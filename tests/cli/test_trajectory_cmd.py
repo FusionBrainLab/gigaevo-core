@@ -26,7 +26,7 @@ def _populate_trajectory(
     Each tuple is (gen, frontier_fitness, mean_fitness).
     """
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_generations=len(generations))
+    write_engine_snapshot_sync(r, prefix, total_mutants=len(generations))
     for gen, frontier, mean in generations:
         r.rpush(
             f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
@@ -146,7 +146,7 @@ class TestTrajectoryMetricOption:
         """--metric uses a different metric name for frontier/mean."""
         server = fakeredis.FakeServer()
         r = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
-        write_engine_snapshot_sync(r, "test/prefix", total_generations=2)
+        write_engine_snapshot_sync(r, "test/prefix", total_mutants=2)
         r.rpush(
             "test/prefix:metrics:history:program_metrics:valid_frontier_accuracy",
             _metric_entry(1, 0.80),

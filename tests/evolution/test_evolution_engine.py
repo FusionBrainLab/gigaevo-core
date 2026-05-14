@@ -1,15 +1,12 @@
-"""Unit tests for EvolutionEngine: generation lifecycle, idle detection, mutation, ingestion, refresh."""
+"""Unit tests for EvolutionEngine: idle detection, mutation, ingestion, refresh."""
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -18,14 +15,14 @@ from gigaevo.programs.program_state import ProgramState
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Every engine call that touches _await_idle must have a timeout.
-# Without this, a refactoring of _has_active_dags (e.g., switching from
-# count_by_status to get_all_by_status) can make _await_idle loop forever
-# on unmocked AsyncMock methods, silently hanging the test suite.
+# Every engine call that touches _await_idle must have a timeout — without
+# one, a change to ``_has_active_dags`` (e.g., switching from count_by_status
+# to get_all_by_status) can make ``_await_idle`` loop forever on unmocked
+# AsyncMock methods, silently hanging the test suite.
 ENGINE_TEST_TIMEOUT = 5.0  # seconds
 
 
-def _make_engine() -> EvolutionEngine:
+def _make_engine() -> SteadyStateEvolutionEngine:
     """Build a minimal EvolutionEngine with all external dependencies mocked."""
     storage = AsyncMock()
     strategy = AsyncMock()
@@ -42,11 +39,11 @@ def _make_engine() -> EvolutionEngine:
     storage.get_ids_by_status.return_value = []
     storage.snapshot = MagicMock()
 
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=AsyncMock(),
-        config=EngineConfig(),
+        config=SteadyStateEngineConfig(),
         writer=writer,
         metrics_tracker=metrics_tracker,
     )
@@ -58,37 +55,6 @@ def _make_engine() -> EvolutionEngine:
 
 def _prog(state: ProgramState = ProgramState.DONE) -> Program:
     return Program(code="def solve(): return 42", state=state)
-
-
-# ---------------------------------------------------------------------------
-# _refresh_archive_programs
-# ---------------------------------------------------------------------------
-
-
-class TestRefreshArchivePrograms:
-    async def test_calls_batch_transition_by_ids(self) -> None:
-        """_refresh_archive_programs passes all archive IDs to batch_transition_by_ids."""
-        engine = _make_engine()
-        ids = ["id1", "id2", "id3"]
-        engine.strategy.get_program_ids.return_value = ids
-        engine.storage.batch_transition_by_ids.return_value = 2
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 2
-        engine.storage.batch_transition_by_ids.assert_called_once_with(
-            ids, ProgramState.DONE.value, ProgramState.QUEUED.value
-        )
-
-    async def test_empty_archive_returns_zero(self) -> None:
-        """No archive programs → no transitions, returns 0."""
-        engine = _make_engine()
-        engine.strategy.get_program_ids.return_value = []
-
-        count = await engine._refresh_archive_programs()
-
-        assert count == 0
-        engine.storage.batch_transition_by_ids.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -338,328 +304,30 @@ class TestAwaitIdle:
 
 
 # ---------------------------------------------------------------------------
-# _select_elites_for_mutation
+# _select_parents_for_mutation
 # ---------------------------------------------------------------------------
 
 
-class TestSelectElites:
-    async def test_returns_elites_from_strategy(self) -> None:
+class TestSelectParents:
+    async def test_returns_parents_from_strategy(self) -> None:
         engine = _make_engine()
-        elites = [_prog() for _ in range(3)]
-        engine.strategy.select_elites.return_value = elites
+        parents = [_prog() for _ in range(3)]
+        engine.strategy.select_elites.return_value = parents
 
-        result = await engine._select_elites_for_mutation()
+        result = await engine._select_parents_for_mutation()
 
-        assert result == elites
+        assert result == parents
         engine.strategy.select_elites.assert_called_once_with(
-            total=engine.config.max_elites_per_generation
+            total=engine.config.parent_selector.num_parents
         )
 
     async def test_records_metrics(self) -> None:
         engine = _make_engine()
         engine.strategy.select_elites.return_value = [_prog(), _prog()]
 
-        await engine._select_elites_for_mutation()
+        await engine._select_parents_for_mutation()
 
         assert engine.metrics.elites_selected == 2
-
-
-# ---------------------------------------------------------------------------
-# _create_mutants (via generate_mutations)
-# ---------------------------------------------------------------------------
-
-
-class TestCreateMutants:
-    async def test_calls_generate_mutations(self) -> None:
-        engine = _make_engine()
-        elites = [_prog() for _ in range(2)]
-        new_ids = [f"mut-{i}" for i in range(5)]
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=new_ids,
-        ) as mock_gen:
-            result = await engine._create_mutants(elites)
-
-        assert set(result) == set(new_ids)
-        mock_gen.assert_called_once()
-        assert engine.metrics.mutations_created == 5
-
-    async def test_empty_elites_skip(self) -> None:
-        """step() with empty elites skips mutation entirely."""
-        engine = _make_engine()
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[],
-        ) as mock_gen:
-            # Directly test: _create_mutants is not called when elites is empty
-            # because step() checks: `if elites else 0`
-            engine.strategy.select_elites.return_value = []
-            engine.storage.count_by_status.return_value = 0
-            engine.storage.get_ids_by_status.return_value = []
-            engine.strategy.get_program_ids.return_value = []
-
-            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        mock_gen.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# step() — full generation lifecycle
-# ---------------------------------------------------------------------------
-
-
-class TestStep:
-    async def test_full_lifecycle_with_mutations(self) -> None:
-        """step() executes all 6 phases in order with real-ish mocks."""
-        engine = _make_engine()
-        engine.config.loop_interval = 0.01
-
-        # Phase 2: elites & mutations
-        elites = [_prog() for _ in range(2)]
-        engine.strategy.select_elites.return_value = elites
-
-        # Phase 4: ingest
-        engine.config.program_acceptor = MagicMock()
-        engine.config.program_acceptor.is_accepted.return_value = True
-        engine.strategy.add.return_value = True
-        new_prog = _prog(ProgramState.DONE)
-
-        # _await_idle uses count_by_status (returns 0 → idle immediately)
-        engine.storage.count_by_status.return_value = 0
-        # _ingest_completed_programs uses get_ids_by_status + mget
-        engine.storage.get_ids_by_status.return_value = [new_prog.id]
-        engine.storage.mget.return_value = [new_prog]
-
-        # Phase 5: refresh → archive has the added program
-        engine.strategy.get_program_ids.side_effect = [
-            [],  # Phase 4: no archive yet
-            [new_prog.id],  # Phase 5: now in archive
-            [new_prog.id],  # generation summary log
-        ]
-        engine.storage.batch_transition_state.return_value = 1
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[new_prog.id],
-        ):
-            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        assert engine.metrics.total_generations == 1
-        assert engine.metrics.mutations_created == 1
-        assert engine.metrics.added == 1
-
-    async def test_step_skips_phase6_when_no_refresh(self) -> None:
-        """When _refresh_archive_programs returns 0, phase 6 _await_idle is skipped."""
-        engine = _make_engine()
-        engine.storage.count_by_status.return_value = 0
-        engine.strategy.select_elites.return_value = []
-        engine.storage.get_ids_by_status.return_value = []
-        engine.strategy.get_program_ids.return_value = []
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        assert engine.metrics.total_generations == 1
-
-    async def test_ingestion_mutation_outcome_callback(self) -> None:
-        """on_program_ingested is called with correct outcome for each program."""
-        engine = _make_engine()
-        engine.config.loop_interval = 0.01
-
-        # Two elites so _create_mutants is called
-        elites = [_prog() for _ in range(2)]
-        engine.strategy.select_elites.return_value = elites
-
-        # One rejected by acceptor, one accepted
-        engine.config.program_acceptor = MagicMock()
-        bad_prog = _prog(ProgramState.DONE)
-        good_prog = _prog(ProgramState.DONE)
-
-        engine.config.program_acceptor.is_accepted.side_effect = [False, True]
-        engine.strategy.add.return_value = True
-
-        # _await_idle uses count_by_status (returns 0 → idle immediately)
-        engine.storage.count_by_status.return_value = 0
-        # _ingest uses get_ids_by_status + mget
-        engine.storage.get_ids_by_status.return_value = [bad_prog.id, good_prog.id]
-        engine.storage.mget.return_value = [bad_prog, good_prog]
-        # Neither in archive (Phase 4), then for refresh + summary
-        engine.strategy.get_program_ids.side_effect = [[], [], []]
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[bad_prog.id, good_prog.id],
-        ):
-            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        # Check on_program_ingested calls
-        calls = engine.mutation_operator.on_program_ingested.call_args_list
-        assert len(calls) == 2
-
-
-# ---------------------------------------------------------------------------
-# run() — main loop behavior
-# ---------------------------------------------------------------------------
-
-
-class TestRunLoop:
-    async def test_generation_cap_stops_loop(self) -> None:
-        """run() stops after max_generations steps."""
-        engine = _make_engine()
-        engine.config.stopper = MaxGenerationsStopper(2)
-        engine.config.loop_interval = 0.01
-
-        # Make step() a fast no-op
-        engine.storage.count_by_status.return_value = 0
-        engine.strategy.select_elites.return_value = []
-        engine.storage.get_ids_by_status.return_value = []
-        engine.strategy.get_program_ids.return_value = []
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
-
-        assert engine.metrics.total_generations == 2
-        assert engine._running is False
-
-    async def test_pause_resume_skips_step(self) -> None:
-        """While paused, the engine sleeps but doesn't call step()."""
-        engine = _make_engine()
-        engine.config.stopper = MaxGenerationsStopper(1)
-        engine.config.loop_interval = 0.01
-
-        engine.storage.count_by_status.return_value = 0
-        engine.strategy.select_elites.return_value = []
-        engine.storage.get_ids_by_status.return_value = []
-        engine.strategy.get_program_ids.return_value = []
-
-        call_count = 0
-
-        original_step = engine.step
-
-        async def counting_step():
-            nonlocal call_count
-            call_count += 1
-            await original_step()
-
-        engine.step = counting_step
-
-        # Start paused
-        engine.pause()
-        assert engine._paused is True
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            # Run for a bit then resume
-            task = asyncio.create_task(engine.run())
-            await asyncio.sleep(0.05)
-            assert call_count == 0  # No steps while paused
-
-            engine.resume()
-            await asyncio.sleep(0.05)
-
-            # Let it finish (max_generations=1)
-            await task
-
-        assert call_count == 1
-
-    async def test_step_exception_doesnt_crash_loop(self) -> None:
-        """An exception in step() is caught; loop continues."""
-        engine = _make_engine()
-        engine.config.stopper = MaxGenerationsStopper(3)
-        engine.config.loop_interval = 0.01
-
-        call_count = 0
-
-        async def flaky_step():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("transient failure")
-            engine.metrics.total_generations += 1
-
-        engine.step = flaky_step
-
-        await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
-
-        # 1st call fails (no gen increment), 2nd and 3rd succeed → 2 generations
-        # But cap is 3 so loop runs: fail, gen=1, gen=2, gen=3... let me check
-        # Actually: call 1 raises → caught, call 2 → gen=1, call 3 → gen=2,
-        # call 4 → gen=3 → cap reached. So call_count = 4
-        assert engine.metrics.total_generations >= 2
-
-    async def test_generation_timeout_deprecated_and_ignored(self) -> None:
-        """generation_timeout is deprecated — setting it has no effect."""
-        engine = _make_engine()
-        engine.config.stopper = MaxGenerationsStopper(2)
-        engine.config.generation_timeout = 0.001
-        engine.config.loop_interval = 0.01
-
-        async def slow_step():
-            await asyncio.sleep(0.1)  # Longer than generation_timeout
-            engine.metrics.total_generations += 1
-
-        engine.step = slow_step
-
-        await asyncio.wait_for(engine.run(), timeout=ENGINE_TEST_TIMEOUT)
-
-        # Both generations complete — timeout is not enforced
-        assert engine.metrics.total_generations == 2
-
-    async def test_stop_cancels_run(self) -> None:
-        """stop() cancels the run() task gracefully."""
-        engine = _make_engine()
-        engine.config.loop_interval = 0.01
-
-        engine.storage.count_by_status.return_value = 0
-        engine.strategy.select_elites.return_value = []
-        engine.storage.get_ids_by_status.return_value = []
-        engine.strategy.get_program_ids.return_value = []
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            task = asyncio.create_task(engine.run())
-            await asyncio.sleep(0.05)
-            engine._running = False
-            await asyncio.sleep(0.05)
-            if not task.done():
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-
-    async def test_reached_generation_cap(self) -> None:
-        engine = _make_engine()
-        engine.config.stopper = MaxGenerationsStopper(5)
-        engine.metrics.total_generations = 4
-        assert engine._reached_generation_cap() is False
-
-        engine.metrics.total_generations = 5
-        assert engine._reached_generation_cap() is True
-
-    async def test_unlimited_generations(self) -> None:
-        engine = _make_engine()
-        engine.config.stopper = EvolutionStopper()
-        engine.metrics.total_generations = 999
-        assert engine._reached_generation_cap() is False
 
 
 # ---------------------------------------------------------------------------
@@ -793,154 +461,6 @@ class TestGenerateMutations:
 
         # One succeeded, one failed
         assert len(count) == 1
-
-
-# ---------------------------------------------------------------------------
-# Audit finding 1: Phase ordering in step()
-# ---------------------------------------------------------------------------
-
-
-class TestStepPhaseOrdering:
-    async def test_step_executes_phases_in_correct_order(self) -> None:
-        """Instrument the engine's internal methods to record call order,
-        then assert the 6-phase sequence: await_idle, select+mutate,
-        await_idle, ingest, refresh, await_idle."""
-        engine = _make_engine()
-        engine.config.loop_interval = 0.01
-
-        call_log: list[str] = []
-
-        async def tracked_await_idle():
-            call_log.append("await_idle")
-            # Make it always idle
-            engine.storage.count_by_status.return_value = 0
-
-        async def tracked_select():
-            call_log.append("select_elites")
-            return []
-
-        async def tracked_create(elites):
-            call_log.append("create_mutants")
-            return []
-
-        async def tracked_ingest(**kwargs):
-            call_log.append("ingest")
-
-        async def tracked_refresh():
-            call_log.append("refresh")
-            return 3  # non-zero to trigger phase 6
-
-        engine._await_idle = tracked_await_idle
-        engine._select_elites_for_mutation = tracked_select
-        engine._create_mutants = tracked_create
-        engine._ingest_completed_programs = tracked_ingest
-        engine._refresh_archive_programs = tracked_refresh
-
-        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        # Expected phase order:
-        # Phase 1: await_idle
-        # Phase 2: select_elites (create_mutants skipped because elites=[])
-        # Phase 3: await_idle
-        # Phase 4: ingest
-        # Phase 5: refresh
-        # Phase 6: await_idle (because refresh returned > 0)
-        assert call_log == [
-            "await_idle",  # Phase 1
-            "select_elites",  # Phase 2
-            "await_idle",  # Phase 3
-            "ingest",  # Phase 4
-            "refresh",  # Phase 5
-            "await_idle",  # Phase 6
-        ]
-
-    async def test_step_skips_phase6_when_refresh_returns_zero(self) -> None:
-        """When refresh returns 0, the final await_idle (phase 6) is skipped."""
-        engine = _make_engine()
-        engine.config.loop_interval = 0.01
-
-        call_log: list[str] = []
-
-        async def tracked_await_idle():
-            call_log.append("await_idle")
-            engine.storage.count_by_status.return_value = 0
-
-        async def tracked_select():
-            call_log.append("select_elites")
-            return []
-
-        async def tracked_ingest(**kwargs):
-            call_log.append("ingest")
-
-        async def tracked_refresh():
-            call_log.append("refresh")
-            return 0  # No refreshed programs
-
-        engine._await_idle = tracked_await_idle
-        engine._select_elites_for_mutation = tracked_select
-        engine._ingest_completed_programs = tracked_ingest
-        engine._refresh_archive_programs = tracked_refresh
-
-        await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        # Phase 6 await_idle should NOT appear because refresh returned 0
-        assert call_log == [
-            "await_idle",  # Phase 1
-            "select_elites",  # Phase 2
-            "await_idle",  # Phase 3
-            "ingest",  # Phase 4
-            "refresh",  # Phase 5
-            # No Phase 6 await_idle
-        ]
-
-    async def test_step_includes_create_mutants_when_elites_exist(self) -> None:
-        """When select_elites returns non-empty, create_mutants is called in phase 2."""
-        engine = _make_engine()
-        engine.config.loop_interval = 0.01
-
-        call_log: list[str] = []
-        elites = [_prog() for _ in range(2)]
-
-        async def tracked_await_idle():
-            call_log.append("await_idle")
-            engine.storage.count_by_status.return_value = 0
-
-        async def tracked_select():
-            call_log.append("select_elites")
-            return elites
-
-        async def tracked_ingest(**kwargs):
-            call_log.append("ingest")
-
-        async def tracked_refresh():
-            call_log.append("refresh")
-            return 0
-
-        engine._await_idle = tracked_await_idle
-        engine._select_elites_for_mutation = tracked_select
-        engine._ingest_completed_programs = tracked_ingest
-        engine._refresh_archive_programs = tracked_refresh
-
-        new_ids = ["mut-0", "mut-1"]
-
-        with patch(
-            "gigaevo.evolution.engine.core.generate_mutations",
-            new_callable=AsyncMock,
-            return_value=new_ids,
-        ) as mock_gen:
-            await asyncio.wait_for(engine.step(), timeout=ENGINE_TEST_TIMEOUT)
-
-        # Phase 2 should now have generate_mutations called
-        assert call_log == [
-            "await_idle",  # Phase 1
-            "select_elites",  # Phase 2 (select)
-            "await_idle",  # Phase 3
-            "ingest",  # Phase 4
-            "refresh",  # Phase 5
-        ]
-        # generate_mutations was called (Phase 2 mutant creation)
-        mock_gen.assert_called_once()
-        assert engine.metrics.mutations_created == 2
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any
+import warnings
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.evolution.engine.acceptor import (
     DefaultProgramEvolutionAcceptor,
@@ -14,20 +15,71 @@ from gigaevo.evolution.mutation.parent_selector import (
     RandomParentSelector,
 )
 
+# Retired engine knobs that older yaml configs may still set. We drop them
+# silently with a one-shot DeprecationWarning so external users get a single
+# upgrade signal instead of a Pydantic crash. Each entry: ``key → reason``.
+_DEPRECATED_FIELDS: dict[str, str] = {
+    "max_mutations_per_generation": (
+        "epoch size is no longer a knob; progress is driven entirely by the "
+        "stopper (see config/stopper/) and JIT parent refresh"
+    ),
+    "generation_timeout": (
+        "was already a deprecated no-op; per-program timeouts live on "
+        "dag_timeout / stage_timeout"
+    ),
+    "refresh_passes": (
+        "per-epoch archive refresh removed; ParentRefresher re-evaluates "
+        "parents JIT as they are selected"
+    ),
+    "refresh_order": (
+        "ordering knob removed alongside the per-epoch refresh; JIT refresh "
+        "order is implicit"
+    ),
+}
+
 
 class EngineConfig(BaseModel):
-    """Configuration options controlling EvolutionEngine behaviour."""
+    """Configuration for the steady-state evolution engine.
+
+    Parents are re-evaluated only when they are themselves selected as parents
+    (:class:`gigaevo.evolution.engine.refresh.ParentRefresher`); there is no
+    global archive refresh. Progress is governed entirely by ``stopper``
+    (e.g. :class:`MaxMutantsStopper`).
+    """
 
     loop_interval: float = Field(default=1.0, gt=0)
     max_elites_per_generation: int = Field(default=20, gt=0)
-    max_mutations_per_generation: int = Field(default=50, gt=0)
-    generation_timeout: float | None = Field(
-        default=None,
-        description="Deprecated — no longer used. Individual program timeouts are "
-        "handled by dag_timeout / stage_timeout.",
-    )
     metrics_collection_interval: float = Field(
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
+    )
+    backpressure_sample_interval: float = Field(
+        default=10.0,
+        gt=0,
+        description=(
+            "Cadence (seconds) at which BACKPRESSURE_SAMPLE events are emitted. "
+            "Decoupled from ``loop_interval`` because the engine ticks at 1Hz "
+            "for snapshotting work, but a 1Hz BACKPRESSURE_SAMPLE stream floods "
+            "the log on long runs (~3.6k lines/hour, ~86k/day). 10s keeps a "
+            "useful time-series for the flow profiler while dropping log "
+            "volume 10x."
+        ),
+    )
+    max_in_flight: int = Field(
+        default=5,
+        gt=0,
+        description=(
+            "Backpressure cap. Sizes BOTH the producer pool (concurrent "
+            "LLM/refresh tasks; ``_producer_sema``) AND the buffer of "
+            "produced-but-not-yet-ingested mutants (``_buffer_sema``). "
+            "Steady-state pipeline depth is therefore ~2 × max_in_flight: "
+            "~N producers alive (mix of LLM-running and holding ready "
+            "result) plus ~N buffered (DAG queue + running + waiting "
+            "ingest). The dispatcher acquires producer_sema and the "
+            "ingestor releases buffer_sema as programs reach "
+            "DONE/DISCARDED. ~4 concurrent producers per GPU server is "
+            "the sweet spot (measured on Qwen3-235B). Default 5 is tuned "
+            "for 3-4 servers with 4 runs."
+        ),
     )
     parent_selector: ParentSelector = Field(
         default_factory=lambda: RandomParentSelector(num_parents=1)
@@ -42,101 +94,63 @@ class EngineConfig(BaseModel):
         "engine loop. Configured via the ``stopper`` Hydra group "
         "(``config/stopper/``). Default is a no-op stopper that never stops.",
     )
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    post_step_hook_timeout_s: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Wall-clock bound on a single ``post_step_hook`` invocation. The "
+            "hook is user-configurable (production: CompositionInjectionHook "
+            "walks the entire G archive); a hung hook would otherwise wedge "
+            "the ingestor — no further sweeps fire and no new mutants reach "
+            "the archive. Default 300s is generous enough for a 10k-program "
+            "archive walk (~30s in production) plus 10× headroom. Tune up "
+            "for archives in the 100k+ range or slow-storage backends."
+        ),
+    )
+    post_step_hook_cancel_grace_s: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "Grace period after cancelling an over-budget ``post_step_hook`` "
+            "task. If the hook ignores ``CancelledError`` within this window "
+            "we log and abandon — better an orphan coroutine than a wedged "
+            "ingestor."
+        ),
+    )
+    # ``extra="forbid"`` keeps typos loud (``max_inflight: 5`` etc.), while
+    # the ``_strip_deprecated_keys`` validator below provides a soft landing
+    # for keys that USED to exist and have been retired (see
+    # ``_DEPRECATED_FIELDS``). Together they give the major-version upgrade a
+    # one-stop deprecation path without silently accepting unknown extras.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_deprecated_keys(cls, data: Any) -> Any:
+        """Drop retired knobs from old yaml configs with a one-shot warning."""
+        if not isinstance(data, dict):
+            return data
+        for dead_key, reason in _DEPRECATED_FIELDS.items():
+            if dead_key in data:
+                warnings.warn(
+                    (
+                        f"{dead_key!r} is no longer an engine config field "
+                        f"and will be ignored ({reason}). Drop it from your "
+                        f"yaml — this shim will be removed in a future "
+                        f"release."
+                    ),
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                data.pop(dead_key)
+        return data
 
 
 class SteadyStateEngineConfig(EngineConfig):
-    """Extra knobs for :class:`SteadyStateEvolutionEngine`.
+    """Alias of :class:`EngineConfig` for Hydra ``_target_`` back-compat.
 
-    Inherits all ``EngineConfig`` fields.  Their meanings in steady-state:
-
-    * ``max_mutations_per_generation`` — **epoch size**.  An epoch refresh is
-      triggered after this many programs have been processed (ingested or
-      discarded).  This is the closest analog to "generation size" — one epoch
-      ≈ one generation's worth of work, but without the idle barrier.
-    * ``max_elites_per_generation`` — passed to ``select_elites()`` each call.
-
-    Termination is controlled by ``stopper`` (see ``config/stopper/``), e.g.
-    ``MaxGenerationsStopper`` caps total epochs.
+    The steady-state engine is the only engine; this class exists so
+    existing config files that target it (``_target_:
+    gigaevo.evolution.engine.SteadyStateEngineConfig``) keep resolving.
+    No extra fields.
     """
-
-    max_in_flight: int = Field(
-        default=5,
-        gt=0,
-        description=(
-            "Max mutant programs in the pipeline (produced but not yet "
-            "ingested/discarded).  Backpressure: the mutation loop blocks "
-            "when this many programs are awaiting DAG evaluation.  "
-            "Optimal value depends on server count and concurrent runs: "
-            "~4 concurrent per GPU server is the sweet spot (measured on "
-            "Qwen3-235B).  Default 5 is tuned for 3-4 servers with 4 runs."
-        ),
-    )
-
-    refresh_passes: int = Field(
-        default=1,
-        gt=0,
-        description=(
-            "Number of times the per-epoch archive refresh repeats.\n"
-            "\n"
-            "refresh_passes=1 (default): one refresh sweep per epoch.  Safe "
-            "when no downstream stage on generation N+1 reads cross-program "
-            "state written by a sibling/parent on generation N AFTER that "
-            "sibling's own downstream stages have read it.\n"
-            "\n"
-            "refresh_passes=2 (D side of the asymmetric adversarial "
-            "pipeline): closes a two-sided cross-program tracker race.\n"
-            "  * Pass 1 re-runs DGTrackerStage for every archived program in "
-            "generation-bucketed order — by the time pass 1 finishes, the "
-            "shared DGImprovementTracker holds current opponent-set "
-            "membership for the ENTIRE archive, both ancestors and "
-            "descendants of any program.\n"
-            "  * Pass 2 re-runs the filtered LineageStage with a globally "
-            "fresh tracker, so both ``lineage_ancestors`` (parent→self) and "
-            "``lineage_descendants`` (self→child) narratives are computed "
-            "against the true current shared-benchmark set rather than a "
-            "single-direction snapshot.\n"
-            "\n"
-            "Cache invalidation between passes is provided by the engine "
-            "snapshot's ``refresh_pass`` counter, which the engine advances "
-            "via ``_write_snapshot`` before each pass; stages such as "
-            "SharedBenchmarkFilteredLineageStage fold the counter into "
-            "their cache key via ``get_current_snapshot()``.  Within a "
-            "pass, normal input-hash caching still applies — programs "
-            "whose inputs haven't changed don't redundantly re-run LLM "
-            "calls inside one pass."
-        ),
-    )
-
-    refresh_order: Literal["fifo", "generation_bucketed"] = Field(
-        default="fifo",
-        description=(
-            "Ordering policy for the per-epoch archive refresh (DONE→QUEUED).\n"
-            "\n"
-            "'fifo' (default): all archived programs are flipped in one batch "
-            "and re-evaluated concurrently under the usual DAG-runner "
-            "backpressure.  Fast, but across concurrent programs there is NO "
-            "parent-before-child ordering: a child's LineageStage can read "
-            "the shared DGImprovementTracker (written by its parent's "
-            "DGTrackerStage) BEFORE the parent has written the new metrics, "
-            "yielding stale lineage deltas after a top-1 opponent flip.\n"
-            "\n"
-            "'generation_bucketed': programs are bucketed by "
-            "``lineage.generation`` and flipped one bucket at a time in "
-            "ascending order.  After each bucket's flip the engine awaits "
-            "idle before starting the next bucket — so every program in "
-            "generation N finishes writing to the shared DGImprovementTracker "
-            "before any program in generation N+1 reads from it.  Eliminates "
-            "the cross-program refresh race at the cost of loss of "
-            "concurrency between buckets.\n"
-            "\n"
-            "Required when a downstream stage on generation N+1 reads state "
-            "written by a sibling/parent stage on generation N via a shared "
-            "external store (Redis tracker, etc.).  Safe no-op otherwise."
-        ),
-    )
-
-    @property
-    def epoch_trigger_count(self) -> int:
-        """Epoch size = ``max_mutations_per_generation`` (reused, not a new knob)."""
-        return self.max_mutations_per_generation

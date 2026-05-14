@@ -1,22 +1,11 @@
-"""SteadyStateEvolutionEngine — continuous mutation/evaluation interleaving.
+"""SteadyStateEvolutionEngine — continuous async dispatch + ingest stream.
 
-Instead of the generational barrier (produce N mutants -> wait for ALL DAGs ->
-ingest -> refresh -> repeat), this engine runs two concurrent async loops:
+Composes :func:`dispatcher_loop` and :func:`ingestor_loop`. Archive
+programs are re-evaluated only when they are themselves selected as
+parents (:class:`gigaevo.evolution.engine.refresh.ParentRefresher`);
+there is no global archive refresh.
 
-* **Mutation loop** — spawns up to ``max_in_flight`` concurrent mutation tasks.
-  Each task acquires one semaphore slot, calls the LLM, and deposits the result.
-  Backpressure is enforced by ``asyncio.Semaphore(max_in_flight)``.
-
-* **Ingestion loop** — polls for DONE programs, ingests each immediately, and
-  releases a semaphore slot so mutation tasks can proceed.  Triggers an
-  *epoch refresh* every ``max_mutations_per_generation`` processed programs.
-
-An **epoch refresh** is the only synchronization point: new mutation tasks are
-blocked, all in-flight programs are drained, the archive is refreshed (so
-NO_CACHE stages see a consistent population snapshot), and
-``total_generations`` is incremented.
-
-See ``SteadyStateEngineConfig`` for tunables.
+See ``docs/superpowers/specs/2026-05-12-steady-state-engine-audit-and-redesign.md``.
 """
 
 from __future__ import annotations
@@ -28,25 +17,16 @@ from typing import cast
 
 from loguru import logger
 
-from gigaevo.evolution.engine.config import SteadyStateEngineConfig  # noqa: I001
+from gigaevo.evolution.engine.backpressure_sampler import backpressure_sampler_loop
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.mutation import generate_mutations
-from gigaevo.llm.bandit import MutationOutcome
-from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
-from gigaevo.programs.program_state import ProgramState
+from gigaevo.evolution.engine.dispatcher import dispatcher_loop
+from gigaevo.evolution.engine.ingestor import ingestor_loop, poll_and_ingest
+from gigaevo.evolution.engine.refresh import ParentRefresher, ParentRefreshTicket
 
 
 class SteadyStateEvolutionEngine(EvolutionEngine):
-    """Evolution engine with continuous mutation/evaluation interleaving.
-
-    Replaces the generational ``step()`` with two concurrent loops governed by
-    a backpressure semaphore.  At most ``max_in_flight`` mutant programs exist
-    between "produced" and "ingested/discarded" at any instant.
-    """
-
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
+    """Steady-state engine. Composes dispatcher + ingestor + ParentRefresher."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -58,82 +38,79 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             )
         self._ss_config: SteadyStateEngineConfig = cfg
 
-        # Backpressure
         self._in_flight: set[str] = set()
-        self._in_flight_sema = asyncio.Semaphore(self._ss_config.max_in_flight)
+        # Parent-refresh tickets transferred from producer (mutant_task) to
+        # ingestor. The ticket holds the per-parent-id locks that prevent
+        # another producer from refreshing the same parents while THIS
+        # mutant's DAG is still in flight. Ownership transfers atomically
+        # with ``_in_flight.add(new_id)`` under ``_in_flight_lock`` and is
+        # released by the ingestor when the child reaches DONE/DISCARDED.
+        # Keyed by mutant id (the in-flight registration key).
+        self._inflight_tickets: dict[str, ParentRefreshTicket] = {}
+        # Two-sema model: producer pool caps concurrent (refresh + LLM); buffer
+        # pool caps produced-but-not-yet-ingested mutants. Both sized from the
+        # single ``max_in_flight`` knob; steady-state pipeline depth ~2 × N.
+        # See docs/superpowers/specs/2026-05-13-mutation-throughput-two-sema-design.md.
+        self._producer_sema = asyncio.Semaphore(self._ss_config.max_in_flight)
+        self._buffer_sema = asyncio.Semaphore(self._ss_config.max_in_flight)
         self._in_flight_lock = asyncio.Lock()
 
-        # Epoch refresh gating
-        self._mutation_gate = asyncio.Event()
-        self._mutation_gate.set()  # open by default
-        self._draining = False  # True during scoped drain (suppress epoch trigger)
+        # Counter of tasks actively in LLM inference. Incremented before
+        # generate_one_mutation, decremented after. Sampled by backpressure_sampler
+        # to break down producer occupancy into LLM vs DAG phases.
+        self._llm_active: int = 0
 
-        # Epoch bookkeeping
-        self._processed_since_epoch = 0
-        self._epoch_mutants = 0  # mutants produced in current epoch (for logging)
-        self._epoch_eligible_since: float | None = None  # low-watermark fallback timer
+        self._parent_refresher = ParentRefresher(storage=self.storage)
 
-        # Cached elites (refreshed at epoch boundaries)
-        self._cached_elites: list[Program] | None = None
-        self._elite_cache_lock = asyncio.Lock()
-
-        # Child tasks
-        self._mutation_task: asyncio.Task | None = None
-        self._ingestion_task: asyncio.Task | None = None
-
-    # ------------------------------------------------------------------
-    # Public API overrides
-    # ------------------------------------------------------------------
-
-    async def step(self) -> None:
-        raise NotImplementedError(
-            "SteadyStateEvolutionEngine uses run() directly. "
-            "step() is not meaningful in steady-state mode."
-        )
+        self._dispatcher_task: asyncio.Task | None = None
+        self._ingestor_task: asyncio.Task | None = None
+        # Observability sidecar: emits BackpressureSample canonical events at
+        # config.backpressure_sample_interval cadence so a runner log carries a time-series
+        # of producer/buffer/in_flight held counts. Lifecycle mirrors the
+        # dispatcher/ingestor tasks (start in run(), cancel in finally).
+        self._sampler_task: asyncio.Task | None = None
 
     async def run(self) -> None:
         logger.info(
-            "[SteadyState] Start | max_in_flight={} epoch_size={} stopper={}",
+            "[SteadyState] Start | producer_sema={} buffer_sema={} "
+            "(max_in_flight={}) stopper={}",
             self._ss_config.max_in_flight,
-            self._ss_config.epoch_trigger_count,
+            self._ss_config.max_in_flight,
+            self._ss_config.max_in_flight,
             type(self._ss_config.stopper).__name__,
         )
         self._running = True
         self._run_start_time = time.monotonic()
-        self._run_start_gen = self.metrics.total_generations
 
-        # Persist initial counters so status tools and sync hooks can read immediately
         await self._write_snapshot(
-            total_generations=self.metrics.total_generations,
+            total_mutants=self.metrics.total_mutants,
             programs_processed=self.metrics.programs_processed,
         )
 
         try:
-            # Phase 0: drain initial population (seed programs already queued)
+            # Phase 0: drain initial seed population (already QUEUED by loader)
             await self._await_idle()
-            await self._ingest_completed_programs(mutation_ids=None)
+            await self._ingest_completed_programs()
             self.storage.snapshot.bump(incremental=True)
-
-            # Publish programs_processed after seed ingestion so adversarial
-            # sync hooks can see our progress before the first hook call.
             await self._write_snapshot(
                 programs_processed=self.metrics.programs_processed
             )
 
-            # Call pre_step_hook once at startup (mirrors parent's per-step call)
             if self._pre_step_hook:
                 await self._pre_step_hook()
 
-            # Launch concurrent loops
-            self._mutation_task = asyncio.create_task(
-                self._mutation_loop(), name="ss-mutation"
+            self._dispatcher_task = asyncio.create_task(
+                dispatcher_loop(self), name="ss-dispatcher"
             )
-            self._ingestion_task = asyncio.create_task(
-                self._ingestion_loop(), name="ss-ingestion"
+            self._ingestor_task = asyncio.create_task(
+                ingestor_loop(self), name="ss-ingestor"
+            )
+            self._sampler_task = asyncio.create_task(
+                backpressure_sampler_loop(self), name="ss-backpressure-sampler"
             )
 
             done, pending = await asyncio.wait(
-                [self._mutation_task, self._ingestion_task],
+                [self._dispatcher_task, self._ingestor_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for t in pending:
@@ -141,7 +118,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 with contextlib.suppress(asyncio.CancelledError):
                     await t
 
-            # Capture exception from completed tasks (will re-raise after drain)
             loop_exc = None
             for t in done:
                 if not t.cancelled():
@@ -149,13 +125,6 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                     if exc and not isinstance(exc, asyncio.CancelledError):
                         logger.error("[SteadyState] Loop failed: {}", exc)
                         loop_exc = exc
-
-            # Final epoch to capture any stragglers.
-            # No timeout: DAG eval duration is problem-dependent; a fixed timeout
-            # would silently drop programs still mid-evaluation.
-            # Stuck programs are handled by dag_timeout/stage_timeout in DagRunner.
-            if self._in_flight:
-                await self._epoch_refresh()
 
             if loop_exc is not None:
                 raise loop_exc
@@ -165,771 +134,141 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             raise
         finally:
             self._running = False
+            # asyncio.wait() does NOT cancel its waited tasks when the
+            # outer coroutine is cancelled, so the dispatcher and ingestor
+            # may still be running here. Cancel them explicitly; each task
+            # cleans up its own spawned mutant tasks (releasing semaphore
+            # slots) in its own finally block.
+            for loop_task in (
+                self._dispatcher_task,
+                self._ingestor_task,
+                self._sampler_task,
+            ):
+                if loop_task is not None and not loop_task.done():
+                    loop_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await loop_task
+
+            # Sweep re-raises CancelledError after the inner poll_and_ingest
+            # is settled, so cancellation reaches our awaiter without leaking
+            # the inner task. The finalizer (post_run_hook) must still run
+            # — cancellation is a shutdown signal, not a "skip cleanup" one.
+            sweep_cancelled = False
+            try:
+                await self._final_ingestion_sweep(deadline_seconds=5.0)
+            except asyncio.CancelledError:
+                sweep_cancelled = True
+
             try:
                 await self._post_run_hook.on_run_complete(self.storage)
-            except Exception as e:
-                logger.error("[SteadyState] post-run hook failed: {}", e)
+            except Exception as exc:
+                logger.error("[SteadyState] post-run hook failed: {}", exc)
             logger.info("[SteadyState] Stopped")
+            if sweep_cancelled:
+                # `from None` keeps the traceback clean: a Redis blip the
+                # `suppress(Exception)` in the sweep swallowed would
+                # otherwise dangle in __context__ and mislead the operator.
+                raise asyncio.CancelledError from None
 
-    # ------------------------------------------------------------------
-    # Mutation loop (producer) — concurrent task spawner
-    # ------------------------------------------------------------------
+    async def _final_ingestion_sweep(self, *, deadline_seconds: float) -> None:
+        """Drain DONE/DISCARDED out of ``_in_flight`` after the loops exit.
 
-    async def _mutation_loop(self) -> None:
-        """Spawn concurrent mutation tasks, gated by the semaphore.
+        Releases ``_buffer_sema`` slots that a mutant cancelled between
+        ``_in_flight.add`` and the slot release would otherwise leak —
+        ``mutant_task``'s ``finally`` guards ``slot_transferred=True`` and
+        refuses to release, expecting the ingestor to. On normal completion
+        the DAG may still be flipping QUEUED→RUNNING→DONE for the last few
+        in-flight mutants, so we sleep between empty passes instead of giving
+        up immediately, bounded by ``deadline_seconds``.
 
-        Each spawned task owns exactly one semaphore slot from creation
-        to either ``_in_flight.add()`` or explicit ``release()``.
+        Cancellation semantics: each ``poll_and_ingest`` pass is wrapped in
+        an explicit :class:`asyncio.Task` so we can wait for it (briefly) to
+        finish if our awaiter is cancelled. A bare ``asyncio.shield`` would
+        let the inner task become detached on cancellation, where it would
+        race ``_post_run_hook.on_run_complete`` and the engine teardown for
+        access to ``storage`` and ``_in_flight``. Instead we cancel and
+        await the inner on a best-effort timeout — the inner's cancel
+        cleanup latency caps the wall-clock cost, not the timeout
+        parameter; ``wait_for`` returns only once the inner is terminal,
+        guaranteeing no zombie coroutine outlives this method. After the
+        inner is settled we re-raise the originating ``CancelledError`` so
+        the caller's teardown order is preserved (the ``BaseException``
+        family — ``KeyboardInterrupt``, ``SystemExit`` — propagates
+        intact; we only swallow ``Exception`` from the cleanup wait).
+
+        Args:
+            deadline_seconds: Wall-clock budget for this sweep. If the
+                budget elapses before ``_in_flight`` drains, emits a
+                WARNING with the stuck-id list so the operator can
+                correlate with stranded DAGs in Redis.
         """
-        logger.info("[SteadyState] Mutation loop started")
-        active_tasks: set[asyncio.Task] = set()
-        try:
-            while self._running and not self._reached_generation_cap():
-                # Respect epoch refresh pause
-                await self._mutation_gate.wait()
-
-                # Backpressure: block until a slot opens
-                await self._in_flight_sema.acquire()
-
-                if not self._running or self._reached_generation_cap():
-                    self._in_flight_sema.release()
-                    break
-
-                # Re-check gate after semaphore acquisition — the gate may
-                # have closed while we were waiting for a slot.
-                if not self._mutation_gate.is_set():
-                    self._in_flight_sema.release()
-                    continue
-
-                # Spawn a concurrent mutation task (owns the acquired slot)
-                task = asyncio.create_task(
-                    self._produce_one_mutant(),
-                    name=f"ss-mutate-{self._epoch_mutants}",
-                )
-                active_tasks.add(task)
-                task.add_done_callback(active_tasks.discard)
-
-        except asyncio.CancelledError:
-            raise
-        finally:
-            # Cancel any still-running mutation tasks on shutdown
-            for t in active_tasks:
-                t.cancel()
-            if active_tasks:
-                await asyncio.gather(*active_tasks, return_exceptions=True)
-            logger.info("[SteadyState] Mutation loop stopped")
-
-    async def _produce_one_mutant(self) -> None:
-        """Single mutation task. Owns one semaphore slot on entry.
-
-        Invariant: every exit path either adds the program to ``_in_flight``
-        (transferring slot ownership) or releases the semaphore slot.
-        """
-        try:
-            elites = await self._get_cached_elites()
-            if not elites:
-                self._in_flight_sema.release()
-                return
-
-            mutation_ids = await self._create_single_mutant(elites)
-            if mutation_ids:
-                if len(mutation_ids) > 1:
-                    # Defensive: 1 semaphore slot acquired but >1 ID returned.
-                    # Only track the first; release would over-release otherwise.
-                    logger.warning(
-                        "[SteadyState] generate_mutations(limit=1) returned {} IDs; "
-                        "tracking only the first",
-                        len(mutation_ids),
-                    )
-                    mutation_ids = mutation_ids[:1]
-                async with self._in_flight_lock:
-                    self._in_flight.update(mutation_ids)
-                self._epoch_mutants += len(mutation_ids)
-            else:
-                self._in_flight_sema.release()
-
-        except asyncio.CancelledError:
-            self._in_flight_sema.release()
-            raise
-        except Exception as e:
-            logger.exception("[SteadyState] Mutation task failed: {}", e)
-            self._in_flight_sema.release()
-
-    async def _get_cached_elites(self) -> list[Program]:
-        """Return cached elites, refreshing on cache miss (epoch boundary).
-
-        Uses a lock to prevent thundering herd: after epoch refresh clears
-        the cache, only one task fetches fresh elites; others wait and reuse.
-        """
-        if self._cached_elites is not None:
-            return self._cached_elites
-        async with self._elite_cache_lock:
-            # Double-check after acquiring lock
-            if self._cached_elites is None:
-                self._cached_elites = await self._select_elites_for_mutation()
-            return self._cached_elites
-
-    async def _create_single_mutant(self, elites: list[Program]) -> list[str]:
-        """Create a single mutant from *elites*. Returns 0 or 1 IDs."""
-        mutation_ids = await generate_mutations(
-            elites,
-            mutator=self.mutation_operator,
-            storage=self.storage,
-            state_manager=self.state,
-            parent_selector=self.config.parent_selector,
-            limit=1,
-            iteration=self.metrics.total_generations,  # current epoch
-        )
-        if mutation_ids:
-            self.metrics.record_mutation_metrics(len(mutation_ids), 0)
-        return mutation_ids
-
-    # ------------------------------------------------------------------
-    # Ingestion loop (consumer)
-    # ------------------------------------------------------------------
-
-    async def _ingestion_loop(self) -> None:
-        logger.info("[SteadyState] Ingestion loop started")
-        try:
-            while self._running:
-                ingested = await self._poll_and_ingest()
-
-                # Check epoch trigger
-                if self._should_trigger_epoch():
-                    await self._epoch_refresh()
-
-                if self._reached_generation_cap():
-                    break
-
-                # Adaptive polling: tighter when pipeline is saturated
-                # (slot release is the critical path when all slots are full)
-                if len(self._in_flight) >= self._ss_config.max_in_flight:
-                    interval = self.config.loop_interval * 0.25
-                elif ingested:
-                    interval = self.config.loop_interval * 0.25
-                else:
-                    interval = self.config.loop_interval
-                await asyncio.sleep(interval)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            logger.info("[SteadyState] Ingestion loop stopped")
-
-    async def _poll_and_ingest(self, *, exclude_ids: set[str] | None = None) -> int:
-        """Poll for completed in-flight programs, ingest them, and sweep leaks.
-
-        Returns the number of programs processed (ingested + rejected + swept).
-        Combines ingestion and leak detection in a single pass: fetches DONE IDs,
-        then mgets ALL in-flight programs to find both completions and leaks.
-
-        *exclude_ids*: IDs to skip (used by ``_drain_scoped`` to prevent
-        double-ingestion of drain-set programs).
-        """
-        async with self._in_flight_lock:
-            if not self._in_flight:
-                return 0
-            candidates = set(self._in_flight)
-            if exclude_ids:
-                candidates -= exclude_ids
-            if not candidates:
-                return 0
-            in_flight_snapshot = list(candidates)
-
-        # Single mget for ALL in-flight programs: detect DONE + leaked in one pass
-        programs = await self.storage.mget(
-            in_flight_snapshot, exclude=EXCLUDE_STAGE_RESULTS
-        )
-        found_ids = {p.id for p in programs if p is not None}
-
-        done_ids: list[str] = []
-        leaked_ids: list[str] = []
-
-        for prog in programs:
-            if prog is None:
-                continue
-            if prog.state == ProgramState.DONE:
-                done_ids.append(prog.id)
-            elif prog.state == ProgramState.DISCARDED:
-                leaked_ids.append(prog.id)
-            # QUEUED/RUNNING → still active, skip
-
-        # Programs that vanished from Redis entirely
-        for pid in in_flight_snapshot:
-            if pid not in found_ids:
-                leaked_ids.append(pid)
-
-        # Ingest DONE programs
-        handled_ids: list[str] = []
-        if done_ids:
-            _, handled_ids = await self._ingest_batch(done_ids)
-
-        # Release slots for ingested + leaked programs
-        released = set(handled_ids) | set(leaked_ids)
-        if released:
-            if leaked_ids:
-                logger.warning(
-                    "[SteadyState] Sweeping {} leaked in-flight programs",
-                    len(leaked_ids),
-                )
-            async with self._in_flight_lock:
-                for pid in released:
-                    if pid in self._in_flight:
-                        self._in_flight.discard(pid)
-                        self._in_flight_sema.release()
-
-        self._processed_since_epoch += len(handled_ids)
-        return len(handled_ids) + len(leaked_ids)
-
-    async def _ingest_batch(self, program_ids: list[str]) -> tuple[int, list[str]]:
-        """Ingest specific completed programs.
-
-        Returns ``(added_count, handled_ids)`` where *handled_ids* is the list
-        of program IDs that were confirmed DONE and processed (accepted or
-        rejected).  IDs whose state changed between the status query and
-        ``mget`` are excluded — their semaphore slots must NOT be released.
-        """
-        if not program_ids:
-            return 0, []
-
-        completed = await self.storage.mget(program_ids, exclude=EXCLUDE_STAGE_RESULTS)
-        completed = [p for p in completed if p.state == ProgramState.DONE]
-
-        if not completed:
-            return 0, []
-
-        added = 0
-        rej_valid = 0
-        rej_strategy = 0
-        reject_ids: list[str] = []
-
-        for prog in completed:
+        sweep_deadline = time.monotonic() + deadline_seconds
+        cancelled = False
+        while self._in_flight and time.monotonic() < sweep_deadline:
+            inner = asyncio.create_task(poll_and_ingest(self))
             try:
-                if not self.config.program_acceptor.is_accepted(prog):
-                    logger.info(
-                        "[SteadyState] Program {} REJECTED by acceptor (metrics={})",
-                        prog.short_id,
-                        prog.metrics,
-                    )
-                    await self._notify_hook(prog, MutationOutcome.REJECTED_ACCEPTOR)
-                    reject_ids.append(prog.id)
-                    rej_valid += 1
-                elif await self.strategy.add(prog):
-                    added += 1
-                    await self._notify_hook(prog, MutationOutcome.ACCEPTED)
-                    logger.debug(
-                        "[SteadyState] Program {} accepted (metrics={})",
-                        prog.short_id,
-                        prog.metrics,
-                    )
-                else:
-                    await self._notify_hook(prog, MutationOutcome.REJECTED_STRATEGY)
-                    reject_ids.append(prog.id)
-                    rej_strategy += 1
-                    logger.debug(
-                        "[SteadyState] Program {} rejected by strategy",
-                        prog.short_id,
-                    )
-            except Exception as e:
-                logger.error(
-                    "[SteadyState] Ingestion failed for {}: {}", prog.short_id, e
-                )
-                reject_ids.append(prog.id)
-
-        # Batch DONE -> DISCARDED for rejects
-        if reject_ids:
-            reject_set = set(reject_ids)
-            for prog in completed:
-                if prog.id in reject_set:
-                    prog.state = ProgramState.DISCARDED
-            try:
-                await self.storage.batch_transition_by_ids(
-                    reject_ids,
-                    ProgramState.DONE.value,
-                    ProgramState.DISCARDED.value,
-                )
-            except Exception as e:
-                logger.error(
-                    "[SteadyState] Batch discard failed for {} programs: {}",
-                    len(reject_ids),
-                    e,
-                )
-
-        # Count ALL evaluated programs (not just accepted) so the adversarial
-        # sync hook's programs_processed counter advances even when rejection
-        # rate is high.  Prevents deadlock if both populations reject everything.
-        self.metrics.programs_processed += len(completed)
-        self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
-
-        # NOTE: programs_processed is intentionally NOT published to Redis here.
-        # Publication happens only at _epoch_refresh step 3a (before the sync
-        # hook).  Publishing after every batch caused adversarial generation
-        # divergence: the faster population read intermediate counter values
-        # and advanced multiple epochs per opponent epoch (2-2.5x divergence
-        # observed in heilbron/asymmetric-iterations).  With publication only
-        # at epoch boundaries, the sync hook enforces ~1:1 epoch parity.
-
-        handled = [p.id for p in completed]
-        return added, handled
-
-    # ------------------------------------------------------------------
-    # Epoch refresh
-    # ------------------------------------------------------------------
-
-    # Fallback: if in-flight stays above watermark for this long, trigger anyway
-    _EPOCH_WATERMARK_FALLBACK_S = 15.0
-
-    def _should_trigger_epoch(self) -> bool:
-        if self._draining:
-            return False  # suppress epoch trigger during scoped drain
-        if self._processed_since_epoch < self._ss_config.epoch_trigger_count:
-            self._epoch_eligible_since = None  # reset if not yet eligible
-            return False
-
-        # Count threshold met.  Opportunistic: wait for a natural valley in
-        # in-flight count so the subsequent drain is fast.
-        # Skip watermark for small max_in_flight (drain is already fast).
-        mif = self._ss_config.max_in_flight
-        if mif <= 3:
-            return True
-        watermark = mif // 4
-        if len(self._in_flight) <= watermark:
-            return True
-
-        # Start fallback timer on first poll where count is met but in-flight is high
-        if self._epoch_eligible_since is None:
-            self._epoch_eligible_since = time.monotonic()
-
-        # Fallback: don't wait forever (15s is ~1% of a 25-min eval)
-        if (
-            time.monotonic() - self._epoch_eligible_since
-            > self._EPOCH_WATERMARK_FALLBACK_S
-        ):
-            return True
-
-        return False
-
-    async def _epoch_refresh(self) -> None:
-        """Periodic synchronization: drain in-flight, refresh archive, bump epoch.
-
-        Uses **scoped drain**: both mutation and ingestion continue during the
-        drain phase.  Only the programs in-flight when the epoch triggered need
-        to finish before the archive is refreshed.  New mutations produced and
-        ingested during drain are counted toward the *next* epoch.
-
-        ``_draining`` flag suppresses ``_should_trigger_epoch`` so the
-        ingestion loop can keep running without triggering a nested refresh.
-        The mutation gate is only closed for the brief refresh window.
-        """
-        epoch = self.metrics.total_generations
-        epoch_t0 = time.monotonic()
-        logger.info("[SteadyState] ---- Epoch {} refresh ----", epoch)
-
-        try:
-            # 1. Enter drain mode — suppresses _should_trigger_epoch so the
-            #    ingestion loop (which is our caller) won't re-enter here.
-            self._draining = True
-
-            # 2. Snapshot the drain set and processed count (for carry-forward).
-            pre_drain_count = self._processed_since_epoch
-            async with self._in_flight_lock:
-                drain_set = set(self._in_flight)
-
-            if drain_set:
-                logger.info(
-                    "[SteadyState] Draining {} in-flight programs "
-                    "(mutations + ingestion continue)",
-                    len(drain_set),
-                )
-                # No timeout: DAG eval duration is problem-dependent and can
-                # exceed any fixed limit.  Stuck programs are handled by
-                # dag_timeout / stage_timeout in DagRunner.
-                await self._drain_scoped(drain_set, timeout_sec=None)
-
-            # 3. Gate mutation loop for the brief refresh window
-            self._mutation_gate.clear()
-
-            # 3a. Publish programs_processed to Redis BEFORE the sync hook.
-            # Without this, adversarial ProgressBasedSyncHook deadlocks: both
-            # populations block at the hook waiting for the other's counter to
-            # advance, but the counter is only written at step 9 (after the hook).
-            await self._write_snapshot(
-                programs_processed=self.metrics.programs_processed
-            )
-
-            # 4. Pre-step hook (called once per epoch, mirrors parent's per-step call)
-            if self._pre_step_hook:
-                await self._pre_step_hook()
-
-            # 5. Snapshot bump + incremental bump
-            self.storage.snapshot.bump()
-            self.storage.snapshot.bump(incremental=True)
-
-            # 6. Refresh archive (DONE -> QUEUED for lineage/insights stages)
-            refreshed = await self._refresh_archive_programs()
-
-            # 7. Reopen mutation gate BEFORE waiting for refresh DAGs.
-            #    First few mutations may see slightly stale population stats
-            #    in their mutation context (from previous epoch's collector).
-            #    This is acceptable: stats change slowly between epochs.
-            self._draining = False
-            # Carry forward programs ingested during drain (by _poll_and_ingest
-            # inside _drain_scoped).  Without this, those programs "don't count"
-            # toward the next epoch trigger, systematically delaying it.
-            drain_phase_count = self._processed_since_epoch - pre_drain_count
-            self._processed_since_epoch = max(0, drain_phase_count)
-            self._epoch_mutants = 0
-            self._epoch_eligible_since = None  # reset watermark timer
-            # Pre-warm elite cache so mutation tasks don't thundering-herd
-            # behind _elite_cache_lock when the gate opens.
-            self._cached_elites = await self._select_elites_for_mutation()
-            self._mutation_gate.set()
-
-            # 8. Wait for refresh DAGs + reindex (mutations continue)
-            if refreshed:
-                await self._await_idle()
-                await self.strategy.reindex_archive()
-
-            # 8a. Post-step hook (composition injection, etc.)
-            if self._post_step_hook:
+                handled = await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                # Cancel inner and wait up to 1s so it can't run detached
+                # past storage.close() (which would raise
+                # ConnectionClosedError into a coroutine with no caller).
+                # `suppress(CancelledError)` swallows a double-cancel from
+                # wait_for; a TimeoutError is logged so the operator can
+                # see the orphan risk rather than dropping it silently.
+                inner.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    try:
+                        await asyncio.wait_for(inner, timeout=1.0)
+                    except TimeoutError:
+                        logger.warning(
+                            "[SteadyState] final sweep inner-task did not "
+                            "honor cancel within 1s — potential orphan "
+                            "coroutine (storage.close() may follow)"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[SteadyState] final sweep inner-task errored "
+                            "on cancel: {}",
+                            exc,
+                        )
+                cancelled = True
+                break
+            except Exception as exc:
+                logger.warning("[SteadyState] final sweep failed: {}", exc)
+                break
+            if handled == 0:
                 try:
-                    await self._post_step_hook()
-                except Exception as e:
-                    logger.error("[SteadyState] post_step_hook failed: {}", e)
+                    await asyncio.sleep(self._ss_config.loop_interval)
+                except asyncio.CancelledError:
+                    cancelled = True
+                    break
 
-            # 9. Increment epoch counter
-            self.metrics.total_generations += 1
-            await self._write_snapshot(total_generations=self.metrics.total_generations)
-            # programs_processed already saved at step 3a before sync hook
-
-            # 10. Log epoch summary
-            epoch_elapsed = time.monotonic() - epoch_t0
-            archive_size = len(await self.strategy.get_program_ids())
-            archive_delta = archive_size - self._prev_archive_size
-            self._prev_archive_size = archive_size
-            if archive_delta == 0:
-                self._stagnant_gens += 1
-            else:
-                self._stagnant_gens = 0
-
-            best_str = self._metrics_tracker.format_best_summary()
-
-            logger.info(
-                "[SteadyState] epoch={} done | mutants={} refreshed={}"
-                " | archive={} ({:+d}){} ({:.1f}s)",
-                epoch,
-                self._epoch_mutants,
-                refreshed,
-                archive_size,
-                archive_delta,
-                best_str,
-                epoch_elapsed,
+        # Observability: if the deadline elapsed before _in_flight
+        # drained, surface count + IDs so an operator can correlate
+        # with stuck DAGs in Redis (state=QUEUED/RUNNING) rather than
+        # silently leaking semaphore slots from the engine's view.
+        # Snapshot under the lock so the WARNING is consistent with
+        # in-memory state at one instant — no torn read with another
+        # poll_and_ingest() concurrently mutating _in_flight.
+        # Skipped on cancel: the WARNING is for deadline-elapsed
+        # diagnostics, not shutdown-was-aborted.
+        if self._in_flight and not cancelled:
+            async with self._in_flight_lock:
+                stuck = sorted(self._in_flight)
+            logger.warning(
+                "[SteadyState] final sweep deadline elapsed with {} "
+                "in-flight mutant(s) still pending; _buffer_sema slots "
+                "will be released on next engine start. stuck_ids={}",
+                len(stuck),
+                stuck[:10] + (["..."] if len(stuck) > 10 else []),
             )
 
-            if self._stagnant_gens >= 5:
-                logger.warning(
-                    "[SteadyState] Archive stagnant for {} consecutive epochs",
-                    self._stagnant_gens,
-                )
-        finally:
-            # Safety net: ensure gate is always reopened on exception.
-            # Normal path reopens gate at step 7 above.
-            self._draining = False
-            self._epoch_eligible_since = None
-            if not self._mutation_gate.is_set():
-                self._processed_since_epoch = 0
-                self._epoch_mutants = 0
-                self._cached_elites = None
-                self._mutation_gate.set()
-
-    # ------------------------------------------------------------------
-    # Drain in-flight
-    # ------------------------------------------------------------------
-
-    async def _drain_in_flight(self, timeout_sec: float | None = None) -> None:
-        """Wait for all in-flight mutants to finish DAG evaluation, then ingest.
-
-        Closes the mutation gate and drains everything.  Used for final shutdown.
-        For epoch refresh, prefer :meth:`_drain_scoped` which allows mutations
-        to continue during the drain.
-        """
-        self._mutation_gate.clear()
-        async with self._in_flight_lock:
-            drain_set = set(self._in_flight)
-        if drain_set:
-            await self._drain_scoped(drain_set, timeout_sec=timeout_sec)
-
-    async def _drain_scoped(
-        self, drain_set: set[str], timeout_sec: float | None = None
-    ) -> None:
-        """Wait for a specific set of program IDs to finish evaluation, then ingest.
-
-        Unlike :meth:`_drain_in_flight`, this does NOT close the mutation gate.
-        New mutations can continue in parallel — their IDs are tracked in
-        ``_in_flight`` but are not part of *drain_set* and do not block this
-        method.
-
-        Programs in *drain_set* that reach DONE are ingested and their semaphore
-        slots released.  Programs that are DISCARDED or vanish have their slots
-        force-released.
-        """
-        # Drain polling interval: tighter than ingestion loop for faster drain
-        _DRAIN_POLL_S = 0.5
-
-        t0 = time.monotonic()
-        remaining_ids = set(drain_set)
-
-        while remaining_ids:
-            candidates = list(remaining_ids)
-
-            # Scoped check: fetch actual state of only drain-set programs
-            programs = await self.storage.mget(
-                candidates, exclude=EXCLUDE_STAGE_RESULTS
-            )
-            found_ids = {p.id for p in programs if p is not None}
-
-            done_ids: list[str] = []
-            gone_ids: list[str] = []
-            still_active = 0
-
-            for prog in programs:
-                if prog is None:
-                    continue
-                if prog.state == ProgramState.DONE:
-                    done_ids.append(prog.id)
-                elif prog.state in (ProgramState.QUEUED, ProgramState.RUNNING):
-                    still_active += 1
-                else:
-                    gone_ids.append(prog.id)  # DISCARDED or unexpected
-
-            # IDs that vanished entirely from Redis
-            for pid in candidates:
-                if pid not in found_ids:
-                    gone_ids.append(pid)
-
-            # Ingest DONE programs — use handled_ids (not done_ids) to avoid
-            # losing programs whose state changed between drain mget and ingest mget
-            handled: list[str] = []
-            if done_ids:
-                _, handled = await self._ingest_batch(done_ids)
-
-            # Release slots for actually-handled programs + gone programs
-            resolved = set(handled) | set(gone_ids)
-            if resolved:
-                async with self._in_flight_lock:
-                    for pid in resolved:
-                        if pid in self._in_flight:
-                            self._in_flight.discard(pid)
-                            self._in_flight_sema.release()
-                remaining_ids -= resolved
-
-            # All drain-set programs resolved?
-            if still_active == 0:
-                # Retry ingestion for any remaining DONE programs that weren't
-                # handled due to TOCTOU (state changed between mgets).
-                retry_done = [pid for pid in remaining_ids if pid in set(done_ids)]
-                if retry_done:
-                    _, retry_handled = await self._ingest_batch(retry_done)
-                    async with self._in_flight_lock:
-                        for pid in retry_handled:
-                            if pid in self._in_flight:
-                                self._in_flight.discard(pid)
-                                self._in_flight_sema.release()
-                    remaining_ids -= set(retry_handled)
-
-                # Force-release anything truly unresolvable (vanished between mgets)
-                if remaining_ids:
-                    logger.warning(
-                        "[SteadyState] {} drain-set programs unresolvable, "
-                        "force-releasing slots",
-                        len(remaining_ids),
-                    )
-                    async with self._in_flight_lock:
-                        for pid in list(remaining_ids):
-                            if pid in self._in_flight:
-                                self._in_flight.discard(pid)
-                                self._in_flight_sema.release()
-                break
-
-            elapsed = time.monotonic() - t0
-
-            # Check timeout
-            if timeout_sec is not None and elapsed > timeout_sec:
-                logger.warning(
-                    "[SteadyState] Drain timeout ({:.0f}s) with {} drain-set remaining; "
-                    "force-releasing slots",
-                    elapsed,
-                    len(remaining_ids),
-                )
-                async with self._in_flight_lock:
-                    for pid in list(remaining_ids):
-                        if pid in self._in_flight:
-                            self._in_flight.discard(pid)
-                            self._in_flight_sema.release()
-                break
-
-            # Also ingest non-drain-set DONE programs to free semaphore slots.
-            # Exclude drain-set IDs to prevent double-ingestion.
-            await self._poll_and_ingest(exclude_ids=drain_set)
-
-            if elapsed > 30 and int(elapsed) % 60 < _DRAIN_POLL_S:
-                logger.info(
-                    "[SteadyState] Draining: {}/{} remaining ({:.0f}s)",
-                    len(remaining_ids),
-                    len(drain_set),
-                    elapsed,
-                )
-            await asyncio.sleep(_DRAIN_POLL_S)
-
-    # ------------------------------------------------------------------
-    # Archive refresh (overrides base to support bucketed ordering)
-    # ------------------------------------------------------------------
-
-    async def _refresh_archive_programs(self) -> int:
-        """Refresh archive programs (DONE → QUEUED).
-
-        Dispatches on ``refresh_order`` and ``refresh_passes`` from
-        ``SteadyStateEngineConfig``:
-
-        * ``refresh_order="fifo"`` (default): one-shot whole-archive flip
-          per pass.  All archived programs become QUEUED and re-run
-          concurrently under the normal DAG-runner backpressure.  If
-          ``refresh_passes > 1`` the whole flip + drain is repeated.
-
-        * ``refresh_order="generation_bucketed"``: bucket the archive by
-          ``lineage.generation`` and flip one bucket at a time in
-          ascending order, awaiting idle between buckets.  Guarantees
-          every program at generation *N* writes its shared-store state
-          (``DGImprovementTracker`` etc.) before any program at
-          generation *N+1* reads it — eliminating the cross-program race
-          where a child's ``LineageStage`` could read tracker data
-          before its parent's ``DGTrackerStage`` wrote it.
-
-        * ``refresh_passes > 1`` (D-side closure of the two-sided race):
-          repeats the refresh.  Pass 1 re-runs ``DGTrackerStage``
-          globally.  Pass 2 re-runs the filtered ``LineageStage`` with a
-          globally-fresh tracker (both ancestor and descendant tracker
-          data current).  Before each pass, advance the engine
-          snapshot's ``refresh_pass`` counter via ``_write_snapshot`` so
-          any stage keyed on it (e.g.
-          :class:`SharedBenchmarkFilteredLineageStage`) cache-invalidates
-          and actually re-runs.  Within a single pass the counter is
-          constant, so normal input-hash caching still deduplicates
-          LLM calls across concurrent siblings.
-        """
-        passes = self._ss_config.refresh_passes
-        total_flipped = 0
-
-        for pass_idx in range(passes):
-            # Advance the engine-snapshot refresh_pass counter BEFORE
-            # each pass.  The engine can't know from here whether any
-            # stage actually reads the counter, but the bump is cheap
-            # (one snapshot write) and harmless when no consumer is
-            # installed.  Always advancing keeps the invariant simple:
-            # every refresh pass bumps the counter exactly once, and
-            # pass k's cache key is distinct from pass k-1's.
-            await self._write_snapshot(
-                refresh_pass=self._snapshot.refresh_pass + 1,
-            )
-
-            if passes > 1 and pass_idx > 0:
-                # Between passes, drain whatever pass k-1 submitted
-                # before starting pass k — otherwise pass k could flip
-                # programs that are already QUEUED from pass k-1.
-                await self._await_idle()
-
-            total_flipped += await self._refresh_archive_programs_one_pass()
-
-        if total_flipped and passes > 1:
-            logger.info(
-                "[SteadyState] gen={} Multi-pass refresh done: "
-                "{} total flips across {} passes",
-                self.metrics.total_generations,
-                total_flipped,
-                passes,
-            )
-
-        return total_flipped
-
-    async def _refresh_archive_programs_one_pass(self) -> int:
-        """One archive refresh pass (see ``_refresh_archive_programs``)."""
-        if self._ss_config.refresh_order == "fifo":
-            return await super()._refresh_archive_programs()
-
-        # generation_bucketed
-        program_ids = await self.strategy.get_program_ids()
-        if not program_ids:
-            return 0
-
-        # Fetch generations for all ids.  mget is a single bulk read — the
-        # exclude set strips heavy fields so we pay only for the tiny
-        # lineage subdocument per program.
-        try:
-            programs = await self.storage.mget(
-                program_ids, exclude=EXCLUDE_STAGE_RESULTS
-            )
-        except Exception as e:
-            logger.error(
-                "[SteadyState] gen={} bucketed mget failed: {}; "
-                "falling back to fifo refresh",
-                self.metrics.total_generations,
-                e,
-            )
-            return await super()._refresh_archive_programs()
-
-        # Bucket by generation.  Programs missing from storage (shouldn't
-        # happen but defensive) are skipped.
-        by_gen: dict[int, list[str]] = {}
-        for prog in programs:
-            if prog is None:
-                continue
-            gen = prog.lineage.generation
-            by_gen.setdefault(gen, []).append(prog.id)
-
-        if not by_gen:
-            return 0
-
-        ordered_gens = sorted(by_gen.keys())
-        total_flipped = 0
-
-        logger.info(
-            "[SteadyState] gen={} Bucketed refresh: {} buckets ({})",
-            self.metrics.total_generations,
-            len(ordered_gens),
-            ", ".join(f"g{g}={len(by_gen[g])}" for g in ordered_gens),
-        )
-
-        for idx, gen in enumerate(ordered_gens):
-            bucket_ids = by_gen[gen]
-            try:
-                count = await self.storage.batch_transition_by_ids(
-                    bucket_ids,
-                    ProgramState.DONE.value,
-                    ProgramState.QUEUED.value,
-                )
-            except Exception as e:
-                logger.error(
-                    "[SteadyState] gen={} bucket g{} flip failed: {}",
-                    self.metrics.total_generations,
-                    gen,
-                    e,
-                )
-                continue
-
-            total_flipped += count
-            logger.info(
-                "[SteadyState] gen={} Bucket g{} submitted ({} programs)",
-                self.metrics.total_generations,
-                gen,
-                count,
-            )
-
-            # Await idle BETWEEN buckets (not after the last — the caller's
-            # step 8 does its own await_idle).  This enforces the invariant
-            # that bucket N's DGTrackerStage writes land before bucket N+1's
-            # LineageStage reads.
-            if idx < len(ordered_gens) - 1 and count:
-                await self._await_idle()
-
-        if total_flipped:
-            self.metrics.record_reprocess_metrics(total_flipped)
-        return total_flipped
+        # Propagate the originating cancellation. The caller's `finally`
+        # in `run()` invoked us; if it was itself cancelled, the cancel
+        # must reach the engine's awaiter rather than being silently
+        # absorbed and letting `_post_run_hook.on_run_complete` execute
+        # in a teardown context the supervisor didn't authorise.
+        # `from None` strips the suppressed Exception (e.g. Redis blip)
+        # from __context__ so the traceback isn't misleadingly chained.
+        if cancelled:
+            raise asyncio.CancelledError from None

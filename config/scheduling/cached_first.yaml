@@ -1,0 +1,9 @@
+# @package _global_
+
+# Cached-first DAG scheduling — programs with non-empty stage_results
+# (i.e. parent re-evaluations) are launched before fresh mutants. Re-evals
+# mostly hit cached_skip and finish in ms, so surfacing them frees parent
+# locks held by the ingestor and unpins producer tasks waiting on
+# refresh_with_ticket. See gigaevo/evolution/scheduling/prioritizer.py.
+prioritizer:
+  _target_: gigaevo.evolution.scheduling.CachedFirstPrioritizer

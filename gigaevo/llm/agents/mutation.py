@@ -2,6 +2,7 @@ import ast
 from datetime import UTC, datetime
 import os
 import re
+import time
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import diffpatch
@@ -16,7 +17,13 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_METADATA_KEY,
 )
 from gigaevo.llm.agents.base import LangGraphAgent
-from gigaevo.llm.models import MultiModelRouter, get_selected_model
+from gigaevo.llm.models import (
+    MultiModelRouter,
+    get_last_token_usage,
+    get_selected_model,
+)
+from gigaevo.monitoring.emit import emit as _emit_event
+from gigaevo.monitoring.events import LLMCall
 from gigaevo.programs.program import Program
 
 if TYPE_CHECKING:
@@ -233,6 +240,9 @@ class MutationAgent(LangGraphAgent):
         """Call LLM with structured output.
 
         Uses the structured LLM to get a MutationStructuredOutput response.
+        Emits exactly one LLM_CALL canonical event per invocation (success or
+        failure) so mutation LLM latency joins the same observability stream
+        as LineageAgent / InsightsAgent — see ``gigaevo.monitoring.events``.
 
         Args:
             state: State with messages field
@@ -240,6 +250,9 @@ class MutationAgent(LangGraphAgent):
         Returns:
             Updated state with llm_response and structured_output fields
         """
+        t0 = time.monotonic()
+        error_type: str | None = None
+        ok = False
         structured_response: Any = None
         try:
             structured_response = await self.structured_llm.ainvoke(state["messages"])
@@ -250,6 +263,7 @@ class MutationAgent(LangGraphAgent):
             model_used = get_selected_model()
             if model_used:
                 state["metadata"]["model_used"] = model_used
+            ok = True
 
             logger.debug(
                 "[MutationAgent] Received structured output — archetype: {}, model: {}",
@@ -258,9 +272,33 @@ class MutationAgent(LangGraphAgent):
             )
 
         except Exception as e:
+            error_type = type(e).__name__
             logger.error(f"[MutationAgent] Structured LLM call failed: {e}")
             state["error"] = str(e)
             state["llm_response"] = None
+        finally:
+            try:
+                model = getattr(self.llm, "model_name", None) or (
+                    get_selected_model() or "unknown"
+                )
+                usage = get_last_token_usage()
+                _emit_event(
+                    LLMCall(
+                        stage="MutationAgent",
+                        endpoint="",
+                        model=str(model),
+                        attempt=1,
+                        ok=ok,
+                        latency_ms=(time.monotonic() - t0) * 1000.0,
+                        tokens_in=usage.context if usage else 0,
+                        tokens_out=usage.generated if usage else 0,
+                        error_type=error_type,
+                    )
+                )
+            except Exception:  # pragma: no cover — never fail the call on logging
+                logger.opt(exception=True).debug(
+                    "[MutationAgent] LLM_CALL emission failed"
+                )
 
         return state
 

@@ -1,12 +1,12 @@
-"""WorkerPool adversarial tests — H2 and H3 from chaos-hacker round 5.
+"""WorkerPool failure-mode tests covering two pool invariants.
 
-H2: _count must NOT be incremented when _start_worker_process raises.
-    If it were, the pool would appear full and all subsequent calls would
-    fall through to the one-shot fallback indefinitely.
+1. ``_count`` must NOT be incremented when ``_start_worker_process`` raises.
+   If it were, the pool would appear full and all subsequent calls would
+   fall through to the one-shot fallback indefinitely.
 
-H3: return_worker must treat returncode=0 (clean exit) as dead — the
-    process must be discarded, not re-queued.  A re-queued dead worker
-    would cause the next caller to receive EOF / BrokenPipe.
+2. ``return_worker`` must treat ``returncode=0`` (clean exit) as dead —
+   the process must be discarded, not re-queued. A re-queued dead worker
+   would cause the next caller to receive EOF / BrokenPipe.
 """
 
 from __future__ import annotations

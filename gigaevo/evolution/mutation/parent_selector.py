@@ -11,6 +11,10 @@ from gigaevo.programs.program import Program
 class ParentSelector(ABC):
     """Abstract base class for selecting parents for mutation."""
 
+    # Concrete subclasses set this in __init__; the engine reads it to
+    # decide how many elites to ask the strategy for per mutant iteration.
+    num_parents: int
+
     @abstractmethod
     def create_parent_iterator(
         self, available_parents: list[Program]

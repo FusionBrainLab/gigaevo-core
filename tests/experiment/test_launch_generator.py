@@ -35,7 +35,6 @@ def dummy_experiment(tmp_path: Path, monkeypatch):
           config:
             stage_timeout: 99
             dag_timeout: 199
-            max_mutations_per_generation: 3
             max_elites_per_generation: 4
             num_parents: 2
             mutation_mode: rewrite
@@ -94,7 +93,6 @@ class TestGenerateProducesValidBash:
         result = generate(dummy_experiment)
         assert "stage_timeout=99" in result
         assert "dag_timeout=199" in result
-        assert "max_mutations_per_generation=3" in result
         assert "max_elites_per_generation=4" in result
         assert "num_parents=2" in result
 
@@ -108,7 +106,9 @@ class TestGenerateProducesValidBash:
         assert "pipeline=standard" in result
         assert "redis.db=15" in result
         assert "model_name=test-model" in result
-        assert "max_generations=5" in result
+        # max_generations on the manifest maps to the engine's max_mutants
+        # Hydra override (1 mutant = 1 unit in the steady-state engine).
+        assert "max_mutants=5" in result
 
     def test_contains_custom_env(self, dummy_experiment):
         result = generate(dummy_experiment)

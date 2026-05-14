@@ -374,6 +374,78 @@ class TestAcallLlm:
         assert result["llm_response"] is None
         assert "LLM exploded" in result["error"]
 
+    @pytest.mark.asyncio
+    async def test_success_emits_llm_call_ok(self):
+        """Successful structured-LLM call emits exactly one LLM_CALL with ok=True."""
+        import json
+        import re
+
+        from loguru import logger
+
+        captured: list[str] = []
+        sink_id = logger.add(
+            lambda m: captured.append(str(m)), level="DEBUG", format="{message}"
+        )
+        try:
+            agent = _make_agent()
+            expected = _make_structured_output()
+            agent.structured_llm = MagicMock()
+            agent.structured_llm.ainvoke = AsyncMock(return_value=expected)
+
+            from langchain_core.messages import HumanMessage
+
+            state = _make_state()
+            state["messages"] = [HumanMessage(content="test")]
+
+            await agent.acall_llm(state)
+        finally:
+            logger.remove(sink_id)
+
+        lines = [m for m in captured if "[LLM_CALL]" in m]
+        assert len(lines) == 1, f"expected 1 LLM_CALL, got {lines}"
+        body = json.loads(re.search(r"\{.*\}\s*$", lines[0]).group(0))
+        assert body["event"] == "LLM_CALL"
+        assert body["stage"] == "MutationAgent"
+        assert body["ok"] is True
+        assert body["latency_ms"] >= 0.0
+        assert body["error_type"] is None
+
+    @pytest.mark.asyncio
+    async def test_exception_emits_llm_call_with_error_type(self):
+        """Failed structured-LLM call emits LLM_CALL with ok=False and error_type set."""
+        import json
+        import re
+
+        from loguru import logger
+
+        captured: list[str] = []
+        sink_id = logger.add(
+            lambda m: captured.append(str(m)), level="DEBUG", format="{message}"
+        )
+        try:
+            agent = _make_agent()
+            agent.structured_llm = MagicMock()
+            agent.structured_llm.ainvoke = AsyncMock(
+                side_effect=RuntimeError("LLM exploded")
+            )
+
+            from langchain_core.messages import HumanMessage
+
+            state = _make_state()
+            state["messages"] = [HumanMessage(content="test")]
+
+            await agent.acall_llm(state)
+        finally:
+            logger.remove(sink_id)
+
+        lines = [m for m in captured if "[LLM_CALL]" in m]
+        assert len(lines) == 1, f"expected 1 LLM_CALL, got {lines}"
+        body = json.loads(re.search(r"\{.*\}\s*$", lines[0]).group(0))
+        assert body["event"] == "LLM_CALL"
+        assert body["stage"] == "MutationAgent"
+        assert body["ok"] is False
+        assert body["error_type"] == "RuntimeError"
+
 
 # ---------------------------------------------------------------------------
 # TestArun

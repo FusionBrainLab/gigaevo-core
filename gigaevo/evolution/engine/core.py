@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
 import time
-from typing import TYPE_CHECKING
+from typing import Any
 
 from loguru import logger
 
@@ -13,7 +13,6 @@ from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.engine.config import EngineConfig
 from gigaevo.evolution.engine.hooks import NullPostRunHook, PostRunHook
 from gigaevo.evolution.engine.metrics import EngineMetrics
-from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.evolution.engine.snapshot import (
     ENGINE_SNAPSHOT_KEY,
     EngineSnapshot,
@@ -30,27 +29,23 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
-from gigaevo.monitoring.emit import emit as _emit_event
-from gigaevo.monitoring.events import GenerationBoundary
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.metrics_tracker import MetricsTracker
 from gigaevo.utils.trackers.base import LogWriter
 
-if TYPE_CHECKING:
-    from typing import Any
-
 
 class EvolutionEngine:
-    """
-      1) Wait until no DAGs are running (idle)
-      2) Select elites & create mutants
-      3) Wait for mutants' DAGs to finish (idle again)
-      4) Ingest completed mutants
-      5) Refresh all archive programs (DONE -> QUEUED)
-      6) Wait for refresh DAGs to finish (idle)
-    All state writes go through ProgramStateManager; storage is read-oriented here.
+    """Abstract base for evolution engines.
+
+    Provides shared helpers (snapshot, metrics, idle wait, hooks, stop
+    context) consumed by :class:`SteadyStateEvolutionEngine`. The concrete
+    loop is provided by the subclass; this base intentionally raises
+    ``NotImplementedError`` from ``run()`` so it cannot be instantiated as
+    a standalone engine.
+
+    See ``docs/superpowers/specs/2026-05-12-steady-state-engine-audit-and-redesign.md``.
     """
 
     def __init__(
@@ -72,7 +67,6 @@ class EvolutionEngine:
         self._writer = writer.bind(path=["evolution_engine"])
 
         self._running = False
-        self._paused = False
         self._last_pending_dags_counts: tuple[int, int] | None = None
 
         self._task: asyncio.Task | None = None
@@ -81,11 +75,6 @@ class EvolutionEngine:
 
         # ETA tracking — set at the start of run()
         self._run_start_time: float | None = None
-        self._run_start_gen: int = 0
-
-        # Archive stagnation tracking
-        self._prev_archive_size: int = 0
-        self._stagnant_gens: int = 0
 
         self.metrics = EngineMetrics()
         self.state = ProgramStateManager(self.storage)
@@ -95,6 +84,13 @@ class EvolutionEngine:
         self._post_run_hook = post_run_hook or NullPostRunHook()
 
         self._snapshot: EngineSnapshot = EngineSnapshot()
+        # Serialises _write_snapshot so the version+Redis writes from
+        # concurrent mutant tasks land in monotone order. Without this lock,
+        # T1 may compute v=N+1 and await save; T2 may compute v=N+2 and
+        # award save; if T2's save lands first, Redis ends at v=N+1 with
+        # stale fields and a crash resume rehydrates a snapshot older than
+        # the in-memory mirror.
+        self._snapshot_lock: asyncio.Lock = asyncio.Lock()
 
         logger.info(
             "[EvolutionEngine] Init | strategy={}, acceptor={}, stopper={}",
@@ -143,7 +139,14 @@ class EvolutionEngine:
                 await task
 
         if self._metrics_collector_task:
+            # Await the cancel — without this, the collector may still be
+            # mid `await storage.<call>` when `storage.close()` fires below,
+            # raising ConnectionClosedError into a coroutine that has no
+            # caller to surface it. Bound the wait so a wedged collector
+            # cannot indefinitely block shutdown.
             self._metrics_collector_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(self._metrics_collector_task, timeout=2.0)
             self._metrics_collector_task = None
 
         if self._metrics_tracker:
@@ -151,175 +154,18 @@ class EvolutionEngine:
 
         await self.storage.close()
 
-    def pause(self) -> None:
-        self._paused = True
-
-    def resume(self) -> None:
-        self._paused = False
-
-    def is_running(self) -> bool:
-        return self._running
-
     @property
     def task(self) -> asyncio.Task | None:
         return self._task
 
     async def run(self) -> None:
-        logger.info(
-            "[EvolutionEngine] Start | stopper={} strategy={} acceptor={}"
-            " | max_elites={} max_mutations={} loop_interval={}s",
-            type(self.config.stopper).__name__,
-            type(self.strategy).__name__,
-            type(self.config.program_acceptor).__name__,
-            self.config.max_elites_per_generation,
-            self.config.max_mutations_per_generation,
-            self.config.loop_interval,
+        """Abstract — subclasses provide the loop.
+
+        Use :class:`SteadyStateEvolutionEngine` (the only concrete engine).
+        """
+        raise NotImplementedError(
+            "EvolutionEngine.run() is abstract — use SteadyStateEvolutionEngine."
         )
-        self._running = True
-        self._run_start_time = time.monotonic()
-        self._run_start_gen = self.metrics.total_generations
-        try:
-            while self._running:
-                if self._paused:
-                    await asyncio.sleep(self.config.loop_interval)
-                    continue
-
-                stop_decision = self.stopper.should_stop(self._build_stop_context())
-                if stop_decision.stop:
-                    logger.info(
-                        "[EvolutionEngine] Stop: {}",
-                        stop_decision.reason,
-                    )
-                    await self._write_snapshot(completion_reason=stop_decision.reason)
-                    break
-
-                try:
-                    await self.step()
-                except asyncio.CancelledError:
-                    # Propagate so shutdown stays clean.
-                    raise
-                except Exception as e:
-                    # Don’t crash the engine on a single bad step; just log and continue.
-                    logger.exception("[EvolutionEngine] step() failed: {}", e)
-
-                await asyncio.sleep(0)
-        except asyncio.CancelledError:
-            # Task is being cancelled during shutdown.
-            logger.debug("[EvolutionEngine] run() cancelled")
-            raise
-        finally:
-            self._running = False
-            try:
-                await self._post_run_hook.on_run_complete(self.storage)
-            except Exception as e:
-                logger.error("[EvolutionEngine] post-run hook failed: {}", e)
-            logger.info("[EvolutionEngine] Stopped")
-
-    async def step(self) -> None:
-        """One generation step (idle → mutate → idle → ingest → refresh → idle)."""
-        gen = self.metrics.total_generations
-        step_t0 = time.monotonic()
-
-        if self._pre_step_hook:
-            await self._pre_step_hook()
-
-        self.storage.snapshot.bump()
-
-        # Phase 1: wait until engine is idle (no QUEUED/RUNNING programs)
-        await self._await_idle()
-        logger.debug("[EvolutionEngine] gen={} Phase 1: Idle confirmed", gen)
-
-        # Phase 2: select elites & create mutants
-        elites = await self._select_elites_for_mutation()
-        mutation_ids = await self._create_mutants(elites) if elites else None
-        logger.debug(
-            "[EvolutionEngine] gen={} Phase 2: Created {} mutant(s)",
-            gen,
-            len(mutation_ids) if mutation_ids is not None else 0,
-        )
-
-        # Phase 3: wait for the mutants' DAGs to finish
-        await self._await_idle()
-        logger.debug(
-            "[EvolutionEngine] gen={} Phase 3: Mutant DAGs finished (idle)", gen
-        )
-
-        # Phase 4: ingest newly completed programs (typically the mutants)
-        await self._ingest_completed_programs(mutation_ids=mutation_ids)
-        logger.debug("[EvolutionEngine] gen={} Phase 4: Ingestion done", gen)
-
-        # Incremental bump: ingestion only changes program states (DONE→DISCARDED)
-        # and set membership — not the data fields the collector reads (metrics,
-        # lineage, generation).  Allows the snapshot to reuse cached Program
-        # objects and only fetch newly added/removed IDs.
-        self.storage.snapshot.bump(incremental=True)
-
-        # Phase 5: refresh all archive programs (to re-run lineage/descendant-aware stages)
-        refreshed = await self._refresh_archive_programs()
-        logger.debug(
-            "[EvolutionEngine] gen={} Phase 5: Refreshed {} program(s)", gen, refreshed
-        )
-
-        # Phase 6: wait for refresh DAGs to finish
-        if refreshed:
-            await self._await_idle()
-            logger.debug(
-                "[EvolutionEngine] gen={} Phase 6: Refresh DAGs finished (idle)", gen
-            )
-
-            # Phase 7: reindex archive with updated metrics (e.g., prompt fitness)
-            await self.strategy.reindex_archive()
-            logger.debug("[EvolutionEngine] gen={} Phase 7: Archive reindexed", gen)
-
-        # Post-step hook: composition injection, cross-population analysis, etc.
-        if self._post_step_hook:
-            try:
-                await self._post_step_hook()
-            except Exception as e:
-                logger.error("[EvolutionEngine] post_step_hook failed: {}", e)
-
-        self.metrics.total_generations += 1
-        try:
-            _emit_event(GenerationBoundary(gen=self.metrics.total_generations))
-        except Exception:  # pragma: no cover — never fail the engine on logging
-            logger.opt(exception=True).debug(
-                "[EvolutionEngine] GENERATION_BOUNDARY emission failed"
-            )
-        await self._write_snapshot(
-            total_generations=self.metrics.total_generations,
-            programs_processed=self.metrics.programs_processed,
-        )
-
-        # Log generation summary for easy diagnosis
-        step_elapsed = time.monotonic() - step_t0
-        archive_size = len(await self.strategy.get_program_ids())
-        best_str = self._metrics_tracker.format_best_summary()
-
-        archive_delta = archive_size - self._prev_archive_size
-        self._prev_archive_size = archive_size
-        if archive_delta == 0:
-            self._stagnant_gens += 1
-        else:
-            self._stagnant_gens = 0
-
-        logger.info(
-            "[EvolutionEngine] gen={} done | elites={} mutants={} refreshed={}"
-            " | archive={} ({:+d}){} ({:.1f}s)",
-            gen,
-            len(elites),
-            len(mutation_ids) if mutation_ids is not None else 0,
-            refreshed,
-            archive_size,
-            archive_delta,
-            best_str,
-            step_elapsed,
-        )
-
-        if self._stagnant_gens >= 5:
-            logger.warning(
-                "[EvolutionEngine] Archive stagnant for {} consecutive generations",
-                self._stagnant_gens,
-            )
 
     async def _await_idle(self) -> None:
         """Block until there are no programs in QUEUED or RUNNING."""
@@ -333,8 +179,8 @@ class EvolutionEngine:
             elapsed = time.monotonic() - t0
             if elapsed > 30 and int(elapsed) % 60 < self.config.loop_interval:
                 logger.info(
-                    "[EvolutionEngine] gen={} Waiting for idle ({:.0f}s elapsed)",
-                    self.metrics.total_generations,
+                    "[EvolutionEngine] mutants={} Waiting for idle ({:.0f}s elapsed)",
+                    self.metrics.total_mutants,
                     elapsed,
                 )
             # Ghost safety: after 30s, verify counts with full fetch (once)
@@ -378,106 +224,48 @@ class EvolutionEngine:
                     break
             await asyncio.sleep(self.config.loop_interval)
 
-    async def _select_elites_for_mutation(self) -> list[Program]:
-        elites = await self.strategy.select_elites(
-            total=self.config.max_elites_per_generation
-        )
+    async def _select_parents_for_mutation(self) -> list[Program]:
+        # In steady-state, every iteration mutates exactly one parent group, so
+        # we ask the strategy for ``num_parents`` elites and treat the response
+        # as the parent set. May return fewer when the archive is smaller than
+        # ``num_parents`` (early run, aggressive rejection) — the mutation
+        # operator decides whether single-parent mutation is acceptable.
+        num_parents = self.config.parent_selector.num_parents
+        parents = await self.strategy.select_elites(total=num_parents)
         logger.debug(
-            "[EvolutionEngine] gen={} Elites selected: {}",
-            self.metrics.total_generations,
-            len(elites),
+            "[EvolutionEngine] mutants={} Parents selected: {}",
+            self.metrics.total_mutants,
+            len(parents),
         )
-        self.metrics.record_elite_selection_metrics(len(elites), 0)
-        return elites
+        self.metrics.elites_selected += len(parents)
+        return parents
 
-    async def _create_mutants(self, elites: list[Program]) -> list[str]:
-        """Create mutants and return their program IDs."""
-        logger.debug(
-            "[EvolutionEngine] gen={} Mutate from {} elite(s)",
-            self.metrics.total_generations,
-            len(elites),
-        )
-        mutation_ids = await generate_mutations(
-            elites,
-            mutator=self.mutation_operator,
-            storage=self.storage,
-            state_manager=self.state,
-            parent_selector=self.config.parent_selector,
-            limit=self.config.max_mutations_per_generation,
-            iteration=self.metrics.total_generations,
-        )
+    async def _ingest_completed_programs(self) -> None:
+        """Validate and hand over any DONE programs to the strategy.
 
-        self.metrics.record_mutation_metrics(len(mutation_ids), 0)
-        return mutation_ids
-
-    async def _ingest_completed_programs(
-        self,
-        *,
-        mutation_ids: list[str] | None = None,
-    ) -> None:
-        """
-        Validate and hand over any DONE programs to the strategy.
-        Programs already in the archive stay DONE (they arrived from a refresh DAG).
-        New programs are added if accepted, otherwise discarded.
-
-        Args:
-            mutation_ids: IDs of programs created during this generation's mutation
-                phase.  When None (mutation was skipped), all non-archive DONE programs
-                are deserialized and validated normally.  When a list (mutation ran),
-                non-archive DONE programs that are NOT in this set are batch-discarded
-                without deserialization — they are stale leftovers from previous
-                generations or initial population.
+        Programs already in the archive stay DONE (they arrived from a
+        refresh DAG). New programs are added if accepted, otherwise
+        discarded.
         """
         # Fetch only IDs first (SMEMBERS — no deserialization), then filter
         # out archive programs before doing the expensive mget+deserialize.
         done_ids = await self.storage.get_ids_by_status(ProgramState.DONE.value)
         if not done_ids:
             logger.debug(
-                "[EvolutionEngine] gen={} No completed programs to ingest",
-                self.metrics.total_generations,
+                "[EvolutionEngine] mutants={} No completed programs to ingest",
+                self.metrics.total_mutants,
             )
             return
 
         archive_program_ids = set(await self.strategy.get_program_ids())
-        non_archive_ids = [pid for pid in done_ids if pid not in archive_program_ids]
-
-        if not non_archive_ids:
-            logger.debug(
-                "[EvolutionEngine] gen={} {} DONE programs all in archive, skipping",
-                self.metrics.total_generations,
-                len(done_ids),
-            )
-            return
-
-        # Fast path: when mutation_ids are known, batch-discard stale DONE
-        # programs (those not created this generation) without deserializing
-        # them.  This avoids O(N) mget + from_dict on the initial population.
-        if mutation_ids is not None:
-            mutation_id_set = set(mutation_ids)
-            stale_ids = [pid for pid in non_archive_ids if pid not in mutation_id_set]
-            new_ids = [pid for pid in non_archive_ids if pid in mutation_id_set]
-            if stale_ids:
-                logger.info(
-                    "[EvolutionEngine] gen={} Fast-discard {} stale DONE program(s)",
-                    self.metrics.total_generations,
-                    len(stale_ids),
-                )
-                try:
-                    await self.storage.batch_move_status_sets(
-                        stale_ids,
-                        ProgramState.DONE.value,
-                        ProgramState.DISCARDED.value,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "[EvolutionEngine] gen={} stale batch discard failed: {}",
-                        self.metrics.total_generations,
-                        e,
-                    )
-        else:
-            new_ids = non_archive_ids
+        new_ids = [pid for pid in done_ids if pid not in archive_program_ids]
 
         if not new_ids:
+            logger.debug(
+                "[EvolutionEngine] mutants={} {} DONE programs all in archive, skipping",
+                self.metrics.total_mutants,
+                len(done_ids),
+            )
             return
 
         # Only deserialize the new (non-archive) programs.
@@ -492,8 +280,8 @@ class EvolutionEngine:
             return
 
         logger.info(
-            "[EvolutionEngine] gen={} Ingest {} program(s) ({} in archive skipped)",
-            self.metrics.total_generations,
+            "[EvolutionEngine] mutants={} Ingest {} program(s) ({} in archive skipped)",
+            self.metrics.total_mutants,
             len(completed),
             len(done_ids) - len(new_ids),
         )
@@ -575,42 +363,12 @@ class EvolutionEngine:
         self.metrics.programs_processed += added
         self.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
         logger.info(
-            "[EvolutionEngine] gen={} Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
-            self.metrics.total_generations,
+            "[EvolutionEngine] mutants={} Ingest done | added={}, rejected_validation={}, rejected_strategy={}",
+            self.metrics.total_mutants,
             added,
             rej_valid,
             rej_strategy,
         )
-
-    async def _refresh_archive_programs(self) -> int:
-        """Flip all archive programs from DONE to QUEUED so lineage/descendant-aware stages re-run."""
-        program_ids_to_refresh = await self.strategy.get_program_ids()
-
-        if not program_ids_to_refresh:
-            return 0
-
-        try:
-            count = await self.storage.batch_transition_by_ids(
-                program_ids_to_refresh,
-                ProgramState.DONE.value,
-                ProgramState.QUEUED.value,
-            )
-        except Exception as e:
-            logger.error(
-                "[EvolutionEngine] gen={} batch_transition_by_ids failed: {}",
-                self.metrics.total_generations,
-                e,
-            )
-            return 0
-
-        if count:
-            logger.info(
-                "[EvolutionEngine] gen={} Submitted {} program(s) for refresh",
-                self.metrics.total_generations,
-                count,
-            )
-            self.metrics.record_reprocess_metrics(count)
-        return count
 
     async def _has_active_dags(self) -> bool:
         """True if any programs are QUEUED or RUNNING (i.e., engine not idle).
@@ -638,9 +396,6 @@ class EvolutionEngine:
         self._last_pending_dags_counts = None
         return False
 
-    async def _set_state(self, program: Program, state: ProgramState) -> None:
-        await self.state.set_program_state(program, state)
-
     async def _notify_hook(self, prog: Program, outcome: MutationOutcome) -> None:
         """Call on_program_ingested with fault isolation.
 
@@ -667,17 +422,29 @@ class EvolutionEngine:
         Last-writer-wins — the engine is single-process async with a single
         writer coroutine.
 
-        If ``save_run_state`` raises, the in-process mirror reflects the attempted
-        write; the caller is expected to retry or treat engine state as divergent.
+        Persist-then-mirror ordering: if ``save_run_state`` raises, the
+        in-memory mirror keeps its current version so the next call retries
+        the same version number — Redis never sees a version skip. The
+        mirror is thus always ``≤`` Redis, which is fine because Redis is
+        the source of truth on resume.
         """
         # EngineSnapshot is frozen; rebuild via model_copy instead of in-place mutation.
-        self._snapshot = self._snapshot.model_copy(
-            update={**updates, "version": self._snapshot.version + 1}
-        )
-        set_current_snapshot(self._snapshot)
-        await self.storage.save_run_state(
-            ENGINE_SNAPSHOT_KEY, self._snapshot.model_dump_json()
-        )
+        # Lock serialises concurrent writes so the Redis-persisted version
+        # matches the in-memory mirror — without it, races between two mutant
+        # tasks can leave Redis on an older version than the mirror, and a
+        # crash resume would rehydrate a snapshot that has lost updates.
+        async with self._snapshot_lock:
+            next_snapshot = self._snapshot.model_copy(
+                update={**updates, "version": self._snapshot.version + 1}
+            )
+            await self.storage.save_run_state(
+                ENGINE_SNAPSHOT_KEY, next_snapshot.model_dump_json()
+            )
+            # Only mirror after Redis confirms — on failure the line above
+            # raises and the mirror keeps the prior version, so the next
+            # call retries cleanly.
+            self._snapshot = next_snapshot
+            set_current_snapshot(next_snapshot)
 
     async def _load_snapshot_on_resume(self) -> None:
         """Hydrate ``self._snapshot`` from Redis during engine startup."""
@@ -685,13 +452,13 @@ class EvolutionEngine:
         set_current_snapshot(self._snapshot)
 
     async def restore_state(self) -> None:
-        """Restore total_generations and programs_processed from storage after a resume."""
+        """Restore total_mutants and programs_processed from storage after a resume."""
         await self._load_snapshot_on_resume()
-        self.metrics.total_generations = self._snapshot.total_generations
+        self.metrics.total_mutants = self._snapshot.total_mutants
         self.metrics.programs_processed = self._snapshot.programs_processed
         logger.info(
-            "[EvolutionEngine] Restored total_generations={} programs_processed={}",
-            self._snapshot.total_generations,
+            "[EvolutionEngine] Restored total_mutants={} programs_processed={}",
+            self._snapshot.total_mutants,
             self._snapshot.programs_processed,
         )
 
@@ -706,10 +473,11 @@ class EvolutionEngine:
             else 0.0
         )
         return StopContext(
-            total_generations=self.metrics.total_generations,
+            total_mutants=self.metrics.total_mutants,
             elapsed_seconds=elapsed,
+            best_fitness=self._metrics_tracker.get_best_fitness(),
             programs_processed=self.metrics.programs_processed,
         )
 
-    def _reached_generation_cap(self) -> bool:
+    def _reached_mutant_cap(self) -> bool:
         return self.stopper.should_stop(self._build_stop_context()).stop

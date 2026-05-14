@@ -9,7 +9,7 @@ from gigaevo.evolution.engine.stopper import (
     CompositeStopper,
     EvolutionStopper,
     FitnessPlateauStopper,
-    MaxGenerationsStopper,
+    MaxMutantsStopper,
     StopContext,
     StopDecision,
     WallClockStopper,

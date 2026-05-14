@@ -27,7 +27,7 @@ ALLOWED_SEAMS: dict[str, tuple[str, ...]] = {
     # General seams (one event each)
     "programs/stages/base.py": ("STAGE_EXEC",),
     "llm/agents/base.py": ("LLM_CALL",),
-    "evolution/engine/core.py": ("GENERATION_BOUNDARY",),
+    "evolution/engine/backpressure_sampler.py": ("BACKPRESSURE_SAMPLE",),
     # Adversarial helpers + their one caller each
     "adversarial/structured_logging.py": (
         "TRACKER_WRITE",
@@ -48,6 +48,7 @@ CANONICAL_EVENT_NAMES = {
     "EXCEPTION",
     "STAGE_EXEC",
     "LLM_CALL",
+    "BACKPRESSURE_SAMPLE",
     "METRIC_EMIT",
     "TRACKER_WRITE",
     "HOF_FETCH",

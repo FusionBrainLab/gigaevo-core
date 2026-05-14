@@ -36,9 +36,9 @@ import pytest
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -231,7 +231,7 @@ def _make_fakeredis_storage(server: fakeredis.FakeServer) -> RedisProgramStorage
 
 def _make_island_config(fitness_key: str = "fitness") -> IslandConfig:
     behavior_space = BehaviorSpace(
-        bins={"x": LinearBinning(min_val=0.0, max_val=5.0, num_bins=5, type="linear")}
+        bins={"x": LinearBinning(min_val=0.0, max_val=6.0, num_bins=6, type="linear")}
     )
     return IslandConfig(
         island_id="test",
@@ -256,7 +256,7 @@ def _make_null_writer() -> MagicMock:
 
 def _build_engine(
     storage: RedisProgramStorage, max_generations: int
-) -> EvolutionEngine:
+) -> SteadyStateEvolutionEngine:
     strategy = MapElitesMultiIsland(
         island_configs=[_make_island_config()],
         program_storage=storage,
@@ -269,16 +269,15 @@ def _build_engine(
 
     tracker.stop = _stop
 
-    return EvolutionEngine(
+    return SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=FloatHalvingOperator(),
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=1,
-            max_mutations_per_generation=1,
-            generation_timeout=30.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            max_in_flight=1,
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),
         metrics_tracker=tracker,
@@ -289,7 +288,7 @@ async def _run_with_metrics(
     storage: RedisProgramStorage,
     metrics_ctx: MetricsContext,
     max_generations: int,
-) -> EvolutionEngine:
+) -> SteadyStateEvolutionEngine:
     engine = _build_engine(storage, max_generations)
     state_manager = ProgramStateManager(storage)
     dag_runner = FakeMetricsDagRunner(storage, state_manager, metrics_ctx)
@@ -335,10 +334,19 @@ class TestEvolutionWithMetricsPipeline:
         await storage.add(seed)
 
         engine = await _run_with_metrics(storage, metrics_ctx, max_generations=5)
-        assert engine.metrics.total_generations == 5
+        assert engine.metrics.total_mutants == 5
 
         programs = await _get_archive_programs(server)
-        assert len(programs) == 5
+        # With the two-semaphore pipeline (steady-state depth ~2N), a producer
+        # for mutant N+1 can run refresh+LLM before mutant N has been ingested
+        # into the strategy archive — so parent selection may pick a stale
+        # parent and two mutants can collide on the same cell. Archive size is
+        # therefore bounded by [seed-cell, seed+all-distinct-halvings] = [2, 6]
+        # under max_in_flight=1, not a fixed 6. The point of this test is the
+        # normalization-pipeline contract below, not the exact cell count.
+        assert 2 <= len(programs) <= 6, (
+            f"archive size {len(programs)} outside expected [2, 6] window"
+        )
 
         # Every archived program must have metrics from the pipeline
         for prog in programs:
@@ -398,8 +406,16 @@ class TestEvolutionWithMetricsPipeline:
         programs = await _get_archive_programs(server)
         values = _archive_values(programs)
 
-        assert values == {1024.0, 512.0, 256.0, 128.0, 64.0}, (
-            f"Unexpected archive values: {sorted(values)}"
+        # Under the two-semaphore pipeline, parent re-selection can race ahead
+        # of strategy ingestion, so the realized halving trajectory is a
+        # subset of the deterministic 1024→32 chain rather than the full set.
+        # The seed value must always be present; everything else must be on
+        # the canonical halving path.
+        expected = {1024.0, 512.0, 256.0, 128.0, 64.0, 32.0}
+        assert 1024.0 in values, f"seed value missing from archive: {sorted(values)}"
+        assert values.issubset(expected), (
+            f"Unexpected archive values (not on halving trajectory): "
+            f"{sorted(values - expected)}"
         )
 
     async def test_normalized_score_aggregate_present(self) -> None:

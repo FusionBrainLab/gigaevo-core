@@ -15,6 +15,7 @@ from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
     reset_event_counters,
 )
+from gigaevo.monitoring.live_profiler import start_live_profiler
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
 from gigaevo.runner.dag_runner import DagRunner
@@ -70,9 +71,7 @@ async def run_experiment(cfg: DictConfig) -> None:
 
         dag_runner.start()
         evolution_engine.start()
-        logger.info(
-            "Evolution running (max_gen={})", cfg.max_generations or "unlimited"
-        )
+        logger.info("Evolution running (max_mutants={})", cfg.max_mutants)
 
         await serve_until_signal(
             stop_coros=(evolution_engine.stop(), dag_runner.stop()),
@@ -105,9 +104,9 @@ def main(cfg: DictConfig) -> None:
         retention=cfg.logging.retention,
     )
     hydra_config = hydra.core.hydra_config.HydraConfig.get().runtime
-    logger.info(
-        "Output dir: {} | Log: {}", Path(hydra_config.output_dir), log_file_path
-    )
+    output_dir = Path(hydra_config.output_dir)
+    logger.info("Output dir: {} | Log: {}", output_dir, log_file_path)
+    start_live_profiler(log_file_path, output_dir)
     asyncio.run(run_experiment(cfg))
 
 

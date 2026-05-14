@@ -30,10 +30,10 @@ import pytest
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.hooks import PostRunHook
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
@@ -222,21 +222,19 @@ def _build_engine(
     storage: RedisProgramStorage,
     max_generations: int,
     post_run_hook: PostRunHook | None = None,
-) -> tuple[EvolutionEngine, MapElitesMultiIsland]:
+) -> tuple[SteadyStateEvolutionEngine, MapElitesMultiIsland]:
     strategy = MapElitesMultiIsland(
         island_configs=[_make_island_config()],
         program_storage=storage,
     )
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=IncrementMutationOperator(),
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=1,
-            max_mutations_per_generation=1,
-            generation_timeout=30.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),
         metrics_tracker=_make_metrics_tracker(),

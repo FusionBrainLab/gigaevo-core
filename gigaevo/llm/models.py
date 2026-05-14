@@ -11,6 +11,7 @@ from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
+from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
 from loguru import logger
 
@@ -53,13 +54,18 @@ def _remember_token_usage(response: Any) -> None:
 
 
 def _create_langfuse_handler() -> CallbackHandler | None:
-    """Create Langfuse handler if credentials are configured."""
+    """Create Langfuse handler if credentials are configured.
+
+    In langfuse v4 the handler is a thin wrapper over the global ``Langfuse``
+    client returned by ``get_client()``; flush tuning must be set on the
+    client at construction time. Constructing the ``Langfuse`` client here
+    installs it as the singleton the handler picks up.
+    """
     if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
         return None
 
+    Langfuse(flush_at=1, flush_interval=1)
     handler = CallbackHandler()
-    handler.client.flush_at = 1  # type: ignore[attr-defined]
-    handler.client.flush_interval = 1  # type: ignore[attr-defined]
     logger.info("[MultiModelRouter] Langfuse tracing enabled")
     return handler
 
@@ -162,7 +168,13 @@ class MultiModelRouter(Runnable):
             checked.add(base_url)
             try:
                 url = f"{base_url}/models"
-                req = urllib.request.Request(url, method="GET")
+                req = urllib.request.Request(
+                    url,
+                    method="GET",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('OPENAI_API_TOKEN')}"
+                    },
+                )
                 with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
                     data = _json.loads(resp.read())
                 available = [d["id"] for d in data.get("data", [])]

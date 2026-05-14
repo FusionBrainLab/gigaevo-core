@@ -416,6 +416,13 @@ class ConfigSpec(BaseModel):
     evolution: str | None = None
     llm_model: str | None = None
     n_workers: int | None = None
+    # Engine-side counter is now ``max_mutants`` (post true-JIT-refresh
+    # refactor); the manifest field keeps the legacy name because the value
+    # also flows out unchanged to monitoring/notification UX
+    # (``ExperimentUpdate.max_generations``, github_pr_channel,
+    # telegram_channel) where the operator-facing "Target: N generations"
+    # label is what users read. ``launch_generator`` translates this field
+    # into the ``max_mutants=`` Hydra override at run launch.
     max_generations: int | None = None
     # Name of a task-group file under ``config/experiment/`` — emitted as the
     # FIRST Hydra override (``experiment=<task_group>``) so every run starts

@@ -119,6 +119,21 @@ class MetricsTracker:
             parts.append(f"{key}={best_val:.{decimals}f}")
         return " best=[" + ", ".join(parts) + "]"
 
+    def get_best_fitness(self) -> float | None:
+        """Return the best frontier value for the primary metric, or None.
+
+        Used by ``EvolutionEngine._build_stop_context`` to populate
+        ``StopContext.best_fitness`` so that ``FitnessPlateauStopper`` can
+        observe progress. Returns ``None`` when no valid programs have been
+        observed yet, or when the primary metric key has no frontier entry.
+        """
+        try:
+            primary_key = self._ctx.get_primary_key()
+        except ValueError:
+            return None
+        entry = self._best_valid.get(primary_key)
+        return entry[0] if entry is not None else None
+
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Schedule tracker task on the provided loop."""
         if self._task and not self._task.done():

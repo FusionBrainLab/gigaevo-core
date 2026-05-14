@@ -33,6 +33,7 @@ from gigaevo.evolution.scheduling.predictor import (
     SimpleHeuristicPredictor,
 )
 from gigaevo.evolution.scheduling.prioritizer import (
+    CachedFirstPrioritizer,
     FIFOPrioritizer,
     LPTPrioritizer,
     ProgramPrioritizer,
@@ -40,6 +41,7 @@ from gigaevo.evolution.scheduling.prioritizer import (
 )
 
 __all__ = [
+    "CachedFirstPrioritizer",
     "ChainFeatureExtractor",
     "CodeFeatureExtractor",
     "CompositeFeatureExtractor",

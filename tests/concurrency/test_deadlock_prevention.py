@@ -22,9 +22,9 @@ from gigaevo.database.redis.config import RedisConnectionConfig
 from gigaevo.database.redis.connection import RedisConnection
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import (
     ScalarTournamentEliteSelector,
@@ -70,7 +70,9 @@ def _make_program(state: ProgramState = ProgramState.QUEUED) -> Program:
     )
 
 
-def _make_engine(storage: RedisProgramStorage, **overrides) -> EvolutionEngine:
+def _make_engine(
+    storage: RedisProgramStorage, **overrides
+) -> SteadyStateEvolutionEngine:
     class _NullMutator(MutationOperator):
         async def mutate_single(
             self, selected_parents: list[Program]
@@ -102,24 +104,21 @@ def _make_engine(storage: RedisProgramStorage, **overrides) -> EvolutionEngine:
     writer = MagicMock()
     writer.bind.return_value = writer
 
-    engine_kwargs: dict = dict(
-        loop_interval=0.005,
-        max_generations=1,
-    )
+    engine_kwargs: dict = dict(loop_interval=0.005)
     engine_kwargs.update(overrides)
 
-    # Translate the legacy max_generations kwarg into a stopper instance.
-    max_gens = engine_kwargs.pop("max_generations", None)
-    if max_gens is not None:
-        engine_kwargs["stopper"] = MaxGenerationsStopper(max_gens)
-    else:
-        engine_kwargs["stopper"] = EvolutionStopper()
+    # Translate a max_generations override (used by some call sites) into a
+    # MaxMutantsStopper; otherwise default to the open-ended EvolutionStopper.
+    max_gens = engine_kwargs.pop("max_generations", 1)
+    engine_kwargs["stopper"] = (
+        MaxMutantsStopper(max_gens) if max_gens is not None else EvolutionStopper()
+    )
 
-    return EvolutionEngine(
+    return SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=_NullMutator(),
-        config=EngineConfig(**engine_kwargs),
+        config=SteadyStateEngineConfig(**engine_kwargs),
         writer=writer,
         metrics_tracker=tracker,
     )
@@ -660,79 +659,7 @@ class TestBatchTransitionScale:
 
 
 # ===========================================================================
-# 7. Full engine step with real storage (integration)
-# ===========================================================================
-
-
-class TestEngineStepIntegration:
-    """A full engine step with real (fake)Redis storage must complete
-    without hanging. This catches interactions between all layers.
-    """
-
-    async def test_full_step_no_programs(self) -> None:
-        """step() with empty storage completes without hanging."""
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage)
-            await asyncio.wait_for(engine.step(), timeout=HANG_TIMEOUT)
-        finally:
-            await storage.close()
-
-    async def test_full_step_with_done_programs(self) -> None:
-        """step() with DONE programs ingests them. After refresh transitions
-        programs back to QUEUED, we need a background task to process them
-        (simulating the DAG runner) so _await_idle in Phase 6 terminates.
-        """
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, generation_timeout=2.0)
-            sm = ProgramStateManager(storage)
-
-            # Add a program that's already DONE
-            p = _make_program(ProgramState.QUEUED)
-            p.add_metrics({"fitness": 0.9, "x": 0.5})
-            await storage.add(p)
-            await sm.set_program_state(p, ProgramState.RUNNING)
-            await sm.set_program_state(p, ProgramState.DONE)
-
-            # Background: after refresh transitions DONE->QUEUED,
-            # simulate DAG runner completing the program (QUEUED->RUNNING->DONE)
-            async def simulate_dag_runner():
-                while True:
-                    queued = await storage.get_all_by_status(ProgramState.QUEUED.value)
-                    for prog in queued:
-                        try:
-                            await sm.set_program_state(prog, ProgramState.RUNNING)
-                            await sm.set_program_state(prog, ProgramState.DONE)
-                        except (ValueError, Exception):
-                            pass
-                    await asyncio.sleep(0.01)
-
-            dag_task = asyncio.create_task(simulate_dag_runner())
-            try:
-                await asyncio.wait_for(engine.step(), timeout=HANG_TIMEOUT)
-            finally:
-                dag_task.cancel()
-                try:
-                    await dag_task
-                except asyncio.CancelledError:
-                    pass
-        finally:
-            await storage.close()
-
-    async def test_run_two_generations_completes(self) -> None:
-        """run() with max_generations=2 completes without hanging."""
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage, max_generations=2)
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-            assert engine.metrics.total_generations == 2
-        finally:
-            await storage.close()
-
-
-# ===========================================================================
-# 8. Snapshot + storage interaction under epoch churn
+# 7. Snapshot + storage interaction under epoch churn
 # ===========================================================================
 
 
@@ -768,7 +695,7 @@ class TestSnapshotEpochChurn:
 
 
 # ===========================================================================
-# 9. _has_active_dags + _await_idle interaction with real programs
+# 8. _has_active_dags + _await_idle interaction with real programs
 # ===========================================================================
 
 

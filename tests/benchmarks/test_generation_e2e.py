@@ -1,6 +1,6 @@
-"""Benchmark: Full engine.step() wall time — the headline metric.
+"""Benchmark: Full engine.run() wall time — the headline metric.
 
-Measures end-to-end generation time with pre-populated archive of
+Measures end-to-end run time with a pre-populated archive of
 production-weight programs (~50KB each). This is the number to optimize:
 tests pass + numbers go down = the system got faster.
 """
@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 import fakeredis
 import pytest
 
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -115,16 +115,14 @@ async def _run_engine(
         writer=writer,
     )
 
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=IncrementMutationOperator(),
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=1,
-            max_mutations_per_generation=max_mutations,
-            generation_timeout=120.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=writer,
         metrics_tracker=_make_metrics_tracker(),
@@ -166,7 +164,7 @@ class TestGenerationWallTime:
     ) -> None:
         engine, elapsed_s = await _run_engine(archive_size, redis_url=redis_url)
 
-        assert engine.metrics.total_generations == 1
+        assert engine.metrics.total_mutants == 1
         progs_per_s = (archive_size + 3) / elapsed_s
         backend = "redis" if redis_url else "fakeredis"
         print(
@@ -185,7 +183,7 @@ class TestGenerationWithCollector:
             archive_size, include_collector=True, redis_url=redis_url
         )
 
-        assert engine.metrics.total_generations == 1
+        assert engine.metrics.total_mutants == 1
         backend = "redis" if redis_url else "fakeredis"
         print(
             f"BENCHMARK: generation_with_collector N={archive_size} ({backend}): "
@@ -203,7 +201,7 @@ class TestThreeGenerations:
             archive_size, max_generations=3, redis_url=redis_url
         )
 
-        assert engine.metrics.total_generations == 3
+        assert engine.metrics.total_mutants == 3
         per_gen = elapsed_s / 3
         backend = "redis" if redis_url else "fakeredis"
         print(

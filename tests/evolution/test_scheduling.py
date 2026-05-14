@@ -18,10 +18,12 @@ from gigaevo.evolution.scheduling.predictor import (
     SimpleHeuristicPredictor,
 )
 from gigaevo.evolution.scheduling.prioritizer import (
+    CachedFirstPrioritizer,
     FIFOPrioritizer,
     LPTPrioritizer,
     SJFPrioritizer,
 )
+from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -529,3 +531,67 @@ class TestProtocolCompliance:
         long = _prog("x" * 1000)
         result = prioritizer.prioritize([short, long])
         assert result[0].id == long.id
+
+
+# ---------------------------------------------------------------------------
+# CachedFirstPrioritizer
+# ---------------------------------------------------------------------------
+
+
+def _cached_prog() -> Program:
+    """Program that has been DAG-evaluated once (re-eval candidate)."""
+    p = _prog()
+    p.stage_results = {
+        "fake_stage": ProgramStageResult(status=StageState.COMPLETED),
+    }
+    return p
+
+
+def _fresh_prog() -> Program:
+    """Brand-new mutant — no cached stages yet."""
+    return _prog()
+
+
+class TestCachedFirstPrioritizer:
+    def test_empty_list_returns_empty(self) -> None:
+        assert CachedFirstPrioritizer().prioritize([]) == []
+
+    def test_all_fresh_preserves_order(self) -> None:
+        progs = [_fresh_prog(), _fresh_prog(), _fresh_prog()]
+        result = CachedFirstPrioritizer().prioritize(progs)
+        assert [p.id for p in result] == [p.id for p in progs]
+
+    def test_all_cached_preserves_order(self) -> None:
+        progs = [_cached_prog(), _cached_prog(), _cached_prog()]
+        result = CachedFirstPrioritizer().prioritize(progs)
+        assert [p.id for p in result] == [p.id for p in progs]
+
+    def test_cached_surface_to_front(self) -> None:
+        """Mixed input — all cached programs appear before any fresh ones."""
+        f1, f2 = _fresh_prog(), _fresh_prog()
+        c1, c2 = _cached_prog(), _cached_prog()
+        # Interleaved input order
+        result = CachedFirstPrioritizer().prioritize([f1, c1, f2, c2])
+        result_ids = [p.id for p in result]
+        # All cached come before any fresh
+        cached_positions = [result_ids.index(c.id) for c in (c1, c2)]
+        fresh_positions = [result_ids.index(f.id) for f in (f1, f2)]
+        assert max(cached_positions) < min(fresh_positions)
+
+    def test_relative_order_preserved_within_tiers(self) -> None:
+        """Within cached and fresh tiers, input order is preserved."""
+        f1, f2, f3 = _fresh_prog(), _fresh_prog(), _fresh_prog()
+        c1, c2 = _cached_prog(), _cached_prog()
+        result = CachedFirstPrioritizer().prioritize([f1, c1, f2, c2, f3])
+        assert [p.id for p in result] == [c1.id, c2.id, f1.id, f2.id, f3.id]
+
+    def test_input_list_not_mutated(self) -> None:
+        f, c = _fresh_prog(), _cached_prog()
+        original = [f, c]
+        snapshot = list(original)
+        CachedFirstPrioritizer().prioritize(original)
+        assert original == snapshot  # same objects, same order
+
+    def test_predictor_is_none(self) -> None:
+        """No predictor — no online learning needed (cache state is the signal)."""
+        assert CachedFirstPrioritizer().predictor is None

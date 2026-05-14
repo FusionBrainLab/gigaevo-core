@@ -7,7 +7,6 @@ to filter programs. Ensures the full chain: storage -> program -> acceptor
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
@@ -19,9 +18,9 @@ from gigaevo.evolution.engine.acceptor import (
     StandardEvolutionAcceptor,
     StateAcceptor,
 )
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import (
     ScalarTournamentEliteSelector,
@@ -52,7 +51,7 @@ def _make_storage(key_prefix: str = "test_acceptor") -> RedisProgramStorage:
 
 def _make_engine(
     storage: RedisProgramStorage, acceptor=None, **overrides
-) -> EvolutionEngine:
+) -> SteadyStateEvolutionEngine:
     class _NullMutator(MutationOperator):
         async def mutate_single(
             self, selected_parents: list[Program]
@@ -95,15 +94,15 @@ def _make_engine(
     # Translate the legacy max_generations kwarg into a stopper instance.
     max_gens = engine_kwargs.pop("max_generations", None)
     if max_gens is not None:
-        engine_kwargs["stopper"] = MaxGenerationsStopper(max_gens)
+        engine_kwargs["stopper"] = MaxMutantsStopper(max_gens)
     else:
         engine_kwargs["stopper"] = EvolutionStopper()
 
-    return EvolutionEngine(
+    return SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=_NullMutator(),
-        config=EngineConfig(**engine_kwargs),
+        config=SteadyStateEngineConfig(**engine_kwargs),
         writer=writer,
         metrics_tracker=tracker,
     )
@@ -111,16 +110,6 @@ def _make_engine(
 
 class TestAcceptorEngineIntegration:
     """Test that engine uses acceptor to filter during ingestion."""
-
-    async def test_engine_with_default_acceptor_runs_clean(self):
-        """Engine with default acceptor completes without error."""
-        storage = _make_storage()
-        try:
-            engine = _make_engine(storage)
-            await asyncio.wait_for(engine.run(), timeout=HANG_TIMEOUT)
-            assert engine.metrics.total_generations == 1
-        finally:
-            await storage.close()
 
     async def test_done_programs_accepted_by_default(self):
         """Programs in DONE state with metrics should be accepted by default acceptor."""

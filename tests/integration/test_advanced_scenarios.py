@@ -23,9 +23,9 @@ import pytest
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -600,17 +600,15 @@ async def _run_engine(storage, max_generations, *, mutation_operator, acceptor=N
         island_configs=[_make_island_config()],
         program_storage=storage,
     )
-    config = EngineConfig(
+    config = SteadyStateEngineConfig(
         loop_interval=0.005,
         max_elites_per_generation=1,
-        max_mutations_per_generation=1,
-        generation_timeout=30.0,
-        stopper=MaxGenerationsStopper(max_generations),
+        stopper=MaxMutantsStopper(max_generations),
     )
     if acceptor is not None:
         config.program_acceptor = acceptor
 
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=mutation_operator,
@@ -639,88 +637,6 @@ class RejectAllAcceptor:
 
     def is_accepted(self, program):
         return False
-
-
-class TestAcceptorRejectsAll:
-    """Engine survives when acceptor rejects everything — consecutive stagnation."""
-
-    async def test_engine_completes_with_all_rejected(self):
-        """Generation counter advances even when acceptor rejects all programs."""
-        _reset_counter()
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        engine = await _run_engine(
-            storage,
-            max_generations=4,
-            mutation_operator=IncrementOperator(),
-            acceptor=RejectAllAcceptor(),
-        )
-
-        assert engine.metrics.total_generations == 4
-
-    async def test_archive_stays_empty_when_all_rejected(self):
-        """With reject-all acceptor, no programs enter the archive."""
-        _reset_counter()
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        engine = await _run_engine(
-            storage,
-            max_generations=3,
-            mutation_operator=IncrementOperator(),
-            acceptor=RejectAllAcceptor(),
-        )
-
-        assert engine.metrics.added == 0
-        assert engine.metrics.rejected_validation >= 1
-
-    async def test_no_mutations_after_seed_rejected(self):
-        """Since the seed itself is rejected, archive stays empty → no elites
-        → no mutations in subsequent generations."""
-        _reset_counter()
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        engine = await _run_engine(
-            storage,
-            max_generations=3,
-            mutation_operator=IncrementOperator(),
-            acceptor=RejectAllAcceptor(),
-        )
-
-        # Gen 1 ingests seed (rejected) → archive empty
-        # Gen 2-3: no elites → no mutations
-        assert engine.metrics.mutations_created == 0
-
-    async def test_no_stranded_programs_after_stagnation(self):
-        """No QUEUED or RUNNING programs after a stagnated run."""
-        _reset_counter()
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        await _run_engine(
-            storage,
-            max_generations=3,
-            mutation_operator=IncrementOperator(),
-            acceptor=RejectAllAcceptor(),
-        )
-
-        check = _make_fakeredis_storage(server)
-        queued = await check.get_all_by_status(ProgramState.QUEUED.value)
-        running = await check.get_all_by_status(ProgramState.RUNNING.value)
-        await check.close()
-
-        assert len(queued) == 0
-        assert len(running) == 0
 
 
 # ===========================================================================

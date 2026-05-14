@@ -220,7 +220,7 @@ class TestFrontierBoundaryPrecision:
 
 
 # ===========================================================================
-# Chaos-hacker: NaN/Inf adversarial floats
+# Adversarial floats: NaN/Inf
 # ===========================================================================
 
 

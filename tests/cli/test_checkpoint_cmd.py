@@ -25,7 +25,7 @@ def _populate_run(
     fitness: float,
 ) -> None:
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_generations=generation)
+    write_engine_snapshot_sync(r, prefix, total_mutants=generation)
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(generation, fitness),

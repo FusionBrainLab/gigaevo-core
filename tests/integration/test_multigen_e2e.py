@@ -40,9 +40,9 @@ import pytest
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -244,22 +244,20 @@ def _build_engine(
     max_mutations: int = 1,
     mutation_operator: MutationOperator | None = None,
     island_config: IslandConfig | None = None,
-) -> tuple[EvolutionEngine, MapElitesMultiIsland]:
+) -> tuple[SteadyStateEvolutionEngine, MapElitesMultiIsland]:
     config = island_config or _make_island_config()
     strategy = MapElitesMultiIsland(
         island_configs=[config],
         program_storage=storage,
     )
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=mutation_operator or IncrementMutationOperator(),
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=max_elites,
-            max_mutations_per_generation=max_mutations,
-            generation_timeout=30.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),
         metrics_tracker=_make_metrics_tracker(),
@@ -281,7 +279,7 @@ async def _run(
     max_mutations: int = 1,
     mutation_operator: MutationOperator | None = None,
     island_config: IslandConfig | None = None,
-) -> tuple[EvolutionEngine, MapElitesMultiIsland]:
+) -> tuple[SteadyStateEvolutionEngine, MapElitesMultiIsland]:
     engine, strategy = _build_engine(
         storage,
         max_generations,
@@ -355,7 +353,9 @@ class TestMultiGenArchiveTrajectory:
 
         engine, _ = await _run(storage, max_generations=5)
 
-        assert engine.metrics.total_generations == 5
+        # The cap is a *floor* trigger (≥ max); concurrent in-flight
+        # mutants may bring total_mutants slightly above max.
+        assert engine.metrics.total_mutants >= 5
 
         programs = await _get_archive(server)
         assert len(programs) >= 3, (
@@ -385,7 +385,8 @@ class TestMultiGenArchiveTrajectory:
         assert max(fitnesses) > 1.0, (
             f"Expected fitness improvement over seed, got fitnesses: {fitnesses}"
         )
-        assert engine.metrics.total_generations == 5
+        # The cap is a *floor* trigger (≥ max).
+        assert engine.metrics.total_mutants >= 5
 
 
 class TestMultiGenLineageChains:
@@ -446,14 +447,18 @@ class TestMultiGenMetrics:
     """Verify engine metrics are correctly accumulated across generations."""
 
     async def test_generation_counter_matches(self) -> None:
-        """total_generations == max_generations after a complete run."""
+        """total_mutants ≥ max_generations after a complete run.
+
+        The cap is a *floor* trigger (≥ max); concurrent in-flight mutants
+        may bring total_mutants slightly above max.
+        """
         _reset_counter()
         server = fakeredis.FakeServer()
         storage = _make_fakeredis_storage(server)
         await _add_seed(storage)
 
         engine, _ = await _run(storage, max_generations=4)
-        assert engine.metrics.total_generations == 4
+        assert engine.metrics.total_mutants >= 4
 
     async def test_mutations_created_positive(self) -> None:
         """At least some mutations were created across all generations."""
@@ -773,6 +778,8 @@ class TestMultiGenStrategyGeneration:
         await engine2.restore_state()
         await strategy2.restore_state()
 
-        assert engine2.metrics.total_generations == 3
+        # The cap is a floor (≥ max) — restore must preserve whatever value
+        # was persisted.
+        assert engine2.metrics.total_mutants >= 3
         assert strategy2.generation > 0
         await check_storage.close()

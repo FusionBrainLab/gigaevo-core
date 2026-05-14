@@ -17,10 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gigaevo.evolution.engine.config import EngineConfig, SteadyStateEngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
-from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxGenerationsStopper
+from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxMutantsStopper
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -84,56 +83,10 @@ class SimulatedDagTracker:
         return len(self._done)
 
 
-def _make_generational_engine(
-    dag_tracker: SimulatedDagTracker,
-    *,
-    max_mutations: int = MAX_IN_FLIGHT,
-    max_generations: int | None = None,
-) -> EvolutionEngine:
-    """Build a generational EvolutionEngine wired to the DAG tracker."""
-    storage = AsyncMock()
-    strategy = AsyncMock()
-    writer = MagicMock()
-    writer.bind.return_value = writer
-    metrics_tracker = MagicMock()
-    metrics_tracker.format_best_summary.return_value = ""
-
-    storage.count_by_status.return_value = 0
-    storage.get_all_by_status.return_value = []
-    storage.get_ids_by_status.return_value = []
-    storage.snapshot = MagicMock()
-    strategy.get_program_ids.return_value = []
-    strategy.select_elites.return_value = [_prog()]
-
-    stopper = (
-        MaxGenerationsStopper(max_generations)
-        if max_generations is not None
-        else EvolutionStopper()
-    )
-    config = EngineConfig(
-        max_mutations_per_generation=max_mutations,
-        max_elites_per_generation=10,
-        stopper=stopper,
-        loop_interval=0.01,
-    )
-
-    engine = EvolutionEngine(
-        storage=storage,
-        strategy=strategy,
-        mutation_operator=AsyncMock(),
-        config=config,
-        writer=writer,
-        metrics_tracker=metrics_tracker,
-    )
-    engine.state = AsyncMock()
-    return engine
-
-
 def _make_steady_state_engine(
     dag_tracker: SimulatedDagTracker,
     *,
     max_in_flight: int = MAX_IN_FLIGHT,
-    max_mutations_per_generation: int = TOTAL_MUTANTS,
     max_generations: int | None = None,
 ) -> SteadyStateEvolutionEngine:
     """Build a SteadyStateEvolutionEngine wired to the DAG tracker."""
@@ -152,13 +105,12 @@ def _make_steady_state_engine(
     strategy.select_elites.return_value = [_prog()]
 
     stopper = (
-        MaxGenerationsStopper(max_generations)
+        MaxMutantsStopper(max_generations)
         if max_generations is not None
         else EvolutionStopper()
     )
     config = SteadyStateEngineConfig(
         max_in_flight=max_in_flight,
-        max_mutations_per_generation=max_mutations_per_generation,
         max_elites_per_generation=10,
         stopper=stopper,
         loop_interval=0.01,
@@ -399,7 +351,6 @@ class TestRealisticE2E:
         engine = _make_steady_state_engine(
             dag_tracker,
             max_in_flight=4,
-            max_mutations_per_generation=8,
             max_generations=2,
         )
 
@@ -447,10 +398,10 @@ class TestRealisticE2E:
         elapsed = time.monotonic() - t0
         print(
             f"\nSteady-state E2E: {elapsed:.3f}s, {mutation_count} mutations, "
-            f"{engine.metrics.total_generations} epochs"
+            f"{engine.metrics.total_mutants} epochs"
         )
 
-        assert engine.metrics.total_generations >= 2
+        assert engine.metrics.total_mutants >= 2
         assert mutation_count >= 8  # at least 1 epoch's worth
 
 

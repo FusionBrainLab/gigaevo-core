@@ -13,7 +13,7 @@ defaults:
   - /algorithm: single_island
   - /pipeline: auto
   - /runner: default
-  - /scheduling: fifo
+  - /scheduling: cached_first
   - /loader: directory
   - /logging: tensorboard
   - /metrics: default

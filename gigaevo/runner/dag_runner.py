@@ -14,7 +14,10 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.scheduling.prioritizer import FIFOPrioritizer, ProgramPrioritizer
+from gigaevo.evolution.scheduling.prioritizer import (
+    CachedFirstPrioritizer,
+    ProgramPrioritizer,
+)
 from gigaevo.programs.dag.dag import DAG
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -156,7 +159,7 @@ class DagRunner:
         self._metrics = DagRunnerMetrics()
         self._config = config
         self._writer = writer.bind(path=["dag_runner"])
-        self._prioritizer = prioritizer or FIFOPrioritizer()
+        self._prioritizer = prioritizer or CachedFirstPrioritizer()
 
         self._active: dict[str, TaskInfo] = {}
         self._sema = asyncio.Semaphore(self._config.max_concurrent_dags)

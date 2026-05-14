@@ -10,8 +10,8 @@ import pytest
 from gigaevo.monitoring.redis_queries import (
     collect_snapshot,
     get_frontier_metrics,
-    get_generation,
     get_program_counts,
+    get_programs_processed,
     get_status_counts,
     get_validator_duration,
 )
@@ -34,26 +34,26 @@ def _metric_entry(step: int, value: float, ts: int = 123) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. get_generation tests
+# 1. get_programs_processed tests
 # ---------------------------------------------------------------------------
 
 
-def test_get_generation_normal() -> None:
+def test_get_programs_processed_normal() -> None:
     r = _make_redis()
-    write_engine_snapshot_sync(r, PREFIX, total_generations=42)
-    assert get_generation(r, PREFIX) == 42
+    write_engine_snapshot_sync(r, PREFIX, total_mutants=42, programs_processed=17)
+    assert get_programs_processed(r, PREFIX) == 17
 
 
-def test_get_generation_missing_key() -> None:
+def test_get_programs_processed_missing_key() -> None:
     r = _make_redis()
-    assert get_generation(r, PREFIX) is None
+    assert get_programs_processed(r, PREFIX) is None
 
 
-def test_get_generation_corrupt_snapshot() -> None:
+def test_get_programs_processed_corrupt_snapshot() -> None:
     r = _make_redis()
     r.hset(f"{PREFIX}:run_state", "engine:snapshot", "not_a_json")
     # Corrupt JSON is treated the same as a missing snapshot.
-    assert get_generation(r, PREFIX) is None
+    assert get_programs_processed(r, PREFIX) is None
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +198,8 @@ def test_collect_snapshot_complete() -> None:
     r = _make_redis()
     spec = _make_spec()
 
-    # Populate generation
-    write_engine_snapshot_sync(r, PREFIX, total_generations=5)
+    # Populate progress (RunSnapshot.generation now reads programs_processed)
+    write_engine_snapshot_sync(r, PREFIX, total_mutants=5, programs_processed=5)
 
     # Populate frontier fitness
     r.rpush(

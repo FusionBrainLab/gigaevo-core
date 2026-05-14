@@ -14,18 +14,22 @@ live in `gigaevo.adversarial.events` so they can carry role-invariant
 validators without polluting the general registry.
 
 Emission seams (each event has exactly one):
-- GENERATION_BOUNDARY -> engine generation tick
 - EXCEPTION           -> loguru exception sink hook
 - STAGE_EXEC          -> Stage.__call__ base-class wrapper
 - LLM_CALL            -> LLM client request/response wrapper
 - METRIC_EMIT         -> metric logging helper
+- BACKPRESSURE_SAMPLE -> backpressure_sampler periodic tick
+
+``GENERATION_BOUNDARY`` is parse-only — its Pydantic schema is retained so
+``log_audit`` can validate archived run logs, but no current code path
+emits it.
 """
 
 from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
 CANONICAL_EVENTS: dict[str, type[BaseEvent]] = {}
 
@@ -71,8 +75,14 @@ class BaseEvent(BaseModel):
 
 
 class GenerationBoundary(BaseEvent):
+    """Parse-only schema for archived run logs.
+
+    No current emitter; retained so ``log_audit`` can validate
+    ``GENERATION_BOUNDARY`` entries in archived logs.
+    """
+
     event: ClassVar[str] = "GENERATION_BOUNDARY"
-    description: ClassVar[str] = "Engine ticked a generation boundary."
+    description: ClassVar[str] = "Archived event — engine generation tick."
     health_question: ClassVar[str] = "Where are we in the run?"
 
     gen: int
@@ -129,3 +139,49 @@ class MetricEmit(BaseEvent):
     program_id: str
     metric: str
     value: Any
+
+
+class BackpressureSample(BaseEvent):
+    """One snapshot of the steady-state two-sema backpressure state.
+
+    Emitted periodically by the engine so a runner log carries a time
+    series of held producer / buffer / in-flight counts. ``llm_active``
+    breaks down producer occupancy into LLM inference vs DAG evaluation
+    phases. Without this the only published evidence that ``max_in_flight``
+    is enforced is the boot banner — concurrency-over-time is invisible.
+    """
+
+    event: ClassVar[str] = "BACKPRESSURE_SAMPLE"
+    description: ClassVar[str] = (
+        "Periodic snapshot of held producer/buffer slots + in_flight + llm_active."
+    )
+    health_question: ClassVar[str] = (
+        "Is max_in_flight actually being utilised? LLM vs DAG split?"
+    )
+
+    producer_held: NonNegativeInt
+    buffer_held: NonNegativeInt
+    in_flight: NonNegativeInt
+    max_in_flight: PositiveInt
+    llm_active: NonNegativeInt
+
+    @model_validator(mode="after")
+    def _hold_within_cap(self) -> BackpressureSample:
+        # held > cap means accounting is broken — surface loudly rather than
+        # silently logging rubbish that downstream dashboards then plot as truth.
+        cap = self.max_in_flight
+        if self.producer_held > cap:
+            raise ValueError(
+                f"producer_held={self.producer_held} exceeds max_in_flight={cap}"
+            )
+        if self.buffer_held > cap:
+            raise ValueError(
+                f"buffer_held={self.buffer_held} exceeds max_in_flight={cap}"
+            )
+        if self.in_flight > cap:
+            raise ValueError(f"in_flight={self.in_flight} exceeds max_in_flight={cap}")
+        if self.llm_active > self.producer_held:
+            raise ValueError(
+                f"llm_active={self.llm_active} exceeds producer_held={self.producer_held}"
+            )
+        return self

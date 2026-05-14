@@ -29,9 +29,9 @@ import pytest
 
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -204,7 +204,9 @@ def _build(
     max_mutations: int = 1,
     mutation_operator: MutationOperator | None = None,
     island_config: IslandConfig | None = None,
-) -> tuple[RedisProgramStorage, DagRunner, EvolutionEngine, MapElitesMultiIsland]:
+) -> tuple[
+    RedisProgramStorage, DagRunner, SteadyStateEvolutionEngine, MapElitesMultiIsland
+]:
     """Wire all components together — mirrors run.py's instantiate step."""
     storage = _make_storage(server)
 
@@ -227,16 +229,14 @@ def _build(
         writer=writer,
     )
 
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=mutation_operator or IncrementMutationOperator(),
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=max_elites,
-            max_mutations_per_generation=max_mutations,
-            generation_timeout=30.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=writer,
         metrics_tracker=_make_metrics_tracker(),
@@ -253,7 +253,7 @@ async def _run_mini(
     max_mutations: int = 1,
     mutation_operator: MutationOperator | None = None,
     island_config: IslandConfig | None = None,
-) -> tuple[EvolutionEngine, MapElitesMultiIsland, DagRunner]:
+) -> tuple[SteadyStateEvolutionEngine, MapElitesMultiIsland, DagRunner]:
     """Seed, wire, run, and return the engine + strategy + runner."""
     storage, dag_runner, engine, strategy = _build(
         server,
@@ -317,7 +317,9 @@ class TestMiniRunBasic:
         server = fakeredis.FakeServer()
         engine, strategy, runner = await _run_mini(server, max_generations=5)
 
-        assert engine.metrics.total_generations == 5
+        # JIT cap is a *floor* trigger (≥ max); concurrent in-flight mutants
+        # may bring total_mutants slightly above max.
+        assert engine.metrics.total_mutants >= 5
 
     async def test_archive_grows(self) -> None:
         _reset_counter()
@@ -465,7 +467,8 @@ class TestMiniRunEngineMetrics:
         _reset_counter()
         server = fakeredis.FakeServer()
         engine, _, _ = await _run_mini(server, max_generations=4)
-        assert engine.metrics.total_generations == 4
+        # JIT cap is a *floor* trigger.
+        assert engine.metrics.total_mutants >= 4
 
     async def test_mutations_created(self) -> None:
         _reset_counter()
@@ -562,7 +565,8 @@ class TestMiniRunResume:
         await engine2.restore_state()
         await strategy2.restore_state()
 
-        assert engine2.metrics.total_generations == 3
+        # JIT cap floor: persisted value may be ≥ 3.
+        assert engine2.metrics.total_mutants >= 3
         assert strategy2.generation > 0
         await storage.close()
 

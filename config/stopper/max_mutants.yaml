@@ -1,0 +1,2 @@
+_target_: gigaevo.evolution.engine.stopper.MaxMutantsStopper
+max_mutants: ${max_mutants}

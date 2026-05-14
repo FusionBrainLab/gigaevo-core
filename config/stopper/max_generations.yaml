@@ -1,2 +1,0 @@
-_target_: gigaevo.evolution.engine.stopper.MaxGenerationsStopper
-max_generations: ${max_generations}

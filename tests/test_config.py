@@ -190,18 +190,15 @@ def test_evolution_constants_default_values():
     assert cfg.max_elites_per_generation == 5, (
         "max_elites_per_generation changed from 5 — update CONTEXT.md for active experiments"
     )
-    assert cfg.max_mutations_per_generation == 8, (
-        "max_mutations_per_generation changed from 8 — verify throughput calculations"
-    )
     assert cfg.num_parents == 2, (
         "num_parents changed from 2 — crossover experiments use this default"
     )
     assert cfg.loop_interval == pytest.approx(1.0), (
         "loop_interval changed from 1.0 — affects engine polling frequency"
     )
-    assert cfg.max_generations == 100, (
-        "max_generations changed from 100 — the default stopper "
-        "(config/stopper/max_generations.yaml) resolves this top-level value"
+    assert cfg.max_mutants == 800, (
+        "max_mutants changed from 800 — the default stopper "
+        "(config/stopper/max_mutants.yaml) resolves this top-level value."
     )
 
 
@@ -218,24 +215,16 @@ def test_pipeline_constants_default_values():
     assert cfg.max_code_length == 30000, "max_code_length changed from 30000 chars"
 
 
-def test_sync_min_delta_decoupled_from_max_mutations():
+def test_sync_min_delta_is_independent_constant():
     """sync_min_delta must be an independent config constant.
 
-    The ProgressBasedSyncHook's min_delta controls how many programs the
-    opponent must process before this population unblocks.  It was historically
-    coupled to max_mutations_per_generation via Hydra interpolation, which made
-    it impossible to set a K=5 compute budget (max_mutations=40) with loose
-    coupling (min_delta=1) without an explicit per-run override.
-
-    After the decoupling fix, sync_min_delta is its own constant.  Changing
-    max_mutations_per_generation must NOT change pre_step_hook.min_delta.
+    The ProgressBasedSyncHook's min_delta/drift_cap controls how many programs
+    the opponent must process before this population unblocks. It is its own
+    top-level constant, decoupled from any generation-sized batching knob.
     """
     # 1. sync_min_delta exists as a top-level constant with default 8
     cfg = _compose()
-    assert cfg.sync_min_delta == 8, (
-        "sync_min_delta should default to 8 (epoch-level sync parity with "
-        "max_mutations_per_generation)"
-    )
+    assert cfg.sync_min_delta == 8, "sync_min_delta should default to 8"
 
     # 2. Both adversarial pipelines wire the drift/sync value from sync_min_delta.
     # ProgressBasedSyncHook accepts either `drift_cap` (preferred) or `min_delta`
@@ -259,22 +248,7 @@ def test_sync_min_delta_decoupled_from_max_mutations():
             f"(from sync_min_delta), got {_hook_sync_value(cfg.pre_step_hook)}"
         )
 
-    # 3. Changing max_mutations does NOT change the hook's sync value.
-    for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
-        cfg = _compose(
-            f"pipeline={pipeline}",
-            "max_mutations_per_generation=40",
-            *_ADVERSARIAL_OVERRIDES,
-        )
-        assert _hook_sync_value(cfg.pre_step_hook) == 8, (
-            f"pipeline={pipeline}: sync value should stay 8 when "
-            f"max_mutations_per_generation=40 — coupling not decoupled!"
-        )
-        assert cfg.max_mutations_per_generation == 40, (
-            "max_mutations_per_generation override should take effect"
-        )
-
-    # 4. sync_min_delta can be overridden independently.
+    # 3. sync_min_delta can be overridden independently.
     for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
         cfg = _compose(
             f"pipeline={pipeline}",

@@ -248,15 +248,18 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
+        # Shared with LineageStage so its preprocess can short-circuit
+        # (Q → failed-child) analyses that this selector would never pick.
+        descendant_selector = AncestrySelector(
+            metrics_context=metrics_context,
+            strategy="best_fitness",
+            max_selected=1,
+        )
         self.add_stage(
             "DescendantProgramIds",
             lambda: DescendantProgramIds(
                 storage=storage,
-                selector=AncestrySelector(
-                    metrics_context=metrics_context,
-                    strategy="best_fitness",
-                    max_selected=1,
-                ),
+                selector=descendant_selector,
                 timeout=stage_timeout,
             ),
         )
@@ -282,6 +285,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 storage=storage,
                 timeout=stage_timeout,
                 prompts_dir=prompts_dir,
+                descendant_selector=descendant_selector,
             ),
         )
 
@@ -402,7 +406,15 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "FormatterStage": [
                 ExecutionOrderDependency.always_after("FetchArtifact"),
             ],
+            # Skip insights for programs that never produced real metrics:
+            # if CallValidatorFunction did not COMPLETE (validator skipped due
+            # to upstream ValidateCodeStage / CallProgramFunction failure, or
+            # validator itself crashed/timed out), we'd otherwise burn LLM
+            # tokens generating insights against sentinel-zero metrics. The
+            # on_success gate cascades: any failure upstream of the validator
+            # propagates as SKIPPED through InsightsStage.
             "InsightsStage": [
+                ExecutionOrderDependency.on_success("CallValidatorFunction"),
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
             "LineageStage": [

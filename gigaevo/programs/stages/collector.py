@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+import bisect
 from typing import Any, TypeVar
 
 from loguru import logger
@@ -167,18 +168,23 @@ class EvolutionaryStatistics(StageIO):
         description="Average fitness per metric in generation (valid only)"
     )
     valid_rate_in_generation: float = Field(description="Valid rate in generation")
-    # iteration statistics - keyed by metric name
+    # iteration-window statistics - keyed by metric name. The window is a
+    # trailing range of iterations [program.iteration - N, program.iteration]
+    # sized by ``EvolutionaryStatisticsCollector.iteration_window_size``;
+    # fields are None when the feature is disabled (N=0).
     best_fitness_in_iteration: dict[str, float] | None = Field(
-        None, description="Best fitness per metric in iteration (valid only)"
+        None, description="Best fitness per metric in the iteration window (valid only)"
     )
     worst_fitness_in_iteration: dict[str, float] | None = Field(
-        None, description="Worst fitness per metric in iteration (valid only)"
+        None,
+        description="Worst fitness per metric in the iteration window (valid only)",
     )
     average_fitness_in_iteration: dict[str, float] | None = Field(
-        None, description="Average fitness per metric in iteration (valid only)"
+        None,
+        description="Average fitness per metric in the iteration window (valid only)",
     )
     valid_rate_in_iteration: float | None = Field(
-        None, description="Valid rate in iteration"
+        None, description="Valid rate in the iteration window"
     )
     # ancestor statistics - keyed by metric name
     ancestor_count: int = Field(description="Number of ancestors (immediate parents)")
@@ -356,9 +362,27 @@ async def _get_descendants(storage: ProgramStorage, program: Program) -> list[Pr
 class EvolutionaryStatisticsCollector(RelatedCollectorBase):
     OutputModel = EvolutionaryStatistics
 
-    def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
+    def __init__(
+        self,
+        *,
+        metrics_context: MetricsContext,
+        iteration_window_size: int = 8,
+        **kwargs: Any,
+    ):
+        if iteration_window_size < 0:
+            raise ValueError(
+                f"iteration_window_size must be >= 0, got {iteration_window_size}"
+            )
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
+        #: Trailing-window size for iteration cohort aggregation. The window
+        #: for a program at iteration ``i`` is the set of programs with
+        #: iteration ``∈ [i - N, i]`` (the program itself is always included).
+        #: Set to 0 to disable iteration-cohort stats; fields are then None.
+        #: Default 8 gives prompts ~8 mutants of recent cohort context — wide
+        #: enough to smooth single-program noise, narrow enough to track
+        #: short-horizon trend changes.
+        self.iteration_window_size = iteration_window_size
         # Population-level stats cache (keyed on list identity from snapshot).
         # Within a single snapshot epoch, all programs see the same population,
         # so global stats, per-generation stats, and generation history are
@@ -385,6 +409,11 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             | None
         ) = None
         self._cached_gen_history: dict[int, GenerationMetrics] | None = None
+        # Iteration cohort index: programs sorted by iteration, plus a
+        # parallel list of iteration keys for bisect lookup. Rebuilt once
+        # per snapshot epoch alongside the other caches.
+        self._cached_iter_sorted: list[Program] | None = None
+        self._cached_iter_keys: list[int] | None = None
 
     #: Skip metadata (89% of payload) and stage_results (10%) during
     #: deserialization.  The collector only reads metrics, lineage, and
@@ -481,7 +510,45 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             )
         self._cached_gen_history = generation_history
 
+        # Iteration cohort index (skipped when the feature is disabled).
+        if self.iteration_window_size > 0:
+            sorted_by_iter = sorted(programs, key=lambda p: p.iteration)
+            self._cached_iter_sorted = sorted_by_iter
+            self._cached_iter_keys = [p.iteration for p in sorted_by_iter]
+        else:
+            self._cached_iter_sorted = None
+            self._cached_iter_keys = None
+
         self._cached_pop_id = pop_id
+
+    def _compute_iteration_window_stats(
+        self, program: Program
+    ) -> tuple[
+        dict[str, float] | None,
+        dict[str, float] | None,
+        dict[str, float] | None,
+        float | None,
+    ]:
+        """Aggregate stats over the trailing iteration window of ``program``.
+
+        Window = programs whose iteration ``∈ [program.iteration - N, program.iteration]``
+        where ``N == self.iteration_window_size``. Returns ``(None, None, None, None)``
+        when the feature is disabled (``N == 0``). The program itself is always
+        in its own window so the cohort is non-empty for any valid input.
+        """
+        if (
+            self.iteration_window_size == 0
+            or self._cached_iter_sorted is None
+            or self._cached_iter_keys is None
+        ):
+            return (None, None, None, None)
+
+        lo = program.iteration - self.iteration_window_size
+        hi = program.iteration
+        left = bisect.bisect_left(self._cached_iter_keys, lo)
+        right = bisect.bisect_right(self._cached_iter_keys, hi)
+        window = self._cached_iter_sorted[left:right]
+        return _compute_fitness_stats_all_metrics(window, self.metrics_context)
 
     async def _process(
         self, program: Program, programs: list[Program]
@@ -512,16 +579,12 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             generation, ({}, {}, {}, 0.0)
         )
 
-        # Iteration statistics (programs in same iteration)
-        iter_best, iter_worst, iter_avg, iter_valid_rate = None, None, None, None
-        if iteration is not None:
-            iter_programs = [p for p in programs if p.iteration == iteration]
-            if iter_programs:
-                iter_best, iter_worst, iter_avg, iter_valid_rate = (
-                    _compute_fitness_stats_all_metrics(
-                        iter_programs, self.metrics_context
-                    )
-                )
+        # Iteration cohort aggregates: trailing window over programs with
+        # iteration ∈ [program.iteration - N, program.iteration]. When the
+        # feature is disabled (N=0) the fields stay None for schema stability.
+        iter_best, iter_worst, iter_avg, iter_valid_rate = (
+            self._compute_iteration_window_stats(program)
+        )
 
         # Ancestor statistics (depth 1 - immediate parents, from batch cache)
         ancestors = [

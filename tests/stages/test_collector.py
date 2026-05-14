@@ -502,8 +502,13 @@ class TestEvolutionaryStatisticsCollector:
         assert stats.total_program_count == 0
         assert stats.valid_rate == 0.0
 
-    async def test_iteration_stats_when_present(self):
-        """Iteration stats computed when program has iteration metadata."""
+    async def test_iteration_window_disabled_with_zero_size(self):
+        """``iteration_window_size=0`` opts out: cohort fields stay None.
+
+        Each mutant in the steady-state engine has a unique iteration
+        value, so callers who don't want any windowed aggregation can
+        disable the feature by passing ``iteration_window_size=0``.
+        """
         storage = AsyncMock()
         p1 = _prog(score=60.0, generation=0)
         p1.iteration = 1
@@ -511,7 +516,70 @@ class TestEvolutionaryStatisticsCollector:
         p2.iteration = 1
         p3 = _prog(score=40.0, generation=0)
         p3.iteration = 2
-        storage.get_all.return_value = [p1, p2, p3]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1, p2, p3]
+
+        ctx = _ctx()
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=ctx,
+            timeout=5.0,
+            iteration_window_size=0,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(p1)
+
+        stats = result.output
+        assert stats.iteration == 1
+        assert stats.best_fitness_in_iteration is None
+        assert stats.worst_fitness_in_iteration is None
+        assert stats.average_fitness_in_iteration is None
+        assert stats.valid_rate_in_iteration is None
+
+    async def test_iteration_window_trailing_cohort_aggregates(self):
+        """Trailing window N=2 over a program at iteration=5 aggregates
+        programs with iteration ∈ [3, 5]."""
+        storage = AsyncMock()
+        progs: list[Program] = []
+        # iterations 1..10 with monotonically increasing scores
+        for i in range(1, 11):
+            p = _prog(score=10.0 * i, generation=0)
+            p.iteration = i
+            progs.append(p)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        ctx = _ctx()
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=ctx,
+            timeout=5.0,
+            iteration_window_size=2,
+        )
+        stage.attach_inputs({})
+        # Process the program at iteration=5
+        target = progs[4]
+        result = await stage.execute(target)
+
+        stats = result.output
+        # Window = [3, 5] → scores 30, 40, 50
+        assert stats.best_fitness_in_iteration is not None
+        assert stats.worst_fitness_in_iteration is not None
+        assert stats.average_fitness_in_iteration is not None
+        assert stats.best_fitness_in_iteration["score"] == 50.0
+        assert stats.worst_fitness_in_iteration["score"] == 30.0
+        assert stats.average_fitness_in_iteration["score"] == 40.0
+        assert stats.valid_rate_in_iteration == 1.0
+
+    async def test_iteration_window_default_size(self):
+        """Default ``iteration_window_size`` populates iteration fields."""
+        storage = AsyncMock()
+        p1 = _prog(score=60.0, generation=0)
+        p1.iteration = 1
+        p2 = _prog(score=80.0, generation=0)
+        p2.iteration = 1
+        p3 = _prog(score=40.0, generation=0)
+        p3.iteration = 2
         storage.mget.return_value = []
         storage.snapshot.get_all.return_value = [p1, p2, p3]
 
@@ -520,19 +588,24 @@ class TestEvolutionaryStatisticsCollector:
             storage=storage, metrics_context=ctx, timeout=5.0
         )
         stage.attach_inputs({})
+        # p1 at iteration=1, default window covers prior iterations too,
+        # but here only p1 and p2 are at iteration=1 (≤ 1).
         result = await stage.execute(p1)
 
         stats = result.output
         assert stats.iteration == 1
-        # Iteration stats should be for iteration=1 only (p1, p2)
+        assert stats.best_fitness_in_iteration is not None
+        assert stats.worst_fitness_in_iteration is not None
+        assert stats.average_fitness_in_iteration is not None
         assert stats.best_fitness_in_iteration["score"] == 80.0
         assert stats.worst_fitness_in_iteration["score"] == 60.0
+        assert stats.average_fitness_in_iteration["score"] == 70.0
+        assert stats.valid_rate_in_iteration == 1.0
 
-    async def test_iteration_stats_default_when_no_explicit_iteration(self):
-        """No explicit iteration → defaults to 0 with iteration stats computed."""
+    async def test_iteration_window_singleton_population(self):
+        """A 1-program population yields aggregate-of-one (best=worst=avg)."""
         storage = AsyncMock()
         p1 = _prog(score=60.0, generation=0)
-        storage.get_all.return_value = [p1]
         storage.mget.return_value = []
         storage.snapshot.get_all.return_value = [p1]
 
@@ -546,4 +619,20 @@ class TestEvolutionaryStatisticsCollector:
         stats = result.output
         assert stats.iteration == 0
         assert stats.best_fitness_in_iteration is not None
-        assert stats.valid_rate_in_iteration is not None
+        assert stats.worst_fitness_in_iteration is not None
+        assert stats.average_fitness_in_iteration is not None
+        assert stats.best_fitness_in_iteration["score"] == 60.0
+        assert stats.worst_fitness_in_iteration["score"] == 60.0
+        assert stats.average_fitness_in_iteration["score"] == 60.0
+        assert stats.valid_rate_in_iteration == 1.0
+
+    def test_iteration_window_size_must_be_non_negative(self):
+        """Negative ``iteration_window_size`` is rejected at construction."""
+        storage = AsyncMock()
+        with pytest.raises(ValueError, match="iteration_window_size"):
+            EvolutionaryStatisticsCollector(
+                storage=storage,
+                metrics_context=_ctx(),
+                timeout=5.0,
+                iteration_window_size=-1,
+            )

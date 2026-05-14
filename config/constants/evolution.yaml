@@ -3,11 +3,11 @@
 
 loop_interval: 1.0
 max_elites_per_generation: 5
-max_mutations_per_generation: 8
 sync_min_delta: 8
 num_parents: 2
 mutation_mode: rewrite
-max_generations: 100
+max_mutants: 800
 strip_comments_and_docstrings: false
 pre_step_hook: null
 post_step_hook: null
+max_in_flight: 8

@@ -620,10 +620,10 @@ class TestLoadRunStateStr:
 
     async def test_load_run_state_str_round_trips(self, fakeredis_storage):
         await fakeredis_storage.save_run_state(
-            "engine:snapshot", '{"total_generations": 9}'
+            "engine:snapshot", '{"total_mutants": 9}'
         )
         result = await fakeredis_storage.load_run_state_str("engine:snapshot")
-        assert result == '{"total_generations": 9}'
+        assert result == '{"total_mutants": 9}'
 
     async def test_load_run_state_str_returns_none_if_missing(self, fakeredis_storage):
         result = await fakeredis_storage.load_run_state_str("engine:missing")

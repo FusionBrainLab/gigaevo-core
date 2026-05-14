@@ -8,7 +8,7 @@ from gigaevo.evolution.engine.stopper import (
     CompositeStopper,
     EvolutionStopper,
     FitnessPlateauStopper,
-    MaxGenerationsStopper,
+    MaxMutantsStopper,
     StopContext,
     StopDecision,
     WallClockStopper,
@@ -17,13 +17,13 @@ from gigaevo.evolution.engine.stopper import (
 
 def _ctx(
     *,
-    total_generations: int = 0,
+    total_mutants: int = 0,
     elapsed_seconds: float = 0.0,
     best_fitness: float | None = None,
     programs_processed: int = 0,
 ) -> StopContext:
     return StopContext(
-        total_generations=total_generations,
+        total_mutants=total_mutants,
         elapsed_seconds=elapsed_seconds,
         best_fitness=best_fitness,
         programs_processed=programs_processed,
@@ -41,24 +41,24 @@ class TestStopDecision:
         assert d.stop is False
 
 
-class TestMaxGenerationsStopper:
+class TestMaxMutantsStopper:
     def test_does_not_stop_before_cap(self) -> None:
-        stopper = MaxGenerationsStopper(max_generations=10)
-        assert stopper.should_stop(_ctx(total_generations=9)).stop is False
+        stopper = MaxMutantsStopper(max_mutants=10)
+        assert stopper.should_stop(_ctx(total_mutants=9)).stop is False
 
     def test_stops_at_cap(self) -> None:
-        stopper = MaxGenerationsStopper(max_generations=10)
-        result = stopper.should_stop(_ctx(total_generations=10))
+        stopper = MaxMutantsStopper(max_mutants=10)
+        result = stopper.should_stop(_ctx(total_mutants=10))
         assert result.stop is True
         assert "10" in result.reason
 
     def test_stops_past_cap(self) -> None:
-        stopper = MaxGenerationsStopper(max_generations=10)
-        assert stopper.should_stop(_ctx(total_generations=15)).stop is True
+        stopper = MaxMutantsStopper(max_mutants=10)
+        assert stopper.should_stop(_ctx(total_mutants=15)).stop is True
 
     def test_zero_generations_does_not_stop(self) -> None:
-        stopper = MaxGenerationsStopper(max_generations=10)
-        assert stopper.should_stop(_ctx(total_generations=0)).stop is False
+        stopper = MaxMutantsStopper(max_mutants=10)
+        assert stopper.should_stop(_ctx(total_mutants=0)).stop is False
 
 
 class TestWallClockStopper:
@@ -85,39 +85,37 @@ class TestFitnessPlateauStopper:
     def test_does_not_stop_when_fitness_improving(self) -> None:
         stopper = FitnessPlateauStopper(window=3, min_delta=0.001)
         for gen, fitness in [(0, 0.5), (1, 0.6), (2, 0.7)]:
-            result = stopper.should_stop(
-                _ctx(total_generations=gen, best_fitness=fitness)
-            )
+            result = stopper.should_stop(_ctx(total_mutants=gen, best_fitness=fitness))
         assert result.stop is False
 
     def test_stops_after_plateau_window(self) -> None:
         stopper = FitnessPlateauStopper(window=3, min_delta=0.01)
-        stopper.should_stop(_ctx(total_generations=0, best_fitness=0.5))
-        stopper.should_stop(_ctx(total_generations=1, best_fitness=0.5))
-        stopper.should_stop(_ctx(total_generations=2, best_fitness=0.5))
-        result = stopper.should_stop(_ctx(total_generations=3, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=0, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=1, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=2, best_fitness=0.5))
+        result = stopper.should_stop(_ctx(total_mutants=3, best_fitness=0.5))
         assert result.stop is True
 
     def test_resets_window_on_improvement(self) -> None:
         stopper = FitnessPlateauStopper(window=3, min_delta=0.01)
-        stopper.should_stop(_ctx(total_generations=0, best_fitness=0.5))
-        stopper.should_stop(_ctx(total_generations=1, best_fitness=0.5))
-        stopper.should_stop(_ctx(total_generations=2, best_fitness=0.6))
-        result = stopper.should_stop(_ctx(total_generations=3, best_fitness=0.6))
+        stopper.should_stop(_ctx(total_mutants=0, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=1, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=2, best_fitness=0.6))
+        result = stopper.should_stop(_ctx(total_mutants=3, best_fitness=0.6))
         assert result.stop is False
 
     def test_none_fitness_does_not_count(self) -> None:
         stopper = FitnessPlateauStopper(window=2, min_delta=0.001)
-        stopper.should_stop(_ctx(total_generations=0, best_fitness=None))
-        stopper.should_stop(_ctx(total_generations=1, best_fitness=None))
-        result = stopper.should_stop(_ctx(total_generations=2, best_fitness=None))
+        stopper.should_stop(_ctx(total_mutants=0, best_fitness=None))
+        stopper.should_stop(_ctx(total_mutants=1, best_fitness=None))
+        result = stopper.should_stop(_ctx(total_mutants=2, best_fitness=None))
         assert result.stop is False
 
     def test_reason_includes_window(self) -> None:
         stopper = FitnessPlateauStopper(window=2, min_delta=0.01)
-        stopper.should_stop(_ctx(total_generations=0, best_fitness=0.5))
-        stopper.should_stop(_ctx(total_generations=1, best_fitness=0.5))
-        result = stopper.should_stop(_ctx(total_generations=2, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=0, best_fitness=0.5))
+        stopper.should_stop(_ctx(total_mutants=1, best_fitness=0.5))
+        result = stopper.should_stop(_ctx(total_mutants=2, best_fitness=0.5))
         assert result.stop is True
         assert "2" in result.reason
 
@@ -127,55 +125,55 @@ class TestCompositeStopper:
         stopper = CompositeStopper(
             mode="any",
             children=[
-                MaxGenerationsStopper(max_generations=10),
+                MaxMutantsStopper(max_mutants=10),
                 WallClockStopper(budget_seconds=3600),
             ],
         )
-        result = stopper.should_stop(_ctx(total_generations=10, elapsed_seconds=100))
+        result = stopper.should_stop(_ctx(total_mutants=10, elapsed_seconds=100))
         assert result.stop is True
 
     def test_any_mode_continues_when_no_child_stops(self) -> None:
         stopper = CompositeStopper(
             mode="any",
             children=[
-                MaxGenerationsStopper(max_generations=10),
+                MaxMutantsStopper(max_mutants=10),
                 WallClockStopper(budget_seconds=3600),
             ],
         )
-        result = stopper.should_stop(_ctx(total_generations=5, elapsed_seconds=100))
+        result = stopper.should_stop(_ctx(total_mutants=5, elapsed_seconds=100))
         assert result.stop is False
 
     def test_all_mode_stops_only_when_all_children_stop(self) -> None:
         stopper = CompositeStopper(
             mode="all",
             children=[
-                MaxGenerationsStopper(max_generations=10),
+                MaxMutantsStopper(max_mutants=10),
                 WallClockStopper(budget_seconds=3600),
             ],
         )
-        result = stopper.should_stop(_ctx(total_generations=10, elapsed_seconds=100))
+        result = stopper.should_stop(_ctx(total_mutants=10, elapsed_seconds=100))
         assert result.stop is False
 
     def test_all_mode_stops_when_all_satisfied(self) -> None:
         stopper = CompositeStopper(
             mode="all",
             children=[
-                MaxGenerationsStopper(max_generations=10),
+                MaxMutantsStopper(max_mutants=10),
                 WallClockStopper(budget_seconds=3600),
             ],
         )
-        result = stopper.should_stop(_ctx(total_generations=10, elapsed_seconds=3600))
+        result = stopper.should_stop(_ctx(total_mutants=10, elapsed_seconds=3600))
         assert result.stop is True
 
     def test_reason_aggregates_child_reasons(self) -> None:
         stopper = CompositeStopper(
             mode="any",
             children=[
-                MaxGenerationsStopper(max_generations=5),
+                MaxMutantsStopper(max_mutants=5),
                 WallClockStopper(budget_seconds=100),
             ],
         )
-        result = stopper.should_stop(_ctx(total_generations=5, elapsed_seconds=200))
+        result = stopper.should_stop(_ctx(total_mutants=5, elapsed_seconds=200))
         assert result.stop is True
         assert result.reason  # non-empty
 
@@ -191,7 +189,7 @@ class TestCompositeStopper:
 class TestBaseEvolutionStopper:
     def test_base_never_stops(self) -> None:
         stopper = EvolutionStopper()
-        assert stopper.should_stop(_ctx(total_generations=9999)).stop is False
+        assert stopper.should_stop(_ctx(total_mutants=9999)).stop is False
 
 
 class TestHydraInstantiation:
@@ -201,18 +199,18 @@ class TestHydraInstantiation:
     def _skip_if_no_hydra(self) -> None:
         pytest.importorskip("hydra")
 
-    def test_max_generations_yaml(self) -> None:
+    def test_max_mutants_yaml(self) -> None:
         from hydra.utils import instantiate
         from omegaconf import OmegaConf
 
-        # The yaml references ${max_generations} from the parent Hydra config.
+        # The yaml references ${max_mutants} from the parent Hydra config.
         # Wrap it in a parent scope that provides the value so resolution works
         # standalone in tests.
-        stopper_cfg = OmegaConf.load("config/stopper/max_generations.yaml")
-        cfg = OmegaConf.create({"max_generations": 25, "stopper": stopper_cfg})
+        stopper_cfg = OmegaConf.load("config/stopper/max_mutants.yaml")
+        cfg = OmegaConf.create({"max_mutants": 25, "stopper": stopper_cfg})
         stopper = instantiate(cfg.stopper)
-        assert isinstance(stopper, MaxGenerationsStopper)
-        assert stopper.max_generations == 25
+        assert isinstance(stopper, MaxMutantsStopper)
+        assert stopper.max_mutants == 25
 
     def test_wall_clock_yaml(self) -> None:
         from hydra.utils import instantiate
@@ -236,15 +234,15 @@ class TestHydraInstantiation:
         from hydra.utils import instantiate
         from omegaconf import OmegaConf
 
-        # Composite child refers to ${max_generations} — wrap in a parent
+        # Composite child refers to ${max_mutants} — wrap in a parent
         # config that provides the value.
         stopper_cfg = OmegaConf.load(
-            "config/stopper/max_generations_or_fitness_plateau.yaml"
+            "config/stopper/max_mutants_or_fitness_plateau.yaml"
         )
-        cfg = OmegaConf.create({"max_generations": 50, "stopper": stopper_cfg})
+        cfg = OmegaConf.create({"max_mutants": 50, "stopper": stopper_cfg})
         stopper = instantiate(cfg.stopper)
         assert isinstance(stopper, CompositeStopper)
         assert stopper.mode == "any"
         assert len(stopper.children) == 2
-        assert isinstance(stopper.children[0], MaxGenerationsStopper)
+        assert isinstance(stopper.children[0], MaxMutantsStopper)
         assert isinstance(stopper.children[1], FitnessPlateauStopper)

@@ -15,6 +15,7 @@ from gigaevo.programs.core_types import (
 )
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
+from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import CacheOnlyInput, ListOf
@@ -55,6 +56,7 @@ class LineageStage(LangGraphStage):
         metrics_context: MetricsContext,
         storage: ProgramStorage,
         prompts_dir: str | Path | None = None,
+        descendant_selector: AncestrySelector | None = None,
         **kwargs: Any,
     ):
         # Inject live Program instance as `program` kwarg for the agent
@@ -69,6 +71,11 @@ class LineageStage(LangGraphStage):
             **kwargs,
         )
         self.storage = storage
+        # When set, used to short-circuit analyses whose (parent→failed-child)
+        # transition would never be read by the parent's future
+        # LineagesToDescendants stage. Should match the selector wired into
+        # DescendantProgramIds. Pass ``None`` to disable the optimisation.
+        self.descendant_selector = descendant_selector
 
     async def preprocess(
         self, program: Program, params: StageIO
@@ -79,7 +86,44 @@ class LineageStage(LangGraphStage):
             program.id[:8],
             len(ids),
         )
-        return {"parents": await self.storage.mget(ids)}
+        parents = await self.storage.mget(ids)
+        if self.descendant_selector is not None and program.is_failed and parents:
+            parents = await self._filter_parents_for_failed_child(program, parents)
+            logger.info(
+                "[LineageStage] program={} failed=True kept {}/{} parents after"
+                " descendant-selector simulation",
+                program.id[:8],
+                len(parents),
+                len(ids),
+            )
+        return {"parents": parents}
+
+    async def _filter_parents_for_failed_child(
+        self, program: Program, parents: list[Program]
+    ) -> list[Program]:
+        """Drop parents whose DescendantProgramIds would not pick this failed child.
+
+        For each parent Q, simulate ``descendant_selector.select`` on
+        ``Q.children`` (plus the in-memory ``program`` for fresh metrics).
+        Keep the parent only when the selector would pick ``program`` —
+        otherwise the future ``(Q → program)`` analysis is dead weight.
+        """
+        assert self.descendant_selector is not None
+        kept: list[Program] = []
+        for parent in parents:
+            sibling_ids = [c for c in parent.lineage.children if c != program.id]
+            siblings = await self.storage.mget(sibling_ids) if sibling_ids else []
+            picked = await self.descendant_selector.select(siblings + [program])
+            if any(p.id == program.id for p in picked):
+                kept.append(parent)
+            else:
+                logger.info(
+                    "[LineageStage] skip {} -> {} (failed; outside top-{})",
+                    parent.id[:8],
+                    program.id[:8],
+                    self.descendant_selector.max_selected,
+                )
+        return kept
 
 
 class LineagesToDescendantsInputs(StageIO):

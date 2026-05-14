@@ -51,12 +51,10 @@
 defaults:
   - adversarial_coevo
 
-# Override sync hook: progress-based instead of generation-based.
-# MainRunSyncHook (inherited from adversarial_coevo) deadlocks with
-# SteadyState: both populations enter _epoch_refresh, both wait for the
-# other's total_generations to advance, but total_generations is only
-# incremented AFTER the hook returns.  ProgressBasedSyncHook reads
-# programs_processed (published before the hook call at step 3a).
+# Override sync hook to use programs_processed as the cross-population
+# progress signal: ProgressBasedSyncHook reads the counter that is
+# published before the hook fires, avoiding the mutual-wait deadlock that
+# a generation-based sync would create under SteadyState.
 pre_step_hook:
   _target_: gigaevo.adversarial.sync.ProgressBasedSyncHook
   host: ${redis.host}

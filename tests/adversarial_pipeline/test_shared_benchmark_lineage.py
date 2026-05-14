@@ -12,9 +12,6 @@ Contract under test:
   - ``per_metric_shared_count`` maps every aggregator output key to
     ``len(shared_opponent_ids)`` (uniform denominator — the per-metric
     filtering is the aggregator's concern, not this stage's).
-
-The refresh-pass-token cache-invariant tests are orthogonal to aggregation and
-carried forward unchanged.
 """
 
 from __future__ import annotations
@@ -138,10 +135,9 @@ def _mk_stage(
     """Instantiate stage via ``__new__`` to bypass the LangGraphStage chain.
 
     The LineageStage base constructor expects an LLM + task_description +
-    prompts_dir; wiring all that up here is both pointless (the tests don't
-    exercise the LLM call path) and brittle. The fields `preprocess` actually
-    reads are set manually — this is the same pattern the previous version
-    of this test file used.
+    prompts_dir; wiring all that up here is pointless (the tests don't
+    exercise the LLM call path) and brittle. Only the fields ``preprocess``
+    reads are set manually.
     """
     from gigaevo.adversarial.shared_benchmark_lineage import (
         SharedBenchmarkFilteredLineageStage,
@@ -550,100 +546,3 @@ class TestLogEmission:
         assert any(
             "[LineageStage:SharedBenchmark]" in m and "kept 1/1" in m for m in captured
         ), f"Expected kept-ratio log line in captured logs: {captured}"
-
-
-# ---------------------------------------------------------------------------
-# Refresh-pass cache-invariant (carried forward unchanged)
-# ---------------------------------------------------------------------------
-
-
-class TestRefreshPassTokenCacheInvariant:
-    """Proves the snapshot refresh_pass mechanism actually invalidates the cache key.
-
-    ``refresh_pass`` lives on the engine snapshot mirror; ``_reset`` resets
-    the mirror before and after each test so tests are order-independent.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _reset_snapshot(self):
-        from gigaevo.evolution.engine.snapshot import (
-            _reset_current_snapshot_for_tests,
-        )
-
-        _reset_current_snapshot_for_tests()
-        yield
-        _reset_current_snapshot_for_tests()
-
-    def test_compute_hash_differs_after_bump(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-        from gigaevo.evolution.engine.snapshot import (
-            EngineSnapshot,
-            set_current_snapshot,
-        )
-
-        params = CacheOnlyInput(cache_on="same")
-        set_current_snapshot(EngineSnapshot(refresh_pass=0))
-        h_pass1 = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-        set_current_snapshot(EngineSnapshot(refresh_pass=1))
-        h_pass2 = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-
-        assert h_pass1 != h_pass2, (
-            "compute_hash returned the same key before and after "
-            "refresh_pass bump — cache would HIT on pass 2 and the "
-            "two-pass refresh would be a no-op semantically."
-        )
-
-    def test_compute_hash_suffix_encodes_current_token(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-        from gigaevo.evolution.engine.snapshot import (
-            EngineSnapshot,
-            get_current_snapshot,
-            set_current_snapshot,
-        )
-
-        params = CacheOnlyInput(cache_on="x")
-        t_before = get_current_snapshot().refresh_pass
-        h_before = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-        assert h_before is not None
-        assert h_before.endswith(f":rp{t_before}")
-
-        set_current_snapshot(EngineSnapshot(refresh_pass=t_before + 1))
-        h_after = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-        assert h_after.endswith(f":rp{t_before + 1}")
-
-    def test_execution_and_cache_check_paths_stay_in_lockstep(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-        from gigaevo.evolution.engine.snapshot import (
-            EngineSnapshot,
-            set_current_snapshot,
-        )
-
-        params = CacheOnlyInput(cache_on="probe")
-        raw = {"cache_on": "probe"}
-
-        set_current_snapshot(EngineSnapshot(refresh_pass=0))
-        h_exec = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-        h_check = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(raw)
-        assert h_exec == h_check
-
-        set_current_snapshot(EngineSnapshot(refresh_pass=1))
-        h_exec_b = SharedBenchmarkFilteredLineageStage.compute_hash(params)
-        h_check_b = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(raw)
-        assert h_exec_b == h_check_b
-        assert h_exec != h_exec_b, "refresh_pass bump must change both paths together"
-
-    def test_compute_hash_returns_none_when_base_returns_none(self):
-        from gigaevo.adversarial.shared_benchmark_lineage import (
-            SharedBenchmarkFilteredLineageStage,
-        )
-
-        h = SharedBenchmarkFilteredLineageStage.compute_hash_from_inputs(
-            {"nonexistent_field": object()}
-        )
-        assert h is None

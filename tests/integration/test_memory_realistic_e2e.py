@@ -28,9 +28,9 @@ import pytest
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -264,16 +264,14 @@ async def _evolve(
 ):
     s = _storage(server)
     strat = MapElitesMultiIsland(island_configs=[_island()], program_storage=s)
-    eng = EvolutionEngine(
+    eng = SteadyStateEvolutionEngine(
         storage=s,
         strategy=strat,
         mutation_operator=operator,
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=1,
-            max_mutations_per_generation=1,
-            generation_timeout=30,
-            stopper=MaxGenerationsStopper(gens),
+            stopper=MaxMutantsStopper(gens),
         ),
         writer=_writer(),
         metrics_tracker=_tracker(),

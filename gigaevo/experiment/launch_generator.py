@@ -216,7 +216,6 @@ _BUILTIN_EMITTED = frozenset(
     {
         "stage_timeout",
         "dag_timeout",
-        "max_mutations_per_generation",
         "max_elites_per_generation",
         "num_parents",
         "mutation_mode",
@@ -264,8 +263,7 @@ def _build_run_cmd(
             f"redis.db={run.db}",
             f"stage_timeout={x.get('stage_timeout', 3000)}",
             f"dag_timeout={x.get('dag_timeout', 7200)}",
-            f"max_generations={manifest.contract.max_generations}",
-            f"max_mutations_per_generation={x.get('max_mutations_per_generation', 8)}",
+            f"max_mutants={manifest.contract.max_generations}",
             f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
             f"num_parents={x.get('num_parents', 1)}",
             f"model_name={run.model_name}",
@@ -281,7 +279,7 @@ def _build_run_cmd(
     # Forward any additional shared_overrides keys as Hydra overrides. Built-ins
     # already landed above; _NOT_HYDRA keys steer launch.sh, not run.py. This
     # is the fix for I-00: before, a user writing
-    # ``contract.config.shared_overrides.stopper: max_generations`` was silently
+    # ``contract.config.shared_overrides.stopper: max_mutants`` was silently
     # dropped.
     for key, val in x.items():
         if key in _BUILTIN_EMITTED or key in _NOT_HYDRA or val is None:

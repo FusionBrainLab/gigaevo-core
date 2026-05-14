@@ -17,13 +17,13 @@ program_acceptor:
 
 # Engine config
 engine_config:
-  _target_: gigaevo.evolution.engine.EngineConfig
+  _target_: gigaevo.evolution.engine.SteadyStateEngineConfig
   loop_interval: ${loop_interval}
   max_elites_per_generation: ${max_elites_per_generation}
-  max_mutations_per_generation: ${max_mutations_per_generation}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
   stopper: ${stopper}
+  max_in_flight: ${max_in_flight}
 
 metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker
@@ -33,7 +33,7 @@ metrics_tracker:
 
 # Evolution engine
 evolution_engine:
-  _target_: gigaevo.evolution.engine.EvolutionEngine
+  _target_: gigaevo.evolution.engine.SteadyStateEvolutionEngine
   storage: ${ref:redis_storage}
   strategy: ${evolution_strategy}
   mutation_operator: ${mutation_operator}

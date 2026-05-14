@@ -411,12 +411,12 @@ class TestOnlineLearning:
 
 
 # ---------------------------------------------------------------------------
-# NaN/Inf safety (chaos-hacker finding)
+# NaN/Inf and outlier safety
 # ---------------------------------------------------------------------------
 
 
 class TestPredictorSafety:
-    """Verify chaos-hacker fixes: NaN, Inf, outlier resilience."""
+    """NaN, Inf, and outlier resilience for the predictor."""
 
     def test_outlier_clipped_in_heuristic(self) -> None:
         """SimpleHeuristicPredictor clips extreme outlier updates."""

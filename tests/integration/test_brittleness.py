@@ -30,10 +30,10 @@ from gigaevo.evolution.engine.acceptor import (
     MetricsExistenceAcceptor,
     StateAcceptor,
 )
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.mutation import generate_mutations
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.parent_selector import (
     AllCombinationsParentSelector,
@@ -252,14 +252,13 @@ class TestIngestionAtomicity:
             async def on_program_ingested(self, program, storage, outcome=None):
                 raise RuntimeError("LLM connection failed!")
 
-        engine = EvolutionEngine(
+        engine = SteadyStateEvolutionEngine(
             storage=storage,
             strategy=strategy,
             mutation_operator=ExplodingMutator(),
-            config=EngineConfig(
-                stopper=MaxGenerationsStopper(1),
+            config=SteadyStateEngineConfig(
+                stopper=MaxMutantsStopper(1),
                 loop_interval=0.005,
-                generation_timeout=10.0,
             ),
             writer=_make_null_writer(),
             metrics_tracker=_make_metrics_tracker(),

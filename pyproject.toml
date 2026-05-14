@@ -53,13 +53,13 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
     "langchain>=0.3.0",
-    "langfuse>=2.0.0",
+    "langfuse>=4.0.0,<5",
     "scikit-learn",
     "optuna",
     "cma",
     "bm25s>=0.3.0",
     "PyStemmer>=3.0.0",
-    "gigaevo-memory @ git+https://github.com/Glazkoff/gigaevo-memory.git@f22f5fff7a532f87260dca4501dc6b6321857794#subdirectory=client/python",
+    "gigaevo-memory",
 ]
 
 [project.optional-dependencies]

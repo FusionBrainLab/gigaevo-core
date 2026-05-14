@@ -1,7 +1,7 @@
 """Pluggable stopping criteria for evolution engines.
 
 Hydra config group: ``config/stopper/``.
-Engine calls ``stopper.should_stop(ctx)`` once per generation.
+Engine calls ``stopper.should_stop(ctx)`` once per dispatched mutant.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Literal
 
 @dataclass(frozen=True)
 class StopContext:
-    total_generations: int = 0
+    total_mutants: int = 0
     elapsed_seconds: float = 0.0
     best_fitness: float | None = None
     programs_processed: int = 0
@@ -29,15 +29,15 @@ class EvolutionStopper:
         return StopDecision(stop=False, reason="")
 
 
-class MaxGenerationsStopper(EvolutionStopper):
-    def __init__(self, max_generations: int) -> None:
-        self.max_generations = max_generations
+class MaxMutantsStopper(EvolutionStopper):
+    def __init__(self, max_mutants: int) -> None:
+        self.max_mutants = max_mutants
 
     def should_stop(self, ctx: StopContext) -> StopDecision:
-        if ctx.total_generations >= self.max_generations:
+        if ctx.total_mutants >= self.max_mutants:
             return StopDecision(
                 stop=True,
-                reason=f"Reached max_generations={self.max_generations}",
+                reason=f"Reached max_mutants={self.max_mutants}",
             )
         return StopDecision(stop=False, reason="")
 
@@ -56,11 +56,10 @@ class WallClockStopper(EvolutionStopper):
 
 
 class FitnessPlateauStopper(EvolutionStopper):
-    # TODO: FitnessPlateauStopper currently never fires because
-    # EvolutionEngine._build_stop_context() does not populate
-    # StopContext.best_fitness (EngineMetrics has no best-fitness field).
-    # Wire best fitness from the archive/strategy into StopContext before
-    # relying on this stopper. See audit notes in stopper/engine refactor.
+    # NOTE: best_fitness is wired into StopContext by
+    # EvolutionEngine._build_stop_context() via MetricsTracker.get_best_fitness().
+    # If the engine cannot determine a best-fitness value (no MetricsTracker or
+    # no metric data yet), ctx.best_fitness is None and this stopper short-circuits.
     def __init__(self, window: int, min_delta: float = 0.001) -> None:
         self.window = window
         self.min_delta = min_delta
@@ -83,7 +82,7 @@ class FitnessPlateauStopper(EvolutionStopper):
         if self._stagnant_count >= self.window:
             return StopDecision(
                 stop=True,
-                reason=f"Fitness plateau: no improvement >= {self.min_delta} for {self.window} generations",
+                reason=f"Fitness plateau: no improvement >= {self.min_delta} for {self.window} mutants",
             )
         return StopDecision(stop=False, reason="")
 

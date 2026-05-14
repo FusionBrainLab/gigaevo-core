@@ -11,13 +11,10 @@ engine_config:
   _target_: gigaevo.evolution.engine.SteadyStateEngineConfig
   loop_interval: ${loop_interval}
   max_elites_per_generation: ${max_elites_per_generation}
-  max_mutations_per_generation: ${max_mutations_per_generation}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
   stopper: ${stopper}
   max_in_flight: 8
-  refresh_order: fifo
-  refresh_passes: 1
 
 # Override engine target
 evolution_engine:

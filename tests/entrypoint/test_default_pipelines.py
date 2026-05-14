@@ -282,6 +282,10 @@ class TestDefaultPipelineBuilder:
         assert "CallValidatorFunction" in _dep_names(bp, "FetchArtifact")
         assert "FetchArtifact" in _dep_names(bp, "FormatterStage")
         assert "EnsureMetricsStage" in _dep_names(bp, "InsightsStage")
+        # InsightsStage must also be gated on validator success — skipping
+        # the (expensive LLM) insights on programs that didn't actually run
+        # to completion is the whole point of #110.
+        assert "CallValidatorFunction" in _dep_names(bp, "InsightsStage")
         assert "EnsureMetricsStage" in _dep_names(bp, "LineageStage")
         assert "LineageStage" in _dep_names(bp, "LineagesToDescendants")
         assert "LineageStage" in _dep_names(bp, "LineagesFromAncestors")

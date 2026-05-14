@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from gigaevo.evolution.bus.engine import BusedEvolutionEngine
 from gigaevo.evolution.bus.node import MigrationNode
-from gigaevo.evolution.engine.config import EngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEngineConfig
 from gigaevo.llm.bandit import MutationOutcome
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -45,7 +45,7 @@ def _make_engine(migration_node=None, max_imports=10) -> BusedEvolutionEngine:
         storage=storage,
         strategy=strategy,
         mutation_operator=AsyncMock(),
-        config=EngineConfig(),
+        config=SteadyStateEngineConfig(),
         writer=writer,
         metrics_tracker=metrics_tracker,
     )
@@ -202,43 +202,6 @@ class TestImportBusArrivals:
 
         # Second program should still have been attempted
         assert engine.storage.add.call_count == 2
-
-
-# ---------------------------------------------------------------------------
-# step — node lifecycle
-# ---------------------------------------------------------------------------
-
-
-class TestStep:
-    async def test_step_starts_node_once(self) -> None:
-        engine = _make_engine()
-        with patch.object(
-            BusedEvolutionEngine.__bases__[0], "step", new_callable=AsyncMock
-        ):
-            await engine.step()
-            await engine.step()
-
-        engine._migration_node.start.assert_called_once()
-        assert engine._node_started is True
-
-    async def test_step_drains_before_parent_step(self) -> None:
-        """Verify drain happens before parent step."""
-        engine = _make_engine()
-        call_order = []
-
-        engine._migration_node.drain_received.side_effect = lambda n: (
-            call_order.append("drain") or []
-        )
-
-        async def mock_parent_step():
-            call_order.append("parent_step")
-
-        with patch.object(
-            BusedEvolutionEngine.__bases__[0], "step", side_effect=mock_parent_step
-        ):
-            await engine.step()
-
-        assert call_order == ["drain", "parent_step"]
 
 
 # ---------------------------------------------------------------------------

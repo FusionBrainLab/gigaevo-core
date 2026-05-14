@@ -18,9 +18,9 @@ import fakeredis.aioredis
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -45,7 +45,7 @@ def _make_storage() -> tuple[RedisProgramStorage, object]:
     return storage, fake_redis
 
 
-def _make_engine(storage: RedisProgramStorage) -> EvolutionEngine:
+def _make_engine(storage: RedisProgramStorage) -> SteadyStateEvolutionEngine:
     class _NullMutator(MutationOperator):
         async def mutate_single(
             self, selected_parents: list[Program]
@@ -82,11 +82,13 @@ def _make_engine(storage: RedisProgramStorage) -> EvolutionEngine:
     writer = MagicMock()
     writer.bind.return_value = writer
 
-    return EvolutionEngine(
+    return SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=_NullMutator(),
-        config=EngineConfig(loop_interval=0.005, stopper=MaxGenerationsStopper(1)),
+        config=SteadyStateEngineConfig(
+            loop_interval=0.005, stopper=MaxMutantsStopper(1)
+        ),
         writer=writer,
         metrics_tracker=tracker,
     )

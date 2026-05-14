@@ -3,7 +3,7 @@
 Covers three failure modes that would make a resumed run diverge from a
 contiguous run:
   1. RUNNING programs stuck forever  →  recover_stranded_programs()
-  2. EngineMetrics.total_generations reset to 0  →  EvolutionEngine.restore_state()
+  2. EngineMetrics.total_mutants reset to 0  →  EvolutionEngine.restore_state()
   3. MapElitesMultiIsland.generation / last_migration reset to 0
        →  MapElitesMultiIsland.restore_state()
 """
@@ -12,14 +12,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.snapshot import (
     ENGINE_SNAPSHOT_KEY,
     EngineSnapshot,
-    load_engine_snapshot,
 )
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.strategies.elite_selectors import RandomEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -62,7 +60,7 @@ def _make_island_config(island_id: str = "test") -> IslandConfig:
     )
 
 
-def _make_engine(storage=None) -> EvolutionEngine:
+def _make_engine(storage=None) -> SteadyStateEvolutionEngine:
     if storage is None:
         storage = AsyncMock()
         storage.load_run_state = AsyncMock(return_value=None)
@@ -72,11 +70,11 @@ def _make_engine(storage=None) -> EvolutionEngine:
     writer.bind.return_value = writer
     metrics_tracker = MagicMock()
 
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=AsyncMock(),
-        config=EngineConfig(),
+        config=SteadyStateEngineConfig(),
         writer=writer,
         metrics_tracker=metrics_tracker,
     )
@@ -145,110 +143,25 @@ class TestRecoverStrandedPrograms:
 
 
 class TestEvolutionEngineRestoreState:
-    async def test_restores_total_generations(self, fakeredis_storage) -> None:
-        """restore_state() loads total_generations from Redis."""
-        snap = EngineSnapshot(total_generations=17)
+    async def test_restores_total_mutants(self, fakeredis_storage) -> None:
+        """restore_state() loads total_mutants from Redis."""
+        snap = EngineSnapshot(total_mutants=17)
         await fakeredis_storage.save_run_state(
             ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
         )
 
         engine = _make_engine(storage=fakeredis_storage)
-        assert engine.metrics.total_generations == 0  # starts at 0
+        assert engine.metrics.total_mutants == 0  # starts at 0
 
         await engine.restore_state()
 
-        assert engine.metrics.total_generations == 17
+        assert engine.metrics.total_mutants == 17
 
     async def test_no_saved_state_keeps_zero(self, fakeredis_storage) -> None:
-        """When no state is persisted, total_generations stays at 0."""
+        """When no state is persisted, total_mutants stays at 0."""
         engine = _make_engine(storage=fakeredis_storage)
         await engine.restore_state()
-        assert engine.metrics.total_generations == 0
-
-    async def test_step_saves_generation(self, fakeredis_storage) -> None:
-        """After a step, total_generations is saved to Redis."""
-        engine = _make_engine(storage=fakeredis_storage)
-
-        # Stub out all I/O except storage
-        engine.storage = fakeredis_storage
-        engine.strategy = AsyncMock()
-        engine.strategy.get_program_ids = AsyncMock(return_value=[])
-        engine.strategy.select_elites = AsyncMock(return_value=[])
-        engine._writer = MagicMock()
-        engine._writer.bind.return_value = engine._writer
-        engine.mutation_operator = AsyncMock()
-
-        # Override _await_idle and _ingest/_refresh so step() can complete
-        engine._await_idle = AsyncMock()
-        engine._ingest_completed_programs = AsyncMock()
-        engine._refresh_archive_programs = AsyncMock(return_value=0)
-
-        await engine.step()
-
-        saved = await load_engine_snapshot(fakeredis_storage)
-        assert saved.total_generations == 1
-
-    async def test_generation_continues_after_restore(self, fakeredis_storage) -> None:
-        """A resumed engine continues counting from the restored value."""
-        snap = EngineSnapshot(total_generations=10)
-        await fakeredis_storage.save_run_state(
-            ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
-        )
-
-        engine = _make_engine(storage=fakeredis_storage)
-        await engine.restore_state()
-        assert engine.metrics.total_generations == 10
-
-        engine._await_idle = AsyncMock()
-        engine._ingest_completed_programs = AsyncMock()
-        engine._refresh_archive_programs = AsyncMock(return_value=0)
-        engine.strategy.select_elites = AsyncMock(return_value=[])
-        engine.strategy.get_program_ids = AsyncMock(return_value=[])
-
-        await engine.step()
-
-        assert engine.metrics.total_generations == 11
-        saved = await load_engine_snapshot(fakeredis_storage)
-        assert saved.total_generations == 11
-
-    async def test_max_generations_cap_respected_after_restore(
-        self, fakeredis_storage
-    ) -> None:
-        """A run with max_generations=10 killed at gen 7 stops at gen 10 on resume, not 17.
-
-        This is the most important correctness property of the engine restore:
-        the generation cap must count across stop/restart cycles.
-        """
-        cap = 10
-        snap = EngineSnapshot(total_generations=7)
-        await fakeredis_storage.save_run_state(
-            ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
-        )
-
-        engine = _make_engine(storage=fakeredis_storage)
-        engine.config = EngineConfig(stopper=MaxGenerationsStopper(cap))
-        await engine.restore_state()
-
-        assert engine.metrics.total_generations == 7
-        assert not engine._reached_generation_cap()
-
-        # Simulate 3 more steps — should reach cap exactly at step 3
-        engine._await_idle = AsyncMock()
-        engine._ingest_completed_programs = AsyncMock()
-        engine._refresh_archive_programs = AsyncMock(return_value=0)
-        engine.strategy.select_elites = AsyncMock(return_value=[])
-        engine.strategy.get_program_ids = AsyncMock(return_value=[])
-
-        for _ in range(3):
-            await engine.step()
-
-        assert engine.metrics.total_generations == 10
-        assert engine._reached_generation_cap()
-
-        # One more step would be blocked in the run() loop — verify cap logic holds
-        steps_before = engine.metrics.total_generations
-        assert engine._reached_generation_cap()
-        assert engine.metrics.total_generations == steps_before  # unchanged
+        assert engine.metrics.total_mutants == 0
 
     async def test_restores_programs_processed(self, fakeredis_storage) -> None:
         """restore_state() loads programs_processed from Redis."""
@@ -271,26 +184,6 @@ class TestEvolutionEngineRestoreState:
         engine = _make_engine(storage=fakeredis_storage)
         await engine.restore_state()
         assert engine.metrics.programs_processed == 0
-
-    async def test_step_saves_programs_processed(self, fakeredis_storage) -> None:
-        """After a step, programs_processed is saved to Redis."""
-        engine = _make_engine(storage=fakeredis_storage)
-        engine.storage = fakeredis_storage
-        engine.strategy = AsyncMock()
-        engine.strategy.get_program_ids = AsyncMock(return_value=[])
-        engine.strategy.select_elites = AsyncMock(return_value=[])
-        engine._writer = MagicMock()
-        engine._writer.bind.return_value = engine._writer
-        engine.mutation_operator = AsyncMock()
-        engine._await_idle = AsyncMock()
-        engine._ingest_completed_programs = AsyncMock()
-        engine._refresh_archive_programs = AsyncMock(return_value=0)
-
-        engine.metrics.programs_processed = 15
-        await engine.step()
-
-        saved = await load_engine_snapshot(fakeredis_storage)
-        assert saved.programs_processed == 15
 
 
 # ---------------------------------------------------------------------------

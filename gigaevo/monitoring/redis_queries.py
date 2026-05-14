@@ -115,18 +115,18 @@ def collect_event_window_counts(
     return out
 
 
-def get_generation(r: redis_lib.Redis, prefix: str) -> int | None:
-    """Get the current generation count from the engine snapshot.
+def get_programs_processed(r: redis_lib.Redis, prefix: str) -> int | None:
+    """Get the engine's programs_processed counter from the snapshot.
 
-    This is the CANONICAL source of generation count.
-    Never use log grep or metric step values. Returns ``None`` when the
-    snapshot is absent or its JSON is corrupt — callers downstream
-    distinguish "no data yet" from "zero generations".
+    This is the canonical source of run progress for the steady-state
+    engine. Returns ``None`` when the snapshot is absent or its JSON is
+    corrupt — callers downstream distinguish "no data yet" from "zero
+    processed".
     """
     snap = _read_engine_snapshot(r, prefix)
     if snap is None:
         return None
-    return snap.total_generations
+    return snap.programs_processed
 
 
 def get_frontier_metrics(
@@ -251,11 +251,13 @@ def collect_snapshot(
         metric_names = ["fitness"]
 
     try:
-        # Single read of the engine snapshot covers both generation and
+        # Single read of the engine snapshot covers both progress and
         # completion_reason — fewer round-trips than two separate hget calls,
         # and keeps the two fields consistent (they share one JSON blob).
         snap = _read_engine_snapshot(r, run_spec.prefix)
-        gen = snap.total_generations if snap is not None else None
+        # RunSnapshot.generation is populated from programs_processed for
+        # the steady-state engine — the field name stays for display compat.
+        gen = snap.programs_processed if snap is not None else None
         completion_reason = snap.completion_reason if snap is not None else None
         metrics = get_frontier_metrics(r, run_spec.prefix, metric_names)
         total, valid = get_program_counts(r, run_spec.prefix)

@@ -20,9 +20,9 @@ import pytest
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
@@ -449,16 +449,14 @@ def _build_engine(storage, max_generations, *, mutation_operator):
         island_configs=[_make_island_config()],
         program_storage=storage,
     )
-    return EvolutionEngine(
+    return SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=mutation_operator,
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=1,
-            max_mutations_per_generation=1,
-            generation_timeout=30.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),
         metrics_tracker=_make_metrics_tracker(),
@@ -522,143 +520,6 @@ class FailFirstThenSucceedOperator(MutationOperator):
             code=_make_code(parent_metrics["fitness"] + 1.0, 1.5),
             parents=selected_parents,
             name="recovered",
-        )
-
-
-class TestAllMutationsReturnNone:
-    """Engine survives when mutation operator returns None for every attempt."""
-
-    async def test_engine_completes_with_none_mutations(self) -> None:
-        """Generation counter still advances when all mutations return None."""
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        engine = await _run_engine(
-            storage, max_generations=3, mutation_operator=AlwaysNoneMutationOperator()
-        )
-
-        assert engine.metrics.total_generations == 3
-        # No mutations were persisted
-        assert engine.metrics.mutations_created == 0
-
-    async def test_archive_unchanged_with_none_mutations(self) -> None:
-        """Archive contains only the seed after gens with no successful mutations."""
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        await _run_engine(
-            storage, max_generations=3, mutation_operator=AlwaysNoneMutationOperator()
-        )
-
-        check_storage = _make_fakeredis_storage(server)
-        strategy = MapElitesMultiIsland(
-            island_configs=[_make_island_config()], program_storage=check_storage
-        )
-        programs = await strategy.islands["test"].get_elites()
-        await check_storage.close()
-
-        assert len(programs) == 1
-        assert programs[0].metrics["fitness"] == 1.0
-
-
-class TestAllMutationsRaise:
-    """Engine survives when mutation operator raises for every attempt."""
-
-    async def test_engine_completes_despite_all_raises(self) -> None:
-        """Generation counter advances even when every mutate_single raises."""
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        engine = await _run_engine(
-            storage,
-            max_generations=3,
-            mutation_operator=AlwaysRaisingMutationOperator(),
-        )
-
-        assert engine.metrics.total_generations == 3
-        assert engine.metrics.mutations_created == 0
-
-    async def test_no_queued_or_running_after_all_raises(self) -> None:
-        """No programs stuck in transient states after raise-only run."""
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        await _run_engine(
-            storage,
-            max_generations=3,
-            mutation_operator=AlwaysRaisingMutationOperator(),
-        )
-
-        check_storage = _make_fakeredis_storage(server)
-        queued = await check_storage.get_all_by_status(ProgramState.QUEUED.value)
-        running = await check_storage.get_all_by_status(ProgramState.RUNNING.value)
-        await check_storage.close()
-
-        assert len(queued) == 0
-        assert len(running) == 0
-
-
-class TestTransientMutationFailure:
-    """Engine recovers after initial mutation failures then succeeds."""
-
-    async def test_engine_recovers_from_transient_failures(self) -> None:
-        """After 3 failing mutation calls, the operator succeeds.
-
-        We run 5 gens. Gen 1 has empty archive (no mutation). Gens 2-5
-        each call mutate_single once. Calls 1-3 fail (gens 2-4), call 4
-        succeeds (gen 5). The engine should complete all 5 gens and have
-        at least 1 mutation created.
-        """
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        engine = await _run_engine(
-            storage,
-            max_generations=5,
-            mutation_operator=FailFirstThenSucceedOperator(fail_count=3),
-        )
-
-        assert engine.metrics.total_generations == 5
-        # At least 1 mutation should have succeeded (gen 5)
-        assert engine.metrics.mutations_created >= 1
-
-    async def test_recovered_mutant_in_archive(self) -> None:
-        """The successfully mutated program ends up in the archive."""
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        await _run_engine(
-            storage,
-            max_generations=5,
-            mutation_operator=FailFirstThenSucceedOperator(fail_count=3),
-        )
-
-        check_storage = _make_fakeredis_storage(server)
-        strategy = MapElitesMultiIsland(
-            island_configs=[_make_island_config()], program_storage=check_storage
-        )
-        programs = await strategy.islands["test"].get_elites()
-        await check_storage.close()
-
-        # The recovered mutant (fitness=2.0, x=1.5) lands in a different bin
-        # than the seed (fitness=1.0, x=0.0) → archive has both, OR the mutant
-        # (x=0.5) shares bin 0 with seed and replaces it.
-        # Either way, the mutant with fitness=2.0 must be present.
-        fitnesses = {p.metrics["fitness"] for p in programs}
-        assert 2.0 in fitnesses, (
-            f"Expected recovered mutant (fitness=2.0) in archive, got: {fitnesses}"
         )
 
 

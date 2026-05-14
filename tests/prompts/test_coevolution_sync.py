@@ -10,14 +10,17 @@ from gigaevo.evolution.engine.snapshot import EngineSnapshot
 from gigaevo.prompts.coevolution.sync import MainRunSyncHook
 
 
-def _snap(total_generations: int | None) -> str | None:
-    """Encode a total_generations value as the engine:snapshot JSON blob.
+def _snap(programs_processed: int | None) -> str | None:
+    """Encode a programs_processed value as the engine:snapshot JSON blob.
 
     ``None`` is passed through (represents a missing Redis key).
     """
-    if total_generations is None:
+    if programs_processed is None:
         return None
-    return EngineSnapshot(total_generations=total_generations).model_dump_json()
+    return EngineSnapshot(
+        total_mutants=programs_processed,
+        programs_processed=programs_processed,
+    ).model_dump_json()
 
 
 def _encode(v):
@@ -42,7 +45,7 @@ class TestMainRunSyncHookInit:
         assert hook._sources == [(3, "chains/hotpotqa")]
         assert hook._timeout == 1000.0
         assert hook._poll_interval == 2.0
-        assert hook._last_main_gen == -1
+        assert hook._last_main_progress == -1
 
     def test_stores_config_multi_source(self):
         hook = MainRunSyncHook(
@@ -72,8 +75,8 @@ class TestMainRunSyncHookInit:
 
 class TestMainRunSyncHookCall:
     @pytest.mark.asyncio
-    async def test_proceeds_immediately_when_gen_advanced(self):
-        """If the main run is already at gen > -1, proceed immediately."""
+    async def test_proceeds_immediately_when_progress_advanced(self):
+        """If the main run is already at programs_processed > -1, proceed immediately."""
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -88,10 +91,10 @@ class TestMainRunSyncHookCall:
         await hook()
 
         mock_redis.hget.assert_called_once_with("test:run_state", "engine:snapshot")
-        assert hook._last_main_gen == 5
+        assert hook._last_main_progress == 5
 
     @pytest.mark.asyncio
-    async def test_waits_until_gen_advances(self):
+    async def test_waits_until_progress_advances(self):
         """If main run hasn't advanced, poll until it does."""
         hook = MainRunSyncHook(
             host="localhost",
@@ -101,14 +104,14 @@ class TestMainRunSyncHookCall:
             poll_interval=0.01,
         )
         mock_redis = AsyncMock()
-        hook._last_main_gen = 3
+        hook._last_main_progress = 3
         mock_redis.hget = AsyncMock(side_effect=[_encode(3), _encode(3), _encode(4)])
         hook._redis_clients[0] = mock_redis
 
         await hook()
 
         assert mock_redis.hget.call_count == 3
-        assert hook._last_main_gen == 4
+        assert hook._last_main_progress == 4
 
     @pytest.mark.asyncio
     async def test_timeout_proceeds_without_advancement(self):
@@ -121,18 +124,18 @@ class TestMainRunSyncHookCall:
             timeout=0.05,
             poll_interval=0.01,
         )
-        hook._last_main_gen = 10
+        hook._last_main_progress = 10
         mock_redis = AsyncMock()
         mock_redis.hget = AsyncMock(return_value=_encode(10))
         hook._redis_clients[0] = mock_redis
 
         await hook()
 
-        assert hook._last_main_gen == 10
+        assert hook._last_main_progress == 10
 
     @pytest.mark.asyncio
     async def test_handles_none_from_redis(self):
-        """If the key doesn't exist in Redis, treat gen as 0."""
+        """If the key doesn't exist in Redis, treat programs_processed as 0."""
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -146,11 +149,11 @@ class TestMainRunSyncHookCall:
 
         await hook()
 
-        assert hook._last_main_gen == 0
+        assert hook._last_main_progress == 0
 
     @pytest.mark.asyncio
-    async def test_tracks_generation_across_calls(self):
-        """Multiple calls should track the advancing generation."""
+    async def test_tracks_progress_across_calls(self):
+        """Multiple calls should track the advancing programs_processed."""
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -163,15 +166,15 @@ class TestMainRunSyncHookCall:
 
         mock_redis.hget = AsyncMock(return_value=_encode(0))
         await hook()
-        assert hook._last_main_gen == 0
+        assert hook._last_main_progress == 0
 
         mock_redis.hget = AsyncMock(return_value=_encode(1))
         await hook()
-        assert hook._last_main_gen == 1
+        assert hook._last_main_progress == 1
 
         mock_redis.hget = AsyncMock(return_value=_encode(3))
         await hook()
-        assert hook._last_main_gen == 3
+        assert hook._last_main_progress == 3
 
     @pytest.mark.asyncio
     async def test_correct_redis_key_construction(self):
@@ -194,8 +197,8 @@ class TestMainRunSyncHookCall:
         )
 
     @pytest.mark.asyncio
-    async def test_multi_source_waits_for_min_gen(self):
-        """With multiple sources, waits for the minimum gen to advance."""
+    async def test_multi_source_waits_for_min_progress(self):
+        """With multiple sources, waits for the minimum programs_processed to advance."""
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -210,16 +213,16 @@ class TestMainRunSyncHookCall:
         hook._redis_clients[4] = mock_r4
         hook._redis_clients[5] = mock_r5
 
-        # DB4 at gen 3, DB5 at gen 1 → min=1 > -1 → proceed
+        # DB4 at progress 3, DB5 at progress 1 → min=1 > -1 → proceed
         mock_r4.hget = AsyncMock(return_value=_encode(3))
         mock_r5.hget = AsyncMock(return_value=_encode(1))
 
         await hook()
-        assert hook._last_main_gen == 1
+        assert hook._last_main_progress == 1
 
     @pytest.mark.asyncio
     async def test_multi_source_blocks_until_slowest_advances(self):
-        """Must wait until ALL sources advance past last_main_gen."""
+        """Must wait until ALL sources advance past last_main_progress."""
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -229,7 +232,7 @@ class TestMainRunSyncHookCall:
             ],
             poll_interval=0.01,
         )
-        hook._last_main_gen = 2
+        hook._last_main_progress = 2
         mock_r4 = AsyncMock()
         mock_r5 = AsyncMock()
         hook._redis_clients[4] = mock_r4
@@ -241,7 +244,7 @@ class TestMainRunSyncHookCall:
         mock_r5.hget = AsyncMock(side_effect=[_encode(2), _encode(3)])
 
         await hook()
-        assert hook._last_main_gen == 3
+        assert hook._last_main_progress == 3
 
 
 class TestMainRunSyncHookGetRedis:

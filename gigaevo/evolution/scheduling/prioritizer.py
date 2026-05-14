@@ -102,3 +102,36 @@ class SJFPrioritizer(ProgramPrioritizer):
     @property
     def predictor(self) -> EvalTimePredictor:
         return self._predictor
+
+
+class CachedFirstPrioritizer(ProgramPrioritizer):
+    """Re-evaluations before fresh mutants.
+
+    A program with non-empty ``stage_results`` has already been DAG-evaluated
+    once, so on re-eval most of its stages will hit ``cached_skip`` and finish
+    in milliseconds. Surfacing those to the front of the launch queue directly
+    unblocks producer tasks that are pinned on
+    :meth:`ParentRefresher._await_done` (each pinned task holds an in-flight
+    slot, so when ``N`` mutants × ``M``-second refresh queues collide,
+    throughput collapses even though per-DAG exec is near-zero).
+
+    Within each tier (cached, fresh) the input order is preserved — Redis
+    SMEMBERS hash order, which the runner uses upstream, has no meaningful
+    semantics, so we don't attempt to re-sort.
+
+    No predictor — the cache signal lives on the program itself, no online
+    learning required. The class is therefore safe to swap in as default and
+    drop later if a higher-fidelity predictor-backed strategy supersedes it.
+    """
+
+    def prioritize(self, programs: list[Program]) -> list[Program]:
+        if not programs:
+            return []
+        cached: list[Program] = []
+        fresh: list[Program] = []
+        for p in programs:
+            if p.stage_results:
+                cached.append(p)
+            else:
+                fresh.append(p)
+        return cached + fresh

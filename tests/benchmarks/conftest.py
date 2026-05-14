@@ -16,9 +16,9 @@ import pytest
 
 from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
-from gigaevo.evolution.engine.config import EngineConfig
-from gigaevo.evolution.engine.core import EvolutionEngine
-from gigaevo.evolution.engine.stopper import MaxGenerationsStopper
+from gigaevo.evolution.engine.config import SteadyStateEngineConfig
+from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
+from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
@@ -280,7 +280,9 @@ def build_system(
     max_mutations: int = 3,
     max_concurrent_dags: int = 4,
     redis_url: str | None = None,
-) -> tuple[RedisProgramStorage, DagRunner, EvolutionEngine, MapElitesMultiIsland]:
+) -> tuple[
+    RedisProgramStorage, DagRunner, SteadyStateEvolutionEngine, MapElitesMultiIsland
+]:
     """Wire storage + strategy + DagRunner + EvolutionEngine."""
     _reset_counter()
     storage = make_storage(server=server, redis_url=redis_url)
@@ -302,16 +304,14 @@ def build_system(
         writer=writer,
     )
 
-    engine = EvolutionEngine(
+    engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
         mutation_operator=IncrementMutationOperator(),
-        config=EngineConfig(
+        config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=1,
-            max_mutations_per_generation=max_mutations,
-            generation_timeout=60.0,
-            stopper=MaxGenerationsStopper(max_generations),
+            stopper=MaxMutantsStopper(max_generations),
         ),
         writer=writer,
         metrics_tracker=_make_metrics_tracker(),

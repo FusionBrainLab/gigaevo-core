@@ -1,11 +1,11 @@
 """Synchronization hook for prompt co-evolution.
 
 MainRunSyncHook blocks the prompt run's engine until the main run(s) advance
-by at least one generation. This prevents the lightweight prompt run from
-racing far ahead of the expensive main run(s).
+by at least one *processed program*. This prevents the lightweight prompt run
+from racing far ahead of the expensive main run(s).
 
-Supports 1-to-many coupling: waits until the minimum generation across all
-tracked main runs exceeds the last-seen value.
+Supports 1-to-many coupling: waits until the minimum ``programs_processed``
+across all tracked main runs exceeds the last-seen value.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from gigaevo.evolution.engine.snapshot import ENGINE_SNAPSHOT_KEY, EngineSnapsho
 
 
 class MainRunSyncHook:
-    """Pre-step hook that blocks until main run(s) advance by 1 generation.
+    """Pre-step hook that blocks until main run(s) advance by 1 processed program.
 
-    Polls each main run's ``total_generations`` field from the
+    Polls each main run's ``programs_processed`` field from the
     ``engine:snapshot`` JSON blob in Redis and waits until the minimum across
     all sources exceeds the previous value.
 
@@ -53,7 +53,7 @@ class MainRunSyncHook:
         self._port = port
         self._timeout = timeout
         self._poll_interval = poll_interval
-        self._last_main_gen: int = -1
+        self._last_main_progress: int = -1
 
         # Build list of (db, prefix) sources
         if sources:
@@ -86,8 +86,8 @@ class MainRunSyncHook:
             )
         return self._redis_clients[db]
 
-    async def _get_min_gen(self) -> int:
-        """Read the minimum ``total_generations`` across all tracked main runs.
+    async def _get_min_progress(self) -> int:
+        """Read the minimum ``programs_processed`` across all tracked main runs.
 
         Reads the ``engine:snapshot`` JSON blob from each source's run-state
         hash. Missing snapshot or corrupt JSON -> 0 (matches
@@ -96,14 +96,14 @@ class MainRunSyncHook:
         snapshot helper takes a single storage abstraction and this hook must
         poll foreign-run prefixes.
         """
-        gens = []
+        progresses = []
         for db, prefix in self._sources:
             try:
                 r = self._get_redis(db)
                 key = f"{prefix}:run_state"
                 raw = await r.hget(key, ENGINE_SNAPSHOT_KEY)
                 if raw is None:
-                    gens.append(0)
+                    progresses.append(0)
                     continue
                 try:
                     snap = EngineSnapshot.model_validate_json(raw)
@@ -115,55 +115,58 @@ class MainRunSyncHook:
                         prefix,
                         exc,
                     )
-                    gens.append(0)
+                    progresses.append(0)
                     continue
-                gens.append(snap.total_generations)
+                progresses.append(snap.programs_processed)
             except Exception as exc:
                 logger.warning(
-                    "[MainRunSyncHook] Error reading gen from db={}: {}", db, exc
+                    "[MainRunSyncHook] Error reading programs_processed from db={}: {}",
+                    db,
+                    exc,
                 )
-                gens.append(0)
-        return min(gens) if gens else 0
+                progresses.append(0)
+        return min(progresses) if progresses else 0
 
     async def __call__(self) -> None:
-        """Poll until the minimum main run generation advances."""
+        """Poll until the minimum main run programs_processed advances."""
         start = time.monotonic()
         last_progress_log = start
 
         while True:
-            min_gen = await self._get_min_gen()
+            min_progress = await self._get_min_progress()
 
-            if min_gen > self._last_main_gen:
+            if min_progress > self._last_main_progress:
                 elapsed = time.monotonic() - start
                 logger.info(
-                    "[MainRunSyncHook] Main runs advanced to gen {} "
+                    "[MainRunSyncHook] Main runs advanced to programs_processed={} "
                     "(was {}, waited {:.1f}s, {} sources)",
-                    min_gen,
-                    self._last_main_gen,
+                    min_progress,
+                    self._last_main_progress,
                     elapsed,
                     len(self._sources),
                 )
-                self._last_main_gen = min_gen
+                self._last_main_progress = min_progress
                 return
 
             elapsed = time.monotonic() - start
             if elapsed > self._timeout:
                 logger.warning(
-                    "[MainRunSyncHook] Timeout after {:.0f}s waiting for min gen > {} "
-                    "(current min={}), proceeding",
+                    "[MainRunSyncHook] Timeout after {:.0f}s waiting for "
+                    "programs_processed > {} (current min={}), proceeding",
                     elapsed,
-                    self._last_main_gen,
-                    min_gen,
+                    self._last_main_progress,
+                    min_progress,
                 )
                 return
 
             now = time.monotonic()
             if (now - last_progress_log) >= 60.0:
                 logger.info(
-                    "[MainRunSyncHook] Waiting {:.0f}s for min gen > {} (current min={})",
+                    "[MainRunSyncHook] Waiting {:.0f}s for programs_processed > {} "
+                    "(current min={})",
                     elapsed,
-                    self._last_main_gen,
-                    min_gen,
+                    self._last_main_progress,
+                    min_progress,
                 )
                 last_progress_log = now
 
