@@ -90,6 +90,56 @@ gigaevo -r chains/hotpotqa/static@4:O export csv -o data/evolution.csv
 gigaevo -r chains/hotpotqa/static@4:O export frontier -o data/frontier.csv --metric fitness
 ```
 
+#### Metrics — raw Redis metric dump
+
+```bash
+# Stream all metric records, one per line: <tag>\tstep=<n>\twall=<iso>\tvalue=<v>
+gigaevo -r heilbron@0 metrics | grep tokens
+
+# Filter by glob, tail last N records per tag
+gigaevo -r heilbron@0 metrics --tag "valid/frontier/*"
+gigaevo -r heilbron@0 metrics --tag "*tokens*" --tail 10
+
+# Bounded step window, TSV output
+gigaevo -r heilbron@0 metrics --since 50 --until 100 --format tsv
+
+# Inspect a known histogram by exact tag (not enumerable from the `latest` hash)
+gigaevo -r heilbron@0 metrics --kind hist --tag valid/iter/duration_s
+```
+
+Read-only. See "Redis Data Model" below for how metrics are keyed.
+
+#### Events — canonical-event analytics
+
+```bash
+# Validate canonical events against the Pydantic registry
+gigaevo -e hover/my-exp events audit
+
+# Per-run event plots + summary.md (registry-driven)
+gigaevo -e hover/my-exp events plot -o plots/events/
+
+# Grouped plot (e.g., G vs D arms)
+gigaevo -e ... events plot --paired G1:D1,G2:D2 -o plots/events/
+```
+
+#### Profiler — log → text summary + HTML dashboard
+
+```bash
+# Every run in the manifest
+gigaevo -e hover/my-exp profiler
+
+# One run (by run label)
+gigaevo -e hover/my-exp profiler G1
+
+# Multiple runs
+gigaevo -e hover/my-exp profiler G1 D1
+
+# Arbitrary log file (no experiment.yaml required)
+gigaevo profiler --file /path/to/runner.log --out-dir /tmp/profile/
+```
+
+Outputs two files per run: `profile_<label>.txt` (terminal summary) and `profile_<label>.html` (interactive dashboard with caption + hover + stable per-tag colors). Default output directory is `experiments/<exp>/profiler/`.
+
 #### Operations
 
 ```bash
@@ -147,25 +197,26 @@ gigaevo -e hover/my-exp restart --confirm
 
 ### General Tools (`tools/`)
 
-Work on any GigaEvo run — no experiment.yaml required.
+Most read/write/plot functionality previously lived as standalone scripts here; it has been consolidated into the unified `gigaevo` CLI (see Commands above). What remains in `tools/` is helper modules and infrastructure scripts.
 
 | Tool | Purpose | Key flags |
 |---|---|---|
-| `status.py` | Live run monitoring: generation, all metrics, invalidity rate, PID liveness | `--run prefix@db:label` or `--experiment task/name` |
-| `trajectory.py` | Gen-by-gen table of frontier/mean fitness and valid program count | `--run`, `--tail N` |
-| `top_programs.py` | Inspect top N programs by fitness, optionally dump source code | `--run`, `-n 10`, `--code`, `--save-dir` |
-| `lineage.py` | Trace evolutionary ancestry chain back to seed | `--run`, `--top-n 1`, `--depth N` |
-| `comparison.py` | Multi-run fitness curve plots (png/pdf/svg) | `--run` (multiple), `--output-folder` |
-| `redis2pd.py` | Export evolution data or frontier to CSV | `--run`, `--frontier-csv`, `--output-file` |
-| `flush.py` | Kill stale exec_runner workers, then flush Redis DBs | `--db N [N ...]`, `--confirm` |
-| `fitness_vs_time.py` | Fitness vs wall-clock time plots | `--run`, `--output-folder` |
-| `pareto_plot.py` | Multi-objective Pareto frontier visualization | `--run`, `--output-folder` |
-| `throughput_plot.py` | Throughput evolution curves | `--run`, `--output-folder` |
-| `csv_memory_comparison.py` | Compare CSV exports from memory experiments | `--run` (multiple), `--output-folder` |
+| `lineage.py` | Trace evolutionary ancestry chain back to seed | `python -m tools.lineage --run`, `--top-n 1`, `--depth N` |
+| `profiler.py` | Log → text summary + HTML dashboard (called by `gigaevo profiler`) | invoked via `gigaevo profiler`; importable as `from tools.profiler import Profiler` |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
 | `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |
-| `no_proxy.py` | NO_PROXY environment helper for backend access | used by `litellm.sh` and launch scripts |
 | `utils.py` | Shared utilities: `parse_run_arg`, Redis helpers | imported by other tools |
+
+The former scripts (`status.py`, `trajectory.py`, `top_programs.py`, `comparison.py`, `redis2pd.py`, `flush.py`, `fitness_vs_time.py`, `pareto_plot.py`, `throughput_plot.py`, `csv_memory_comparison.py`) now live under `gigaevo/cli/` and are invoked as `gigaevo <subcommand>`.
+
+### Live Monitoring (`gigaevo/monitoring/`)
+
+Library-level helpers a runner can start to surface metrics to the terminal while an experiment is in flight. Not CLI tools — embed via `from gigaevo.monitoring import ...`.
+
+| Symbol | Purpose |
+|---|---|
+| `start_live_profiler(log_path, out_dir, ...)` | Periodically re-profile a runner's log file and refresh `profile_<label>.{txt,html}` on disk (default interval 60s) |
+| `start_live_frontier_compare(redis_url, key_prefix, metrics, ...)` | Stream side-by-side frontier comparison across runs/metrics into the terminal — sibling of `live_profiler` for multi-run experiments |
 
 ### Experiment Lifecycle Tools (`tools/experiment/`)
 
