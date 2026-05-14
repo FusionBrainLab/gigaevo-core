@@ -185,6 +185,48 @@ gigaevo -e hover/foo export csv A3_G B5_D -o results.csv
 gigaevo -e hover/foo export frontier --metric actual_fitness -o frontier.csv
 ```
 
+#### Metrics (`gigaevo metrics`)
+Dump raw metrics history from Redis, one record per line. Grep-friendly — composes with `grep | awk | sort` and friends. No plotting, no aggregations, no writes.
+
+**Flags**:
+
+| Flag | Description |
+|------|-------------|
+| `--tag PATTERN` | `fnmatch` glob on tag names (e.g. `valid/iter/*`, `*tokens*`). Exact (no-glob) patterns match a single tag even if absent from the `latest` hash (useful for histograms). |
+| `--since INT` | Earliest step/iteration to include (inclusive). |
+| `--until INT` | Latest step/iteration to include (inclusive). |
+| `--kind {scalar,hist,text,all}` | Filter by metric kind. Default: `scalar`. |
+| `--format {plain,tsv,json}` | Output format. Default: `plain`. |
+| `--tail N` | Keep only the last N records per tag. |
+
+**Plain output** (default), one record per line:
+```
+<tag>\tstep=<n>\twall=<iso>\tvalue=<v>
+```
+
+**Examples**:
+```bash
+# Everything, then grep
+gigaevo -r heilbron@0 metrics | grep tokens
+
+# Glob-filter tags
+gigaevo -r heilbron@0 metrics --tag "valid/frontier/*"
+gigaevo -r heilbron@0 metrics --tag "*context_tokens" --tail 20
+
+# Step window
+gigaevo -r heilbron@0 metrics --tag "loss" --since 100 --until 200
+
+# Spreadsheet pipeline
+gigaevo -r heilbron@0 metrics --tag "*tokens*" --format tsv > tokens.tsv
+
+# Multi-run (`label=` appears as a leading field in plain output)
+gigaevo -r p@1:A -r p@2:B metrics --tag fitness --tail 5
+```
+
+**Notes**:
+- Tag enumeration uses the `latest` hash, which RedisMetricsBackend doesn't update for histograms. To inspect a known histogram tag pass its exact name via `--tag` together with `--kind hist`.
+- Read-only. Never modifies Redis.
+
 #### Inspect (`gigaevo inspect`)
 Discover experiment prefix(es) in a Redis DB via `:__instance_lock__`.
 
@@ -372,6 +414,7 @@ CLI commands are tested in `tests/cli/`:
 - `test_status_cmd.py` — Status monitoring
 - `test_export_cmd.py` — Data export (positional labels + multi-run fan-out)
 - `test_logs_cmd.py` — Log tailing (explicit --file / labels / list mode)
+- `test_metrics_cmd.py` — Metrics dump (tag glob, step window, format, multi-run labels)
 - `test_run_resolver.py` — `-e`/`-r` → RunConfig resolution
 - etc.
 
