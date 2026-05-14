@@ -86,7 +86,8 @@ Evolution starts immediately. Logs are saved to `outputs/`.
 2. **Mutate programs** using LLMs (GPT, Claude, Gemini, Qwen, etc.)
 3. **Evaluate fitness** by running each program's `entrypoint()` + `validate()`
 4. **Select solutions** using MAP-Elites across a behavior space
-5. **Repeat** for N generations
+5. **Repeat** continuously (steady-state) until a `stopper` (e.g. `max_mutants`,
+   wall-clock, fitness-plateau) fires
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
@@ -130,14 +131,17 @@ python run.py experiment=prompt_coevolution problem.name=heilbron \
 ### Common Overrides
 
 ```bash
-# Limit generations
-python run.py problem.name=heilbron max_generations=10
+# Cap total mutants (steady-state stopper budget)
+python run.py problem.name=heilbron max_mutants=10
 
 # Use different Redis database
 python run.py problem.name=heilbron redis.db=5
 
 # Change LLM model
 python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
+
+# Pick a different stopper (wall-clock, fitness-plateau, ...)
+python run.py problem.name=heilbron stopper=wall_clock
 
 # Preview config without running
 python run.py problem.name=heilbron --cfg job
@@ -169,18 +173,19 @@ files are in `config/`:
 
 | Directory | Purpose | Key files |
 |-----------|---------|-----------|
-| `experiment/` | Complete experiment templates | `base.yaml`, `steady_state.yaml`, `migration_bus.yaml`, `prompt_coevolution.yaml`, `steady_state_bus.yaml` |
-| `algorithm/` | Evolution algorithms | `single_island.yaml`, `multi_island.yaml` |
-| `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml` |
-| `pipeline/` | DAG execution pipelines | `standard.yaml`, `with_context.yaml`, `prompt_evolution.yaml` |
+| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `steady_state.yaml`, `migration_bus.yaml`, `multi_island_complexity.yaml`, `multi_llm_exploration.yaml`, `prompt_coevolution.yaml`, `steady_state_adversarial.yaml`, `steady_state_bus.yaml` |
+| `algorithm/` | Evolution algorithms | `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
+| `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
+| `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
 | `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
-| `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml` |
+| `stopper/` | Stopping criteria | `max_mutants.yaml` (default), `wall_clock.yaml`, `fitness_plateau.yaml` |
+| `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml`, `runner.yaml`, `endpoints.yaml`, `redis.yaml`, `logging.yaml` |
 | `loader/` | Program loading | `directory.yaml`, `redis_selection.yaml` |
 | `logging/` | Backends | `tensorboard.yaml`, `wandb.yaml` |
 
 Override any setting via command line:
 ```bash
-python run.py experiment=full_featured max_generations=50 temperature=0.8
+python run.py experiment=full_featured max_mutants=50 temperature=0.8
 ```
 
 ## Creating a Problem
@@ -223,9 +228,11 @@ Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `
 | `gigaevo -r RUN top` | Inspect best programs by fitness |
 | `gigaevo -e EXP plot comparison -o DIR` | Multi-run fitness curve plots |
 | `gigaevo -e EXP plot arms-race -o DIR` | Dual-panel adversarial arms-race plot |
+| `gigaevo -e EXP profiler` | Profile runner logs into text summary + HTML dashboard |
+| `gigaevo -e EXP manifest gate <status>` | Hard-gate on experiment status (preregistered/implemented/running/complete) |
 | `gigaevo -r RUN export csv -o FILE` | Export evolution data to CSV |
 | `gigaevo flush --db N --confirm` | Safely flush Redis DBs (kills workers first) |
-| `gigaevo -e EXP watchdog` | Start experiment watchdog |
+| `gigaevo -e EXP launch` / `watchdog` | Launch + supervise an experiment |
 | `tools/experiment/archive_run.sh` | Archive run data before flush |
 | `tools/dag_builder/` | Visual DAG pipeline designer |
 | `tools/wizard/` | Interactive problem scaffolding |

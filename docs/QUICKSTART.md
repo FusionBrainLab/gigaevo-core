@@ -29,7 +29,7 @@ redis-server
 
 ```bash
 # Run the heilbron problem (triangle packing)
-python run.py problem.name=heilbron max_generations=5
+python run.py problem.name=heilbron max_mutants=5
 ```
 
 You should see:
@@ -49,7 +49,8 @@ You should see:
 2. **Evaluation**: Each program is evaluated (runs its `entrypoint()` function)
 3. **Mutation**: LLM mutates the best programs to create new ones
 4. **Selection**: Programs that improve fitness are kept in the archive
-5. **Repeat**: Continues for 5 generations
+5. **Repeat**: The steady-state engine continuously mutates and ingests until
+   the configured stopper (here `max_mutants=5`) fires
 
 ## Step 4: Inspect Results (while evolution runs)
 
@@ -72,8 +73,8 @@ gigaevo export csv -r heilbron@0:run-1
 ## Step 5: View Evolution Logs
 
 ```bash
-# Logs are in outputs/
-tail -f outputs/2025-11-11/*/evolution_*.log
+# Logs are in outputs/YYYY-MM-DD/HH-MM-SS/
+tail -f outputs/*/*/evolution_*.log
 ```
 
 ## Step 6: Analyze Results
@@ -84,8 +85,8 @@ After evolution completes:
 # Export to CSV
 gigaevo export csv -r heilbron@0:run-1
 
-# Compare fitness curves across runs (pass multiple --run flags)
-gigaevo plot comparison -r heilbron@0:run-1 -r heilbron@1:run-2
+# Compare fitness curves across runs (pass multiple --run flags; -o is required)
+gigaevo plot comparison -r heilbron@0:run-1 -r heilbron@1:run-2 -o plots/
 
 # View top programs
 gigaevo top -r heilbron@0:run-1 -n 10
@@ -102,11 +103,9 @@ gigaevo top -r heilbron@0:run-1 -n 10
 [INFO] Step 4/5: Starting evolution... ✓
 [INFO] Step 5/5: Running until completion...
 
-[INFO] [EvolutionEngine] Phase 1: Idle confirmed
-[INFO] [EvolutionEngine] Phase 2: Created 10 mutant(s)
-[INFO] [EvolutionEngine] Phase 3: Mutant DAGs finished
-[INFO] [EvolutionEngine] Phase 4: Ingestion done (added=3, rejected=7)
-[INFO] [EvolutionEngine] Phase 5: Refreshed 8 program(s)
+[INFO] [SteadyState] Start | producer_sema=N buffer_sema=N (max_in_flight=N) ...
+[INFO] [EvolutionEngine] Init | strategy=..., acceptor=..., stopper=MaxMutantsStopper
+[INFO] [SteadyState] Dispatcher / Ingestor running — continuous mutation + ingest
 ```
 
 ### Key Metrics to Watch
@@ -127,9 +126,10 @@ gigaevo flush --db 0 --confirm
 python run.py problem.name=heilbron redis.db=1
 ```
 
-### Issue: "No programs in EVOLVING state"
+### Issue: "No programs reaching DONE state"
 
-**Cause**: Programs might be failing validation.
+**Cause**: Programs might be failing validation (state machine:
+`QUEUED → RUNNING → DONE` or `→ DISCARDED`).
 
 **Solution:**
 ```bash
@@ -150,9 +150,10 @@ gigaevo top -r <prefix>@<db>:<label> -n 10
 - Generation cycle: ~2-5 minutes
 
 **Speed it up**:
-- Reduce `max_mutations_per_generation` in config
 - Use faster LLM models
-- Increase `max_concurrent_dags` (but beware of rate limits)
+- Increase `max_in_flight` (concurrent mutation + ingest tasks; see
+  `config/constants/evolution.yaml`) — beware of LLM rate limits
+- Increase `max_concurrent_dags` (DAG runner parallelism)
 
 ## Next Steps
 
@@ -180,17 +181,17 @@ python run.py experiment=multi_llm_exploration problem.name=heilbron
 
 # Adjust parameters
 python run.py problem.name=heilbron \
-    max_generations=20 \
-    max_mutations_per_generation=15 \
+    max_mutants=20 \
+    max_in_flight=15 \
     model_name=anthropic/claude-3.5-sonnet
 ```
 
 ### 3. Read the Documentation
 
-- **Architecture**: `ARCHITECTURE.md` - Understand the system design
-- **DAG System**: `DAG_SYSTEM.md` - Learn about pipelines
-- **Evolution Strategies**: `EVOLUTION_STRATEGIES.md` - Learn about MAP-Elites
-- **Contributing**: `CONTRIBUTING.md` - Development guidelines
+- **Architecture**: `docs/ARCHITECTURE.md` - Understand the system design
+- **DAG System**: `docs/DAG_SYSTEM.md` - Learn about pipelines
+- **Evolution Strategies**: `docs/EVOLUTION_STRATEGIES.md` - Learn about MAP-Elites
+- **Contributing**: `docs/CONTRIBUTING.md` - Development guidelines
 
 ### 4. Explore Examples
 
@@ -231,8 +232,8 @@ gigaevo top -r <prefix>@<db>:<label> -n 10
 # Export results to CSV
 gigaevo export csv -r <prefix>@<db>:<label>
 
-# Compare fitness curves across runs
-gigaevo plot comparison -r <prefix>@<db>:A -r <prefix>@<db>:B
+# Compare fitness curves across runs (-o output dir required)
+gigaevo plot comparison -r <prefix>@<db>:A -r <prefix>@<db>:B -o plots/
 
 # Flush Redis (kills exec_runners first — never use redis-cli FLUSHDB directly)
 gigaevo flush --db 0 --confirm
@@ -245,7 +246,7 @@ tail -f outputs/*/evolution_*.log
 
 1. **Check logs**: Most issues are explained in the logs
 2. **Check run status**: `gigaevo status -r <prefix>@<db>:<label>`
-3. **Read architecture doc**: `ARCHITECTURE.md` explains the system
+3. **Read architecture doc**: `docs/ARCHITECTURE.md` explains the system
 4. **Check examples**: Look at existing problems in `problems/`
 
 ## What You Just Learned
@@ -258,7 +259,7 @@ tail -f outputs/*/evolution_*.log
 ## Recommended Learning Path
 
 1. **Day 1**: Run existing problems, inspect results
-2. **Day 2**: Read `ARCHITECTURE.md`, understand the flow
+2. **Day 2**: Read `docs/ARCHITECTURE.md`, understand the flow
 3. **Day 3**: Create your own simple problem
 4. **Day 4**: Customize pipeline (add custom stages)
 5. **Day 5**: Experiment with multi-island evolution

@@ -30,7 +30,8 @@ This guide helps you understand GigaEvo's architecture from a bird's-eye view be
 
 ## Program Lifecycle: The Most Critical Flow
 
-Understanding this is **essential**. Every program goes through these states:
+Understanding this is **essential**. Every program goes through these states
+(defined in `gigaevo/programs/program_state.py`):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -38,98 +39,89 @@ Understanding this is **essential**. Every program goes through these states:
 └─────────────────────────────────────────────────────────────────┘
 
     ┌──────────┐
-    │  FRESH   │ ← Program created or refreshed
+    │  QUEUED  │ ← Program created or re-queued for JIT refresh
     └────┬─────┘
          │ DagRunner picks it up
          ↓
-    ┌──────────────────────┐
-    │ DAG_PROCESSING_      │ ← DAG executing stages
-    │     STARTED          │
-    └────┬─────────────────┘
-         │ DAG completes successfully
-         ↓
-    ┌──────────────────────┐
-    │ DAG_PROCESSING_      │ ← Ready for ingestion
-    │    COMPLETED         │
-    └────┬─────────────────┘
-         │ EvolutionEngine processes it
-         ├─→ (New program + accepted) ──→ EVOLVING
-         ├─→ (Existing program) ────────→ EVOLVING (restored)
-         └─→ (Rejected) ────────────────→ DISCARDED
+    ┌──────────┐
+    │ RUNNING  │ ← DAG executing stages
+    └────┬─────┘
+         │ DAG completes
+         ├─→ (success) ────────────────→ DONE
+         └─→ (acceptor rejects) ────────→ DISCARDED
 
     ┌──────────┐
-    │ EVOLVING │ ← Active in island archive
+    │   DONE   │ ← Ingested + in archive (if accepted)
     └────┬─────┘
-         │ Refresh phase
-         └─→ Back to FRESH (to update lineage-aware stages)
+         │ ParentRefresher (JIT, when selected as a parent)
+         └─→ Back to QUEUED (to refresh lineage-aware stages)
 ```
 
 ### Why This Matters
 
-- **FRESH** programs are picked up by `DagRunner`
-- **DAG_PROCESSING_STARTED** programs are being evaluated
-- **DAG_PROCESSING_COMPLETED** programs await ingestion by `EvolutionEngine`
-- **EVOLVING** programs are in the archive and can be selected as parents
-- Programs cycle: `EVOLVING → FRESH → ... → EVOLVING` to update lineage info
+- **QUEUED** programs are picked up by `DagRunner`
+- **RUNNING** programs are being evaluated
+- **DONE** programs have metrics and live in the archive; they can be
+  selected as parents
+- **DISCARDED** is terminal (rejected by acceptor or invalid)
+- Re-evaluation is **JIT** (just-in-time): a parent is re-queued only when
+  `ParentRefresher` selects it for mutation — there is no global per-epoch
+  archive refresh (see `gigaevo/evolution/engine/refresh.py`).
 
 ### The "Idle" State
 
-`EvolutionEngine` waits for "idle" (no FRESH or DAG_PROCESSING_STARTED programs) before:
-- Selecting elites and creating mutants
-- Ingesting completed programs
-- Refreshing evolving programs
+The engine waits for "idle" (no QUEUED or RUNNING programs) only during
+startup (to drain the initial seed population). After that, the
+steady-state engine runs `dispatcher_loop` and `ingestor_loop`
+concurrently — there is no per-generation barrier.
 
-**Debugging tip**: If evolution is stuck, check Redis for programs in FRESH/DAG_PROCESSING_STARTED:
+**Debugging tip**: If evolution is stuck, count programs by status set
+(Redis schema: `{prefix}:status:{status}`):
 ```bash
-redis-cli KEYS "state:FRESH:*"
-redis-cli KEYS "state:DAG_PROCESSING_STARTED:*"
+redis-cli SCARD "gigaevo:status:queued"
+redis-cli SCARD "gigaevo:status:running"
+redis-cli SCARD "gigaevo:status:done"
 ```
 
-## Evolution Generation Flow
+## Evolution Flow: Steady-State Engine
 
-One complete generation consists of 6 phases:
+`SteadyStateEvolutionEngine` is the only concrete engine. It runs two
+concurrent loops (no per-generation barrier):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    GENERATION PHASES                             │
+│                  STEADY-STATE EVOLUTION                         │
 └─────────────────────────────────────────────────────────────────┘
 
-Phase 1: Wait for Idle
-    └─→ Block until no FRESH or DAG_PROCESSING_STARTED programs
+dispatcher_loop                          ingestor_loop
+─────────────────                        ──────────────
+ 1. acquire producer_sema                 1. poll Redis for DONE/DISCARDED
+ 2. (JIT) ParentRefresher.refresh()       2. apply Strategy.add / reject
+    — re-queues parents that need it      3. release producer_sema + buffer_sema
+ 3. MutationOperator.mutate()             4. release ParentRefreshTicket
+ 4. store mutant (state: QUEUED)
+ 5. acquire buffer_sema
+ 6. emit BackpressureSample event
 
-Phase 2: Select & Mutate
-    ├─→ Strategy.select_elites(N)
-    ├─→ MutationOperator.mutate() → Create N mutants
-    └─→ Store mutants in Redis (state: FRESH)
-
-Phase 3: Wait for Mutant DAGs
-    └─→ Block until mutants complete evaluation
-
-Phase 4: Ingest Completed Programs
-    ├─→ For each DAG_PROCESSING_COMPLETED program:
-    │   ├─→ Already in archive? → Restore to EVOLVING
-    │   ├─→ New + accepted by strategy? → Add, set EVOLVING
-    │   └─→ Rejected? → Set DISCARDED
-
-Phase 5: Refresh Evolving Programs
-    ├─→ Get all programs in EVOLVING state
-    ├─→ Flip them to FRESH
-    └─→ Lineage-aware stages will re-run with updated family tree
-
-Phase 6: Wait for Refresh DAGs
-    └─→ Block until refresh completes
-
-[Increment generation counter and repeat]
+Stopping: stopper.should_stop(StopContext) is called once per dispatched
+mutant. Built-in stoppers live in config/stopper/ (max_mutants,
+wall_clock, fitness_plateau, ...).
 ```
 
-### Why Refresh Exists
+Backpressure is governed by `max_in_flight` (sizes both producer and
+buffer semaphores). See `gigaevo/evolution/engine/steady_state.py`.
 
-Programs need to be refreshed because:
-1. New children are added to their lineage
-2. Descendant statistics change
-3. LLM-based stages (insights, lineage analysis) should be recomputed with updated context
+### Why JIT Refresh
 
-**Performance note**: This means stages run multiple times per program. Use `cacheable=True` for deterministic stages to avoid redundant computation.
+Parents are re-evaluated only when they are themselves selected as
+parents (`ParentRefresher`). This refreshes lineage-aware stages
+(insights, lineage) with the latest descendant statistics without paying
+the cost of refreshing the entire archive each epoch.
+
+**Performance note**: Cacheable stages (e.g. `ValidateCodeStage`,
+`ComputeComplexityStage`) skip re-computation across refresh cycles via
+the stage cache; non-cacheable stages (LineageStage,
+MutationContextStage) re-run.
 
 ## The DAG Pipeline: How Programs Are Evaluated
 
@@ -138,50 +130,60 @@ Programs need to be refreshed because:
 │                        DAG EXECUTION                             │
 └─────────────────────────────────────────────────────────────────┘
 
-Program (state: FRESH)
+Program (state: QUEUED)
     ↓
 DagRunner picks it up
     ↓
-DAG built from blueprint
+DAG built from blueprint (DefaultPipelineBuilder)
     ↓
 Stages execute in parallel (respecting dependencies)
     │
-    ├─→ ValidateCode (cacheable)
+    ├─→ ValidateCodeStage (cacheable)
     │   ├─→ SUCCESS → Continue
     │   └─→ FAILED → Skip dependent stages
     │
-    ├─→ ExecuteProgram (depends on ValidateCode)
+    ├─→ CallProgramFunction (depends on ValidateCodeStage)
     │   ├─→ Runs user's entrypoint() function
     │   └─→ Captures output
     │
-    ├─→ ValidateOutput (depends on ExecuteProgram)
-    │   ├─→ Runs validate() from problem
-    │   ├─→ Returns metrics (fitness, etc.)
-    │   └─→ May return an optional artifact (e.g. bottleneck data, arrays) for mutation context
+    ├─→ CallValidatorFunction (depends on CallProgramFunction)
+    │   ├─→ Runs validate() from the problem
+    │   └─→ Returns (metrics, artifact) tuple
     │
-    ├─→ ComputeComplexity (independent, cacheable)
+    ├─→ FetchMetrics / FetchArtifact
+    │   └─→ Split validator output into metrics + optional artifact
+    │
+    ├─→ ComputeComplexityStage (independent, cacheable)
     │   └─→ Analyzes code structure
     │
-    ├─→ MergeMetrics
-    │   └─→ Combines all metrics
+    ├─→ MergeMetricsStage → EnsureMetricsStage
+    │   └─→ Combines + sanitises all metrics
     │
-    ├─→ InsightsStage (depends on metrics, non-cacheable)
+    ├─→ ArchivePotentialGateStage (optional, opt-in via Hydra)
+    │   └─→ Skip InsightsStage when a program would be dominated in every island
+    │
+    ├─→ InsightsStage (cacheable, LLM)
     │   └─→ LLM generates insights
+    │
+    ├─→ LineageStage + LineagesToDescendants / LineagesFromAncestors
+    │   └─→ Lineage-aware analysis (non-cacheable; rerun on JIT refresh)
     │
     └─→ MutationContextStage (non-cacheable)
         └─→ Formats context for future mutation
     ↓
 All stages complete
     ↓
-Program state: DAG_PROCESSING_COMPLETED
+Program state: DONE
 ```
 
 ### Data Flow Example
 
 ```
-ExecuteProgram.OutputModel = Box[np.ndarray]
-    ↓ DataFlowEdge(source="ExecuteProgram", dest="ValidateOutput", input_name="payload")
-ValidateOutput.InputsModel.payload: Box[np.ndarray]
+CallProgramFunction.OutputModel = Box[np.ndarray]
+    ↓ DataFlowEdge(source="CallProgramFunction",
+                   destination="CallValidatorFunction",
+                   input_name="payload")
+CallValidatorFunction.InputsModel.payload: Box[np.ndarray]
 ```
 
 **How to find input_name**: Look at the destination stage's `InputsModel` class.
@@ -190,10 +192,10 @@ ValidateOutput.InputsModel.payload: Box[np.ndarray]
 
 | Stage Type | Cacheable? | Why |
 |------------|------------|-----|
-| ValidateCode | ✅ Yes | Code syntax doesn't change |
-| ExecuteProgram | ✅ Yes | Deterministic execution |
-| ComputeComplexity | ✅ Yes | Static code analysis |
-| InsightsStage | ✅ Yes | Fixed LLM based analysis |
+| ValidateCodeStage | ✅ Yes | Code syntax doesn't change |
+| CallProgramFunction | ✅ Yes | Deterministic execution |
+| ComputeComplexityStage | ✅ Yes | Static code analysis |
+| InsightsStage | ✅ Yes | Fixed LLM-based analysis |
 | LineageStage | ❌ No | Depends on evolving family tree |
 | MutationContextStage | ❌ No | Aggregates non-cacheable data |
 
@@ -236,7 +238,7 @@ program.metadata = {
 ### Migration Process
 
 ```
-Generation 50, 100, 150, ... (every migration_interval):
+Every `migration_interval` mutants (formerly: every N generations):
 
 1. Select Migrants
    ├─→ Island 1: Select top 5 by fitness
@@ -266,37 +268,40 @@ Redis is the single source of truth. Understanding the key schema is essential f
 │                       REDIS KEY SCHEMA                           │
 └─────────────────────────────────────────────────────────────────┘
 
-program:{program_id}                    → Program object (JSON)
-state:{state_value}:{program_id}        → State index
-counter                                 → Atomic counter for updates
+# Templates (defaults from gigaevo/database/redis/config.py)
+{prefix}:program:{pid}        → Program object (JSON)
+{prefix}:status:{status}      → SET of program IDs in that state
+{prefix}:status_events        → STREAM of status-change events
+{prefix}:archive              → HASH: cell → program_id (elite archive)
+{prefix}:archive:reverse      → HASH: program_id → cell
+{prefix}:ts                   → Atomic counter / timestamp
+{prefix}:run_state            → HASH of run-level counters
 
-# Island-specific
-island_{island_id}:archive              → Hash: cell → program_id
+# Multi-island runs use a distinct key_prefix per island.
 
-# Example keys:
-program:a1b2c3d4-...                    → Program data
-state:FRESH:a1b2c3d4-...                → Index entry
-state:EVOLVING:a1b2c3d4-...             → Index entry
-island_fitness_island:archive           → Archive hash
+# Example keys (default prefix "gigaevo", status set member is a program id):
+gigaevo:program:a1b2c3d4-...
+gigaevo:status:queued                   → SET membership
+gigaevo:status:done                     → SET membership
+gigaevo:archive                         → elite hash
 ```
 
 ### Debugging Commands
 
 ```bash
-# Show all states
-redis-cli --scan --pattern "state:*" | cut -d: -f2 | sort | uniq -c
+# Count programs in each state
+for s in queued running done discarded; do
+  echo -n "$s: "; redis-cli SCARD "gigaevo:status:$s"
+done
 
-# Show programs in FRESH state
-redis-cli KEYS "state:FRESH:*"
+# List program IDs currently QUEUED
+redis-cli SMEMBERS "gigaevo:status:queued"
 
-# Show island archive size
-redis-cli HLEN "island_fitness_island:archive"
+# Show archive size
+redis-cli HLEN "gigaevo:archive"
 
 # Get program details
-redis-cli GET "program:a1b2c3d4-..." | jq .
-
-# Show all island archives
-redis-cli KEYS "island_*:archive"
+redis-cli GET "gigaevo:program:a1b2c3d4-..." | jq .
 ```
 
 ## LLM Mutation Pipeline
@@ -331,7 +336,7 @@ The mutation process involves multiple stages:
 4. Create Child Program
    ├─→ Program.from_mutation_spec()
    ├─→ Set lineage (parents, generation, mutation name)
-   ├─→ Store in Redis (state: FRESH)
+   ├─→ Store in Redis (state: QUEUED)
    └─→ Update parent.lineage.children
 
 5. Child Evaluation
@@ -340,13 +345,17 @@ The mutation process involves multiple stages:
 
 ### Prompt Construction
 
+Default prompt templates ship under `gigaevo/prompts/` (override per
+experiment via the `prompts.dir` Hydra knob; see
+`config/prompts/default.yaml`).
+
 ```
-System Prompt (from prompts/mutation/system.txt):
+System Prompt (from gigaevo/prompts/mutation/system.txt):
     Task: {task_description}
     Metrics: {metrics_description}
     Instructions: ...
 
-User Prompt (from prompts/mutation/user.txt):
+User Prompt (from gigaevo/prompts/mutation/user.txt):
     Mutate {count} parent programs:
 
     === Parent 1 ===
@@ -405,14 +414,14 @@ ${metrics_context}          # Resolves to metrics context
 ### "Evolution is stuck"
 
 **Check:**
-1. Are there programs in FRESH state waiting for DAG?
+1. Are there programs in QUEUED state waiting for DAG?
    ```bash
-   redis-cli KEYS "state:FRESH:*" | wc -l
+   redis-cli SCARD "gigaevo:status:queued"
    ```
 
-2. Are there programs in DAG_PROCESSING_STARTED?
+2. Are there programs in RUNNING that never advance?
    ```bash
-   redis-cli KEYS "state:DAG_PROCESSING_STARTED:*" | wc -l
+   redis-cli SCARD "gigaevo:status:running"
    ```
 
 3. Check DagRunner metrics in logs:
@@ -456,21 +465,30 @@ ${metrics_context}          # Resolves to metrics context
 1. Archive size: `await strategy.get_metrics()`
 2. Elite selection: Are any elites being selected?
 3. Parent selector: Is it producing valid parent tuples?
-4. Generation limit: Has `max_generations` been reached?
+4. Stopper fired: Has the configured stopper (e.g. `max_mutants`,
+   `wall_clock`, `fitness_plateau`) reported `stop=True`?
 
 ## Quick Reference: Key Files
 
 | File | Purpose |
 |------|---------|
 | `run.py` | Main entry point |
-| `gigaevo/evolution/engine/core.py` | Evolution generation loop |
-| `gigaevo/runner/dag_runner.py` | Picks up FRESH programs, runs DAGs |
+| `gigaevo/evolution/engine/core.py` | `EvolutionEngine` base class (shared helpers, snapshot, idle wait) |
+| `gigaevo/evolution/engine/steady_state.py` | `SteadyStateEvolutionEngine` (only concrete engine) |
+| `gigaevo/evolution/engine/dispatcher.py` | Dispatcher loop (mutate + enqueue) |
+| `gigaevo/evolution/engine/ingestor.py` | Ingestor loop (poll DONE + acceptor) |
+| `gigaevo/evolution/engine/refresh.py` | `ParentRefresher` (JIT parent refresh) |
+| `gigaevo/evolution/engine/stopper.py` | Stoppers: `MaxMutantsStopper`, `WallClockStopper`, ... |
+| `gigaevo/runner/dag_runner.py` | Picks up QUEUED programs, runs DAGs |
 | `gigaevo/evolution/strategies/multi_island.py` | Multi-island strategy |
 | `gigaevo/evolution/strategies/island.py` | Single island (archive) |
 | `gigaevo/programs/dag/dag.py` | DAG execution engine |
 | `gigaevo/programs/dag/automata.py` | Stage scheduling logic |
+| `gigaevo/programs/program_state.py` | `ProgramState` enum + valid transitions |
 | `gigaevo/database/redis_program_storage.py` | Redis interface |
 | `gigaevo/database/state_manager.py` | Program state transitions |
+| `gigaevo/database/redis/keys.py` | Redis key templates |
+| `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (stage wiring) |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
 
 ## Next Steps
@@ -478,12 +496,12 @@ ${metrics_context}          # Resolves to metrics context
 1. **Quick Start**: Follow README.md to run your first evolution
 2. **Create a Problem**: See `problems/heilbron/` as template
 3. **Customize Evolution**: Modify `config/experiment/base.yaml`
-4. **Add Custom Stages**: Read `DAG_SYSTEM.md`
+4. **Add Custom Stages**: Read `docs/DAG_SYSTEM.md`
 5. **Debug Issues**: Use Redis commands and logs
 
 ## Getting Help
 
-- **DAG System**: See `DAG_SYSTEM.md`
-- **Evolution Strategies**: See `EVOLUTION_STRATEGIES.md`
+- **DAG System**: See `docs/DAG_SYSTEM.md`
+- **Evolution Strategies**: See `docs/EVOLUTION_STRATEGIES.md`
 - **Configuration**: See `config/` directory structure
 - **Tools**: See `../tools/README.md` for analysis utilities

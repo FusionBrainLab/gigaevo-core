@@ -35,27 +35,31 @@ Experiments are starting points — override any setting after selecting one:
 
 ```bash
 python run.py experiment=full_featured problem.name=toy_example \
-    max_generations=50 stage_timeout=300
+    max_mutants=50 stage_timeout=300
 ```
 
 ## Common Overrides
 
 ```bash
-# Limit generations
-python run.py problem.name=toy_example max_generations=50
+# Cap total mutants (default stopper is max_mutants)
+python run.py problem.name=toy_example max_mutants=50
+
+# Switch stopper (e.g. wall-clock or fitness-plateau)
+python run.py problem.name=toy_example stopper=wall_clock
 
 # Change population size
 python run.py problem.name=toy_example island_max_size=150
 
 # Change LLM settings
 python run.py problem.name=toy_example \
-    default_temperature=0.7 \
-    default_max_tokens=40960
+    temperature=0.7 \
+    max_tokens=40960
 
 # More parallelism
 python run.py problem.name=toy_example \
     dag_concurrency=32 \
-    max_concurrent_dags=20
+    max_concurrent_dags=20 \
+    max_in_flight=12
 
 # Use a different Redis database
 python run.py problem.name=toy_example redis.db=5
@@ -84,11 +88,12 @@ python run.py problem.name=toy_example \
 
 | Group | Options |
 |-------|---------|
-| `experiment` | `base`, `full_featured`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state`, `steady_state_adversarial`, `steady_state_bus` |
-| `algorithm` | `single_island`, `single_island_2d`, `multi_island`, `single_island_fitness_prop_fixed_temp`, `single_island_weighted` |
-| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini25_pro`, `gemini31_pro`, `gemini3_flash` |
-| `pipeline` | `standard`, `with_context`, `auto`, `custom`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `prompt_evolution`, `optuna_opt`, `cma_opt` |
+| `experiment` | `base`, `full_featured`, `heilbron`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state`, `steady_state_adversarial`, `steady_state_bus` |
+| `algorithm` | `single_island`, `single_island_2d` (+ `_d`, `_g` variants), `multi_island`, `topology_3d` (+ `_ret`, `_7step` variants), `single_island_fitness_prop_fixed_temp`, `single_island_weighted` |
+| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini25_pro`, `gemini31_pro`, `gemini3_flash` |
+| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `algotune_speed`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `prompt_evolution`, `optuna_opt`, `cma_opt` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
+| `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
 | `loader` | `directory`, `redis_selection` |
 | `logging` | `tensorboard`, `wandb` |
@@ -97,21 +102,21 @@ python run.py problem.name=toy_example \
 
 ### Quick Test Run
 ```bash
-python run.py problem.name=toy_example max_generations=5
+python run.py problem.name=toy_example max_mutants=5
 ```
 
 ### Production Run with Multi-Island
 ```bash
 python run.py experiment=multi_island_complexity \
     problem.name=heilbron \
-    max_generations=100
+    max_mutants=100
 ```
 
 ### Multi-LLM Exploration
 ```bash
 python run.py experiment=multi_llm_exploration \
     problem.name=heilbron \
-    max_mutations_per_generation=12
+    max_in_flight=12
 ```
 
 ### Prompt Co-Evolution
