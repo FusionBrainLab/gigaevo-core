@@ -171,8 +171,21 @@ class MultiModelRouter(Runnable):
                 continue
             by_base_url.setdefault(base_url, []).append(model)
 
-        token = os.getenv("OPENAI_API_TOKEN", "")
         for base_url, models in by_base_url.items():
+            # Use the key actually configured on the model so the probe
+            # auths the same way as real requests. Fall back to env vars.
+            secret: Any = getattr(models[0], "openai_api_key", None)
+            if hasattr(secret, "get_secret_value"):
+                model_token = secret.get_secret_value()
+            elif isinstance(secret, str):
+                model_token = secret
+            else:
+                model_token = ""
+            token = (
+                model_token
+                or os.getenv("OPENAI_API_KEY", "")
+                or os.getenv("OPENAI_API_TOKEN", "")
+            )
             url = f"{base_url.rstrip('/')}/models"
             req = urllib.request.Request(
                 url, method="GET", headers={"Authorization": f"Bearer {token}"}
