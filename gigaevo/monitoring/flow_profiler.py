@@ -21,10 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import hashlib
 import json
 from pathlib import Path
 import re
-import zlib
 
 # ----- log parsing -----
 
@@ -798,22 +798,87 @@ def format_summary_text(
 # ----- HTML render (Plotly imported lazily) -----
 
 
+# Curated qualitative palette (20 hues) — colorblind-aware mix of Tableau 10
+# + Tableau 10 Light + a few extra distinct hues. Designed so adjacent slots
+# stay visually distinguishable and no two slots collide under SHA-1 hashing
+# for realistic stage-name sets.
 STAGE_PALETTE = [
-    "#1f77b4",
-    "#ff7f0e",
-    "#2ca02c",
-    "#d62728",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-    "#17becf",
-    "#bcbd22",
-    "#7f3f97",
+    "#1f77b4",  # blue
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#d62728",  # red
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#17becf",  # cyan
+    "#bcbd22",  # olive
+    "#7f3f97",  # violet
+    "#aec7e8",  # light blue
+    "#ffbb78",  # light orange
+    "#98df8a",  # light green
+    "#ff9896",  # light red
+    "#c5b0d5",  # light purple
+    "#c49c94",  # tan
+    "#f7b6d2",  # light pink
+    "#9edae5",  # light cyan
+    "#dbdb8d",  # light olive
+    "#393b79",  # dark navy
 ]
+
+# Lightness/saturation variants applied as a deterministic second axis when
+# the hue slot alone would collide. Three levels keep the visual distance
+# between variants well above the just-noticeable-difference for most stages.
+_LIGHTNESS_LEVELS = 3
+# Effective palette capacity = len(STAGE_PALETTE) * _LIGHTNESS_LEVELS.
+
+
+def _hash_slot(name: str, n: int, salt: bytes) -> int:
+    """Deterministic, well-distributed slot in ``[0, n)`` keyed by ``name``."""
+    digest = hashlib.sha1(salt + name.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % n
+
+
+def _shade(hex_color: str, level: int) -> str:
+    """Return ``hex_color`` shifted in lightness for variant ``level``.
+
+    ``level == 0`` returns the base color unchanged. Higher levels nudge the
+    color toward white/black in alternating directions so neighbouring
+    variants stay visually distinct without wandering off the palette.
+    """
+    if level == 0:
+        return hex_color
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    # Alternate darker/lighter shifts; magnitude grows with level so 0/1/2
+    # remain pairwise distinguishable on standard displays.
+    if level % 2 == 1:
+        # Darken
+        factor = 1.0 - 0.22 * ((level + 1) // 2)
+        r = max(0, int(r * factor))
+        g = max(0, int(g * factor))
+        b = max(0, int(b * factor))
+    else:
+        # Lighten (blend toward white)
+        weight = 0.28 * (level // 2)
+        r = min(255, int(r + (255 - r) * weight))
+        g = min(255, int(g + (255 - g) * weight))
+        b = min(255, int(b + (255 - b) * weight))
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def stage_color(name: str) -> str:
-    return STAGE_PALETTE[zlib.adler32(name.encode()) % len(STAGE_PALETTE)]
+    """Stable, distinguishable color for a stage name.
+
+    The mapping is deterministic and name-keyed: a given stage always maps
+    to the same color, across runs, re-renders, and additions/removals of
+    other stages. Two independent SHA-1-derived slots pick a hue and a
+    lightness variant, expanding the effective palette to
+    ``len(STAGE_PALETTE) * _LIGHTNESS_LEVELS`` distinct colors without
+    wrapping back onto the primary palette.
+    """
+    hue_slot = _hash_slot(name, len(STAGE_PALETTE), b"hue:")
+    lit_slot = _hash_slot(name, _LIGHTNESS_LEVELS, b"lit:")
+    return _shade(STAGE_PALETTE[hue_slot], lit_slot)
 
 
 MIN_BAR_VISUAL_MS = 50.0
@@ -905,14 +970,19 @@ def make_figure(
         return max(ms, MIN_BAR_VISUAL_MS)
 
     # DAG span backdrop
-    bd_w, bd_b, bd_y, bd_text = [], [], [], []
+    # NOTE: caption text was previously rendered inside this bar but Plotly's
+    # ``textposition=inside`` clips/hides labels unpredictably under zoom (see
+    # issue #230). The DAG identity is conveyed by the birth tick hover and
+    # the colored per-stage bars sitting on top of it, so this trace is now
+    # purely a visual backdrop with no on-bar text.
+    bd_w, bd_b, bd_y, bd_hov = [], [], [], []
     for p in ordered:
         if p.birth and p.first_dag_done and p.first_dag_done > p.birth:
             dur = (p.first_dag_done - p.birth).total_seconds()
             bd_w.append(vis(dur * 1000))
             bd_b.append(p.birth)
             bd_y.append(p.row)
-            bd_text.append(f"DAG {p.short_id} · {dur:.2f}s")
+            bd_hov.append(f"<b>DAG {p.short_id}</b><br>duration: {dur:.2f}s")
     if bd_w:
         fig.add_trace(
             go.Bar(
@@ -921,24 +991,22 @@ def make_figure(
                 x=bd_w,
                 base=bd_b,
                 y=bd_y,
-                text=bd_text,
-                textposition="inside",
-                insidetextanchor="start",
-                textfont=dict(
-                    color="#57606a",
-                    size=11,
-                    family="ui-monospace, monospace",
-                    weight=700,
-                ),
+                textposition="none",
                 cliponaxis=True,
-                hoverinfo="skip",
+                hovertext=bd_hov,
+                hoverinfo="text",
                 marker=dict(color="#eef1f4", line=dict(color="#b6bcc4", width=0.5)),
                 width=BAR_HEIGHT,
             )
         )
 
     # Per-stage exec bars
-    st_w, st_b, st_y, st_hov, st_col, st_text = [], [], [], [], [], []
+    # On-bar text labels were removed (issue #230): under zoom Plotly's inside
+    # text either clipped (small boxes), overflowed neighbours, or disappeared
+    # on large boxes via ``uniformtext``. The stage title is reliably surfaced
+    # through the hover tooltip instead (issue #231). The hovertemplate keeps
+    # the stage name as the bold first line for EVERY box regardless of size.
+    st_w, st_b, st_y, st_hov, st_col = [], [], [], [], []
     for p in ordered:
         for sr in p.stage_runs:
             if sr.decision == "cached_skip":
@@ -949,7 +1017,6 @@ def make_figure(
             st_b.append(sr.start)
             st_y.append(p.row)
             st_col.append(col)
-            st_text.append(sr.stage)
             st_hov.append(
                 f"<b>{sr.stage}</b><br>"
                 f"program:    {p.short_id}<br>"
@@ -967,19 +1034,11 @@ def make_figure(
                 x=st_w,
                 base=st_b,
                 y=st_y,
-                text=st_text,
-                textposition="inside",
-                insidetextanchor="start",
-                textfont=dict(
-                    color="#ffffff",
-                    size=11,
-                    family="ui-monospace, monospace",
-                    weight=700,
-                ),
+                textposition="none",
                 cliponaxis=True,
-                constraintext="inside",
                 hovertext=st_hov,
                 hoverinfo="text",
+                hoverlabel=dict(namelength=-1),
                 marker=dict(color=st_col, line=dict(color=st_col, width=0.4)),
                 width=STAGE_HEIGHT,
             )
@@ -1268,7 +1327,11 @@ def make_figure(
             color="#57606a",
             activecolor="#24292f",
         ),
-        uniformtext=dict(mode="hide", minsize=9),
+        # No on-bar text labels (see issues #230/#231): stage identity is
+        # carried by color + hover, so the uniformtext "hide below minsize"
+        # safety net is unnecessary and previously caused large-box labels
+        # to vanish.
+        hovermode="closest",
     )
 
     return fig

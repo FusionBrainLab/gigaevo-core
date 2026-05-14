@@ -327,3 +327,165 @@ class TestUtilizationReportDerivedStats:
         assert rep.archetype_counts["Precision Optimization"]["accepted"] == 1
         assert rep.archetype_counts["Precision Optimization"]["rejected"] == 1
         assert rep.archetype_counts["Algorithmic Redesign"]["accepted"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# stage_color: stability + distinguishability (issue #238)                    #
+# --------------------------------------------------------------------------- #
+
+
+class TestStageColor:
+    """Behaviour contract for the deterministic stage-color mapping.
+
+    Issue #238 requires (a) the same stage name always maps to the same
+    color across runs/re-renders and (b) different stages — in particular
+    ``lineage`` vs ``insights`` — render with visibly different colors.
+    """
+
+    def test_color_is_deterministic_across_calls(self):
+        from gigaevo.monitoring.flow_profiler import stage_color
+
+        # Same input → same output, regardless of how many times we ask.
+        for name in ["insights", "lineage", "mutation", "evaluate"]:
+            assert stage_color(name) == stage_color(name)
+
+    def test_color_is_a_hex_string(self):
+        from gigaevo.monitoring.flow_profiler import stage_color
+
+        c = stage_color("insights")
+        assert isinstance(c, str)
+        assert c.startswith("#") and len(c) == 7
+        # Hex digits only after the leading "#".
+        int(c[1:], 16)
+
+    def test_reported_collision_pair_is_distinct(self):
+        """Regression: ``lineage`` vs ``insights`` collided under the old
+        adler32-on-10-color palette (issue #238 specifically calls this out)."""
+        from gigaevo.monitoring.flow_profiler import stage_color
+
+        assert stage_color("lineage") != stage_color("insights")
+        assert stage_color("lineage") != stage_color("insights_lineage")
+        assert stage_color("insights") != stage_color("insights_lineage")
+
+    def test_realistic_stage_set_mostly_distinct(self):
+        """A realistic set of pipeline stage names should produce colors
+        with very few collisions — the new palette + double-hash scheme
+        expands capacity to ``palette_size * lightness_levels`` cells."""
+        from gigaevo.monitoring.flow_profiler import stage_color
+
+        names = [
+            "insights",
+            "insights_lineage",
+            "lineage",
+            "mutation",
+            "validate",
+            "evaluate",
+            "reflect",
+            "exec",
+            "complexity",
+            "retrieve",
+            "rank",
+            "metrics",
+        ]
+        colors = [stage_color(n) for n in names]
+        # At least 10 of 12 distinct (allow rare hash collisions on the
+        # lightness axis, but never the originally reported pair).
+        assert len(set(colors)) >= 10
+
+    def test_stability_independent_of_unrelated_names(self):
+        """Adding/removing other stages must not change a stage's color.
+
+        Verified indirectly: ``stage_color`` is pure and name-keyed, so
+        calling it interleaved with other names returns the same color.
+        """
+        from gigaevo.monitoring.flow_profiler import stage_color
+
+        before = stage_color("lineage")
+        # Ask about many other names — must not influence "lineage" output.
+        for n in ["a", "b", "c", "insights", "evaluate", "mutation"]:
+            stage_color(n)
+        after = stage_color("lineage")
+        assert before == after
+
+
+# --------------------------------------------------------------------------- #
+# make_figure: caption + hover behaviour (issues #230, #231)                  #
+# --------------------------------------------------------------------------- #
+
+
+class TestFigureRendering:
+    """The Plotly figure must (a) not rely on on-bar text labels and
+    (b) carry the stage title in the hovertext of every stage box."""
+
+    @staticmethod
+    def _build_fig():
+        from datetime import datetime, timedelta
+
+        from gigaevo.monitoring.flow_profiler import (
+            Program,
+            StageRun,
+            make_figure,
+        )
+
+        def _t(s: float) -> datetime:
+            return datetime(2026, 5, 14, 0, 0, 0) + timedelta(seconds=s)
+
+        p = Program(short_id="aaaaaaaa")
+        p.birth = _t(0.0)
+        p.dag_starts.append(_t(0.0))
+        p.dag_dones.append(_t(10.0))
+        for i, name in enumerate(["insights", "lineage", "mutation"]):
+            p.stage_runs.append(
+                StageRun(
+                    stage=name,
+                    start=_t(float(i)),
+                    end=_t(float(i) + 0.5),
+                    decision="executed",
+                )
+            )
+        return make_figure({p.short_id: p}, [], last_n=None)
+
+    def test_bar_traces_have_no_inside_text_captions(self):
+        """Issue #230: on-bar text rendering was rewritten — bar traces no
+        longer carry inside-anchored text that breaks under zoom."""
+        fig = self._build_fig()
+        for tr in fig.data:
+            kind = getattr(tr, "type", "")
+            if kind != "bar":
+                continue
+            tp = getattr(tr, "textposition", None)
+            assert tp in (None, "none"), (
+                f"bar trace {tr.name!r} still uses on-bar text (textposition={tp!r})"
+            )
+            text = getattr(tr, "text", None)
+            assert not text, (
+                f"bar trace {tr.name!r} still emits on-bar text labels: {text!r}"
+            )
+
+    def test_stage_exec_hover_includes_stage_title_for_every_box(self):
+        """Issue #231: each stage-exec box must surface its stage title in
+        the hover tooltip — regardless of box width or position."""
+        fig = self._build_fig()
+        stage_exec = next((t for t in fig.data if t.name == "stage exec"), None)
+        assert stage_exec is not None, "stage exec trace missing"
+        hov = list(stage_exec.hovertext or [])
+        assert len(hov) >= 3
+        for line in hov:
+            # The stage title is rendered as the bold first line of every
+            # hover entry — this is what makes the plot navigable when
+            # boxes are too small for any on-bar label.
+            assert line.startswith("<b>"), (
+                "hover entry missing bold stage title prefix: " + line[:80]
+            )
+
+    def test_uniformtext_does_not_hide_large_labels(self):
+        """Issue #230 also called out that *large* boxes lost their text
+        — caused by ``uniformtext`` mode. Ensure the layout no longer
+        applies a min-size text hide rule."""
+        fig = self._build_fig()
+        ut = fig.layout.uniformtext
+        # Either unset or set to a non-hiding mode.
+        mode = getattr(ut, "mode", None) if ut is not None else None
+        assert mode in (None, "show", ""), (
+            f"uniformtext.mode={mode!r} still hides on-bar text"
+        )
