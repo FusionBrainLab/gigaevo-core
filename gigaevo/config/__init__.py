@@ -1,4 +1,5 @@
 from gigaevo.config.helpers import (
+    build_archive_gate_provider,
     build_dag_from_builder,
     extract_behavior_keys_from_islands,
     get_bounds,
@@ -9,6 +10,7 @@ from gigaevo.config.helpers import (
 )
 
 __all__ = [
+    "build_archive_gate_provider",
     "build_dag_from_builder",
     "extract_behavior_keys_from_islands",
     "get_bounds",

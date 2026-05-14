@@ -1,5 +1,14 @@
 # @package _global_
 
+# ArchivePotentialGateStage provider. Returns None when the strategy is
+# not a MAP-Elites strategy (e.g. single-island scratch) or when
+# archive_gate_enabled is false — in either case the gate stage fails
+# open inside compute(), so disabling here is safe.
+archive_gate_provider:
+  _target_: gigaevo.config.helpers.build_archive_gate_provider
+  strategy: ${ref:evolution_strategy}
+  enabled: ${archive_gate_enabled}
+
 # Evolution context
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
@@ -9,12 +18,14 @@ evolution_context:
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${memory_provider}
+  archive_gate_provider: ${ref:archive_gate_provider}
 
 # Pipeline builder - automatically selects based on problem_context.is_contextual
 pipeline_builder:
   _target_: gigaevo.config.helpers.select_pipeline_builder
   problem_context: ${problem_context}
   evolution_context: ${evolution_context}
+  archive_gate_enabled: ${archive_gate_enabled}
 
 # Build DAG blueprint
 dag_blueprint:

@@ -9,6 +9,7 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.provider import MemoryProvider, NullMemoryProvider
 from gigaevo.problems.context import ProblemContext
+from gigaevo.programs.stages.archive_gate import ArchiveGateProvider
 
 if TYPE_CHECKING:
     pass
@@ -38,5 +39,13 @@ class EvolutionContext(BaseModel):
     memory_provider: MemoryProvider = Field(
         default_factory=NullMemoryProvider,
         description="Memory provider for DAG pipeline. NullMemoryProvider is a no-op.",
+    )
+    archive_gate_provider: ArchiveGateProvider | None = Field(
+        default=None,
+        description=(
+            "Provider for archive-insertion gating before InsightsStage. "
+            "None disables gating (ArchivePotentialGateStage fails open). "
+            "Built at config-instantiation time from evolution_strategy."
+        ),
     )
     model_config = ConfigDict(arbitrary_types_allowed=True)

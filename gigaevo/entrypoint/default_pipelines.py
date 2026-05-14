@@ -18,6 +18,7 @@ from gigaevo.problems.layout import ProblemLayout
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
+from gigaevo.programs.stages.archive_gate import ArchivePotentialGateStage
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.collector import (
     AncestorProgramIds,
@@ -162,11 +163,13 @@ class DefaultPipelineBuilder(PipelineBuilder):
         max_parallel: int | None = None,
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
+        archive_gate_enabled: bool = False,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout, max_parallel=max_parallel)
         self._stage_timeout = stage_timeout
         self._max_insights = max_insights
         self._max_code_length = max_code_length
+        self._archive_gate_enabled = archive_gate_enabled
         self._contribute_default_nodes()
         self._contribute_default_edges()
         self._contribute_default_deps()
@@ -233,6 +236,19 @@ class DefaultPipelineBuilder(PipelineBuilder):
             "FormatterStage",
             lambda: FormatterStage(timeout=stage_timeout),
         )
+
+        # Archive-potential gate: skip InsightsStage when a program would be
+        # dominated in every island. Disabled by default; opt-in via Hydra.
+        if self._archive_gate_enabled:
+            gate_provider = self.ctx.archive_gate_provider
+            gate_timeout = stage_timeout
+            self.add_stage(
+                "ArchivePotentialGateStage",
+                lambda: ArchivePotentialGateStage(
+                    provider=gate_provider,
+                    timeout=gate_timeout,
+                ),
+            )
 
         # Insights stages
         max_insights = self._max_insights
@@ -433,6 +449,18 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
         }
+        if self._archive_gate_enabled:
+            self._deps["ArchivePotentialGateStage"] = [
+                ExecutionOrderDependency.on_success("CallValidatorFunction"),
+                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+            ]
+            # Add gate as on_success dep of Insights so SKIPPED cascades. The
+            # existing dependencies above are intentionally preserved — a
+            # validator failure must still skip Insights even when the gate
+            # itself is disabled in a future config flip.
+            self._deps["InsightsStage"].append(
+                ExecutionOrderDependency.on_success("ArchivePotentialGateStage")
+            )
 
 
 class ContextPipelineBuilder(DefaultPipelineBuilder):
@@ -447,6 +475,7 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
         max_parallel: int | None = None,
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
+        archive_gate_enabled: bool = False,
     ):
         super().__init__(
             ctx,
@@ -455,6 +484,7 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
             max_parallel=max_parallel,
             max_insights=max_insights,
             max_code_length=max_code_length,
+            archive_gate_enabled=archive_gate_enabled,
         )
         self._add_context_stage_and_edges()
 
@@ -488,6 +518,7 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
         max_parallel: int | None = None,
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
+        archive_gate_enabled: bool = False,
     ):
         super().__init__(
             ctx,
@@ -496,6 +527,7 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
             max_parallel=max_parallel,
             max_insights=max_insights,
             max_code_length=max_code_length,
+            archive_gate_enabled=archive_gate_enabled,
         )
         self._add_runtime_fitness_stage()
 
@@ -578,6 +610,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
         optimization_time_budget: float | None = None,
+        archive_gate_enabled: bool = False,
     ):
         super().__init__(
             ctx,
@@ -586,6 +619,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
             max_parallel=max_parallel,
             max_insights=max_insights,
             max_code_length=max_code_length,
+            archive_gate_enabled=archive_gate_enabled,
         )
         self._optimization_time_budget = (
             optimization_time_budget
@@ -716,6 +750,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
         optimization_time_budget: float | None = None,
+        archive_gate_enabled: bool = False,
     ):
         super().__init__(
             ctx,
@@ -724,6 +759,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
             max_parallel=max_parallel,
             max_insights=max_insights,
             max_code_length=max_code_length,
+            archive_gate_enabled=archive_gate_enabled,
         )
         self._optimization_time_budget = (
             optimization_time_budget

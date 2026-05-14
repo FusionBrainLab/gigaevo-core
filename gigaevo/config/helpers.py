@@ -9,14 +9,20 @@ from gigaevo.entrypoint.default_pipelines import (
     DefaultPipelineBuilder,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.evolution.strategies.map_elites import IslandConfig
 from gigaevo.evolution.strategies.models import (
     BehaviorSpace,
     DynamicBehaviorSpace,
     LinearBinning,
 )
+from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+from gigaevo.programs.stages.archive_gate import (
+    AllIslandsGateProvider,
+    ArchiveGateProvider,
+)
 
 
 def get_metrics_context(problem_context: ProblemContext) -> MetricsContext:
@@ -161,11 +167,42 @@ def build_dag_from_builder(builder: Any) -> Any:
 def select_pipeline_builder(
     problem_context: ProblemContext,
     evolution_context: EvolutionContext,
+    archive_gate_enabled: bool = False,
 ) -> ContextPipelineBuilder | DefaultPipelineBuilder:
-    """Select appropriate pipeline builder based on problem type."""
+    """Select appropriate pipeline builder based on problem type.
+
+    ``archive_gate_enabled`` enables the ArchivePotentialGateStage that
+    short-circuits InsightsStage for programs dominated in every island.
+    """
     if problem_context.is_contextual:
-        return ContextPipelineBuilder(evolution_context)
-    return DefaultPipelineBuilder(evolution_context)
+        return ContextPipelineBuilder(
+            evolution_context, archive_gate_enabled=archive_gate_enabled
+        )
+    return DefaultPipelineBuilder(
+        evolution_context, archive_gate_enabled=archive_gate_enabled
+    )
+
+
+def build_archive_gate_provider(
+    *,
+    strategy: EvolutionStrategy | None,
+    enabled: bool,
+) -> ArchiveGateProvider | None:
+    """Build an ArchiveGateProvider from the evolution strategy.
+
+    Returns ``None`` (disables gating; stage fails open) when:
+    - ``enabled`` is False, or
+    - ``strategy`` is None, or
+    - ``strategy`` is not a MAP-Elites strategy that exposes islands.
+
+    Only ``MapElitesMultiIsland`` is supported today. Add explicit
+    isinstance branches here when new MAP-Elites strategies are introduced.
+    """
+    if not enabled or strategy is None:
+        return None
+    if isinstance(strategy, MapElitesMultiIsland):
+        return AllIslandsGateProvider(islands=list(strategy.islands.values()))
+    return None
 
 
 def add_auxiliary_metrics(
