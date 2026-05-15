@@ -9,6 +9,7 @@ adaptive strategy that learns which LLM produces the best fitness improvements.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 import math
@@ -22,7 +23,11 @@ from loguru import logger
 import numpy as np
 
 from gigaevo.llm.call_outcome import BanditAction, classify_call_result
-from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter
+from gigaevo.llm.models import (
+    MultiModelRouter,
+    _remember_selected_model,
+    _StructuredOutputRouter,
+)
 from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
@@ -267,9 +272,19 @@ class BanditModelRouter(MultiModelRouter):
     # -- selection ----------------------------------------------------------
 
     def _select(self) -> tuple[ChatOpenAI, str]:
-        """Select a model via UCB1 and record the pull."""
+        """Select a model via UCB1 and record the pull.
+
+        Also writes the selected name into the ``_selected_model`` ContextVar
+        so downstream consumers (``BaseAgent.acall_llm``, ``MutationAgent``,
+        ``InsightsAgent``, ...) can read it via ``get_selected_model()``.
+        ``MultiModelRouter._select`` does this; the bandit override must
+        preserve the contract or ``state['metadata']['model_used']`` would
+        carry whatever value the previous non-bandit selection happened to
+        leave behind in the ContextVar.
+        """
         name = self._bandit.select()
         self._bandit.record_pull(name)
+        _remember_selected_model(name)
         tid = self._current_task_id()
         if tid is not None:
             self._task_model_map[tid] = name
@@ -313,6 +328,49 @@ class BanditModelRouter(MultiModelRouter):
             result.exception_class,
         )
 
+    def _safe_inject_failure_reward(
+        self, exc: BaseException, arm_name: str
+    ) -> None:
+        """Best-effort wrapper around ``_inject_failure_reward``.
+
+        Mirrors ``_StructuredOutputRouter._maybe_fire_failure_hook``: the
+        ledger-symmetry update is observability-only and must never mask the
+        original LLM exception (or its traceback). Any error inside the hook
+        is swallowed with a debug log so ``raise`` at the call site still
+        re-raises the real failure.
+        """
+        try:
+            self._inject_failure_reward(exc, arm_name)
+        except Exception as hook_exc:  # noqa: BLE001 — observability-only
+            logger.debug(
+                "[BanditModelRouter] Failure-reward injection itself raised "
+                "for arm {!r}: {!r}. Original exception preserved.",
+                arm_name,
+                hook_exc,
+            )
+
+    def _safe_track(self, response: Any, name: str) -> None:
+        """Best-effort token-tracker call.
+
+        ``self._tracker.track`` reads ``response.usage_metadata`` and writes
+        to a ``LogWriter``. A telemetry-side bug (malformed token_usage from
+        a hostile provider, broken writer, etc.) must not propagate to the
+        caller — the LLM call already succeeded, and on the bandit success
+        path the reward is *deferred* to ``on_mutation_outcome``, so an
+        exception here would both lose the response AND leave the bandit
+        unable to associate the deferred reward (the caller never returns).
+        """
+        try:
+            self._tracker.track(response, name)
+        except Exception as track_exc:  # noqa: BLE001 — telemetry only
+            logger.debug(
+                "[BanditModelRouter] Token tracking failed for arm {!r}: {!r}. "
+                "LLM response preserved; reward still deferred to "
+                "on_mutation_outcome.",
+                name,
+                track_exc,
+            )
+
     def invoke(
         self,
         input: LanguageModelInput,
@@ -323,9 +381,9 @@ class BanditModelRouter(MultiModelRouter):
         try:
             response = model.invoke(input, self._config(config, name), **kwargs)
         except BaseException as exc:
-            self._inject_failure_reward(exc, name)
+            self._safe_inject_failure_reward(exc, name)
             raise
-        self._tracker.track(response, name)
+        self._safe_track(response, name)
         return response
 
     async def ainvoke(
@@ -338,10 +396,58 @@ class BanditModelRouter(MultiModelRouter):
         try:
             response = await model.ainvoke(input, self._config(config, name), **kwargs)
         except BaseException as exc:
-            self._inject_failure_reward(exc, name)
+            self._safe_inject_failure_reward(exc, name)
             raise
-        self._tracker.track(response, name)
+        self._safe_track(response, name)
         return response
+
+    def stream(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Iterator[BaseMessage]:
+        """Streaming counterpart to :meth:`invoke` with ledger-symmetry guard.
+
+        ``MultiModelRouter.stream`` records the pull (via ``_select``) and
+        then yields from ``model.stream`` without try/except. A mid-stream
+        failure would leave ``total_pulls`` and the reward window out of
+        step exactly as the unwrapped ``invoke`` path used to.  We mirror
+        the ``invoke`` contract: classify any exception via the bandit
+        hook, then re-raise.
+        """
+        model, name = self._select()
+        last = None
+        try:
+            for chunk in model.stream(input, self._config(config, name), **kwargs):
+                last = chunk
+                yield chunk
+        except BaseException as exc:
+            self._safe_inject_failure_reward(exc, name)
+            raise
+        if last is not None:
+            self._safe_track(last, name)
+
+    async def astream(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
+        """Async streaming counterpart to :meth:`ainvoke`. See :meth:`stream`."""
+        model, name = self._select()
+        last = None
+        try:
+            async for chunk in model.astream(
+                input, self._config(config, name), **kwargs
+            ):
+                last = chunk
+                yield chunk
+        except BaseException as exc:
+            self._safe_inject_failure_reward(exc, name)
+            raise
+        if last is not None:
+            self._safe_track(last, name)
 
     # -- mutation outcome ---------------------------------------------------
 
@@ -421,6 +527,10 @@ class BanditModelRouter(MultiModelRouter):
         def _bandit_select() -> tuple[Any, str]:
             name = self._bandit.select()
             self._bandit.record_pull(name)
+            # Mirror MultiModelRouter._select: publish the selection to the
+            # ContextVar so ``get_selected_model()`` reads the actual arm
+            # name during structured-output dispatch.
+            _remember_selected_model(name)
             tid = self._current_task_id()
             if tid is not None:
                 self._task_model_map[tid] = name

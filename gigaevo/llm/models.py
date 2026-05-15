@@ -322,10 +322,15 @@ class _StructuredOutputRouter(Runnable):
         model, name = self._select()
         try:
             response = model.invoke(input, self._config(config, name), **kwargs)
+            # ``_process`` runs the token tracker and unwraps the parsed
+            # Pydantic object. Either step can raise (telemetry-side bug,
+            # malformed structured response, missing parsed field). Treat
+            # those failures as call failures for ledger-symmetry purposes
+            # so the failure_hook fires.
+            return self._process(response, name)
         except BaseException as exc:
             self._maybe_fire_failure_hook(exc, name)
             raise
-        return self._process(response, name)
 
     async def ainvoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
@@ -333,10 +338,10 @@ class _StructuredOutputRouter(Runnable):
         model, name = self._select()
         try:
             response = await model.ainvoke(input, self._config(config, name), **kwargs)
+            return self._process(response, name)
         except BaseException as exc:
             self._maybe_fire_failure_hook(exc, name)
             raise
-        return self._process(response, name)
 
     def _maybe_fire_failure_hook(self, exc: BaseException, name: str) -> None:
         if self._failure_hook is None:
