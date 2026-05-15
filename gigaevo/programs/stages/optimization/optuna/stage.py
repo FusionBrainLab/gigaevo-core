@@ -122,8 +122,6 @@ class OptunaOptimizationStage(Stage):
         Optional task description forwarded to the LLM.
     python_path : list[Path] | None
         Extra ``sys.path`` entries for evaluation sub-processes.
-    max_memory_mb : int | None
-        Per-evaluation RSS memory cap in MB.
     llm_max_tokens : int
         Maximum tokens (thinking + output) for the LLM analysis call (default
         ``8192``).  Prevents runaway extended-thinking budget usage which can
@@ -149,7 +147,6 @@ class OptunaOptimizationStage(Stage):
         add_tuned_comment: bool = True,
         task_description: str | None = None,
         python_path: list[Path] | None = None,
-        max_memory_mb: int | None = None,
         optimization_time_budget: float | None = None,
         config: OptunaOptimizationConfig | None = None,
         **kwargs: Any,
@@ -168,7 +165,6 @@ class OptunaOptimizationStage(Stage):
         self.add_tuned_comment = add_tuned_comment
         self.task_description = task_description
         self.python_path = python_path or []
-        self.max_memory_mb = max_memory_mb
         self.config = config or OptunaOptimizationConfig()
 
         # Store user-supplied config values (None = auto-compute at runtime)
@@ -297,7 +293,6 @@ class OptunaOptimizationStage(Stage):
             score_key=self.score_key,
             python_path=self.python_path,
             timeout=baseline_timeout,
-            max_memory_mb=self.max_memory_mb,
             log_tag="Optuna-baseline",
         )
         elapsed = time.monotonic() - t0
@@ -473,14 +468,13 @@ class OptunaOptimizationStage(Stage):
         )
         args = [context] if context is not None else []
         try:
-            result, _, _ = await run_exec_runner(
+            result = await run_exec_runner(
                 code=eval_code,
                 function_name="_optuna_eval",
                 args=args,
                 kwargs={},
                 python_path=list(self.python_path),
                 timeout=self.eval_timeout,
-                max_memory_mb=self.max_memory_mb,
             )
             val_result, prog_output = result
             # Validator may return (metrics_dict, artifact) — unwrap.

@@ -12,7 +12,7 @@ from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.problems.initial_loaders import InitialProgramLoader
-from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
+from gigaevo.programs.stages.python_executors.wrapper import shutdown_executor
 from gigaevo.runner.dag_runner import DagRunner
 from gigaevo.utils.logger_setup import setup_logger
 from gigaevo.utils.serve import serve_until_signal
@@ -84,7 +84,7 @@ async def run_experiment(cfg: DictConfig) -> None:
         logger.exception("Experiment failed")
         raise
     finally:
-        await default_exec_runner_pool().shutdown()
+        shutdown_executor()
         if redis_storage is not None:
             await redis_storage.close()
         if writer is not None:

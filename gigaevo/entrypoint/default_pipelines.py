@@ -11,8 +11,6 @@ from gigaevo.entrypoint.constants import (
     DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION,
     DEFAULT_SIMPLE_STAGE_TIMEOUT,
     MAX_CODE_LENGTH,
-    MAX_MEMORY_MB,
-    MAX_OUTPUT_SIZE,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.problems.layout import ProblemLayout
@@ -198,8 +196,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 function_name="entrypoint",
                 python_path=[problem_ctx.problem_dir.resolve()],
                 timeout=stage_timeout,
-                max_memory_mb=MAX_MEMORY_MB,
-                max_output_size=MAX_OUTPUT_SIZE,
             ),
         )
 
@@ -211,8 +207,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 path=validator_path,
                 function_name="validate",
                 timeout=stage_timeout,
-                max_memory_mb=MAX_MEMORY_MB,
-                max_output_size=MAX_OUTPUT_SIZE,
             ),
         )
 
@@ -594,7 +588,6 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
                 skip_integers=extra.pop("skip_integers", self.CMA_TUNE_FLOATS_ONLY),
                 update_program_code=True,
                 timeout=stage_timeout,
-                max_memory_mb=MAX_MEMORY_MB,
                 **extra,
             ),
         )
@@ -728,7 +721,6 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
                 task_description=task_description,
                 optimization_time_budget=budget,
                 timeout=stage_timeout,
-                max_memory_mb=MAX_MEMORY_MB,
                 **extra,
             ),
         )

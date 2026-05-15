@@ -174,36 +174,58 @@ class NeverCachedStage(Stage):
 
 
 # ---------------------------------------------------------------------------
-# Exec-runner pool cleanup (prevents stale event-loop references)
+# Loky executor cleanup
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-async def _clear_exec_runner_pool():
-    """Clear the cached WorkerPool between tests to avoid stale event-loop refs.
+@pytest.fixture(scope="session", autouse=True)
+def _shutdown_loky_executor_at_session_end():
+    """Kill loky workers once at session teardown.
 
-    The default_exec_runner_pool() is an @lru_cache singleton whose asyncio
-    Queue, Lock, and subprocess streams are bound to whatever event loop was
-    running when they were created.  pytest-asyncio creates a fresh loop per
-    test function, so the cached pool must be reset to prevent
-    "Future attached to a different loop" errors.
-
-    On teardown, shutdown() kills idle subprocess workers *before* the loop
-    closes, preventing "Event loop is closed" warnings from transport __del__.
+    Function-scoped teardown would pay the ``cpu_count``-worker spawn cost
+    on every test; loky's reusable executor is safe to share across the
+    session because :func:`get_reusable_executor` respawns on env/config
+    change anyway.
     """
-    from gigaevo.programs.stages.python_executors.wrapper import (
-        default_exec_runner_pool,
-    )
-
-    default_exec_runner_pool.cache_clear()
     yield
-    # Kill idle subprocess workers while the event loop is still open.
     try:
-        pool = default_exec_runner_pool()
-        await pool.shutdown()
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            shutdown_executor,
+        )
+
+        shutdown_executor()
     except Exception:
         pass
-    default_exec_runner_pool.cache_clear()
+
+
+@pytest.fixture
+def isolated_spill_dir(tmp_path, monkeypatch):
+    """Point the wrapper's ``SPILL_DIR`` at a per-test temp directory.
+
+    Lets tests count spill artefacts without interference from concurrent
+    test runs or system-level tmp pollution.
+    """
+    from gigaevo.programs.stages.python_executors import wrapper as _wrapper
+
+    spill = tmp_path / "spill"
+    spill.mkdir()
+    monkeypatch.setattr(_wrapper, "SPILL_DIR", spill)
+    return spill
+
+
+@pytest.fixture
+def fresh_executor():
+    """Tear down the loky pool before and after the test.
+
+    Use for tests that need a guaranteed-fresh worker state — e.g.
+    inspecting env propagation, verifying lazy-spawn semantics, or
+    asserting clean shutdown.  Costs ``cpu_count`` worker spawns.
+    """
+    from gigaevo.programs.stages.python_executors.wrapper import shutdown_executor
+
+    shutdown_executor()
+    yield
+    shutdown_executor()
 
 
 # ---------------------------------------------------------------------------

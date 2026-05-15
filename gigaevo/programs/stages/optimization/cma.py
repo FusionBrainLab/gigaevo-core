@@ -345,8 +345,6 @@ class CMANumericalOptimizationStage(Stage):
         Fallback penalty for failed evaluations (default ``None``).
     python_path : list[Path] | None
         Extra ``sys.path`` entries for sub-processes (default ``None``).
-    max_memory_mb : int | None
-        Per-evaluation RSS memory cap in MB (default ``None``).
     """
 
     InputsModel = OptimizationInput
@@ -376,7 +374,6 @@ class CMANumericalOptimizationStage(Stage):
         update_program_code: bool = True,
         penalty_fitness: float | None = None,
         python_path: list[Path] | None = None,
-        max_memory_mb: int | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -403,7 +400,6 @@ class CMANumericalOptimizationStage(Stage):
         self.max_abs_value = max_abs_value
         self.update_program_code = update_program_code
         self.python_path = python_path or []
-        self.max_memory_mb = max_memory_mb
 
         # Fallback penalty in CMA space (CMA minimises: higher -> worse).
         if penalty_fitness is not None:
@@ -442,7 +438,6 @@ class CMANumericalOptimizationStage(Stage):
             score_key=self.score_key,
             python_path=self.python_path,
             timeout=self.eval_timeout,
-            max_memory_mb=self.max_memory_mb,
             log_tag="CMA",
         )
 
@@ -590,7 +585,6 @@ class CMANumericalOptimizationStage(Stage):
             score_key=self.score_key,
             python_path=self.python_path,
             timeout=self.eval_timeout,
-            max_memory_mb=self.max_memory_mb,
             log_tag="CMA",
         )
         best_solution = list(initial_values)
