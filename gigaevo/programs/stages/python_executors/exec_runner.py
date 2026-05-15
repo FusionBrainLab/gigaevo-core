@@ -3,15 +3,16 @@
 Loaded inside a loky worker by :func:`gigaevo.programs.stages.python_executors.wrapper.run_exec_runner`.
 Loads a user-supplied code string as a synthetic ``user_code`` module, calls
 the named function, and returns ``(value, None)`` on success or
-``(None, error_dict)`` on failure.  All process-level isolation (subprocess
-lifetime, IPC, timeouts, memory) lives in :mod:`wrapper`; this module only
-deals with the in-worker concerns: sys.path, env mutation, source-registered
+``(None, WorkerError)`` on failure.  All process-level isolation (subprocess
+lifetime, IPC, timeouts) lives in :mod:`wrapper`; this module only deals
+with the in-worker concerns: sys.path, env mutation, source-registered
 tracebacks, and user-exception capture.
 """
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from dataclasses import dataclass, field
 import io
 import linecache
 import os
@@ -24,6 +25,32 @@ from typing import Any
 import cloudpickle
 
 _CODE_FILENAME = "user_code.py"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerCall:
+    """Picklable description of a single user-code invocation."""
+
+    code: str
+    function_name: str
+    args: list[Any] = field(default_factory=list)
+    kwargs: dict[str, Any] = field(default_factory=dict)
+    python_path: list[str] = field(default_factory=list)
+    env: dict[str, str | None] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerError:
+    """Structured failure from user-code execution.
+
+    ``stderr`` holds the formatted traceback (plus any captured
+    stdout/stderr from before the error).  ``returncode`` mirrors the
+    exit-code convention historically used by the subprocess protocol;
+    callers should treat ``0`` as success and anything else as failure.
+    """
+
+    stderr: str
+    returncode: int = 1
 
 
 def _register_source(filename: str, source: str) -> None:
@@ -43,7 +70,7 @@ def _load_module_from_code(
     return mod
 
 
-def _prepend_sys_path(paths: list[str] | None) -> None:
+def _prepend_sys_path(paths: list[str]) -> None:
     """Insert each *path* at the head of ``sys.path``, deduplicating by
     resolved location.  Order of the input list is preserved at the front
     (left-most wins after iteration)."""
@@ -108,7 +135,7 @@ def _module_belongs_to_path(module: types.ModuleType, path: Path, name: str) -> 
     return module_file in candidates
 
 
-def _clear_shadowed_top_level_modules(paths: list[str] | None) -> None:
+def _clear_shadowed_top_level_modules(paths: list[str]) -> None:
     """Drop ``sys.modules`` entries that a freshly-prepended *paths* would
     shadow.  Without this, a long-lived worker keeps the first-loaded
     version of a top-level module even after the project root changes."""
@@ -170,96 +197,96 @@ def _format_syntax_error(e: SyntaxError) -> str:
 _ENV_MISSING = object()
 
 
-def _apply_env(env: dict[str, Any]) -> dict[str, Any]:
+@contextmanager
+def _scoped_env(updates: dict[str, str | None]):
+    """Apply *updates* to ``os.environ`` for the duration of the block.
+
+    A ``None`` value means "unset this variable for the block".  Original
+    values (or absence) are restored on exit, even if the block raises.
+    """
+    if not updates:
+        yield
+        return
+
     old: dict[str, Any] = {}
-    for k, v in env.items():
+    for k, v in updates.items():
         old[k] = os.environ.get(k, _ENV_MISSING)
         if v is None:
             os.environ.pop(k, None)
         else:
             os.environ[k] = str(v)
-    return old
+    try:
+        yield
+    finally:
+        for k, v in old.items():
+            if v is _ENV_MISSING:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v  # type: ignore[assignment]
 
 
-def _restore_env(old: dict[str, Any]) -> None:
-    for k, v in old.items():
-        if v is _ENV_MISSING:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
+def _format_error(prefix_text: str, captured: str = "") -> str:
+    buf = io.StringIO()
+    if captured:
+        buf.write("[captured stdout/stderr before error]\n")
+        buf.write(captured)
+    buf.write(prefix_text)
+    return buf.getvalue()
 
 
-def _error_envelope(message: str, returncode: int = 1) -> dict[str, Any]:
-    return {"_error": True, "stderr": message, "returncode": returncode}
-
-
-def _run_one(payload: dict[str, Any]) -> tuple[Any, dict[str, Any] | None]:
+def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
     """Run a single user-code call.
 
-    Returns ``(value, None)`` on success or ``(None, error_dict)`` on
-    failure.  ``error_dict`` has the shape
-    ``{"_error": True, "stderr": <traceback text>, "returncode": int}``.
+    Returns ``(value, None)`` on success or ``(None, WorkerError)`` on
+    failure.  ``BaseException`` is caught so that user ``sys.exit()`` and
+    ``KeyboardInterrupt`` become structured errors rather than tearing
+    down the worker process.
     """
     captured = io.StringIO()
-    old_env: dict[str, Any] | None = None
     try:
         _ensure_cwd_in_path()
 
-        code: str = payload["code"]
-        fn_name: str = payload["function_name"]
-        py_path: list[str] = payload.get("python_path", [])
-        args: list[Any] = payload.get("args", [])
-        kwargs: dict[str, Any] = payload.get("kwargs", {})
-        env_updates: dict[str, Any] = payload.get("env", {}) or {}
+        if not isinstance(call.args, list) or not isinstance(call.kwargs, dict):
+            raise TypeError("WorkerCall.args must be list and .kwargs must be dict")
 
-        if env_updates:
-            old_env = _apply_env(env_updates)
+        _prepend_sys_path(call.python_path)
+        _clear_shadowed_top_level_modules(call.python_path)
 
-        if not isinstance(args, list) or not isinstance(kwargs, dict):
-            raise TypeError("Payload must contain 'args': list and 'kwargs': dict")
+        with _scoped_env(call.env):
+            mod = _load_module_from_code(call.code)
+            fn = getattr(mod, call.function_name, None)
+            if not callable(fn):
+                raise ValueError(
+                    f"Function '{call.function_name}' not found or not callable"
+                )
 
-        _prepend_sys_path(py_path)
-        _clear_shadowed_top_level_modules(py_path)
-        mod = _load_module_from_code(code)
-        fn = getattr(mod, fn_name, None)
-        if not callable(fn):
-            raise ValueError(f"Function '{fn_name}' not found or not callable")
+            with redirect_stdout(captured), redirect_stderr(captured):
+                result = fn(*call.args, **call.kwargs)
 
-        with redirect_stdout(captured), redirect_stderr(captured):
-            result = fn(*args, **kwargs)
+            # User-visible prints surface in the worker's real stderr (so
+            # they appear in worker logs); they are not returned to the parent.
+            printed = captured.getvalue()
+            if printed:
+                sys.stderr.write(printed)
+                sys.stderr.flush()
 
-        # User-visible prints surface in the worker's real stderr (so they
-        # appear in worker logs); they are not returned to the parent.
-        printed = captured.getvalue()
-        if printed:
-            sys.stderr.write(printed)
-            sys.stderr.flush()
-
-        # Register the synthetic module so cloudpickle embeds user-defined
-        # classes by value; otherwise the parent cannot unpickle a result
-        # that references them (the parent has no 'user_code' module).
-        cloudpickle.register_pickle_by_value(mod)
+            # Register the synthetic module so cloudpickle embeds
+            # user-defined classes by value; the parent has no
+            # ``user_code`` module to import-by-reference against.
+            cloudpickle.register_pickle_by_value(mod)
         return (result, None)
 
     except SyntaxError as e:
-        buf = io.StringIO()
-        if printed := captured.getvalue():
-            buf.write("[captured stdout/stderr before error]\n")
-            buf.write(printed)
-        buf.write(_format_syntax_error(e))
-        return (None, _error_envelope(buf.getvalue()))
+        return (
+            None,
+            WorkerError(stderr=_format_error(_format_syntax_error(e), captured.getvalue())),
+        )
 
     except BaseException as e:
-        # Catch BaseException so user sys.exit() / KeyboardInterrupt becomes
-        # a structured error rather than tearing down the worker.
         buf = io.StringIO()
-        if printed := captured.getvalue():
-            buf.write("[captured stdout/stderr before error]\n")
-            buf.write(printed)
         traceback.print_exception(type(e), e, e.__traceback__, file=buf)
         _write_code_context(e, out=buf)
-        return (None, _error_envelope(buf.getvalue()))
-
-    finally:
-        if old_env is not None:
-            _restore_env(old_env)
+        return (
+            None,
+            WorkerError(stderr=_format_error(buf.getvalue(), captured.getvalue())),
+        )

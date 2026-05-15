@@ -657,33 +657,30 @@ class TestEnvScrubbing:
 
 
 class TestWorkerObservability:
-    """:class:`_ResultEnvelope` carries per-call resource accounting so the
+    """:class:`WorkerResult` carries per-call resource accounting so the
     wrapper can log it and (later) feed a metrics writer.  The fields must
     be populated and non-degenerate."""
 
     def test_run_task_populates_envelope_fields(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
         from gigaevo.programs.stages.python_executors.wrapper import _run_task
 
-        payload = {
-            "code": "def f(): return [1] * 1024",
-            "function_name": "f",
-            "python_path": [],
-            "args": [],
-            "kwargs": {},
-            "env": {},
-        }
-        envelope = _run_task(payload, str(tmp_path))
+        call = WorkerCall(
+            code="def f(): return [1] * 1024",
+            function_name="f",
+        )
+        result = _run_task(call, str(tmp_path))
         try:
-            assert envelope.error is None
-            assert envelope.spill_path is not None
-            assert envelope.peak_rss_kb > 0
-            assert envelope.wall_time_s >= 0.0
-            assert envelope.user_time_s >= 0.0
-            assert envelope.sys_time_s >= 0.0
-            assert envelope.worker_pid == os.getpid()
+            assert result.error is None
+            assert result.spill_path is not None
+            assert result.peak_rss_kb > 0
+            assert result.wall_time_s >= 0.0
+            assert result.user_time_s >= 0.0
+            assert result.sys_time_s >= 0.0
+            assert result.worker_pid == os.getpid()
         finally:
-            if envelope.spill_path is not None:
-                os.unlink(envelope.spill_path)
+            if result.spill_path is not None:
+                os.unlink(result.spill_path)
 
 
 # =============================================================================
@@ -799,110 +796,85 @@ class TestRunOneDirect:
     """
 
     def test_success_returns_value_none(self) -> None:
-        from gigaevo.programs.stages.python_executors.exec_runner import _run_one
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
 
         value, error = _run_one(
-            {
-                "code": "def f(x): return x + 1",
-                "function_name": "f",
-                "python_path": [],
-                "args": [41],
-                "kwargs": {},
-                "env": {},
-            }
+            WorkerCall(code="def f(x): return x + 1", function_name="f", args=[41])
         )
         assert error is None
         assert value == 42
 
     def test_user_exception_returns_structured_error(self) -> None:
-        from gigaevo.programs.stages.python_executors.exec_runner import _run_one
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
 
         value, error = _run_one(
-            {
-                "code": "def f(): raise KeyError('lookup')",
-                "function_name": "f",
-                "python_path": [],
-                "args": [],
-                "kwargs": {},
-                "env": {},
-            }
+            WorkerCall(code="def f(): raise KeyError('lookup')", function_name="f")
         )
         assert value is None
         assert error is not None
-        assert error["_error"] is True
-        assert error["returncode"] == 1
-        assert "KeyError" in error["stderr"]
-        assert "lookup" in error["stderr"]
+        assert error.returncode == 1
+        assert "KeyError" in error.stderr
+        assert "lookup" in error.stderr
 
     def test_sys_exit_does_not_kill_caller(self) -> None:
-        from gigaevo.programs.stages.python_executors.exec_runner import _run_one
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
 
         value, error = _run_one(
-            {
-                "code": "import sys\ndef f(): sys.exit(2)",
-                "function_name": "f",
-                "python_path": [],
-                "args": [],
-                "kwargs": {},
-                "env": {},
-            }
+            WorkerCall(code="import sys\ndef f(): sys.exit(2)", function_name="f")
         )
         assert value is None
         assert error is not None
-        assert "SystemExit" in error["stderr"]
+        assert "SystemExit" in error.stderr
 
     def test_syntax_error_formatted_with_caret(self) -> None:
-        from gigaevo.programs.stages.python_executors.exec_runner import _run_one
-
-        value, error = _run_one(
-            {
-                "code": "def f(\n  return 1",
-                "function_name": "f",
-                "python_path": [],
-                "args": [],
-                "kwargs": {},
-                "env": {},
-            }
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
         )
+
+        value, error = _run_one(WorkerCall(code="def f(\n  return 1", function_name="f"))
         assert value is None
         assert error is not None
-        assert "SyntaxError" in error["stderr"]
+        assert "SyntaxError" in error.stderr
 
     def test_missing_function_returns_error(self) -> None:
-        from gigaevo.programs.stages.python_executors.exec_runner import _run_one
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
 
         value, error = _run_one(
-            {
-                "code": "def g(): return 1",
-                "function_name": "nonexistent",
-                "python_path": [],
-                "args": [],
-                "kwargs": {},
-                "env": {},
-            }
+            WorkerCall(code="def g(): return 1", function_name="nonexistent")
         )
         assert value is None
         assert error is not None
-        assert (
-            "not found" in error["stderr"] or "not callable" in error["stderr"]
-        )
+        assert "not found" in error.stderr or "not callable" in error.stderr
 
     def test_env_updates_applied_then_restored(self) -> None:
-        from gigaevo.programs.stages.python_executors.exec_runner import _run_one
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
 
         os.environ.pop("GIGAEVO_DIRECT_PROBE", None)
         value, error = _run_one(
-            {
-                "code": (
+            WorkerCall(
+                code=(
                     "import os\n"
                     "def f(): return os.environ.get('GIGAEVO_DIRECT_PROBE')\n"
                 ),
-                "function_name": "f",
-                "python_path": [],
-                "args": [],
-                "kwargs": {},
-                "env": {"GIGAEVO_DIRECT_PROBE": "set-by-test"},
-            }
+                function_name="f",
+                env={"GIGAEVO_DIRECT_PROBE": "set-by-test"},
+            )
         )
         assert error is None
         assert value == "set-by-test"
