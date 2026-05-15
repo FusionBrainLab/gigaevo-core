@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 from gigaevo.entrypoint.default_pipelines import (
     ContextPipelineBuilder,
     DefaultPipelineBuilder,
+    _resolve_context_flag,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.evolution.strategies.map_elites import IslandConfig
@@ -172,16 +173,7 @@ def select_pipeline_builder(
     auto-detection doesn't match what the run actually needs.  Accepts
     ``"context"``, ``"default"``, or ``None`` (auto, the default).
     """
-    if force == "context":
-        return ContextPipelineBuilder(evolution_context)
-    if force == "default":
-        return DefaultPipelineBuilder(evolution_context)
-    if force is not None:
-        raise ValueError(
-            "select_pipeline_builder(force=...) must be 'context', 'default', "
-            f"or None; got {force!r}"
-        )
-    if problem_context.is_contextual:
+    if _resolve_context_flag(force, problem_context.is_contextual):
         return ContextPipelineBuilder(evolution_context)
     return DefaultPipelineBuilder(evolution_context)
 

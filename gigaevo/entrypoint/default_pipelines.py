@@ -57,6 +57,26 @@ from gigaevo.runner.dag_blueprint import DAGBlueprint
 StageFactory = Callable[[], Stage]
 
 
+def _resolve_context_flag(force: str | None, is_contextual: bool) -> bool:
+    """Resolve the context-wiring decision for builders that branch on
+    ``problem_ctx.is_contextual``.
+
+    Operators can override the filesystem-inferred heuristic from Hydra via
+    ``+pipeline_builder.force=context`` (or ``"default"``); ``None`` (the
+    default) falls back to the inferred value.  Mirrors
+    :func:`gigaevo.config.helpers.select_pipeline_builder`.
+    """
+    if force == "context":
+        return True
+    if force == "default":
+        return False
+    if force is not None:
+        raise ValueError(
+            f"force= must be 'context', 'default', or None; got {force!r}"
+        )
+    return is_contextual
+
+
 class PipelineBuilder:
     """Mutable builder for pipeline nodes/edges/deps producing a DAGBlueprint."""
 
@@ -70,6 +90,18 @@ class PipelineBuilder:
 
     # Stage operations - add, replace, remove
     def add_stage(self, name: str, factory: StageFactory) -> PipelineBuilder:
+        # Fail loudly on duplicate add: silently overwriting an existing
+        # ``self._nodes[name]`` makes copy-paste mistakes in subclass
+        # ``_contribute_*`` / ``_add_*`` methods invisible — the new factory
+        # silently shadows the parent's, producing a working but wrong
+        # pipeline.  Callers that intentionally swap a factory must use
+        # :meth:`replace_stage` (explicit), mirroring the
+        # ``StageRegistry.clear() + register()`` discipline.
+        if name in self._nodes:
+            raise ValueError(
+                f"Stage '{name}' already registered on this builder. "
+                f"Use replace_stage('{name}', ...) to swap factories explicitly."
+            )
         self._nodes[name] = factory
         return self
 
@@ -529,6 +561,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         *,
         dag_timeout: float = 3600.0,
         optimization_time_budget: float | None = None,
+        force: str | None = None,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout)
         self._optimization_time_budget = (
@@ -536,7 +569,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
             if optimization_time_budget is not None
             else dag_timeout * DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION
         )
-        has_context = ctx.problem_ctx.is_contextual
+        has_context = _resolve_context_flag(force, ctx.problem_ctx.is_contextual)
         if has_context:
             self._add_context_stage_and_edges()
         self._add_cma_optimization(has_context=has_context)
@@ -655,6 +688,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         *,
         dag_timeout: float = 7200.0,
         optimization_time_budget: float | None = None,
+        force: str | None = None,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout)
         self._optimization_time_budget = (
@@ -662,7 +696,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
             if optimization_time_budget is not None
             else dag_timeout * DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION
         )
-        has_context = ctx.problem_ctx.is_contextual
+        has_context = _resolve_context_flag(force, ctx.problem_ctx.is_contextual)
         if has_context:
             self._add_context_stage_and_edges()
         self._add_optuna_optimization(has_context=has_context)
