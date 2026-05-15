@@ -51,21 +51,53 @@ class NumericalComplexityVisitor(ast.NodeVisitor):
         self.condition_count += 1
         self.generic_visit(node)
 
+    def visit_IfExp(self, node):
+        # Ternary `a if cond else b` is a branch decision.
+        self.condition_count += 1
+        self.generic_visit(node)
+
     def visit_Match(self, node):
         # Each case branch is a discrete condition, mirroring how if/elif
         # chains are counted (each If node contributes 1).
         self.condition_count += len(node.cases)
         self.generic_visit(node)
 
+    def visit_Try(self, node):
+        # Each except-handler is a branch path off the try body.
+        self.condition_count += len(node.handlers)
+        self.generic_visit(node)
+
+    def visit_TryStar(self, node):
+        # `except*` (PEP 654) — same branching semantics as Try.
+        self.condition_count += len(node.handlers)
+        self.generic_visit(node)
+
     def visit_AsyncFor(self, node):
         self.loop_count += 1
         self.generic_visit(node)
+
+    def _visit_comprehension(self, node):
+        # Comprehensions are loops in disguise. Each generator contributes a
+        # loop, and each `if` clause inside it is an extra condition.
+        self.loop_count += len(node.generators)
+        self.condition_count += sum(len(gen.ifs) for gen in node.generators)
+        self.generic_visit(node)
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
 
     def visit_FunctionDef(self, node):
         self.function_def_count += 1
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node):
+        self.function_def_count += 1
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node):
+        # Lambda is an anonymous function definition; count it alongside def.
         self.function_def_count += 1
         self.generic_visit(node)
 
