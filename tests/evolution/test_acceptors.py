@@ -77,6 +77,22 @@ class TestValidityMetricAcceptor:
         acc = ValidityMetricAcceptor(validity_key="custom_valid")
         assert acc.is_accepted(p)
 
+    def test_small_positive_value_accepted(self):
+        # Finite-input fast-path is unchanged: 0.5 still passes.
+        p = _prog(metrics={VALIDITY_KEY: 0.5})
+        assert ValidityMetricAcceptor().is_accepted(p)
+
+    def test_nan_rejected(self):
+        # NaN <= 0 is False, so without isfinite() a crashed validity
+        # stage emitting NaN would be silently accepted as an elite.
+        p = _prog(metrics={VALIDITY_KEY: float("nan")})
+        assert not ValidityMetricAcceptor().is_accepted(p)
+
+    def test_inf_rejected(self):
+        # +inf <= 0 is False; reject unbounded-sentinel values too.
+        p = _prog(metrics={VALIDITY_KEY: float("inf")})
+        assert not ValidityMetricAcceptor().is_accepted(p)
+
 
 class TestRequiredBehaviorKeysAcceptor:
     def test_all_present(self):

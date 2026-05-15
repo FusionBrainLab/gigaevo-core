@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Set
+import math
 
 from loguru import logger
 
@@ -81,10 +82,9 @@ class ValidityMetricAcceptor(ProgramEvolutionAcceptor):
     def is_accepted(self, program: Program) -> bool:
         is_valid = program.metrics.get(self.validity_key)
 
-        # Reject missing key, None, zero, and any negative value (including the
-        # sentinel -1e5).  'not is_valid' is intentionally avoided here because
-        # bool(-1e5) is True — negative sentinel values would pass that check.
-        if is_valid is None or is_valid <= 0:
+        # `not is_valid` would wrongly accept the -1e5 sentinel; `is_valid <= 0`
+        # would wrongly accept NaN and +inf (both comparisons return False).
+        if is_valid is None or not math.isfinite(is_valid) or is_valid <= 0:
             logger.debug(
                 f"[ValidityMetricAcceptor] Program {program.id} rejected: "
                 f"{self.validity_key}={is_valid}"
