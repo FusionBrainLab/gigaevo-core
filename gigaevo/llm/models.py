@@ -54,14 +54,20 @@ def _with_langfuse(
     if handler is None:
         return config
 
+    # dict() is a shallow copy: cfg["callbacks"] and cfg["metadata"] would
+    # alias the caller's mutable list/dict. Copy both defensively up-front
+    # so the function never mutates its input, regardless of which branch
+    # below fires (or whether downstream code mutates the returned config).
     cfg: dict[str, Any] = dict(config or {})
-    callbacks: list[Any] = cfg.setdefault("callbacks", [])
-    if handler not in callbacks:
-        callbacks.append(handler)
+    cfg["callbacks"] = list(cfg.get("callbacks") or [])
+    if "metadata" in cfg:
+        cfg["metadata"] = dict(cfg["metadata"] or {})
+
+    if handler not in cfg["callbacks"]:
+        cfg["callbacks"].append(handler)
 
     if model_name:
-        metadata: dict[str, Any] = cfg.setdefault("metadata", {})
-        metadata["selected_model"] = model_name
+        cfg.setdefault("metadata", {})["selected_model"] = model_name
 
     return cast(RunnableConfig, cfg)
 
