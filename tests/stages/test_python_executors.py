@@ -1120,37 +1120,19 @@ class TestCancellationCleansSpill:
 
 
 class TestSerializationDistantCorners:
-    """Hunt for round-trip bugs in the worker→parent cloudpickle path.
-
-    Every test here corresponds to a hypothesis from the serialization
-    bug-hunt audit: cyclic graphs, numpy dtype edge cases, user-defined
-    classes leaking from the synthetic ``user_code`` module, and the
-    interaction between protocol-5 inline buffers and the parent's
-    ``mmap``-based spill reader.
-    """
+    """Worker→parent cloudpickle round-trip edge cases."""
 
     async def test_self_referential_list_round_trip(self) -> None:
-        """``x = []; x.append(x)`` is the canonical Pickle cycle test.
-        Cloudpickle/pickle resolve via the memo table; if anything in
-        the spill path forced ``deepcopy``-style semantics this would
-        either infinite-loop or fail with RecursionError."""
         code = "def f():\n    x = []\n    x.append(x)\n    return x\n"
         result = await run_exec_runner(code=code, function_name="f", timeout=10)
-        assert result[0] is result, "self-reference broken after round-trip"
+        assert result[0] is result
 
     async def test_cyclic_dict_round_trip(self) -> None:
-        """Same as above for dicts — the memo table works equally for
-        mapping types, but worth pinning in case a future spill format
-        change introduces shallow-copy semantics."""
         code = "def f():\n    d = {}\n    d['self'] = d\n    return d\n"
         result = await run_exec_runner(code=code, function_name="f", timeout=10)
         assert result["self"] is result
 
     async def test_numpy_structured_dtype_round_trip(self) -> None:
-        """Structured dtypes (named fields, mixed numeric + fixed-width
-        unicode) historically tripped up early pickle protocols on
-        numpy versions <1.17 and ICC-compiled MKL builds.  Lock in
-        round-trip on the modern stack."""
         import numpy as np
 
         code = (
@@ -1170,11 +1152,8 @@ class TestSerializationDistantCorners:
         assert np.allclose(result["b"], [0.1, 0.2, 0.3, 0.4, 0.5])
 
     async def test_numpy_memmap_returns_materialised_array(self) -> None:
-        """A worker-side ``np.memmap`` references a file that won't exist
-        in the parent process.  Cloudpickle should serialise the *data*
-        (via numpy's ``__reduce_ex__``) so the parent gets a regular
-        in-memory array, not a stale ``memmap`` pointing at a worker
-        tempfile."""
+        """Parent should get a regular in-memory array, not a memmap
+        aliasing the worker's tempfile."""
         import numpy as np
 
         code = (
@@ -1196,9 +1175,6 @@ class TestSerializationDistantCorners:
         assert result[0] == 999.0
 
     async def test_closure_over_user_defined_class(self) -> None:
-        """Cloudpickle must serialise the captured cell variable's class
-        (defined in ``user_code``) by value, since the parent has no
-        ``user_code`` module to import-by-reference against."""
         code = (
             "class Inner:\n"
             "    def __init__(self, v): self.v = v\n"
@@ -1214,10 +1190,6 @@ class TestSerializationDistantCorners:
         assert result() == 42
 
     async def test_instance_of_class_defined_inside_function_body(self) -> None:
-        """Classes defined inside a function body (CO_NESTED) historically
-        tripped cloudpickle's older "is it in __main__?" heuristic.
-        register_pickle_by_value on the synthetic ``user_code`` module
-        should make this work regardless of nesting."""
         code = (
             "def f():\n"
             "    class Local:\n"
@@ -1229,15 +1201,9 @@ class TestSerializationDistantCorners:
         assert result.squared() == 49
 
     async def test_numpy_round_trip_survives_aggressive_heap_pressure(self) -> None:
-        """Probe for use-after-free on the spill mmap.
-
-        Protocol 5 *without* ``buffer_callback`` encodes numpy buffers
-        as inline ``BYTEARRAY8`` opcodes, which the unpickler copies
-        into freshly-allocated buffers — the result must not alias the
-        spill mmap.  Stress this by unlinking the spill (parent's
-        ``finally`` does this), allocating tens of MB to force reuse
-        of any freed pages, and re-reading the result.
-        """
+        """Probe for use-after-free on the spill mmap: after the parent
+        unlinks the spill, allocating heap pressure must not corrupt the
+        unpickled array (would mean it aliased the spill mmap)."""
         import gc
 
         import numpy as np
@@ -1270,11 +1236,8 @@ class TestSerializationDistantCorners:
         assert result[0] == -42.0
 
     def test_worker_envelopes_round_trip_via_cloudpickle(self) -> None:
-        """``WorkerCall``/``WorkerError``/``WorkerResult`` cross the loky
-        boundary as argument and return value.  Frozen slotted dataclasses
-        are picklable via the default ``__reduce_ex__``; pin this so a
-        future ``__slots__`` or ``__init_subclass__`` change doesn't
-        silently break IPC."""
+        """``WorkerCall``/``WorkerError``/``WorkerResult`` survive
+        cloudpickle round-trip (they cross the loky boundary)."""
         import cloudpickle
 
         from gigaevo.programs.stages.python_executors.exec_runner import (
@@ -1310,10 +1273,8 @@ class TestSerializationDistantCorners:
     async def test_worker_returns_object_with_lock_surfaces_structured_error(
         self,
     ) -> None:
-        """A result that *contains* an unpicklable component (here a
-        ``threading.Lock`` mixed into an otherwise plain dict) must
-        surface as :class:`ExecRunnerError` — not as a raw cloudpickle
-        traceback in the parent, and not as a deadlock."""
+        """Unpicklable component (Lock) → :class:`ExecRunnerError`, not raw
+        cloudpickle traceback or deadlock."""
         code = (
             "import threading\n"
             "def f():\n"
@@ -1325,16 +1286,8 @@ class TestSerializationDistantCorners:
         assert "serialise" in msg or "pickle" in msg
 
     async def test_python_path_does_not_accumulate_across_calls(self) -> None:
-        """:func:`_run_one`'s ``finally`` block restores ``sys.path``.
-        Even if a worker handles 20+ calls with distinct ``python_path``
-        entries (one fresh tempdir each), the worker's final ``sys.path``
-        length must match what it had on the first call.
-
-        Regression guard for a hypothesis raised during the audit: that
-        ``_prepend_sys_path`` only dedupes the *current* path and prior
-        entries would accumulate unboundedly.  They don't, because of
-        the snapshot/restore wrapper.
-        """
+        """``_run_one``'s finally restores ``sys.path``: many calls with
+        distinct ``python_path`` entries don't grow it."""
         import tempfile
 
         code = "import sys\ndef f(): return len(sys.path)\n"
@@ -1358,10 +1311,8 @@ class TestSerializationDistantCorners:
                 )
 
     async def test_cloudpickle_register_by_value_idempotent(self) -> None:
-        """``cloudpickle.register_pickle_by_value`` keys
-        ``_PICKLE_BY_VALUE_MODULES`` by module *name*, so re-registering
-        ``"user_code"`` on every call must not grow the set.
-        Sanity check on a fresh worker."""
+        """``_PICKLE_BY_VALUE_MODULES`` is a set keyed by name — re-registering
+        ``"user_code"`` every call doesn't grow it."""
         code = (
             "import cloudpickle.cloudpickle as _cp\n"
             "def f():\n"
@@ -1379,17 +1330,10 @@ class TestSerializationDistantCorners:
 
 
 class TestProtocolFiveSafety:
-    """End-to-end sanity that the worker's ``cloudpickle.dump(..., protocol=5)``
-    is consumed by the parent's ``cloudpickle.loads`` without asymmetry.
-    Both ends run cloudpickle 3.1.2 on Python 3.12, but a future pin
-    drift (loky vendoring a different cloudpickle, or a constraint that
-    relaxes the version) would surface here first.
-    """
+    """Worker dump / parent loads asymmetry checks for cloudpickle protocol 5."""
 
     def test_one_cloudpickle_in_environment(self) -> None:
-        """No vendored second copy lurking under ``loky.cloudpickle_wrapper``
-        or anywhere else on the path; pickle round-trip semantics depend
-        on both ends sharing the same ``cloudpickle.dispatch_table``."""
+        """No vendored cloudpickle lurking under loky — both ends share dispatch tables."""
         import importlib
 
         cp_main = importlib.import_module("cloudpickle")
@@ -1406,10 +1350,7 @@ class TestProtocolFiveSafety:
         assert Path(cp_impl.__file__).parent == Path(cp_main.__file__).parent
 
     def test_protocol_5_round_trip_sanity(self, tmp_path) -> None:
-        """Mimic the worker's exact spill flow: ``cloudpickle.dump(...,
-        protocol=5)`` to a file, then ``mmap`` + ``cloudpickle.loads``
-        from the parent.  Verifies no asymmetry between writer protocol
-        opcodes and reader opcode handling."""
+        """Worker-style dump(protocol=5) → parent-style mmap + loads."""
         import mmap as _mmap
 
         import cloudpickle as _cp
@@ -1429,13 +1370,8 @@ class TestProtocolFiveSafety:
 
 
 class TestXdistWorkerCountAutoCap:
-    """Under pytest-xdist with N>1 worker processes, each xdist worker
-    imports ``wrapper.py`` and would otherwise spawn ``cpu_count`` loky
-    subprocesses — a 28-CPU / 8-xdist host fan-outs to 224 children.
-
-    The auto-cap divides cpu_count across xdist workers.  An explicit
-    ``GIGAEVO_EXECUTOR_MAX_WORKERS`` always wins (operator override).
-    """
+    """Under xdist, ``max_workers`` auto-caps to ``cpu_count // xdist_count``
+    to avoid an N×cpu_count fork-bomb; explicit env override always wins."""
 
     def test_no_xdist_yields_default_none(self, monkeypatch) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
@@ -1507,14 +1443,8 @@ class TestXdistWorkerCountAutoCap:
 
 
 class TestShutdownExecutorWaitFlag:
-    """``shutdown_executor(wait=True)`` must block until loky's executor-
-    manager thread has finished its shutdown sequence; ``wait=False``
-    (default) must return before that.
-
-    Verified by submitting a task, calling shutdown, and checking the
-    state of ``_executor_manager_thread`` (cleared synchronously by
-    ``shutdown()`` only after the join completes).
-    """
+    """``wait=True`` blocks until loky's manager thread joins; ``wait=False``
+    returns promptly."""
 
     async def test_wait_true_blocks_until_manager_thread_joined(self) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
