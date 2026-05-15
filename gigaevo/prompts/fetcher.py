@@ -380,18 +380,25 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 return None
             result = entrypoint_fn()
             if isinstance(result, str):
-                if not result.strip():
+                system = sanitize_for_log(result)
+                if not system.strip():
                     logger.warning(
                         "[GigaEvoArchivePromptFetcher] entrypoint() returned empty string"
                     )
                     return None
-                pid = prompt_text_to_id(result)
-                return _PromptPack(system=result, user=None, prompt_id=pid)
+                pid = prompt_text_to_id(system)
+                return _PromptPack(system=system, user=None, prompt_id=pid)
             elif isinstance(result, dict):
                 system = result.get("system", "")
                 if not isinstance(system, str) or not system.strip():
                     logger.warning(
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() missing valid 'system' key"
+                    )
+                    return None
+                system = sanitize_for_log(system)
+                if not system.strip():
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] dict entrypoint() system became empty after sanitization"
                     )
                     return None
                 user = result.get("user")
@@ -400,6 +407,13 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() has invalid 'user' key — ignoring"
                     )
                     user = None
+                if user is not None:
+                    user = sanitize_for_log(user)
+                    if not user.strip():
+                        logger.warning(
+                            "[GigaEvoArchivePromptFetcher] dict entrypoint() user became empty after sanitization"
+                        )
+                        user = None
                 pid = prompt_text_to_id(system, user_text=user)
                 return _PromptPack(system=system, user=user, prompt_id=pid)
             else:

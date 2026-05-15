@@ -183,7 +183,9 @@ def prompt_text_to_id(prompt_text: str, user_text: str | None = None) -> str:
     Returns:
         16-char hex string (sha256[:16])
     """
+    prompt_text = sanitize_for_log(prompt_text)
     blob = prompt_text
     if user_text is not None:
+        user_text = sanitize_for_log(user_text)
         blob = prompt_text + "\x00" + user_text
     return hashlib.sha256(blob.encode()).hexdigest()[:16]

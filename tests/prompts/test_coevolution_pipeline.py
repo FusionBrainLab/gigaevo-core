@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -434,6 +435,12 @@ class TestMetricsCountTracking:
 
 
 class TestPromptTextToIdUserText:
+    def test_clean_system_only_hash_matches_previous_sha256(self):
+        """Clean prompt text keeps the historical sha256[:16] ID."""
+        expected = hashlib.sha256("system".encode()).hexdigest()[:16]
+
+        assert prompt_text_to_id("system") == expected
+
     def test_same_system_different_user_different_ids(self):
         """M4: Two prompts with same system but different user get different IDs."""
         id1 = prompt_text_to_id("system", user_text="user1")
@@ -451,6 +458,13 @@ class TestPromptTextToIdUserText:
         id_system_only = prompt_text_to_id("system")
         id_with_user = prompt_text_to_id("system", user_text="user")
         assert id_system_only != id_with_user
+
+    def test_lone_surrogate_prompt_text_is_sanitized_before_hashing(self):
+        """LLM-returned prompt text with a surrogate must not crash ID generation."""
+        expected_blob = "system�\x00user�"
+        expected = hashlib.sha256(expected_blob.encode()).hexdigest()[:16]
+
+        assert prompt_text_to_id("system\ud83d", user_text="user\udc00") == expected
 
 
 # ===================================================================

@@ -107,6 +107,16 @@ class PromptExecutionStage(Stage):
                 f"entrypoint() must return str or dict, got {type(result).__name__}"
             )
 
+        system_text = sanitize_for_log(system_text)
+        if not system_text.strip():
+            raise ValueError("entrypoint() returned empty string after sanitization")
+        if user_text is not None:
+            user_text = sanitize_for_log(user_text)
+            if not user_text.strip():
+                raise ValueError(
+                    "dict entrypoint() 'user' key became empty after sanitization"
+                )
+
         prompt_id = prompt_text_to_id(system_text, user_text=user_text)
         logger.debug(
             f"[PromptExecutionStage] Executed entrypoint(): "
