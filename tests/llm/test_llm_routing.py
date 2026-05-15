@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter
+from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter, _with_langfuse
 from gigaevo.llm.token_tracking import TokenTracker, TokenUsage
 from tests.conftest import NullWriter
 
@@ -158,6 +158,58 @@ class TestTokenTracker:
 # ---------------------------------------------------------------------------
 # MultiModelRouter
 # ---------------------------------------------------------------------------
+
+
+class TestWithLangfuse:
+    """_with_langfuse must return a config that includes the handler without
+    mutating the caller's input dict, list, or metadata."""
+
+    def test_handler_appended_to_callbacks_in_returned_config(self) -> None:
+        handler = MagicMock()
+        result = _with_langfuse({"callbacks": []}, handler)
+        assert result is not None
+        assert handler in result["callbacks"]
+
+    def test_caller_callbacks_list_is_not_mutated(self) -> None:
+        handler = MagicMock()
+        caller_callbacks: list[MagicMock] = []
+        caller_config = {"callbacks": caller_callbacks}
+        result = _with_langfuse(caller_config, handler)
+        assert result is not None
+        # Caller's list is preserved by identity AND content.
+        assert caller_callbacks == []
+        assert result["callbacks"] is not caller_callbacks
+
+    def test_caller_metadata_dict_is_not_mutated_with_model_name(self) -> None:
+        handler = MagicMock()
+        caller_metadata: dict[str, str] = {"caller_key": "caller_val"}
+        caller_config = {
+            "callbacks": [],
+            "metadata": caller_metadata,
+        }
+        result = _with_langfuse(caller_config, handler, model_name="gpt-4")
+        assert result is not None
+        # selected_model lands in the returned metadata, not the caller's.
+        assert "selected_model" not in caller_metadata
+        assert caller_metadata == {"caller_key": "caller_val"}
+        assert result["metadata"] is not caller_metadata
+        assert result["metadata"]["selected_model"] == "gpt-4"
+        assert result["metadata"]["caller_key"] == "caller_val"
+
+    def test_caller_metadata_dict_is_not_aliased_without_model_name(self) -> None:
+        """Even when model_name is None and the function never assigns into
+        metadata, the returned config must not alias the caller's dict —
+        downstream code may mutate the returned config."""
+        handler = MagicMock()
+        caller_metadata: dict[str, str] = {"caller_key": "caller_val"}
+        caller_config = {
+            "callbacks": [],
+            "metadata": caller_metadata,
+        }
+        result = _with_langfuse(caller_config, handler, model_name=None)
+        assert result is not None
+        assert result["metadata"] is not caller_metadata
+        assert result["metadata"] == caller_metadata
 
 
 class TestMultiModelRouter:
