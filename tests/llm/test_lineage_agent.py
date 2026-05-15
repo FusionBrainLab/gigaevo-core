@@ -616,3 +616,58 @@ class TestArunEdgeCases:
         assert captured_state["child"] is child
         assert captured_state["metadata"]["parent_id"] == parent.id
         assert captured_state["metadata"]["child_id"] == child.id
+
+
+# ---------------------------------------------------------------------------
+# TransitionInsight field validators — schema-layer sanitization
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionInsightFieldSanitization:
+    """TransitionInsight str fields receive LLM output verbatim and must scrub
+    ANSI / BIDI overrides / lone surrogates / control bytes before the value
+    flows into reports, JSON dumps, Postgres TEXT columns, or re-injection
+    back into LLM prompts."""
+
+    def test_clean_input_passes_through(self):
+        ti = TransitionInsight(
+            strategy="imitation",
+            description="Parent's loop tiling improved cache locality 1.8x.",
+        )
+        assert ti.strategy == "imitation"
+        assert ti.description == "Parent's loop tiling improved cache locality 1.8x."
+
+    def test_ansi_escape_in_description_stripped(self):
+        ti = TransitionInsight(
+            strategy="avoidance",
+            description="\x1b[31mreverted\x1b[0m fused-mul-add — slower on this GPU",
+        )
+        assert "\x1b" not in ti.description
+        assert "reverted" in ti.description
+
+    def test_lone_surrogate_replaced_in_strategy(self):
+        ti = TransitionInsight(
+            strategy="exploration\ud83d",
+            description="ok",
+        )
+        assert "\ud83d" not in ti.strategy
+        ti.strategy.encode("utf-8")
+        ti.model_dump_json()
+
+    def test_cr_in_description_does_not_forge_log_line(self):
+        ti = TransitionInsight(
+            strategy="generalization",
+            description="moved threshold higher\r\n[FAKE LINE]",
+        )
+        assert "\r" not in ti.description
+
+    def test_unicode_arrows_preserved(self):
+        # Mojo / Pallas error formatters carry U+2192; CUTLASS-style template
+        # syntax in descriptions must survive verbatim.
+        ti = TransitionInsight(
+            strategy="imitation",
+            description="Shape<_32,_128> → Shape<_64,_64> halves register pressure",
+        )
+        assert ti.description == (
+            "Shape<_32,_128> → Shape<_64,_64> halves register pressure"
+        )

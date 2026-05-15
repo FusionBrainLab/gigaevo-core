@@ -359,3 +359,69 @@ class TestScoringAgentParseResponse:
         }
         with pytest.raises(ValueError, match="Expected ProgramScore"):
             agent.parse_response(state)
+
+
+# ---------------------------------------------------------------------------
+# ProgramInsight field validators — schema-layer sanitization
+# ---------------------------------------------------------------------------
+
+
+class TestProgramInsightFieldSanitization:
+    """ProgramInsight str fields receive LLM output verbatim and must scrub
+    ANSI / BIDI overrides / lone surrogates / control bytes before the value
+    flows into reports, JSON dumps, Postgres TEXT columns, or re-injection
+    back into LLM prompts as part of a multi-agent loop."""
+
+    def test_clean_input_passes_through(self):
+        insight = ProgramInsight(
+            type="performance",
+            insight="The inner loop dominates wall time on N>1000.",
+            tag="hotspot",
+            severity="medium",
+        )
+        assert insight.type == "performance"
+        assert insight.insight == "The inner loop dominates wall time on N>1000."
+        assert insight.tag == "hotspot"
+        assert insight.severity == "medium"
+
+    def test_ansi_escape_in_insight_field_stripped(self):
+        insight = ProgramInsight(
+            type="perf",
+            insight="\x1b[31mred\x1b[0m: cache miss on hot path",
+            tag="cache",
+            severity="high",
+        )
+        assert "\x1b" not in insight.insight
+        assert "red: cache miss on hot path" in insight.insight
+
+    def test_lone_surrogate_replaced_in_type(self):
+        insight = ProgramInsight(
+            type="perf\ud83d",
+            insight="ok",
+            tag="t",
+            severity="low",
+        )
+        assert "\ud83d" not in insight.type
+        # Result must be UTF-8 encodable and JSON-serializable.
+        insight.type.encode("utf-8")
+        insight.model_dump_json()
+
+    def test_cr_in_severity_does_not_forge_log_line(self):
+        insight = ProgramInsight(
+            type="t",
+            insight="ok",
+            tag="t",
+            severity="high\r\n[FAKE LINE]",
+        )
+        assert "\r" not in insight.severity
+
+    def test_unicode_arrows_and_math_symbols_preserved(self):
+        # Mojo and Pallas error formatters carry these legitimately; the
+        # validator must not strip printable Unicode the operator wants to see.
+        insight = ProgramInsight(
+            type="formal",
+            insight="∀x ∈ ℝ → ℂ holds after the rewrite",
+            tag="t",
+            severity="low",
+        )
+        assert insight.insight == "∀x ∈ ℝ → ℂ holds after the rewrite"
