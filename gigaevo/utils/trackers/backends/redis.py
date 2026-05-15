@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -37,12 +38,21 @@ class RedisMetricsBackend(LoggerBackend):
     def _k_latest(self) -> str:
         return f"{self.cfg.key_prefix}:latest"
 
+    def _field_tag(self, tag: str) -> str:
+        """Return the stable Redis hash/list field for a metric tag."""
+
+        safe_tag = clean_identifier(tag, max_len=128)
+        if safe_tag:
+            return safe_tag
+
+        digest = hashlib.sha256(sanitize_for_log(tag).encode()).hexdigest()[:12]
+        return f"metric_{digest}"
+
     def _k_history(self, tag: str) -> str:
         # Sanitize tag for Redis key: strict identifier charset only.
         # Defends against ANSI / BIDI / control bytes in LLM-derived tags
         # that the previous ad-hoc replace() missed.
-        safe_tag = clean_identifier(tag, max_len=128)
-        return f"{self.cfg.key_prefix}:history:{safe_tag}"
+        return f"{self.cfg.key_prefix}:history:{self._field_tag(tag)}"
 
     def _k_meta(self) -> str:
         return f"{self.cfg.key_prefix}:meta"
@@ -121,7 +131,7 @@ class RedisMetricsBackend(LoggerBackend):
                 # NUL inside a field name on some clients; clean_identifier
                 # gives a stable, displayable field name regardless of what
                 # an LLM-derived tag carried.
-                tag = clean_identifier(entry["tag"], max_len=128)
+                tag = self._field_tag(str(entry["tag"]))
                 step = entry["step"]
                 wall_time = entry["wall_time"]
                 kind = entry["kind"]
@@ -170,7 +180,9 @@ class RedisMetricsBackend(LoggerBackend):
             self._client.delete(history_key)
         except Exception as e:
             logger.warning(
-                "[RedisMetricsBackend] clear_series failed for {}: {}", tag, e
+                "[RedisMetricsBackend] clear_series failed for {}: {}",
+                sanitize_for_log(tag),
+                sanitize_for_log(str(e)),
             )
 
     # --------------------- Query Methods ---------------------
@@ -182,15 +194,18 @@ class RedisMetricsBackend(LoggerBackend):
             return {}
         try:
             if tag:
-                val = client.hget(self._k_latest(), tag)
+                field = self._field_tag(tag)
+                val = client.hget(self._k_latest(), field)
                 if val is None:
                     return {}
-                return {tag: float(str(val))}
+                return {field: self._parse_value(str(val))}
             else:
                 data = client.hgetall(self._k_latest())
                 return {k: self._parse_value(str(v)) for k, v in data.items()}
         except Exception as e:
-            logger.warning("[RedisMetricsBackend] get_latest failed: {}", e)
+            logger.warning(
+                "[RedisMetricsBackend] get_latest failed: {}", sanitize_for_log(str(e))
+            )
             return {}
 
     def get_history(
@@ -204,7 +219,9 @@ class RedisMetricsBackend(LoggerBackend):
             entries = client.lrange(self._k_history(tag), start, end)
             return [json.loads(str(e)) for e in entries]
         except Exception as e:
-            logger.warning("[RedisMetricsBackend] get_history failed: {}", e)
+            logger.warning(
+                "[RedisMetricsBackend] get_history failed: {}", sanitize_for_log(str(e))
+            )
             return []
 
     def list_metrics(self) -> list[str]:
@@ -215,7 +232,9 @@ class RedisMetricsBackend(LoggerBackend):
         try:
             return [str(k) for k in client.hkeys(self._k_latest())]
         except Exception as e:
-            logger.warning("[RedisMetricsBackend] list_metrics failed: {}", e)
+            logger.warning(
+                "[RedisMetricsBackend] list_metrics failed: {}", sanitize_for_log(str(e))
+            )
             return []
 
     @staticmethod

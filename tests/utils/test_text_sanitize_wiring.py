@@ -380,6 +380,33 @@ class TestRedisMetricsBackendSanitization:
         backend._client = fakeredis.FakeRedis(decode_responses=True)
         return backend
 
+    def test_clean_scalar_tag_round_trips_latest_and_history(self) -> None:
+        backend = self._make_backend()
+
+        backend.write_scalar("loss/train", 0.25, step=3, wall_time=1.5)
+        backend.flush()
+
+        assert backend.get_latest("loss/train") == {"loss/train": 0.25}
+        assert backend.list_metrics() == ["loss/train"]
+        assert backend.get_history("loss/train") == [
+            {"s": 3, "t": 1.5, "v": 0.25, "k": "scalar"}
+        ]
+
+    def test_hostile_scalar_tag_round_trips_via_sanitized_field(self) -> None:
+        backend = self._make_backend()
+        tag = f"loss {HOSTILE}/train"
+        safe_tag = backend._field_tag(tag)
+
+        backend.write_scalar(tag, 0.5, step=4, wall_time=2.0)
+        backend.flush()
+
+        assert backend.get_latest(tag) == {safe_tag: 0.5}
+        assert backend.list_metrics() == [safe_tag]
+        assert backend.get_history(tag) == [
+            {"s": 4, "t": 2.0, "v": 0.5, "k": "scalar"}
+        ]
+        _assert_sanitized(safe_tag)
+
     def test_history_key_strips_hostile_bytes_from_tag(self) -> None:
         backend = self._make_backend()
         # Tag with ANSI/BIDI/NUL/CR — clean_identifier strips them all.
