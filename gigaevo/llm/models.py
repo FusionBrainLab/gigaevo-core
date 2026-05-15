@@ -348,8 +348,14 @@ class _StructuredOutputRouter(Runnable):
             return
         try:
             self._failure_hook(exc, name)
-        except Exception:
+        except Exception as hook_exc:  # noqa: BLE001 — observability-only
             # The hook is observability-only; it must never swallow or
             # mutate the original exception. Suppress any hook-side error
-            # so the caller still sees the real LLM failure.
-            pass
+            # so the caller still sees the real LLM failure — but emit a
+            # warning so a buggy hook does not silently lose telemetry.
+            logger.warning(
+                "[_StructuredOutputRouter] failure_hook for arm {!r} raised "
+                "{!r}; original LLM exception preserved.",
+                name,
+                hook_exc,
+            )

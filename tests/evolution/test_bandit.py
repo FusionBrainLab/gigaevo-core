@@ -1789,3 +1789,49 @@ class TestInjectFailureRewardCannotMaskOriginalException:
         router = self._router_with_broken_hook()
         with pytest.raises(RuntimeError, match="real failure"):
             await router.ainvoke("hi")
+
+
+# ---------------------------------------------------------------------------
+# Structured-output: failure_hook errors are warned (not silently swallowed)
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredOutputFailureHookErrorsAreLogged:
+    """``_StructuredOutputRouter._maybe_fire_failure_hook`` suppresses any
+    exception raised by the hook so the original LLM failure still
+    propagates. Previously the suppression was silent (`except Exception:
+    pass`), losing telemetry whenever the hook itself had a bug. The
+    suppression must remain (the hook is observability-only and must not
+    mask the real failure), but the suppressed error has to be visible at
+    warning level so a hook regression does not vanish into the void."""
+
+    def test_warning_emitted_when_failure_hook_raises(self) -> None:
+        from gigaevo.llm.models import _StructuredOutputRouter
+
+        flaky = MagicMock()
+        flaky.invoke = MagicMock(side_effect=RuntimeError("real failure"))
+
+        def _explode_hook(_exc: BaseException, _name: str) -> None:
+            raise RuntimeError("hook bug")
+
+        router = _StructuredOutputRouter(
+            [flaky],
+            ["m"],
+            [1.0],
+            None,
+            MagicMock(),
+            failure_hook=_explode_hook,
+        )
+
+        with patch("gigaevo.llm.models.logger.warning") as mock_warning:
+            with pytest.raises(RuntimeError, match="real failure"):
+                router.invoke("hi")
+
+        # The hook exception must have been logged at warning level so a
+        # hook regression is visible in operator logs.
+        assert mock_warning.called
+        # The warning payload must reference the hook exception so the
+        # operator can identify the broken hook from logs alone.
+        call_args = mock_warning.call_args
+        payload = repr(call_args)
+        assert "hook bug" in payload or "RuntimeError" in payload
