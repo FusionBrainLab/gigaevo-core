@@ -41,7 +41,7 @@ def _coerce_param_value(value: Any) -> Any:
     if isinstance(value, str):
         try:
             parsed = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
+        except (ValueError, SyntaxError, MemoryError, RecursionError, TypeError):
             return value
         # Coerce whole-number floats to int so range()/indexing works
         if isinstance(parsed, float) and parsed == int(parsed):
@@ -229,16 +229,16 @@ def _clean_eval_in_source(code: str) -> str:
             # Quoted string: eval('math.sqrt') — only strip if dotted name
             try:
                 string_val = ast.literal_eval(inner)
-            except (ValueError, SyntaxError):
+            except (ValueError, SyntaxError, MemoryError, RecursionError, TypeError):
                 continue
             if isinstance(string_val, str) and _DOTTED_NAME_RE.match(string_val):
                 replacement = string_val
         else:
-            # Unquoted: eval([2, 3]), eval((1, 2)), eval(42), etc.
+            # Unquoted: eval([2, 3]), eval((1, 2)), eval(42), eval(-5), etc.
             try:
                 ast.literal_eval(inner)
                 replacement = inner
-            except (ValueError, SyntaxError):
+            except (ValueError, SyntaxError, MemoryError, RecursionError, TypeError):
                 pass
 
         if replacement is not None:
@@ -284,10 +284,15 @@ class _EvalCleaner(ast.NodeTransformer):
                 return ast.copy_location(result, node)
             return node
 
-        # eval(<literal>) — already a valid AST node, just strip eval()
-        if isinstance(arg, (ast.Constant, ast.List, ast.Tuple, ast.Set, ast.Dict)):
-            return ast.copy_location(arg, node)
-        return node
+        # eval(<literal>) — use ast.literal_eval as the predicate so this
+        # path matches `_clean_eval_in_source` exactly (it also handles
+        # ``UnaryOp(USub|UAdd, Constant)`` like ``eval(-5)``, which the
+        # previous isinstance(...) check silently missed).
+        try:
+            ast.literal_eval(arg)
+        except (ValueError, SyntaxError, MemoryError, RecursionError, TypeError):
+            return node
+        return ast.copy_location(arg, node)
 
 
 # ---------------------------------------------------------------------------
