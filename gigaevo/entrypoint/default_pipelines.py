@@ -384,7 +384,11 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self.add_data_flow_edge("MemoryContextStage", "MutationContextStage", "memory")
 
     def _contribute_default_deps(self) -> None:
-        self._deps = {
+        # Merge into ``self._deps`` rather than reassigning the whole dict —
+        # subclasses (or callers that constructed the builder and added deps
+        # via ``add_exec_dep`` before ``_contribute_default_deps`` ran) would
+        # otherwise have their contributions silently wiped.
+        defaults: dict[str, list[ExecutionOrderDependency]] = {
             "CallProgramFunction": [
                 ExecutionOrderDependency.on_success("ValidateCodeStage")
             ],
@@ -416,6 +420,8 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
         }
+        for stage_name, deps in defaults.items():
+            self._deps.setdefault(stage_name, []).extend(deps)
 
 
 class ContextPipelineBuilder(DefaultPipelineBuilder):

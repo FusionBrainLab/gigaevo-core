@@ -99,6 +99,25 @@ class TestStageRegistry:
         info = StageRegistry.get_stage("SimpleStage")
         assert info.import_path == "my.custom.path.SimpleStage"
 
+    def test_duplicate_registration_raises(self) -> None:
+        """Re-registering a class name silently shadowed the previous entry
+        with whatever was decorated last, hiding copy-paste bugs across
+        modules.  Now it raises so operators see the conflict at import."""
+        import pytest
+
+        StageRegistry.register(description="first")(SimpleStage)
+        with pytest.raises(ValueError, match="already registered"):
+            StageRegistry.register(description="second")(SimpleStage)
+
+    def test_clear_then_reregister_works(self) -> None:
+        """Tests that intentionally re-register can call clear() between."""
+        StageRegistry.register(description="first")(SimpleStage)
+        StageRegistry.clear()
+        StageRegistry.register(description="second")(SimpleStage)
+        info = StageRegistry.get_stage("SimpleStage")
+        assert info is not None
+        assert info.description == "second"
+
     def test_auto_import_path(self) -> None:
         StageRegistry.register()(SimpleStage)
         info = StageRegistry.get_stage("SimpleStage")

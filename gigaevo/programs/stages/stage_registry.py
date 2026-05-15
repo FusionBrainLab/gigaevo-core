@@ -92,6 +92,21 @@ class StageRegistry:
             # Auto-detect import path if not provided
             final_import_path = import_path or f"{stage_class.__module__}.{class_name}"
 
+            # Fail loudly on duplicate registration: silently overwriting
+            # ``cls._stages[class_name]`` makes copy-paste bugs (two modules
+            # decorating distinct ``Stage`` subclasses with the same name)
+            # invisible until something downstream looks up ``import_path``
+            # and gets the wrong one.  Tests that re-register intentionally
+            # must call ``StageRegistry.clear()`` between registrations.
+            existing = cls._stages.get(class_name)
+            if existing is not None:
+                raise ValueError(
+                    f"Stage '{class_name}' already registered "
+                    f"(existing import_path={existing.import_path!r}, "
+                    f"new import_path={final_import_path!r}). "
+                    f"Call StageRegistry.clear() before re-registering."
+                )
+
             cls._stages[class_name] = StageInfo(
                 name=class_name,
                 description=description,

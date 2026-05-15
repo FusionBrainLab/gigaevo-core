@@ -618,3 +618,41 @@ class TestPipelineBuilderEdgeCases:
         bp = builder.build_blueprint()
         assert bp.exec_order_deps is not None
         assert "A" in bp.exec_order_deps
+
+
+class TestDefaultDepsMergeNotOverwrite:
+    """``_contribute_default_deps`` previously assigned the whole ``_deps``
+    dict literal, silently wiping any deps a subclass had injected at the
+    top of its override.  Verify the merge keeps both."""
+
+    def test_subclass_dep_for_unrelated_stage_survives(self):
+        injected = ExecutionOrderDependency.on_success("Foo")
+
+        class _CustomBuilder(DefaultPipelineBuilder):
+            def _contribute_default_deps(self):
+                # Add a dep BEFORE calling super — old code's ``self._deps =``
+                # in the parent would wipe this.
+                self._deps.setdefault("MyCustomStage", []).append(injected)
+                super()._contribute_default_deps()
+
+        ctx = _make_ctx()
+        builder = _CustomBuilder(ctx)
+        assert "MyCustomStage" in builder._deps
+        assert injected in builder._deps["MyCustomStage"]
+        assert "CallProgramFunction" in builder._deps  # from defaults
+
+    def test_subclass_dep_for_default_stage_is_extended(self):
+        custom_dep = ExecutionOrderDependency.on_success("SomeOtherStage")
+
+        class _CustomBuilder(DefaultPipelineBuilder):
+            def _contribute_default_deps(self):
+                self._deps.setdefault("CallProgramFunction", []).append(custom_dep)
+                super()._contribute_default_deps()
+
+        ctx = _make_ctx()
+        builder = _CustomBuilder(ctx)
+        deps = builder._deps["CallProgramFunction"]
+        names = [d.stage_name for d in deps]
+        # Both the subclass's custom dep and the default's own dep coexist.
+        assert "SomeOtherStage" in names
+        assert "ValidateCodeStage" in names

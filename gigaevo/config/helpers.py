@@ -161,8 +161,26 @@ def build_dag_from_builder(builder: Any) -> Any:
 def select_pipeline_builder(
     problem_context: ProblemContext,
     evolution_context: EvolutionContext,
+    *,
+    force: str | None = None,
 ) -> ContextPipelineBuilder | DefaultPipelineBuilder:
-    """Select appropriate pipeline builder based on problem type."""
+    """Select appropriate pipeline builder based on problem type.
+
+    ``force`` lets an operator bypass the ``problem_context.is_contextual``
+    heuristic from the CLI / Hydra config (e.g.
+    ``+pipeline_builder.force=default`` or ``=context``) — useful when the
+    auto-detection doesn't match what the run actually needs.  Accepts
+    ``"context"``, ``"default"``, or ``None`` (auto, the default).
+    """
+    if force == "context":
+        return ContextPipelineBuilder(evolution_context)
+    if force == "default":
+        return DefaultPipelineBuilder(evolution_context)
+    if force is not None:
+        raise ValueError(
+            "select_pipeline_builder(force=...) must be 'context', 'default', "
+            f"or None; got {force!r}"
+        )
     if problem_context.is_contextual:
         return ContextPipelineBuilder(evolution_context)
     return DefaultPipelineBuilder(evolution_context)
