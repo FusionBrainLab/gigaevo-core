@@ -492,9 +492,7 @@ class LLMCallResult(BaseModel):
     exception_class: str | None = None
     exception_module: str | None = None
     http_status: int | None = Field(default=None, ge=100, le=599)
-    # 24-hour upper bound: matches no real provider policy but stops a
-    # misbehaving upstream from parking the bandit on a multi-year sleep.
-    retry_after_seconds: float | None = Field(default=None, ge=0.0, le=86400.0)
+    retry_after_seconds: float | None = Field(default=None, ge=0.0)
     message: str | None = None
     cause_chain: tuple[str, ...] = ()
     model_name: str | None = None
@@ -755,19 +753,16 @@ def _extract_retry_after(exc: BaseException) -> float | None:
         return None
     # Reject non-finite values: ``"inf"`` / ``"Infinity"`` / ``"nan"`` /
     # numbers that overflow ``float`` would otherwise propagate as
-    # ``math.inf`` or ``math.nan`` into the bandit's sleep budget and
+    # ``math.inf`` or ``math.nan`` into a downstream sleep budget and
     # diverge from telemetry (JSON serializers emit ``null`` for
     # non-finite floats, so the in-memory value and the wire value
-    # would disagree silently). The 24-hour cap matches the schema's
-    # ``le=86400`` and is enforced here so that values past the cap
-    # become ``None`` rather than crashing classifier totality at the
-    # ``LLMCallResult`` validation step.
-    if not math.isfinite(value) or value < 0.0 or value > _MAX_RETRY_AFTER_SECONDS:
+    # would disagree silently). Negative values are rejected because
+    # the field semantics are "seconds to wait". Any finite non-negative
+    # value passes through; the consumer is the right arbiter of a
+    # maximum acceptable sleep.
+    if not math.isfinite(value) or value < 0.0:
         return None
     return value
-
-
-_MAX_RETRY_AFTER_SECONDS: Final[float] = 86400.0
 
 
 def _safe_message(exc: BaseException) -> str | None:

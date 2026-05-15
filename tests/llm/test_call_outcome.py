@@ -594,9 +594,8 @@ class TestRetryAfterNonFiniteRejected:
         )
         assert result.retry_after_seconds == 30.0
 
-    def test_excessive_finite_header_rejected_at_schema(self) -> None:
-        # 24 hours is the schema cap. Past that, reject so a misbehaving
-        # upstream cannot park the bandit on a multi-year sleep.
+    def test_large_finite_header_passes_through(self) -> None:
+        # The classifier parses; capping is the consumer's policy choice.
         result = classify_call_result(
             openai.RateLimitError(
                 "rate",
@@ -604,7 +603,7 @@ class TestRetryAfterNonFiniteRejected:
                 body=None,
             )
         )
-        assert result.retry_after_seconds is None
+        assert result.retry_after_seconds == 100000.0
 
 
 class TestHostileClassMetadata:
