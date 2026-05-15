@@ -314,7 +314,19 @@ class _StructuredOutputRouter(Runnable):
     def _process(self, response: dict, name: str) -> Any:
         if raw := response.get("raw"):
             self._tracker.track(raw, name)
-        return response.get("parsed")
+        parsing_error = response.get("parsing_error")
+        parsed = response.get("parsed")
+        if parsing_error is not None and parsed is None:
+            # ``include_raw=True`` makes langchain surface schema-validation
+            # failures as ``response['parsing_error']`` with ``parsed=None``
+            # instead of raising. Returning ``None`` here would silently
+            # bypass the caller's ``try / except`` and the bandit's
+            # failure_hook would never fire — the pull was recorded by
+            # ``_select`` but the reward window would never get a matching
+            # entry. Raise the parsing_error so the call site routes it
+            # through the existing failure path.
+            raise parsing_error
+        return parsed
 
     def invoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs

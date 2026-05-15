@@ -299,28 +299,19 @@ class TestStructuredAgentsBanditWiring:
 # ---------------------------------------------------------------------------
 
 
-class TestSilentNoneParseGapIsDocumented:
+class TestStructuredOutputParsingErrorFiresHook:
     """``BanditModelRouter.with_structured_output`` passes
-    ``include_raw=True`` to the underlying langchain wrapper, which means
-    a schema-parse failure surfaces as ``response['parsing_error']``
-    instead of raising.  ``_StructuredOutputRouter._process`` returns
-    ``response.get('parsed')`` (i.e. ``None``) without firing the
-    failure hook, so the pull is recorded but no reward injection lands
-    in the window — ledger asymmetry.
-
-    The fix belongs in ``gigaevo/llm/models.py``
-    (``_StructuredOutputRouter._process``) and is queued as **FU12**.
-    This regression-lock test documents the current (broken) behaviour
-    so the fix can be detected: when FU12 lands, ``window_size`` will
-    equal ``total_pulls`` and this test will need its assertion
-    flipped.
-    """
+    ``include_raw=True`` to the underlying langchain wrapper, which makes
+    a schema-validation failure surface as ``response['parsing_error']``
+    with ``parsed=None`` instead of raising. Previously
+    ``_StructuredOutputRouter._process`` returned ``None`` silently and
+    the bandit's failure_hook never fired — the pull was recorded but
+    the reward window never got a matching entry. ``_process`` now
+    raises ``parsing_error`` so the existing ``try / except`` routes
+    through the failure_hook."""
 
     @pytest.mark.asyncio
-    async def test_silent_none_parse_currently_leaves_window_empty(self) -> None:
-        # Simulate the langchain include_raw=True response shape on parse
-        # failure: parsed=None, parsing_error=<exc>.  The _process path
-        # returns None silently — exactly the path FU12 must fix.
+    async def test_parsing_error_fires_hook_and_propagates(self) -> None:
         silent_none = {
             "raw": MagicMock(),
             "parsed": None,
@@ -345,15 +336,83 @@ class TestSilentNoneParseGapIsDocumented:
         }
         result = await agent.acall_llm(state)  # type: ignore[arg-type]
 
-        # Current behaviour (the gap): MutationAgent.acall_llm crashes on
-        # ``None.archetype`` access, catches it, sets state["error"], but
-        # the bandit hook was *never* invoked from the structured-output
-        # dispatch because _StructuredOutputRouter._process returned
-        # None without raising.
+        # MutationAgent.acall_llm now sees the raised ValueError and
+        # records it in state["error"]. The bandit hook fired inside
+        # _StructuredOutputRouter so the window has the matching entry.
         assert result["llm_response"] is None
-        assert "NoneType" in result["error"]
+        assert "schema validation failed" in result["error"]
 
         stats = router.get_bandit_stats()
-        # Pull recorded, but no reward injection — FU12 must close this.
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_parsed_does_not_raise_or_fire_hook(self) -> None:
+        # Positive: a clean parse passes through with no hook fire.
+        parsed_ok = {
+            "raw": MagicMock(),
+            "parsed": MagicMock(archetype="rewrite", code="def f(): pass"),
+            "parsing_error": None,
+        }
+        router, _model = _bandit(ainvoke_return=parsed_ok)
+
+        agent = MutationAgent(
+            llm=router,
+            system_prompt="sys",
+            user_prompt_template="Mutate {count}:\n{parent_blocks}",
+            mutation_mode="rewrite",
+        )
+
+        state = {
+            "input": [_program()],
+            "mutation_mode": "rewrite",
+            "messages": [HumanMessage(content="hi")],
+            "llm_response": None,
+            "final_code": "",
+            "mutation_label": "",
+        }
+        result = await agent.acall_llm(state)  # type: ignore[arg-type]
+
+        assert result["llm_response"] is not None
+
+        stats = router.get_bandit_stats()
+        # Success defers to on_mutation_outcome; no immediate reward.
         assert stats["flaky"]["total_pulls"] == 1
         assert stats["flaky"]["window_size"] == 0
+
+    @pytest.mark.asyncio
+    async def test_parsed_none_without_error_passes_through(self) -> None:
+        # Negative: both parsed and parsing_error are None. Degenerate
+        # but legal langchain shape (caller asked for structured output
+        # but the model returned empty). Pass-through with parsed=None;
+        # no exception, no hook fire. The caller is responsible for
+        # handling None.
+        empty = {"raw": MagicMock(), "parsed": None, "parsing_error": None}
+        router, _model = _bandit(ainvoke_return=empty)
+
+        agent = MutationAgent(
+            llm=router,
+            system_prompt="sys",
+            user_prompt_template="Mutate {count}:\n{parent_blocks}",
+            mutation_mode="rewrite",
+        )
+
+        state = {
+            "input": [_program()],
+            "mutation_mode": "rewrite",
+            "messages": [HumanMessage(content="hi")],
+            "llm_response": None,
+            "final_code": "",
+            "mutation_label": "",
+        }
+        result = await agent.acall_llm(state)  # type: ignore[arg-type]
+
+        # Without a parsing_error, _process returns None. MutationAgent
+        # crashes on the subsequent attribute access and records its
+        # own error, but the bandit ledger semantics differ: this is
+        # not a parse-error path so no failure_hook fires from
+        # _StructuredOutputRouter; the agent's own try/except records
+        # the downstream attribute error.
+        assert result["llm_response"] is None
+        # The agent caught AttributeError on the None-returned parsed.
+        assert result["error"] is not None
