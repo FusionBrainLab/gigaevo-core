@@ -192,6 +192,42 @@ class TestDynamicBehaviorSpace:
         )
         assert space.calculate_optimized_bounds([]) == {}
 
+    # -- zero-range batches must not collapse the dimension --
+
+    def test_batch_optimize_small_nonzero_range_still_tightens(self):
+        """Tiny but non-zero range tightens normally; the guard fires only on
+        exact zero, not on numerically-small ranges."""
+        space = DynamicBehaviorSpace(
+            bins={"x": LinearBinning(min_val=0.0, max_val=100.0, num_bins=10)},
+            expansion_buffer_ratio=0.1,
+        )
+        bounds = space.calculate_optimized_bounds([{"x": 5.0}, {"x": 5.001}])
+        new_min, new_max = bounds["x"]
+        # obs_range=0.001, margin=0.0001; bounds should tighten well inside
+        # the initial [0, 100] range, not collapse to it or stay at default.
+        assert 0.0 < new_min < 5.0
+        assert 5.001 < new_max < 100.0
+
+    def test_batch_optimize_single_sample_keeps_strategy_bounds(self):
+        """One observation has zero range; tightening would shrink the
+        binning to a ~2e-5 window. Keep the strategy's current bounds."""
+        space = DynamicBehaviorSpace(
+            bins={"x": LinearBinning(min_val=0.0, max_val=100.0, num_bins=10)},
+            expansion_buffer_ratio=0.1,
+        )
+        bounds = space.calculate_optimized_bounds([{"x": 42.0}])
+        assert bounds["x"] == (0.0, 100.0)
+
+    def test_batch_optimize_all_equal_samples_keeps_strategy_bounds(self):
+        """Multiple samples all at the same value also have zero range; the
+        guard must hold and avoid the same collapse."""
+        space = DynamicBehaviorSpace(
+            bins={"x": LinearBinning(min_val=0.0, max_val=100.0, num_bins=10)},
+            expansion_buffer_ratio=0.1,
+        )
+        bounds = space.calculate_optimized_bounds([{"x": 7.0}, {"x": 7.0}, {"x": 7.0}])
+        assert bounds["x"] == (0.0, 100.0)
+
     def test_multi_dim_update(self):
         space = DynamicBehaviorSpace(
             bins={
@@ -223,15 +259,11 @@ class TestDynamicBehaviorSpace:
         assert space.bins["x"].max_val == max_after_first
 
     def test_batch_optimize_single_point(self):
-        """Single data point: bounds are tight around it (with margin)."""
+        """Single data point: bounds are NOT tightened — a zero-range batch
+        would collapse the dimension to ~2e-5 (see the zero-range guard)."""
         space = DynamicBehaviorSpace(
             bins={"x": LinearBinning(min_val=0.0, max_val=100.0, num_bins=10)},
             expansion_buffer_ratio=0.1,
         )
         bounds = space.calculate_optimized_bounds([{"x": 50.0}])
-        assert "x" in bounds
-        new_min, new_max = bounds["x"]
-        # obs_min == obs_max == 50, range=0, margin=1e-5
-        # new_min = max(0, 50-1e-5) ≈ 50; new_max = min(100, 50+1e-5) ≈ 50
-        assert new_min == pytest.approx(50.0, abs=1e-3)
-        assert new_max == pytest.approx(50.0, abs=1e-3)
+        assert bounds["x"] == (0.0, 100.0)
