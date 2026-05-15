@@ -39,3 +39,8 @@ class _DocstringRemover(ast.NodeTransformer):
             and isinstance(node.body[0].value.value, str)
         ):
             node.body.pop(0)
+            # Function/class bodies can't be empty; insert Pass so ast.unparse
+            # produces re-parseable code. Modules are allowed to be empty.
+            # copy_location keeps the tree compile()-able for downstream callers.
+            if not node.body and not isinstance(node, ast.Module):
+                node.body.append(ast.copy_location(ast.Pass(), node))
