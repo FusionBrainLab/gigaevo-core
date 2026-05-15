@@ -225,6 +225,32 @@ class TestCanonicalizeCode:
             result = LLMMutationOperator._canonicalize_code(code)
         assert result == code
 
+    def test_value_error_during_unparse_falls_back_to_original(self):
+        """ast.unparse can raise ValueError on malformed Constant trees;
+        the broadened except clause must catch it and return the input."""
+        from unittest.mock import patch
+
+        code = "def f():\n    return 1\n"
+        with patch(
+            "gigaevo.evolution.mutation.mutation_operator.ast.unparse",
+            side_effect=ValueError("synthetic"),
+        ):
+            result = LLMMutationOperator._canonicalize_code(code)
+        assert result == code
+
+    def test_recursion_error_during_unparse_falls_back_to_original(self):
+        """ast.unparse can hit RecursionError on deeply-nested trees; the
+        broadened except clause must catch it and return the input."""
+        from unittest.mock import patch
+
+        code = "def f():\n    return 1\n"
+        with patch(
+            "gigaevo.evolution.mutation.mutation_operator.ast.unparse",
+            side_effect=RecursionError(),
+        ):
+            result = LLMMutationOperator._canonicalize_code(code)
+        assert result == code
+
 
 # ---------------------------------------------------------------------------
 # TestOnProgramIngested

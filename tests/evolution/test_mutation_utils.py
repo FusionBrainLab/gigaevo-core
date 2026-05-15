@@ -138,3 +138,35 @@ def foo():
         ast.parse(result)
         assert "pass" not in result
         assert "return 1" in result
+
+    # -- edge cases for the empty-body Pass insertion --
+
+    def test_decorated_function_keeps_decorator_after_pass_insertion(self) -> None:
+        """Decorators survive when the body collapses to pass."""
+        code = '@my_decorator\ndef stub():\n    """doc"""\n'
+        result = _strip(code)
+        ast.parse(result)
+        assert "@my_decorator" in result
+        assert "pass" in result
+
+    def test_class_with_bases_keeps_bases_after_pass_insertion(self) -> None:
+        """Base classes and metaclass kwargs survive when body collapses."""
+        code = 'class Stub(Base, metaclass=Meta):\n    """doc"""\n'
+        result = _strip(code)
+        ast.parse(result)
+        assert "Base" in result
+        assert "metaclass=Meta" in result
+        assert "pass" in result
+
+    def test_non_string_first_expr_not_treated_as_docstring(self) -> None:
+        """A leading numeric/None/bytes expression is NOT a docstring;
+        body must be left untouched (no spurious Pass injection)."""
+        # Function whose first statement is the integer literal `1` (an Expr,
+        # but Constant.value is int — not a string). Must be preserved.
+        code = "def foo():\n    1\n    return 2\n"
+        result = _strip(code)
+        ast.parse(result)
+        assert "return 2" in result
+        # Body is non-empty even without our help, so no Pass should appear
+        # because the original body already had 2 statements.
+        assert "pass" not in result
