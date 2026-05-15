@@ -51,6 +51,16 @@ class NumericalComplexityVisitor(ast.NodeVisitor):
         self.condition_count += 1
         self.generic_visit(node)
 
+    def visit_Match(self, node):
+        # Each case branch is a discrete condition, mirroring how if/elif
+        # chains are counted (each If node contributes 1).
+        self.condition_count += len(node.cases)
+        self.generic_visit(node)
+
+    def visit_AsyncFor(self, node):
+        self.loop_count += 1
+        self.generic_visit(node)
+
     def visit_FunctionDef(self, node):
         self.function_def_count += 1
         self.generic_visit(node)
@@ -103,15 +113,11 @@ def compute_numerical_complexity(code_str: str) -> dict[str, int | float]:
         "unique_identifiers": len(visitor.identifiers),
         "max_depth": visitor.max_depth,
         "ast_entropy": float(entropy),
-        "total_nodes": int(
-            visitor.call_count
-            + visitor.binop_count
-            + visitor.subscript_count
-            + visitor.loop_count
-            + visitor.condition_count
-            + visitor.function_def_count
-            + visitor.class_def_count
-        ),
+        # total_nodes should be the size of the AST, not the sum of a small
+        # subset of visitor counts (which under-reported by ~5-10x for any
+        # non-trivial program). Reuse the ast.walk result already computed
+        # above for entropy.
+        "total_nodes": total_nodes,
     }
 
 
