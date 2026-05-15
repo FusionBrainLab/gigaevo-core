@@ -729,16 +729,12 @@ class TestSearchFallbackPaths:
 
     def test_http_200_non_json_raises(self):
         """_ConceptApiClient._request crashes on 200 with non-JSON body."""
-        import httpx
-
-        from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+        from tests.memory._fake_http import make_fake_response, make_mocked_client
 
         def handler(request):
-            return httpx.Response(200, text="<html>502 Bad Gateway</html>")
+            return make_fake_response(200, text="<html>502 Bad Gateway</html>")
 
-        transport = httpx.MockTransport(handler)
-        client = _ConceptApiClient.__new__(_ConceptApiClient)
-        client._http = httpx.Client(base_url="http://test:8000", transport=transport)
+        client = make_mocked_client(handler, base_url="http://test:8000")
 
         # BUG: raises json.JSONDecodeError, not RuntimeError
         with pytest.raises(Exception):  # JSONDecodeError or RuntimeError

@@ -1,46 +1,48 @@
 """HTTP client for the Memory API entity endpoints.
 
-Extracted from memory.py for cleaner modularity.
+Sync client backed by ``requests.Session`` over ``urllib3``'s connection
+pool. Retries on transient 5xx responses are configured inside
+``urllib3`` itself via :func:`gigaevo.infra.requests_factory.build_retry`
+so they happen before responses reach this module.
+
+Despite the class name, the client targets the newer Memory API entity
+model:
+- memory cards: ``/v1/memory-cards``
+- search: ``/v1/search/batch``
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import requests
 
 from gigaevo.exceptions import MemoryStorageError
+from gigaevo.infra.requests_factory import make_requests_session
 
 
 class _ConceptApiClient:
-    """Small HTTP client around Memory API entity endpoints.
-
-    NOTE: despite the class name, this client now targets the newer Memory API
-    entity model:
-    - memory cards: ``/v1/memory-cards``
-    - search: ``/v1/search/batch``
-    """
+    """Small HTTP client around Memory API entity endpoints."""
 
     def __init__(self, base_url: str, timeout: float = 30.0):
-        base = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=base, timeout=timeout)
+        self._base_url = base_url.rstrip("/")
+        self._http = make_requests_session("memory_api", timeout=timeout)
 
     def close(self) -> None:
         self._http.close()
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any] | None:
+        url = f"{self._base_url}{path}"
         try:
-            response = self._http.request(method, path, **kwargs)
-        except httpx.ConnectError as exc:
-            host = str(self._http.base_url).rstrip("/")
+            response = self._http.request(method, url, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
             raise MemoryStorageError(
-                f"Cannot connect to Memory API at {host}. "
+                f"Cannot connect to Memory API at {self._base_url}. "
                 "Start the API service or set MEMORY_API_URL to a reachable endpoint."
             ) from exc
-        except httpx.TimeoutException as exc:
-            host = str(self._http.base_url).rstrip("/")
+        except requests.exceptions.Timeout as exc:
             raise MemoryStorageError(
-                f"Memory API request timed out for {host}. "
+                f"Memory API request timed out for {self._base_url}. "
                 "Check service health and network connectivity."
             ) from exc
         if response.status_code == 204:

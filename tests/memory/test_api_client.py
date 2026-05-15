@@ -1,31 +1,30 @@
 """Tests for _ConceptApiClient HTTP wrapper and API-mode AmemGamMemory paths.
 
-All HTTP calls are mocked via httpx mock transport.
+All HTTP calls are routed through :mod:`tests.memory._fake_http`, a shim that
+patches the underlying ``requests.Session.request`` method.
 """
 
 import json
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
+import requests
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient  # noqa: F401
 from gigaevo.memory.shared_memory.utils import truncate_text
 from tests.fakes.agentic_memory import make_test_memory
+from tests.memory._fake_http import make_fake_response, make_mocked_client
 
 # ---------------------------------------------------------------------------
 # _ConceptApiClient
 # ---------------------------------------------------------------------------
 
 
-def _mock_client(responses):
+def _mock_client(handler):
     """Create a _ConceptApiClient with mocked HTTP transport."""
-    transport = httpx.MockTransport(responses)
-    client = _ConceptApiClient.__new__(_ConceptApiClient)
-    client._http = httpx.Client(base_url="http://test:8000", transport=transport)
-    return client
+    return make_mocked_client(handler, base_url="http://test:8000")
 
 
 class TestConceptApiClientSaveConcept:
@@ -33,7 +32,7 @@ class TestConceptApiClientSaveConcept:
         def handler(request):
             assert request.method == "POST"
             assert "/v1/memory-cards" in str(request.url)
-            return httpx.Response(200, json={"entity_id": "eid-1", "version_id": "v1"})
+            return make_fake_response(200, json={"entity_id": "eid-1", "version_id": "v1"})
 
         client = _mock_client(handler)
         result = client.save_concept(
@@ -51,7 +50,7 @@ class TestConceptApiClientSaveConcept:
         def handler(request):
             assert request.method == "PUT"
             assert "eid-1" in str(request.url)
-            return httpx.Response(200, json={"entity_id": "eid-1", "version_id": "v2"})
+            return make_fake_response(200, json={"entity_id": "eid-1", "version_id": "v2"})
 
         client = _mock_client(handler)
         result = client.save_concept(
@@ -70,7 +69,7 @@ class TestConceptApiClientSaveConcept:
 class TestConceptApiClientGetConcept:
     def test_success(self):
         def handler(request):
-            return httpx.Response(200, json={"content": {"description": "hello"}})
+            return make_fake_response(200, json={"content": {"description": "hello"}})
 
         client = _mock_client(handler)
         result = client.get_concept("eid-1")
@@ -78,7 +77,7 @@ class TestConceptApiClientGetConcept:
 
     def test_empty_response_raises(self):
         def handler(request):
-            return httpx.Response(204)
+            return make_fake_response(204)
 
         client = _mock_client(handler)
         with pytest.raises(MemoryStorageError, match="Unexpected empty response"):
@@ -88,7 +87,7 @@ class TestConceptApiClientGetConcept:
 class TestConceptApiClientListMemoryCards:
     def test_returns_list(self):
         def handler(request):
-            return httpx.Response(200, json=[{"entity_id": "e1"}, {"entity_id": "e2"}])
+            return make_fake_response(200, json=[{"entity_id": "e1"}, {"entity_id": "e2"}])
 
         client = _mock_client(handler)
         result = client.list_memory_cards(limit=10)
@@ -96,7 +95,7 @@ class TestConceptApiClientListMemoryCards:
 
     def test_non_list_returns_empty(self):
         def handler(request):
-            return httpx.Response(200, json={"error": "bad"})
+            return make_fake_response(200, json={"error": "bad"})
 
         client = _mock_client(handler)
         result = client.list_memory_cards(limit=10)
@@ -104,7 +103,7 @@ class TestConceptApiClientListMemoryCards:
 
     def test_filters_non_dicts(self):
         def handler(request):
-            return httpx.Response(200, json=[{"entity_id": "e1"}, "bad", None])
+            return make_fake_response(200, json=[{"entity_id": "e1"}, "bad", None])
 
         client = _mock_client(handler)
         result = client.list_memory_cards(limit=10)
@@ -116,7 +115,7 @@ class TestConceptApiClientSearchConcepts:
         def handler(request):
             body = json.loads(request.content)
             assert body["queries"] == ["test query"]
-            return httpx.Response(
+            return make_fake_response(
                 200, json={"results": [[{"entity_id": "e1", "score": 0.9}]]}
             )
 
@@ -126,13 +125,13 @@ class TestConceptApiClientSearchConcepts:
         assert result["hits"][0]["entity_id"] == "e1"
 
     def test_empty_query(self):
-        client = _mock_client(lambda r: httpx.Response(200, json={}))
+        client = _mock_client(lambda r: make_fake_response(200, json={}))
         result = client.search_concepts(query="", limit=5, namespace=None)
         assert result == {"hits": [], "total": 0}
 
     def test_no_results(self):
         def handler(request):
-            return httpx.Response(200, json={"results": []})
+            return make_fake_response(200, json={"results": []})
 
         client = _mock_client(handler)
         result = client.search_concepts(query="test", limit=5, namespace=None)
@@ -143,7 +142,7 @@ class TestConceptApiClientDeleteConcept:
     def test_success(self):
         def handler(request):
             assert request.method == "DELETE"
-            return httpx.Response(204)
+            return make_fake_response(204)
 
         client = _mock_client(handler)
         client.delete_concept("eid-1")  # Should not raise
@@ -152,7 +151,7 @@ class TestConceptApiClientDeleteConcept:
 class TestConceptApiClientErrors:
     def test_connect_error(self):
         def handler(request):
-            raise httpx.ConnectError("refused")
+            raise requests.exceptions.ConnectionError("refused")
 
         client = _mock_client(handler)
         with pytest.raises(MemoryStorageError, match="Cannot connect"):
@@ -168,7 +167,7 @@ class TestConceptApiClientErrors:
 
     def test_timeout_error(self):
         def handler(request):
-            raise httpx.TimeoutException("timed out")
+            raise requests.exceptions.Timeout("timed out")
 
         client = _mock_client(handler)
         with pytest.raises(MemoryStorageError, match="timed out"):
@@ -176,7 +175,7 @@ class TestConceptApiClientErrors:
 
     def test_http_400_raises(self):
         def handler(request):
-            return httpx.Response(400, text="Bad Request")
+            return make_fake_response(400, text="Bad Request")
 
         client = _mock_client(handler)
         with pytest.raises(MemoryStorageError, match="400"):
@@ -184,14 +183,14 @@ class TestConceptApiClientErrors:
 
     def test_http_500_raises(self):
         def handler(request):
-            return httpx.Response(500, text="Internal Server Error")
+            return make_fake_response(500, text="Internal Server Error")
 
         client = _mock_client(handler)
         with pytest.raises(MemoryStorageError, match="500"):
             client.get_concept("eid-1")
 
     def test_close(self):
-        client = _mock_client(lambda r: httpx.Response(200, json={}))
+        client = _mock_client(lambda r: make_fake_response(200, json={}))
         client.close()  # Should not raise
 
 
