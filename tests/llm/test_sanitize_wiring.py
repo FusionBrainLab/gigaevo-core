@@ -84,9 +84,16 @@ def _mock_model(name: str) -> MagicMock:
 class TestModelRouterLogSanitization:
     """Init banner and _verify_models warnings must never emit hostile bytes."""
 
-    def test_init_log_with_hostile_model_name(self, loguru_sink) -> None:
+    def test_init_log_with_hostile_model_name(
+        self, loguru_sink, monkeypatch
+    ) -> None:
         # Hostile bytes in model_name should be stripped by _safe_model_name
-        # before reaching the init INFO line.
+        # before reaching the init INFO line. Patch _verify_models out — this
+        # test is about the init banner, not the server probe; the real probe
+        # would otherwise spend ~10s timing out against the fake host.
+        monkeypatch.setattr(
+            MultiModelRouter, "_verify_models", lambda self: None
+        )
         models = [_mock_model(f"gpt-4{HOSTILE}"), _mock_model("gpt-3.5-turbo")]
         # base_url must be present so the second loop also fires; we use one
         # that contains userinfo, exercising _redact_url alongside sanitizing.
