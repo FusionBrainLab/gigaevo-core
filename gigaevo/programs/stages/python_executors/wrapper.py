@@ -41,10 +41,10 @@ from gigaevo.programs.stages.python_executors.exec_runner import (
 class ExecutorConfig:
     """Tunables for the loky-backed executor.
 
-    The defaults match the historical hand-rolled WorkerPool: no
+    Defaults match the historical hand-rolled WorkerPool: no
     preallocation (``max_workers=None`` → loky picks ``cpu_count()``),
-    a generous idle timeout so DAGs with bursty traffic keep workers warm,
-    and result spill to ``$TMPDIR`` (typically tmpfs).
+    a generous idle timeout so DAGs with bursty traffic keep workers
+    warm, and result spill to ``$TMPDIR`` (typically tmpfs).
     """
 
     max_workers: int | None = None
@@ -54,29 +54,24 @@ class ExecutorConfig:
     @classmethod
     def from_env(cls) -> ExecutorConfig:
         """Construct from ``GIGAEVO_EXECUTOR_*`` environment variables."""
+
+        def _pos_int(key: str, default: int | None) -> int | None:
+            raw = os.environ.get(key)
+            if not raw:
+                return default
+            try:
+                v = int(raw)
+            except ValueError:
+                return default
+            return v if v > 0 else default
+
+        idle = _pos_int("GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S", 300) or 300
+        spill = os.environ.get("GIGAEVO_EXECUTOR_SPILL_DIR")
         return cls(
-            max_workers=_env_int_or("GIGAEVO_EXECUTOR_MAX_WORKERS", None),
-            idle_timeout_s=_env_int_or("GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S", 300) or 300,
-            spill_dir=_env_path_or(
-                "GIGAEVO_EXECUTOR_SPILL_DIR", Path(tempfile.gettempdir())
-            ),
+            max_workers=_pos_int("GIGAEVO_EXECUTOR_MAX_WORKERS", None),
+            idle_timeout_s=idle,
+            spill_dir=Path(spill) if spill else Path(tempfile.gettempdir()),
         )
-
-
-def _env_int_or(key: str, default: int | None) -> int | None:
-    raw = os.environ.get(key)
-    if not raw:
-        return default
-    try:
-        v = int(raw)
-    except ValueError:
-        return default
-    return v if v > 0 else default
-
-
-def _env_path_or(key: str, default: Path) -> Path:
-    raw = os.environ.get(key)
-    return Path(raw) if raw else default
 
 
 _CONFIG: ExecutorConfig = ExecutorConfig.from_env()

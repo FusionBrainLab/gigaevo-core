@@ -222,7 +222,7 @@ def _scoped_env(updates: dict[str, str | None]):
             if v is _ENV_MISSING:
                 os.environ.pop(k, None)
             else:
-                os.environ[k] = v  # type: ignore[assignment]
+                os.environ[k] = v
 
 
 def _format_error(prefix_text: str, captured: str = "") -> str:
