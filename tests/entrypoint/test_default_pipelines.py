@@ -130,6 +130,21 @@ class TestPipelineBuilder:
 
         assert bp.nodes["S"] is factory2
 
+    def test_add_stage_duplicate_raises(self):
+        """Adding the same stage name twice via ``add_stage`` silently
+        shadowed the first factory — exactly the
+        ``StageRegistry.register`` collision pattern.  Now it raises so a
+        subclass copy-pasting a parent ``add_stage`` call fails loudly
+        instead of producing a working-but-wrong pipeline.  Operators that
+        intentionally swap must use ``replace_stage``."""
+        import pytest
+
+        ctx = _make_ctx()
+        builder = PipelineBuilder(ctx)
+        builder.add_stage("S", MagicMock())
+        with pytest.raises(ValueError, match="already registered"):
+            builder.add_stage("S", MagicMock())
+
     def test_remove_stage_cleans_edges_and_deps(self):
         ctx = _make_ctx()
         builder = PipelineBuilder(ctx)
@@ -407,6 +422,25 @@ class TestCMAOptPipelineBuilder:
         default_stages = set(default_bp.nodes.keys())
         assert default_stages.issubset(set(cma_bp.nodes.keys()))
 
+    def test_force_default_skips_context_when_inferred_contextual(self):
+        """``force='default'`` wins over auto-detected ``is_contextual=True``."""
+        ctx = _make_ctx(is_contextual=True)
+        bp = CMAOptPipelineBuilder(ctx, force="default").build_blueprint()
+        assert "AddContext" not in bp.nodes
+
+    def test_force_context_adds_context_when_inferred_non_contextual(self):
+        """``force='context'`` wins over auto-detected ``is_contextual=False``."""
+        ctx = _make_ctx(is_contextual=False)
+        bp = CMAOptPipelineBuilder(ctx, force="context").build_blueprint()
+        assert "AddContext" in bp.nodes
+
+    def test_force_invalid_raises(self):
+        import pytest
+
+        ctx = _make_ctx()
+        with pytest.raises(ValueError, match="must be 'context', 'default'"):
+            CMAOptPipelineBuilder(ctx, force="bogus")
+
 
 # ===================================================================
 # OptunaOptPipelineBuilder
@@ -483,6 +517,23 @@ class TestOptunaOptPipelineBuilder:
         builder = OptunaOptPipelineBuilder(ctx)
         bp = builder.build_blueprint()
         assert bp.dag_timeout == 7200.0
+
+    def test_force_default_skips_context_when_inferred_contextual(self):
+        ctx = _make_ctx(is_contextual=True)
+        bp = OptunaOptPipelineBuilder(ctx, force="default").build_blueprint()
+        assert "AddContext" not in bp.nodes
+
+    def test_force_context_adds_context_when_inferred_non_contextual(self):
+        ctx = _make_ctx(is_contextual=False)
+        bp = OptunaOptPipelineBuilder(ctx, force="context").build_blueprint()
+        assert "AddContext" in bp.nodes
+
+    def test_force_invalid_raises(self):
+        import pytest
+
+        ctx = _make_ctx()
+        with pytest.raises(ValueError, match="must be 'context', 'default'"):
+            OptunaOptPipelineBuilder(ctx, force="bogus")
 
     def test_optuna_stage_factory_is_callable(self):
         ctx = _make_ctx()
@@ -618,3 +669,41 @@ class TestPipelineBuilderEdgeCases:
         bp = builder.build_blueprint()
         assert bp.exec_order_deps is not None
         assert "A" in bp.exec_order_deps
+
+
+class TestDefaultDepsMergeNotOverwrite:
+    """``_contribute_default_deps`` previously assigned the whole ``_deps``
+    dict literal, silently wiping any deps a subclass had injected at the
+    top of its override.  Verify the merge keeps both."""
+
+    def test_subclass_dep_for_unrelated_stage_survives(self):
+        injected = ExecutionOrderDependency.on_success("Foo")
+
+        class _CustomBuilder(DefaultPipelineBuilder):
+            def _contribute_default_deps(self):
+                # Add a dep BEFORE calling super — old code's ``self._deps =``
+                # in the parent would wipe this.
+                self._deps.setdefault("MyCustomStage", []).append(injected)
+                super()._contribute_default_deps()
+
+        ctx = _make_ctx()
+        builder = _CustomBuilder(ctx)
+        assert "MyCustomStage" in builder._deps
+        assert injected in builder._deps["MyCustomStage"]
+        assert "CallProgramFunction" in builder._deps  # from defaults
+
+    def test_subclass_dep_for_default_stage_is_extended(self):
+        custom_dep = ExecutionOrderDependency.on_success("SomeOtherStage")
+
+        class _CustomBuilder(DefaultPipelineBuilder):
+            def _contribute_default_deps(self):
+                self._deps.setdefault("CallProgramFunction", []).append(custom_dep)
+                super()._contribute_default_deps()
+
+        ctx = _make_ctx()
+        builder = _CustomBuilder(ctx)
+        deps = builder._deps["CallProgramFunction"]
+        names = [d.stage_name for d in deps]
+        # Both the subclass's custom dep and the default's own dep coexist.
+        assert "SomeOtherStage" in names
+        assert "ValidateCodeStage" in names

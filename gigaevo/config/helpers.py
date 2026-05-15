@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 from gigaevo.entrypoint.default_pipelines import (
     ContextPipelineBuilder,
     DefaultPipelineBuilder,
+    _resolve_context_flag,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.evolution.strategies.map_elites import IslandConfig
@@ -161,9 +162,18 @@ def build_dag_from_builder(builder: Any) -> Any:
 def select_pipeline_builder(
     problem_context: ProblemContext,
     evolution_context: EvolutionContext,
+    *,
+    force: str | None = None,
 ) -> ContextPipelineBuilder | DefaultPipelineBuilder:
-    """Select appropriate pipeline builder based on problem type."""
-    if problem_context.is_contextual:
+    """Select appropriate pipeline builder based on problem type.
+
+    ``force`` lets an operator bypass the ``problem_context.is_contextual``
+    heuristic from the CLI / Hydra config (e.g.
+    ``+pipeline_builder.force=default`` or ``=context``) — useful when the
+    auto-detection doesn't match what the run actually needs.  Accepts
+    ``"context"``, ``"default"``, or ``None`` (auto, the default).
+    """
+    if _resolve_context_flag(force, problem_context.is_contextual):
         return ContextPipelineBuilder(evolution_context)
     return DefaultPipelineBuilder(evolution_context)
 
