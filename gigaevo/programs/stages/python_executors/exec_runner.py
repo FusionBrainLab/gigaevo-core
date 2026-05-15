@@ -11,8 +11,7 @@ tracebacks, and user-exception capture.
 
 from __future__ import annotations
 
-import contextlib
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout, suppress
 from dataclasses import dataclass, field
 import io
 import linecache
@@ -49,7 +48,6 @@ class WorkerError:
 
 
 def _register_source(filename: str, source: str) -> None:
-    """Inject *source* into linecache so tracebacks show the user's lines."""
     lines = source.splitlines(keepends=True)
     linecache.cache[filename] = (len(source), None, lines, filename)
 
@@ -65,38 +63,36 @@ def _load_module_from_code(
     return mod
 
 
-def _prepend_sys_path(paths: list[str]) -> None:
-    """Insert each *path* at the head of ``sys.path``, deduplicating by
-    resolved location.  Order of the input list is preserved at the front
-    (left-most wins after iteration)."""
+def _prepend_sys_path(paths: list[str] | None) -> None:
     if not paths:
         return
-    resolved_cache: list[tuple[str, str]] = []
+    normalized_existing: list[tuple[str, str]] = []
     for entry in sys.path:
         try:
-            resolved_cache.append((entry, str(Path(entry).resolve())))
+            normalized_existing.append((entry, str(Path(entry).resolve())))
         except OSError:
-            resolved_cache.append((entry, entry))
+            normalized_existing.append((entry, entry))
 
     for raw_path in reversed(paths):
         if not raw_path:
             continue
         resolved = str(Path(raw_path).resolve())
         sys.path[:] = [
-            entry for entry, normalized in resolved_cache if normalized != resolved
+            entry for entry, normalized in normalized_existing if normalized != resolved
         ]
         sys.path.insert(0, resolved)
-        resolved_cache = []
+        normalized_existing = []
         for entry in sys.path:
             try:
-                resolved_cache.append((entry, str(Path(entry).resolve())))
+                normalized_existing.append((entry, str(Path(entry).resolve())))
             except OSError:
-                resolved_cache.append((entry, entry))
+                normalized_existing.append((entry, entry))
 
 
 def _iter_top_level_module_names(path: Path) -> set[str]:
     if not path.is_dir():
         return set()
+
     names: set[str] = set()
     for child in path.iterdir():
         if child.name == "__pycache__":
@@ -122,20 +118,21 @@ def _module_belongs_to_path(module: types.ModuleType, path: Path, name: str) -> 
     module_file = _module_file_path(module)
     if module_file is None:
         return False
+
+    file_candidate = path / f"{name}.py"
+    package_candidate = path / name / "__init__.py"
     candidates = [
         candidate.resolve()
-        for candidate in (path / f"{name}.py", path / name / "__init__.py")
+        for candidate in (file_candidate, package_candidate)
         if candidate.exists()
     ]
     return module_file in candidates
 
 
-def _clear_shadowed_top_level_modules(paths: list[str]) -> None:
-    """Drop ``sys.modules`` entries that a freshly-prepended *paths* would
-    shadow.  Without this, a long-lived worker keeps the first-loaded
-    version of a top-level module even after the project root changes."""
+def _clear_shadowed_top_level_modules(paths: list[str] | None) -> None:
     if not paths:
         return
+
     for raw_path in paths:
         if not raw_path:
             continue
@@ -156,13 +153,13 @@ def _ensure_cwd_in_path() -> None:
 
 
 def _write_code_context(tb: BaseException, *, out: io.TextIOBase) -> None:
-    """Append a ±3-line excerpt of the user's source around the failing line."""
     try:
         extracted = traceback.extract_tb(tb.__traceback__)
         user_frames = [f for f in extracted if f.filename == _CODE_FILENAME]
         if not user_frames:
             return
-        lineno = user_frames[-1].lineno
+        last = user_frames[-1]
+        lineno = last.lineno
         lines = linecache.getlines(_CODE_FILENAME)
         if not lines or lineno is None:
             return
@@ -294,5 +291,5 @@ def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
     finally:
         sys.path[:] = sys_path_before
         if cwd_before is not None:
-            with contextlib.suppress(OSError):
+            with suppress(OSError):
                 os.chdir(cwd_before)

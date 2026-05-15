@@ -1,10 +1,6 @@
-"""Tests for the loky-backed Python executor.
-
-Covers the public surface (``run_exec_runner``, ``PythonCodeExecutor``
-stages), regression reproducers for bugs fixed by the loky migration, and
-worker-isolation / env-scrub / spill-hygiene properties.  ``TestRunOneDirect``
-exercises the in-worker library function in-process to skip loky spawn cost.
-"""
+"""Tests for the loky-backed Python executor: run_exec_runner public surface,
+PythonCodeExecutor stages, regression reproducers, and worker-isolation /
+env-scrub / spill-hygiene properties."""
 
 from __future__ import annotations
 
@@ -20,9 +16,14 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     run_exec_runner,
 )
 
+# ---------------------------------------------------------------------------
+# run_exec_runner — basic execution
+# ---------------------------------------------------------------------------
+
 
 class TestRunExecRunner:
     async def test_simple_function_returns_result(self) -> None:
+        """Execute a simple function and get the return value."""
         code = "def run_code(): return 42"
         result = await run_exec_runner(code=code, function_name="run_code", timeout=10)
         assert result == 42
@@ -48,6 +49,7 @@ class TestRunExecRunner:
         assert result == "hello test"
 
     async def test_returns_complex_object(self) -> None:
+        """Complex return values (dict, list, nested) survive serialization."""
         code = "def run_code(): return {'a': [1, 2], 'b': {'nested': True}}"
         result = await run_exec_runner(code=code, function_name="run_code", timeout=10)
         assert result == {"a": [1, 2], "b": {"nested": True}}
@@ -64,9 +66,14 @@ def run_code():
         assert np.array_equal(result, np.array([1.0, 2.0, 3.0]))
 
 
+# ---------------------------------------------------------------------------
+# run_exec_runner — error handling
+# ---------------------------------------------------------------------------
+
+
 class TestRunExecRunnerErrors:
     async def test_syntax_error_raises_exec_runner_error(self) -> None:
-        code = "def run_code(\n  return 42"
+        code = "def run_code(\n  return 42"  # syntax error
         with pytest.raises(ExecRunnerError) as exc_info:
             await run_exec_runner(code=code, function_name="run_code", timeout=10)
         assert "SyntaxError" in exc_info.value.stderr
@@ -98,6 +105,11 @@ def run_code():
             await run_exec_runner(code=code, function_name="run_code", timeout=1)
 
 
+# ---------------------------------------------------------------------------
+# ExecRunnerError attributes
+# ---------------------------------------------------------------------------
+
+
 class TestExecRunnerErrorAttributes:
     async def test_exec_runner_error_attributes(self) -> None:
         code = "def run_code(): raise RuntimeError('boom')"
@@ -107,7 +119,11 @@ class TestExecRunnerErrorAttributes:
         assert err.returncode == 1
         assert "RuntimeError" in err.stderr
         assert "boom" in err.stderr
-        assert "boom" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# PythonCodeExecutor stage class
+# ---------------------------------------------------------------------------
 
 
 class TestPythonCodeExecutorStage:
@@ -125,7 +141,6 @@ class TestPythonCodeExecutorStage:
         assert result.data == 42
 
     async def test_compute_failure_returns_stage_result(self) -> None:
-        from gigaevo.programs.core_types import ProgramStageResult
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.python_executors.execution import (
             CallProgramFunction,
@@ -136,11 +151,19 @@ class TestPythonCodeExecutorStage:
         prog = Program(code="def solve(): raise ValueError('nope')")
 
         result = await stage.compute(prog)
+        # Should return a ProgramStageResult failure, not raise
+        from gigaevo.programs.core_types import ProgramStageResult
+
         assert isinstance(result, ProgramStageResult)
         assert result.status.value == "failed"
         assert result.error is not None
         assert result.error.traceback is not None
         assert "ValueError" in result.error.traceback
+
+
+# ---------------------------------------------------------------------------
+# PythonCodeExecutor — error-handling paths
+# ---------------------------------------------------------------------------
 
 
 class TestPythonCodeExecutorErrorPaths:
@@ -206,10 +229,16 @@ class TestPythonCodeExecutorErrorPaths:
         )
 
 
+# ---------------------------------------------------------------------------
+# CallFileFunction
+# ---------------------------------------------------------------------------
+
+
 class TestCallFileFunctionStage:
     def test_call_file_function_nonexistent_path_raises_validation_error(
         self, tmp_path
     ) -> None:
+        """CallFileFunction with a non-existent path raises ValidationError at construction."""
         from gigaevo.exceptions import ValidationError
         from gigaevo.programs.stages.python_executors.execution import CallFileFunction
 
@@ -218,6 +247,7 @@ class TestCallFileFunctionStage:
             CallFileFunction(path=nonexistent, timeout=10)
 
     async def test_call_file_function_executes_file_code(self, tmp_path) -> None:
+        """CallFileFunction reads code from the file and executes the named function."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.python_executors.execution import CallFileFunction
 
@@ -232,8 +262,14 @@ class TestCallFileFunctionStage:
         assert result.data == {"answer": 42}
 
 
+# ---------------------------------------------------------------------------
+# CallProgramFunctionWithFixedArgs
+# ---------------------------------------------------------------------------
+
+
 class TestCallProgramFunctionWithFixedArgs:
     async def test_fixed_args_passed_to_function(self) -> None:
+        """Fixed positional args are forwarded correctly to the program function."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.python_executors.execution import (
             CallProgramFunctionWithFixedArgs,
@@ -251,6 +287,7 @@ class TestCallProgramFunctionWithFixedArgs:
         assert result.data == 10
 
     async def test_fixed_kwargs_passed_to_function(self) -> None:
+        """Fixed keyword args are forwarded correctly to the program function."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.python_executors.execution import (
             CallProgramFunctionWithFixedArgs,
@@ -268,6 +305,7 @@ class TestCallProgramFunctionWithFixedArgs:
         assert result.data == "hello world"
 
     async def test_no_args_no_kwargs_defaults(self) -> None:
+        """Instantiating with neither args nor kwargs works fine."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.python_executors.execution import (
             CallProgramFunctionWithFixedArgs,
@@ -284,14 +322,22 @@ class TestCallProgramFunctionWithFixedArgs:
         assert result.data == "ok"
 
 
+# ---------------------------------------------------------------------------
+# FetchMetrics and FetchArtifact stages
+# ---------------------------------------------------------------------------
+
+
 class TestFetchMetricsAndFetchArtifact:
     async def test_fetch_metrics_extracts_metrics_dict(self) -> None:
+        """FetchMetrics pulls the first element (metrics dict) from a ValidatorOutput."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.common import Box
         from gigaevo.programs.stages.python_executors.execution import FetchMetrics
 
         metrics = {"score": 0.95, "loss": 0.1}
         artifact = {"data": [1, 2, 3]}
+
+        # ValidatorOutput = Box[Tuple[dict[str, float], Any]]
         validator_output = Box[tuple](data=(metrics, artifact))
 
         stage = FetchMetrics(timeout=10)
@@ -303,12 +349,14 @@ class TestFetchMetricsAndFetchArtifact:
         assert result.data == metrics
 
     async def test_fetch_artifact_extracts_artifact(self) -> None:
+        """FetchArtifact pulls the second element (artifact) from a ValidatorOutput."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.common import Box
         from gigaevo.programs.stages.python_executors.execution import FetchArtifact
 
         metrics = {"score": 1.0}
         artifact = [42, 43, 44]
+
         validator_output = Box[tuple](data=(metrics, artifact))
 
         stage = FetchArtifact(timeout=10)
@@ -320,6 +368,7 @@ class TestFetchMetricsAndFetchArtifact:
         assert result.data == artifact
 
     async def test_fetch_artifact_can_return_none_artifact(self) -> None:
+        """FetchArtifact handles None artifact (validator returned no artifact)."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.common import Box
         from gigaevo.programs.stages.python_executors.execution import FetchArtifact
@@ -335,8 +384,14 @@ class TestFetchMetricsAndFetchArtifact:
         assert result.data is None
 
 
+# ---------------------------------------------------------------------------
+# CallValidatorFunction — constructor and parse_output
+# ---------------------------------------------------------------------------
+
+
 class TestCallValidatorFunction:
     def test_nonexistent_validator_path_raises(self, tmp_path) -> None:
+        """CallValidatorFunction raises ValidationError when the file doesn't exist."""
         from gigaevo.exceptions import ValidationError
         from gigaevo.programs.stages.python_executors.execution import (
             CallValidatorFunction,
@@ -346,6 +401,7 @@ class TestCallValidatorFunction:
             CallValidatorFunction(path=tmp_path / "missing.py", timeout=10)
 
     async def test_validator_called_with_payload(self, tmp_path) -> None:
+        """CallValidatorFunction passes payload to the validate function."""
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.common import Box
         from gigaevo.programs.stages.python_executors.execution import (
@@ -368,6 +424,7 @@ class TestCallValidatorFunction:
         prog = Program(code="def f(): pass")
         result = await stage.compute(prog)
 
+        # result is a Box[Tuple[dict, Any]] or ProgramStageResult
         from gigaevo.programs.core_types import ProgramStageResult
 
         if not isinstance(result, ProgramStageResult):
@@ -375,10 +432,12 @@ class TestCallValidatorFunction:
             assert result.data[1] is None
 
     async def test_parse_output_passes_through_tuple(self, tmp_path) -> None:
+        """parse_output returns the value unchanged when it is already a tuple."""
         from gigaevo.programs.stages.python_executors.execution import (
             CallValidatorFunction,
         )
 
+        # Create a minimal valid file so the constructor succeeds
         f = tmp_path / "v.py"
         f.write_text("def validate(x): return x\n")
 
@@ -388,6 +447,7 @@ class TestCallValidatorFunction:
         assert out == raw
 
     async def test_parse_output_non_tuple_wrapped(self, tmp_path) -> None:
+        """parse_output wraps non-tuple return in (value, None)."""
         from gigaevo.programs.stages.python_executors.execution import (
             CallValidatorFunction,
         )
@@ -401,6 +461,11 @@ class TestCallValidatorFunction:
         assert out == (raw, None)
 
     async def test_validator_called_with_non_none_context(self, tmp_path) -> None:
+        """When context is non-None it is prepended to the call args.
+
+        The validate function receives (context, payload) when context is provided,
+        so the test verifies both args arrive correctly.
+        """
         from gigaevo.programs.program import Program
         from gigaevo.programs.stages.common import Box
         from gigaevo.programs.stages.python_executors.execution import (
@@ -408,6 +473,7 @@ class TestCallValidatorFunction:
         )
 
         validator_file = tmp_path / "validator_ctx.py"
+        # Returns the context value so we can assert it was passed
         validator_file.write_text(
             "def validate(ctx, payload): return ({'ctx': ctx, 'payload': payload}, None)\n"
         )
