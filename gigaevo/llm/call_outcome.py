@@ -136,7 +136,10 @@ from pydantic import BaseModel, ConfigDict, Field
 class LLMCallOutcome(StrEnum):
     """Terminal outcome of one LLM call attempt. Exhaustive over the failure
     modes the router stack currently observes against openai 2.x,
-    httpx 0.28.x, langchain-openai 1.2.x, langchain-core 1.4.x."""
+    httpx 0.28.x, langchain-openai 1.2.x, langchain-core 1.4.x, and
+    litellm 1.x (rule tables include the litellm class names that do not
+    inherit a known base — see ``_CONTEXT_OVERFLOW_MRO_NAMES`` and
+    ``_CONTENT_FILTER_MRO_NAMES`` comments)."""
 
     SUCCESS = "success"
     RATE_LIMITED = "rate_limited"
@@ -292,16 +295,21 @@ _STATUS_TO_OUTCOME: Final[Mapping[int, LLMCallOutcome]] = MappingProxyType(
     }
 )
 
-# Context-overflow-specific exception class names (openai + langchain-core).
+# Context-overflow-specific exception class names (openai + langchain-core + litellm).
 # Verified MROs:
 #   OpenAIContextOverflowError      → BadRequestError → APIStatusError → ContextOverflowError
 #   OpenAIAPIContextOverflowError   → APIError → ContextOverflowError
 #   ContextOverflowError            → LangChainException
+#   litellm.ContextWindowExceededError → BadRequestError → APIStatusError (status_code=400)
+#     — litellm does NOT inherit from langchain's ContextOverflowError, so the
+#     class name must appear here explicitly; otherwise the 400 status would
+#     misclassify as BAD_REQUEST.
 _CONTEXT_OVERFLOW_MRO_NAMES: Final[frozenset[str]] = frozenset(
     {
         "ContextOverflowError",  # langchain_core base
         "OpenAIContextOverflowError",  # langchain-openai
         "OpenAIAPIContextOverflowError",  # langchain-openai
+        "ContextWindowExceededError",  # litellm
     }
 )
 
@@ -317,11 +325,15 @@ _OUTPUT_TRUNCATED_MRO_NAMES: Final[frozenset[str]] = frozenset(
 #   OpenAIRefusalError                 → Exception
 #   OpenAIModerationError              → RuntimeError
 #   ContentFilterFinishReasonError     → OpenAIError
+#   litellm.ContentPolicyViolationError → BadRequestError (status_code=400)
+#     — provider-side refusal surfaced as a 400; without this entry it would
+#     fall through to BAD_REQUEST and lose the "arm-level refusal" signal.
 _CONTENT_FILTER_MRO_NAMES: Final[frozenset[str]] = frozenset(
     {
         "OpenAIRefusalError",
         "OpenAIModerationError",
         "ContentFilterFinishReasonError",
+        "ContentPolicyViolationError",  # litellm
     }
 )
 
@@ -419,17 +431,59 @@ class LLMCallResult(BaseModel):
     that telemetry and the bandit can rely on without defensive copying.
 
     Field semantics:
-        ``outcome``              classified outcome
-        ``exception_class``      ``type(exc).__name__`` of the surface exception
-        ``exception_module``     full module path of the surface exception
-        ``http_status``          status code recovered from the exception, if any
+        ``outcome``              classified outcome (exhaustive over
+                                 ``LLMCallOutcome``)
+        ``exception_class``      ``type(exc).__name__`` of the surface
+                                 exception. ``None`` only when ``outcome
+                                 is SUCCESS``.
+        ``exception_module``     full module path of the surface exception.
+                                 ``None`` only when ``outcome is SUCCESS`` or
+                                 ``__module__`` could not be coerced to ``str``.
+        ``http_status``          status code recovered from the exception, if
+                                 any. ``None`` means "no status was present on
+                                 the exception" — NOT "status was zero".
         ``retry_after_seconds``  Retry-After header value when the response
-                                 carries one and the parse succeeds
+                                 carries one and the parse succeeds. Three
+                                 distinct values:
+                                   * ``None`` — header absent / malformed /
+                                     non-finite / above the 24-hour cap; PR-B
+                                     callers should treat this as "no hint,
+                                     use default backoff".
+                                   * ``0.0`` — header present and equal to
+                                     zero; provider explicitly said "retry
+                                     immediately". PR-B callers MUST NOT
+                                     conflate this with ``None``.
+                                   * positive float — recommended sleep in
+                                     seconds, bounded by ``[0.0, 86400.0]``.
         ``message``              ``str(exc)`` (or ``None`` when ``__str__``
-                                 raises or returns empty)
-        ``cause_chain``          tuple of class names walked through
-                                 ``__cause__`` / ``__context__`` (cycle-bounded)
-        ``model_name``           the bandit arm associated with this call
+                                 raises or returns empty). UTF-16 surrogates
+                                 are scrubbed to ``U+FFFD`` so the field is
+                                 always safe for ``model_dump_json`` and
+                                 downstream JSON consumers (langfuse, tracker
+                                 writes).
+        ``cause_chain``          Tuple of class names walked through
+                                 ``__cause__`` / ``__context__`` with cycle
+                                 protection. Index ``0`` is the SURFACE
+                                 exception's class name; index ``1``+ are
+                                 (cause OR context, cause preferred) frames
+                                 walked from the surface outward. The tuple
+                                 is non-empty for every failure outcome and
+                                 empty only for ``SUCCESS``.
+        ``model_name``           Bandit-arm name attached by the caller for
+                                 telemetry. Never inspected by the classifier
+                                 — PR-B passes the routed model identifier
+                                 here so the result can be correlated with
+                                 the arm that produced it.
+
+    PR-B integration contract:
+        Callers wrap an LLM call in ``try``/``except BaseException``, pass
+        the caught exception (or ``None`` on success) to
+        ``classify_call_result``, then branch on ``result.action``:
+        ``DEFER_TO_OUTCOME`` (success — reward arrives via
+        ``on_mutation_outcome``) versus ``INJECT_ZERO_REWARD`` (any
+        failure). For retry / backoff decisions, callers branch on
+        ``result.outcome`` (rate-limited vs auth-failed vs parse-failed
+        all differ) and use ``result.retry_after_seconds`` when set.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -504,13 +558,23 @@ def classify_call_result(
 def _iter_cause_chain(exc: BaseException) -> Iterator[BaseException]:
     """Yield ``exc`` and walk ``__cause__`` / ``__context__`` with cycle
     protection. ``__cause__`` wins over ``__context__`` (explicit
-    ``raise X from Y`` is more informative than the implicit context)."""
+    ``raise X from Y`` is more informative than the implicit context).
+
+    ``__cause__`` / ``__context__`` are normally C-level slots on
+    ``BaseException``, but a subclass may override them with a descriptor
+    that raises (legal Python). Access is funnelled through
+    ``_safe_getattr`` so a hostile property cannot break classifier
+    totality. A non-BaseException value (reachable via property overrides
+    that return arbitrary objects) terminates the walk rather than
+    poisoning the cycle-detection set."""
     seen: set[int] = set()
     cur: BaseException | None = exc
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
         yield cur
-        cur = cur.__cause__ if cur.__cause__ is not None else cur.__context__
+        cause = _safe_getattr(cur, "__cause__")
+        nxt = cause if cause is not None else _safe_getattr(cur, "__context__")
+        cur = nxt if isinstance(nxt, BaseException) else None
 
 
 def _walk_and_classify(exc: BaseException) -> LLMCallOutcome:
@@ -582,8 +646,21 @@ def _classify_one(exc: BaseException) -> LLMCallOutcome:
 
 
 def _mro_class_names(exc: BaseException) -> frozenset[str]:
-    """Names of every class in the exception's MRO, frozen for set ops."""
-    return frozenset(cls.__name__ for cls in type(exc).__mro__)
+    """Names of every class in the exception's MRO, frozen for set ops.
+
+    A metaclass may override ``__mro__`` with a property that raises
+    (legal Python). The classifier's totality contract forbids letting
+    that propagate, so the access is wrapped and a hostile MRO collapses
+    to an empty fingerprint set — every MRO-based branch in
+    ``_classify_one`` then naturally skips, and the exception falls
+    through to the status-code / isinstance / OTHER paths."""
+    mro: object = _safe_getattr(type(exc), "__mro__")
+    if mro is None:
+        return frozenset()
+    try:
+        return frozenset(cls.__name__ for cls in mro)  # type: ignore[union-attr]
+    except Exception:
+        return frozenset()
 
 
 def _safe_str_attr(obj: object, attr: str) -> str | None:

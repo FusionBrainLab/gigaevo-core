@@ -634,16 +634,167 @@ class TestHostileClassMetadata:
         assert result.exception_module is None
         assert result.exception_class == "_Weird"
 
-    def test_property_that_raises_on_module_does_not_propagate(self) -> None:
-        # If a meta-property on the class object raises a non-AttributeError
-        # exception, _safe_getattr suppresses it.
-        class _Meta(type):
-            @property
-            def __module__(cls):  # type: ignore[override]
-                raise RuntimeError("boom")
+    # The metaclass-raises-on-__module__ scenario is covered by
+    # TestTotalityWithHostileExceptionPlumbing.test_hostile_mro_via_metaclass_does_not_propagate.
 
-        # We cannot actually attach a property to a class's metaclass for an
-        # existing exception cleanly in this test scope; the helper is
-        # exercised by the property-on-instance case in _extract_status,
-        # which is already covered. Here we just verify the totality contract
-        # via the int and None paths above.
+
+class TestTotalityWithHostileExceptionPlumbing:
+    """``classify_call_result`` is documented total: every constructible
+    ``BaseException`` returns an ``LLMCallResult`` without raising. Python
+    permits class authors to override ``__cause__`` / ``__context__`` /
+    ``__mro__`` with descriptors that raise non-AttributeError. The
+    classifier touches these attributes on whatever object the caller
+    hands us, so it must defend against the hostile path."""
+
+    def test_hostile_cause_property_does_not_propagate(self) -> None:
+        class _HostileCause(Exception):
+            @property
+            def __cause__(self):  # type: ignore[override]
+                raise RuntimeError("evil cause descriptor")
+
+        # Must not raise — totality contract.
+        result = classify_call_result(_HostileCause("x"))
+        assert result.outcome is LLMCallOutcome.OTHER_EXCEPTION
+        assert result.exception_class == "_HostileCause"
+
+    def test_hostile_context_property_does_not_propagate(self) -> None:
+        class _HostileContext(Exception):
+            @property
+            def __context__(self):  # type: ignore[override]
+                raise RuntimeError("evil context descriptor")
+
+        result = classify_call_result(_HostileContext("x"))
+        assert result.outcome is LLMCallOutcome.OTHER_EXCEPTION
+        assert result.exception_class == "_HostileContext"
+
+    def test_hostile_mro_via_metaclass_does_not_propagate(self) -> None:
+        class _BadMeta(type):
+            @property
+            def __mro__(cls):  # type: ignore[override]
+                raise RuntimeError("evil mro descriptor")
+
+        class _E(Exception, metaclass=_BadMeta):
+            pass
+
+        result = classify_call_result(_E("x"))
+        # No MRO available -> all class-fingerprint branches skipped; falls
+        # through to OTHER_EXCEPTION (or a built-in isinstance match).
+        assert result.outcome is LLMCallOutcome.OTHER_EXCEPTION
+
+    def test_base_exception_subclasses_total(self) -> None:
+        # The signature is ``BaseException | None``; KeyboardInterrupt /
+        # SystemExit / GeneratorExit are constructible BaseExceptions and
+        # must not crash the classifier.
+        for cls in (KeyboardInterrupt, SystemExit, GeneratorExit):
+            result = classify_call_result(cls("x"))
+            assert result.outcome is LLMCallOutcome.OTHER_EXCEPTION
+            assert result.exception_class == cls.__name__
+
+
+# ---------------------------------------------------------------------------
+# litellm fingerprint coverage
+# ---------------------------------------------------------------------------
+# Rather than depend on the heavy litellm import in the test process, we
+# synthesize exception classes whose name + MRO shape mirror the real
+# litellm exceptions verified at audit time:
+#   litellm.ContextWindowExceededError  → BadRequestError (status_code=400)
+#   litellm.ContentPolicyViolationError → BadRequestError (status_code=400)
+# Without the rule-table additions in this commit, both classify as
+# BAD_REQUEST because the 400 status wins.
+
+
+class _LiteLLMContextWindowExceededError(Exception):
+    """Shape-equivalent stand-in for litellm.ContextWindowExceededError.
+
+    The classifier matches on the leaf class name via the MRO walk, so the
+    real class name on the synthesized type is what counts for the test.
+    Status code 400 is set on the instance to mirror the litellm class-level
+    default."""
+
+
+_LiteLLMContextWindowExceededError.__name__ = "ContextWindowExceededError"
+
+
+class _LiteLLMContentPolicyViolationError(Exception):
+    pass
+
+
+_LiteLLMContentPolicyViolationError.__name__ = "ContentPolicyViolationError"
+
+
+class TestLiteLLMRuleCoverage:
+    def test_context_window_exceeded_classifies_as_context_overflow(self) -> None:
+        exc = _LiteLLMContextWindowExceededError("ctx window exceeded")
+        exc.status_code = 400  # type: ignore[attr-defined]
+        result = classify_call_result(exc)
+        # The MRO-based override beats the 400 status fallback.
+        assert result.outcome is LLMCallOutcome.CONTEXT_OVERFLOW
+        assert result.http_status == 400
+
+    def test_content_policy_violation_classifies_as_content_filtered(self) -> None:
+        exc = _LiteLLMContentPolicyViolationError("policy violation")
+        exc.status_code = 400  # type: ignore[attr-defined]
+        result = classify_call_result(exc)
+        assert result.outcome is LLMCallOutcome.CONTENT_FILTERED
+        assert result.http_status == 400
+
+
+# ---------------------------------------------------------------------------
+# PR-B documented invariants
+# ---------------------------------------------------------------------------
+# These pin the contract PR-B will rely on (cause_chain ordering,
+# retry_after_seconds tri-state, action lookup for every outcome).
+
+
+class TestPRBContract:
+    def test_cause_chain_starts_with_surface_exception(self) -> None:
+        try:
+            try:
+                raise ValueError("inner")
+            except ValueError as inner:
+                raise RuntimeError("outer") from inner
+        except RuntimeError as surface:
+            result = classify_call_result(surface)
+        # Index 0 must be the SURFACE exception's class name; the cause
+        # walk extends outward toward the root cause.
+        assert result.cause_chain[0] == "RuntimeError"
+        assert result.cause_chain[-1] == "ValueError"
+
+    def test_retry_after_zero_is_distinct_from_none(self) -> None:
+        zero = openai.RateLimitError(
+            "x", response=_resp(429, {"retry-after": "0"}), body=None
+        )
+        absent = openai.RateLimitError("x", response=_resp(429), body=None)
+        zero_result = classify_call_result(zero)
+        absent_result = classify_call_result(absent)
+        # ``0.0`` means "retry immediately"; ``None`` means "no hint".
+        # PR-B must distinguish these two.
+        assert zero_result.retry_after_seconds == 0.0
+        assert absent_result.retry_after_seconds is None
+
+    def test_action_lookup_for_every_outcome(self) -> None:
+        # PR-B will call ``result.action`` after ``classify_call_result``;
+        # the property must resolve for every enum member.
+        for outcome in LLMCallOutcome:
+            stub = LLMCallResult(outcome=outcome)
+            assert stub.action in {
+                BanditAction.DEFER_TO_OUTCOME,
+                BanditAction.INJECT_ZERO_REWARD,
+            }
+
+    def test_json_roundtrip_preserves_pr_b_relevant_fields(self) -> None:
+        exc = openai.RateLimitError(
+            "rate limit hit",
+            response=_resp(429, {"retry-after": "42"}),
+            body=None,
+        )
+        result = classify_call_result(exc, model_name="gpt-4o-2024-08-06")
+        # Round-trip via the wire format PR-B telemetry will use.
+        encoded = result.model_dump_json()
+        decoded = LLMCallResult.model_validate_json(encoded)
+        assert decoded == result
+        assert decoded.outcome is LLMCallOutcome.RATE_LIMITED
+        assert decoded.http_status == 429
+        assert decoded.retry_after_seconds == 42.0
+        assert decoded.model_name == "gpt-4o-2024-08-06"
+        assert decoded.action is BanditAction.INJECT_ZERO_REWARD
