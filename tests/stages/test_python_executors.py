@@ -650,6 +650,78 @@ class TestEnvScrubbing:
         )
         assert seen == "abc-123"
 
+    @pytest.mark.parametrize(
+        "secret_key",
+        [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GCP_PROJECT",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "LANGFUSE_SECRET_KEY",
+            "WANDB_API_KEY",
+            "HF_TOKEN",
+            "STRIPE_SECRET_KEY",
+            "SUPABASE_SERVICE_ROLE_KEY",
+        ],
+    )
+    async def test_well_known_secret_env_vars_scrubbed(
+        self, monkeypatch, fresh_executor, secret_key: str
+    ) -> None:
+        """None of the standard cloud/SaaS secret env vars should reach
+        the worker.  Locked in via parametrize so a future whitelist
+        edit that accidentally adds one of these trips this test."""
+        monkeypatch.setenv(secret_key, "should-not-leak")
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                f"def f(): return os.environ.get({secret_key!r})\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert seen is None, f"{secret_key} leaked to worker"
+
+
+# =============================================================================
+# Spill directory hardening
+# =============================================================================
+
+
+class TestSpillDirHardening:
+    """The default spill directory should not be a bare ``$TMPDIR``
+    (mixing with other users' tempfiles leaks workload metadata via
+    directory listing).  Operator-supplied paths must be resolved so
+    ``..`` segments don't smuggle traversal through innocuous parents."""
+
+    def test_default_spill_dir_is_per_uid(self, monkeypatch) -> None:
+        from pathlib import Path as _Path
+        import tempfile as _tempfile
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_SPILL_DIR", raising=False)
+        cfg = ExecutorConfig.from_env()
+        assert cfg.spill_dir != _Path(_tempfile.gettempdir())
+        assert str(os.getuid()) in cfg.spill_dir.name
+
+    def test_spill_dir_env_resolves_dotdot(self, monkeypatch, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        target = tmp_path / "real-spill"
+        target.mkdir()
+        weird = tmp_path / "real-spill" / ".." / "real-spill"
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_SPILL_DIR", str(weird))
+        cfg = ExecutorConfig.from_env()
+        assert cfg.spill_dir == target.resolve()
+
 
 # =============================================================================
 # Worker observability (OBS2)
@@ -915,3 +987,99 @@ class TestRunOneDirect:
         assert value == "set-by-test"
         # Restored after the call returns.
         assert os.environ.get("GIGAEVO_DIRECT_PROBE") is None
+
+
+# =============================================================================
+# Coverage gaps surfaced during the loky migration audit
+# =============================================================================
+
+
+class TestPythonPathPropagation:
+    """``python_path`` entries must be prepended to the worker's ``sys.path``
+    so problem-local modules import without packaging.  Regression guard for
+    the algotune shim path."""
+
+    async def test_python_path_makes_local_module_importable(self, tmp_path) -> None:
+        # Create an isolated module the worker would not otherwise see.
+        mod_dir = tmp_path / "ppath_pkg"
+        mod_dir.mkdir()
+        (mod_dir / "sentinel_module.py").write_text(
+            "MARKER = 'python_path-reached-worker'\n"
+        )
+        code = (
+            "import sentinel_module\n"
+            "def f():\n"
+            "    return sentinel_module.MARKER\n"
+        )
+        result = await run_exec_runner(
+            code=code,
+            function_name="f",
+            python_path=[mod_dir],
+            timeout=10,
+        )
+        assert result == "python_path-reached-worker"
+
+
+class TestEnvUpdatesNoneUnsets:
+    """``env_updates={'KEY': None}`` must unset KEY for the duration of the
+    call, even when the parent env had it set.  Untested before — silently
+    promoting None to the literal string ``'None'`` would corrupt downstream
+    code that checks ``os.environ.get(K) is None``."""
+
+    async def test_none_value_unsets_existing_var(
+        self, monkeypatch, fresh_executor
+    ) -> None:
+        # Set the var in the parent so the worker would inherit it via the
+        # whitelist (GIGAEVO_ prefix → always passed through).
+        monkeypatch.setenv("GIGAEVO_UNSET_PROBE", "parent-value")
+
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                "def f(): return os.environ.get('GIGAEVO_UNSET_PROBE', '__missing__')\n"
+            ),
+            function_name="f",
+            env_updates={"GIGAEVO_UNSET_PROBE": None},
+            timeout=10,
+        )
+        assert seen == "__missing__", (
+            f"None env_updates value should unset, but worker saw {seen!r}"
+        )
+
+
+class TestCancellationCleansSpill:
+    """Bug-class: cancellation between worker completion and parent read
+    would leak a spill file.  ``_unlink_spill_on_done`` registers a
+    done-callback that unlinks once the worker finishes — verify it fires
+    even after the awaiting task is cancelled."""
+
+    async def test_cancelled_task_does_not_leak_spill_file(
+        self, isolated_spill_dir
+    ) -> None:
+        # Worker sleeps long enough that we can cancel between submit and
+        # await completion — but short enough that the eventual completion
+        # arrives within the test timeout so the done-callback runs.
+        code = (
+            "import time\n"
+            "def f():\n"
+            "    time.sleep(0.5)\n"
+            "    return [0] * 1024\n"
+        )
+        task = asyncio.create_task(
+            run_exec_runner(code=code, function_name="f", timeout=10)
+        )
+        # Give submit a chance to register but cancel before the worker
+        # finishes — the done-callback path is what we want to exercise.
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Wait long enough for the worker to finish its sleep + serialise +
+        # done-callback to run.  Poll the dir to avoid flaky fixed sleeps.
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if not list(isolated_spill_dir.iterdir()):
+                break
+        leaked = list(isolated_spill_dir.iterdir())
+        assert leaked == [], f"spill leaked after cancellation: {leaked}"

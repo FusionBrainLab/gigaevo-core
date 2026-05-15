@@ -270,10 +270,14 @@ def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
                 sys.stderr.write(printed)
                 sys.stderr.flush()
 
-            # Register the synthetic module so cloudpickle embeds
-            # user-defined classes by value; the parent has no
-            # ``user_code`` module to import-by-reference against.
-            cloudpickle.register_pickle_by_value(mod)
+        # Register the synthetic module so cloudpickle embeds user-defined
+        # classes by value; the parent has no ``user_code`` module to
+        # import-by-reference against.  Done outside ``_scoped_env`` because
+        # registration is a process-global side effect unrelated to env state,
+        # and the registry must survive the env-restore (the parent reads
+        # the spill *after* this function returns).  Registry is keyed by
+        # module name (string) so re-registering across calls is idempotent.
+        cloudpickle.register_pickle_by_value(mod)
         return (result, None)
 
     except SyntaxError as e:

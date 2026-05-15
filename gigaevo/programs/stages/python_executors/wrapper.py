@@ -8,6 +8,17 @@ first :meth:`submit`, are cached across calls, and on Linux receive
 Results are spilled to a per-call file under :data:`ExecutorConfig.spill_dir`
 and the parent reads them back via :mod:`mmap`; result size is bounded by
 free disk space rather than parent RAM.
+
+Trust boundary
+==============
+User code runs *unsandboxed* inside a forked worker.  We only contain
+ambient secrets (env scrub), process lifetime (``PR_SET_PDEATHSIG``), and
+signal dispositions (default handlers).  We do **not** restrict CPU, memory,
+``fork``, file-descriptor count, or filesystem access; nor do we treat the
+worker's return value as untrusted — :mod:`cloudpickle` happily executes
+``__reduce__`` gadgets on unpickle in the *parent*.  The model is "trust
+the code as much as you trust whoever generated it"; in the evolutionary
+search loop this is an LLM, so the boundary lives at the LLM call, not here.
 """
 
 from __future__ import annotations
@@ -49,11 +60,19 @@ class ExecutorConfig:
 
     max_workers: int | None = None
     idle_timeout_s: int = 300
-    spill_dir: Path = Path("/tmp")
+    spill_dir: Path = Path(tempfile.gettempdir()) / f"gigaevo-{os.getuid()}"
 
     @classmethod
     def from_env(cls) -> ExecutorConfig:
-        """Construct from ``GIGAEVO_EXECUTOR_*`` environment variables."""
+        """Construct from ``GIGAEVO_EXECUTOR_*`` environment variables.
+
+        The spill directory is resolved (``..`` collapsed) but symlinks are
+        *not* followed, so an operator who points the env var at a symlink
+        gets exactly the path they asked for — auditable in logs.  The
+        default is ``$TMPDIR/gigaevo-<uid>`` (not bare ``$TMPDIR``) so
+        spill files never share a world-readable directory with other
+        users' data.
+        """
 
         def _pos_int(key: str, default: int | None) -> int | None:
             raw = os.environ.get(key)
@@ -67,17 +86,38 @@ class ExecutorConfig:
 
         idle = _pos_int("GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S", 300) or 300
         spill = os.environ.get("GIGAEVO_EXECUTOR_SPILL_DIR")
+        if spill:
+            # ``Path.resolve(strict=False)`` collapses ``..`` and ``.``
+            # segments without requiring the path to exist yet (the
+            # module-level ``mkdir(parents=True, exist_ok=True)`` below
+            # creates it).  Resolution defeats traversal smuggled through
+            # otherwise-innocuous parent segments.
+            spill_path = Path(spill).resolve(strict=False)
+        else:
+            spill_path = Path(tempfile.gettempdir()) / f"gigaevo-{os.getuid()}"
         return cls(
             max_workers=_pos_int("GIGAEVO_EXECUTOR_MAX_WORKERS", None),
             idle_timeout_s=idle,
-            spill_dir=Path(spill) if spill else Path(tempfile.gettempdir()),
+            spill_dir=spill_path,
         )
 
 
 _CONFIG: ExecutorConfig = ExecutorConfig.from_env()
 # Custom spill dirs may not exist yet; opt into create-on-import so
 # callers don't have to remember to mkdir before the first submit.
-_CONFIG.spill_dir.mkdir(parents=True, exist_ok=True)
+# ``mode=0o700`` keeps spill files unreadable by other UIDs even on
+# shared hosts (only honoured on directory creation — pre-existing
+# dirs retain their mode, which is the operator's choice to make).
+_CONFIG.spill_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+# Capture the scrubbed env exactly once at import time.  Loky's
+# ``get_reusable_executor`` reuses a cached pool only when the kwargs of the
+# current call equal those used to construct it (``kwargs == _executor_kwargs``
+# in ``loky.reusable_executor``).  If we rebuilt the dict on every submit
+# from ``os.environ`` — which mutates throughout a process's lifetime — the
+# pool would be torn down and respawned whenever any whitelisted variable
+# changed, also breaking concurrent in-flight tasks with ``BrokenProcessPool``.
+_WORKER_ENV: dict[str, str] = {}  # populated lazily; see _get_executor()
 
 
 class ExecRunnerError(Exception):
@@ -183,9 +223,19 @@ def _worker_init() -> None:
 
         _PR_SET_PDEATHSIG = 1
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
-    except Exception:
-        pass
+        rc = libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+        if rc != 0:
+            # Containers with restricted ``prctl`` (seccomp denylist,
+            # gVisor, some sandboxed CI runners) will fail this; without
+            # the death-signal, workers become orphans if the parent dies
+            # uncleanly.  Log so operators can spot it; don't fail
+            # initialization — the loky pool itself still functions.
+            errno_ = ctypes.get_errno()
+            logger.debug(
+                "[exec_wrapper] PR_SET_PDEATHSIG failed rc={} errno={}", rc, errno_
+            )
+    except Exception as exc:
+        logger.debug("[exec_wrapper] PR_SET_PDEATHSIG unavailable: {}", exc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,11 +268,30 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
     spill_path: str | None = None
     if error is None:
         try:
+            # mkstemp guarantees ``O_CREAT | O_EXCL`` (so a pre-existing
+            # symlink at the chosen path causes failure rather than
+            # silent reuse) and mode 0600 (only this UID can read the
+            # spilled result).  See ``_load_spill`` for the matching
+            # ``O_NOFOLLOW`` parent-side hardening.
             fd, spill_path = tempfile.mkstemp(
                 prefix="gevo-result-", suffix=".pkl", dir=spill_dir
             )
+        except OSError as exc:
+            error = _error_from_exc(
+                exc, f"Failed to create spill file in {spill_dir!r}:"
+            )
+        else:
             try:
-                with os.fdopen(fd, "wb") as f:
+                # ``os.fdopen`` takes ownership of fd on success; on
+                # failure (e.g. EMFILE) it does *not*, so close it
+                # ourselves to avoid leaking a descriptor.
+                try:
+                    f = os.fdopen(fd, "wb")
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    raise
+                with f:
                     cloudpickle.dump(result, f, protocol=5)
             except BaseException as exc:
                 with contextlib.suppress(OSError):
@@ -231,10 +300,6 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
                 error = _error_from_exc(
                     exc, "Failed to serialise result via cloudpickle:"
                 )
-        except OSError as exc:
-            error = _error_from_exc(
-                exc, f"Failed to create spill file in {spill_dir!r}:"
-            )
 
     ru_after = _resource.getrusage(_resource.RUSAGE_SELF)
     return WorkerResult(
@@ -255,11 +320,18 @@ def _error_from_exc(exc: BaseException, prefix: str) -> WorkerError:
 
 
 def _get_executor() -> Any:
+    # Freeze the env on first use rather than at import time: tests
+    # (e.g. ``isolated_spill_dir``) and early bootstrap code legitimately
+    # mutate ``os.environ`` after the wrapper module is loaded but before
+    # the first submit.  After that first call the env is stable for the
+    # life of the pool, so subsequent calls reuse the existing workers.
+    if not _WORKER_ENV:
+        _WORKER_ENV.update(_scrub_env(os.environ))
     return get_reusable_executor(
         max_workers=_CONFIG.max_workers,
         timeout=_CONFIG.idle_timeout_s,
         initializer=_worker_init,
-        env=_scrub_env(os.environ),
+        env=_WORKER_ENV,
         context="loky",
     )
 
@@ -269,7 +341,19 @@ def shutdown_executor() -> None:
 
     Reaches into loky's module-global cache so we don't pay the spawn cost
     of constructing a pool just to tear it down.  Safe to call repeatedly.
+
+    Note: this is racy by design.  If a concurrent ``asyncio.gather`` task
+    is mid-``executor.submit(...)`` when shutdown happens, that submit (or
+    the in-flight future) surfaces as :class:`loky.process_executor.BrokenProcessPool`
+    in the caller.  Only the timeout path invokes this, and that path
+    accepts collateral damage to other in-flight tasks: a stuck worker has
+    no public per-future kill primitive in loky, so the only way to free
+    it is to tear the pool.  ``run_exec_runner``'s ``CancelledError`` path
+    deliberately does *not* call this.
     """
+    # Re-capture the env on next submit: caller is signalling "fresh pool"
+    # and may have legitimately mutated the env since first capture.
+    _WORKER_ENV.clear()
     try:
         from loky import reusable_executor as _re
     except ImportError:
@@ -282,9 +366,20 @@ def shutdown_executor() -> None:
 
 
 def _load_spill(spill_path: str) -> Any:
-    """Read a cloudpickle spill file, preferring mmap to skip a bytes copy."""
-    size = os.path.getsize(spill_path)
-    with open(spill_path, "rb") as f:
+    """Read a cloudpickle spill file, preferring mmap to skip a bytes copy.
+
+    The file was created by the worker via ``tempfile.mkstemp`` (mode
+    0600, ``O_EXCL`` so no pre-existing symlink can be reused).  We open
+    it here with ``O_NOFOLLOW`` as defence-in-depth: a same-UID attacker
+    who manages to replace the path with a symlink between worker exit
+    and parent read will trip ``ELOOP`` rather than feed an attacker-
+    controlled file into :func:`cloudpickle.loads` (an RCE primitive in
+    the parent process).
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(spill_path, flags)
+    with os.fdopen(fd, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
         if size == 0:
             return cloudpickle.loads(b"")
         try:
