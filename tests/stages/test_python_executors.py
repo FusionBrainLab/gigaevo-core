@@ -656,6 +656,41 @@ class TestEnvScrubbing:
 # =============================================================================
 
 
+class TestWorkerSignalDispositions:
+    """``_worker_init`` should leave the worker with default signal
+    handlers so user code sees standard Python semantics — KeyboardInterrupt
+    on SIGINT, termination on SIGTERM/SIGHUP/SIGQUIT, BrokenPipeError on
+    SIGPIPE — regardless of what loky installs internally.
+    """
+
+    async def test_sigint_handler_is_default_int_handler(self) -> None:
+        result = await run_exec_runner(
+            code=(
+                "import signal\n"
+                "def f():\n"
+                "    return (\n"
+                "        signal.getsignal(signal.SIGINT)\n"
+                "        is signal.default_int_handler\n"
+                "    )\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert result is True
+
+    async def test_sigterm_handler_is_default(self) -> None:
+        result = await run_exec_runner(
+            code=(
+                "import signal\n"
+                "def f():\n"
+                "    return signal.getsignal(signal.SIGTERM) == signal.SIG_DFL\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert result is True
+
+
 class TestWorkerObservability:
     """:class:`WorkerResult` carries per-call resource accounting so the
     wrapper can log it and (later) feed a metrics writer.  The fields must

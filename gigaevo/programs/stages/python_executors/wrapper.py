@@ -152,10 +152,28 @@ def _scrub_env(env: Mapping[str, str]) -> dict[str, str]:
 def _worker_init() -> None:
     """Per-worker startup hook.
 
+    * Resets the signal handlers loky installs so user code sees the
+      default Python dispositions (KeyboardInterrupt on SIGINT, termination
+      on SIGTERM/SIGHUP/SIGQUIT, ignore on SIGPIPE).
     * Scrubs ``os.environ`` down to the whitelist (loky's ``env=`` kwarg is
-      additive, so we have to drop non-whitelisted keys explicitly here).
-    * On Linux, asks the kernel to SIGTERM this worker if the parent dies.
+      additive, so non-whitelisted keys must be dropped explicitly here).
+    * On Linux, asks the kernel to SIGTERM this worker if the parent dies
+      (replaces the legacy orphan-reaper in ``tools/flush.py``).
     """
+    # Restore default signal dispositions.  SIGINT goes to Python's
+    # ``default_int_handler`` (which raises KeyboardInterrupt — preserved by
+    # ``_run_one``'s ``except BaseException``); the rest go to OS defaults.
+    with contextlib.suppress(Exception):
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    for sig_name in ("SIGTERM", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2", "SIGCHLD"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        with contextlib.suppress(Exception):
+            signal.signal(sig, signal.SIG_DFL)
+    # SIGPIPE: leave Python's default (SIG_IGN; broken-pipe raises
+    # BrokenPipeError instead of killing the worker on stdout closure).
+
     for key in list(os.environ.keys()):
         if key in _ENV_WHITELIST:
             continue
