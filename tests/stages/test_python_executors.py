@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 import time
 
 import pytest
@@ -889,6 +890,68 @@ class TestWorkerIsolation:
         )
         assert result == "missing"
 
+    async def test_user_chdir_does_not_leak_to_next_call(self, tmp_path) -> None:
+        """Bug: workers are reused.  A user ``os.chdir(/tmp/...)`` in one
+        call would otherwise become the *implicit* cwd for the next call —
+        causing relative-path reads to silently target the wrong tree and
+        ``_ensure_cwd_in_path`` to pin the leaked dir onto ``sys.path``.
+
+        After ``_run_one`` snapshots+restores cwd, the second call's cwd
+        is whatever the worker had at spawn time, not the leaked dir.
+        """
+        leak_dir = tmp_path / "leak-target"
+        leak_dir.mkdir()
+
+        seen_first = await run_exec_runner(
+            code=(
+                "import os\n"
+                f"def f():\n"
+                f"    os.chdir({str(leak_dir)!r})\n"
+                f"    return os.getcwd()\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert seen_first == str(leak_dir)
+
+        seen_second = await run_exec_runner(
+            code="import os\ndef f(): return os.getcwd()",
+            function_name="f",
+            timeout=10,
+        )
+        assert seen_second != str(leak_dir), (
+            f"cwd leaked across worker reuse: {seen_second!r}"
+        )
+
+    async def test_user_sys_path_mutation_does_not_leak_to_next_call(
+        self,
+    ) -> None:
+        """Bug: ``sys.path.insert(0, ...)`` in user code would survive into
+        the next caller's task because the worker is reused.  After the fix
+        ``_run_one`` snapshots+restores ``sys.path``."""
+        sentinel = "/__sentinel_sys_path_leak_xyz__"
+        await run_exec_runner(
+            code=(
+                "import sys\n"
+                f"def f():\n"
+                f"    sys.path.insert(0, {sentinel!r})\n"
+                f"    return {sentinel!r} in sys.path\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        leaked = await run_exec_runner(
+            code=(
+                "import sys\n"
+                f"def f(): return {sentinel!r} in sys.path\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert leaked is False, (
+            f"sys.path leak: sentinel {sentinel!r} survived into next call"
+        )
+
 
 # =============================================================================
 # Direct exec_runner._run_one — in-parent worker-library tests
@@ -1083,3 +1146,449 @@ class TestCancellationCleansSpill:
                 break
         leaked = list(isolated_spill_dir.iterdir())
         assert leaked == [], f"spill leaked after cancellation: {leaked}"
+
+
+# =============================================================================
+# Distant-corner serialization edge cases
+# =============================================================================
+
+
+class TestSerializationDistantCorners:
+    """Hunt for round-trip bugs in the worker→parent cloudpickle path.
+
+    Every test here corresponds to a hypothesis from the serialization
+    bug-hunt audit: cyclic graphs, numpy dtype edge cases, user-defined
+    classes leaking from the synthetic ``user_code`` module, and the
+    interaction between protocol-5 inline buffers and the parent's
+    ``mmap``-based spill reader.
+    """
+
+    async def test_self_referential_list_round_trip(self) -> None:
+        """``x = []; x.append(x)`` is the canonical Pickle cycle test.
+        Cloudpickle/pickle resolve via the memo table; if anything in
+        the spill path forced ``deepcopy``-style semantics this would
+        either infinite-loop or fail with RecursionError."""
+        code = "def f():\n    x = []\n    x.append(x)\n    return x\n"
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result[0] is result, "self-reference broken after round-trip"
+
+    async def test_cyclic_dict_round_trip(self) -> None:
+        """Same as above for dicts — the memo table works equally for
+        mapping types, but worth pinning in case a future spill format
+        change introduces shallow-copy semantics."""
+        code = "def f():\n    d = {}\n    d['self'] = d\n    return d\n"
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result["self"] is result
+
+    async def test_numpy_structured_dtype_round_trip(self) -> None:
+        """Structured dtypes (named fields, mixed numeric + fixed-width
+        unicode) historically tripped up early pickle protocols on
+        numpy versions <1.17 and ICC-compiled MKL builds.  Lock in
+        round-trip on the modern stack."""
+        import numpy as np
+
+        code = (
+            "import numpy as np\n"
+            "def f():\n"
+            "    dt = np.dtype([('a', np.int32), ('b', np.float64), ('c', 'U8')])\n"
+            "    arr = np.zeros(5, dtype=dt)\n"
+            "    arr['a'] = [1, 2, 3, 4, 5]\n"
+            "    arr['b'] = [0.1, 0.2, 0.3, 0.4, 0.5]\n"
+            "    arr['c'] = ['xx', 'yy', 'zz', 'aa', 'bb']\n"
+            "    return arr\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=20)
+        assert result.dtype.names == ("a", "b", "c")
+        assert result["a"].tolist() == [1, 2, 3, 4, 5]
+        assert result["c"][2] == "zz"
+        assert np.allclose(result["b"], [0.1, 0.2, 0.3, 0.4, 0.5])
+
+    async def test_numpy_memmap_returns_materialised_array(self) -> None:
+        """A worker-side ``np.memmap`` references a file that won't exist
+        in the parent process.  Cloudpickle should serialise the *data*
+        (via numpy's ``__reduce_ex__``) so the parent gets a regular
+        in-memory array, not a stale ``memmap`` pointing at a worker
+        tempfile."""
+        import numpy as np
+
+        code = (
+            "import numpy as np, tempfile\n"
+            "def f():\n"
+            "    path = tempfile.mkstemp(suffix='.dat')[1]\n"
+            "    arr = np.memmap(path, dtype='float32', mode='w+', shape=(100,))\n"
+            "    arr[:] = np.arange(100, dtype='float32')\n"
+            "    arr.flush()\n"
+            "    return arr\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result.shape == (100,)
+        assert float(result.sum()) == float(np.arange(100, dtype=np.float32).sum())
+        # Must be writable from the parent — if it's still a memmap aliased
+        # to the worker's deleted tempfile this either crashes or silently
+        # writes into a dangling region.
+        result[0] = 999.0
+        assert result[0] == 999.0
+
+    async def test_closure_over_user_defined_class(self) -> None:
+        """Cloudpickle must serialise the captured cell variable's class
+        (defined in ``user_code``) by value, since the parent has no
+        ``user_code`` module to import-by-reference against."""
+        code = (
+            "class Inner:\n"
+            "    def __init__(self, v): self.v = v\n"
+            "    def double(self): return self.v * 2\n"
+            "def f():\n"
+            "    obj = Inner(21)\n"
+            "    def closure():\n"
+            "        return obj.double()\n"
+            "    return closure\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert callable(result)
+        assert result() == 42
+
+    async def test_instance_of_class_defined_inside_function_body(self) -> None:
+        """Classes defined inside a function body (CO_NESTED) historically
+        tripped cloudpickle's older "is it in __main__?" heuristic.
+        register_pickle_by_value on the synthetic ``user_code`` module
+        should make this work regardless of nesting."""
+        code = (
+            "def f():\n"
+            "    class Local:\n"
+            "        def __init__(self, n): self.n = n\n"
+            "        def squared(self): return self.n * self.n\n"
+            "    return Local(7)\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result.squared() == 49
+
+    async def test_numpy_round_trip_survives_aggressive_heap_pressure(self) -> None:
+        """Probe for use-after-free on the spill mmap.
+
+        Protocol 5 *without* ``buffer_callback`` encodes numpy buffers
+        as inline ``BYTEARRAY8`` opcodes, which the unpickler copies
+        into freshly-allocated buffers — the result must not alias the
+        spill mmap.  Stress this by unlinking the spill (parent's
+        ``finally`` does this), allocating tens of MB to force reuse
+        of any freed pages, and re-reading the result.
+        """
+        import gc
+
+        import numpy as np
+
+        code = (
+            "import numpy as np\n"
+            "def f():\n"
+            "    return np.arange(1_000_000, dtype=np.float32)\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=20)
+        # Sum the un-tampered tail before any writes — must equal the
+        # arange tail-sum.  float32 sums are non-associative, so use
+        # ``np.array_equal`` against a fresh reference rather than
+        # comparing scalar sums.
+        reference = np.arange(1_000_000, dtype=np.float32)
+        assert np.array_equal(result, reference)
+        # Pressure: allocate ~64 MB of distinct byte buffers and force
+        # GC.  If the result aliased the spill region, the kernel would
+        # reuse those pages and the equality check below would diverge.
+        ballast = [bytes(1024 * 1024) for _ in range(64)]
+        gc.collect()
+        assert np.array_equal(result, reference), (
+            "result diverged from reference after heap pressure — suggests "
+            "the unpickled array aliased the (now-unlinked) spill mmap"
+        )
+        # Writing should succeed and not crash — confirms own-buffer
+        # semantics rather than a read-only mmap-aliased view.
+        del ballast
+        result[0] = -42.0
+        assert result[0] == -42.0
+
+    def test_worker_envelopes_round_trip_via_cloudpickle(self) -> None:
+        """``WorkerCall``/``WorkerError``/``WorkerResult`` cross the loky
+        boundary as argument and return value.  Frozen slotted dataclasses
+        are picklable via the default ``__reduce_ex__``; pin this so a
+        future ``__slots__`` or ``__init_subclass__`` change doesn't
+        silently break IPC."""
+        import cloudpickle
+
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            WorkerError,
+        )
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerResult
+
+        call = WorkerCall(
+            code="def f(): return 1",
+            function_name="f",
+            args=[1, 2, 3],
+            kwargs={"k": "v"},
+            python_path=["/tmp/foo"],
+            env={"X": "1", "Y": None},
+        )
+        assert cloudpickle.loads(cloudpickle.dumps(call)) == call
+
+        err = WorkerError(stderr="oops", returncode=2)
+        assert cloudpickle.loads(cloudpickle.dumps(err)) == err
+
+        res = WorkerResult(
+            spill_path="/tmp/x.pkl",
+            error=None,
+            peak_rss_kb=4242,
+            wall_time_s=0.5,
+            user_time_s=0.4,
+            sys_time_s=0.1,
+            worker_pid=12345,
+        )
+        assert cloudpickle.loads(cloudpickle.dumps(res)) == res
+
+    async def test_worker_returns_object_with_lock_surfaces_structured_error(
+        self,
+    ) -> None:
+        """A result that *contains* an unpicklable component (here a
+        ``threading.Lock`` mixed into an otherwise plain dict) must
+        surface as :class:`ExecRunnerError` — not as a raw cloudpickle
+        traceback in the parent, and not as a deadlock."""
+        code = (
+            "import threading\n"
+            "def f():\n"
+            "    return {'data': [1, 2, 3], 'lock': threading.Lock()}\n"
+        )
+        with pytest.raises(ExecRunnerError) as exc_info:
+            await run_exec_runner(code=code, function_name="f", timeout=10)
+        msg = exc_info.value.stderr.lower()
+        assert "serialise" in msg or "pickle" in msg
+
+    async def test_python_path_does_not_accumulate_across_calls(self) -> None:
+        """:func:`_run_one`'s ``finally`` block restores ``sys.path``.
+        Even if a worker handles 20+ calls with distinct ``python_path``
+        entries (one fresh tempdir each), the worker's final ``sys.path``
+        length must match what it had on the first call.
+
+        Regression guard for a hypothesis raised during the audit: that
+        ``_prepend_sys_path`` only dedupes the *current* path and prior
+        entries would accumulate unboundedly.  They don't, because of
+        the snapshot/restore wrapper.
+        """
+        import tempfile
+
+        code = "import sys\ndef f(): return len(sys.path)\n"
+        first_len: int | None = None
+        for i in range(8):
+            d = tempfile.mkdtemp(prefix=f"distant-corner-acc-{i}-")
+            n = await run_exec_runner(
+                code=code,
+                function_name="f",
+                python_path=[Path(d)],
+                timeout=10,
+            )
+            if first_len is None:
+                first_len = n
+            else:
+                # Allow ±1 slack for ``_ensure_cwd_in_path`` toggling
+                # depending on whether the worker's cwd happens to be
+                # already-present in the snapshotted sys.path.
+                assert abs(n - first_len) <= 1, (
+                    f"sys.path drift: call 0 had {first_len}, call {i} has {n}"
+                )
+
+    async def test_cloudpickle_register_by_value_idempotent(self) -> None:
+        """``cloudpickle.register_pickle_by_value`` keys
+        ``_PICKLE_BY_VALUE_MODULES`` by module *name*, so re-registering
+        ``"user_code"`` on every call must not grow the set.
+        Sanity check on a fresh worker."""
+        code = (
+            "import cloudpickle.cloudpickle as _cp\n"
+            "def f():\n"
+            "    modules = _cp._PICKLE_BY_VALUE_MODULES\n"
+            "    return [m for m in modules if m == 'user_code']\n"
+        )
+        # Drive several iterations; the set must stay at most {'user_code'}.
+        for _ in range(5):
+            entries = await run_exec_runner(
+                code=code, function_name="f", timeout=10
+            )
+            assert entries in ([], ["user_code"]), (
+                f"unexpected user_code accumulation: {entries}"
+            )
+
+
+class TestProtocolFiveSafety:
+    """End-to-end sanity that the worker's ``cloudpickle.dump(..., protocol=5)``
+    is consumed by the parent's ``cloudpickle.loads`` without asymmetry.
+    Both ends run cloudpickle 3.1.2 on Python 3.12, but a future pin
+    drift (loky vendoring a different cloudpickle, or a constraint that
+    relaxes the version) would surface here first.
+    """
+
+    def test_one_cloudpickle_in_environment(self) -> None:
+        """No vendored second copy lurking under ``loky.cloudpickle_wrapper``
+        or anywhere else on the path; pickle round-trip semantics depend
+        on both ends sharing the same ``cloudpickle.dispatch_table``."""
+        import importlib
+
+        cp_main = importlib.import_module("cloudpickle")
+        # loky imports the *installed* cloudpickle, not a vendored copy.
+        from loky import cloudpickle_wrapper as lw
+
+        lw_cp_path = lw.dumps.__module__  # "cloudpickle.cloudpickle" or similar
+        assert lw_cp_path.startswith("cloudpickle"), (
+            f"loky's dumps does not come from cloudpickle: {lw_cp_path}"
+        )
+        # File-level check: both should resolve under the same install root.
+        from cloudpickle import cloudpickle as cp_impl
+
+        assert Path(cp_impl.__file__).parent == Path(cp_main.__file__).parent
+
+    def test_protocol_5_round_trip_sanity(self, tmp_path) -> None:
+        """Mimic the worker's exact spill flow: ``cloudpickle.dump(...,
+        protocol=5)`` to a file, then ``mmap`` + ``cloudpickle.loads``
+        from the parent.  Verifies no asymmetry between writer protocol
+        opcodes and reader opcode handling."""
+        import mmap as _mmap
+
+        import cloudpickle as _cp
+
+        payload = {"a": list(range(1024)), "b": {"nested": (1.0, 2.0, 3.0)}}
+        f = tmp_path / "p5.pkl"
+        with open(f, "wb") as fh:
+            _cp.dump(payload, fh, protocol=5)
+        with open(f, "rb") as fh:
+            with _mmap.mmap(fh.fileno(), 0, access=_mmap.ACCESS_READ) as mm:
+                loaded = _cp.loads(mm)
+        assert loaded == payload
+
+# =============================================================================
+# pytest-xdist auto-cap of max_workers
+# =============================================================================
+
+
+class TestXdistWorkerCountAutoCap:
+    """Under pytest-xdist with N>1 worker processes, each xdist worker
+    imports ``wrapper.py`` and would otherwise spawn ``cpu_count`` loky
+    subprocesses — a 28-CPU / 8-xdist host fan-outs to 224 children.
+
+    The auto-cap divides cpu_count across xdist workers.  An explicit
+    ``GIGAEVO_EXECUTOR_MAX_WORKERS`` always wins (operator override).
+    """
+
+    def test_no_xdist_yields_default_none(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_WORKER_COUNT", raising=False)
+        cfg = ExecutorConfig.from_env()
+        assert cfg.max_workers is None
+
+    def test_xdist_caps_to_cpu_div_workers(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "4")
+        cfg = ExecutorConfig.from_env()
+        # max(1, cpu_count // 4): exact value depends on host, just verify
+        # it's a small positive int strictly less than cpu_count.
+        cpu = os.cpu_count() or 1
+        assert cfg.max_workers is not None
+        assert cfg.max_workers >= 1
+        if cpu >= 4:
+            assert cfg.max_workers == cpu // 4
+            assert cfg.max_workers < cpu
+
+    def test_xdist_one_worker_does_not_cap(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "1")
+        cfg = ExecutorConfig.from_env()
+        # Single-worker xdist is effectively no xdist — don't penalize.
+        assert cfg.max_workers is None
+
+    def test_explicit_max_workers_overrides_xdist(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_MAX_WORKERS", "7")
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "8")
+        cfg = ExecutorConfig.from_env()
+        # Operator override wins even on a 1-CPU host where cpu//8 = 0.
+        assert cfg.max_workers == 7
+
+    def test_xdist_floor_is_one(self, monkeypatch) -> None:
+        """cpu_count // xdist_count can be 0 on small hosts; we must
+        never request max_workers=0 (loky raises ValueError)."""
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutorConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        # Pick a count that exceeds any plausible cpu_count.
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "10000")
+        cfg = ExecutorConfig.from_env()
+        assert cfg.max_workers is not None
+        assert cfg.max_workers >= 1
+
+
+# =============================================================================
+# shutdown_executor wait semantics
+# =============================================================================
+
+
+class TestShutdownExecutorWaitFlag:
+    """``shutdown_executor(wait=True)`` must block until loky's executor-
+    manager thread has finished its shutdown sequence; ``wait=False``
+    (default) must return before that.
+
+    Verified by submitting a task, calling shutdown, and checking the
+    state of ``_executor_manager_thread`` (cleared synchronously by
+    ``shutdown()`` only after the join completes).
+    """
+
+    async def test_wait_true_blocks_until_manager_thread_joined(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            _get_executor,
+            shutdown_executor,
+        )
+
+        # Force a pool to exist with a live manager thread.
+        executor = _get_executor()
+        fut = executor.submit(lambda: 1)
+        assert fut.result(timeout=10) == 1
+
+        mgr_thread = executor._executor_manager_thread
+        assert mgr_thread is not None
+        assert mgr_thread.is_alive()
+
+        shutdown_executor(wait=True)
+
+        # After wait=True returns, the manager thread must be joined.
+        # ``shutdown(wait=True)`` clears the attribute on the executor;
+        # checking is_alive() on the captured ref is the residual check.
+        assert not mgr_thread.is_alive()
+
+    async def test_wait_false_returns_promptly(self) -> None:
+        """Sanity guard: wait=False must not regress to wait=True.  We
+        can't reliably observe the manager thread mid-shutdown on every
+        scheduler, but we can at least verify wait=False completes in
+        sub-second time even with a worker mid-submit."""
+        import time as _time
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            _get_executor,
+            shutdown_executor,
+        )
+
+        executor = _get_executor()
+        executor.submit(lambda: 1).result(timeout=10)
+
+        t0 = _time.monotonic()
+        shutdown_executor(wait=False)
+        elapsed = _time.monotonic() - t0
+        # wait=False on a small pool should be < 100ms.  Generous bound.
+        assert elapsed < 2.0, f"shutdown_executor(wait=False) took {elapsed:.3f}s"

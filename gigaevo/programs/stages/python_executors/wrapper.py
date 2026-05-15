@@ -9,16 +9,103 @@ Results are spilled to a per-call file under :data:`ExecutorConfig.spill_dir`
 and the parent reads them back via :mod:`mmap`; result size is bounded by
 free disk space rather than parent RAM.
 
+Spill backing storage
+=====================
+The default ``spill_dir`` is ``$TMPDIR/gigaevo-<uid>``.  On most Linux
+distributions ``$TMPDIR`` resolves to ``/tmp`` which is mounted ``tmpfs``
+— i.e. RAM-backed.  In that configuration the "spill bounds result size
+by free disk space" claim is misleading: a B-byte result transits the
+worker's serialise buffer (B bytes), lands in the tmpfs page cache
+(another B bytes), then ``mmap``-faults into the parent's address space.
+Peak memory cost is roughly ``2*B + epsilon``.
+
+To genuinely cap result size against a disk budget rather than RAM,
+point ``GIGAEVO_EXECUTOR_SPILL_DIR`` at a path on a real filesystem
+(e.g. ``/var/tmp/gigaevo-<uid>``, or an SSD-backed working directory).
+Inspect at runtime with ``findmnt -no FSTYPE $TMPDIR``.
+
+Result pickle protocol
+======================
+We use ``cloudpickle.dump(..., protocol=5)`` with **no**
+``buffer_callback``.  Protocol 5 introduced the PEP 574 out-of-band
+buffer mechanism, but the ``buffer_callback=None`` default falls back
+to inline ``BYTEARRAY8`` opcodes for :class:`pickle.PickleBuffer`
+instances — concretely, numpy/torch tensors are serialised by *copying*
+their bytes into the pickle stream and materialise into freshly-allocated
+buffers on unpickle.  The unpickled tensor in the parent therefore
+**does not alias** the spill ``mmap``, so closing the ``mmap`` context
+in :func:`_load_spill` does not invalidate the result.  See
+https://docs.python.org/3/library/pickle.html#out-of-band-buffers .
+
+Adopting ``buffer_callback`` would skip the bytes copy on both sides
+and shrink the metadata pickle from O(payload) to O(metadata) — for a
+1 GB float32 array, from ~1 GB down to ~120 B — at the cost of a
+multi-file spill format (manifest + N buffer sidecars) and the parent
+having to keep the buffer ``mmap``-s alive for the lifetime of the
+unpickled result.  That's exactly the dangling-mmap hazard the current
+single-file inline design avoids.  Tracked as a future optimisation;
+the inline path is correct.
+
+Worker state lifecycle
+======================
+Loky pool workers are reused across calls.  Per-call mutations are
+restored by :func:`exec_runner._run_one`'s ``finally`` block:
+``sys.path``, ``os.getcwd()``, and ``os.environ`` (via ``_scoped_env``)
+all snapshot on entry and restore on exit, so ``python_path`` and
+``env_updates`` do **not** accumulate across calls within the same
+worker.  What *does* persist across calls in a long-lived worker:
+
+* ``sys.modules`` entries created by user ``import`` statements (matches
+  CPython ``-c`` semantics — once a module is imported its state lives
+  until interpreter teardown);
+* ``sys.modules["user_code"]``, **replaced** (not appended) each call,
+  so the synthetic-module slot is at most one entry regardless of call
+  count;
+* ``linecache.cache["user_code.py"]``, **overwritten** each call;
+* ``cloudpickle.cloudpickle._PICKLE_BY_VALUE_MODULES``, a *set* keyed
+  by module name — re-registering ``"user_code"`` is idempotent so the
+  set stays at most one element regardless of call count.
+
+All four cases are bounded.  User code that mutates other globals —
+``sys.argv``, signal handlers installed mid-call, monkey-patched
+stdlib modules — is **not** restored, by design: correctly unwinding
+arbitrary monkey patches is undecidable, and CPython itself doesn't
+do it across ``exec()`` calls.
+
+Start method
+============
+``context="loky"`` selects loky's ``Popen`` (``loky.backend.popen_loky_posix``),
+which dispatches to ``_posixsubprocess.fork_exec`` with ``close_fds=True`` and
+an explicit ``keep_fds`` allowlist.  Mechanically this is fork+exec — never a
+bare ``fork()`` — so children get a *fresh Python interpreter* re-launched
+from ``sys.executable``, not a memory snapshot of the parent.  Practical
+consequences:
+
+* No parent module state is inherited.  CUDA contexts, ``torch`` lazy
+  initialisation, ``langfuse`` handlers, ``loguru`` sinks, open Redis
+  connections, ``asyncio`` event-loop state, ``atexit`` registrations —
+  none survive into the worker.  The worker starts as a clean Python
+  process and only sees what loky reduces over the spawn pipe.
+* No parent file descriptors leak: ``close_fds=True`` slams everything
+  shut except the loky-owned pipes and stdin/stdout/stderr.  Verified
+  empirically against ``/proc/self/fd`` (probe in the bug-hunt report).
+* ``os.environ`` in the worker is what loky's ``env=`` kwarg sets, not
+  the parent's mutable ``os.environ`` — see :func:`_get_executor` below
+  for the snapshot policy.
+* Worker cold-start cost is ~spawn (~100ms), not ~fork (~1ms).  The pool
+  is reused across calls so this is amortised over the run.
+
 Trust boundary
 ==============
-User code runs *unsandboxed* inside a forked worker.  We only contain
-ambient secrets (env scrub), process lifetime (``PR_SET_PDEATHSIG``), and
-signal dispositions (default handlers).  We do **not** restrict CPU, memory,
-``fork``, file-descriptor count, or filesystem access; nor do we treat the
-worker's return value as untrusted — :mod:`cloudpickle` happily executes
-``__reduce__`` gadgets on unpickle in the *parent*.  The model is "trust
-the code as much as you trust whoever generated it"; in the evolutionary
-search loop this is an LLM, so the boundary lives at the LLM call, not here.
+User code runs *unsandboxed* inside the worker.  We only contain ambient
+secrets (env scrub), process lifetime (``PR_SET_PDEATHSIG``), and signal
+dispositions (default handlers).  We do **not** restrict CPU, memory,
+``fork``, file-descriptor count, or filesystem access; nor do we treat
+the worker's return value as untrusted — :mod:`cloudpickle` happily
+executes ``__reduce__`` gadgets on unpickle in the *parent*.  The model
+is "trust the code as much as you trust whoever generated it"; in the
+evolutionary search loop this is an LLM, so the boundary lives at the
+LLM call, not here.
 """
 
 from __future__ import annotations
@@ -72,6 +159,15 @@ class ExecutorConfig:
         default is ``$TMPDIR/gigaevo-<uid>`` (not bare ``$TMPDIR``) so
         spill files never share a world-readable directory with other
         users' data.
+
+        Under pytest-xdist (``PYTEST_XDIST_WORKER_COUNT`` set), if
+        ``GIGAEVO_EXECUTOR_MAX_WORKERS`` is not explicitly set, the
+        per-process worker count is auto-capped to
+        ``max(1, cpu_count // xdist_worker_count)``.  Otherwise an 8-xdist /
+        28-CPU host would fork 8×28 = 224 loky workers, exhausting the
+        process table and oversubscribing the scheduler.  An explicit
+        ``GIGAEVO_EXECUTOR_MAX_WORKERS`` always wins — operators who know
+        what they're doing aren't second-guessed.
         """
 
         def _pos_int(key: str, default: int | None) -> int | None:
@@ -95,8 +191,16 @@ class ExecutorConfig:
             spill_path = Path(spill).resolve(strict=False)
         else:
             spill_path = Path(tempfile.gettempdir()) / f"gigaevo-{os.getuid()}"
+
+        max_workers = _pos_int("GIGAEVO_EXECUTOR_MAX_WORKERS", None)
+        if max_workers is None:
+            xdist_count = _pos_int("PYTEST_XDIST_WORKER_COUNT", None)
+            if xdist_count and xdist_count > 1:
+                cpu = os.cpu_count() or 1
+                max_workers = max(1, cpu // xdist_count)
+
         return cls(
-            max_workers=_pos_int("GIGAEVO_EXECUTOR_MAX_WORKERS", None),
+            max_workers=max_workers,
             idle_timeout_s=idle,
             spill_dir=spill_path,
         )
@@ -336,19 +440,28 @@ def _get_executor() -> Any:
     )
 
 
-def shutdown_executor() -> None:
+def shutdown_executor(*, wait: bool = False) -> None:
     """Kill all loky workers if any were spawned.
 
     Reaches into loky's module-global cache so we don't pay the spawn cost
     of constructing a pool just to tear it down.  Safe to call repeatedly.
 
+    ``wait`` controls whether we block until loky's executor-manager thread
+    has finished its shutdown sequence (SIGKILLing workers, draining the
+    result queue, firing done-callbacks for pending futures).  The default
+    ``wait=False`` is the historical async path: callers in the timeout
+    branch of :func:`run_exec_runner` need to return promptly so the
+    original :class:`TimeoutError` propagates without blocking the event
+    loop on an OS-level reap.  The ``wait=True`` path is for explicit
+    teardown — run.py's ``finally`` block, session-end fixtures — where
+    we want spill-unlink callbacks to fire *before* the process exits, so
+    ``/tmp/gigaevo-<uid>`` doesn't accumulate orphaned spill files across
+    crash/restart cycles.
+
     Note: this is racy by design.  If a concurrent ``asyncio.gather`` task
     is mid-``executor.submit(...)`` when shutdown happens, that submit (or
     the in-flight future) surfaces as :class:`loky.process_executor.BrokenProcessPool`
-    in the caller.  Only the timeout path invokes this, and that path
-    accepts collateral damage to other in-flight tasks: a stuck worker has
-    no public per-future kill primitive in loky, so the only way to free
-    it is to tear the pool.  ``run_exec_runner``'s ``CancelledError`` path
+    in the caller.  ``run_exec_runner``'s ``CancelledError`` path
     deliberately does *not* call this.
     """
     # Re-capture the env on next submit: caller is signalling "fresh pool"
@@ -362,7 +475,7 @@ def shutdown_executor() -> None:
     if executor is None:
         return
     with contextlib.suppress(Exception):
-        executor.shutdown(kill_workers=True, wait=False)
+        executor.shutdown(kill_workers=True, wait=wait)
 
 
 def _load_spill(spill_path: str) -> Any:

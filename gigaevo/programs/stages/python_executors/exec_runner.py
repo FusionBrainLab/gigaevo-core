@@ -241,8 +241,28 @@ def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
     failure.  ``BaseException`` is caught so that user ``sys.exit()`` and
     ``KeyboardInterrupt`` become structured errors rather than tearing
     down the worker process.
+
+    Workers are reused across calls (loky pool), so any process-global
+    mutation made by user code — ``os.chdir()``, ``sys.path.insert``,
+    new entries in ``sys.modules`` — would otherwise persist into the
+    next caller's task.  We snapshot ``cwd`` and ``sys.path`` on entry
+    and restore them on exit; ``sys.modules`` is left alone (matching
+    CPython's own ``-c`` semantics — a script gets to see and add
+    modules, and subsequent imports correctly reuse them).
     """
     captured = io.StringIO()
+    # Snapshot worker-global state we'll restore on exit.  ``getcwd``
+    # may raise FileNotFoundError if the previous call ran ``os.chdir``
+    # to a directory that has since been removed; in that case we have
+    # nothing meaningful to restore to and fall back to the user's home
+    # (HOME is in the whitelist; if unset we tolerate the lack of
+    # restoration rather than failing the call).
+    try:
+        cwd_before: str | None = os.getcwd()
+    except OSError:
+        cwd_before = None
+    sys_path_before = list(sys.path)
+
     try:
         _ensure_cwd_in_path()
 
@@ -294,3 +314,15 @@ def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
             None,
             WorkerError(stderr=_format_error(buf.getvalue(), captured.getvalue())),
         )
+
+    finally:
+        # Restore in reverse order of capture.  ``chdir`` may fail (the
+        # snapshotted dir could have been deleted by user code); swallow
+        # that — leaking the wrong cwd into the next call is worse than
+        # logging nothing here.
+        sys.path[:] = sys_path_before
+        if cwd_before is not None:
+            try:
+                os.chdir(cwd_before)
+            except OSError:
+                pass

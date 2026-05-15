@@ -186,6 +186,13 @@ def _shutdown_loky_executor_at_session_end():
     on every test; loky's reusable executor is safe to share across the
     session because :func:`get_reusable_executor` respawns on env/config
     change anyway.
+
+    Uses ``wait=True`` so under pytest-xdist the per-worker process
+    actually reaps its subprocess children before exiting — otherwise the
+    xdist worker may exit with the loky executor-manager thread mid-SIGKILL,
+    leaving zombie loky workers parented to init until ``PR_SET_PDEATHSIG``
+    fires (which it doesn't if the xdist worker exited cleanly: SIGTERM is
+    sent only on *parent death*, not parent exit).
     """
     yield
     try:
@@ -193,7 +200,7 @@ def _shutdown_loky_executor_at_session_end():
             shutdown_executor,
         )
 
-        shutdown_executor()
+        shutdown_executor(wait=True)
     except Exception:
         pass
 
