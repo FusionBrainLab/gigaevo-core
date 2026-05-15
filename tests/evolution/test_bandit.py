@@ -1835,3 +1835,60 @@ class TestStructuredOutputFailureHookErrorsAreLogged:
         call_args = mock_warning.call_args
         payload = repr(call_args)
         assert "hook bug" in payload or "RuntimeError" in payload
+
+# ---------------------------------------------------------------------------
+# Pre-_select exceptions: ledger invariant must hold
+# ---------------------------------------------------------------------------
+
+
+class TestPreSelectFailureLedgerInvariant:
+    """If ``_select`` itself raises (e.g. a corrupted bandit state where
+    ``self._bandit.select()`` blows up), the LLM call never happens and the
+    try/except inside ``invoke`` never engages. The invariant the wiring
+    promises is "pulls and rewards stay in step": if no pull was recorded
+    (``record_pull`` is called *inside* ``_select``), no reward must be
+    injected either. Verifying explicitly so a future refactor that moves
+    ``record_pull`` outside ``_select`` doesn't quietly break the
+    invariant."""
+
+    def test_select_failure_before_record_pull_leaves_ledger_clean(self) -> None:
+        models = _make_mock_models(["arm_a"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        # Force bandit.select to raise *before* record_pull has a chance.
+        def _explode() -> str:
+            raise RuntimeError("bandit corrupted")
+
+        router._bandit.select = _explode  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="bandit corrupted"):
+            router.invoke("hello")
+
+        # No pull recorded, no reward injected — ledgers in step.
+        stats = router.get_bandit_stats()
+        assert stats["arm_a"]["total_pulls"] == 0
+        assert stats["arm_a"]["window_size"] == 0
+
+    async def test_aselect_failure_before_record_pull_leaves_ledger_clean(
+        self,
+    ) -> None:
+        models = _make_mock_models(["arm_a"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        def _explode() -> str:
+            raise RuntimeError("bandit corrupted")
+
+        router._bandit.select = _explode  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="bandit corrupted"):
+            await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["arm_a"]["total_pulls"] == 0
+        assert stats["arm_a"]["window_size"] == 0
