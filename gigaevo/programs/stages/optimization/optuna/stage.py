@@ -12,6 +12,7 @@ import ast
 import asyncio
 import math
 from pathlib import Path
+import re
 import time
 from typing import Any, cast
 import warnings
@@ -63,8 +64,70 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     run_exec_runner,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
+from gigaevo.utils.text_sanitize import clean_identifier, sanitize_for_log
+
+# Conservative cap on Optuna parameter names. Long enough to admit
+# any reasonable snake_case identifier the LLM proposes; short enough
+# that a hostile payload of megabytes of garbage cannot bloat the
+# trial dict / optuna storage key. Matches typical SQL identifier
+# limits and leaves headroom for compound names like
+# "block_size_x_inner_loop_unroll".
+_MAX_PARAM_NAME_LEN: int = 64
 
 _DEADLINE_GRACE_S: int = 10  # post-eval margin before hard stage timeout
+
+_OPTUNA_PARAM_REF_RE = re.compile(
+    rf"(?P<prefix>{re.escape(_OPTUNA_PARAMS_NAME)}\s*\[\s*)"
+    r"(?P<literal>'(?P<single>(?:\\.|[^'\\])*)'|\"(?P<double>(?:\\.|[^\"\\])*)\")"
+    r"(?P<suffix>\s*\])"
+)
+
+
+def _dedupe_param_name(base_name: str, used_names: set[str]) -> str:
+    """Return a unique Optuna parameter name within the configured length cap."""
+
+    if base_name not in used_names:
+        return base_name
+
+    counter = 1
+    while True:
+        suffix = f"_{counter}"
+        prefix_len = max(1, _MAX_PARAM_NAME_LEN - len(suffix))
+        candidate = f"{base_name[:prefix_len]}{suffix}"
+        if candidate not in used_names:
+            return candidate
+        counter += 1
+
+
+def _string_literal_key(match: re.Match[str]) -> str | None:
+    """Decode the string key from an ``_optuna_params[...]`` regex match."""
+
+    literal = match.group("literal")
+    try:
+        value = ast.literal_eval(literal)
+    except (SyntaxError, ValueError):
+        value = match.group("single")
+        if value is None:
+            value = match.group("double")
+    return value if isinstance(value, str) else None
+
+
+def _rewrite_optuna_param_refs(snippet: str, name_map: dict[str, str]) -> str:
+    """Rewrite string-literal ``_optuna_params`` keys after name sanitization."""
+
+    if not name_map:
+        return snippet
+
+    def replace(match: re.Match[str]) -> str:
+        old_key = _string_literal_key(match)
+        if old_key is None:
+            return match.group(0)
+        new_key = name_map.get(old_key)
+        if new_key is None or new_key == old_key:
+            return match.group(0)
+        return f"{match.group('prefix')}{new_key!r}{match.group('suffix')}"
+
+    return _OPTUNA_PARAM_REF_RE.sub(replace, snippet)
 
 
 @StageRegistry.register(
@@ -206,6 +269,38 @@ class OptunaOptimizationStage(Stage):
         ValueError
             If line ranges are invalid or if the resulting code has syntax errors.
         """
+        # LLM-derived parameter names flow into ``trial.suggest_*`` calls,
+        # which embed the name in Optuna's internal storage key and in
+        # log records. A name like ``"\x00../"`` or ``"abc‮"`` would
+        # otherwise corrupt the trial dict and any downstream sink.
+        # Clean the identifier at the boundary; if the LLM hands us a
+        # name with no surviving characters, fall back to a stable
+        # positional id so optimization can still proceed.
+        name_map: dict[str, str] = {}
+        assigned_by_original: dict[str, str] = {}
+        used_names: set[str] = set()
+        for idx, p in enumerate(search_space.parameters):
+            original_name = p.name
+            if original_name in assigned_by_original:
+                cleaned = assigned_by_original[original_name]
+            else:
+                cleaned = clean_identifier(original_name, max_len=_MAX_PARAM_NAME_LEN)
+                if not cleaned:
+                    cleaned = f"param_{idx}"
+                cleaned = _dedupe_param_name(cleaned, used_names)
+                assigned_by_original[original_name] = cleaned
+                used_names.add(cleaned)
+
+            if cleaned != original_name:
+                name_map[original_name] = cleaned
+            if cleaned != p.name:
+                logger.debug(
+                    "[Optuna] ParamSpec name sanitized: {!r} -> {!r}",
+                    sanitize_for_log(p.name),
+                    cleaned,
+                )
+                p.name = cleaned
+
         lines = original_code.splitlines()
         num_lines = len(lines)
         mods = sorted(search_space.modifications, key=lambda x: x.start_line)
@@ -230,7 +325,8 @@ class OptunaOptimizationStage(Stage):
         for mod in reversed(mods):
             start_idx = mod.start_line - 1
             end_idx = mod.end_line
-            replacement_lines = mod.parameterized_snippet.splitlines()
+            snippet = _rewrite_optuna_param_refs(mod.parameterized_snippet, name_map)
+            replacement_lines = snippet.splitlines()
             # Defensive: strip any "N | " prefix if the LLM copied the numbered format
             replacement_lines = strip_line_number_prefix(replacement_lines)
             # Re-indent to match the original block so we never get "unexpected indent"
@@ -251,14 +347,22 @@ class OptunaOptimizationStage(Stage):
         try:
             ast.parse(code)
         except SyntaxError as e:
-            logger.error(
-                "[Optuna] Parameterized code has syntax error: {}\nCode snippet around error:\n{}",
-                e,
+            # ``e.msg`` and the surrounding code lines originate from
+            # LLM output and may carry ANSI / BIDI / control bytes;
+            # sanitize each interpolation independently.
+            snippet = (
                 "\n".join(code.splitlines()[max(0, e.lineno - 5) : e.lineno + 5])
                 if e.lineno
-                else "Unknown location",
+                else "Unknown location"
             )
-            raise ValueError(f"Parameterized code syntax error: {e}")
+            logger.error(
+                "[Optuna] Parameterized code has syntax error: {}\nCode snippet around error:\n{}",
+                sanitize_for_log(str(e)),
+                sanitize_for_log(snippet),
+            )
+            raise ValueError(
+                f"Parameterized code syntax error: {sanitize_for_log(str(e))}"
+            ) from e
 
         return code
 
@@ -492,8 +596,16 @@ class OptunaOptimizationStage(Stage):
         except TimeoutError:
             return None, None, "Timeout"
         except ExecRunnerError as exc:
+            # Sanitize compiler-stderr-derived text before it flows into
+            # StageError.message / loguru sinks downstream. The returned
+            # error string ends up in failure_reasons and ultimately in
+            # log lines aggregated for the LLM.
             last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
-            return None, None, f"{exc} | {last_line}"
+            return (
+                None,
+                None,
+                f"{sanitize_for_log(str(exc))} | {sanitize_for_log(last_line)}",
+            )
 
     async def _run_optuna(
         self,
@@ -1152,7 +1264,11 @@ class OptunaOptimizationStage(Stage):
             n,
             [p.name for p in param_specs],
         )
-        logger.debug("[Optuna][{}] LLM reasoning: {}", pid, search_space.reasoning)
+        logger.debug(
+            "[Optuna][{}] LLM reasoning: {}",
+            pid,
+            sanitize_for_log(search_space.reasoning),
+        )
 
         # 3. Run Optuna
         (

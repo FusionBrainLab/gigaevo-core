@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 from pydantic import BaseModel
 import redis.asyncio as aioredis
+
+from gigaevo.utils.text_sanitize import deep_sanitize_for_json
 
 if TYPE_CHECKING:
     from gigaevo.evolution.bus.topology import Topology
@@ -28,10 +30,19 @@ class MigrantEnvelope(BaseModel):
     generation: int
 
     def to_stream_fields(self) -> dict[str, str]:
+        # Belt-and-suspenders: program_data carries LLM-generated code plus
+        # stage errors whose origins span Python / Triton / CUDA C++ /
+        # CUTLASS / Mojo / Pallas / CuTe. Any one of those toolchains can
+        # emit text that contains a lone UTF-16 surrogate; json.dumps then
+        # raises UnicodeEncodeError and the migration write aborts. Scrub
+        # surrogates at the boundary.
+        safe_program_data = cast(
+            dict[str, Any], deep_sanitize_for_json(self.program_data)
+        )
         return {
             "source_run_id": self.source_run_id,
             "program_id": self.program_id,
-            "program_data": json.dumps(self.program_data),
+            "program_data": json.dumps(safe_program_data),
             "published_at": str(self.published_at),
             "generation": str(self.generation),
         }

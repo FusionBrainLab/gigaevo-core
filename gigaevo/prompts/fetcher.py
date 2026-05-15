@@ -18,6 +18,7 @@ from loguru import logger
 
 from gigaevo.prompts import load_prompt
 from gigaevo.prompts.coevolution.stats import prompt_text_to_id
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
@@ -292,7 +293,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         candidates.append((pid, fitness, code))
                 except Exception as exc:
                     logger.debug(
-                        f"[GigaEvoArchivePromptFetcher] Error parsing program {pid}: {exc}"
+                        "[GigaEvoArchivePromptFetcher] Error parsing program {}: {}",
+                        sanitize_for_log(str(pid)),
+                        sanitize_for_log(str(exc)),
                     )
                     continue
 
@@ -301,7 +304,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         except Exception as exc:
             self._fetch_errors += 1
             logger.warning(
-                f"[GigaEvoArchivePromptFetcher] Archive read error (#{self._fetch_errors}): {exc}"
+                "[GigaEvoArchivePromptFetcher] Archive read error (#{}): {}",
+                self._fetch_errors,
+                sanitize_for_log(str(exc)),
             )
             return None
 
@@ -327,16 +332,26 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         if pack is None:
             return None
 
-        user_preview = repr(pack.user[:300]) if pack.user else "None"
+        user_preview = (
+            repr(sanitize_for_log(pack.user[:300])) if pack.user else "None"
+        )
+        system_preview = repr(sanitize_for_log(pack.system[:300]))
         logger.info(
-            f"[GigaEvoArchivePromptFetcher] Sampled: {chosen_pid[:8]} "
-            f"fitness={chosen_fitness:.4f} prompt_id={pack.prompt_id} "
-            f"has_user={pack.user is not None} "
-            f"(from {len(candidates)} candidates)\n"
-            f"  SYSTEM[:{min(300, len(pack.system))}]: "
-            f"{pack.system[:300]!r}\n"
-            f"  USER[:{min(300, len(pack.user)) if pack.user else 0}]: "
-            f"{user_preview}"
+            "[GigaEvoArchivePromptFetcher] Sampled: {} "
+            "fitness={:.4f} prompt_id={} "
+            "has_user={} "
+            "(from {} candidates)\n"
+            "  SYSTEM[:{}]: {}\n"
+            "  USER[:{}]: {}",
+            sanitize_for_log(str(chosen_pid[:8])),
+            chosen_fitness,
+            sanitize_for_log(str(pack.prompt_id)),
+            pack.user is not None,
+            len(candidates),
+            min(300, len(pack.system)),
+            system_preview,
+            min(300, len(pack.user)) if pack.user else 0,
+            user_preview,
         )
         return pack
 
@@ -365,18 +380,25 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 return None
             result = entrypoint_fn()
             if isinstance(result, str):
-                if not result.strip():
+                system = sanitize_for_log(result)
+                if not system.strip():
                     logger.warning(
                         "[GigaEvoArchivePromptFetcher] entrypoint() returned empty string"
                     )
                     return None
-                pid = prompt_text_to_id(result)
-                return _PromptPack(system=result, user=None, prompt_id=pid)
+                pid = prompt_text_to_id(system)
+                return _PromptPack(system=system, user=None, prompt_id=pid)
             elif isinstance(result, dict):
                 system = result.get("system", "")
                 if not isinstance(system, str) or not system.strip():
                     logger.warning(
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() missing valid 'system' key"
+                    )
+                    return None
+                system = sanitize_for_log(system)
+                if not system.strip():
+                    logger.warning(
+                        "[GigaEvoArchivePromptFetcher] dict entrypoint() system became empty after sanitization"
                     )
                     return None
                 user = result.get("user")
@@ -385,17 +407,26 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         "[GigaEvoArchivePromptFetcher] dict entrypoint() has invalid 'user' key — ignoring"
                     )
                     user = None
+                if user is not None:
+                    user = sanitize_for_log(user)
+                    if not user.strip():
+                        logger.warning(
+                            "[GigaEvoArchivePromptFetcher] dict entrypoint() user became empty after sanitization"
+                        )
+                        user = None
                 pid = prompt_text_to_id(system, user_text=user)
                 return _PromptPack(system=system, user=user, prompt_id=pid)
             else:
                 logger.warning(
-                    f"[GigaEvoArchivePromptFetcher] entrypoint() returned {type(result)}, "
-                    f"expected str or dict"
+                    "[GigaEvoArchivePromptFetcher] entrypoint() returned {}, "
+                    "expected str or dict",
+                    type(result),
                 )
                 return None
         except Exception as exc:
             logger.warning(
-                f"[GigaEvoArchivePromptFetcher] entrypoint() execution error: {exc}"
+                "[GigaEvoArchivePromptFetcher] entrypoint() execution error: {}",
+                sanitize_for_log(str(exc)),
             )
             return None
 
@@ -552,12 +583,18 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
 
             self._redis_main_sync.set(stats_key, _json.dumps(stats))
             logger.debug(
-                f"[GigaEvoArchivePromptFetcher] Stats updated for {prompt_id}: "
-                f"trials={stats['trials']} successes={stats['successes']} "
-                f"child_fitness={child_fitness:.4f}"
+                "[GigaEvoArchivePromptFetcher] Stats updated for {}: "
+                "trials={} successes={} child_fitness={:.4f}",
+                sanitize_for_log(str(prompt_id)),
+                stats["trials"],
+                stats["successes"],
+                child_fitness,
             )
         except Exception as exc:
-            logger.warning(f"[GigaEvoArchivePromptFetcher] Stats write error: {exc}")
+            logger.warning(
+                "[GigaEvoArchivePromptFetcher] Stats write error: {}",
+                sanitize_for_log(str(exc)),
+            )
 
     def get_stats(self) -> dict[str, Any]:
         return {

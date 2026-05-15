@@ -7,6 +7,7 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState, validate_transition
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 # States after which the DagRunner never accesses the program again.
 # Evict per-program locks for these states to prevent unbounded memory growth.
@@ -100,7 +101,7 @@ class ProgramStateManager:
                 logger.error(
                     "[ProgramStateManager] Invalid state transition for {}: {}",
                     program.short_id,
-                    e,
+                    sanitize_for_log(str(e)),
                 )
                 raise
 

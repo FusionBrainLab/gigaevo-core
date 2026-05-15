@@ -8,12 +8,13 @@ from typing import TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 
 class ProgramInsight(BaseModel):
@@ -23,6 +24,11 @@ class ProgramInsight(BaseModel):
     insight: str = Field(description="Actionable insight with evidence (≤35 words)")
     tag: str = Field(description="Tag for the insight")
     severity: str = Field(description="Severity of the insight")
+
+    @field_validator("type", "insight", "tag", "severity", mode="after")
+    @classmethod
+    def _scrub_text(cls, value: str) -> str:
+        return sanitize_for_log(value)
 
 
 class ProgramInsights(BaseModel):

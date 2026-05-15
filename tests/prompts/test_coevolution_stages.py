@@ -12,7 +12,11 @@ from gigaevo.prompts.coevolution.stages import (
     PromptExecutionStage,
     PromptFitnessStage,
 )
-from gigaevo.prompts.coevolution.stats import PromptMutationStats, PromptStatsProvider
+from gigaevo.prompts.coevolution.stats import (
+    PromptMutationStats,
+    PromptStatsProvider,
+    prompt_text_to_id,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -86,6 +90,32 @@ class TestPromptExecutionStage:
             == "You are a mutation expert. Optimize the given program."
         )
         assert len(result.prompt_id) == 16  # SHA256[:16]
+
+    @pytest.mark.asyncio
+    async def test_execute_sanitizes_returned_prompt_text(self):
+        """compute() sanitizes prompt text before returning and hashing it."""
+        code = (
+            "def entrypoint() -> dict:\n"
+            "    return {\n"
+            "        'system': 'system\\ud83d\\x00\\x1b[31mred\\x1b[0m',\n"
+            "        'user': 'user\\udc00\\r\\u202e',\n"
+            "    }\n"
+        )
+        stage = PromptExecutionStage(timeout=30.0)
+        stage.attach_inputs({})
+
+        result = await stage.compute(Program(code=code))
+
+        assert result.prompt_text == "system�\\x00red"
+        assert result.user_text == "user�\\x0d"
+        assert result.prompt_id == prompt_text_to_id(
+            result.prompt_text, user_text=result.user_text
+        )
+        assert "\ud83d" not in result.prompt_text
+        assert "\x1b" not in result.prompt_text
+        assert "\x00" not in result.prompt_text
+        assert "\udc00" not in result.user_text
+        assert "‮" not in result.user_text
 
     @pytest.mark.asyncio
     async def test_execute_no_entrypoint(self, broken_prompt_program: Program):

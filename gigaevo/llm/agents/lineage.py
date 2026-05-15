@@ -9,12 +9,13 @@ from typing import TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 
 class TransitionInsight(BaseModel):
@@ -26,6 +27,11 @@ class TransitionInsight(BaseModel):
     description: str = Field(
         description="Specific explanation with evidence (≤30 words)"
     )
+
+    @field_validator("strategy", "description", mode="after")
+    @classmethod
+    def _scrub_text(cls, value: str) -> str:
+        return sanitize_for_log(value)
 
 
 class TransitionInsights(BaseModel):

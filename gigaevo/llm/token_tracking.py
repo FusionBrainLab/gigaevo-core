@@ -2,8 +2,9 @@ import threading
 from typing import Annotated, Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, SkipValidation
+from pydantic import BaseModel, Field, SkipValidation, ValidationError
 
+from gigaevo.utils.text_sanitize import clean_identifier, sanitize_for_log
 from gigaevo.utils.trackers.base import LogWriter
 
 
@@ -60,16 +61,39 @@ class TokenTracker(BaseModel):
     )
 
     def track(self, response: Any, model_name: str) -> None:
-        """Track token usage from LLM response. Thread-safe."""
+        """Track token usage from LLM response. Thread-safe.
+
+        ``model_name`` is cleaned through ``clean_identifier`` because it
+        flows into metric path components (``self._write_metrics`` joins it
+        with slashes and colons replaced) and into loguru ``{}`` slots. The
+        ``TokenUsage.from_response`` call is wrapped against ``ValidationError``
+        — a hostile provider returning ``"prompt_tokens": "lots"`` would
+        otherwise abort the whole ``ainvoke`` boundary.
+        """
         if self.writer is None:
             return
 
-        usage = TokenUsage.from_response(response)
-        if usage is None:
+        safe_model_name = clean_identifier(str(model_name), max_len=128) or "unknown"
+        try:
+            usage = TokenUsage.from_response(response)
+        except (ValidationError, TypeError, ValueError) as exc:
             logger.debug(
-                "[TokenTracker:{}] No token usage for {}", self.name, model_name
+                "[TokenTracker:{}] Token usage extraction failed for {}: {}",
+                self.name,
+                safe_model_name,
+                sanitize_for_log(str(exc)),
             )
             return
+        if usage is None:
+            logger.debug(
+                "[TokenTracker:{}] No token usage for {}",
+                self.name,
+                safe_model_name,
+            )
+            return
+        # Shadow original variable so the rest of the function uses the
+        # cleaned name everywhere (cumulative dict key, _write_metrics path).
+        model_name = safe_model_name
 
         with self.lock:
             if model_name not in self.cumulative:

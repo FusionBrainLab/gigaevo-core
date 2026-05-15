@@ -14,6 +14,7 @@ from loguru import logger
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.programs.program import Program
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 try:
     from gigaevo.memory.runtime_config import (
@@ -71,7 +72,7 @@ class MemorySelectorAgent:
 
     def _create_memory_backend(self) -> Any | None:
         if _RUNTIME_IMPORT_ERROR is not None:
-            message = (
+            message = sanitize_for_log(
                 "gigaevo.memory is unavailable"
                 f"{': ' + str(_RUNTIME_IMPORT_ERROR) if _RUNTIME_IMPORT_ERROR else ''}"
             )
@@ -210,17 +211,19 @@ class MemorySelectorAgent:
             logger.info(
                 "[MemorySelectorAgent] Using memory backend "
                 "(class={}, use_api={}, namespace={}, channel={}, checkpoint={})",
-                type(memory).__module__,
+                sanitize_for_log(type(memory).__module__),
                 use_api,
-                namespace,
-                channel,
-                memory_dir,
+                sanitize_for_log(str(namespace)),
+                sanitize_for_log(str(channel)),
+                sanitize_for_log(str(memory_dir)),
             )
             return memory
         except Exception as exc:
-            self._backend_error = str(exc)
+            safe_exc = sanitize_for_log(str(exc))
+            self._backend_error = safe_exc
             logger.warning(
-                "[MemorySelectorAgent] Failed to initialize red memory backend: {}", exc
+                "[MemorySelectorAgent] Failed to initialize red memory backend: {}",
+                safe_exc,
             )
             return None
 
@@ -259,7 +262,7 @@ class MemorySelectorAgent:
         if self.memory is None:
             logger.warning(
                 "[MemorySelectorAgent] Memory backend unavailable: {}",
-                self._backend_error or "unknown error",
+                sanitize_for_log(self._backend_error or "unknown error"),
             )
             return MemorySelection(cards=[], card_ids=[])
 
@@ -280,7 +283,10 @@ class MemorySelectorAgent:
                     self._search_with_ids, query
                 )
         except Exception as exc:
-            logger.warning("[MemorySelectorAgent] Red memory search failed: {}", exc)
+            logger.warning(
+                "[MemorySelectorAgent] Red memory search failed: {}",
+                sanitize_for_log(str(exc)),
+            )
             return MemorySelection(cards=[], card_ids=[])
 
         cards = self._parse_search_result(result_text, max_cards=max_cards)
@@ -295,7 +301,7 @@ class MemorySelectorAgent:
             logger.debug(
                 "[MemorySelectorAgent] Selected {} memory idea(s) via red agent (ids={})",
                 len(cards),
-                card_ids,
+                [sanitize_for_log(cid) for cid in card_ids],
             )
         else:
             logger.debug(
@@ -358,7 +364,7 @@ class MemorySelectorAgent:
             except Exception as exc:
                 logger.warning(
                     "[MemorySelectorAgent] Direct GAM research failed, falling back to plain search: {}",
-                    exc,
+                    sanitize_for_log(str(exc)),
                 )
 
         assert self.memory is not None  # caller checks self.memory before calling

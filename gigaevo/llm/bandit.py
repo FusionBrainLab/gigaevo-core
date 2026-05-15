@@ -19,6 +19,7 @@ from loguru import logger
 import numpy as np
 
 from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter
+from gigaevo.utils.text_sanitize import sanitize_for_log
 from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
@@ -296,7 +297,7 @@ class BanditModelRouter(MultiModelRouter):
             self._bandit.update_reward(model_name, normalized)
             logger.debug(
                 "[BanditModelRouter] Reward for {} ({}): raw=0.0 norm={:.4f}",
-                model_name,
+                sanitize_for_log(str(model_name)),
                 outcome.value,
                 normalized,
             )
@@ -326,7 +327,7 @@ class BanditModelRouter(MultiModelRouter):
         self._bandit.update_reward(model_name, normalized)
         logger.debug(
             "[BanditModelRouter] Reward for {} ({}): raw={:.4f} norm={:.4f}",
-            model_name,
+            sanitize_for_log(str(model_name)),
             outcome.value,
             raw,
             normalized,

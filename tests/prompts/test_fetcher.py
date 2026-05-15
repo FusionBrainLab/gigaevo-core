@@ -232,6 +232,35 @@ class TestGigaEvoArchivePromptFetcher:
 
         assert pack.prompt_id == prompt_text_to_id("Hello system.")
 
+    def test_execute_entrypoint_sanitizes_prompt_pack(self, tmp_prompts_dir: Path):
+        """_execute_entrypoint() sanitizes returned system/user prompt text."""
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="prefix",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        code = (
+            "def entrypoint() -> dict:\n"
+            "    return {\n"
+            "        'system': 'System\\ud83d\\x00\\x1b[31mred\\x1b[0m',\n"
+            "        'user': 'User\\udc00\\r\\u202e',\n"
+            "    }\n"
+        )
+
+        from gigaevo.prompts.coevolution.stats import prompt_text_to_id
+
+        pack = fetcher._execute_entrypoint(code)
+
+        assert pack is not None
+        assert pack.system == "System�\\x00red"
+        assert pack.user == "User�\\x0d"
+        assert pack.prompt_id == prompt_text_to_id(pack.system, user_text=pack.user)
+        assert "\ud83d" not in pack.system
+        assert "\x1b" not in pack.system
+        assert "\x00" not in pack.system
+        assert "\udc00" not in pack.user
+        assert "‮" not in pack.user
+
     def test_execute_entrypoint_dict_return_with_user(self, tmp_prompts_dir: Path):
         """_execute_entrypoint() handles dict-returning entrypoint with user key."""
         fetcher = GigaEvoArchivePromptFetcher(

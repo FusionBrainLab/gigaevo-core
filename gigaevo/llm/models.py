@@ -6,6 +6,7 @@ from contextvars import ContextVar
 import os
 import random
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse, urlunparse
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
@@ -15,6 +16,7 @@ from langfuse.langchain import CallbackHandler
 from loguru import logger
 
 from gigaevo.llm.token_tracking import TokenTracker
+from gigaevo.utils.text_sanitize import clean_identifier, sanitize_for_log
 from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
@@ -22,6 +24,37 @@ if TYPE_CHECKING:
 
 
 _selected_model_var: ContextVar[str | None] = ContextVar("selected_model", default=None)
+
+
+def _redact_url(url: str) -> str:
+    """Strip userinfo (user:password@) from a URL before logging. Other
+    URL components are preserved verbatim. Returns the input unchanged
+    on parse failure."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    if not parsed.hostname:
+        return url
+    netloc = parsed.hostname
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def _safe_model_name(raw: object) -> str:
+    """Validate a model name read off a ChatOpenAI instance. Strips control
+    characters and ANSI; logs a one-shot WARNING if the cleaning changes
+    the input so operators notice a misconfigured identifier."""
+    raw_str = str(raw) if raw is not None else ""
+    cleaned = clean_identifier(raw_str, max_len=128)
+    if cleaned != raw_str:
+        logger.warning(
+            "[MultiModelRouter] model_name sanitized: {!r} -> {!r}",
+            sanitize_for_log(raw_str),
+            cleaned,
+        )
+    return cleaned
 
 
 def get_selected_model() -> str | None:
@@ -95,7 +128,12 @@ class MultiModelRouter(Runnable):
             raise ValueError("All probabilities must be positive")
 
         self.models = models
-        self.model_names = [m.model_name for m in models]
+        # ChatOpenAI.model_name comes from operator config / env interpolation
+        # / occasionally LLM-generated overrides; control characters there
+        # would propagate into every loguru ``{}`` substitution in this
+        # module and into langfuse trace identifiers. Validate once at
+        # construction.
+        self.model_names = [_safe_model_name(m.model_name) for m in models]
         self.probabilities = [p / sum(probabilities) for p in probabilities]
         self._task_model_map: dict[int, str] = {}
         self._name = name
@@ -116,12 +154,15 @@ class MultiModelRouter(Runnable):
             model_desc,
         )
         # Log base URLs for debugging server connectivity
-        for m in models:
+        for m, safe_name in zip(models, self.model_names):
             # ChatOpenAI exposes base_url as a property (langchain 0.1+)
             base_url = getattr(m, "base_url", None)
             if base_url:
                 logger.info(
-                    "[MultiModelRouter:{}] Model {} at {}", name, m.model_name, base_url
+                    "[MultiModelRouter:{}] Model {} at {}",
+                    name,
+                    safe_name,
+                    _redact_url(sanitize_for_log(str(base_url))),
                 )
 
         self._verify_models()
@@ -139,38 +180,45 @@ class MultiModelRouter(Runnable):
             if not base_url or base_url in checked:
                 continue
             checked.add(base_url)
+            # Redacted view of base_url is what enters log messages. The raw
+            # value still drives the HTTP GET below — operators need that
+            # for connectivity debugging, but it must never reach loguru.
+            safe_base_url = _redact_url(sanitize_for_log(str(base_url)))
             try:
                 url = f"{base_url}/models"
                 req = urllib.request.Request(url, method="GET")
                 with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
                     data = _json.loads(resp.read())
-                available = [d["id"] for d in data.get("data", [])]
-                for m in self.models:
+                # Server-returned model ids are LLM-provider-controlled text;
+                # treat them as untrusted before logging or comparing.
+                available_raw = [d["id"] for d in data.get("data", [])]
+                available = [sanitize_for_log(str(x)) for x in available_raw]
+                for m, safe_name in zip(self.models, self.model_names):
                     m_url = getattr(m, "base_url", None) or getattr(
                         m, "openai_api_base", None
                     )
                     if m_url == base_url:
-                        if m.model_name in available:
+                        if m.model_name in available_raw:
                             logger.info(
                                 "[MultiModelRouter:{}] Model {} verified on {}",
                                 self._name,
-                                m.model_name,
-                                base_url,
+                                safe_name,
+                                safe_base_url,
                             )
                         else:
                             logger.warning(
                                 "[MultiModelRouter:{}] Model {} NOT FOUND on {}. Available: {}",
                                 self._name,
-                                m.model_name,
-                                base_url,
+                                safe_name,
+                                safe_base_url,
                                 available,
                             )
             except Exception as exc:
                 logger.warning(
                     "[MultiModelRouter:{}] Cannot verify models at {}: {}",
                     self._name,
-                    base_url,
-                    exc,
+                    safe_base_url,
+                    sanitize_for_log(str(exc)),
                 )
 
     @staticmethod
