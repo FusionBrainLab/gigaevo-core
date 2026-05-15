@@ -290,6 +290,18 @@ class BanditModelRouter(MultiModelRouter):
         if not model_name:
             return
 
+        # update_reward would otherwise KeyError when metadata names an arm
+        # that does not exist on this router (Redis restore, custom operator,
+        # hand-built test fixture).
+        if model_name not in self._bandit.arms:
+            logger.debug(
+                "[BanditModelRouter] Skipping reward for unknown arm {!r} "
+                "(known arms: {})",
+                model_name,
+                list(self._bandit.arms),
+            )
+            return
+
         if outcome == MutationOutcome.REJECTED_ACCEPTOR:
             # No reliable fitness — inject zero reward directly.
             normalized = self._reward_normalizer.normalize(0.0)

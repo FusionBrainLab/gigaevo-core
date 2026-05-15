@@ -508,6 +508,62 @@ class TestBanditModelRouter:
         router.on_mutation_outcome(child, [parent])
         assert router.get_bandit_stats()["model_a"]["window_size"] == 1
 
+    def test_on_mutation_outcome_unknown_arm_skips_silently(self):
+        """A program whose mutation_model metadata does not match any current
+        arm is the realistic failure mode after a Redis restore, a snapshot
+        replay, a custom mutation operator, or a hand-built test program.
+        Previously this raised KeyError inside update_reward and aborted the
+        callback; now it is a silent skip and no arm's window grows."""
+        models = _make_mock_models(["model_a", "model_b"])
+        router = BanditModelRouter(
+            models, [0.5, 0.5], fitness_key="score", higher_is_better=True
+        )
+        child = Program(code="x=1")
+        child.set_metadata("mutation_model", "gpt-4-not-in-router")
+        child.metrics["score"] = 10.0
+        parent = Program(code="x=0")
+        parent.metrics["score"] = 8.0
+
+        # The call must not raise.
+        router.on_mutation_outcome(child, [parent])
+
+        stats = router.get_bandit_stats()
+        assert stats["model_a"]["window_size"] == 0
+        assert stats["model_b"]["window_size"] == 0
+
+    def test_on_mutation_outcome_unknown_arm_skips_on_rejected_acceptor(self):
+        """Same defensive skip applies on the REJECTED_ACCEPTOR branch which
+        bypasses the fitness checks and called update_reward immediately."""
+        models = _make_mock_models(["model_a"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="score", higher_is_better=True
+        )
+        child = Program(code="x=1")
+        child.set_metadata("mutation_model", "unknown_model")
+
+        router.on_mutation_outcome(child, [], outcome=MutationOutcome.REJECTED_ACCEPTOR)
+
+        assert router.get_bandit_stats()["model_a"]["window_size"] == 0
+
+    def test_on_mutation_outcome_unknown_arm_does_not_crash_on_missing_fitness(
+        self,
+    ):
+        """Unknown arm + missing child fitness is the worst-case combination
+        of two defensive code paths; must not raise."""
+        models = _make_mock_models(["model_a"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="score", higher_is_better=True
+        )
+        child = Program(code="x=1")
+        child.set_metadata("mutation_model", "ghost")
+        # No fitness metric set.
+        parent = Program(code="x=0")
+        parent.metrics["score"] = 5.0
+
+        router.on_mutation_outcome(child, [parent])
+
+        assert router.get_bandit_stats()["model_a"]["window_size"] == 0
+
     def test_get_bandit_stats(self):
         models = _make_mock_models(["model_a", "model_b"])
         router = BanditModelRouter(
