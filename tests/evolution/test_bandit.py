@@ -1836,6 +1836,7 @@ class TestStructuredOutputFailureHookErrorsAreLogged:
         payload = repr(call_args)
         assert "hook bug" in payload or "RuntimeError" in payload
 
+
 # ---------------------------------------------------------------------------
 # Pre-_select exceptions: ledger invariant must hold
 # ---------------------------------------------------------------------------

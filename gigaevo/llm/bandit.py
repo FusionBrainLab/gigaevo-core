@@ -328,9 +328,7 @@ class BanditModelRouter(MultiModelRouter):
             result.exception_class,
         )
 
-    def _safe_inject_failure_reward(
-        self, exc: BaseException, arm_name: str
-    ) -> None:
+    def _safe_inject_failure_reward(self, exc: BaseException, arm_name: str) -> None:
         """Best-effort wrapper around ``_inject_failure_reward``.
 
         Mirrors ``_StructuredOutputRouter._maybe_fire_failure_hook``: the
