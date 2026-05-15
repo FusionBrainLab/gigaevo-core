@@ -120,6 +120,29 @@ class TestComputeBanditRewardEdgeCases:
         for child, parent, hib in cases:
             assert compute_bandit_reward(child, parent, higher_is_better=hib) >= 0.0
 
+    # -- non-finite inputs must not poison the sliding-window mean --
+
+    def test_finite_inputs_unaffected_by_finite_guard(self) -> None:
+        """The finite-input fast-path is identical to pre-guard behavior."""
+        r = compute_bandit_reward(10.0, 8.0, higher_is_better=True)
+        assert r == pytest.approx(math.exp(2.0) - 1.0)
+
+    def test_nan_child_returns_neutral_reward(self) -> None:
+        """A NaN child fitness (e.g. from a crashed validity stage) must not
+        propagate into the deque — a single NaN poisons mean_reward and bricks
+        UCB exploration (all scores become NaN, ``score > best_score`` is
+        always False, the first arm in dict order is always selected)."""
+        r = compute_bandit_reward(float("nan"), 8.0, higher_is_better=True)
+        assert r == 0.0
+        assert math.isfinite(r)
+
+    def test_inf_parent_returns_neutral_reward(self) -> None:
+        """Infinite parent fitness (sentinel for unbounded objectives) must
+        not produce inf or NaN reward."""
+        r = compute_bandit_reward(10.0, float("inf"), higher_is_better=True)
+        assert r == 0.0
+        assert math.isfinite(r)
+
 
 # ---------------------------------------------------------------------------
 # RunningPercentileNormalizer

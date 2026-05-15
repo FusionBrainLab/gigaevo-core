@@ -64,9 +64,14 @@ def compute_bandit_reward(
         best_parent_fitness: Best fitness among the parent programs.
         higher_is_better: Whether higher fitness is better.
 
+    Non-finite inputs (NaN or ±inf in either argument) return ``0.0``: a NaN
+    reward would propagate into the sliding-window mean and brick UCB scoring.
+
     Returns:
         Non-negative raw reward, capped at ``exp(_MAX_IMPROVEMENT) - 1``.
     """
+    if not (math.isfinite(child_fitness) and math.isfinite(best_parent_fitness)):
+        return 0.0
     improvement = child_fitness - best_parent_fitness
     if not higher_is_better:
         improvement = -improvement
