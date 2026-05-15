@@ -36,8 +36,12 @@ class TestValidateCodeStageSyntax:
 
     async def test_syntax_error(self):
         stage = ValidateCodeStage(timeout=30.0)
-        with pytest.raises(SyntaxError, match="SyntaxError"):
+        with pytest.raises(SyntaxError) as exc_info:
             await stage.compute(_prog("def foo("))
+        # The reconstructed SyntaxError preserves location info so
+        # ``traceback.format_exception`` renders the caret.
+        assert exc_info.value.lineno == 1
+        assert exc_info.value.text is not None
 
     async def test_too_long(self):
         stage = ValidateCodeStage(timeout=30.0, max_code_length=10)

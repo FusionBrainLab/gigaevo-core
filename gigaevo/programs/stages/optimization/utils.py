@@ -251,7 +251,7 @@ async def evaluate_single(
         logger.trace("[{}] single evaluation timed out", log_tag)
         return None, "Timeout"
     except ExecRunnerError as exc:
-        last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
-        logger.trace("[{}] eval failed: {} | {}", log_tag, exc, last_line)
-        # Return the actual error message so the caller can log it if critical
-        return None, f"{exc} | {last_line}"
+        stderr_tail = (exc.stderr or "").strip()
+        logger.trace("[{}] eval failed: {} | {}", log_tag, exc, stderr_tail)
+        # Return the full stderr so the caller can log it if critical.
+        return None, f"{exc} | {stderr_tail}" if stderr_tail else str(exc)

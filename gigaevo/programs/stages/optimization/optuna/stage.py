@@ -258,7 +258,7 @@ class OptunaOptimizationStage(Stage):
                 if e.lineno
                 else "Unknown location",
             )
-            raise ValueError(f"Parameterized code syntax error: {e}")
+            raise ValueError(f"Parameterized code syntax error: {e}") from e
 
         return code
 
@@ -492,8 +492,9 @@ class OptunaOptimizationStage(Stage):
         except TimeoutError:
             return None, None, "Timeout"
         except ExecRunnerError as exc:
-            last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
-            return None, None, f"{exc} | {last_line}"
+            stderr_tail = (exc.stderr or "").strip()
+            detail = f"{exc} | {stderr_tail}" if stderr_tail else str(exc)
+            return None, None, detail
 
     async def _run_optuna(
         self,

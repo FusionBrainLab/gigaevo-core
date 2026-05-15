@@ -289,11 +289,10 @@ class DagRunner:
                     )
                 self._metrics.record_timeout()
                 logger.error("[DagScheduler] program {} timed out", info.program_id[:8])
-            except Exception as e:
-                logger.error(
-                    "[DagScheduler] discard after timeout failed for {}: {}",
+            except Exception:
+                logger.exception(
+                    "[DagScheduler] discard after timeout failed for {}",
                     info.program_id[:8],
-                    e,
                 )
 
         for info in finished:
@@ -305,10 +304,10 @@ class DagRunner:
                     "[DagScheduler] harvested completed task for program {}",
                     info.program_id[:8],
                 )
-            except Exception as e:
+            except Exception:
                 self._metrics.increment_dag_errors()
-                logger.error(
-                    "[DagScheduler] program {} failed: {}", info.program_id[:8], e
+                logger.exception(
+                    "[DagScheduler] program {} failed", info.program_id[:8]
                 )
             finally:
                 del info
