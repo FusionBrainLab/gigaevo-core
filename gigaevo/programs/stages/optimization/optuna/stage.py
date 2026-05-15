@@ -12,6 +12,7 @@ import ast
 import asyncio
 import math
 from pathlib import Path
+import re
 import time
 from typing import Any, cast
 import warnings
@@ -74,6 +75,59 @@ from gigaevo.utils.text_sanitize import clean_identifier, sanitize_for_log
 _MAX_PARAM_NAME_LEN: int = 64
 
 _DEADLINE_GRACE_S: int = 10  # post-eval margin before hard stage timeout
+
+_OPTUNA_PARAM_REF_RE = re.compile(
+    rf"(?P<prefix>{re.escape(_OPTUNA_PARAMS_NAME)}\s*\[\s*)"
+    r"(?P<literal>'(?P<single>(?:\\.|[^'\\])*)'|\"(?P<double>(?:\\.|[^\"\\])*)\")"
+    r"(?P<suffix>\s*\])"
+)
+
+
+def _dedupe_param_name(base_name: str, used_names: set[str]) -> str:
+    """Return a unique Optuna parameter name within the configured length cap."""
+
+    if base_name not in used_names:
+        return base_name
+
+    counter = 1
+    while True:
+        suffix = f"_{counter}"
+        prefix_len = max(1, _MAX_PARAM_NAME_LEN - len(suffix))
+        candidate = f"{base_name[:prefix_len]}{suffix}"
+        if candidate not in used_names:
+            return candidate
+        counter += 1
+
+
+def _string_literal_key(match: re.Match[str]) -> str | None:
+    """Decode the string key from an ``_optuna_params[...]`` regex match."""
+
+    literal = match.group("literal")
+    try:
+        value = ast.literal_eval(literal)
+    except (SyntaxError, ValueError):
+        value = match.group("single")
+        if value is None:
+            value = match.group("double")
+    return value if isinstance(value, str) else None
+
+
+def _rewrite_optuna_param_refs(snippet: str, name_map: dict[str, str]) -> str:
+    """Rewrite string-literal ``_optuna_params`` keys after name sanitization."""
+
+    if not name_map:
+        return snippet
+
+    def replace(match: re.Match[str]) -> str:
+        old_key = _string_literal_key(match)
+        if old_key is None:
+            return match.group(0)
+        new_key = name_map.get(old_key)
+        if new_key is None or new_key == old_key:
+            return match.group(0)
+        return f"{match.group('prefix')}{new_key!r}{match.group('suffix')}"
+
+    return _OPTUNA_PARAM_REF_RE.sub(replace, snippet)
 
 
 @StageRegistry.register(
@@ -222,10 +276,23 @@ class OptunaOptimizationStage(Stage):
         # Clean the identifier at the boundary; if the LLM hands us a
         # name with no surviving characters, fall back to a stable
         # positional id so optimization can still proceed.
+        name_map: dict[str, str] = {}
+        assigned_by_original: dict[str, str] = {}
+        used_names: set[str] = set()
         for idx, p in enumerate(search_space.parameters):
-            cleaned = clean_identifier(p.name, max_len=_MAX_PARAM_NAME_LEN)
-            if not cleaned:
-                cleaned = f"param_{idx}"
+            original_name = p.name
+            if original_name in assigned_by_original:
+                cleaned = assigned_by_original[original_name]
+            else:
+                cleaned = clean_identifier(original_name, max_len=_MAX_PARAM_NAME_LEN)
+                if not cleaned:
+                    cleaned = f"param_{idx}"
+                cleaned = _dedupe_param_name(cleaned, used_names)
+                assigned_by_original[original_name] = cleaned
+                used_names.add(cleaned)
+
+            if cleaned != original_name:
+                name_map[original_name] = cleaned
             if cleaned != p.name:
                 logger.debug(
                     "[Optuna] ParamSpec name sanitized: {!r} -> {!r}",
@@ -258,7 +325,8 @@ class OptunaOptimizationStage(Stage):
         for mod in reversed(mods):
             start_idx = mod.start_line - 1
             end_idx = mod.end_line
-            replacement_lines = mod.parameterized_snippet.splitlines()
+            snippet = _rewrite_optuna_param_refs(mod.parameterized_snippet, name_map)
+            replacement_lines = snippet.splitlines()
             # Defensive: strip any "N | " prefix if the LLM copied the numbered format
             replacement_lines = strip_line_number_prefix(replacement_lines)
             # Re-indent to match the original block so we never get "unexpected indent"
@@ -292,7 +360,9 @@ class OptunaOptimizationStage(Stage):
                 sanitize_for_log(str(e)),
                 sanitize_for_log(snippet),
             )
-            raise ValueError(f"Parameterized code syntax error: {e}")
+            raise ValueError(
+                f"Parameterized code syntax error: {sanitize_for_log(str(e))}"
+            ) from e
 
         return code
 

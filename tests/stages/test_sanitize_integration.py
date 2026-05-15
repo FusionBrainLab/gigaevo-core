@@ -124,6 +124,32 @@ class TestOptunaParamNameCleaning:
             timeout=30.0,
         )
 
+    def test_clean_paramspec_name_and_reference_stay_unchanged(self, tmp_path: Path):
+        stage = self._make_stage(tmp_path)
+        param = ParamSpec(
+            name="learning_rate",
+            initial_value=0.1,
+            param_type="float",
+            low=0.01,
+            high=1.0,
+            reason="clean",
+        )
+        mod = CodeModification(
+            start_line=1,
+            end_line=1,
+            parameterized_snippet="x = _optuna_params['learning_rate']",
+        )
+        ss = OptunaSearchSpace(
+            parameters=[param],
+            modifications=[mod],
+            reasoning="clean",
+        )
+
+        code = stage._apply_modifications("x = 1\n", ss)
+
+        assert param.name == "learning_rate"
+        assert code == "x = _optuna_params['learning_rate']\n"
+
     def test_nul_in_paramspec_name_cleaned(self, tmp_path: Path):
         stage = self._make_stage(tmp_path)
         param = ParamSpec(
@@ -144,17 +170,17 @@ class TestOptunaParamNameCleaning:
             modifications=[mod],
             reasoning="hostile",
         )
-        # _apply_modifications mutates ParamSpec.name in place.
-        try:
-            stage._apply_modifications("x = 1\n", ss)
-        except Exception:
-            # We don't care whether AST parse succeeds — we only care
-            # that the param name was scrubbed before any optuna call.
-            pass
+
+        code = stage._apply_modifications("x = 1\n", ss)
+
         assert "\x00" not in param.name
         assert ".." in param.name or "etc" in param.name  # printable survived
         # And the name is now safe for use as an optuna key (no control bytes).
         assert _C0_RAW_RE.search(param.name) is None
+        assert code == "x = _optuna_params['../etc/passwd']\n"
+        namespace = {"_optuna_params": {param.name: 3.0}}
+        exec(code, namespace)  # noqa: S102
+        assert namespace["x"] == 3.0
 
     def test_ansi_in_paramspec_name_cleaned(self, tmp_path: Path):
         stage = self._make_stage(tmp_path)
@@ -175,10 +201,7 @@ class TestOptunaParamNameCleaning:
             ],
             reasoning="hostile",
         )
-        try:
-            stage._apply_modifications("x = 1\n", ss)
-        except Exception:
-            pass
+        stage._apply_modifications("x = 1\n", ss)
         assert "\x1b" not in param.name
         assert "red_param" in param.name
 
@@ -202,11 +225,40 @@ class TestOptunaParamNameCleaning:
             ],
             reasoning="hostile",
         )
-        try:
-            stage._apply_modifications("x = 1\n", ss)
-        except Exception:
-            pass
+        stage._apply_modifications("x = 1\n", ss)
         assert param.name == "param_0"
+
+    def test_sanitized_param_name_rewrites_double_quoted_reference(
+        self, tmp_path: Path
+    ):
+        stage = self._make_stage(tmp_path)
+        param = ParamSpec(
+            name="batch size\r",
+            initial_value=16,
+            param_type="int",
+            low=1,
+            high=64,
+            reason="hostile",
+        )
+        ss = OptunaSearchSpace(
+            parameters=[param],
+            modifications=[
+                CodeModification(
+                    start_line=1,
+                    end_line=1,
+                    parameterized_snippet='x = _optuna_params["batch size\\r"]',
+                )
+            ],
+            reasoning="hostile",
+        )
+
+        code = stage._apply_modifications("x = 16\n", ss)
+
+        assert param.name == "batchsize"
+        assert code == "x = _optuna_params['batchsize']\n"
+        namespace = {"_optuna_params": {"batchsize": 32}}
+        exec(code, namespace)  # noqa: S102
+        assert namespace["x"] == 32
 
 
 # ---------------------------------------------------------------------------
