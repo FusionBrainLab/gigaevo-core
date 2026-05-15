@@ -84,12 +84,7 @@ async def run_experiment(cfg: DictConfig) -> None:
         logger.exception("Experiment failed")
         raise
     finally:
-        # Block until loky's executor-manager thread has reaped workers
-        # and fired done-callbacks (including ``_unlink_spill_on_done``
-        # for any in-flight tasks).  Without ``wait=True`` we'd race the
-        # interpreter shutdown: pending futures would set ShutdownExecutorError
-        # without their done-callback running, leaking spill files into
-        # ``/tmp/gigaevo-<uid>`` across run cycles.
+        # ``wait=True`` so spill-unlink done-callbacks fire before exit.
         shutdown_executor(wait=True)
         if redis_storage is not None:
             await redis_storage.close()

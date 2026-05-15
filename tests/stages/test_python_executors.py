@@ -1,20 +1,9 @@
 """Tests for the loky-backed Python executor.
 
-Covers public-surface behaviour (``run_exec_runner``, ``PythonCodeExecutor``
-stages) plus regression reproducers for bugs fixed by the loky migration:
-
-- #78 ER1: :class:`ExecRunnerError` formatting includes stderr.
-- #64 E4 : no ``"MemoryError"``/``"Cannot allocate memory"`` string-match
-  heuristic mislabels in-validator OOM-like errors as ``MemoryLimitExceeded``.
-- #62 E3 : the executor is process-level, not event-loop bound, so a fresh
-  ``asyncio.run`` after the first call does not break.
-- #63 E6 : timeout raises promptly and does not silently fall back to a
-  one-shot subprocess.
-- OBS2  : per-call worker accounting (peak RSS, wall time, pid) is
-  surfaced through the internal ``_run_task`` envelope.
-
-Internal-helper tests (no subprocess) cover ``_run_one`` directly so
-worker-side logic is exercised without paying loky spawn cost.
+Covers the public surface (``run_exec_runner``, ``PythonCodeExecutor``
+stages), regression reproducers for bugs fixed by the loky migration, and
+worker-isolation / env-scrub / spill-hygiene properties.  ``TestRunOneDirect``
+exercises the in-worker library function in-process to skip loky spawn cost.
 """
 
 from __future__ import annotations
@@ -449,9 +438,7 @@ class TestCallValidatorFunction:
 
 
 class TestRegressionER1ExecRunnerErrorStr:
-    """Bug #78: ``ExecRunnerError.__str__`` previously dropped ``stderr``,
-    surfacing only the bare ``"exec_runner failed (exit=N)"`` text and
-    hiding the actual user traceback from logs."""
+    """``ExecRunnerError.__str__`` includes ``stderr`` (was dropped)."""
 
     def test_str_contains_stderr(self) -> None:
         err = ExecRunnerError(returncode=1, stderr="ZeroDivisionError: division by zero")
@@ -470,12 +457,8 @@ class TestRegressionER1ExecRunnerErrorStr:
 
 
 class TestRegressionE4NoMemoryHeuristic:
-    """Bug #64: the previous wrapper substring-matched ``"MemoryError"`` in
-    stderr to set ``StageError.type = "MemoryLimitExceeded"`` — but the same
-    substring appears in legitimate in-validator OOMs, library messages,
-    and even error names like ``KeyError("MemoryError")``.  After the fix
-    the StageError type is always ``SubprocessError`` and the original
-    traceback is preserved verbatim."""
+    """``StageError.type`` is always ``SubprocessError``; no ``"MemoryError"``
+    substring heuristic mislabels in-validator OOMs or similar messages."""
 
     async def test_user_raises_memoryerror_does_not_mislabel(self) -> None:
         from unittest.mock import AsyncMock, patch
@@ -531,15 +514,8 @@ class TestRegressionE4NoMemoryHeuristic:
 
 
 class TestRegressionE62NotEventLoopBound:
-    """Bug #62: the old ``default_exec_runner_pool()`` was ``@lru_cache``
-    around an ``asyncio.Queue`` / ``asyncio.Lock`` pair, binding the pool
-    to whichever event loop was running at first call.  Subsequent calls
-    from a different loop crashed with "Future attached to a different loop".
-
-    The loky executor is process-level and indifferent to which asyncio
-    loop submits to it, so two sequential ``asyncio.run`` calls now share
-    the pool transparently.
-    """
+    """The loky executor is process-level; two sequential ``asyncio.run``
+    calls share the pool (was lru_cache-bound to first event loop)."""
 
     def test_two_sequential_event_loops_share_executor(self) -> None:
         async def one() -> int:
@@ -552,30 +528,19 @@ class TestRegressionE62NotEventLoopBound:
 
 
 class TestRegressionE63TimeoutNoSilentRetry:
-    """Bug #63: on worker timeout the old wrapper silently fell through to a
-    second one-shot subprocess — doubling the wall time and hiding the
-    underlying timeout from the caller.  The new wrapper raises promptly."""
+    """Timeout raises promptly; no silent one-shot subprocess retry."""
 
     async def test_timeout_completes_within_budget(self) -> None:
         code = "import time\ndef f():\n    time.sleep(30)\n    return 0\n"
         t0 = time.monotonic()
         with pytest.raises((TimeoutError, asyncio.TimeoutError, ExecRunnerError)):
             await run_exec_runner(code=code, function_name="f", timeout=1)
-        elapsed = time.monotonic() - t0
-        # The old "silent one-shot retry" path would have taken ~2x timeout
-        # plus subprocess spawn cost.  Allow generous headroom for slow CI.
-        assert elapsed < 1.0 + 4.0, f"timeout took {elapsed:.2f}s — silent retry?"
-
-
-# =============================================================================
-# Resource hygiene
-# =============================================================================
+        # Old code's silent retry would have taken ~2x timeout.
+        assert time.monotonic() - t0 < 1.0 + 4.0
 
 
 class TestSpillFileLifecycle:
-    """Spill files in :data:`SPILL_DIR` must be unlinked after every call,
-    whether the result was read successfully or the parent never read it
-    (e.g. on cancellation)."""
+    """Spill files are unlinked after every call."""
 
     async def test_spill_unlinked_after_success(self, isolated_spill_dir) -> None:
         result = await run_exec_runner(
@@ -602,15 +567,8 @@ class TestSpillFileLifecycle:
         assert list(isolated_spill_dir.iterdir()) == []
 
 
-# =============================================================================
-# Env scrubbing — security
-# =============================================================================
-
-
 class TestEnvScrubbing:
-    """User code should not see arbitrary parent env vars — only the
-    whitelisted set plus ``GIGAEVO_*`` / ``LOKY_*`` prefixed keys.  Catches
-    accidental leakage of API tokens through the subprocess boundary."""
+    """Worker sees only whitelisted + ``GIGAEVO_*``/``LOKY_*`` env vars."""
 
     async def test_secret_env_var_invisible_to_worker(
         self, monkeypatch, fresh_executor
@@ -672,9 +630,6 @@ class TestEnvScrubbing:
     async def test_well_known_secret_env_vars_scrubbed(
         self, monkeypatch, fresh_executor, secret_key: str
     ) -> None:
-        """None of the standard cloud/SaaS secret env vars should reach
-        the worker.  Locked in via parametrize so a future whitelist
-        edit that accidentally adds one of these trips this test."""
         monkeypatch.setenv(secret_key, "should-not-leak")
         seen = await run_exec_runner(
             code=(
@@ -687,16 +642,8 @@ class TestEnvScrubbing:
         assert seen is None, f"{secret_key} leaked to worker"
 
 
-# =============================================================================
-# Spill directory hardening
-# =============================================================================
-
-
 class TestSpillDirHardening:
-    """The default spill directory should not be a bare ``$TMPDIR``
-    (mixing with other users' tempfiles leaks workload metadata via
-    directory listing).  Operator-supplied paths must be resolved so
-    ``..`` segments don't smuggle traversal through innocuous parents."""
+    """Default spill dir is per-uid; operator paths get ``..`` resolved."""
 
     def test_default_spill_dir_is_per_uid(self, monkeypatch) -> None:
         from pathlib import Path as _Path
@@ -724,17 +671,9 @@ class TestSpillDirHardening:
         assert cfg.spill_dir == target.resolve()
 
 
-# =============================================================================
-# Worker observability (OBS2)
-# =============================================================================
-
-
 class TestWorkerSignalDispositions:
-    """``_worker_init`` should leave the worker with default signal
-    handlers so user code sees standard Python semantics — KeyboardInterrupt
-    on SIGINT, termination on SIGTERM/SIGHUP/SIGQUIT, BrokenPipeError on
-    SIGPIPE — regardless of what loky installs internally.
-    """
+    """Workers have default signal handlers (KeyboardInterrupt on SIGINT,
+    SIG_DFL on SIGTERM/SIGHUP/SIGQUIT) regardless of loky's internal setup."""
 
     async def test_sigint_handler_is_default_int_handler(self) -> None:
         result = await run_exec_runner(
@@ -765,9 +704,7 @@ class TestWorkerSignalDispositions:
 
 
 class TestWorkerObservability:
-    """:class:`WorkerResult` carries per-call resource accounting so the
-    wrapper can log it and (later) feed a metrics writer.  The fields must
-    be populated and non-degenerate."""
+    """``WorkerResult`` resource-accounting fields are populated."""
 
     def test_run_task_populates_envelope_fields(self, tmp_path) -> None:
         from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
@@ -791,21 +728,13 @@ class TestWorkerObservability:
                 os.unlink(result.spill_path)
 
 
-# =============================================================================
-# Unpicklable result — structured-error path
-# =============================================================================
-
-
 class TestUnpicklableResult:
-    """A user function that returns an unpicklable object (open file,
-    lambda) must surface as :class:`ExecRunnerError`, not as a raw
-    pickling exception that leaks out of the worker."""
+    """Unpicklable results surface as :class:`ExecRunnerError`."""
 
-    async def test_returning_lambda_raises_exec_runner_error(self) -> None:
-        code = "def f(): return lambda x: x"
-        # Lambdas are picklable via cloudpickle so this should actually
-        # succeed; verify the round-trip survives.
-        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+    async def test_lambda_round_trips_via_cloudpickle(self) -> None:
+        result = await run_exec_runner(
+            code="def f(): return lambda x: x", function_name="f", timeout=10
+        )
         assert callable(result)
 
     async def test_returning_open_file_handle_raises_exec_runner_error(self) -> None:
@@ -823,14 +752,8 @@ class TestUnpicklableResult:
         )
 
 
-# =============================================================================
-# Large-result round-trip via mmap spill
-# =============================================================================
-
-
 class TestSpillMmapRoundTrip:
-    """Multi-MB numpy arrays must round-trip via the mmap spill path
-    without truncation, byte-order corruption, or loss of dtype."""
+    """Multi-MB numpy arrays round-trip via the mmap spill path."""
 
     async def test_numpy_2d_array_roundtrip(self) -> None:
         import numpy as np
@@ -853,9 +776,7 @@ class TestSpillMmapRoundTrip:
 
 
 class TestWorkerIsolation:
-    """Successive calls into the same loky worker should not leak state —
-    env mutations are reverted, sys.path is independent, and user_code
-    module shadows do not persist."""
+    """Successive calls into the same worker don't leak cwd / sys.path / env."""
 
     async def test_env_update_does_not_leak_between_calls(self) -> None:
         await run_exec_runner(
@@ -872,9 +793,8 @@ class TestWorkerIsolation:
             function_name="f",
             timeout=10,
         )
-        # Either the env was restored (correct) or the second call's
-        # absent env_updates left whatever the first call set.  Both are
-        # acceptable but the second case should not leak the literal "1".
+        # Either env was restored, or the second call's absent
+        # env_updates left whatever the first call set.  Both acceptable.
         assert seen in ("unset", "1")
 
     async def test_user_code_name_does_not_persist_old_definitions(self) -> None:
@@ -891,14 +811,6 @@ class TestWorkerIsolation:
         assert result == "missing"
 
     async def test_user_chdir_does_not_leak_to_next_call(self, tmp_path) -> None:
-        """Bug: workers are reused.  A user ``os.chdir(/tmp/...)`` in one
-        call would otherwise become the *implicit* cwd for the next call —
-        causing relative-path reads to silently target the wrong tree and
-        ``_ensure_cwd_in_path`` to pin the leaked dir onto ``sys.path``.
-
-        After ``_run_one`` snapshots+restores cwd, the second call's cwd
-        is whatever the worker had at spawn time, not the leaked dir.
-        """
         leak_dir = tmp_path / "leak-target"
         leak_dir.mkdir()
 
@@ -926,9 +838,6 @@ class TestWorkerIsolation:
     async def test_user_sys_path_mutation_does_not_leak_to_next_call(
         self,
     ) -> None:
-        """Bug: ``sys.path.insert(0, ...)`` in user code would survive into
-        the next caller's task because the worker is reused.  After the fix
-        ``_run_one`` snapshots+restores ``sys.path``."""
         sentinel = "/__sentinel_sys_path_leak_xyz__"
         await run_exec_runner(
             code=(
@@ -953,17 +862,8 @@ class TestWorkerIsolation:
         )
 
 
-# =============================================================================
-# Direct exec_runner._run_one — in-parent worker-library tests
-# =============================================================================
-
-
 class TestRunOneDirect:
-    """``_run_one`` is the worker-side library function.  Testing it in the
-    parent process gives fast coverage of payload handling, error paths,
-    env mutation, and syntax-error formatting without paying loky's worker
-    spawn cost.
-    """
+    """In-parent unit tests for ``_run_one`` — no loky spawn cost."""
 
     def test_success_returns_value_none(self) -> None:
         from gigaevo.programs.stages.python_executors.exec_runner import (

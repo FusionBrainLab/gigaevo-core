@@ -180,20 +180,8 @@ class NeverCachedStage(Stage):
 
 @pytest.fixture(scope="session", autouse=True)
 def _shutdown_loky_executor_at_session_end():
-    """Kill loky workers once at session teardown.
-
-    Function-scoped teardown would pay the ``cpu_count``-worker spawn cost
-    on every test; loky's reusable executor is safe to share across the
-    session because :func:`get_reusable_executor` respawns on env/config
-    change anyway.
-
-    Uses ``wait=True`` so under pytest-xdist the per-worker process
-    actually reaps its subprocess children before exiting — otherwise the
-    xdist worker may exit with the loky executor-manager thread mid-SIGKILL,
-    leaving zombie loky workers parented to init until ``PR_SET_PDEATHSIG``
-    fires (which it doesn't if the xdist worker exited cleanly: SIGTERM is
-    sent only on *parent death*, not parent exit).
-    """
+    """Kill loky workers at session end with ``wait=True`` so xdist workers
+    actually reap their loky children before exiting."""
     yield
     try:
         from gigaevo.programs.stages.python_executors.wrapper import (
@@ -207,12 +195,7 @@ def _shutdown_loky_executor_at_session_end():
 
 @pytest.fixture
 def isolated_spill_dir(tmp_path, monkeypatch):
-    """Point the wrapper's spill directory at a per-test temp directory.
-
-    Lets tests count spill artefacts without interference from concurrent
-    test runs or system-level tmp pollution.  Replaces the module-level
-    ``_CONFIG`` so the new ``spill_dir`` takes effect on the next call.
-    """
+    """Point the wrapper's spill directory at a per-test temp directory."""
     from dataclasses import replace
 
     from gigaevo.programs.stages.python_executors import wrapper as _wrapper
@@ -227,12 +210,7 @@ def isolated_spill_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fresh_executor():
-    """Tear down the loky pool before and after the test.
-
-    Use for tests that need a guaranteed-fresh worker state — e.g.
-    inspecting env propagation, verifying lazy-spawn semantics, or
-    asserting clean shutdown.  Costs ``cpu_count`` worker spawns.
-    """
+    """Tear down the loky pool before and after the test."""
     from gigaevo.programs.stages.python_executors.wrapper import shutdown_executor
 
     shutdown_executor()

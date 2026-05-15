@@ -11,6 +11,7 @@ tracebacks, and user-exception capture.
 
 from __future__ import annotations
 
+import contextlib
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 import io
@@ -41,13 +42,7 @@ class WorkerCall:
 
 @dataclass(frozen=True, slots=True)
 class WorkerError:
-    """Structured failure from user-code execution.
-
-    ``stderr`` holds the formatted traceback (plus any captured
-    stdout/stderr from before the error).  ``returncode`` mirrors the
-    exit-code convention historically used by the subprocess protocol;
-    callers should treat ``0`` as success and anything else as failure.
-    """
+    """Structured failure: ``stderr`` is the formatted traceback."""
 
     stderr: str
     returncode: int = 1
@@ -235,28 +230,15 @@ def _format_error(prefix_text: str, captured: str = "") -> str:
 
 
 def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
-    """Run a single user-code call.
+    """Run a single user-code call inside a (possibly reused) worker.
 
-    Returns ``(value, None)`` on success or ``(None, WorkerError)`` on
-    failure.  ``BaseException`` is caught so that user ``sys.exit()`` and
-    ``KeyboardInterrupt`` become structured errors rather than tearing
-    down the worker process.
-
-    Workers are reused across calls (loky pool), so any process-global
-    mutation made by user code — ``os.chdir()``, ``sys.path.insert``,
-    new entries in ``sys.modules`` — would otherwise persist into the
-    next caller's task.  We snapshot ``cwd`` and ``sys.path`` on entry
-    and restore them on exit; ``sys.modules`` is left alone (matching
-    CPython's own ``-c`` semantics — a script gets to see and add
-    modules, and subsequent imports correctly reuse them).
+    Catches ``BaseException`` so ``sys.exit()``/``KeyboardInterrupt`` become
+    structured errors instead of tearing down the worker.  Snapshots and
+    restores ``cwd`` and ``sys.path`` so user-code mutations don't leak into
+    the next caller; ``sys.modules`` is intentionally left alone (matches
+    CPython ``-c`` semantics).
     """
     captured = io.StringIO()
-    # Snapshot worker-global state we'll restore on exit.  ``getcwd``
-    # may raise FileNotFoundError if the previous call ran ``os.chdir``
-    # to a directory that has since been removed; in that case we have
-    # nothing meaningful to restore to and fall back to the user's home
-    # (HOME is in the whitelist; if unset we tolerate the lack of
-    # restoration rather than failing the call).
     try:
         cwd_before: str | None = os.getcwd()
     except OSError:
@@ -283,20 +265,14 @@ def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
             with redirect_stdout(captured), redirect_stderr(captured):
                 result = fn(*call.args, **call.kwargs)
 
-            # User-visible prints surface in the worker's real stderr (so
-            # they appear in worker logs); they are not returned to the parent.
             printed = captured.getvalue()
             if printed:
                 sys.stderr.write(printed)
                 sys.stderr.flush()
 
-        # Register the synthetic module so cloudpickle embeds user-defined
-        # classes by value; the parent has no ``user_code`` module to
-        # import-by-reference against.  Done outside ``_scoped_env`` because
-        # registration is a process-global side effect unrelated to env state,
-        # and the registry must survive the env-restore (the parent reads
-        # the spill *after* this function returns).  Registry is keyed by
-        # module name (string) so re-registering across calls is idempotent.
+        # The parent has no ``user_code`` module; register-by-value embeds
+        # any user-defined classes into the pickle stream.  Set-keyed-by-name
+        # so this is idempotent across calls.
         cloudpickle.register_pickle_by_value(mod)
         return (result, None)
 
@@ -316,13 +292,7 @@ def _run_one(call: WorkerCall) -> tuple[Any, WorkerError | None]:
         )
 
     finally:
-        # Restore in reverse order of capture.  ``chdir`` may fail (the
-        # snapshotted dir could have been deleted by user code); swallow
-        # that — leaking the wrong cwd into the next call is worse than
-        # logging nothing here.
         sys.path[:] = sys_path_before
         if cwd_before is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.chdir(cwd_before)
-            except OSError:
-                pass
