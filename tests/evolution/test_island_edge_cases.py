@@ -910,7 +910,8 @@ class TestCalculateOptimizedBounds:
         assert result == {}
 
     def test_single_point_batch(self):
-        """Single metric point creates bounds around that point with margin."""
+        """Single metric point: zero-range batches are refused (the prior
+        1e-5 margin collapsed the dimension permanently)."""
         space = DynamicBehaviorSpace(
             bins={
                 "x": LinearBinning(
@@ -920,11 +921,7 @@ class TestCalculateOptimizedBounds:
             expansion_buffer_ratio=0.1,
         )
         result = space.calculate_optimized_bounds([{"x": 50.0}])
-        assert "x" in result
-        new_min, new_max = result["x"]
-        # Single point: range=0, margin=1e-5
-        assert new_min == pytest.approx(50.0 - 1e-5)
-        assert new_max == pytest.approx(50.0 + 1e-5)
+        assert result["x"] == (0.0, 100.0)
 
     def test_batch_missing_key_excluded(self):
         """If a key is missing from all metrics, it's excluded from bounds."""

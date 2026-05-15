@@ -246,9 +246,15 @@ class DynamicBehaviorSpace(BehaviorSpace):
             (new_min, new_max) - always returns both values
         """
         obs_min, obs_max = min(values), max(values)
-
-        # Calculate margin based on observed range
         value_range = obs_max - obs_min
+
+        # A single sample (or all-equal batch) gives zero observed range; the
+        # `_calculate_margin` fallback of 1e-5 would collapse the dimension to
+        # a ~2e-5 window and destroy resolution permanently — the initial-bounds
+        # clamp prevents re-widening once samples diversify.
+        if value_range == 0:
+            return strategy.min_val, strategy.max_val
+
         margin = self._calculate_margin(value_range)
 
         # Calculate new bounds with margin, clamped to initial bounds
