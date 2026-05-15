@@ -200,16 +200,21 @@ def _shutdown_loky_executor_at_session_end():
 
 @pytest.fixture
 def isolated_spill_dir(tmp_path, monkeypatch):
-    """Point the wrapper's ``SPILL_DIR`` at a per-test temp directory.
+    """Point the wrapper's spill directory at a per-test temp directory.
 
     Lets tests count spill artefacts without interference from concurrent
-    test runs or system-level tmp pollution.
+    test runs or system-level tmp pollution.  Replaces the module-level
+    ``_CONFIG`` so the new ``spill_dir`` takes effect on the next call.
     """
+    from dataclasses import replace
+
     from gigaevo.programs.stages.python_executors import wrapper as _wrapper
 
     spill = tmp_path / "spill"
     spill.mkdir()
-    monkeypatch.setattr(_wrapper, "SPILL_DIR", spill)
+    monkeypatch.setattr(
+        _wrapper, "_CONFIG", replace(_wrapper._CONFIG, spill_dir=spill)
+    )
     return spill
 
 

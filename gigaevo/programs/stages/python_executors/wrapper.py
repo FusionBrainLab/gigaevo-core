@@ -150,7 +150,19 @@ def _scrub_env(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def _worker_init() -> None:
-    """Linux only: have the kernel SIGTERM this worker if the parent dies."""
+    """Per-worker startup hook.
+
+    * Scrubs ``os.environ`` down to the whitelist (loky's ``env=`` kwarg is
+      additive, so we have to drop non-whitelisted keys explicitly here).
+    * On Linux, asks the kernel to SIGTERM this worker if the parent dies.
+    """
+    for key in list(os.environ.keys()):
+        if key in _ENV_WHITELIST:
+            continue
+        if key.startswith("GIGAEVO_") or key.startswith("LOKY_"):
+            continue
+        os.environ.pop(key, None)
+
     if sys.platform != "linux":
         return
     try:
