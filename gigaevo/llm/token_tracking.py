@@ -7,6 +7,36 @@ from pydantic import BaseModel, Field, SkipValidation
 from gigaevo.utils.trackers.base import LogWriter
 
 
+def _coerce_int(value: Any) -> int:
+    """Coerce a token-count value to ``int``, defaulting to ``0``.
+
+    Hostile providers occasionally return ``None``, strings, floats with
+    non-integer fractions, or arbitrary objects in their ``usage`` payload.
+    Token counts are summed downstream into a Pydantic ``int`` field
+    (``TokenUsage.cumulative``), so an uncoerced non-int would raise on the
+    first ``cum.context += usage.context`` add. Coerce defensively and
+    swallow conversion errors as ``0`` — token telemetry is observability-
+    only and must never crash the LLM call site.
+    """
+    if isinstance(value, bool):
+        # ``bool`` is a subclass of ``int`` — accept silently as 0/1 for
+        # the rare provider that returns a flag instead of a count.
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return 0
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
 class TokenUsage(BaseModel):
     """Token counts for a single LLM call."""
 
@@ -17,33 +47,43 @@ class TokenUsage(BaseModel):
 
     @classmethod
     def from_response(cls, response: Any) -> "TokenUsage | None":
-        """Extract token usage from LLM response metadata."""
-        if not hasattr(response, "response_metadata") or not response.response_metadata:
+        """Extract token usage from LLM response metadata.
+
+        Defensive against hostile / malformed payloads: a provider that
+        returns a string (or any non-dict) in ``completion_tokens_details``,
+        ``token_usage``, or ``usage`` must not propagate an ``AttributeError``
+        into the call site. The bandit's ``_safe_track`` already swallows
+        such failures, but direct callers (``MultiModelRouter`` in
+        ``gigaevo/llm/models.py``) have no second-level guard, so the
+        hardening lives here.
+        """
+        metadata = getattr(response, "response_metadata", None)
+        if not metadata or not isinstance(metadata, dict):
             return None
 
-        usage = response.response_metadata.get(
-            "token_usage"
-        ) or response.response_metadata.get("usage")
-        if not usage:
+        usage = metadata.get("token_usage") or metadata.get("usage")
+        if not usage or not isinstance(usage, dict):
             return None
 
-        # Extract reasoning tokens - try multiple possible field names/structures
+        # Extract reasoning tokens - try multiple possible field names/structures.
+        # Each branch tolerates non-dict / non-int values from hostile providers.
         reasoning = 0
         # OpenAI o1/o3 style: completion_tokens_details.reasoning_tokens
-        if details := usage.get("completion_tokens_details"):
-            reasoning = details.get("reasoning_tokens", 0) or 0
+        details = usage.get("completion_tokens_details")
+        if isinstance(details, dict):
+            reasoning = _coerce_int(details.get("reasoning_tokens"))
         # Direct field (some providers)
         if not reasoning:
-            reasoning = usage.get("reasoning_tokens", 0) or 0
+            reasoning = _coerce_int(usage.get("reasoning_tokens"))
         # Qwen/thinking models might use different names
         if not reasoning:
-            reasoning = usage.get("thinking_tokens", 0) or 0
+            reasoning = _coerce_int(usage.get("thinking_tokens"))
 
         return cls(
-            context=usage.get("prompt_tokens", 0),
-            generated=usage.get("completion_tokens", 0),
+            context=_coerce_int(usage.get("prompt_tokens")),
+            generated=_coerce_int(usage.get("completion_tokens")),
             reasoning=reasoning,
-            total=usage.get("total_tokens", 0),
+            total=_coerce_int(usage.get("total_tokens")),
         )
 
 
