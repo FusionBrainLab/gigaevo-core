@@ -94,3 +94,39 @@ def foo():
         result = _strip(code)
         # The string after a statement is not a docstring
         assert "this is not a docstring" in result
+
+    # -- empty-body bodies must remain syntactically valid --
+
+    def test_function_with_only_docstring_becomes_parseable_pass(self) -> None:
+        """`def stub(): "..."` would become `def stub():` (no body) without
+        the Pass insertion — `ast.unparse` emits it but `ast.parse` rejects
+        it, silently corrupting mutants that contain placeholder stubs."""
+        code = '''
+def stub():
+    """Empty stub."""
+'''
+        result = _strip(code)
+        ast.parse(result)  # must re-parse
+        assert "pass" in result
+        assert "Empty stub" not in result
+
+    def test_module_only_docstring_stays_empty_without_pass(self) -> None:
+        """Module bodies are allowed to be empty; do not inject a top-level
+        Pass after removing a module docstring."""
+        code = '"""Module-only docstring."""\n'
+        result = _strip(code)
+        ast.parse(result)
+        assert "pass" not in result
+        assert "Module-only" not in result
+
+    def test_function_with_body_does_not_get_extra_pass(self) -> None:
+        """Existing-body fast-path must not gain a stray Pass."""
+        code = '''
+def foo():
+    """doc."""
+    return 1
+'''
+        result = _strip(code)
+        ast.parse(result)
+        assert "pass" not in result
+        assert "return 1" in result
