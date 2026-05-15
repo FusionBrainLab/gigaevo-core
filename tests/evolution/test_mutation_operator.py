@@ -199,6 +199,32 @@ class TestCanonicalizeCode:
         assert "# this is a comment" not in canonical
         assert "return 1" in canonical
 
+    # -- canonicalization output must be re-parseable --
+
+    def test_empty_body_function_canonicalizes_to_valid_python(self):
+        """Function whose only statement is a docstring used to produce
+        `def f():` with no suite — invalid Python. Now `pass` is inserted."""
+        code = 'def stub():\n    """just a stub."""\n'
+        canonical = LLMMutationOperator._canonicalize_code(code)
+        import ast as _ast  # re-import locally to ensure parse uses stdlib ast
+
+        _ast.parse(canonical)  # must not raise
+        assert "pass" in canonical
+        assert "just a stub" not in canonical
+
+    def test_round_trip_failure_falls_back_to_original(self):
+        """If a future AST transformer ever emits unparseable Python, the
+        round-trip check catches it and returns the input untouched."""
+        from unittest.mock import patch
+
+        code = "def f():\n    return 1\n"
+        with patch(
+            "gigaevo.evolution.mutation.mutation_operator.ast.unparse",
+            return_value="def f(:",  # deliberately broken
+        ):
+            result = LLMMutationOperator._canonicalize_code(code)
+        assert result == code
+
 
 # ---------------------------------------------------------------------------
 # TestOnProgramIngested

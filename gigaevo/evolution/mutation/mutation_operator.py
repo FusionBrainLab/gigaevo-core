@@ -90,6 +90,10 @@ class LLMMutationOperator(MutationOperator):
             remover = _DocstringRemover()
             tree = remover.visit(tree)
             canonicalized = ast.unparse(tree)
+            # ast.unparse does not validate its output; defend against any
+            # future AST transformer producing unparseable code by re-parsing
+            # the result and falling back to the original on round-trip failure.
+            ast.parse(canonicalized)
             return canonicalized
         except SyntaxError as e:
             logger.warning(
