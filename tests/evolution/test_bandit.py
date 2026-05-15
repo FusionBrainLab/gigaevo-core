@@ -1893,3 +1893,249 @@ class TestPreSelectFailureLedgerInvariant:
         stats = router.get_bandit_stats()
         assert stats["arm_a"]["total_pulls"] == 0
         assert stats["arm_a"]["window_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Engine / mutation-operator integration: no double-injection on failure
+# ---------------------------------------------------------------------------
+
+
+class TestBanditNoDoubleInjectionOnFailure:
+    """Audit hypothesis 3: when an LLM call inside the mutation operator
+    fails, the bandit must receive **exactly one** ledger entry — the
+    immediate ``_inject_failure_reward`` from ``ainvoke``. A failed
+    mutation never reaches persistence (``generate_and_persist_mutation``
+    returns ``None`` on ``MutationError``), which means the engine never
+    fires ``_notify_hook`` and therefore never calls
+    ``on_program_ingested`` → ``on_mutation_outcome``. This test pins
+    that invariant: a future refactor that, say, persists a placeholder
+    program for failed mutations would break it by causing a second
+    reward entry to land in the window for the same pull.
+    """
+
+    async def test_failed_ainvoke_injects_exactly_one_zero_reward(
+        self,
+    ) -> None:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.ainvoke = AsyncMock(side_effect=RuntimeError("provider 500"))
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        with pytest.raises(RuntimeError, match="provider 500"):
+            await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        # Exactly one reward entry — the failure-path zero injection.
+        assert stats["flaky"]["window_size"] == 1
+        # And it really is a zero (normalizer is in warmup so it returns 0.5
+        # for the first sample, but it appended exactly one).
+        assert len(router._bandit.arms["flaky"].rewards) == 1
+
+    async def test_on_mutation_outcome_not_invoked_when_failed_ainvoke(
+        self,
+    ) -> None:
+        """The engine only fires ``on_mutation_outcome`` for persisted
+        programs. A failed LLM call → ``MutationError`` → no persistence
+        → no outcome callback. We simulate the production path: the
+        bandit sees the failure injection, and ``on_mutation_outcome``
+        is never invoked for that same call.
+        """
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.ainvoke = AsyncMock(side_effect=RuntimeError("timeout"))
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        seen_outcomes: list[MutationOutcome] = []
+        original = router.on_mutation_outcome
+
+        def _spy(program, parents, outcome=MutationOutcome.ACCEPTED):  # noqa: ANN001
+            seen_outcomes.append(outcome)
+            return original(program, parents, outcome=outcome)
+
+        router.on_mutation_outcome = _spy  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="timeout"):
+            await router.ainvoke("hello")
+
+        # No on_mutation_outcome call — only the failure-path injection.
+        assert seen_outcomes == []
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_success_then_explicit_outcome_yields_exactly_one_reward(
+        self,
+    ) -> None:
+        """Symmetric to the negative case: a successful ainvoke defers
+        reward to ``on_mutation_outcome``. After the engine calls it once
+        per accepted program, the window holds exactly one entry — no
+        accidental double-injection from a stale failure path."""
+        ok = MagicMock()
+        ok.model_name = "ok"
+        ok.ainvoke = AsyncMock(return_value=MagicMock())
+        ok.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [ok], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._tracker = MagicMock()  # avoid touching real tracker.track
+
+        await router.ainvoke("hello")
+
+        # Deferred — nothing in window yet.
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        assert stats["ok"]["window_size"] == 0
+
+        # Engine path: parent + accepted child with mutation_model metadata.
+        parent = Program(code="x=0")
+        parent.metrics["score"] = 5.0
+        child = Program(code="x=1")
+        child.set_metadata("mutation_model", "ok")
+        child.metrics["score"] = 7.0
+        router.on_mutation_outcome(child, [parent], outcome=MutationOutcome.ACCEPTED)
+
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        # Exactly one reward — the deferred outcome reward, not a double.
+        assert stats["ok"]["window_size"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Concurrent dispatch stress: success/failure mix invariants
+# ---------------------------------------------------------------------------
+
+
+class TestBanditConcurrentMixedDispatch:
+    """Audit hypothesis 7: under heavy concurrency, the asyncio task-id
+    based context propagation in ``_task_model_map`` must not blur
+    pulls across tasks, and the ledger invariants must hold.
+
+    Each ``ainvoke`` records a pull at ``_select`` time. On failure the
+    classifier injects exactly one zero reward; on success the reward
+    is deferred to ``on_mutation_outcome`` (which we do *not* fire in
+    this test). So after N parallel calls with F failures and S=N-F
+    successes:
+
+        total_pulls == N
+        window_size == F     (only failure-path injections land in the window)
+
+    A regression where the task-id mapping leaked one task's failure
+    into another task's success path would break the second assertion.
+    """
+
+    async def test_32_concurrent_mixed_success_failure_invariants(
+        self,
+    ) -> None:
+        import random as _rnd
+
+        _rnd.seed(0xC0FFEE)
+        outcomes = [_rnd.random() < 0.5 for _ in range(32)]  # True = failure
+        expected_failures = sum(outcomes)
+
+        model = MagicMock()
+        model.model_name = "arm"
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        call_idx = -1
+        lock = asyncio.Lock()
+
+        async def _ainvoke(*args, **kwargs):  # noqa: ANN001
+            nonlocal call_idx
+            async with lock:
+                call_idx += 1
+                will_fail = outcomes[call_idx]
+            # Yield to the event loop so calls truly interleave.
+            await asyncio.sleep(0)
+            if will_fail:
+                raise RuntimeError("flake")
+            return MagicMock()
+
+        model.ainvoke = _ainvoke
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._tracker = MagicMock()
+
+        async def _one() -> bool:
+            try:
+                await router.ainvoke("x")
+                return False
+            except RuntimeError:
+                return True
+
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_one() for _ in range(32)]),
+            timeout=10.0,
+        )
+        observed_failures = sum(results)
+
+        # Sanity: each task observed the outcome that was scheduled for it.
+        assert observed_failures == expected_failures
+
+        stats = router.get_bandit_stats()
+        assert stats["arm"]["total_pulls"] == 32
+        # Only failures inject — successes defer to on_mutation_outcome.
+        assert stats["arm"]["window_size"] == expected_failures
+
+    async def test_concurrent_all_failures_keep_ledger_in_step(self) -> None:
+        """Pure-failure stress: total_pulls == window_size == N."""
+        model = MagicMock()
+        model.model_name = "arm"
+        model.ainvoke = AsyncMock(side_effect=RuntimeError("dead"))
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        async def _one() -> None:
+            with pytest.raises(RuntimeError):
+                await router.ainvoke("x")
+
+        await asyncio.wait_for(
+            asyncio.gather(*[_one() for _ in range(24)]),
+            timeout=10.0,
+        )
+
+        stats = router.get_bandit_stats()
+        assert stats["arm"]["total_pulls"] == 24
+        assert stats["arm"]["window_size"] == 24
+
+    async def test_concurrent_all_successes_defer_all_rewards(self) -> None:
+        """Pure-success stress: total_pulls == N, window_size == 0
+        because every reward is deferred to ``on_mutation_outcome``."""
+        model = MagicMock()
+        model.model_name = "arm"
+        model.ainvoke = AsyncMock(return_value=MagicMock())
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._tracker = MagicMock()
+
+        async def _one() -> None:
+            await router.ainvoke("x")
+
+        await asyncio.wait_for(
+            asyncio.gather(*[_one() for _ in range(24)]),
+            timeout=10.0,
+        )
+
+        stats = router.get_bandit_stats()
+        assert stats["arm"]["total_pulls"] == 24
+        assert stats["arm"]["window_size"] == 0
