@@ -14,6 +14,8 @@ import json
 from loguru import logger
 from redis import asyncio as aioredis
 
+from gigaevo.utils.text_sanitize import sanitize_for_log
+
 
 @dataclass
 class PromptMutationStats:
@@ -131,8 +133,11 @@ class RedisPromptStatsProvider(PromptStatsProvider):
                         ) + float(v)
             except Exception as exc:
                 logger.warning(
-                    f"[RedisPromptStatsProvider] Error reading stats from "
-                    f"db={db} for {prompt_id}: {exc}"
+                    "[RedisPromptStatsProvider] Error reading stats from "
+                    "db={} for {}: {}",
+                    db,
+                    sanitize_for_log(str(prompt_id)),
+                    sanitize_for_log(str(exc)),
                 )
 
         if total_trials < self._min_trials:

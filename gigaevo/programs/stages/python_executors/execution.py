@@ -22,6 +22,7 @@ from gigaevo.programs.stages.python_executors.wrapper import (
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
 from gigaevo.programs.utils import dedent_code
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 T = TypeVar("T")
 
@@ -133,12 +134,17 @@ class PythonCodeExecutor[T](Stage):
                     else "Process ran out of memory"
                 )
 
+            # Subprocess stderr may contain ANSI / NUL / BIDI / lone
+            # surrogates from heterogeneous compiler toolchains (nvcc,
+            # ptxas, Triton, Mojo). Sanitize the log interpolation; the
+            # StageError construction below is already covered by
+            # field_validators on type/message/traceback.
             logger.warning(
                 "[{}] {} FAILED for {}: {}",
                 stage_name,
                 error_type,
                 program.id[:8],
-                error_msg[:200],
+                sanitize_for_log(error_msg[:200]),
             )
             return ProgramStageResult.failure(
                 error=StageError(
@@ -153,7 +159,7 @@ class PythonCodeExecutor[T](Stage):
                 "[{}] Exception for {}: {}",
                 stage_name,
                 program.id[:8],
-                str(e)[:200],
+                sanitize_for_log(str(e)[:200]),
             )
             return ProgramStageResult.failure(
                 error=StageError.from_exception(e, stage=stage_name)

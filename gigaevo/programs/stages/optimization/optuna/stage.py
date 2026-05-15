@@ -63,6 +63,15 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     run_exec_runner,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
+from gigaevo.utils.text_sanitize import clean_identifier, sanitize_for_log
+
+# Conservative cap on Optuna parameter names. Long enough to admit
+# any reasonable snake_case identifier the LLM proposes; short enough
+# that a hostile payload of megabytes of garbage cannot bloat the
+# trial dict / optuna storage key. Matches typical SQL identifier
+# limits and leaves headroom for compound names like
+# "block_size_x_inner_loop_unroll".
+_MAX_PARAM_NAME_LEN: int = 64
 
 _DEADLINE_GRACE_S: int = 10  # post-eval margin before hard stage timeout
 
@@ -206,6 +215,25 @@ class OptunaOptimizationStage(Stage):
         ValueError
             If line ranges are invalid or if the resulting code has syntax errors.
         """
+        # LLM-derived parameter names flow into ``trial.suggest_*`` calls,
+        # which embed the name in Optuna's internal storage key and in
+        # log records. A name like ``"\x00../"`` or ``"abc‮"`` would
+        # otherwise corrupt the trial dict and any downstream sink.
+        # Clean the identifier at the boundary; if the LLM hands us a
+        # name with no surviving characters, fall back to a stable
+        # positional id so optimization can still proceed.
+        for idx, p in enumerate(search_space.parameters):
+            cleaned = clean_identifier(p.name, max_len=_MAX_PARAM_NAME_LEN)
+            if not cleaned:
+                cleaned = f"param_{idx}"
+            if cleaned != p.name:
+                logger.debug(
+                    "[Optuna] ParamSpec name sanitized: {!r} -> {!r}",
+                    sanitize_for_log(p.name),
+                    cleaned,
+                )
+                p.name = cleaned
+
         lines = original_code.splitlines()
         num_lines = len(lines)
         mods = sorted(search_space.modifications, key=lambda x: x.start_line)
@@ -251,12 +279,18 @@ class OptunaOptimizationStage(Stage):
         try:
             ast.parse(code)
         except SyntaxError as e:
-            logger.error(
-                "[Optuna] Parameterized code has syntax error: {}\nCode snippet around error:\n{}",
-                e,
+            # ``e.msg`` and the surrounding code lines originate from
+            # LLM output and may carry ANSI / BIDI / control bytes;
+            # sanitize each interpolation independently.
+            snippet = (
                 "\n".join(code.splitlines()[max(0, e.lineno - 5) : e.lineno + 5])
                 if e.lineno
-                else "Unknown location",
+                else "Unknown location"
+            )
+            logger.error(
+                "[Optuna] Parameterized code has syntax error: {}\nCode snippet around error:\n{}",
+                sanitize_for_log(str(e)),
+                sanitize_for_log(snippet),
             )
             raise ValueError(f"Parameterized code syntax error: {e}")
 
@@ -492,8 +526,16 @@ class OptunaOptimizationStage(Stage):
         except TimeoutError:
             return None, None, "Timeout"
         except ExecRunnerError as exc:
+            # Sanitize compiler-stderr-derived text before it flows into
+            # StageError.message / loguru sinks downstream. The returned
+            # error string ends up in failure_reasons and ultimately in
+            # log lines aggregated for the LLM.
             last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
-            return None, None, f"{exc} | {last_line}"
+            return (
+                None,
+                None,
+                f"{sanitize_for_log(str(exc))} | {sanitize_for_log(last_line)}",
+            )
 
     async def _run_optuna(
         self,
@@ -1152,7 +1194,11 @@ class OptunaOptimizationStage(Stage):
             n,
             [p.name for p in param_specs],
         )
-        logger.debug("[Optuna][{}] LLM reasoning: {}", pid, search_space.reasoning)
+        logger.debug(
+            "[Optuna][{}] LLM reasoning: {}",
+            pid,
+            sanitize_for_log(search_space.reasoning),
+        )
 
         # 3. Run Optuna
         (

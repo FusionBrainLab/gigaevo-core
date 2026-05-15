@@ -7,9 +7,10 @@ import traceback
 from typing import Any
 
 import cloudpickle
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 
 class StageIO(BaseModel):
@@ -38,6 +39,21 @@ class StageError(BaseModel):
     message: str = Field(..., description="Human-readable message")
     stage: str | None = Field(default=None, description="Stage class name, if known")
     traceback: str | None = Field(default=None, description="Formatted traceback")
+
+    @field_validator("type", "message", mode="after")
+    @classmethod
+    def _scrub_text(cls, value: str) -> str:
+        # LLM-generated code triggers compiler errors whose stderr (from
+        # nvcc / clang / ptxas / Triton / Mojo / Pallas / CUTLASS) may carry
+        # ANSI colorization, BIDI overrides, lone surrogates, NUL bytes.
+        # Sanitize at construction so every downstream (loguru, orjson,
+        # Redis storage, re-injection back into LLM prompts) sees safe text.
+        return sanitize_for_log(value)
+
+    @field_validator("traceback", mode="after")
+    @classmethod
+    def _scrub_traceback(cls, value: str | None) -> str | None:
+        return None if value is None else sanitize_for_log(value)
 
     @classmethod
     def from_exception(

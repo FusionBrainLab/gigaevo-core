@@ -8,7 +8,7 @@ import diffpatch
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
@@ -18,6 +18,7 @@ from gigaevo.evolution.mutation.constants import (
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter, get_selected_model
 from gigaevo.programs.program import Program
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 if TYPE_CHECKING:
     from gigaevo.programs.metrics.context import MetricsContext
@@ -41,6 +42,14 @@ class MutationChange(BaseModel):
             "mutations."
         )
     )
+
+    @field_validator("description", "explanation", mode="after")
+    @classmethod
+    def _scrub_text(cls, value: str) -> str:
+        # LLM-generated free-form text; sanitize so downstream log sinks,
+        # JSON encoders, and asyncpg TEXT columns never see ANSI escape
+        # sequences, BIDI overrides, lone UTF-16 surrogates, or NUL bytes.
+        return sanitize_for_log(value)
 
 
 class MutationStructuredOutput(BaseModel):
@@ -75,6 +84,20 @@ class MutationStructuredOutput(BaseModel):
             "Use actual newlines between lines, not literal backslash-n."
         )
     )
+
+    @field_validator("archetype", "justification", "code", mode="after")
+    @classmethod
+    def _scrub_text(cls, value: str) -> str:
+        # ``code`` is sanitized too — Python source has no legitimate use
+        # for ANSI/BIDI/C0-other-than-TAB-LF or NUL, and an LLM injecting
+        # one would otherwise break ast.parse() error formatting, log
+        # rendering, and asyncpg storage.
+        return sanitize_for_log(value)
+
+    @field_validator("insights_used", mode="after")
+    @classmethod
+    def _scrub_insights(cls, value: list[str]) -> list[str]:
+        return [sanitize_for_log(v) for v in value]
 
 
 # Re-export from canonical location for backward compatibility
@@ -202,7 +225,9 @@ class MutationAgent(LangGraphAgent):
                 f.write(user)
                 f.write("\n")
         except Exception as exc:
-            logger.debug(f"[MutationAgent] prompt dump failed: {exc}")
+            logger.debug(
+                "[MutationAgent] prompt dump failed: {}", sanitize_for_log(str(exc))
+            )
 
     async def arun(self, input: list[Program], mutation_mode: str) -> dict:
         """Execute mutation agent.
@@ -258,8 +283,9 @@ class MutationAgent(LangGraphAgent):
             )
 
         except Exception as e:
-            logger.error(f"[MutationAgent] Structured LLM call failed: {e}")
-            state["error"] = str(e)
+            safe_msg = sanitize_for_log(str(e))
+            logger.error("[MutationAgent] Structured LLM call failed: {}", safe_msg)
+            state["error"] = safe_msg
             state["llm_response"] = None
 
         return state
@@ -387,8 +413,10 @@ class MutationAgent(LangGraphAgent):
         model_used = state.get("metadata", {}).get("model_used")
 
         if structured_output is None:
-            error_msg = state.get("error", "No structured output received")
-            logger.error(f"[MutationAgent] No structured output: {error_msg}")
+            error_msg = sanitize_for_log(
+                state.get("error", "No structured output received")
+            )
+            logger.error("[MutationAgent] No structured output: {}", error_msg)
             state["parsed_output"] = {
                 "code": "",
                 "structured_output": None,
@@ -450,8 +478,11 @@ class MutationAgent(LangGraphAgent):
             )
 
         except Exception as e:
-            logger.error(f"[MutationAgent] Failed to parse structured response: {e}")
-            state["error"] = str(e)
+            safe_msg = sanitize_for_log(str(e))
+            logger.error(
+                "[MutationAgent] Failed to parse structured response: {}", safe_msg
+            )
+            state["error"] = safe_msg
             state["parsed_output"] = {
                 "code": "",
                 "structured_output": (

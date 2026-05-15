@@ -25,6 +25,7 @@ from gigaevo.programs.stages.python_executors.wrapper import (
     ExecRunnerError,
     run_exec_runner,
 )
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 # ---------------------------------------------------------------------------
 # Shared numeric / AST helpers
@@ -244,14 +245,25 @@ async def evaluate_single(
             return result, None
 
         msg = f"Unexpected result type: {type(result).__name__} (expected dict with key '{score_key}')"
-        logger.warning("[{}] {}", log_tag, msg)
+        logger.warning("[{}] {}", log_tag, sanitize_for_log(msg))
         return None, msg
 
     except TimeoutError:
         logger.trace("[{}] single evaluation timed out", log_tag)
         return None, "Timeout"
     except ExecRunnerError as exc:
+        # exc.stderr may carry ANSI / NUL / BIDI from heterogeneous
+        # compiler stacks; the str(exc) message is sanitized too because
+        # ExecRunnerError stores arbitrary text.
         last_line = (exc.stderr or "").strip().rsplit("\n", 1)[-1]
-        logger.trace("[{}] eval failed: {} | {}", log_tag, exc, last_line)
-        # Return the actual error message so the caller can log it if critical
-        return None, f"{exc} | {last_line}"
+        safe_exc = sanitize_for_log(str(exc))
+        safe_last = sanitize_for_log(last_line)
+        logger.trace(
+            "[{}] eval failed: {} | {}",
+            log_tag,
+            safe_exc,
+            safe_last,
+        )
+        # Return the sanitized error message so callers can log / store
+        # it without re-introducing terminal control bytes.
+        return None, f"{safe_exc} | {safe_last}"

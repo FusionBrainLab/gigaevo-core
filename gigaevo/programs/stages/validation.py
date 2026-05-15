@@ -12,6 +12,7 @@ from gigaevo.programs.core_types import StageIO, VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.stage_registry import StageRegistry
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 
 class CodeValidationOutput(StageIO):
@@ -73,9 +74,18 @@ class ValidateCodeStage(Stage):
         try:
             compile(code, "<string>", "exec")
         except SyntaxError as e:
+            # ``e.msg`` and ``e.text`` come from the parser operating on
+            # LLM output, which can embed control bytes that would slip
+            # into the re-raised exception's args and from there into
+            # every downstream log / serialization path. Sanitize before
+            # interpolation; the StageError validators below would catch
+            # the final log line, but the exception text itself is
+            # consumed elsewhere (e.g. ``__cause__`` chains in tests).
             code_line = (e.text or "").strip() or "<source unavailable>"
             raise SyntaxError(
-                f"SyntaxError at line {e.lineno}, offset {e.offset}: {e.msg}. Line: `{code_line}`"
+                f"SyntaxError at line {e.lineno}, offset {e.offset}: "
+                f"{sanitize_for_log(e.msg or '')}. "
+                f"Line: `{sanitize_for_log(code_line)}`"
             ) from e
 
         if self.safe_mode:

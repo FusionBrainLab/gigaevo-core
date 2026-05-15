@@ -8,6 +8,12 @@ from typing import Any
 from loguru import logger
 import redis
 
+from gigaevo.utils.text_sanitize import (
+    clean_identifier,
+    deep_sanitize_for_json,
+    sanitize_for_dbtext,
+    sanitize_for_log,
+)
 from gigaevo.utils.trackers.configs import RedisMetricsConfig
 from gigaevo.utils.trackers.core import LoggerBackend
 
@@ -32,8 +38,10 @@ class RedisMetricsBackend(LoggerBackend):
         return f"{self.cfg.key_prefix}:latest"
 
     def _k_history(self, tag: str) -> str:
-        # Sanitize tag for Redis key
-        safe_tag = tag.replace("/", ":").replace(" ", "_")
+        # Sanitize tag for Redis key: strict identifier charset only.
+        # Defends against ANSI / BIDI / control bytes in LLM-derived tags
+        # that the previous ad-hoc replace() missed.
+        safe_tag = clean_identifier(tag, max_len=128)
         return f"{self.cfg.key_prefix}:history:{safe_tag}"
 
     def _k_meta(self) -> str:
@@ -82,10 +90,13 @@ class RedisMetricsBackend(LoggerBackend):
             self._buffer.append(entry)
 
     def write_text(self, tag: str, text: str, step: int, wall_time: float) -> None:
+        # Sanitize the text payload at the boundary so LLM-derived strings
+        # with NUL bytes or lone surrogates do not poison the latest-hash
+        # value or the JSON history entry.
         entry = {
             "kind": "text",
             "tag": tag,
-            "value": text,
+            "value": sanitize_for_dbtext(text),
             "step": step,
             "wall_time": wall_time,
         }
@@ -105,7 +116,12 @@ class RedisMetricsBackend(LoggerBackend):
             pipe = self._client.pipeline(transaction=False)
 
             for entry in buf:
-                tag = entry["tag"]
+                # Sanitize the tag at the Redis boundary. The wire encoder
+                # rejects lone UTF-16 surrogates and is also unhappy with
+                # NUL inside a field name on some clients; clean_identifier
+                # gives a stable, displayable field name regardless of what
+                # an LLM-derived tag carried.
+                tag = clean_identifier(entry["tag"], max_len=128)
                 step = entry["step"]
                 wall_time = entry["wall_time"]
                 kind = entry["kind"]
@@ -119,7 +135,10 @@ class RedisMetricsBackend(LoggerBackend):
 
                 # Store history if enabled
                 if self.cfg.store_history:
-                    history_entry = json.dumps(
+                    # deep_sanitize_for_json defuses lone surrogates buried
+                    # in histogram value lists or text strings before they
+                    # reach json.dumps, which would otherwise raise.
+                    payload = deep_sanitize_for_json(
                         {
                             "s": step,
                             "t": wall_time,
@@ -127,6 +146,7 @@ class RedisMetricsBackend(LoggerBackend):
                             "k": kind,
                         }
                     )
+                    history_entry = json.dumps(payload)
                     history_key = self._k_history(tag)
                     pipe.rpush(history_key, history_entry)
                     # Trim to max size (FIFO)
@@ -137,7 +157,9 @@ class RedisMetricsBackend(LoggerBackend):
             pipe.execute()
 
         except Exception as e:
-            logger.warning("[RedisMetricsBackend] Flush failed: {}", e)
+            logger.warning(
+                "[RedisMetricsBackend] Flush failed: {}", sanitize_for_log(str(e))
+            )
 
     def clear_series(self, tag: str) -> None:
         """Delete the history list for *tag* so it can be rewritten."""

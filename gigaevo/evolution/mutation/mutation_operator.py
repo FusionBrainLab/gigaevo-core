@@ -17,6 +17,7 @@ from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
@@ -95,7 +96,7 @@ class LLMMutationOperator(MutationOperator):
             logger.warning(
                 "[LLMMutationOperator] Failed to canonicalize code due to syntax error: {}. "
                 "Returning original code.",
-                e,
+                sanitize_for_log(str(e)),
             )
             return code
 
@@ -156,7 +157,10 @@ class LLMMutationOperator(MutationOperator):
             if structured_output:
                 mutation_metadata[MutationSpec.META_OUTPUT] = structured_output
                 archetype = result.get("archetype", "unknown")
-                logger.debug("[LLMMutationOperator] Mutation archetype: {}", archetype)
+                logger.debug(
+                    "[LLMMutationOperator] Mutation archetype: {}",
+                    sanitize_for_log(str(archetype)),
+                )
             if result.get("changes"):
                 logger.debug(
                     "[LLMMutationOperator] Mutation returned {} tracked change(s)",

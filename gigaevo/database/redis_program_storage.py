@@ -25,6 +25,7 @@ from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState, validate_transition
 from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
+from gigaevo.utils.text_sanitize import sanitize_for_log
 from gigaevo.utils.trackers.base import LogWriter
 
 T = TypeVar("T")
@@ -109,7 +110,11 @@ class RedisProgramStorage(ProgramStorage):
         try:
             return Program.from_dict(_loads(raw), exclude=exclude)
         except Exception as e:
-            logger.warning("[RedisProgramStorage] Corrupt data in {}: {}", ctx, e)
+            logger.warning(
+                "[RedisProgramStorage] Corrupt data in {}: {}",
+                ctx,
+                sanitize_for_log(str(e)),
+            )
             return None
 
     async def _mget_by_keys(

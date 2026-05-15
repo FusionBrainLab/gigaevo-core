@@ -21,6 +21,7 @@ from gigaevo.programs.dag.automata import (
 )
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
+from gigaevo.utils.text_sanitize import sanitize_for_log
 from gigaevo.utils.trackers.base import LogWriter
 
 DEFAULT_STALL_GRACE_SECONDS = 120.0
@@ -409,11 +410,17 @@ class DAG:
             result = cast(ProgramStageResult, outcome)
 
         if result.status == StageState.FAILED and result.error is not None:
+            # ``StageError`` field_validators already sanitize ``type``,
+            # ``message``, and ``traceback`` at construction, so
+            # ``pretty()`` returns text whose interpolated leaves are
+            # safe. The outer literal in ``pretty()`` is hardcoded.
+            # Defensive wrap guards against future fields being added to
+            # the format string without a corresponding validator.
             logger.exception(
                 "[DAG][{}] Stage '{}' FAILED with exception.\n### ERROR SUMMARY ###:\n{}",
                 pid,
                 stage_name,
-                result.error.pretty(include_traceback=True),
+                sanitize_for_log(result.error.pretty(include_traceback=True)),
             )
 
         await self._persist_stage_result(program, stage_name, result)

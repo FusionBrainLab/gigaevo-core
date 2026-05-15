@@ -21,6 +21,7 @@ from gigaevo.programs.stages.insights import InsightsOutput, InsightsStage
 from gigaevo.programs.stages.insights_lineage import LineageAnalysesOutput, LineageStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
 from gigaevo.prompts.coevolution.stats import PromptStatsProvider, prompt_text_to_id
+from gigaevo.utils.text_sanitize import sanitize_for_log
 
 
 class PromptExecutionOutput(StageIO):
@@ -58,15 +59,19 @@ class PromptExecutionStage(Stage):
             raise ValueError(
                 "Prompt program must contain 'def entrypoint()'. "
                 "Got non-Python content (possibly JSON template). "
-                f"Code starts with: {code[:80]!r}"
+                f"Code starts with: {sanitize_for_log(code[:80])!r}"
             )
         namespace: dict[str, Any] = {}
         try:
             exec(compile(code, "<prompt_program>", "exec"), namespace)  # noqa: S102
         except SyntaxError as exc:
-            raise ValueError(f"Prompt program has syntax error: {exc}") from exc
+            raise ValueError(
+                f"Prompt program has syntax error: {sanitize_for_log(str(exc))}"
+            ) from exc
         except Exception as exc:
-            raise ValueError(f"Prompt program failed to compile/exec: {exc}") from exc
+            raise ValueError(
+                f"Prompt program failed to compile/exec: {sanitize_for_log(str(exc))}"
+            ) from exc
 
         entrypoint_fn = namespace.get("entrypoint")
         if not callable(entrypoint_fn):
@@ -75,7 +80,9 @@ class PromptExecutionStage(Stage):
         try:
             result = entrypoint_fn()
         except Exception as exc:
-            raise ValueError(f"entrypoint() raised an exception: {exc}") from exc
+            raise ValueError(
+                f"entrypoint() raised an exception: {sanitize_for_log(str(exc))}"
+            ) from exc
 
         if isinstance(result, str):
             if not result.strip():
