@@ -110,6 +110,14 @@ def stub():
         assert "pass" in result
         assert "Empty stub" not in result
 
+    def test_empty_body_tree_remains_compilable(self) -> None:
+        """Inserted Pass copies the parent's lineno/col_offset, so callers
+        that compile() the transformed tree directly (no unparse round-trip)
+        don't crash with `required field "lineno" missing`."""
+        tree = ast.parse('def stub():\n    """just a stub."""\n')
+        _DocstringRemover().visit(tree)
+        compile(tree, "<test>", "exec")  # must not raise
+
     def test_module_only_docstring_stays_empty_without_pass(self) -> None:
         """Module bodies are allowed to be empty; do not inject a top-level
         Pass after removing a module docstring."""

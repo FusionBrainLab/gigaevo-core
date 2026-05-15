@@ -95,7 +95,7 @@ class LLMMutationOperator(MutationOperator):
             # the result and falling back to the original on round-trip failure.
             ast.parse(canonicalized)
             return canonicalized
-        except SyntaxError as e:
+        except (SyntaxError, ValueError, RecursionError) as e:
             logger.warning(
                 "[LLMMutationOperator] Failed to canonicalize code due to syntax error: {}. "
                 "Returning original code.",
