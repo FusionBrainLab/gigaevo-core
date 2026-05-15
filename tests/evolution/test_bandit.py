@@ -1307,3 +1307,135 @@ class TestOnProgramIngestedEdgeCases:
         await op.on_program_ingested(child, mock_storage)
 
         mock_storage.mget.assert_called_once_with(parent_ids)
+
+
+# ---------------------------------------------------------------------------
+# Classifier-driven failure dispatch through invoke / ainvoke
+# ---------------------------------------------------------------------------
+
+
+class TestBanditFailureDispatchViaClassifier:
+    """``_select`` records the pull before the LLM call. A failure between
+    those two points used to inflate ``total_pulls`` with no matching reward
+    entry, shrinking the UCB1 confidence term for the failing arm and
+    underexploring flaky models. The new dispatch wraps the LLM call,
+    classifies the exception via ``classify_call_result``, and injects a
+    zero reward via ``_inject_failure_reward`` so pulls and the reward
+    window stay in step on every failure path. The exception still
+    propagates."""
+
+    def _router_with_flaky_arm(
+        self, exc: BaseException
+    ) -> tuple[BanditModelRouter, MagicMock]:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.invoke = MagicMock(side_effect=exc)
+        flaky.ainvoke = AsyncMock(side_effect=exc)
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+
+        healthy = MagicMock()
+        healthy.model_name = "healthy"
+        healthy.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [flaky, healthy],
+            [0.5, 0.5],
+            fitness_key="score",
+            higher_is_better=True,
+        )
+        router._langfuse = None
+        router._bandit.select = lambda: "flaky"  # type: ignore[assignment]
+        return router, flaky
+
+    def test_sync_invoke_failure_records_zero_reward_and_propagates(
+        self,
+    ) -> None:
+        router, _flaky = self._router_with_flaky_arm(RuntimeError("rate limited"))
+
+        with pytest.raises(RuntimeError, match="rate limited"):
+            router.invoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_async_ainvoke_failure_records_zero_reward_and_propagates(
+        self,
+    ) -> None:
+        router, _flaky = self._router_with_flaky_arm(RuntimeError("rate limited"))
+
+        with pytest.raises(RuntimeError, match="rate limited"):
+            await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_repeated_ainvoke_failures_keep_ledgers_in_step(self) -> None:
+        router, _flaky = self._router_with_flaky_arm(RuntimeError("boom"))
+
+        for _ in range(7):
+            with pytest.raises(RuntimeError):
+                await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 7
+        assert stats["flaky"]["window_size"] == 7
+
+    async def test_successful_call_does_not_inject_immediate_reward(self) -> None:
+        # The success path defers the reward to on_mutation_outcome, which
+        # runs later with the fitness result.
+        model = MagicMock()
+        model.model_name = "ok"
+        model.ainvoke = AsyncMock(return_value=MagicMock())
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        # No reward entry yet — on_mutation_outcome drives the real reward.
+        assert stats["ok"]["window_size"] == 0
+
+    def test_structured_output_failure_also_injects_zero_reward(self) -> None:
+        # The bandit's with_structured_output wires the failure_hook through
+        # to _StructuredOutputRouter so the structured-output dispatch path
+        # gets the same ledger-symmetry guarantee.
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.with_structured_output = MagicMock(return_value=flaky)
+        flaky.invoke = MagicMock(side_effect=RuntimeError("structured failure"))
+
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        structured = router.with_structured_output(dict)
+        with pytest.raises(RuntimeError, match="structured failure"):
+            structured.invoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    def test_inject_failure_reward_skips_unknown_arm_silently(self) -> None:
+        # Defense-in-depth symmetry with on_mutation_outcome's unknown-arm
+        # guard. _select cannot normally return a name outside
+        # self._bandit.arms, but if a future caller invokes
+        # _inject_failure_reward directly with a stale name (loaded from a
+        # snapshot, hand-built in a test, etc.) the helper must not raise
+        # KeyError on top of the original exception.
+        router, _ = self._router_with_flaky_arm(RuntimeError("boom"))
+
+        # Should not raise.
+        router._inject_failure_reward(RuntimeError("orig"), "not_an_arm")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["window_size"] == 0
+        assert stats["healthy"]["window_size"] == 0

@@ -278,6 +278,7 @@ class _StructuredOutputRouter(Runnable):
         tracker: TokenTracker,
         task_model_map: dict[int, str] | None = None,
         select_override: Callable[[], tuple[Any, str]] | None = None,
+        failure_hook: Callable[[BaseException, str], None] | None = None,
     ):
         self._models = models
         self._names = model_names
@@ -286,6 +287,12 @@ class _StructuredOutputRouter(Runnable):
         self._tracker = tracker
         self._task_model_map = task_model_map
         self._select_override = select_override
+        # Called when ``model.{,a}invoke`` raises. ``BanditModelRouter`` uses
+        # it to inject a zero reward into the ledger so a failed pull does
+        # not silently inflate ``total_pulls`` without a matching window
+        # entry. The hook receives the exception and the selected arm name;
+        # it must not re-raise (the original exception still propagates).
+        self._failure_hook = failure_hook
 
     def _select(self) -> tuple[Any, str]:
         if self._select_override is not None:
@@ -313,14 +320,31 @@ class _StructuredOutputRouter(Runnable):
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> Any:
         model, name = self._select()
-        return self._process(
-            model.invoke(input, self._config(config, name), **kwargs), name
-        )
+        try:
+            response = model.invoke(input, self._config(config, name), **kwargs)
+        except BaseException as exc:
+            self._maybe_fire_failure_hook(exc, name)
+            raise
+        return self._process(response, name)
 
     async def ainvoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> Any:
         model, name = self._select()
-        return self._process(
-            await model.ainvoke(input, self._config(config, name), **kwargs), name
-        )
+        try:
+            response = await model.ainvoke(input, self._config(config, name), **kwargs)
+        except BaseException as exc:
+            self._maybe_fire_failure_hook(exc, name)
+            raise
+        return self._process(response, name)
+
+    def _maybe_fire_failure_hook(self, exc: BaseException, name: str) -> None:
+        if self._failure_hook is None:
+            return
+        try:
+            self._failure_hook(exc, name)
+        except Exception:
+            # The hook is observability-only; it must never swallow or
+            # mutate the original exception. Suppress any hook-side error
+            # so the caller still sees the real LLM failure.
+            pass

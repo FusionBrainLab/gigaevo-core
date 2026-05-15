@@ -14,10 +14,14 @@ from enum import Enum
 import math
 from typing import TYPE_CHECKING, Any
 
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.messages import BaseMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from loguru import logger
 import numpy as np
 
+from gigaevo.llm.call_outcome import BanditAction, classify_call_result
 from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter
 from gigaevo.utils.trackers.base import LogWriter
 
@@ -272,6 +276,73 @@ class BanditModelRouter(MultiModelRouter):
         idx = self.model_names.index(name)
         return self.models[idx], name
 
+    # -- dispatch -----------------------------------------------------------
+
+    def _inject_failure_reward(self, exc: BaseException, arm_name: str) -> None:
+        """Classify a failed LLM call and dispatch on its bandit action.
+
+        ``_select`` records the pull before the LLM call, so without this
+        hook a failure would inflate ``total_pulls`` for the arm with no
+        matching window entry — the UCB1 confidence term shrinks for that
+        arm and the bandit underexplores flaky models. The classifier maps
+        the exception to an outcome whose ``OUTCOME_ACTION`` is currently
+        ``INJECT_ZERO_REWARD`` for every failure variant; we normalize a
+        zero reward and append it to the arm's window.
+        """
+        result = classify_call_result(exc, model_name=arm_name)
+        if result.action is BanditAction.DEFER_TO_OUTCOME:
+            # SUCCESS — never reachable here (we are inside the except),
+            # but the action lookup keeps the contract honest.
+            return
+        if arm_name not in self._bandit.arms:
+            # Mirrors the on_mutation_outcome guard: an unknown arm name
+            # would otherwise raise KeyError inside update_reward.
+            logger.debug(
+                "[BanditModelRouter] Skipping zero-reward injection for "
+                "unknown arm {!r} (outcome={})",
+                arm_name,
+                result.outcome.value,
+            )
+            return
+        normalized = self._reward_normalizer.normalize(0.0)
+        self._bandit.update_reward(arm_name, normalized)
+        logger.debug(
+            "[BanditModelRouter] Zero reward injected for {} | outcome={} exception={}",
+            arm_name,
+            result.outcome.value,
+            result.exception_class,
+        )
+
+    def invoke(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        model, name = self._select()
+        try:
+            response = model.invoke(input, self._config(config, name), **kwargs)
+        except BaseException as exc:
+            self._inject_failure_reward(exc, name)
+            raise
+        self._tracker.track(response, name)
+        return response
+
+    async def ainvoke(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        model, name = self._select()
+        try:
+            response = await model.ainvoke(input, self._config(config, name), **kwargs)
+        except BaseException as exc:
+            self._inject_failure_reward(exc, name)
+            raise
+        self._tracker.track(response, name)
+        return response
+
     # -- mutation outcome ---------------------------------------------------
 
     def on_mutation_outcome(
@@ -364,4 +435,5 @@ class BanditModelRouter(MultiModelRouter):
             self._tracker,
             task_model_map=self._task_model_map,
             select_override=_bandit_select,
+            failure_hook=self._inject_failure_reward,
         )
