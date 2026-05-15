@@ -272,6 +272,41 @@ class TestMutationAgentLogSanitization:
         assert "No structured output" in captured
         _assert_no_raw_hostile(captured)
 
+    def test_parse_response_failure_stores_sanitized_error(
+        self, loguru_sink, monkeypatch
+    ) -> None:
+        agent = self._make_agent()
+        structured_output = MutationStructuredOutput(
+            archetype="Rewrite",
+            justification="test",
+            insights_used=[],
+            changes=[],
+            code="def run_code():\n    return 1\n",
+        )
+
+        def boom(_code: str) -> str:
+            raise RuntimeError(f"parse failed: {HOSTILE}")
+
+        monkeypatch.setattr(agent, "_extract_code_block", boom)
+        state: MutationState = {
+            "input": [],
+            "mutation_mode": "rewrite",
+            "messages": [],
+            "llm_response": None,
+            "structured_output": structured_output,
+            "final_code": "",
+            "mutation_label": "",
+        }
+
+        agent.parse_response(state)
+
+        captured = loguru_sink.getvalue()
+        assert "Failed to parse structured response" in captured
+        _assert_no_raw_hostile(captured)
+        parsed = state["parsed_output"]
+        _assert_no_raw_hostile(parsed["error"])
+        assert state["error"] == parsed["error"]
+
 
 # ---------------------------------------------------------------------------
 # gigaevo/llm/token_tracking.py — track() error path

@@ -488,7 +488,7 @@ class MutationAgent(LangGraphAgent):
                 "structured_output": (
                     structured_output.model_dump() if structured_output else None
                 ),
-                "error": str(e),
+                "error": safe_msg,
                 "model_used": model_used,
             }
 
