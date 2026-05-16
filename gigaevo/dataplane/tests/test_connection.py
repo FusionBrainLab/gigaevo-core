@@ -208,6 +208,41 @@ class TestShutdown:
         assert not conn.is_started
 
 
+class TestShutdownTimeout:
+    """``_safe_close`` is bounded; a stalled ``aclose`` does not pin shutdown."""
+
+    async def test_stalled_aclose_does_not_pin_shutdown(self) -> None:
+        finished: dict[str, bool] = {"closed": False}
+
+        class _StallRedis:
+            async def ping(self) -> bool:
+                return True
+
+            async def aclose(self) -> None:
+                # Park forever; ``_safe_close`` must cap the wait.
+                await asyncio.Event().wait()
+                finished["closed"] = True
+
+        def builder(_url: str, **_kwargs: Any) -> _StallRedis:
+            return _StallRedis()
+
+        with (
+            patch(
+                "gigaevo.dataplane.connection.aioredis.Redis.from_url",
+                side_effect=builder,
+            ),
+            patch("gigaevo.dataplane.connection._CLOSE_TIMEOUT_S", 0.05),
+        ):
+            conn = RedisConnection("redis://fake", key_prefix="p")
+            await conn.startup()
+            # If the bound were absent this call would hang forever.
+            await asyncio.wait_for(conn.shutdown(), timeout=2.0)
+            assert not conn.is_started
+            # The slow ``aclose`` did NOT complete normally; the
+            # timeout fired and we proceeded.
+            assert not finished["closed"]
+
+
 class TestStartupShutdownInterleaving:
     async def test_startup_then_shutdown_then_startup(
         self, fake_from_url: None

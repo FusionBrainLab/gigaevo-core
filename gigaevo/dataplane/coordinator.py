@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import math
 import secrets
 from time import monotonic
 from typing import Final, Literal
@@ -41,6 +42,7 @@ from .connection import RedisConnection
 from .crash import OneShotFlag
 from .errors import (
     DataPlaneError,
+    DeadlineExceeded,
     LockHeld,
     LockLost,
     NotStartedError,
@@ -81,6 +83,27 @@ _LEASE_TOKEN_BYTES: Final[int] = 16
 # attempts before the TTL would expire under perfect timing, with room
 # for GC pauses or transient network hiccups.
 _LOCK_RENEW_RATIO: Final[float] = 3.0
+
+# Cap on per-batch item count. The batch is not atomic across items
+# (see :meth:`DataPlane.transition_program_state_batch`); accepting a
+# pathologically large batch would build a multi-megabyte outcome list
+# in memory while holding no global progress invariant. The cap is loose
+# enough for legitimate fan-out and tight enough to surface accidental
+# unbounded batches at the boundary.
+_BATCH_ITEM_CAP: Final[int] = 1024
+
+# Control characters that are unsafe in any Redis key. NUL truncates
+# the key on the RESP wire; CR / LF break framing for clients that
+# share a connection with another protocol. Reject these universally
+# regardless of whether the caller-supplied identifier is a single
+# component or a hierarchical key path.
+_FORBIDDEN_KEY_CONTROL_CHARS: Final[frozenset[str]] = frozenset({"\x00", "\r", "\n"})
+
+# Additional separator forbidden for *atomic* (single-component) IDs
+# spliced into ``{prefix}:{resource}:{id}`` patterns. Hierarchical keys
+# (CounterKey, LWW register names) legitimately carry colons as
+# sub-namespace separators and must opt out of this check.
+_FORBIDDEN_ATOMIC_ID_SEPARATOR: Final[str] = ":"
 
 
 # ── built-in script names ──────────────────────────────────────────────
@@ -290,75 +313,103 @@ class DataPlane:
         # by :meth:`acquire_instance_lock`, drained by
         # :meth:`release_instance_lock` and :meth:`shutdown`.
         self._renewers: dict[LeaseToken, asyncio.Task[None]] = {}
+        # Serialises the whole startup / shutdown sequence so two racing
+        # callers cannot torn-init the coordinator's own ``_lua`` and
+        # ``_started`` fields. The underlying :class:`RedisConnection`
+        # has its own lifecycle lock for the pool itself; this lock
+        # protects the coordinator-level state that wraps it. Lazily
+        # built inside the running event loop so construction stays
+        # cheap and loop-agnostic.
+        self._lifecycle_lock: asyncio.Lock | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────
+
+    def _get_lifecycle_lock(self) -> asyncio.Lock:
+        """Lazy-init the coordinator-level lifecycle lock inside the loop."""
+        if self._lifecycle_lock is None:
+            self._lifecycle_lock = asyncio.Lock()
+        return self._lifecycle_lock
 
     async def startup(self) -> None:
         """Initialise the connection pool, load scripts, prime FSM tables.
 
-        Idempotent: re-calling on a started coordinator is a no-op. On
-        partial failure (e.g. FSM table load fails) the connection pool
-        is closed and the lua-registry handle is dropped before the
-        exception propagates so the coordinator is left in the
-        pre-startup state — the caller can retry without leaking
+        Idempotent: re-calling on a started coordinator is a no-op.
+        Serialised: concurrent callers wait on a single lock so the
+        pool-start / script-load / FSM-load sequence happens once,
+        atomically. On partial failure (e.g. FSM table load fails) the
+        connection pool is closed and the lua-registry handle is dropped
+        before the exception propagates so the coordinator is left in
+        the pre-startup state — the caller can retry without leaking
         sockets or holding a half-initialised registry.
         """
+        # Cheap pre-check avoids contending on the lock when the
+        # coordinator is already up. Re-checked under the lock below.
         if self._started:
             return
-        await self._connection.startup()
-        try:
-            lua = LuaRegistry(self._connection.pool)
-            self._register_builtin_scripts(lua)
-            await lua.load_all()
+        async with self._get_lifecycle_lock():
+            if self._started:
+                return
+            await self._connection.startup()
+            try:
+                lua = LuaRegistry(self._connection.pool)
+                self._register_builtin_scripts(lua)
+                await lua.load_all()
+                for fsm_name, table in (
+                    ("program_state", PROGRAM_STATE_TRANSITIONS),
+                    ("claim_state", CLAIM_STATE_TRANSITIONS),
+                    ("lock_state", LOCK_STATE_TRANSITIONS),
+                ):
+                    await load_fsm_table(
+                        self._connection.pool,
+                        key_prefix=self._connection.key_prefix,
+                        name=fsm_name,
+                        table=table,
+                    )
+            except BaseException:  # noqa: BLE001 - startup rollback, error re-raised verbatim
+                # ``BaseException`` so a cancellation mid-FSM-load still
+                # rolls the pool back. ``self._lua`` is reset to ``None``
+                # so the invariant ``self._started == (self._lua is not
+                # None)`` holds even after a partial script load
+                # populated the local ``lua`` variable above.
+                await self._connection.shutdown()
+                self._lua = None
+                raise
             self._lua = lua
-            await load_fsm_table(
-                self._connection.pool,
-                key_prefix=self._connection.key_prefix,
-                name="program_state",
-                table=PROGRAM_STATE_TRANSITIONS,
-            )
-            await load_fsm_table(
-                self._connection.pool,
-                key_prefix=self._connection.key_prefix,
-                name="claim_state",
-                table=CLAIM_STATE_TRANSITIONS,
-            )
-            await load_fsm_table(
-                self._connection.pool,
-                key_prefix=self._connection.key_prefix,
-                name="lock_state",
-                table=LOCK_STATE_TRANSITIONS,
-            )
-        except Exception:  # noqa: BLE001 - startup cleanup, error re-raised verbatim
-            # Roll back the pool AND the registry handle so the
-            # coordinator is observably in its pre-startup state. A
-            # later script-load attempt after a successful pool-startup
-            # leaves ``self._lua`` non-None on its own, which would lie
-            # about progress; the explicit reset to None below is
-            # required for the invariant
-            # ``self._started == (self._lua is not None)``.
-            await self._connection.shutdown()
-            self._lua = None
-            raise
-        self._started = True
+            self._started = True
         logger.info("DataPlane started: prefix={}", self._connection.key_prefix)
 
     async def shutdown(self) -> None:
         """Release background tasks, close the connection pool.
 
-        Idempotent. Wraps any internal failure in :class:`ShutdownError`
-        so callers see a single typed error class on the way out.
+        Idempotent and serialised against :meth:`startup` via the
+        coordinator-level lifecycle lock. The pool is closed even if
+        renewer cancellation surfaced an exception; that exception is
+        re-wrapped into a :class:`ShutdownError` after the pool teardown
+        has completed so no socket survives a noisy shutdown.
         """
         if not self._started:
             return
-        try:
-            await self._cancel_renewers()
-            await self._connection.shutdown()
-        except Exception as exc:  # noqa: BLE001 - shutdown boundary, wrapped into ShutdownError
-            raise ShutdownError(reason=repr(exc)) from exc
-        finally:
+        async with self._get_lifecycle_lock():
+            if not self._started:
+                return
+            cancel_exc: BaseException | None = None
+            try:
+                await self._cancel_renewers()
+            except BaseException as exc:  # noqa: BLE001 - shutdown deferral, surfaced below
+                # Defer the failure until after the pool is closed; a
+                # renewer-cancel error must not leak a live connection
+                # pool. Re-raised below wrapped in ShutdownError.
+                cancel_exc = exc
+            close_exc: BaseException | None = None
+            try:
+                await self._connection.shutdown()
+            except BaseException as exc:  # noqa: BLE001 - shutdown boundary, wrapped below
+                close_exc = exc
             self._lua = None
             self._started = False
+        if cancel_exc is not None or close_exc is not None:
+            primary = cancel_exc if cancel_exc is not None else close_exc
+            raise ShutdownError(reason=repr(primary)) from primary
 
     @property
     def started(self) -> bool:
@@ -391,6 +442,79 @@ class DataPlane:
         an explicit method label.
         """
         return self._require_started("_require_lua")
+
+    @staticmethod
+    def _validate_key_component(
+        value: str, *, method: str, field_name: str, allow_colon: bool = False
+    ) -> None:
+        """Reject identifiers that would break Redis key namespacing.
+
+        The coordinator splices caller-supplied identifiers into Redis
+        keys verbatim. NUL would silently truncate the key on the wire,
+        CR / LF would corrupt RESP framing, and colon collides with the
+        dataplane's own ``{prefix}:{resource}:{id}`` convention for
+        atomic IDs. Hierarchical key paths (CounterKey, LWW register
+        names) opt out of the colon check via ``allow_colon=True``.
+        """
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"{method}: {field_name} must be a non-empty string, got {value!r}"
+            )
+        for ch in _FORBIDDEN_KEY_CONTROL_CHARS:
+            if ch in value:
+                raise ValueError(
+                    f"{method}: {field_name} contains forbidden control "
+                    f"character {ch!r}: {value!r}"
+                )
+        if not allow_colon and _FORBIDDEN_ATOMIC_ID_SEPARATOR in value:
+            raise ValueError(
+                f"{method}: {field_name} contains ':' which collides with the "
+                f"dataplane key-namespacing convention: {value!r}"
+            )
+
+    @staticmethod
+    def _validate_ttl(ttl_s: float, *, method: str) -> None:
+        """Reject NaN / Inf / non-positive TTLs at the call boundary.
+
+        ``int(NaN * 1000)`` raises ``ValueError`` deep in the renew path;
+        we'd rather surface that as a clean ``ValueError`` at the entry
+        point with the offending value attached. Non-positive TTLs would
+        round to zero milliseconds and produce a lock that's immediately
+        expired — refuse them up front.
+        """
+        if not isinstance(ttl_s, (int, float)) or isinstance(ttl_s, bool):
+            raise ValueError(
+                f"{method}: ttl_s must be a real number, got {type(ttl_s).__name__}"
+            )
+        if math.isnan(ttl_s) or math.isinf(ttl_s):
+            raise ValueError(f"{method}: ttl_s must be finite, got {ttl_s!r}")
+        if ttl_s <= 0:
+            raise ValueError(f"{method}: ttl_s must be positive, got {ttl_s!r}")
+
+    @staticmethod
+    def _validate_floor(min_epoch: int, min_generation: int, *, method: str) -> None:
+        """Reject negative freshness floors at the call boundary."""
+        if min_epoch < 0:
+            raise ValueError(
+                f"{method}: min_epoch must be non-negative, got {min_epoch!r}"
+            )
+        if min_generation < 0:
+            raise ValueError(
+                f"{method}: min_generation must be non-negative, got {min_generation!r}"
+            )
+
+    def _check_deadline(self, deadline_monotonic: float | None, method: str) -> None:
+        """Surface a typed :class:`DeadlineExceeded` if the budget is gone.
+
+        Called at the top of every public method that accepts a
+        deadline; we'd rather fail fast at the boundary than start a
+        Redis call we know we cannot afford to finish.
+        """
+        if deadline_monotonic is None:
+            return
+        now = monotonic()
+        if now >= deadline_monotonic:
+            raise DeadlineExceeded(elapsed_s=now - deadline_monotonic, budget_s=0.0)
 
     # ── program FSM ──────────────────────────────────────────────────
 
@@ -429,7 +553,14 @@ class DataPlane:
             Err(TransitionError.unknown) — token-tag mismatch (caller
                 bug) or unrecognised Lua status.
         """
-        _ = deadline_monotonic
+        self._validate_key_component(
+            program_id, method="transition_program_state", field_name="program_id"
+        )
+        try:
+            self._check_deadline(deadline_monotonic, "transition_program_state")
+        except DeadlineExceeded as exc:
+            return Err(exc)
+        lua = self._require_started("transition_program_state")
         tag = token.consume()
         if tag != program_id:
             return Err(
@@ -438,7 +569,6 @@ class DataPlane:
                     f"token tag {tag!r} does not match program_id {program_id!r}",
                 )
             )
-        lua = self._require_lua()
         prefix = self._connection.key_prefix
         program_key = f"{prefix}:program:{program_id}"
         events_stream = f"{prefix}:status_events"
@@ -513,8 +643,25 @@ class DataPlane:
         """
         if not items:
             return Ok(BatchTransitionOutcome(items=()))
+        if len(items) > _BATCH_ITEM_CAP:
+            return Err(
+                DataPlaneError(
+                    f"transition_program_state_batch: item count {len(items)} "
+                    f"exceeds cap {_BATCH_ITEM_CAP}"
+                )
+            )
         outcomes: list[Versioned[ProgramSnapshot]] = []
         for item in items:
+            # Re-check the shared deadline before each per-item call so
+            # a long batch surfaces :class:`DeadlineExceeded` after the
+            # last successfully-committed item instead of pressing on
+            # against a budget that's already gone.
+            try:
+                self._check_deadline(
+                    deadline_monotonic, "transition_program_state_batch"
+                )
+            except DeadlineExceeded as exc:
+                return Err(exc)
             result = await self.transition_program_state(
                 item.program_id,
                 token=item.token,
@@ -548,7 +695,11 @@ class DataPlane:
         the redundant ``min_generation`` parameter is preserved for API
         consistency with :meth:`crdt_read`.
         """
-        self._require_lua()
+        self._validate_key_component(
+            program_id, method="read_program", field_name="program_id"
+        )
+        self._validate_floor(min_epoch, min_generation, method="read_program")
+        self._require_started("read_program")
         prefix = self._connection.key_prefix
         program_key = f"{prefix}:program:{program_id}"
         raw = await self._connection.pool.get(program_key)  # type: ignore[misc]
@@ -558,7 +709,19 @@ class DataPlane:
             blob = decode_canonical(raw)
         except Exception as exc:  # noqa: BLE001 - coordinator boundary
             return Err(DataPlaneError(f"read_program: decode failed: {exc!r}"))
-        epoch = int(blob.get("epoch", 0))
+        if not isinstance(blob, dict):
+            return Err(
+                DataPlaneError(
+                    f"read_program: decoded blob has wrong shape "
+                    f"({type(blob).__name__}); expected dict"
+                )
+            )
+        try:
+            epoch = int(blob.get("epoch", 0))
+        except (TypeError, ValueError) as exc:
+            return Err(
+                DataPlaneError(f"read_program: epoch field unparseable: {exc!r}")
+            )
         versioned: Versioned[ProgramSnapshot] = Versioned(
             value=blob, epoch=epoch, generation=epoch
         )
@@ -591,12 +754,24 @@ class DataPlane:
         :class:`OneShotFlag` so the caller's hot path can short-circuit
         without a blocking call.
 
-        ``deadline_monotonic`` is reserved for the future connection-pool
-        wait-timeout integration; for now the call returns whatever the
-        single EVALSHA observes.
+        ``deadline_monotonic`` is honoured at the call boundary: an
+        already-expired deadline returns :class:`DeadlineExceeded`
+        without issuing the EVALSHA. Once the call is in flight the
+        single round-trip runs to completion; finer-grained deadline
+        propagation lands with the connection-pool wait-timeout.
         """
-        _ = deadline_monotonic
-        lua = self._require_lua()
+        self._validate_key_component(
+            prefix,
+            method="acquire_instance_lock",
+            field_name="prefix",
+            allow_colon=True,
+        )
+        self._validate_ttl(ttl_s, method="acquire_instance_lock")
+        try:
+            self._check_deadline(deadline_monotonic, "acquire_instance_lock")
+        except DeadlineExceeded as exc:
+            return Err(exc)
+        lua = self._require_started("acquire_instance_lock")
         lock_key = f"{self._connection.key_prefix}:lock:{prefix}"
         lease_token = LeaseToken(secrets.token_urlsafe(_LEASE_TOKEN_BYTES))
         try:
@@ -610,7 +785,12 @@ class DataPlane:
         if int(result) != 1:
             # Best-effort holder lookup for diagnostics. The holder
             # field is redacted in str(err) so we don't leak the token.
-            holder = await self._connection.pool.get(lock_key)  # type: ignore[misc]
+            # A failed lookup must not mask the underlying LockHeld
+            # outcome — degrade gracefully to a holder-less Err.
+            try:
+                holder = await self._connection.pool.get(lock_key)  # type: ignore[misc]
+            except Exception:  # noqa: BLE001 - diagnostic-only lookup, degrade silently
+                holder = None
             return Err(LockHeld(key=lock_key, holder=holder))
         flag = OneShotFlag()
         lease = InstanceLease(
@@ -645,7 +825,8 @@ class DataPlane:
         below the dataclass scope so renewals are transparent to
         callers holding the lease by value).
         """
-        lua = self._require_lua()
+        self._validate_ttl(ttl_s, method="renew_instance_lock")
+        lua = self._require_started("renew_instance_lock")
         try:
             result = await lua.evalsha(
                 _SCRIPT_LOCK_RENEW,
@@ -669,16 +850,23 @@ class DataPlane:
     async def release_instance_lock(self, lease: InstanceLease) -> None:
         """Token-CAS DEL; no-op if the lease was already released or lost.
 
-        Cancels the lease's renewal task before issuing the DEL so the
-        two cannot race (the renewer would otherwise see DEL-then-fail
-        and signal the flag spuriously). Coordinator must be started;
-        an already-shut-down coordinator silently no-ops.
+        Cancels the lease's renewal task AND awaits its exit before
+        issuing the DEL so a renewer that's mid-Redis-call cannot race
+        the release. Without the wait the renewer's pending EXPIRE
+        could land after our DEL, leaving the lock un-bounded for one
+        renew interval. Coordinator must be started; an already-shut-
+        down coordinator silently no-ops.
         """
-        # Cancel the renewer first; the task catches CancelledError in
-        # its asyncio.sleep and exits cleanly.
         task = self._renewers.pop(lease.token, None)
         if task is not None:
             task.cancel()
+            # ``return_exceptions=True`` so an unrelated renewer
+            # exception (e.g. flag-signalled mid-renew) does not mask
+            # the release path. The renewer can still race with DEL on
+            # a renewing EXPIRE iff Redis processes its request before
+            # our cancellation; the Lua script's token-CAS handles
+            # that — the EXPIRE on a missing key returns 0.
+            await asyncio.gather(task, return_exceptions=True)
         if not self._started or self._lua is None:
             return
         lua = self._lua
@@ -696,11 +884,12 @@ class DataPlane:
     async def _renew_lease_loop(self, lease: InstanceLease) -> None:
         """Background renewal loop. Signals the lease's flag on loss.
 
-        Runs forever until either (a) the task is cancelled by
-        :meth:`release_instance_lock` or :meth:`shutdown`, or (b)
-        renewal fails — token mismatch (real loss) OR a transient
-        connection error. Either way, the loop signals the flag and
-        returns.
+        Runs forever until either (a) the task is cancelled (typical
+        path: :meth:`release_instance_lock` or :meth:`shutdown`), or (b)
+        renewal fails — token mismatch (real loss), a typed
+        :class:`DataPlaneError`, or any unexpected exception. Cases
+        other than cancellation signal the lease's flag so the holder
+        observes the loss on its next dataplane call.
 
         Cadence is ``ttl_s / _LOCK_RENEW_RATIO`` with a floor of 1 ms so
         pathologically tiny TTLs (test fixtures) still make forward
@@ -711,8 +900,24 @@ class DataPlane:
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
+                # Cooperative cancellation from release / shutdown; the
+                # caller does not treat this as a lock loss.
                 return
-            result = await self.renew_instance_lock(lease, ttl_s=lease.ttl_s)
+            try:
+                result = await self.renew_instance_lock(lease, ttl_s=lease.ttl_s)
+            except asyncio.CancelledError:
+                # Cancellation racing the in-flight renew: propagate so
+                # the gather() in :meth:`_cancel_renewers` observes it.
+                # The flag stays unset — cancellation is not loss.
+                raise
+            except Exception:  # noqa: BLE001 - watchdog boundary, surfaced via flag
+                # Any other failure (NotStartedError after shutdown,
+                # programming bug, transient client error not wrapped
+                # as DataPlaneError) is escalated to the holder via
+                # the one-shot flag. The exception is swallowed because
+                # nobody is awaiting this task in steady state.
+                lease.flag.signal()
+                return
             if isinstance(result, Err):
                 lease.flag.signal()
                 return
@@ -760,7 +965,31 @@ class DataPlane:
         wins ties (favours stability — useful when equal-score programs
         should be left undisturbed).
         """
-        _ = deadline_monotonic
+        self._validate_key_component(
+            cell, method="try_replace_elite", field_name="cell"
+        )
+        self._validate_key_component(
+            candidate_id, method="try_replace_elite", field_name="candidate_id"
+        )
+        if math.isnan(candidate_score) or math.isinf(candidate_score):
+            return Err(
+                DataPlaneError(
+                    f"try_replace_elite: candidate_score must be finite, "
+                    f"got {candidate_score!r}"
+                )
+            )
+        if int(tiebreak_bit) not in (0, 1):
+            return Err(
+                DataPlaneError(
+                    f"try_replace_elite: tiebreak_bit must be 0 or 1, "
+                    f"got {tiebreak_bit!r}"
+                )
+            )
+        try:
+            self._check_deadline(deadline_monotonic, "try_replace_elite")
+        except DeadlineExceeded as exc:
+            return Err(exc)
+        lua = self._require_started("try_replace_elite")
         tag = token.consume()
         if tag != cell:
             return Err(
@@ -768,7 +997,6 @@ class DataPlane:
                     f"try_replace_elite: token tag {tag!r} does not match cell {cell!r}"
                 )
             )
-        lua = self._require_lua()
         prefix = self._connection.key_prefix
         archive_key = f"{prefix}:archive"
         reverse_key = f"{prefix}:archive:reverse"
@@ -817,8 +1045,14 @@ class DataPlane:
         monotonically — callers that decrement should hold a token for
         that actor's subspace.
         """
-        _ = deadline_monotonic  # deadline propagation lands with the connection-pool wait-timeout
-        lua = self._require_lua()
+        self._validate_key_component(
+            key, method="crdt_inc", field_name="key", allow_colon=True
+        )
+        try:
+            self._check_deadline(deadline_monotonic, "crdt_inc")
+        except DeadlineExceeded as exc:
+            return Err(exc)
+        lua = self._require_started("crdt_inc")
         counts_key, gen_key, epoch_key = self._counter_keys(key)
         try:
             raw = await lua.evalsha(
@@ -853,7 +1087,11 @@ class DataPlane:
         ``Versioned`` whose epoch / generation reflect that staleness,
         which is exactly what the freshness floor catches.
         """
-        self._require_lua()
+        self._validate_key_component(
+            key, method="crdt_read", field_name="key", allow_colon=True
+        )
+        self._validate_floor(min_epoch, min_generation, method="crdt_read")
+        self._require_started("crdt_read")
         counts_key, gen_key, epoch_key = self._counter_keys(key)
         redis = self._connection.pool
         pipe = redis.pipeline(transaction=False)
@@ -899,7 +1137,10 @@ class DataPlane:
         beyond the candidate's. ``Err(DataPlaneError)`` surfaces only on
         connection / script-load failures.
         """
-        lua = self._require_lua()
+        self._validate_key_component(
+            key, method="lwwr_set", field_name="key", allow_colon=True
+        )
+        lua = self._require_started("lwwr_set")
         register_key = f"{self._connection.key_prefix}:lwwr:{key}"
         encoded_value = encode_canonical(value).decode("utf-8")
         try:
@@ -929,7 +1170,10 @@ class DataPlane:
         HLC witness otherwise. ``Err(DataPlaneError)`` on connection /
         decoding failures.
         """
-        self._require_lua()
+        self._validate_key_component(
+            key, method="lwwr_get", field_name="key", allow_colon=True
+        )
+        self._require_started("lwwr_get")
         register_key = f"{self._connection.key_prefix}:lwwr:{key}"
         redis = self._connection.pool
         # HMGET is one round-trip and returns [value, hlc] in order.

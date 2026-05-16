@@ -22,6 +22,12 @@ _DEFAULT_MAX_CONNECTIONS: Final[int] = 64
 _DEFAULT_SOCKET_TIMEOUT_S: Final[float] = 30.0
 _DEFAULT_SOCKET_CONNECT_TIMEOUT_S: Final[float] = 10.0
 
+# Upper bound on ``aclose`` during pool teardown. A server that has
+# closed its TCP half but kept the socket alive can stall ``aclose``
+# indefinitely; the bound below caps shutdown latency at a value that's
+# still generous enough to drain a healthy pool.
+_CLOSE_TIMEOUT_S: Final[float] = 5.0
+
 
 class RedisConnection:
     """Lifecycle-managed async Redis pool.
@@ -150,12 +156,27 @@ class RedisConnection:
 
 
 async def _safe_close(pool: aioredis.Redis | None) -> None:
-    """Best-effort close of a Redis client; never raises."""
+    """Best-effort close of a Redis client; never raises, bounded latency.
+
+    ``aclose`` is wrapped in :func:`asyncio.wait_for` because a peer that
+    half-closes the socket can otherwise stall the call forever and pin
+    the entire shutdown path. A timeout-elapsed close still leaks the
+    underlying socket, but the process can proceed; surface that as a
+    warning so operators see the leak.
+    """
     if pool is None:
         return
     try:
-        await pool.aclose()  # type: ignore[attr-defined]  # stub gap: aclose exists at runtime
-    except Exception as exc:  # noqa: BLE001
+        await asyncio.wait_for(
+            pool.aclose(),  # type: ignore[attr-defined]  # stub gap: aclose exists at runtime
+            timeout=_CLOSE_TIMEOUT_S,
+        )
+    except TimeoutError:
+        logger.warning(
+            "RedisConnection close timed out after {}s; socket may leak",
+            _CLOSE_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 - shutdown boundary, never re-raised
         logger.warning("RedisConnection close swallowed error: {!r}", exc)
 
 
