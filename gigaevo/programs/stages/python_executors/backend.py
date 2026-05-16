@@ -1,21 +1,26 @@
 """Pluggable executor backend interface.
 
-The single Protocol declared here is the swap-point between
+Two Protocols form the swap-point between
 :func:`gigaevo.programs.stages.python_executors.wrapper.run_exec_runner`
-and the concrete subprocess pool.  :class:`LokyBackend` in
-:mod:`gigaevo.programs.stages.python_executors.wrapper` is the only
-implementation today; future backends (Redis-Stream-mediated remote
-workers, HTTP submission services, Ray actors) implement the same
-contract and slot in at call sites without modification.
+and the concrete subprocess pool:
 
-The Protocol is intentionally minimal: ``execute`` and ``shutdown``.
-Lifecycle hooks (``on_submit`` / ``on_complete`` / ``on_shutdown``) are
-declared as well but are optional — backends that have nothing useful to
-notify can leave the registration methods as no-ops.  Per-worker-process
-lifecycle (``on_worker_start``, ``on_worker_exit``) is deliberately
-absent: it requires cross-process signalling that has no immediate
-consumer on local-subprocess backends, and becomes natural to wire up
-only when the worker layer itself emits network events.
+* :class:`ExecutorBackend` — the required core contract
+  (``execute`` + ``shutdown``).  Every backend must implement this.
+* :class:`LifecycleObservable` — optional observation hooks
+  (``on_submit`` / ``on_complete`` / ``on_shutdown``).  Backends that
+  have nothing useful to notify simply do not implement it; callers
+  gate hook registration on ``isinstance(backend, LifecycleObservable)``.
+
+:class:`LokyBackend` in
+:mod:`gigaevo.programs.stages.python_executors.wrapper` is the only
+implementation today and conforms to both.  Future backends
+(Redis-Stream-mediated remote workers, HTTP submission services,
+Ray actors) implement at minimum :class:`ExecutorBackend` and slot in
+at call sites without modification.  Per-worker-process lifecycle
+(``on_worker_start``, ``on_worker_exit``) is deliberately absent: it
+requires cross-process signalling that has no immediate consumer on
+local-subprocess backends and becomes natural to wire up only when the
+worker layer itself emits network events.
 """
 
 from __future__ import annotations
@@ -55,6 +60,9 @@ class ExecutorBackend(Protocol):
     Implementations encapsulate the lifecycle of one logical pool of
     worker processes (local subprocesses, remote workers reachable over
     a network, or anything else that can run a :class:`WorkerCall`).
+
+    ``runtime_checkable`` only verifies attribute names; structural
+    signature mismatches surface at call time, not at ``isinstance``.
     """
 
     async def execute(self, call: WorkerCall, *, deadline_s: int) -> Any:
@@ -83,6 +91,19 @@ class ExecutorBackend(Protocol):
         cleanup).  Idempotent: calling twice is safe.
         """
         ...
+
+
+@runtime_checkable
+class LifecycleObservable(Protocol):
+    """Optional observation hooks for an :class:`ExecutorBackend`.
+
+    Implementers expose three independent registration channels.
+    Handlers are invoked in registration order; a handler raising must
+    not silence the others nor break the execution path.  Backends with
+    no useful events to emit simply do not implement this Protocol;
+    callers should gate hook registration with
+    ``isinstance(backend, LifecycleObservable)``.
+    """
 
     def on_submit(self, handler: SubmitHandler) -> None:
         """Register a handler fired immediately before a call is submitted."""

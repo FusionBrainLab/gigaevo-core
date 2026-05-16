@@ -17,9 +17,10 @@ Configuration is captured in :class:`WorkerConfig`; multiple backends
 can coexist with isolated pools, spill directories and env scrub rules.
 Result envelopes (:class:`WorkerResult`) carry an :class:`ExecutionMetrics`
 block with timing and resource measurements plus per-worker identity
-(``node_id`` / ``worker_id``).  Lifecycle observers can subscribe via
-:meth:`LokyBackend.on_submit` / :meth:`~LokyBackend.on_complete` /
-:meth:`~LokyBackend.on_shutdown`.
+(``node_id`` / ``worker_id``).  :class:`LokyBackend` also conforms to
+:class:`~gigaevo.programs.stages.python_executors.backend.LifecycleObservable`,
+so observers subscribe via :meth:`LokyBackend.on_submit` /
+:meth:`~LokyBackend.on_complete` / :meth:`~LokyBackend.on_shutdown`.
 
 Module-level :func:`run_exec_runner` and :func:`shutdown_executor` are
 thin wrappers over a process-scoped default :class:`LokyBackend`
@@ -27,12 +28,18 @@ singleton for backward compatibility with existing call sites.
 :func:`run_exec_runner` accepts an optional ``backend`` kwarg so callers
 can inject any :class:`ExecutorBackend` implementation — used by tests
 and by deployments to plug in distributed-execution backends.
+
+Thread-safety: :class:`LokyBackend` is designed for use from a single
+asyncio event loop.  The lazy ``_executor`` creation, the hook handler
+lists, and the module-level ``_default_backend`` singleton are not
+guarded by locks; concurrent access from multiple OS threads can race.
+Callers driving the backend from a thread pool must add their own
+serialization.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 from collections.abc import Mapping, Sequence
 import contextlib
 from dataclasses import dataclass, field
@@ -139,10 +146,6 @@ class WorkerConfig:
     )
     env_whitelist: frozenset[str] = DEFAULT_ENV_WHITELIST
     env_prefixes: tuple[str, ...] = DEFAULT_ENV_PREFIXES
-    # Forward-compatible field; not enforced today.  Wired up in a later
-    # PR alongside per-worker call counters from the upcoming
-    # ExecutorBackend distributed implementations.
-    max_calls_before_recycle: int | None = None
     enable_pdeathsig: bool = True
     pool_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     node_id: str = field(default_factory=socket.gethostname)
@@ -150,6 +153,19 @@ class WorkerConfig:
     @classmethod
     def from_env(cls) -> WorkerConfig:
         """Construct from ``GIGAEVO_EXECUTOR_*`` env vars.
+
+        Recognised env keys:
+
+        * ``GIGAEVO_EXECUTOR_MAX_WORKERS`` (positive int) — pool size.
+        * ``GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S`` (positive int) — worker
+          idle reap timeout, default 300.
+        * ``GIGAEVO_EXECUTOR_SPILL_DIR`` (path) — spill directory; falls
+          back to ``$TMPDIR/gigaevo-<uid>``.
+        * ``GIGAEVO_EXECUTOR_NODE_ID`` — overrides ``socket.gethostname()``;
+          useful in k8s where the pod name is the meaningful identity.
+        * ``GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG`` (truthy) — opt out of
+          ``PR_SET_PDEATHSIG`` on Linux; useful for debugging worker
+          lifecycle outside a parent-supervised context.
 
         Under pytest-xdist, ``max_workers`` auto-caps to
         ``cpu_count // PYTEST_XDIST_WORKER_COUNT`` to avoid an N×cpu_count
@@ -166,6 +182,9 @@ class WorkerConfig:
                 return default
             return v if v > 0 else default
 
+        def _truthy(key: str) -> bool:
+            return os.environ.get(key, "").strip().lower() in {"1", "true", "yes", "on"}
+
         spill = os.environ.get("GIGAEVO_EXECUTOR_SPILL_DIR")
         spill_path = (
             Path(spill).resolve(strict=False)
@@ -179,10 +198,15 @@ class WorkerConfig:
             if xdist and xdist > 1:
                 max_workers = max(1, (os.cpu_count() or 1) // xdist)
 
+        node_id_override = os.environ.get("GIGAEVO_EXECUTOR_NODE_ID", "").strip()
+        node_id = node_id_override or socket.gethostname()
+
         return cls(
             max_workers=max_workers,
             idle_timeout_s=_pos_int("GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S", 300) or 300,
             spill_dir=spill_path,
+            enable_pdeathsig=not _truthy("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG"),
+            node_id=node_id,
         )
 
 
@@ -205,6 +229,19 @@ class ExecutionMetrics:
     success or failure.  Separate from the outcome so a future remote
     executor backend can reuse the same metrics shape without bundling
     in the spill-path-vs-error duality.
+
+    ``peak_rss_kb`` reports ``getrusage(RUSAGE_SELF).ru_maxrss`` taken
+    after the call.  This is the worker process's lifetime-watermark RSS,
+    not a per-call peak — loky reuses workers across calls, so the value
+    for call N includes peaks from calls 1..N-1 on the same worker.
+    Treat it as "max RSS this worker has ever held", which is the only
+    cheap-to-obtain accurate measurement.  An accurate per-call peak
+    requires sampling RSS during execution (e.g. via ``psutil``) and
+    is left to a future PR if telemetry demands it.
+
+    ``started_at_ns`` / ``finished_at_ns`` come from
+    :func:`time.perf_counter_ns` in the worker; ``wall_time_s`` is derived
+    from their difference (single monotonic clock).
     """
 
     peak_rss_kb: int
@@ -311,7 +348,7 @@ def _worker_init() -> None:
     node_id = ""
     if raw:
         try:
-            decoded = json.loads(base64.b64decode(raw).decode("utf-8"))
+            decoded = json.loads(raw)
             whitelist = frozenset(decoded["whitelist"])
             prefixes = tuple(decoded["prefixes"])
             enable_pdeathsig = bool(decoded["pdeathsig"])
@@ -365,7 +402,6 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
     """Loky worker entry point.  Picklable; runs in the child process."""
     import resource as _resource
 
-    t0 = time.monotonic()
     started_at_ns = time.perf_counter_ns()
     ru_before = _resource.getrusage(_resource.RUSAGE_SELF)
     result, error = _run_one(call)
@@ -401,16 +437,17 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
                 )
 
     ru_after = _resource.getrusage(_resource.RUSAGE_SELF)
+    finished_at_ns = time.perf_counter_ns()
     metrics = ExecutionMetrics(
         peak_rss_kb=int(ru_after.ru_maxrss),
-        wall_time_s=time.monotonic() - t0,
+        wall_time_s=(finished_at_ns - started_at_ns) / 1e9,
         user_time_s=float(ru_after.ru_utime - ru_before.ru_utime),
         sys_time_s=float(ru_after.ru_stime - ru_before.ru_stime),
         worker_pid=os.getpid(),
         worker_id=os.environ.get("GIGAEVO_WORKER_ID", ""),
         node_id=os.environ.get("GIGAEVO_NODE_ID", ""),
         started_at_ns=started_at_ns,
-        finished_at_ns=time.perf_counter_ns(),
+        finished_at_ns=finished_at_ns,
     )
     return WorkerResult(spill_path=spill_path, error=error, metrics=metrics)
 
@@ -491,9 +528,11 @@ class LokyBackend:
             "pdeathsig": self._config.enable_pdeathsig,
             "node_id": self._config.node_id,
         }
-        scrubbed[_WORKER_INIT_ENV_KEY] = base64.b64encode(
-            json.dumps(init_config).encode("utf-8")
-        ).decode("ascii")
+        # Raw JSON in the env var: POSIX env values accept any byte except
+        # NUL, and ``execve`` does not re-tokenise them, so braces / quotes
+        # / colons pass through unmodified.  Base64 would be cargo-culted
+        # paranoia.
+        scrubbed[_WORKER_INIT_ENV_KEY] = json.dumps(init_config)
         return scrubbed
 
     def _get_executor(self) -> loky.ProcessPoolExecutor:
@@ -679,6 +718,13 @@ def shutdown_executor(*, wait: bool = False) -> None:
 
     Sync wrapper; safe to call from atexit handlers or sync test teardown.
     From an async context, prefer ``await default_loky_backend().shutdown()``.
+
+    Hook lifetime: this drops the current default singleton.  Any
+    handlers registered on it via ``on_submit`` / ``on_complete`` /
+    ``on_shutdown`` are released along with the backend; the next call
+    to :func:`default_loky_backend` constructs a fresh backend with
+    empty hook lists.  Observers that should outlive a shutdown cycle
+    must re-register on each new backend instance.
     """
     global _default_backend
     if _default_backend is None:

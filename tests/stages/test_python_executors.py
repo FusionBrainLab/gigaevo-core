@@ -1439,6 +1439,72 @@ class TestXdistWorkerCountAutoCap:
         assert cfg.max_workers >= 1
 
 
+class TestFromEnvIdentityAndSafety:
+    """``WorkerConfig.from_env`` surfaces a small set of identity / safety
+    knobs as env vars so k8s downward-API and debugging contexts don't
+    require constructing :class:`WorkerConfig` programmatically."""
+
+    def test_node_id_default_is_hostname(self, monkeypatch) -> None:
+        import socket as _socket
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_NODE_ID", raising=False)
+        cfg = WorkerConfig.from_env()
+        assert cfg.node_id == _socket.gethostname()
+
+    def test_node_id_env_override(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_NODE_ID", "pod-7-abc12")
+        cfg = WorkerConfig.from_env()
+        assert cfg.node_id == "pod-7-abc12"
+
+    def test_node_id_empty_env_falls_back_to_hostname(self, monkeypatch) -> None:
+        import socket as _socket
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_NODE_ID", "   ")
+        cfg = WorkerConfig.from_env()
+        assert cfg.node_id == _socket.gethostname()
+
+    def test_pdeathsig_default_enabled(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG", raising=False)
+        cfg = WorkerConfig.from_env()
+        assert cfg.enable_pdeathsig is True
+
+    @pytest.mark.parametrize("val", ["1", "true", "yes", "on", "TRUE", "Yes"])
+    def test_pdeathsig_disabled_by_truthy(self, monkeypatch, val) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG", val)
+        cfg = WorkerConfig.from_env()
+        assert cfg.enable_pdeathsig is False
+
+    @pytest.mark.parametrize("val", ["0", "false", "no", "off", "", "garbage"])
+    def test_pdeathsig_stays_enabled_for_non_truthy(self, monkeypatch, val) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG", val)
+        cfg = WorkerConfig.from_env()
+        assert cfg.enable_pdeathsig is True
+
+
 # =============================================================================
 # shutdown_executor wait semantics
 # =============================================================================
@@ -2045,6 +2111,47 @@ class TestLifecycleHooks:
         assert len(a) == 1
         assert len(b) == 1
         assert len(c) == 1
+
+    async def test_handlers_fire_in_registration_order(self, tmp_path) -> None:
+        """Handlers fire in the order they were registered.
+
+        The Protocol pins this — observers reason about ordering
+        (e.g., a logging handler registered first should see the call
+        before a metrics handler that might mutate state) so it's
+        worth nailing down with a test, not just a docstring.
+        """
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        submit_order: list[str] = []
+        complete_order: list[str] = []
+        shutdown_order: list[str] = []
+
+        for name in ("first", "second", "third"):
+            backend.on_submit(lambda _c, n=name: submit_order.append(n))
+            backend.on_complete(
+                lambda _c, _m, _e, n=name: complete_order.append(n)
+            )
+            backend.on_shutdown(lambda n=name: shutdown_order.append(n))
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert submit_order == ["first", "second", "third"]
+        assert complete_order == ["first", "second", "third"]
+        assert shutdown_order == ["first", "second", "third"]
 
     async def test_on_complete_fires_with_none_metrics_on_pre_submit_failure(
         self, tmp_path, monkeypatch
