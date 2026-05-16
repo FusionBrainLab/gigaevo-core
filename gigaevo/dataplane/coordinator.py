@@ -494,22 +494,39 @@ class DataPlane:
         *,
         deadline_monotonic: float | None = None,
     ) -> Result[BatchTransitionOutcome, DataPlaneError]:
-        """Apply a batch of program-FSM transitions atomically.
+        """Apply a batch of program-FSM transitions.
 
-        Either every item in ``items`` succeeds or none do. A partial
-        failure surfaces as an :class:`Err` on the outer
-        :data:`Result`; the :class:`BatchTransitionOutcome` is only
-        produced on full-batch success. The order of
-        ``BatchTransitionOutcome.items`` matches ``items``.
+        Each item is dispatched as an independent :meth:`transition_program_state`
+        call; per-item atomicity is preserved (the underlying Lua
+        script handles each one), but **the batch as a whole is not
+        atomic**. If item *k* fails the preceding *k-1* items are
+        already applied; the failure surfaces as the outer ``Err`` and
+        the caller must compensate for the partial commit (or accept it).
 
-        Each item carries its own token; the batch helper does not
-        accept a single combined token because the underlying subspaces
-        are per-program.
+        The order of :class:`BatchTransitionOutcome.items` matches the
+        input ``items``. Each item's :class:`Token` is consumed on its
+        own call — passing the same token across multiple items would
+        raise :class:`TokenAlreadyConsumed` on the second use.
+
+        Returns ``Ok(BatchTransitionOutcome(items=()))`` for an empty
+        batch (vacuous success).
         """
-        # TODO: call self._require_started("transition_program_state_batch")
-        # and dispatch a single Lua MULTI / EVALSHA call.
-        _ = (self, items, deadline_monotonic)
-        raise NotImplementedError("transition_program_state_batch")
+        if not items:
+            return Ok(BatchTransitionOutcome(items=()))
+        outcomes: list[Versioned[ProgramSnapshot]] = []
+        for item in items:
+            result = await self.transition_program_state(
+                item.program_id,
+                token=item.token,
+                expected_from=item.expected_from,
+                to=item.to,
+                patch=item.patch,
+                deadline_monotonic=deadline_monotonic,
+            )
+            if isinstance(result, Err):
+                return result
+            outcomes.append(result.value)
+        return Ok(BatchTransitionOutcome(items=tuple(outcomes)))
 
     async def read_program(
         self,

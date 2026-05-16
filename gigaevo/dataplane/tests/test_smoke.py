@@ -69,10 +69,23 @@ def test_method_stubs_raise_notimplemented() -> None:
     # Each method raises NotImplementedError when called; we don't await
     # the coroutines (they raise as soon as they're called because the
     # raise lives in the function body, not after an await).
-    stub_names = [
+    # Every public DataPlane method is now implemented. Verify the
+    # surface is callable as a smoke check — bodies are exercised by
+    # their dedicated test_*.py modules against fakeredis.
+    public_methods = [
+        "transition_program_state",
         "transition_program_state_batch",
+        "read_program",
+        "acquire_instance_lock",
+        "renew_instance_lock",
+        "release_instance_lock",
+        "try_replace_elite",
+        "crdt_inc",
+        "crdt_read",
+        "lwwr_set",
+        "lwwr_get",
     ]
-    for name in stub_names:
+    for name in public_methods:
         method = getattr(coord, name)
         assert callable(method), name
 

@@ -324,3 +324,85 @@ class TestTokenDiscipline:
                 expected_from=dp.ProgramState.RUNNING,
                 to=dp.ProgramState.DONE,
             )
+
+
+# ── batch transitions ────────────────────────────────────────────────
+
+
+class TestBatch:
+    async def test_empty_batch_returns_ok_empty(self, coord: dp.DataPlane) -> None:
+        result = await coord.transition_program_state_batch(items=())
+        assert isinstance(result, dp.Ok)
+        assert result.value.items == ()
+
+    async def test_batch_applies_all_in_order(self, coord: dp.DataPlane) -> None:
+        for i in range(1, 4):
+            await _put_program(coord, f"b-{i}", dp.ProgramState.QUEUED)
+        items = tuple(
+            dp.BatchTransitionItem(
+                program_id=dp.ProgramId(f"b-{i}"),
+                token=_token(f"b-{i}"),
+                expected_from=dp.ProgramState.QUEUED,
+                to=dp.ProgramState.RUNNING,
+            )
+            for i in range(1, 4)
+        )
+        result = await coord.transition_program_state_batch(items=items)
+        assert isinstance(result, dp.Ok)
+        outcomes = result.value.items
+        assert len(outcomes) == 3
+        for v, expected_pid in zip(outcomes, ("b-1", "b-2", "b-3")):
+            assert v.value["id"] == expected_pid
+            assert v.value["state"] == "RUNNING"
+
+    async def test_batch_per_item_token_consumed(self, coord: dp.DataPlane) -> None:
+        await _put_program(coord, "b-x", dp.ProgramState.QUEUED)
+        await _put_program(coord, "b-y", dp.ProgramState.QUEUED)
+        tx = _token("b-x")
+        ty = _token("b-y")
+        items = (
+            dp.BatchTransitionItem(
+                program_id=dp.ProgramId("b-x"),
+                token=tx,
+                expected_from=dp.ProgramState.QUEUED,
+                to=dp.ProgramState.RUNNING,
+            ),
+            dp.BatchTransitionItem(
+                program_id=dp.ProgramId("b-y"),
+                token=ty,
+                expected_from=dp.ProgramState.QUEUED,
+                to=dp.ProgramState.RUNNING,
+            ),
+        )
+        result = await coord.transition_program_state_batch(items=items)
+        assert isinstance(result, dp.Ok)
+        assert tx.consumed and ty.consumed
+
+    async def test_batch_partial_failure_returns_err_after_partial_commit(
+        self, coord: dp.DataPlane
+    ) -> None:
+        # b-good is QUEUED and will succeed; b-bad doesn't exist so the
+        # second item fails. The first item is already committed when
+        # the second fails — the batch is not atomic across items.
+        await _put_program(coord, "b-good", dp.ProgramState.QUEUED)
+        items = (
+            dp.BatchTransitionItem(
+                program_id=dp.ProgramId("b-good"),
+                token=_token("b-good"),
+                expected_from=dp.ProgramState.QUEUED,
+                to=dp.ProgramState.RUNNING,
+            ),
+            dp.BatchTransitionItem(
+                program_id=dp.ProgramId("b-bad"),  # never written
+                token=_token("b-bad"),
+                expected_from=dp.ProgramState.QUEUED,
+                to=dp.ProgramState.RUNNING,
+            ),
+        )
+        result = await coord.transition_program_state_batch(items=items)
+        assert isinstance(result, dp.Err)
+        assert result.error.kind == "stale"
+        # The first item's commit survived.
+        read = await coord.read_program(dp.ProgramId("b-good"))
+        assert isinstance(read, dp.Ok) and read.value is not None
+        assert read.value.value["state"] == "RUNNING"
