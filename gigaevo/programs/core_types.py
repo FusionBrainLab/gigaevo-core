@@ -3,35 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
-import re
 import traceback
 from typing import Any
 
 import cloudpickle
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, Field, field_serializer
 
 from gigaevo.programs.utils import pickle_b64_deserialize, pickle_b64_serialize
-
-# Lone UTF-16 surrogate code points (U+D800..U+DFFF) are legal in Python ``str``
-# but illegal in UTF-8 and rejected by ``orjson.dumps`` (TypeError) and by
-# PostgreSQL TEXT columns. LLM-derived exception text occasionally contains
-# them — typically from tokenizer artefacts that emit half of an astral pair
-# without its partner — and they survive ``str(exc)`` unchanged. ``StageError``
-# sits at the failure-reporting boundary between LLM call sites and every
-# downstream consumer (Redis blob via ``orjson``, migration-bus stream payload,
-# asyncpg TEXT write), so we scrub them to U+FFFD on field-validate.
-_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
-
-
-def _scrub_surrogates(value: str | None) -> str | None:
-    """Replace lone UTF-16 surrogate code points with U+FFFD.
-
-    ``None`` and surrogate-free strings pass through unchanged (identity). The
-    replacement is idempotent: ``f(f(x)) == f(x)`` for every input.
-    """
-    if value is None or not _SURROGATE_RE.search(value):
-        return value
-    return _SURROGATE_RE.sub("�", value)
 
 
 class StageIO(BaseModel):
@@ -60,23 +38,6 @@ class StageError(BaseModel):
     message: str = Field(..., description="Human-readable message")
     stage: str | None = Field(default=None, description="Stage class name, if known")
     traceback: str | None = Field(default=None, description="Formatted traceback")
-
-    @field_validator("message", mode="before")
-    @classmethod
-    def _scrub_message(cls, value: Any) -> Any:
-        # ``message`` is required (``...``) so a non-str input still has to
-        # fail validation downstream; only intercept str values to avoid
-        # masking type errors.
-        if isinstance(value, str):
-            return _scrub_surrogates(value)
-        return value
-
-    @field_validator("type", "stage", "traceback", mode="before")
-    @classmethod
-    def _scrub_optional(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            return _scrub_surrogates(value)
-        return value
 
     @classmethod
     def from_exception(
