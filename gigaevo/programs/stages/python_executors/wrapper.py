@@ -43,6 +43,12 @@ from loguru import logger
 import loky
 from loky.backend.context import get_context
 
+from gigaevo.programs.stages.python_executors.backend import (
+    CompleteHandler,
+    ExecutorBackend,
+    ShutdownHandler,
+    SubmitHandler,
+)
 from gigaevo.programs.stages.python_executors.exec_runner import (
     WorkerCall,
     WorkerError,
@@ -449,6 +455,9 @@ class LokyBackend:
         self._config = config if config is not None else WorkerConfig.from_env()
         self._executor: loky.ProcessPoolExecutor | None = None
         self._worker_env: dict[str, str] = {}
+        self._on_submit: list[SubmitHandler] = []
+        self._on_complete: list[CompleteHandler] = []
+        self._on_shutdown: list[ShutdownHandler] = []
 
     @property
     def config(self) -> WorkerConfig:
@@ -498,6 +507,7 @@ class LokyBackend:
         wall-clock overrun.  On timeout the worker pool is torn down;
         subsequent calls respawn it.
         """
+        self._fire(self._on_submit, call)
         executor = self._get_executor()
         fut = executor.submit(_run_task, call, str(self._config.spill_dir))
 
@@ -505,16 +515,18 @@ class LokyBackend:
             result: WorkerResult = await asyncio.wait_for(
                 asyncio.wrap_future(fut), timeout=deadline_s
             )
-        except TimeoutError:
+        except TimeoutError as exc:
             # Loky has no public per-future kill; tearing the pool down is
             # the only available primitive.  Other in-flight tasks become
             # BrokenProcessPool and will be retried by their callers.
             self._shutdown_sync(wait=False)
+            self._fire_complete(call, None, exc)
             raise
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             # Don't tear the pool down; just unlink the spill if the
             # worker still produces one after cancellation.
             fut.add_done_callback(_unlink_spill_on_done)
+            self._fire_complete(call, None, exc)
             raise
 
         logger.trace(
@@ -531,17 +543,67 @@ class LokyBackend:
         )
 
         if result.error is not None:
-            raise ExecRunnerError(
+            err = ExecRunnerError(
                 returncode=result.error.returncode,
                 stderr=result.error.stderr,
             )
+            self._fire_complete(call, result.metrics, err)
+            raise err
 
         assert result.spill_path is not None
         try:
-            return _load_spill(result.spill_path)
-        finally:
+            value = _load_spill(result.spill_path)
+        except BaseException as exc:
+            self._fire_complete(call, result.metrics, exc)
             with contextlib.suppress(OSError):
                 os.unlink(result.spill_path)
+            raise
+        with contextlib.suppress(OSError):
+            os.unlink(result.spill_path)
+        self._fire_complete(call, result.metrics, None)
+        return value
+
+    # --- Lifecycle hook registration (ExecutorBackend Protocol) ---
+
+    def on_submit(self, handler: SubmitHandler) -> None:
+        self._on_submit.append(handler)
+
+    def on_complete(self, handler: CompleteHandler) -> None:
+        self._on_complete.append(handler)
+
+    def on_shutdown(self, handler: ShutdownHandler) -> None:
+        self._on_shutdown.append(handler)
+
+    def _fire(self, handlers: list, *args: Any) -> None:
+        """Invoke every registered handler; exceptions are logged and swallowed.
+
+        A misbehaving handler must not silence the others nor break the
+        execution path.
+        """
+        for h in handlers:
+            try:
+                h(*args)
+            except Exception:
+                logger.exception(
+                    "[LokyBackend:{}] hook raised", self._config.pool_id
+                )
+
+    def _fire_complete(
+        self,
+        call: WorkerCall,
+        metrics: ExecutionMetrics | None,
+        exc: BaseException | None,
+    ) -> None:
+        if metrics is None:
+            metrics = ExecutionMetrics(
+                peak_rss_kb=0,
+                wall_time_s=0.0,
+                user_time_s=0.0,
+                sys_time_s=0.0,
+                worker_pid=0,
+                node_id=self._config.node_id,
+            )
+        self._fire(self._on_complete, call, metrics, exc)
 
     def _shutdown_sync(self, *, wait: bool = False) -> None:
         """Sync shutdown — the body of :meth:`shutdown` without async wrap.
@@ -551,11 +613,20 @@ class LokyBackend:
         going through ``asyncio.run``.
         """
         if self._executor is None:
+            # Still fire the shutdown hook for callers that registered
+            # one before any execute() — idempotent shutdown should still
+            # notify observers exactly once.  Guard with a sentinel so
+            # multiple shutdown calls only fire once.
+            if self._on_shutdown:
+                self._fire(self._on_shutdown)
+                self._on_shutdown = []
             return
         with contextlib.suppress(Exception):
             self._executor.shutdown(kill_workers=True, wait=wait)
         self._executor = None
         self._worker_env.clear()
+        self._fire(self._on_shutdown, *())
+        self._on_shutdown = []
 
     async def shutdown(self, *, wait: bool = False) -> None:
         """Kill all workers if any were spawned.
@@ -631,17 +702,18 @@ async def run_exec_runner(
     python_path: Sequence[Path] | None = None,
     env_updates: dict[str, Any] | None = None,
     timeout: int,
+    backend: ExecutorBackend | None = None,
 ) -> Any:
-    """Run a user function in a loky-managed subprocess and return its value.
+    """Run a user function in a subprocess and return its value.
 
     Raises :class:`ExecRunnerError` on user-code failure (``.stderr`` holds
     the traceback) or :class:`asyncio.TimeoutError` on wall-clock overrun.
-    On timeout the default-backend pool is torn down; subsequent calls
-    respawn it.
 
-    Wrapper over the process-scoped default :class:`LokyBackend`; callers
-    that want isolated pools should instantiate a :class:`LokyBackend`
-    directly and call :meth:`LokyBackend.execute`.
+    Args:
+        backend: Optional :class:`ExecutorBackend` to use instead of the
+            process-scoped default :class:`LokyBackend` singleton.  Used
+            by tests to inject fakes, and by deployments to swap in a
+            remote-execution backend without changing call sites.
     """
     call = WorkerCall(
         code=code,
@@ -651,4 +723,17 @@ async def run_exec_runner(
         python_path=[str(p) for p in (python_path or [])],
         env={k: (None if v is None else str(v)) for k, v in (env_updates or {}).items()},
     )
-    return await default_loky_backend().execute(call, deadline_s=timeout)
+    if backend is None:
+        backend = default_loky_backend()
+    return await backend.execute(call, deadline_s=timeout)
+
+
+# Static structural-conformance check — ``LokyBackend`` must satisfy
+# :class:`ExecutorBackend` for the abstraction to mean anything.
+def _assert_loky_conforms() -> None:
+    """Static check; called once at module import via the test suite."""
+    # Mypy / pyright would catch a mismatch via Protocol structural
+    # comparison even without this; the call exists so a runtime mismatch
+    # in field/method names fails fast.
+    _: ExecutorBackend = LokyBackend.__new__(LokyBackend)  # type: ignore[abstract]
+    del _

@@ -1845,6 +1845,238 @@ class TestWorkerIdentity:
         finally:
             await backend.shutdown(wait=True)
 
+    async def test_executor_backend_protocol_conformance(self, tmp_path) -> None:
+        """``LokyBackend`` must satisfy the :class:`ExecutorBackend` Protocol."""
+        from gigaevo.programs.stages.python_executors.backend import ExecutorBackend
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+        try:
+            assert isinstance(backend, ExecutorBackend)
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_custom_backend_injected_into_run_exec_runner(self) -> None:
+        """A caller can substitute a custom backend via the ``backend=`` kwarg."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import run_exec_runner
+
+        captured: list[WorkerCall] = []
+
+        class FakeBackend:
+            async def execute(self, call: WorkerCall, *, deadline_s: int):
+                captured.append(call)
+                return 42
+
+            async def shutdown(self, *, wait: bool = False) -> None:
+                pass
+
+            def on_submit(self, handler) -> None:
+                pass
+
+            def on_complete(self, handler) -> None:
+                pass
+
+            def on_shutdown(self, handler) -> None:
+                pass
+
+        value = await run_exec_runner(
+            code="def f(): return 1",
+            function_name="f",
+            timeout=30,
+            backend=FakeBackend(),
+        )
+        assert value == 42
+        assert len(captured) == 1
+        assert captured[0].function_name == "f"
+
+
+# =============================================================================
+# Lifecycle hooks
+# =============================================================================
+
+
+class TestLifecycleHooks:
+    """``on_submit`` / ``on_complete`` / ``on_shutdown`` fire at the
+    appropriate point; handler exceptions are isolated from the
+    execution path and from sibling handlers."""
+
+    async def test_on_submit_fires_before_execute_returns(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[WorkerCall] = []
+        backend.on_submit(seen.append)
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(seen) == 1
+        assert seen[0].function_name == "f"
+
+    async def test_on_complete_fires_with_metrics_on_success(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutionMetrics,
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[tuple] = []
+
+        def handler(call, metrics, exc):
+            seen.append((call, metrics, exc))
+
+        backend.on_complete(handler)
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(seen) == 1
+        call, metrics, exc = seen[0]
+        assert call.function_name == "f"
+        assert isinstance(metrics, ExecutionMetrics)
+        assert exc is None
+
+    async def test_on_complete_fires_with_exception_on_failure(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecRunnerError,
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[BaseException | None] = []
+        backend.on_complete(lambda call, metrics, exc: seen.append(exc))
+
+        try:
+            with pytest.raises(ExecRunnerError):
+                await backend.execute(
+                    WorkerCall(
+                        code="def f(): raise RuntimeError('boom')",
+                        function_name="f",
+                    ),
+                    deadline_s=30,
+                )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(seen) == 1
+        assert isinstance(seen[0], ExecRunnerError)
+
+    async def test_on_shutdown_fires_once_per_shutdown(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        counter = [0]
+        backend.on_shutdown(lambda: counter.__setitem__(0, counter[0] + 1))
+
+        await backend.execute(
+            WorkerCall(code="def f(): return 1", function_name="f"),
+            deadline_s=30,
+        )
+        await backend.shutdown(wait=True)
+        # Idempotent second shutdown should not re-fire.
+        await backend.shutdown(wait=True)
+
+        assert counter[0] == 1
+
+    async def test_multiple_handlers_all_fire(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        a, b, c = [], [], []
+        backend.on_submit(a.append)
+        backend.on_submit(b.append)
+        backend.on_submit(c.append)
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(a) == 1
+        assert len(b) == 1
+        assert len(c) == 1
+
+    async def test_handler_exception_does_not_break_siblings(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[WorkerCall] = []
+
+        def bad_handler(call):
+            raise RuntimeError("handler explodes")
+
+        backend.on_submit(bad_handler)
+        backend.on_submit(seen.append)
+
+        try:
+            value = await backend.execute(
+                WorkerCall(code="def f(): return 7", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert value == 7
+        assert len(seen) == 1  # sibling fired despite bad_handler exception
+
+
     async def test_worker_id_stable_within_one_worker(self, tmp_path) -> None:
         """A worker reused across multiple calls reports the same worker_id."""
         from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
