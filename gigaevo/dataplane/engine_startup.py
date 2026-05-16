@@ -50,6 +50,7 @@ from gigaevo.dataplane.permissions import Token, mint_root, mint_split
 if TYPE_CHECKING:
     from gigaevo.database.redis_program_storage import RedisProgramStorage
     from gigaevo.llm.models import MultiModelRouter
+    from gigaevo.prompts.fetcher import PromptFetcher
 
 __all__ = [
     "ENV_RUN_ID",
@@ -60,6 +61,7 @@ __all__ = [
     "build_actor_identity",
     "wire_storage",
     "wire_bandit_router",
+    "wire_prompt_fetcher",
 ]
 
 
@@ -338,4 +340,49 @@ def wire_bandit_router(
         bandit.arm_names,
         actor.pack(),
     )
+    return True
+
+
+def wire_prompt_fetcher(
+    fetcher: PromptFetcher,
+    main_dp: DataPlane,
+    prompt_dp: DataPlane,
+    actor: ActorIdentity,
+) -> bool:
+    """Attach engine-owned DataPlanes + actor to a prompt fetcher, if applicable.
+
+    Returns ``True`` when the fetcher is a
+    :class:`~gigaevo.prompts.fetcher.GigaEvoArchivePromptFetcher` and
+    the rebind happened, ``False`` for the static
+    :class:`~gigaevo.prompts.fetcher.FixedDirPromptFetcher` case (no
+    co-evolution archive read and no per-prompt outcome ledger).
+    Non-archive fetchers degrade silently so the entrypoint can call
+    this unconditionally regardless of which prompt-fetcher config the
+    user selected.
+
+    The fetcher writes prompt-outcome stats to ``main_dp`` (same
+    key-space the storage and bandit already own) and reads the
+    co-evolution archive from ``prompt_dp`` (typically a different
+    Redis DB under a different key prefix). Sharing ``main_dp`` with
+    the rest of the engine eliminates the second connection pool the
+    fetcher would otherwise build lazily in
+    :meth:`GigaEvoArchivePromptFetcher.start`.
+
+    ``actor`` is the same :class:`ActorIdentity` passed to
+    :func:`wire_bandit_router`: one engine, one identity, multiple
+    write surfaces. The fetcher writes under the
+    ``prompt:trials:{id}`` counter namespace; the bandit writes under
+    ``bandit:trials:{arm}``; identical ``(run_id, worker_id)`` keeps
+    every per-engine sub-count addressable under one actor.
+
+    Idempotency and conflict-detection are delegated to
+    :meth:`GigaEvoArchivePromptFetcher.attach_dataplane`.
+    """
+    # Lazy import to avoid the dataplane package importing the prompts
+    # tree at module load — keeps the dataplane self-contained.
+    from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+    if not isinstance(fetcher, GigaEvoArchivePromptFetcher):
+        return False
+    fetcher.attach_dataplane(main_dp, prompt_dp, actor)
     return True

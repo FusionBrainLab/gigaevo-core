@@ -14,7 +14,9 @@ from gigaevo.dataplane import (
     DataPlane,
     build_actor_identity,
     build_dataplane,
+    build_engine_root,
     wire_bandit_router,
+    wire_prompt_fetcher,
     wire_storage,
 )
 from gigaevo.evolution.engine import EvolutionEngine
@@ -33,6 +35,7 @@ async def run_experiment(cfg: DictConfig) -> None:
     redis_storage: RedisProgramStorage | None = None
     writer: LogWriter | None = None
     dataplane: DataPlane | None = None
+    prompt_dataplane: DataPlane | None = None
     try:
         config_with_instances = instantiate(cfg, recursive=True)
         redis_storage: RedisProgramStorage = config_with_instances.redis_storage
@@ -61,11 +64,52 @@ async def run_experiment(cfg: DictConfig) -> None:
             str(redis_storage.config.redis_url),
             key_prefix=redis_storage.config.key_prefix,
         )
-        wire_storage(redis_storage, dataplane)
+        # One engine, one root-token bundle. The engine root flows into
+        # the storage so per-call FSM tokens derive by linear split from
+        # this single origin — every per-program write is structurally
+        # a child of the engine's single ProgramId subspace witness.
+        engine_root = build_engine_root()
+        wire_storage(redis_storage, dataplane, engine_root)
+        # Hand the runner and engine the dataplane handle so their
+        # freshness-pinned reads (currently: the timeout-discard
+        # re-read in :class:`DagRunner._timeout_read_is_fresh`) route
+        # through :meth:`DataPlane.read_program`. The engine_root is
+        # forwarded for future writes; storage already owns the
+        # canonical reference and rotates the program-subspace witness
+        # on every transition.
+        dag_runner._dataplane = dataplane
+        dag_runner._engine_root = engine_root
+        evolution_engine._dataplane = dataplane
+        evolution_engine._engine_root = engine_root
         actor = build_actor_identity(run_id=cfg.get("run_id"))
         llm_wrapper = getattr(evolution_engine.mutation_operator, "llm_wrapper", None)
         if llm_wrapper is not None:
             wire_bandit_router(llm_wrapper, dataplane, actor)
+
+        # Share the engine's main DataPlane with the prompt fetcher (so
+        # prompt-outcome G-counters live under the same connection pool
+        # the storage and bandit already own) while constructing a
+        # separate :class:`DataPlane` for the co-evolved prompt archive
+        # reads: that archive is in a different Redis DB, so it needs
+        # its own connection pool dialled at a different URL. The
+        # fetcher carries the prompt-archive DB / host / port / prefix
+        # from its Hydra config; we read them directly off the instance
+        # so the engine surface stays unaware of the fetcher's schema.
+        prompt_fetcher = getattr(
+            evolution_engine.mutation_operator, "_prompt_fetcher", None
+        )
+        from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+        if isinstance(prompt_fetcher, GigaEvoArchivePromptFetcher):
+            prompt_url = (
+                f"redis://{prompt_fetcher._host}:{prompt_fetcher._port}/"
+                f"{prompt_fetcher._prompt_redis_db}"
+            )
+            prompt_dataplane = await build_dataplane(
+                prompt_url,
+                key_prefix=prompt_fetcher._prompt_prefix,
+            )
+            wire_prompt_fetcher(prompt_fetcher, dataplane, prompt_dataplane, actor)
 
         await redis_storage.acquire_instance_lock()
 
@@ -123,6 +167,15 @@ async def run_experiment(cfg: DictConfig) -> None:
                 await dataplane.shutdown()
             except Exception:
                 logger.exception("DataPlane shutdown failed")
+        # The prompt-archive coordinator is independent (separate DB
+        # and key prefix) and therefore needs its own shutdown step;
+        # ordering relative to ``dataplane`` does not matter because
+        # the two pools share no resources.
+        if prompt_dataplane is not None:
+            try:
+                await prompt_dataplane.shutdown()
+            except Exception:
+                logger.exception("Prompt DataPlane shutdown failed")
         if writer is not None:
             writer.close()
         duration = time.time() - start_time

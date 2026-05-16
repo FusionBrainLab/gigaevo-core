@@ -17,10 +17,9 @@ helper opens a real Redis socket via :meth:`aioredis.Redis.from_url`;
 fakeredis cannot intercept that path. Instead, the test bypasses the
 URL-based startup and injects a shared :class:`fakeredis.FakeServer`
 into both the storage's connection and the coordinator's connection,
-then exercises :func:`load_legacy_program_fsm`, :func:`wire_storage`,
-and :func:`wire_bandit_router` exactly as the production entrypoint
-does. This is the smallest test surface that exercises the wiring
-contract without requiring a live Redis.
+then exercises :func:`wire_storage` and :func:`wire_bandit_router`
+exactly as the production entrypoint does. The FSM hash is primed via
+:func:`load_fsm_table` since the test bypasses :meth:`DataPlane.startup`.
 """
 
 from __future__ import annotations
@@ -32,15 +31,13 @@ import fakeredis
 import fakeredis.aioredis
 import pytest
 
-from gigaevo.database.redis_program_storage import (
-    RedisProgramStorage,
-    load_legacy_program_fsm,
-)
+from gigaevo.database.redis_program_storage import RedisProgramStorage
 import gigaevo.dataplane as dp
 from gigaevo.dataplane import (
     DataPlane,
     build_actor_identity,
     wire_bandit_router,
+    wire_prompt_fetcher,
     wire_storage,
 )
 from gigaevo.dataplane.scripts import LuaRegistry
@@ -62,8 +59,8 @@ async def _build_coordinator_against_fake(
 ) -> tuple[DataPlane, fakeredis.aioredis.FakeRedis]:
     """Wire a coordinator on top of an existing :class:`FakeServer`.
 
-    Construction mirrors the production sequence — instantiate,
-    inject pool, register scripts, load the legacy FSM table — but
+    Construction mirrors the production sequence — instantiate, inject
+    pool, register scripts, load the case-tolerant FSM table — but
     skips the URL-based startup so fakeredis is preserved.
     """
     coord = DataPlane(
@@ -75,9 +72,23 @@ async def _build_coordinator_against_fake(
     lua = LuaRegistry(fake)
     coord._register_builtin_scripts(lua)  # type: ignore[attr-defined]
     await lua.load_all()
+    # FSM table primes the program-state transition matrix in the
+    # case-tolerant form the script consults. The dataplane bridge no
+    # longer ships a legacy-vocab reloader; ``load_fsm_table`` emits
+    # rows under both vocabularies in one pass.
+    from gigaevo.dataplane.transitions import (
+        PROGRAM_STATE_TRANSITIONS,
+        load_fsm_table,
+    )
+
+    await load_fsm_table(
+        fake,
+        key_prefix=key_prefix,
+        name="program_state",
+        table=PROGRAM_STATE_TRANSITIONS,
+    )
     coord._lua = lua  # type: ignore[attr-defined]
     coord._started = True  # type: ignore[attr-defined]
-    await load_legacy_program_fsm(coord)
     return coord, fake
 
 
@@ -194,6 +205,78 @@ class TestDataplaneWiringSmoke:
             await _coord_shutdown(coord, fake)
 
 
+class TestEngineRootWiring:
+    """Engine-root threading through :func:`wire_storage`.
+
+    The storage receives a single :class:`EngineRoot` at startup; per-
+    call FSM tokens derive by linear split. The structural invariant is
+    that two consecutive transitions on a single program both succeed:
+    the engine root rotates its long-lived witness, so the second call
+    is not blocked by a consumed token from the first.
+    """
+
+    async def test_wire_storage_attaches_engine_root(self) -> None:
+        from gigaevo.dataplane import build_engine_root
+
+        server = fakeredis.FakeServer()
+        # The storage from :func:`_make_storage` is pinned to the
+        # ``minirun`` prefix; the coordinator must share that prefix so
+        # both observe the same key-space on the shared FakeServer.
+        coord, fake = await _build_coordinator_against_fake(
+            server, key_prefix="minirun"
+        )
+        storage = _make_storage(server)
+        try:
+            assert storage._engine_root is None  # type: ignore[attr-defined]
+            root = build_engine_root()
+            wire_storage(storage, coord, root)
+            assert storage._engine_root is root  # type: ignore[attr-defined]
+            assert storage._dataplane is coord  # type: ignore[attr-defined]
+        finally:
+            await storage.close()
+            await _coord_shutdown(coord, fake)
+
+    async def test_two_transitions_on_one_program_both_succeed(self) -> None:
+        """The structural invariant: rotation preserves single-live-witness
+        across consecutive transitions on the same program. The legacy
+        ``mint_root`` path was per-call; the engine-root path replaces
+        it with ``mint_split`` from the rotating engine root."""
+        from gigaevo.dataplane import build_engine_root
+
+        _reset_counter()
+        server = fakeredis.FakeServer()
+        coord, fake = await _build_coordinator_against_fake(
+            server, key_prefix="minirun"
+        )
+        storage = _make_storage(server)
+        root = build_engine_root()
+        wire_storage(storage, coord, root)
+        try:
+            prog = Program(code=SEED_CODE, state=ProgramState.QUEUED)
+            await storage.add(prog)
+            initial_root = root._program_root  # type: ignore[attr-defined]
+
+            await storage.fast_state_transition(
+                prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+            )
+            await storage.atomic_state_transition(
+                prog, ProgramState.RUNNING.value, ProgramState.DONE.value
+            )
+
+            # Initial root consumed, current root live and rotated.
+            assert initial_root.consumed
+            current = root._program_root  # type: ignore[attr-defined]
+            assert current is not initial_root
+            assert not current.consumed
+            # Persisted program reflects the final state.
+            fetched = await storage.get(prog.id)
+            assert fetched is not None
+            assert fetched.state == ProgramState.DONE
+        finally:
+            await storage.close()
+            await _coord_shutdown(coord, fake)
+
+
 class TestBanditWiring:
     """The router-wiring helper rebinds private state without errors."""
 
@@ -248,6 +331,187 @@ class TestBanditWiring:
             assert wired is False
         finally:
             await _coord_shutdown(coord, fake)
+
+
+class TestPromptFetcherWiring:
+    """The prompt-fetcher wiring helper pins the shared-dataplane discipline.
+
+    Mirrors the bandit-wiring contract: the helper is silent on
+    non-co-evolved fetchers and rebinds private state on the
+    :class:`GigaEvoArchivePromptFetcher` case. The structural invariant
+    is that the main DataPlane the fetcher writes through is the SAME
+    instance the storage and bandit observe — eliminating the second
+    connection pool the fetcher would lazily build otherwise.
+    """
+
+    async def test_wire_prompt_fetcher_attaches_and_shares_main_dp(
+        self, tmp_path
+    ) -> None:
+        """The fetcher's main DP is the engine's shared DP after wiring."""
+        from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+        server = fakeredis.FakeServer()
+        main_coord, main_fake = await _build_coordinator_against_fake(
+            server, key_prefix="testpfx"
+        )
+        prompt_coord, prompt_fake = await _build_coordinator_against_fake(
+            server, key_prefix="prompt_evolution"
+        )
+        actor = build_actor_identity(run_id="r1", worker_id="w1")
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="testpfx",
+            main_redis_db=5,
+            fallback_prompts_dir=tmp_path,
+        )
+        try:
+            assert fetcher._main_dp is None
+            assert fetcher._prompt_dp is None
+
+            wired = wire_prompt_fetcher(fetcher, main_coord, prompt_coord, actor)
+            assert wired is True
+            # Sharing invariant: the fetcher's main DP is identically
+            # the one the engine threads into storage and bandit.
+            assert fetcher._main_dp is main_coord
+            assert fetcher._prompt_dp is prompt_coord
+            assert fetcher._actor == actor
+            # Lifetime: engine owns the handles after wiring.
+            assert fetcher._main_dp_owned is False
+            assert fetcher._prompt_dp_owned is False
+        finally:
+            await _coord_shutdown(main_coord, main_fake)
+            await _coord_shutdown(prompt_coord, prompt_fake)
+
+    async def test_wire_prompt_fetcher_noops_on_fixed_fetcher(self, tmp_path) -> None:
+        """A :class:`FixedDirPromptFetcher` is silently skipped (no archive)."""
+        from gigaevo.prompts.fetcher import FixedDirPromptFetcher
+
+        server = fakeredis.FakeServer()
+        main_coord, main_fake = await _build_coordinator_against_fake(
+            server, key_prefix="main"
+        )
+        prompt_coord, prompt_fake = await _build_coordinator_against_fake(
+            server, key_prefix="prompt"
+        )
+        actor = build_actor_identity(run_id="r1", worker_id="w1")
+        fetcher = FixedDirPromptFetcher(prompts_dir=tmp_path)
+        try:
+            wired = wire_prompt_fetcher(fetcher, main_coord, prompt_coord, actor)
+            assert wired is False
+        finally:
+            await _coord_shutdown(main_coord, main_fake)
+            await _coord_shutdown(prompt_coord, prompt_fake)
+
+    async def test_wire_then_record_outcome_writes_to_shared_pool(
+        self, tmp_path
+    ) -> None:
+        """A wired ``record_outcome`` lands in the engine's shared DataPlane.
+
+        The reader's source is the SAME ``DataPlane`` instance the wire
+        helper attached — reading back proves the writer is bound to
+        that pool rather than a private lazy clone.
+        """
+        from gigaevo.llm.bandit import MutationOutcome
+        from gigaevo.prompts.coevolution.stats import RedisPromptStatsProvider
+        from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+        server = fakeredis.FakeServer()
+        main_coord, main_fake = await _build_coordinator_against_fake(
+            server, key_prefix="testpfx"
+        )
+        prompt_coord, prompt_fake = await _build_coordinator_against_fake(
+            server, key_prefix="prompt_evolution"
+        )
+        actor = build_actor_identity(run_id="r1", worker_id="w1")
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="testpfx",
+            main_redis_db=5,
+            fallback_prompts_dir=tmp_path,
+        )
+        try:
+            wire_prompt_fetcher(fetcher, main_coord, prompt_coord, actor)
+            await fetcher.record_outcome(
+                prompt_id="pid-1",
+                child_fitness=0.9,
+                parent_fitness=0.5,
+                higher_is_better=True,
+                outcome=MutationOutcome.ACCEPTED,
+                child_metrics={"em": 1.0},
+            )
+            provider = RedisPromptStatsProvider(
+                host="localhost",
+                port=6379,
+                db=5,
+                prefix="testpfx",
+                min_trials=0,
+                dataplanes=[main_coord],
+            )
+            stats = await provider.get_stats("pid-1")
+            assert stats.trials == 1
+            assert stats.successes == 1
+            assert stats.recent_fitnesses == [0.9]
+        finally:
+            await _coord_shutdown(main_coord, main_fake)
+            await _coord_shutdown(prompt_coord, prompt_fake)
+
+    async def test_wire_prompt_fetcher_idempotent(self, tmp_path) -> None:
+        """A second wire with the same triple is a silent no-op."""
+        from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+        server = fakeredis.FakeServer()
+        main_coord, main_fake = await _build_coordinator_against_fake(
+            server, key_prefix="main"
+        )
+        prompt_coord, prompt_fake = await _build_coordinator_against_fake(
+            server, key_prefix="prompt"
+        )
+        actor = build_actor_identity(run_id="r1", worker_id="w1")
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_path,
+        )
+        try:
+            wire_prompt_fetcher(fetcher, main_coord, prompt_coord, actor)
+            # Second wire with identical args is a no-op.
+            wire_prompt_fetcher(fetcher, main_coord, prompt_coord, actor)
+            assert fetcher._main_dp is main_coord
+            assert fetcher._prompt_dp is prompt_coord
+        finally:
+            await _coord_shutdown(main_coord, main_fake)
+            await _coord_shutdown(prompt_coord, prompt_fake)
+
+    async def test_wire_prompt_fetcher_rejects_conflicting_args(self, tmp_path) -> None:
+        """A second wire with different args raises rather than overwriting."""
+        from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+        server = fakeredis.FakeServer()
+        main_coord, main_fake = await _build_coordinator_against_fake(
+            server, key_prefix="main"
+        )
+        other_coord, other_fake = await _build_coordinator_against_fake(
+            server, key_prefix="other"
+        )
+        prompt_coord, prompt_fake = await _build_coordinator_against_fake(
+            server, key_prefix="prompt"
+        )
+        actor = build_actor_identity(run_id="r1", worker_id="w1")
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_path,
+        )
+        try:
+            wire_prompt_fetcher(fetcher, main_coord, prompt_coord, actor)
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                wire_prompt_fetcher(fetcher, other_coord, prompt_coord, actor)
+            # Original attachment must survive a rejected re-wire.
+            assert fetcher._main_dp is main_coord
+        finally:
+            await _coord_shutdown(main_coord, main_fake)
+            await _coord_shutdown(other_coord, other_fake)
+            await _coord_shutdown(prompt_coord, prompt_fake)
 
 
 class TestActorIdentity:

@@ -301,6 +301,174 @@ class TestGigaEvoArchivePromptFetcher:
 
 
 # ---------------------------------------------------------------------------
+# attach_dataplane Tests
+# ---------------------------------------------------------------------------
+
+
+class TestAttachDataplane:
+    """Structural-invariant tests for :meth:`GigaEvoArchivePromptFetcher.attach_dataplane`.
+
+    These pin the rebind contract used by
+    :func:`gigaevo.dataplane.engine_startup.wire_prompt_fetcher`:
+    idempotent on identical input, raises on conflicting input, and
+    suppresses the lazy-build branch in :meth:`start` once the slots
+    are populated.
+    """
+
+    @staticmethod
+    def _fake_dataplane(prefix: str):
+        """Build a started fake-pool DataPlane suitable for attach tests."""
+        import fakeredis
+        import fakeredis.aioredis
+
+        from gigaevo.dataplane import DataPlane
+        from gigaevo.dataplane.scripts import LuaRegistry
+
+        async def _build() -> DataPlane:
+            server = fakeredis.FakeServer()
+            dp = DataPlane("redis://embedded/0", key_prefix=prefix)
+            fake = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+            dp._connection._pool = fake  # type: ignore[attr-defined]
+            lua = LuaRegistry(fake)
+            dp._register_builtin_scripts(lua)  # type: ignore[attr-defined]
+            await lua.load_all()
+            dp._lua = lua  # type: ignore[attr-defined]
+            dp._started = True  # type: ignore[attr-defined]
+            return dp
+
+        return _build
+
+    @pytest.mark.asyncio
+    async def test_attach_populates_slots(self, tmp_prompts_dir: Path):
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            assert fetcher._main_dp is main_dp
+            assert fetcher._prompt_dp is prompt_dp
+            assert fetcher._actor == actor
+            # Engine owns the lifetime; the fetcher must NOT mark them
+            # as owned, otherwise ``stop`` would tear down the engine's
+            # shared pool.
+            assert fetcher._main_dp_owned is False
+            assert fetcher._prompt_dp_owned is False
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_attach_is_idempotent_on_identical_args(self, tmp_prompts_dir: Path):
+        """A second call with the SAME triple is a silent no-op."""
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            # Second call must not raise and must leave state untouched.
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            assert fetcher._main_dp is main_dp
+            assert fetcher._prompt_dp is prompt_dp
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_attach_raises_on_conflicting_main(self, tmp_prompts_dir: Path):
+        """A second call with a DIFFERENT main DP must raise rather than overwrite."""
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        other_dp = await self._fake_dataplane("other")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                fetcher.attach_dataplane(other_dp, prompt_dp, actor)
+            # Original attachment survives the rejected re-attach.
+            assert fetcher._main_dp is main_dp
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            other_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_attach_raises_on_conflicting_actor(self, tmp_prompts_dir: Path):
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor_a = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w-a"))
+        actor_b = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w-b"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor_a)
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                fetcher.attach_dataplane(main_dp, prompt_dp, actor_b)
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_start_skips_lazy_build_when_attached(self, tmp_prompts_dir: Path):
+        """After attach, :meth:`start` must not construct a second DataPlane.
+
+        The pre-attach handles are the engine's; rebuilding would
+        defeat the entire point of the wire helper.
+        """
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            main_redis_db=5,
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            # ``start`` is async; both handles are already started in
+            # the fake-pool setup, so ``DataPlane.startup()`` is a
+            # cheap no-op here. The point is identity: the slots stay
+            # pinned to the injected pair.
+            await fetcher.start()
+            assert fetcher._main_dp is main_dp
+            assert fetcher._prompt_dp is prompt_dp
+            assert fetcher._main_dp_owned is False
+            assert fetcher._prompt_dp_owned is False
+        finally:
+            await fetcher.stop()
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
 # Seed Program Tests
 # ---------------------------------------------------------------------------
 

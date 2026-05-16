@@ -384,6 +384,70 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         url = f"redis://{self._host}:{self._port}/{db}"
         return DataPlane(url, key_prefix=key_prefix)
 
+    def attach_dataplane(
+        self,
+        main_dataplane: DataPlane,
+        prompt_dataplane: DataPlane,
+        actor: ActorIdentity,
+    ) -> None:
+        """Rebind engine-owned DataPlane handles + actor onto this fetcher.
+
+        Called from :func:`gigaevo.dataplane.engine_startup.wire_prompt_fetcher`
+        post-Hydra instantiation so the fetcher shares the engine's
+        already-started main DataPlane (the same instance bound to the
+        storage and the bandit) instead of lazily building a second one
+        in :meth:`start`. The prompt-archive read surface lives in a
+        different Redis DB and therefore receives its own pre-started
+        DataPlane.
+
+        Both handles are recorded as engine-owned (``_owned == False``)
+        so :meth:`stop` leaves their lifecycle to the engine and does
+        not attempt a duplicate shutdown.
+
+        Idempotency: a second call with the exact same triple is a
+        silent no-op. A second call with a different triple raises
+        :class:`RuntimeError` — silent overwrite would corrupt the
+        single-engine / single-actor invariant the bandit and storage
+        already rely on.
+
+        Must be called before :meth:`start`; after attachment, the
+        lazy-build branches in :meth:`start` see the slots populated
+        and skip construction.
+        """
+        if (
+            self._main_dp is main_dataplane
+            and self._prompt_dp is prompt_dataplane
+            and self._actor == actor
+        ):
+            return
+        if (
+            self._main_dp is not None
+            or self._prompt_dp is not None
+            or self._main_dp_owned
+            or self._prompt_dp_owned
+        ) and (
+            self._main_dp is not main_dataplane
+            or self._prompt_dp is not prompt_dataplane
+            or self._actor != actor
+        ):
+            raise RuntimeError(
+                "GigaEvoArchivePromptFetcher already has a different DataPlane "
+                "or actor attached; refusing to overwrite. Construct a fresh "
+                "fetcher or detach the existing handles before reattaching."
+            )
+        self._main_dp = main_dataplane
+        self._prompt_dp = prompt_dataplane
+        self._main_dp_owned = False
+        self._prompt_dp_owned = False
+        self._actor = actor
+        logger.info(
+            "[GigaEvoArchivePromptFetcher] DataPlane attached | main_prefix={!r} "
+            "prompt_prefix={!r} actor={}",
+            main_dataplane.key_prefix,
+            prompt_dataplane.key_prefix,
+            actor.pack(),
+        )
+
     async def start(self, storage: ProgramStorage | None = None) -> None:
         """Lazily construct + start DataPlane handles.
 
