@@ -1,0 +1,80 @@
+# Lint rules that the dataplane package enforces over the wider codebase.
+#
+# This file is documentation only; the actual ruff config lives in the
+# repo's top-level pyproject.toml. The rules below are the contract that
+# subsequent dataplane changes will wire into the live configuration.
+#
+# Lifting them here keeps the rule set co-located with the code that
+# justifies them, so review of a future "tighten the linter" change can
+# diff against a concrete spec instead of inventing one.
+
+# ── direct redis imports ────────────────────────────────────────────
+#
+# After the dataplane substrate lands, no other module should import
+# ``redis`` or ``redis.asyncio`` directly. All Redis interaction flows
+# through :class:`gigaevo.dataplane.DataPlane`.
+#
+# Implementation (when wired into pyproject.toml):
+#
+#   [tool.ruff.lint.flake8-tidy-imports.banned-api]
+#   "redis" = { msg = "Import from gigaevo.dataplane instead." }
+#   "redis.asyncio" = { msg = "Import from gigaevo.dataplane instead." }
+#
+# Allowlist (the only files that may import redis directly):
+#   - gigaevo/dataplane/*.py
+#   - gigaevo/infra/endpoint_pool.py        # the reference pattern; pre-existing
+
+[banned_imports]
+redis = "Import from gigaevo.dataplane instead."
+"redis.asyncio" = "Import from gigaevo.dataplane instead."
+
+[banned_import_allowlist]
+files = [
+    "gigaevo/dataplane/*.py",
+    "gigaevo/infra/endpoint_pool.py",
+]
+
+# ── pickle ban ──────────────────────────────────────────────────────
+#
+# ``pickle.loads`` over Redis blobs is an RCE primitive. The initial
+# tightening bans deserialise; a follow-up ban removes the serialise
+# path entirely once all call sites are migrated to JSON.
+
+[banned_calls]
+"pickle.loads" = "Pickle deserialise is banned. Use gigaevo.dataplane.codec."
+"pickle.load" = "Pickle deserialise is banned. Use gigaevo.dataplane.codec."
+"cloudpickle.loads" = "Pickle deserialise is banned. Use gigaevo.dataplane.codec."
+"cloudpickle.load" = "Pickle deserialise is banned. Use gigaevo.dataplane.codec."
+
+[banned_calls_allowlist]
+# Driver↔worker IPC in the loky executor legitimately uses cloudpickle.
+# The boundary is in-process, the wire is trusted, the alternative is
+# JSON-only which doesn't support the closure types the loky workers
+# need. Documented exception, narrowly scoped.
+files = [
+    "gigaevo/programs/stages/python_executors/*.py",
+]
+
+# ── bare and broad except ───────────────────────────────────────────
+#
+# ``except:`` and ``except Exception:`` mask real failures. The
+# dataplane converts internal exceptions to typed ``Result`` returns at
+# its boundary; outside the dataplane, errors should propagate up to
+# the engine's top-level handler.
+
+[banned_patterns]
+bare_except = "Use a typed except clause."
+broad_except = "Use a typed except clause; the dataplane converts internal errors to Result."
+
+[banned_patterns_allowlist]
+files = [
+    "gigaevo/dataplane/coordinator.py",     # the one boundary that catches & converts
+    "gigaevo/dataplane/connection.py",      # _safe_close swallows on shutdown
+]
+
+# ── decode_responses=True ───────────────────────────────────────────
+#
+# Every async redis client built by the dataplane sets
+# ``decode_responses=True`` to avoid bytes/str confusion at the wire
+# boundary. Tests should verify the connection construction by
+# inspecting the ``aioredis.Redis`` instance's connection kwargs.

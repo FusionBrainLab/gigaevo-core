@@ -1,0 +1,204 @@
+"""Tests for the type-system primitives in :mod:`gigaevo.dataplane.models`."""
+
+from __future__ import annotations
+
+import dataclasses
+
+import pytest
+
+from gigaevo.dataplane.errors import StaleReadError
+from gigaevo.dataplane.models import (
+    Err,
+    HlcTimestamp,
+    Monotonic,
+    Ok,
+    Sourced,
+    Versioned,
+)
+
+# ── Versioned ─────────────────────────────────────────────────────────
+
+
+class TestVersioned:
+    def test_is_at_least_below_epoch(self) -> None:
+        v = Versioned(value="x", epoch=3, generation=1)
+        assert not v.is_at_least(5, 0)
+
+    def test_is_at_least_below_generation(self) -> None:
+        v = Versioned(value="x", epoch=5, generation=1)
+        assert not v.is_at_least(5, 3)
+
+    def test_is_at_least_at_floor(self) -> None:
+        v = Versioned(value="x", epoch=5, generation=3)
+        assert v.is_at_least(5, 3)
+        assert v.is_at_least(0, 0)
+
+    def test_require_at_least_passes(self) -> None:
+        v = Versioned(value=42, epoch=5, generation=0)
+        same = v.require_at_least(5, 0)
+        assert same is v
+
+    def test_require_at_least_raises_with_observed_fields(self) -> None:
+        v = Versioned(value=42, epoch=3, generation=0)
+        with pytest.raises(StaleReadError) as exc:
+            v.require_at_least(5, 0)
+        assert exc.value.observed_epoch == 3
+        assert exc.value.min_epoch == 5
+
+    def test_combine_max_picks_greater(self) -> None:
+        a = Versioned(value="a", epoch=1, generation=0)
+        b = Versioned(value="b", epoch=2, generation=0)
+        assert a.combine_max(b) is b
+        assert b.combine_max(a) is b
+
+    def test_combine_max_ties_pick_self(self) -> None:
+        a = Versioned(value="a", epoch=1, generation=0)
+        b = Versioned(value="b", epoch=1, generation=0)
+        assert a.combine_max(b) is a
+        assert b.combine_max(a) is b
+
+    def test_combine_max_dominance_by_generation(self) -> None:
+        a = Versioned(value="a", epoch=1, generation=5)
+        b = Versioned(value="b", epoch=1, generation=3)
+        assert a.combine_max(b) is a
+
+    def test_map_preserves_epoch_and_generation(self) -> None:
+        v = Versioned(value=10, epoch=5, generation=2)
+        w = v.map(lambda x: x * 2)
+        assert w.value == 20
+        assert w.epoch == 5
+        assert w.generation == 2
+
+    def test_frozen(self) -> None:
+        v = Versioned(value=1, epoch=0, generation=0)
+        with pytest.raises((AttributeError, dataclasses.FrozenInstanceError)):
+            v.value = 2  # type: ignore[misc]
+
+
+# ── Sourced ───────────────────────────────────────────────────────────
+
+
+class TestSourced:
+    def test_holds_value(self) -> None:
+        s = Sourced(value="hello")
+        assert s.value == "hello"
+
+    def test_retag_returns_new_wrapper(self) -> None:
+        s = Sourced(value=[1, 2, 3])
+        retagged = s.retag(None)
+        assert retagged is not s
+        assert retagged.value is s.value
+
+
+# ── Result / Ok / Err ─────────────────────────────────────────────────
+
+
+class TestResult:
+    def test_ok_is_ok(self) -> None:
+        r = Ok(value=42)
+        assert r.is_ok() is True
+        assert r.is_err() is False
+        assert r.unwrap() == 42
+
+    def test_err_is_err(self) -> None:
+        e = RuntimeError("boom")
+        r = Err(error=e)
+        assert r.is_ok() is False
+        assert r.is_err() is True
+
+    def test_err_unwrap_raises_exception_payload(self) -> None:
+        r = Err(error=ValueError("bad"))
+        with pytest.raises(ValueError, match="bad"):
+            r.unwrap()
+
+    def test_err_unwrap_wraps_non_exception(self) -> None:
+        r = Err(error="just a string")
+        with pytest.raises(RuntimeError, match="just a string"):
+            r.unwrap()
+
+    def test_match_pattern(self) -> None:
+        def label(r: Ok[int] | Err[str]) -> str:
+            match r:
+                case Ok(value=v):
+                    return f"ok-{v}"
+                case Err(error=e):
+                    return f"err-{e}"
+            raise AssertionError("unreachable")
+
+        assert label(Ok(value=7)) == "ok-7"
+        assert label(Err(error="x")) == "err-x"
+
+
+# ── Monotonic ─────────────────────────────────────────────────────────
+
+
+class TestMonotonic:
+    def test_initial_value(self) -> None:
+        m = Monotonic(0)
+        assert m.peek() == 0
+
+    def test_advance_to_equal_ok(self) -> None:
+        m = Monotonic(5)
+        m.advance(5)
+        assert m.peek() == 5
+
+    def test_advance_forward(self) -> None:
+        m = Monotonic(5)
+        m.advance(10)
+        assert m.peek() == 10
+
+    def test_retrograde_raises(self) -> None:
+        m = Monotonic(5)
+        with pytest.raises(ValueError, match="Monotonic violation"):
+            m.advance(3)
+
+    def test_bump_increments(self) -> None:
+        m = Monotonic(0)
+        assert m.bump() == 1
+        assert m.bump() == 2
+        assert m.peek() == 2
+
+
+# ── HlcTimestamp ──────────────────────────────────────────────────────
+
+
+class TestHlcTimestamp:
+    def test_pack_round_trip(self) -> None:
+        t = HlcTimestamp(physical_ns=1234567890, counter=42)
+        packed = t.pack_hex()
+        assert len(packed) == 32
+        unpacked = HlcTimestamp.unpack_hex(packed)
+        assert unpacked == t
+
+    def test_order_is_lexicographic_on_physical(self) -> None:
+        a = HlcTimestamp(physical_ns=100, counter=999)
+        b = HlcTimestamp(physical_ns=200, counter=0)
+        assert a < b
+
+    def test_order_counter_breaks_ties(self) -> None:
+        a = HlcTimestamp(physical_ns=100, counter=5)
+        b = HlcTimestamp(physical_ns=100, counter=6)
+        assert a < b
+
+    def test_uint64_bound(self) -> None:
+        # Exactly at the boundary is OK
+        HlcTimestamp(physical_ns=(1 << 64) - 1, counter=0)
+        with pytest.raises(ValueError, match="uint64"):
+            HlcTimestamp(physical_ns=1 << 64, counter=0)
+
+    def test_uint32_bound(self) -> None:
+        HlcTimestamp(physical_ns=0, counter=(1 << 32) - 1)
+        with pytest.raises(ValueError, match="uint32"):
+            HlcTimestamp(physical_ns=0, counter=1 << 32)
+
+    def test_negative_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            HlcTimestamp(physical_ns=-1, counter=0)
+
+    def test_unpack_rejects_bad_length(self) -> None:
+        with pytest.raises(ValueError, match="32 hex chars"):
+            HlcTimestamp.unpack_hex("deadbeef")
+
+    def test_hashable(self) -> None:
+        t = HlcTimestamp(physical_ns=1, counter=2)
+        assert {t, t} == {t}
