@@ -3,13 +3,49 @@
 Two concrete implementations:
   - FixedDirPromptFetcher: reads from a directory or package defaults.
   - GigaEvoArchivePromptFetcher: reads champion from a co-evolving GigaEvo archive.
+
+Storage layout for :class:`GigaEvoArchivePromptFetcher` outcome stats
+-------------------------------------------------------------------
+
+Every per-prompt mutation outcome is written to a small fixed set of
+:class:`gigaevo.dataplane.DataPlane` keys. The shapes mirror the
+established bandit-ledger pattern at ``bandit:trials:{arm}`` so a
+reader that already understands CRDT G-counters can pattern-match
+across both subsystems:
+
+    prompt:trials:{prompt_id}         G-counter (cross-actor sum =
+                                       total trials recorded)
+    prompt:successes:{prompt_id}      G-counter (count of outcomes
+                                       judged to be improvements)
+    prompt:metrics_count:{prompt_id}  G-counter (count of trials
+                                       whose ``child_metrics`` was
+                                       supplied; the denominator for
+                                       per-metric mean sums)
+    prompt:metric:{prompt_id}:{key}   G-counter (per-metric running
+                                       sum; fixed-point scaled by
+                                       :data:`_METRIC_FIXED_POINT_SCALE`
+                                       so HINCRBY-only suffices)
+    prompt:metric_keys:{prompt_id}    Redis Set listing every metric
+                                       key that has been observed for
+                                       this prompt id (read-path
+                                       discovery vector)
+    prompt:fitnesses:{prompt_id}      Bounded recency list (LPUSH +
+                                       LTRIM via the dataplane's
+                                       ``bounded_list_push`` primitive;
+                                       capped at ``_FITNESS_WINDOW``)
+
+Every increment is partitioned by ``ActorIdentity`` so two engines
+writing the same prompt id never collide on a single integer cell;
+the consensus value is the sum across actors.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import random
 import time
@@ -17,6 +53,12 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from gigaevo.dataplane import (
+    ActorIdentity,
+    CounterKey,
+    DataPlane,
+    Err,
+)
 from gigaevo.prompts import load_prompt
 from gigaevo.prompts.coevolution.stats import prompt_text_to_id
 
@@ -48,10 +90,62 @@ other's sample even when they share one fetcher instance.
 _FITNESS_WINDOW: int = 20
 """Max number of recent fitness samples retained per prompt id.
 
-LPUSH inserts at head, LTRIM keeps indices ``0 .. _FITNESS_WINDOW - 1``,
-so the list always carries the newest ``_FITNESS_WINDOW`` values in
-most-recent-first order.
+The dataplane's :meth:`DataPlane.bounded_list_push` enforces this cap
+server-side via an atomic LPUSH + LTRIM; the list always carries the
+newest ``_FITNESS_WINDOW`` values in most-recent-first order.
 """
+
+_METRIC_FIXED_POINT_SCALE: int = 1000
+"""Multiplier used to coerce float metric values into HINCRBY-friendly
+integers. The reader divides by the same scale to recover the mean. The
+choice of 1000 preserves three decimal digits of precision — sufficient
+for the F1/EM/accuracy band typically reported by evaluator stages.
+"""
+
+
+def _trials_key(prompt_id: str) -> CounterKey:
+    """G-counter key for the per-prompt trial count."""
+    return CounterKey(f"prompt:trials:{prompt_id}")
+
+
+def _successes_key(prompt_id: str) -> CounterKey:
+    """G-counter key for the per-prompt success count."""
+    return CounterKey(f"prompt:successes:{prompt_id}")
+
+
+def _metrics_count_key(prompt_id: str) -> CounterKey:
+    """G-counter key for the count of trials carrying ``child_metrics``."""
+    return CounterKey(f"prompt:metrics_count:{prompt_id}")
+
+
+def _metric_sum_key(prompt_id: str, metric_key: str) -> CounterKey:
+    """G-counter key for the fixed-point sum of one metric across trials."""
+    return CounterKey(f"prompt:metric:{prompt_id}:{metric_key}")
+
+
+def _metric_directory_key(prompt_id: str) -> str:
+    """Set name carrying every metric key observed for this prompt id."""
+    return f"prompt:metric_keys:{prompt_id}"
+
+
+def _fitness_list_key(prompt_id: str) -> str:
+    """Bounded-list key carrying the recent fitness samples."""
+    return f"prompt:fitnesses:{prompt_id}"
+
+
+def _metric_to_fixed_point(value: float) -> int:
+    """Coerce a metric float into an HINCRBY-friendly signed integer.
+
+    The reader recovers ``mean = sum / metrics_count / scale`` so the
+    rounding error is bounded by ``1 / _METRIC_FIXED_POINT_SCALE``. A
+    non-finite input is squashed to zero rather than propagated into the
+    counter where it would corrupt every future read.
+    """
+    if not isinstance(value, (int, float)):
+        return 0
+    if value != value or value in (float("inf"), float("-inf")):
+        return 0
+    return int(round(float(value) * _METRIC_FIXED_POINT_SCALE))
 
 
 @dataclass
@@ -93,7 +187,7 @@ class PromptFetcher(ABC):
         """
         ...
 
-    def record_outcome(
+    async def record_outcome(
         self,
         prompt_id: str | None,
         child_fitness: float,
@@ -157,9 +251,10 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
       Falls back to FixedDirPromptFetcher until the first champion is available.
 
     On record_outcome():
-      Writes {successes, trials} stats to Redis so PromptFitnessStage
-      can compute fitness for the prompt run.
-      Skips REJECTED_ACCEPTOR outcomes (no reliable fitness).
+      Writes per-prompt stats through the :class:`DataPlane` G-counter
+      and bounded-list primitives so :class:`PromptFitnessStage` can
+      compute fitness for the prompt run. Skips ``REJECTED_ACCEPTOR``
+      outcomes (no reliable fitness).
 
     Args:
         prompt_redis_db: Redis DB of the prompt GigaEvo run
@@ -173,6 +268,14 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         cache_ttl_seconds: How long to cache the current champion (default: 30s)
         fallback_prompts_dir: Directory for fallback prompts while no champion exists
         fitness_key: Metric key used for champion selection (default: "fitness")
+        main_dataplane: Pre-wired :class:`DataPlane` for main-run writes; when
+            ``None`` the fetcher lazily constructs one in :meth:`start`.
+        prompt_dataplane: Pre-wired :class:`DataPlane` for prompt-run archive
+            reads; when ``None`` the fetcher lazily constructs one.
+        actor: Optional :class:`ActorIdentity` carrying ``(run_id, worker_id)``
+            for the G-counter sub-counts. When unset the fetcher derives one
+            from ``main_redis_prefix`` plus the process pid so two engines on
+            the same prefix still pick up distinct identities.
     """
 
     @property
@@ -191,9 +294,14 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         cache_ttl_seconds: float = 30.0,
         fallback_prompts_dir: str | Path | None = None,
         fitness_key: str = "fitness",
+        *,
+        main_dataplane: DataPlane | None = None,
+        prompt_dataplane: DataPlane | None = None,
+        actor: ActorIdentity | None = None,
     ):
         self._prompt_redis_db = prompt_redis_db
         self._main_redis_prefix = main_redis_prefix
+        self._main_redis_db = main_redis_db
         self._prompt_prefix = prompt_prefix
         self._archive_prefix = archive_prefix
         self._host = host
@@ -210,24 +318,18 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._cached_pack: _PromptPack | None = None  # last sampled (for get_stats)
         self._cache_timestamp: float = 0.0
 
-        # Lazy-imported redis client for archive reads (prompt run DB)
-        self._redis_sync: Any = None
+        # DataPlane handles. The fetcher owns each one if and only if it
+        # constructed it lazily in :meth:`start`; an injected handle
+        # belongs to the engine startup path and survives the fetcher's
+        # ``stop``.
+        self._main_dp: DataPlane | None = main_dataplane
+        self._prompt_dp: DataPlane | None = prompt_dataplane
+        self._main_dp_owned: bool = False
+        self._prompt_dp_owned: bool = False
 
-        # Synchronous Redis client for main run stats writes.
-        # Initialized immediately if main_redis_db is provided.
-        if main_redis_db is not None:
-            import redis as sync_redis
-
-            self._redis_main_sync: Any = sync_redis.Redis(
-                host=host,
-                port=port,
-                db=main_redis_db,
-                decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=2,
-            )
-        else:
-            self._redis_main_sync = None
+        # Resolved at :meth:`start` time so the identity carries the
+        # eventually-wired actor instead of the import-time fallback.
+        self._actor: ActorIdentity = actor or self._derive_default_actor()
 
         self._fetch_errors: int = 0
         self._cache_hits: int = 0
@@ -249,80 +351,188 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             fallback_prompts_dir or "(package defaults)",
         )
 
-    def _get_sync_redis(self) -> Any:
-        """Lazy-create synchronous Redis client for archive reads."""
-        if self._redis_sync is None:
-            import redis as sync_redis
+    def _derive_default_actor(self) -> ActorIdentity:
+        """Synthesise an :class:`ActorIdentity` from prefix + pid.
 
-            self._redis_sync = sync_redis.Redis(
-                host=self._host,
-                port=self._port,
-                db=self._prompt_redis_db,
-                decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=2,
+        Used when the caller does not supply one; the resulting actor is
+        unique per process under one main-run prefix so two engines on
+        the same prefix never collide on a G-counter cell.
+        """
+        import os
+        import socket
+
+        from gigaevo.dataplane import RunId, WorkerId
+
+        # Sanitise the prefix so the typed validator inside ActorIdentity
+        # accepts it (the prefix can carry "/" but never ":" given Hydra's
+        # naming convention).
+        clean_prefix = self._main_redis_prefix.replace(":", "-").replace("/", "-")
+        if not clean_prefix:
+            clean_prefix = "prompts"
+        return ActorIdentity(
+            run_id=RunId(clean_prefix),
+            worker_id=WorkerId(f"{socket.gethostname()}-{os.getpid()}"),
+        )
+
+    def _build_dataplane(self, db: int, key_prefix: str) -> DataPlane:
+        """Construct a DataPlane bound to the requested Redis DB and prefix.
+
+        The connection URL is composed from ``host``, ``port``, ``db``
+        — kept consistent with the Hydra config surface so callers that
+        already plumb host/port don't need to learn a new shape.
+        """
+        url = f"redis://{self._host}:{self._port}/{db}"
+        return DataPlane(url, key_prefix=key_prefix)
+
+    async def start(self, storage: ProgramStorage | None = None) -> None:
+        """Lazily construct + start DataPlane handles.
+
+        The fetcher only owns a DataPlane if it constructed one; an
+        injected handle has its lifecycle managed by the engine startup
+        path. Re-callable safely: an already-started DataPlane returns
+        from ``startup()`` immediately.
+        """
+        del storage  # not currently used; reserved for ProgramStorage-aware tests.
+        if self._main_dp is None and self._main_redis_db is not None:
+            self._main_dp = self._build_dataplane(
+                self._main_redis_db, self._main_redis_prefix
             )
-        return self._redis_sync
+            self._main_dp_owned = True
+        if self._prompt_dp is None:
+            self._prompt_dp = self._build_dataplane(
+                self._prompt_redis_db, self._prompt_prefix
+            )
+            self._prompt_dp_owned = True
+        if self._main_dp is not None:
+            await self._main_dp.startup()
+        if self._prompt_dp is not None:
+            await self._prompt_dp.startup()
+
+    async def stop(self) -> None:
+        """Tear down any DataPlane handles the fetcher constructed itself.
+
+        Injected handles are left alone — they belong to the engine. The
+        method is idempotent so a double-stop after a partial start does
+        not raise.
+        """
+        if self._main_dp is not None and self._main_dp_owned:
+            try:
+                await self._main_dp.shutdown()
+            except Exception as exc:  # noqa: BLE001 - shutdown best effort
+                logger.warning(
+                    "[GigaEvoArchivePromptFetcher] main DataPlane shutdown failed: {}",
+                    exc,
+                )
+            self._main_dp = None
+            self._main_dp_owned = False
+        if self._prompt_dp is not None and self._prompt_dp_owned:
+            try:
+                await self._prompt_dp.shutdown()
+            except Exception as exc:  # noqa: BLE001 - shutdown best effort
+                logger.warning(
+                    "[GigaEvoArchivePromptFetcher] prompt DataPlane shutdown failed: {}",
+                    exc,
+                )
+            self._prompt_dp = None
+            self._prompt_dp_owned = False
 
     def _is_cache_stale(self) -> bool:
         return (time.monotonic() - self._cache_timestamp) >= self._cache_ttl
 
-    def _refresh_candidates(self) -> list[tuple[str, float, str]] | None:
-        """Read candidate prompts from the prompt run's archive.
+    async def _refresh_candidates_async(self) -> list[tuple[str, float, str]] | None:
+        """Read candidate prompts from the prompt run's archive via the dataplane.
 
-        Caches the candidates list (Redis read is expensive). Sampling happens
-        independently on every fetch() call via _sample_prompt().
-
-        Returns:
-            List of (program_id, fitness, code) tuples, or None if archive is empty
+        Returns a list of (program_id, fitness, code) tuples, or None when
+        the archive is empty / unreachable. The archive lives in the prompt
+        run's DB under ``{prompt_prefix}:archive`` (a hash whose values are
+        elite program IDs) and ``{prompt_prefix}:program:{pid}`` (a JSON
+        blob per program).
         """
+        if self._prompt_dp is None:
+            return None
+        archive_key = f"{self._archive_prefix}:archive"
         try:
-            r = self._get_sync_redis()
-
-            archive_key = f"{self._archive_prefix}:archive"
-            program_ids = list(r.hvals(archive_key))
-            if not program_ids:
-                self._empty_refresh_count += 1
-                if (
-                    self._empty_refresh_count == 1
-                    or self._empty_refresh_count % 10 == 0
-                ):
-                    logger.info(
-                        "[GigaEvoArchivePromptFetcher] Archive empty (check #{}) "
-                        "— using fallback",
-                        self._empty_refresh_count,
-                    )
-                return None
-
-            import json
-
-            candidates: list[tuple[str, float, str]] = []
-            for pid in program_ids:
-                program_key = f"{self._prompt_prefix}:program:{pid}"
-                raw = r.get(program_key)
-                if not raw:
-                    continue
-                try:
-                    data = json.loads(raw)
-                    metrics = data.get("metrics", {})
-                    fitness = float(metrics.get(self._fitness_key, 0.0))
-                    code = data.get("code", "")
-                    if code:
-                        candidates.append((pid, fitness, code))
-                except Exception as exc:
-                    logger.debug(
-                        f"[GigaEvoArchivePromptFetcher] Error parsing program {pid}: {exc}"
-                    )
-                    continue
-
-            return candidates if candidates else None
-
-        except Exception as exc:
+            ids_result = await self._prompt_dp.raw_hash_values(archive_key)
+        except Exception as exc:  # noqa: BLE001 - read boundary, surface as miss
             self._fetch_errors += 1
             logger.warning(
-                f"[GigaEvoArchivePromptFetcher] Archive read error (#{self._fetch_errors}): {exc}"
+                "[GigaEvoArchivePromptFetcher] Archive hvals error (#{}): {}",
+                self._fetch_errors,
+                exc,
             )
             return None
+        if isinstance(ids_result, Err):
+            self._fetch_errors += 1
+            logger.warning(
+                "[GigaEvoArchivePromptFetcher] Archive hvals failed: {}",
+                ids_result.error,
+            )
+            return None
+        program_ids = ids_result.value
+        if not program_ids:
+            self._empty_refresh_count += 1
+            if self._empty_refresh_count == 1 or self._empty_refresh_count % 10 == 0:
+                logger.info(
+                    "[GigaEvoArchivePromptFetcher] Archive empty (check #{}) "
+                    "— using fallback",
+                    self._empty_refresh_count,
+                )
+            return None
+
+        candidates: list[tuple[str, float, str]] = []
+        for pid in program_ids:
+            program_key = f"{self._prompt_prefix}:program:{pid}"
+            raw_result = await self._prompt_dp.raw_get(program_key)
+            if isinstance(raw_result, Err) or raw_result.value is None:
+                continue
+            try:
+                data = json.loads(raw_result.value)
+                metrics = data.get("metrics", {})
+                fitness = float(metrics.get(self._fitness_key, 0.0))
+                code = data.get("code", "")
+                if code:
+                    candidates.append((pid, fitness, code))
+            except Exception as exc:  # noqa: BLE001 - per-entry diagnostic
+                logger.debug(
+                    "[GigaEvoArchivePromptFetcher] Error parsing program {}: {}",
+                    pid,
+                    exc,
+                )
+                continue
+        return candidates if candidates else None
+
+    def _refresh_candidates(self) -> list[tuple[str, float, str]] | None:
+        """Sync bridge to :meth:`_refresh_candidates_async`.
+
+        Called from :meth:`fetch`, which itself is invoked synchronously
+        from the agent hot path. We dispatch the async refresh onto a
+        worker thread so the agent's calling event loop is not blocked
+        by Redis I/O even though the fetch interface itself is sync.
+        """
+        try:
+            return asyncio.run(self._refresh_candidates_async())
+        except RuntimeError:
+            # Already inside an event loop (e.g. test that drives fetch
+            # synchronously from within a coroutine). Run the coroutine
+            # on a fresh loop in a worker thread so the outer loop is
+            # not re-entered.
+            import threading
+
+            holder: list[list[tuple[str, float, str]] | None] = [None]
+
+            def _runner() -> None:
+                loop = asyncio.new_event_loop()
+                try:
+                    holder[0] = loop.run_until_complete(
+                        self._refresh_candidates_async()
+                    )
+                finally:
+                    loop.close()
+
+            thread = threading.Thread(target=_runner, daemon=True)
+            thread.start()
+            thread.join()
+            return holder[0]
 
     def _sample_prompt(self) -> _PromptPack | None:
         """Sample a prompt from cached candidates using fitness-proportional selection.
@@ -489,7 +699,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             self._using_archive = False
         return self._fallback.fetch(agent_name, prompt_type)
 
-    def record_outcome(
+    async def record_outcome(
         self,
         prompt_id: str | None,
         child_fitness: float,
@@ -498,40 +708,25 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         outcome: MutationOutcome,
         child_metrics: dict[str, float] | None = None,
     ) -> None:
-        """Append one mutation outcome to the Redis stats for ``prompt_id``.
+        """Record one mutation outcome through the dataplane substrate.
 
-        Writes are partitioned across two keys so each write is atomic
-        against concurrent writers without WATCH/MULTI/EXEC:
+        Bumps four conceptual counters and pushes one fitness sample
+        onto a bounded list, each via an atomic dataplane primitive:
 
-        - Hash ``{prefix}:prompt_stats:{prompt_id}`` with fields
-          ``trials``, ``successes``, ``metrics_count`` (HINCRBY), and
-          ``m:<metric_key>`` per accumulated metric (HINCRBYFLOAT).
-        - List ``{prefix}:prompt_fitnesses:{prompt_id}`` capped at the
-          most recent ``_FITNESS_WINDOW`` entries via LPUSH + LTRIM.
+        - ``prompt:trials:{prompt_id}`` G-counter +1
+        - ``prompt:successes:{prompt_id}`` G-counter +1 iff the child
+          improved over the best parent
+        - ``prompt:metrics_count:{prompt_id}`` G-counter +1 iff
+          ``child_metrics`` is provided
+        - ``prompt:metric:{prompt_id}:{key}`` G-counter += fixed-point
+          metric value, for every key in ``child_metrics``
+        - ``prompt:metric_keys:{prompt_id}`` set adds every observed
+          metric key (read-path discovery)
+        - ``prompt:fitnesses:{prompt_id}`` bounded list LPUSH +
+          LTRIM, capped at :data:`_FITNESS_WINDOW`
 
-        Both keys are written in one pipeline so the per-call work is one
-        Redis round-trip. Skips ``REJECTED_ACCEPTOR`` (no reliable
-        fitness) and is a no-op when ``main_redis_db`` is unset.
-
-        Concurrency posture
-        -------------------
-        The body uses a synchronous ``redis.Redis`` client because the
-        ``PromptFetcher`` ABC contract makes ``record_outcome`` a sync
-        method. Callers running inside an asyncio task therefore block
-        the event loop for the duration of the round-trip; the
-        recommended bridge at the call site is
-        ``await asyncio.to_thread(fetcher.record_outcome, ...)`` when
-        the caller is async. Inlining the bridge here would require
-        changing the ABC signature and is left to the broader sync→async
-        migration tracked at the prompt-fitness coordinator boundary.
-
-        Args:
-            prompt_id: Tracking ID of the prompt used
-            child_fitness: Fitness of the resulting program
-            parent_fitness: Best parent fitness
-            higher_is_better: Whether higher fitness is better
-            outcome: Mutation outcome
-            child_metrics: Full metrics dict of the child program (optional)
+        Skips ``REJECTED_ACCEPTOR`` outcomes (no reliable fitness) and
+        is a no-op when the main DataPlane handle is unset.
         """
         if prompt_id is None:
             return
@@ -541,9 +736,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         if outcome == _MutationOutcome.REJECTED_ACCEPTOR:
             return
 
-        if self._redis_main_sync is None:
+        if self._main_dp is None:
             logger.debug(
-                "[GigaEvoArchivePromptFetcher] No main Redis configured for stats write"
+                "[GigaEvoArchivePromptFetcher] No main DataPlane configured for stats write"
             )
             return
 
@@ -553,27 +748,39 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             else (child_fitness < parent_fitness)
         )
 
-        stats_key = f"{self._main_redis_prefix}:prompt_stats:{prompt_id}"
-        fitness_key = f"{self._main_redis_prefix}:prompt_fitnesses:{prompt_id}"
-
+        dp_ = self._main_dp
+        actor = self._actor
         try:
-            pipe = self._redis_main_sync.pipeline(transaction=False)
-            pipe.hincrby(stats_key, "trials", 1)
+            await dp_.crdt_inc(_trials_key(prompt_id), actor=actor, delta=1)
             if is_improvement:
-                pipe.hincrby(stats_key, "successes", 1)
-            pipe.lpush(fitness_key, round(child_fitness, 4))
-            pipe.ltrim(fitness_key, 0, _FITNESS_WINDOW - 1)
+                await dp_.crdt_inc(_successes_key(prompt_id), actor=actor, delta=1)
+            await dp_.bounded_list_push(
+                _fitness_list_key(prompt_id),
+                round(float(child_fitness), 4),
+                cap=_FITNESS_WINDOW,
+            )
             if child_metrics:
-                pipe.hincrby(stats_key, "metrics_count", 1)
+                await dp_.crdt_inc(_metrics_count_key(prompt_id), actor=actor, delta=1)
+                metric_dir = _metric_directory_key(prompt_id)
                 for k, v in child_metrics.items():
-                    if isinstance(v, (int, float)):
-                        pipe.hincrbyfloat(stats_key, f"m:{k}", float(v))
-            pipe.execute()
+                    if not isinstance(v, (int, float)):
+                        continue
+                    fixed = _metric_to_fixed_point(float(v))
+                    if fixed == 0 and v != 0:
+                        # Out-of-range value coerced to zero; record the
+                        # name so future writes for the same key sum up
+                        # under the dataplane registry, but skip the
+                        # fixed-point write itself.
+                        continue
+                    await dp_.crdt_inc(
+                        _metric_sum_key(prompt_id, k), actor=actor, delta=fixed
+                    )
+                    await dp_.set_add(metric_dir, k)
             logger.debug(
                 f"[GigaEvoArchivePromptFetcher] Recorded outcome for {prompt_id}: "
                 f"improvement={is_improvement} child_fitness={child_fitness:.4f}"
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - record outcome boundary
             logger.warning(f"[GigaEvoArchivePromptFetcher] Stats write error: {exc}")
 
     def get_stats(self) -> dict[str, Any]:

@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
+import pytest
+
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.constants import DEFAULT_DAG_CONCURRENCY
 from gigaevo.entrypoint.evolution_context import EvolutionContext
@@ -362,22 +364,39 @@ class TestPromptFitnessStagePrior:
 
 
 class TestMetricsCountTracking:
-    def _fakeredis(self) -> object:
+    async def _wired_dataplane(self):
+        """Build a started DataPlane backed by an in-memory fakeredis."""
         import fakeredis
+        import fakeredis.aioredis
 
-        return fakeredis.FakeStrictRedis(db=0, decode_responses=True)
+        from gigaevo.dataplane import DataPlane
+        from gigaevo.dataplane.scripts import LuaRegistry
 
-    def test_record_outcome_with_metrics_increments_count(self) -> None:
-        """metrics_count and per-metric m: sums advance when metrics supplied."""
+        server = fakeredis.FakeServer()
+        dp = DataPlane("redis://embedded/0", key_prefix="test_prefix")
+        fake = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+        dp._connection._pool = fake  # type: ignore[attr-defined]
+        lua = LuaRegistry(fake)
+        dp._register_builtin_scripts(lua)  # type: ignore[attr-defined]
+        await lua.load_all()
+        dp._lua = lua  # type: ignore[attr-defined]
+        dp._started = True  # type: ignore[attr-defined]
+        return dp
+
+    @pytest.mark.asyncio
+    async def test_record_outcome_with_metrics_increments_count(self) -> None:
+        """metrics_count and per-metric counters advance when metrics supplied."""
+        from gigaevo.prompts.coevolution.stats import RedisPromptStatsProvider
+
+        dp = await self._wired_dataplane()
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="test_prefix",
             main_redis_db=0,
+            main_dataplane=dp,
         )
-        r = self._fakeredis()
-        fetcher._redis_main_sync = r
 
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.8,
             parent_fitness=0.5,
@@ -386,22 +405,32 @@ class TestMetricsCountTracking:
             child_metrics={"em": 0.6, "f1": 0.8},
         )
 
-        fields = r.hgetall("test_prefix:prompt_stats:abc123")
-        assert int(fields["metrics_count"]) == 1
-        assert float(fields["m:em"]) == 0.6
-        assert float(fields["m:f1"]) == 0.8
+        provider = RedisPromptStatsProvider(
+            host="localhost",
+            port=6379,
+            db=0,
+            prefix="test_prefix",
+            min_trials=0,
+            dataplanes=[dp],
+        )
+        stats = await provider.get_stats("abc123")
+        assert stats.trials == 1
+        assert stats.mean_metrics == {"em": 0.6, "f1": 0.8}
 
-    def test_record_outcome_without_metrics_no_count(self) -> None:
+    @pytest.mark.asyncio
+    async def test_record_outcome_without_metrics_no_count(self) -> None:
         """metrics_count stays unset when child_metrics is None."""
+        from gigaevo.prompts.coevolution.stats import RedisPromptStatsProvider
+
+        dp = await self._wired_dataplane()
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="test_prefix",
             main_redis_db=0,
+            main_dataplane=dp,
         )
-        r = self._fakeredis()
-        fetcher._redis_main_sync = r
 
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.8,
             parent_fitness=0.5,
@@ -410,10 +439,18 @@ class TestMetricsCountTracking:
             child_metrics=None,
         )
 
-        fields = r.hgetall("test_prefix:prompt_stats:abc123")
-        # No metrics → no metrics_count field, and no m:* fields either.
-        assert "metrics_count" not in fields
-        assert not any(k.startswith("m:") for k in fields)
+        provider = RedisPromptStatsProvider(
+            host="localhost",
+            port=6379,
+            db=0,
+            prefix="test_prefix",
+            min_trials=0,
+            dataplanes=[dp],
+        )
+        stats = await provider.get_stats("abc123")
+        assert stats.trials == 1
+        # No metrics ⇒ mean_metrics is None on the reader.
+        assert stats.mean_metrics is None
 
 
 # ===================================================================

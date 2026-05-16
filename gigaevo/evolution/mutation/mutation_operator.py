@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -214,11 +213,11 @@ class LLMMutationOperator(MutationOperator):
                 best_parent_fitness = (
                     max(parent_fitness_values) if parent_fitness_values else 0.0
                 )
-                # record_outcome talks to Redis through a synchronous
-                # redis-py client; offloading to a worker thread keeps
-                # the event loop free while the call is in flight.
-                await asyncio.to_thread(
-                    _fetcher.record_outcome,
+                # record_outcome routes every write through the typed
+                # :class:`DataPlane` substrate; the method itself is
+                # async, so the event loop is yielded between Redis
+                # round-trips without a worker-thread bridge.
+                await _fetcher.record_outcome(
                     prompt_id,
                     child_fitness,
                     best_parent_fitness,

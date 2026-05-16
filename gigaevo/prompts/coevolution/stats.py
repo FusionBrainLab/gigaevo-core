@@ -12,7 +12,8 @@ import hashlib
 from typing import Final
 
 from loguru import logger
-from redis import asyncio as aioredis
+
+from gigaevo.dataplane import CounterKey, DataPlane, Err, Ok
 
 _RECENT_FITNESS_WINDOW: Final[int] = 20
 """Cap on entries returned in ``PromptMutationStats.recent_fitnesses``.
@@ -21,6 +22,14 @@ Each per-source list is already capped writer-side by
 ``gigaevo.prompts.fetcher._FITNESS_WINDOW``; this value bounds the
 multi-source concatenation independently so the reader contract does
 not silently inflate when sources are added.
+"""
+
+_METRIC_FIXED_POINT_SCALE: Final[int] = 1000
+"""Reverse of :data:`gigaevo.prompts.fetcher._METRIC_FIXED_POINT_SCALE`.
+
+The writer scales each float metric by this factor before HINCRBY-ing
+the per-actor sub-count; the reader recovers the mean by dividing the
+cross-actor sum by ``metrics_count * _METRIC_FIXED_POINT_SCALE``.
 """
 
 
@@ -53,23 +62,15 @@ class PromptStatsProvider(ABC):
 
 
 class RedisPromptStatsProvider(PromptStatsProvider):
-    """Reads prompt stats written by main run(s) to their Redis DBs.
+    """Reads prompt stats written by main run(s) via :class:`DataPlane`.
 
-    Supports 1-to-many coupling: aggregates trials/successes across multiple
-    main runs that all test prompts from the same prompt evolution archive.
-
-    Stats are written by ``GigaEvoArchivePromptFetcher.record_outcome``
-    across two keys per prompt id:
-
-    - Hash ``{prefix}:prompt_stats:{prompt_id}`` with fields
-      ``trials``, ``successes``, ``metrics_count`` and one
-      ``m:<metric_key>`` per metric (the per-metric sum).
-    - List ``{prefix}:prompt_fitnesses:{prompt_id}`` of recent fitness
-      values in most-recent-first order, capped at the writer's window.
-
-    Reads aggregate across all configured sources: counters sum,
-    per-metric sums sum, fitness lists concatenate (the last 20 entries
-    overall feed ``recent_fitnesses``).
+    Supports 1-to-many coupling: aggregates trials/successes across
+    multiple main runs that all test prompts from the same prompt
+    evolution archive. Each source carries an independent
+    :class:`DataPlane` handle bound to its DB + prefix; reads route
+    through :meth:`DataPlane.crdt_read` for G-counters, the bounded-list
+    primitive for fitness samples, and the set primitive for the
+    metric-name directory.
 
     Args:
         host: Redis host
@@ -79,6 +80,9 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         sources: List of {"db": int, "prefix": str} dicts for multi-source
             aggregation. If provided, ``db`` and ``prefix`` are ignored.
         min_trials: Minimum trials before reporting real success rate
+        dataplanes: Optional list of pre-wired :class:`DataPlane` handles
+            (one per source). When ``None`` the provider lazily constructs
+            its own; index alignment with ``sources`` is enforced.
     """
 
     def __init__(
@@ -89,6 +93,8 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         prefix: str | None = None,
         sources: list[dict[str, int | str]] | None = None,
         min_trials: int = 5,
+        *,
+        dataplanes: list[DataPlane] | None = None,
     ):
         self._host = host
         self._port = port
@@ -105,17 +111,50 @@ class RedisPromptStatsProvider(PromptStatsProvider):
                 "or sources=[{db, prefix}, ...]"
             )
 
-        self._redis_clients: dict[int, aioredis.Redis] = {}  # type: ignore[type-arg]
+        if dataplanes is not None:
+            if len(dataplanes) != len(self._sources):
+                raise ValueError(
+                    "RedisPromptStatsProvider: dataplanes length "
+                    f"({len(dataplanes)}) must match sources length "
+                    f"({len(self._sources)})"
+                )
+            self._dataplanes: list[DataPlane | None] = list(dataplanes)
+            self._dp_owned: list[bool] = [False] * len(dataplanes)
+        else:
+            self._dataplanes = [None] * len(self._sources)
+            self._dp_owned = [False] * len(self._sources)
 
-    def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
-        if db not in self._redis_clients:
-            self._redis_clients[db] = aioredis.Redis(
-                host=self._host,
-                port=self._port,
-                db=db,
-                decode_responses=True,
-            )
-        return self._redis_clients[db]
+    async def _get_dataplane(self, idx: int) -> DataPlane:
+        """Resolve (and lazily construct) the DataPlane for source ``idx``."""
+        dp = self._dataplanes[idx]
+        if dp is not None:
+            return dp
+        db, prefix = self._sources[idx]
+        url = f"redis://{self._host}:{self._port}/{db}"
+        dp = DataPlane(url, key_prefix=prefix)
+        await dp.startup()
+        self._dataplanes[idx] = dp
+        self._dp_owned[idx] = True
+        return dp
+
+    async def close(self) -> None:
+        """Tear down any DataPlane handles the provider constructed itself.
+
+        Injected handles are left alone. Safe to call multiple times.
+        """
+        for i, dp in enumerate(self._dataplanes):
+            if dp is None or not self._dp_owned[i]:
+                continue
+            try:
+                await dp.shutdown()
+            except Exception as exc:  # noqa: BLE001 - shutdown best-effort
+                logger.warning(
+                    "[RedisPromptStatsProvider] DataPlane[{}] shutdown failed: {}",
+                    i,
+                    exc,
+                )
+            self._dataplanes[i] = None
+            self._dp_owned[i] = False
 
     async def get_stats(self, prompt_id: str) -> PromptMutationStats:
         """Fetch and aggregate mutation stats across all source DBs.
@@ -130,37 +169,32 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         total_successes = 0
         total_metrics_count = 0
         all_fitnesses: list[float] = []
-        merged_metrics_sums: dict[str, float] = {}
+        merged_metrics_sums: dict[str, int] = {}
 
-        for db, prefix in self._sources:
+        for idx, (db, prefix) in enumerate(self._sources):
             try:
-                r = self._get_redis(db)
-                stats_key = f"{prefix}:prompt_stats:{prompt_id}"
-                fitness_key = f"{prefix}:prompt_fitnesses:{prompt_id}"
-                pipe = r.pipeline(transaction=False)
-                pipe.hgetall(stats_key)
-                pipe.lrange(fitness_key, 0, -1)
-                fields, fitness_values = await pipe.execute()
-                total_trials += int(fields.get("trials", 0))
-                total_successes += int(fields.get("successes", 0))
-                total_metrics_count += int(fields.get("metrics_count", 0))
-                for field_name, value in fields.items():
-                    if field_name.startswith("m:"):
-                        metric_key = field_name[len("m:") :]
-                        merged_metrics_sums[metric_key] = merged_metrics_sums.get(
-                            metric_key, 0.0
-                        ) + float(value)
-                # Fitness list is stored newest-first; convert to floats.
-                for raw in fitness_values:
-                    try:
-                        all_fitnesses.append(float(raw))
-                    except (TypeError, ValueError):
-                        continue
-            except Exception as exc:
+                dp = await self._get_dataplane(idx)
+            except Exception as exc:  # noqa: BLE001 - read boundary
                 logger.warning(
-                    f"[RedisPromptStatsProvider] Error reading stats from "
-                    f"db={db} for {prompt_id}: {exc}"
+                    "[RedisPromptStatsProvider] DataPlane[{}] startup failed: {}",
+                    idx,
+                    exc,
                 )
+                continue
+            (
+                trials,
+                successes,
+                metrics_count,
+                fitnesses,
+                per_metric,
+            ) = await _read_one_source(dp, prompt_id)
+            total_trials += trials
+            total_successes += successes
+            total_metrics_count += metrics_count
+            all_fitnesses.extend(fitnesses)
+            for k, v in per_metric.items():
+                merged_metrics_sums[k] = merged_metrics_sums.get(k, 0) + v
+            del db, prefix  # captured only for the log line above
 
         if total_trials < self._min_trials:
             success_rate = 0.0
@@ -175,12 +209,13 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         # concatenation, treating every source as equally recent.
         recent = all_fitnesses[:_RECENT_FITNESS_WINDOW] if all_fitnesses else None
 
-        # Compute per-metric means using metrics_count (only trials with metrics)
-        mean_metrics = None
+        # Per-metric means: sum is in fixed-point integer space; divide
+        # by metrics_count * scale to recover the float mean.
+        mean_metrics: dict[str, float] | None = None
         if total_metrics_count > 0 and merged_metrics_sums:
+            divisor = total_metrics_count * _METRIC_FIXED_POINT_SCALE
             mean_metrics = {
-                k: round(v / total_metrics_count, 4)
-                for k, v in merged_metrics_sums.items()
+                k: round(v / divisor, 4) for k, v in merged_metrics_sums.items()
             }
 
         return PromptMutationStats(
@@ -191,6 +226,63 @@ class RedisPromptStatsProvider(PromptStatsProvider):
             recent_fitnesses=recent,
             mean_metrics=mean_metrics,
         )
+
+
+async def _read_one_source(
+    dp: DataPlane, prompt_id: str
+) -> tuple[int, int, int, list[float], dict[str, int]]:
+    """Read all five quantities for one (DataPlane, prompt) pair.
+
+    Returns a tuple ``(trials, successes, metrics_count, fitnesses,
+    per_metric_sums)``. Each field defaults to its empty value on a
+    per-key miss, so an unknown prompt id surfaces as zeros — never an
+    exception — which is the contract the reader caller depends on.
+    """
+    from gigaevo.prompts.fetcher import (
+        _fitness_list_key,
+        _metric_directory_key,
+        _metric_sum_key,
+        _metrics_count_key,
+        _successes_key,
+        _trials_key,
+    )
+
+    async def _counter(key: CounterKey) -> int:
+        result = await dp.crdt_read(key)
+        if isinstance(result, Err):
+            logger.debug(
+                "[RedisPromptStatsProvider] crdt_read({}) error: {}",
+                key,
+                result.error,
+            )
+            return 0
+        return int(result.value.value)
+
+    trials = await _counter(_trials_key(prompt_id))
+    successes = await _counter(_successes_key(prompt_id))
+    metrics_count = await _counter(_metrics_count_key(prompt_id))
+
+    fitnesses: list[float] = []
+    fitness_result = await dp.bounded_list_range(
+        _fitness_list_key(prompt_id), count=_RECENT_FITNESS_WINDOW
+    )
+    if isinstance(fitness_result, Ok):
+        for raw in fitness_result.value:
+            try:
+                fitnesses.append(float(raw))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+
+    per_metric: dict[str, int] = {}
+    if metrics_count > 0:
+        members_result = await dp.set_members(_metric_directory_key(prompt_id))
+        if isinstance(members_result, Ok):
+            for metric_key in members_result.value:
+                value = await _counter(_metric_sum_key(prompt_id, metric_key))
+                if value:
+                    per_metric[metric_key] = value
+
+    return trials, successes, metrics_count, fitnesses, per_metric
 
 
 def prompt_text_to_id(prompt_text: str, user_text: str | None = None) -> str:

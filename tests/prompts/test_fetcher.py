@@ -125,7 +125,8 @@ class TestGigaEvoArchivePromptFetcher:
         )
         assert result.prompt_id is None
 
-    def test_record_outcome_skips_rejected_acceptor(self, tmp_prompts_dir: Path):
+    @pytest.mark.asyncio
+    async def test_record_outcome_skips_rejected_acceptor(self, tmp_prompts_dir: Path):
         """record_outcome() skips REJECTED_ACCEPTOR outcomes."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
@@ -133,7 +134,7 @@ class TestGigaEvoArchivePromptFetcher:
             fallback_prompts_dir=tmp_prompts_dir,
         )
         # Should not raise when prompt_id is None or outcome is REJECTED_ACCEPTOR
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.5,
             parent_fitness=0.4,
@@ -142,14 +143,15 @@ class TestGigaEvoArchivePromptFetcher:
         )
         # No assertion needed — just verify no exception
 
-    def test_record_outcome_noop_when_prompt_id_none(self, tmp_prompts_dir: Path):
+    @pytest.mark.asyncio
+    async def test_record_outcome_noop_when_prompt_id_none(self, tmp_prompts_dir: Path):
         """record_outcome() is no-op when prompt_id is None."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="chains/hotpotqa",
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id=None,
             child_fitness=0.5,
             parent_fitness=0.4,
@@ -171,19 +173,22 @@ class TestGigaEvoArchivePromptFetcher:
         assert "has_champion" in stats
         assert "champion_has_user" in stats
 
-    def test_main_redis_db_none_leaves_stats_write_disabled(
+    @pytest.mark.asyncio
+    async def test_main_redis_db_none_leaves_stats_write_disabled(
         self, tmp_prompts_dir: Path
     ):
-        """Without main_redis_db, _redis_main_sync is None and record_outcome is a no-op."""
+        """Without main_redis_db (and no injected DataPlane), record_outcome
+        is a silent no-op — the main DataPlane handle is not constructed.
+        """
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="prefix",
             main_redis_db=None,  # explicit None
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        assert fetcher._redis_main_sync is None
+        assert fetcher._main_dp is None
         # record_outcome must be silent no-op, not raise
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.7,
             parent_fitness=0.5,
@@ -191,16 +196,20 @@ class TestGigaEvoArchivePromptFetcher:
             outcome=MutationOutcome.ACCEPTED,
         )
 
-    def test_main_redis_db_provided_initializes_client(self, tmp_prompts_dir: Path):
-        """Providing main_redis_db initializes _redis_main_sync immediately in __init__."""
+    def test_main_redis_db_provided_defers_dataplane_construction(
+        self, tmp_prompts_dir: Path
+    ):
+        """The constructor records the main DB but defers DataPlane build to start()."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="prefix",
             main_redis_db=5,  # main run's DB
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        # Client should be initialized (even if Redis is not actually running)
-        assert fetcher._redis_main_sync is not None
+        assert fetcher._main_redis_db == 5
+        # DataPlane is only constructed when start() is awaited, so that
+        # the Hydra-instantiation phase (sync) does not dial Redis.
+        assert fetcher._main_dp is None
 
     def test_fetch_user_returns_fallback_when_no_champion(self, tmp_prompts_dir: Path):
         """fetch('mutation', 'user') returns fallback when no champion."""
@@ -407,11 +416,12 @@ class TestPromptFetcherABC:
         with pytest.raises(TypeError):
             IncompleteFetcher()  # type: ignore
 
-    def test_record_outcome_default_noop(self):
+    @pytest.mark.asyncio
+    async def test_record_outcome_default_noop(self):
         """PromptFetcher.record_outcome() default is no-op."""
         fetcher = FixedDirPromptFetcher()
         # Should not raise
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="test",
             child_fitness=0.5,
             parent_fitness=0.4,

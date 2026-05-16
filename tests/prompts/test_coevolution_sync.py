@@ -1,12 +1,35 @@
-"""Tests for gigaevo.prompts.coevolution.sync — MainRunSyncHook."""
+"""Tests for gigaevo.prompts.coevolution.sync — MainRunSyncHook.
+
+Routes every Redis read through a stand-in :class:`DataPlane` (an
+``AsyncMock`` exposing :meth:`raw_hash_get`). The hook itself owns no
+direct ``redis``-py import; per-source DataPlane handles are injected
+via the ``dataplanes=`` constructor parameter so tests need not dial a
+real Redis instance.
+"""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
+from gigaevo.dataplane import Ok
 from gigaevo.prompts.coevolution.sync import MainRunSyncHook
+
+
+def _stub_dataplane(*, hget_returns) -> AsyncMock:
+    """Build an AsyncMock standing in for DataPlane.raw_hash_get.
+
+    ``hget_returns`` is either a single return value or a side-effect
+    list. Wraps each value in :class:`Ok` so the production code path
+    matches the real DataPlane contract.
+    """
+    dp = AsyncMock()
+    if isinstance(hget_returns, list):
+        dp.raw_hash_get = AsyncMock(side_effect=[Ok(v) for v in hget_returns])
+    else:
+        dp.raw_hash_get = AsyncMock(return_value=Ok(hget_returns))
+    return dp
 
 
 class TestMainRunSyncHookInit:
@@ -51,25 +74,36 @@ class TestMainRunSyncHookInit:
         with pytest.raises(ValueError, match="requires either"):
             MainRunSyncHook(host="localhost", port=6379)
 
+    def test_dataplanes_length_must_match_sources(self):
+        with pytest.raises(ValueError, match="dataplanes length"):
+            MainRunSyncHook(
+                host="localhost",
+                port=6379,
+                sources=[
+                    {"db": 4, "prefix": "p"},
+                    {"db": 5, "prefix": "p"},
+                ],
+                dataplanes=[AsyncMock()],
+            )
+
 
 class TestMainRunSyncHookCall:
     @pytest.mark.asyncio
     async def test_proceeds_immediately_when_gen_advanced(self):
         """If the main run is already at gen > -1, proceed immediately."""
+        dp = _stub_dataplane(hget_returns="5")
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
             db=0,
             prefix="test",
             poll_interval=0.01,
+            dataplanes=[dp],
         )
-        mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value="5")
-        hook._redis_clients[0] = mock_redis
 
         await hook()
 
-        mock_redis.hget.assert_called_once_with(
+        dp.raw_hash_get.assert_called_once_with(
             "test:run_state", "engine:total_generations"
         )
         assert hook._last_main_gen == 5
@@ -77,26 +111,26 @@ class TestMainRunSyncHookCall:
     @pytest.mark.asyncio
     async def test_waits_until_gen_advances(self):
         """If main run hasn't advanced, poll until it does."""
+        dp = _stub_dataplane(hget_returns=["3", "3", "4"])
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
             db=0,
             prefix="test",
             poll_interval=0.01,
+            dataplanes=[dp],
         )
-        mock_redis = AsyncMock()
         hook._last_main_gen = 3
-        mock_redis.hget = AsyncMock(side_effect=["3", "3", "4"])
-        hook._redis_clients[0] = mock_redis
 
         await hook()
 
-        assert mock_redis.hget.call_count == 3
+        assert dp.raw_hash_get.call_count == 3
         assert hook._last_main_gen == 4
 
     @pytest.mark.asyncio
     async def test_timeout_proceeds_without_advancement(self):
         """If main run doesn't advance within timeout, proceed anyway."""
+        dp = _stub_dataplane(hget_returns="10")
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -104,11 +138,9 @@ class TestMainRunSyncHookCall:
             prefix="test",
             timeout=0.05,
             poll_interval=0.01,
+            dataplanes=[dp],
         )
         hook._last_main_gen = 10
-        mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value="10")
-        hook._redis_clients[0] = mock_redis
 
         await hook()
 
@@ -116,17 +148,16 @@ class TestMainRunSyncHookCall:
 
     @pytest.mark.asyncio
     async def test_handles_none_from_redis(self):
-        """If the key doesn't exist in Redis, treat gen as 0."""
+        """If the key doesn't exist, treat gen as 0."""
+        dp = _stub_dataplane(hget_returns=None)
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
             db=0,
             prefix="test",
             poll_interval=0.01,
+            dataplanes=[dp],
         )
-        mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value=None)
-        hook._redis_clients[0] = mock_redis
 
         await hook()
 
@@ -135,51 +166,52 @@ class TestMainRunSyncHookCall:
     @pytest.mark.asyncio
     async def test_tracks_generation_across_calls(self):
         """Multiple calls should track the advancing generation."""
+        dp = AsyncMock()
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
             db=0,
             prefix="test",
             poll_interval=0.01,
+            dataplanes=[dp],
         )
-        mock_redis = AsyncMock()
-        hook._redis_clients[0] = mock_redis
 
-        mock_redis.hget = AsyncMock(return_value="0")
+        dp.raw_hash_get = AsyncMock(return_value=Ok("0"))
         await hook()
         assert hook._last_main_gen == 0
 
-        mock_redis.hget = AsyncMock(return_value="1")
+        dp.raw_hash_get = AsyncMock(return_value=Ok("1"))
         await hook()
         assert hook._last_main_gen == 1
 
-        mock_redis.hget = AsyncMock(return_value="3")
+        dp.raw_hash_get = AsyncMock(return_value=Ok("3"))
         await hook()
         assert hook._last_main_gen == 3
 
     @pytest.mark.asyncio
     async def test_correct_redis_key_construction(self):
-        """Verify the Redis key is built from the prefix."""
+        """Verify the hash key is built from the source prefix."""
+        dp = _stub_dataplane(hget_returns="1")
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
             db=0,
             prefix="chains/hotpotqa",
             poll_interval=0.01,
+            dataplanes=[dp],
         )
-        mock_redis = AsyncMock()
-        mock_redis.hget = AsyncMock(return_value="1")
-        hook._redis_clients[0] = mock_redis
 
         await hook()
 
-        mock_redis.hget.assert_called_with(
+        dp.raw_hash_get.assert_called_with(
             "chains/hotpotqa:run_state", "engine:total_generations"
         )
 
     @pytest.mark.asyncio
     async def test_multi_source_waits_for_min_gen(self):
         """With multiple sources, waits for the minimum gen to advance."""
+        dp4 = _stub_dataplane(hget_returns="3")
+        dp5 = _stub_dataplane(hget_returns="1")
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -188,22 +220,18 @@ class TestMainRunSyncHookCall:
                 {"db": 5, "prefix": "chains/hotpotqa"},
             ],
             poll_interval=0.01,
+            dataplanes=[dp4, dp5],
         )
-        mock_r4 = AsyncMock()
-        mock_r5 = AsyncMock()
-        hook._redis_clients[4] = mock_r4
-        hook._redis_clients[5] = mock_r5
 
         # DB4 at gen 3, DB5 at gen 1 → min=1 > -1 → proceed
-        mock_r4.hget = AsyncMock(return_value="3")
-        mock_r5.hget = AsyncMock(return_value="1")
-
         await hook()
         assert hook._last_main_gen == 1
 
     @pytest.mark.asyncio
     async def test_multi_source_blocks_until_slowest_advances(self):
         """Must wait until ALL sources advance past last_main_gen."""
+        dp4 = _stub_dataplane(hget_returns=["5", "5"])
+        dp5 = _stub_dataplane(hget_returns=["2", "3"])
         hook = MainRunSyncHook(
             host="localhost",
             port=6379,
@@ -212,46 +240,11 @@ class TestMainRunSyncHookCall:
                 {"db": 5, "prefix": "p"},
             ],
             poll_interval=0.01,
+            dataplanes=[dp4, dp5],
         )
         hook._last_main_gen = 2
-        mock_r4 = AsyncMock()
-        mock_r5 = AsyncMock()
-        hook._redis_clients[4] = mock_r4
-        hook._redis_clients[5] = mock_r5
 
         # First poll: DB4=5, DB5=2 → min=2, not > 2 → wait
         # Second poll: DB4=5, DB5=3 → min=3 > 2 → proceed
-        mock_r4.hget = AsyncMock(side_effect=["5", "5"])
-        mock_r5.hget = AsyncMock(side_effect=["2", "3"])
-
         await hook()
         assert hook._last_main_gen == 3
-
-
-class TestMainRunSyncHookGetRedis:
-    def test_lazy_creates_redis_on_first_call(self):
-        hook = MainRunSyncHook(host="localhost", port=6379, db=5, prefix="test")
-        assert hook._redis_clients == {}
-
-        with patch("gigaevo.prompts.coevolution.sync.aioredis.Redis") as mock_redis_cls:
-            mock_client = MagicMock()
-            mock_redis_cls.return_value = mock_client
-
-            result = hook._get_redis(5)
-
-            mock_redis_cls.assert_called_once_with(
-                host="localhost",
-                port=6379,
-                db=5,
-                decode_responses=True,
-            )
-            assert result is mock_client
-            assert hook._redis_clients[5] is mock_client
-
-    def test_reuses_existing_redis(self):
-        hook = MainRunSyncHook(host="localhost", port=6379, db=0, prefix="test")
-        sentinel = MagicMock()
-        hook._redis_clients[0] = sentinel
-
-        result = hook._get_redis(0)
-        assert result is sentinel

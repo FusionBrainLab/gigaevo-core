@@ -14,14 +14,18 @@ import asyncio
 import time
 
 from loguru import logger
-from redis import asyncio as aioredis
+
+from gigaevo.dataplane import DataPlane, Err
 
 
 class MainRunSyncHook:
     """Pre-step hook that blocks until main run(s) advance by 1 generation.
 
-    Polls each main run's ``engine:total_generations`` counter in Redis and
-    waits until the minimum across all sources exceeds the previous value.
+    Polls each main run's ``engine:total_generations`` counter — persisted
+    by :class:`~gigaevo.database.redis_program_storage.RedisProgramStorage`
+    inside the ``{prefix}:run_state`` hash — through
+    :meth:`DataPlane.raw_hash_get`. Waits until the minimum across all
+    sources exceeds the previous value.
 
     Supports both single-source (backwards compat) and multi-source configs.
 
@@ -34,6 +38,9 @@ class MainRunSyncHook:
             If provided, ``db`` and ``prefix`` are ignored.
         timeout: Maximum seconds to wait before proceeding anyway
         poll_interval: Seconds between polls
+        dataplanes: Optional list of pre-wired :class:`DataPlane` handles
+            (one per source). When ``None`` the hook lazily constructs its
+            own; lifecycle is managed via :meth:`close`.
     """
 
     def __init__(
@@ -45,6 +52,8 @@ class MainRunSyncHook:
         sources: list[dict[str, int | str]] | None = None,
         timeout: float = 7200.0,
         poll_interval: float = 5.0,
+        *,
+        dataplanes: list[DataPlane] | None = None,
     ):
         self._host = host
         self._port = port
@@ -63,7 +72,18 @@ class MainRunSyncHook:
                 "or sources=[{db, prefix}, ...]"
             )
 
-        self._redis_clients: dict[int, aioredis.Redis] = {}  # type: ignore[type-arg]
+        if dataplanes is not None:
+            if len(dataplanes) != len(self._sources):
+                raise ValueError(
+                    "MainRunSyncHook: dataplanes length "
+                    f"({len(dataplanes)}) must match sources length "
+                    f"({len(self._sources)})"
+                )
+            self._dataplanes: list[DataPlane | None] = list(dataplanes)
+            self._dp_owned: list[bool] = [False] * len(dataplanes)
+        else:
+            self._dataplanes = [None] * len(self._sources)
+            self._dp_owned = [False] * len(self._sources)
 
         sources_desc = ", ".join(f"db={db} prefix={pfx!r}" for db, pfx in self._sources)
         logger.info(
@@ -73,26 +93,49 @@ class MainRunSyncHook:
             self._poll_interval,
         )
 
-    def _get_redis(self, db: int) -> aioredis.Redis:  # type: ignore[type-arg]
-        if db not in self._redis_clients:
-            self._redis_clients[db] = aioredis.Redis(
-                host=self._host,
-                port=self._port,
-                db=db,
-                decode_responses=True,
-            )
-        return self._redis_clients[db]
+    async def _get_dataplane(self, idx: int) -> DataPlane:
+        """Resolve (and lazily construct) the DataPlane for source ``idx``."""
+        dp = self._dataplanes[idx]
+        if dp is not None:
+            return dp
+        db, prefix = self._sources[idx]
+        url = f"redis://{self._host}:{self._port}/{db}"
+        dp = DataPlane(url, key_prefix=prefix)
+        await dp.startup()
+        self._dataplanes[idx] = dp
+        self._dp_owned[idx] = True
+        return dp
+
+    async def close(self) -> None:
+        """Tear down any DataPlane handles the hook constructed itself."""
+        for i, dp in enumerate(self._dataplanes):
+            if dp is None or not self._dp_owned[i]:
+                continue
+            try:
+                await dp.shutdown()
+            except Exception as exc:  # noqa: BLE001 - shutdown best-effort
+                logger.warning(
+                    "[MainRunSyncHook] DataPlane[{}] shutdown failed: {}", i, exc
+                )
+            self._dataplanes[i] = None
+            self._dp_owned[i] = False
 
     async def _get_min_gen(self) -> int:
         """Read the minimum generation across all tracked main runs."""
-        gens = []
-        for db, prefix in self._sources:
+        gens: list[int] = []
+        for idx, (db, prefix) in enumerate(self._sources):
             try:
-                r = self._get_redis(db)
+                dp = await self._get_dataplane(idx)
                 key = f"{prefix}:run_state"
-                raw = await r.hget(key, "engine:total_generations")
-                gens.append(int(raw) if raw else 0)
-            except Exception as exc:
+                result = await dp.raw_hash_get(key, "engine:total_generations")
+                if isinstance(result, Err) or result.value is None:
+                    gens.append(0)
+                else:
+                    try:
+                        gens.append(int(result.value))
+                    except (TypeError, ValueError):
+                        gens.append(0)
+            except Exception as exc:  # noqa: BLE001 - read boundary
                 logger.warning(
                     "[MainRunSyncHook] Error reading gen from db={}: {}", db, exc
                 )
