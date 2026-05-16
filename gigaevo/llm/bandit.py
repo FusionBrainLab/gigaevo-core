@@ -5,6 +5,45 @@ inspired by ShinkaEvolve (arxiv 2509.19349).  The ``BanditModelRouter`` subclass
 of ``MultiModelRouter`` replaces static probability-based selection with an
 adaptive strategy that learns which LLM produces the best fitness improvements.
 
+Mutation-outcome reward policy
+------------------------------
+
+:meth:`BanditModelRouter.on_mutation_outcome` is called after the DAG
+has decided whether to admit the child program. The three outcomes
+shape the bandit signal as follows:
+
+    - :data:`MutationOutcome.ACCEPTED` and
+      :data:`MutationOutcome.REJECTED_STRATEGY`: the child reached the
+      strategy with a measurable fitness, so the reward is the
+      normalised improvement over the best parent. The strategy reject
+      branch still produces an informative signal — a model that
+      consistently produces valid-but-uncompetitive code shows up as a
+      low-mean arm.
+    - :data:`MutationOutcome.REJECTED_ACCEPTOR`: the program crashed,
+      lacked the validity metric, or otherwise failed the acceptor
+      pipeline (``gigaevo.evolution.engine.acceptor``). The fitness is
+      unreliable — the DAG never produced a real measurement, only a
+      sentinel — and the failure is not necessarily attributable to the
+      model: it can sit anywhere from "the LLM produced incoherent
+      code" to "an upstream stage crashed on otherwise sound code".
+      Recording a synthetic 0.0 reward conflates these classes and
+      drags the model's posterior toward a value the data does not
+      support. The chosen policy is to **skip the reward update** for
+      this outcome; the per-arm pull counter already incremented at
+      selection time, so the trial is still represented in the UCB1
+      exploration term — only the reward window stays free of
+      synthetic zeros. This matches the precedent in
+      ``gigaevo.prompts.fetcher`` which also drops ``REJECTED_ACCEPTOR``
+      outcomes from its stats writes.
+
+The trade-off is acknowledged: a model that systematically produces
+crash-inducing code looks better than it should, because those trials
+contribute pulls but no rewards. The ``REJECTED_STRATEGY`` branch still
+carries a real-fitness signal, which catches the broader class of
+"valid but weak" outputs; chronically broken outputs surface as a low
+ratio of recorded rewards to recorded pulls, which downstream tooling
+can inspect through :meth:`SlidingWindowUCB1.get_stats`.
+
 Optional Redis-backed ledger
 ----------------------------
 
@@ -483,6 +522,12 @@ class BanditModelRouter(MultiModelRouter):
         window_size: Number of recent rewards kept per arm.
         fitness_key: Metric key used to read fitness from ``Program.metrics``.
         higher_is_better: Whether higher fitness values are better.
+        skip_reward_on_acceptor_reject: When ``True``, ``REJECTED_ACCEPTOR``
+            outcomes do not append a synthetic 0.0 to the reward window
+            (see module docstring for the rationale). When ``False`` —
+            the default for backwards compatibility — the historical
+            behaviour applies: a 0.0 is normalised and recorded. New
+            deployments should set this to ``True``.
         dataplane: Optional :class:`DataPlane` for CRDT-backed sharing.
         actor: Optional :class:`ActorIdentity` for per-actor G-counter
             sub-counts. Both ``dataplane`` and ``actor`` must be supplied
@@ -500,12 +545,14 @@ class BanditModelRouter(MultiModelRouter):
         window_size: int = 100,
         fitness_key: str,
         higher_is_better: bool = True,
+        skip_reward_on_acceptor_reject: bool = False,
         dataplane: DataPlane | None = None,
         actor: ActorIdentity | None = None,
     ):
         super().__init__(models, probabilities, writer=writer, name=name)
         self.fitness_key = fitness_key
         self.higher_is_better = higher_is_better
+        self._skip_reward_on_acceptor_reject = skip_reward_on_acceptor_reject
         self._bandit = SlidingWindowUCB1(
             arm_names=self.model_names,
             exploration_constant=exploration_constant,
@@ -515,11 +562,13 @@ class BanditModelRouter(MultiModelRouter):
         )
         self._reward_normalizer = RunningPercentileNormalizer()
         logger.info(
-            "[BanditModelRouter:{}] UCB1 bandit enabled | arms={} c={} W={}",
+            "[BanditModelRouter:{}] UCB1 bandit enabled | arms={} c={} W={} "
+            "skip_reward_on_acceptor_reject={}",
             name,
             self.model_names,
             exploration_constant,
             window_size,
+            skip_reward_on_acceptor_reject,
         )
 
     # -- selection ----------------------------------------------------------
@@ -544,16 +593,37 @@ class BanditModelRouter(MultiModelRouter):
     ) -> None:
         """Update the bandit with the reward from a completed mutation.
 
-        Called for **every** mutation outcome — accepted, rejected by strategy,
-        or rejected by acceptor — so the bandit sees the full distribution of
-        each model's outputs.
+        Reward shaping by outcome:
+
+        - ``ACCEPTED`` and ``REJECTED_STRATEGY`` produce a real
+          fitness-derived reward (improvement over best parent, run
+          through the running-percentile normaliser).
+        - ``REJECTED_ACCEPTOR`` is gated on
+          :attr:`_skip_reward_on_acceptor_reject`. When the flag is set,
+          the reward window stays free of synthetic zeros (the policy
+          documented in the module docstring); when unset (the historical
+          default), a normalised 0.0 is recorded.
+
+        Calls with no ``mutation_model`` metadata are silently dropped:
+        the program did not come from a routed mutation and there is no
+        arm to credit.
         """
         model_name = program.get_metadata("mutation_model")
         if not model_name:
             return
 
         if outcome == MutationOutcome.REJECTED_ACCEPTOR:
-            # No reliable fitness — inject zero reward directly.
+            if self._skip_reward_on_acceptor_reject:
+                logger.debug(
+                    "[BanditModelRouter] Skipping reward update for {} ({}): "
+                    "acceptor-rejected, no reliable fitness",
+                    model_name,
+                    outcome.value,
+                )
+                return
+            # Legacy path: inject a normalised zero so the older
+            # downstream signal shape is preserved for callers that have
+            # not opted into the new policy.
             normalized = self._reward_normalizer.normalize(0.0)
             self._bandit.update_reward(model_name, normalized)
             logger.debug(

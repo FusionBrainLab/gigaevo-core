@@ -602,6 +602,109 @@ class TestMutationOutcomeHandling:
 
 
 # ---------------------------------------------------------------------------
+# Acceptor-reject reward policy (skip_reward_on_acceptor_reject)
+# ---------------------------------------------------------------------------
+
+
+class TestSkipRewardOnAcceptorReject:
+    """The flag suppresses synthetic 0.0 rewards on REJECTED_ACCEPTOR.
+
+    Two distinct invariants are exercised here:
+
+    1. With the flag set, ``REJECTED_ACCEPTOR`` does not append to the
+       reward window — successive accepted rewards survive untouched
+       and the model's mean reward reflects only the real signal.
+    2. The selection-time ``record_pull`` is untouched: a separate
+       outcome stream that mixes acceptor-rejections with accepted
+       outcomes accumulates only one reward sample per accepted call,
+       confirming the trial-vs-reward decoupling described in the
+       module docstring.
+    """
+
+    def _make_router(self, **kwargs):
+        models = _make_mock_models(["llama", "qwen"])
+        defaults = dict(
+            fitness_key="fitness",
+            higher_is_better=True,
+            window_size=50,
+            skip_reward_on_acceptor_reject=True,
+        )
+        defaults.update(kwargs)
+        router = BanditModelRouter(models, [0.5, 0.5], **defaults)
+        router._bandit.record_pull("llama")
+        router._bandit.record_pull("qwen")
+        return router
+
+    def test_rejected_acceptor_does_not_record_reward(self):
+        router = self._make_router()
+        child = Program(code="x=CRASH")
+        child.set_metadata("mutation_model", "llama")
+        child.metrics["fitness"] = -1000  # sentinel for crashed
+        parent = Program(code="x=0")
+        parent.metrics["fitness"] = 0.025
+        router.on_mutation_outcome(
+            child, [parent], outcome=MutationOutcome.REJECTED_ACCEPTOR
+        )
+        stats = router.get_bandit_stats()
+        # Reward window untouched: no synthetic 0 was appended.
+        assert stats["llama"]["window_size"] == 0
+        # Pull counter remains as recorded at selection time.
+        assert stats["llama"]["total_pulls"] == 1
+
+    def test_accepted_then_rejected_acceptor_keeps_real_signal(self):
+        router = self._make_router()
+        # First, an ACCEPTED outcome with a strong improvement.
+        good = Program(code="good")
+        good.set_metadata("mutation_model", "llama")
+        good.metrics["fitness"] = 0.030
+        good_parent = Program(code="parent")
+        good_parent.metrics["fitness"] = 0.025
+        router.on_mutation_outcome(
+            good, [good_parent], outcome=MutationOutcome.ACCEPTED
+        )
+        accepted_stats = router.get_bandit_stats()["llama"]
+        assert accepted_stats["window_size"] == 1
+        # Then an acceptor reject: window stays at 1, mean unchanged.
+        crashed = Program(code="crashed")
+        crashed.set_metadata("mutation_model", "llama")
+        crashed.metrics["fitness"] = -1000
+        router.on_mutation_outcome(
+            crashed, [good_parent], outcome=MutationOutcome.REJECTED_ACCEPTOR
+        )
+        after_stats = router.get_bandit_stats()["llama"]
+        assert after_stats["window_size"] == 1
+        assert after_stats["mean_reward"] == accepted_stats["mean_reward"]
+
+    def test_strategy_reject_still_records_with_flag(self):
+        """REJECTED_STRATEGY is unaffected by the new flag — it still
+        produces a fitness-derived reward sample."""
+        router = self._make_router()
+        child = Program(code="weak")
+        child.set_metadata("mutation_model", "qwen")
+        child.metrics["fitness"] = 0.020
+        parent = Program(code="parent")
+        parent.metrics["fitness"] = 0.025
+        router.on_mutation_outcome(
+            child, [parent], outcome=MutationOutcome.REJECTED_STRATEGY
+        )
+        assert router.get_bandit_stats()["qwen"]["window_size"] == 1
+
+    def test_default_flag_preserves_legacy_zero_injection(self):
+        """The flag defaults to False — REJECTED_ACCEPTOR still appends 0.0."""
+        models = _make_mock_models(["llama"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="fitness", higher_is_better=True
+        )
+        router._bandit.record_pull("llama")
+        child = Program(code="x=CRASH")
+        child.set_metadata("mutation_model", "llama")
+        child.metrics["fitness"] = -1000
+        router.on_mutation_outcome(child, [], outcome=MutationOutcome.REJECTED_ACCEPTOR)
+        # Default-flag behaviour: window grows by one.
+        assert router.get_bandit_stats()["llama"]["window_size"] == 1
+
+
+# ---------------------------------------------------------------------------
 # Realistic heilbron scenarios
 # ---------------------------------------------------------------------------
 

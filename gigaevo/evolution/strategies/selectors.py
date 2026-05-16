@@ -25,6 +25,25 @@ class ArchiveSelector(ABC):
     def __call__(self, new: Program, current: Program) -> bool:
         """Determine if new program should replace current elite."""
 
+    def reduce_to_score(self, program: Program) -> float | None:
+        """Reduce a program to a single comparison score, if possible.
+
+        Selectors that compute a total ordering from a scalar return that
+        scalar; the archive storage uses it to route the cell swap through
+        an atomic Lua script that compares scores server-side. Selectors
+        whose ``__call__`` cannot be expressed as ``score(new) > score(current)``
+        — multi-criteria dominance, for example — must return ``None`` so the
+        archive falls back to its optimistic-locking path with the full
+        ``is_better`` callback.
+
+        The returned scalar must satisfy ``__call__(a, b) is True`` iff
+        ``reduce_to_score(a) > reduce_to_score(b)`` for every pair on which
+        ``__call__`` returns a defined boolean. Ties are resolved by the
+        caller via a tiebreak bit; see the archive storage for the
+        in-use convention.
+        """
+        return None
+
 
 class SumArchiveSelector(ArchiveSelector):
     def __init__(self, *args, weights: list[float] | None = None, **kwargs):
@@ -75,6 +94,10 @@ class SumArchiveSelector(ArchiveSelector):
                 )
             ]
         )
+
+    def reduce_to_score(self, program: Program) -> float | None:
+        """Weighted-sum fitness reduction; mirrors :meth:`__call__`."""
+        return self.score(program)
 
 
 class ParetoFrontSelector(ArchiveSelector):
