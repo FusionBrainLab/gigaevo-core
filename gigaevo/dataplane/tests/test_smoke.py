@@ -103,18 +103,6 @@ def test_require_started_raises_when_not_started() -> None:
     assert exc.value.method == "test_label"
 
 
-def test_require_lua_alias_still_works() -> None:
-    """The ``_require_lua`` alias raises ``NotStartedError`` when not started.
-
-    Method bodies that have not yet landed call ``_require_lua``; keep
-    the alias green until those bodies migrate to
-    ``_require_started("<method>")``.
-    """
-    coord = dp.DataPlane("redis://localhost:6379/0", key_prefix="smoke")
-    with pytest.raises(NotStartedError):
-        coord._require_lua()
-
-
 # ── public contract dataclasses ─────────────────────────────────────────
 
 

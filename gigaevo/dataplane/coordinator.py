@@ -435,15 +435,6 @@ class DataPlane:
             raise NotStartedError(method=method)
         return lua
 
-    def _require_lua(self) -> LuaRegistry:
-        """Deprecated internal alias for :meth:`_require_started`.
-
-        Retained because the method bodies that have not yet landed
-        reference this name. New code uses :meth:`_require_started` with
-        an explicit method label.
-        """
-        return self._require_started("_require_lua")
-
     @staticmethod
     def _validate_key_component(
         value: str, *, method: str, field_name: str, allow_colon: bool = False
