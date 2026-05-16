@@ -4,12 +4,34 @@ Implements UCB1 with sliding window and running-percentile reward normalization,
 inspired by ShinkaEvolve (arxiv 2509.19349).  The ``BanditModelRouter`` subclass
 of ``MultiModelRouter`` replaces static probability-based selection with an
 adaptive strategy that learns which LLM produces the best fitness improvements.
+
+Optional Redis-backed ledger
+----------------------------
+
+When constructed with a :class:`~gigaevo.dataplane.DataPlane` and an
+:class:`~gigaevo.dataplane.ActorIdentity`, the bandit mirrors its trial
+count and reward sum into Redis G-counters via ``crdt_inc``. Two engines
+sharing the same Redis prefix observe each other's pulls after a refresh
+and a restart no longer loses all history.
+
+Key scheme (relative to the dataplane key prefix):
+
+    - ``bandit:trials:{arm}``      — per-arm trial G-counter, integer delta.
+    - ``bandit:reward_sum:{arm}``  — per-arm fixed-point reward sum,
+      scaled by :data:`_REWARD_FIXED_POINT_SCALE` so HINCRBY (integer-only)
+      suffices. The float reward is rounded half-even then summed.
+
+The in-process windowed UCB stays authoritative for fast selection (the
+hot path is sync and must not block on Redis). Redis is the audit trail
+and cross-engine sharing tier; :meth:`SlidingWindowUCB1.refresh_from_redis`
+re-syncs the local trial counters from the Redis consensus sum.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import math
 from typing import TYPE_CHECKING, Any
@@ -18,6 +40,12 @@ from langchain_openai import ChatOpenAI
 from loguru import logger
 import numpy as np
 
+from gigaevo.dataplane import (
+    ActorIdentity,
+    CounterKey,
+    DataPlane,
+    Ok,
+)
 from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter
 from gigaevo.utils.trackers.base import LogWriter
 
@@ -45,6 +73,36 @@ class MutationOutcome(Enum):
 #: Cap improvement before ``exp()`` to prevent overflow.  ``exp(20) ≈ 4.85e8``
 #: is already enormous; the normalizer clips anything above p95 to 1.0 anyway.
 _MAX_IMPROVEMENT: float = 20.0
+
+#: Fixed-point scale for the Redis reward-sum G-counter. Floats in ``[0, 1]``
+#: from :meth:`RunningPercentileNormalizer.normalize` are multiplied by this
+#: factor and rounded to an integer so ``HINCRBY`` (integer-only) suffices.
+#: The doc-prescribed value is 1000 (three decimal digits of precision); the
+#: reverse conversion lives in :meth:`SlidingWindowUCB1.get_mean_reward`.
+_REWARD_FIXED_POINT_SCALE: int = 1000
+
+
+def _trials_key(arm: str) -> CounterKey:
+    """Return the CRDT G-counter key for an arm's trial count."""
+    return CounterKey(f"bandit:trials:{arm}")
+
+
+def _reward_sum_key(arm: str) -> CounterKey:
+    """Return the CRDT G-counter key for an arm's fixed-point reward sum."""
+    return CounterKey(f"bandit:reward_sum:{arm}")
+
+
+def _reward_to_fixed_point(reward: float) -> int:
+    """Convert a normalized reward in ``[0, 1]`` to a Redis-storable integer.
+
+    Banker's rounding (``round``) keeps the bias-free property when the
+    same series of rewards is summed across actors. Rewards outside
+    ``[0, 1]`` are clamped: ``normalize`` is contractually bounded, but
+    we keep the clamp as defence-in-depth so a bug in the normalizer
+    cannot poison the consensus reward sum.
+    """
+    clamped = max(0.0, min(1.0, reward))
+    return round(clamped * _REWARD_FIXED_POINT_SCALE)
 
 
 def compute_bandit_reward(
@@ -125,7 +183,6 @@ class ArmStats:
     total_pulls: int = 0
 
 
-@dataclass
 class SlidingWindowUCB1:
     """Upper Confidence Bound (UCB1) bandit with a sliding reward window.
 
@@ -134,23 +191,65 @@ class SlidingWindowUCB1:
 
         UCB1 = mean(windowed_rewards) + c * sqrt(ln(N) / n_i)
 
+    When ``dataplane`` and ``actor`` are both supplied, every ``record_pull``
+    and ``update_reward`` also fires a non-blocking CRDT increment against
+    the corresponding ``bandit:trials:{arm}`` / ``bandit:reward_sum:{arm}``
+    G-counter. Selection always reads from the in-process window — the
+    Redis ledger is the audit trail and the cross-engine sharing tier, not
+    the hot path. Call :meth:`refresh_from_redis` to fold the consensus
+    sum back into the in-process counters.
+
     Args:
         arm_names: Names identifying each arm.
         exploration_constant: UCB1 exploration parameter *c*.
         window_size: Maximum number of recent rewards kept per arm.
+        dataplane: Optional :class:`DataPlane` for CRDT-backed sharing.
+        actor: Optional :class:`ActorIdentity` for the per-actor G-counter
+            sub-counts. Both ``dataplane`` and ``actor`` must be supplied
+            together; otherwise the bandit operates in in-process-only mode.
     """
 
     arm_names: list[str]
-    exploration_constant: float = 1.41
-    window_size: int = 100
-    arms: dict[str, ArmStats] = field(init=False)
-    _total_pulls: int = field(default=0, init=False)
+    exploration_constant: float
+    window_size: int
+    arms: dict[str, ArmStats]
+    _total_pulls: int
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        arm_names: list[str],
+        exploration_constant: float = 1.41,
+        window_size: int = 100,
+        *,
+        dataplane: DataPlane | None = None,
+        actor: ActorIdentity | None = None,
+    ) -> None:
+        self.arm_names = arm_names
+        self.exploration_constant = exploration_constant
+        self.window_size = window_size
         self.arms = {
-            name: ArmStats(rewards=deque(maxlen=self.window_size))
-            for name in self.arm_names
+            name: ArmStats(rewards=deque(maxlen=window_size)) for name in arm_names
         }
+        self._total_pulls = 0
+        # CRDT mirror is enabled only when both surfaces are present; an
+        # asymmetric configuration (one without the other) is a caller
+        # bug, not a legitimate fallback path.
+        if (dataplane is None) != (actor is None):
+            raise ValueError(
+                "SlidingWindowUCB1: dataplane and actor must be supplied together "
+                "or both omitted"
+            )
+        self._dataplane: DataPlane | None = dataplane
+        self._actor: ActorIdentity | None = actor
+        # Strong refs to in-flight background increments — without this set
+        # asyncio.create_task results are GC-eligible immediately and the
+        # write may be cancelled before it reaches Redis.
+        self._pending_writes: set[asyncio.Task[Any]] = set()
+
+    @property
+    def is_redis_backed(self) -> bool:
+        """``True`` when both a dataplane and an actor are configured."""
+        return self._dataplane is not None and self._actor is not None
 
     def select(self) -> str:
         """Return the arm name with the highest UCB1 score.
@@ -184,13 +283,29 @@ class SlidingWindowUCB1:
         return best_name
 
     def record_pull(self, arm_name: str) -> None:
-        """Increment pull counter for *arm_name*."""
+        """Increment pull counter for *arm_name*.
+
+        In Redis-backed mode the local counters update synchronously and
+        a background ``crdt_inc`` task is scheduled on the running event
+        loop. Outside a running loop the Redis mirror is skipped — the
+        in-process state remains authoritative.
+        """
         self.arms[arm_name].total_pulls += 1
         self._total_pulls += 1
+        self._schedule_crdt_inc(_trials_key(arm_name), delta=1)
 
     def update_reward(self, arm_name: str, reward: float) -> None:
-        """Append *reward* to the sliding window for *arm_name*."""
+        """Append *reward* to the sliding window for *arm_name*.
+
+        In Redis-backed mode the per-arm reward sum G-counter is also
+        bumped by the fixed-point representation of *reward*. Zero-delta
+        bumps are skipped to avoid no-op round trips when the rounded
+        reward is exactly zero.
+        """
         self.arms[arm_name].rewards.append(reward)
+        delta = _reward_to_fixed_point(reward)
+        if delta != 0:
+            self._schedule_crdt_inc(_reward_sum_key(arm_name), delta=delta)
 
     def get_stats(self) -> dict[str, dict[str, Any]]:
         """Return a JSON-friendly summary of per-arm statistics."""
@@ -203,6 +318,145 @@ class SlidingWindowUCB1:
                 "mean_reward": sum(rewards) / len(rewards) if rewards else 0.0,
             }
         return out
+
+    # -- Redis-backed helpers ---------------------------------------------
+
+    def _schedule_crdt_inc(self, key: CounterKey, *, delta: int) -> None:
+        """Fire-and-forget a ``crdt_inc`` on the running loop, if any.
+
+        Sync callers (no running loop) silently fall back to in-process
+        only. Errors from the background write are logged and dropped —
+        the in-process state remains correct; the consensus sum simply
+        lags by one increment until the next successful write.
+        """
+        if not self.is_redis_backed:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        assert self._dataplane is not None
+        assert self._actor is not None
+        task = loop.create_task(
+            self._do_crdt_inc(self._dataplane, self._actor, key, delta)
+        )
+        self._pending_writes.add(task)
+        task.add_done_callback(self._pending_writes.discard)
+
+    @staticmethod
+    async def _do_crdt_inc(
+        dataplane: DataPlane,
+        actor: ActorIdentity,
+        key: CounterKey,
+        delta: int,
+    ) -> None:
+        """Issue one ``crdt_inc`` and log any error without propagating.
+
+        The bandit is allowed to degrade gracefully if the dataplane is
+        unreachable — UCB1 selection still works on the in-process state.
+        Surfacing the error to the hot path would make every LLM call
+        depend on Redis availability, which the design explicitly avoids.
+        """
+        try:
+            result = await dataplane.crdt_inc(key, actor=actor, delta=delta)
+        except Exception as exc:  # noqa: BLE001 — background-task safety net
+            logger.warning(
+                "[SlidingWindowUCB1] crdt_inc({}, delta={}) raised: {}",
+                key,
+                delta,
+                exc,
+            )
+            return
+        if not isinstance(result, Ok):
+            logger.warning(
+                "[SlidingWindowUCB1] crdt_inc({}, delta={}) failed: {}",
+                key,
+                delta,
+                result.error,
+            )
+
+    async def drain_pending_writes(self) -> None:
+        """Await every in-flight background increment.
+
+        Tests pin determinism by waiting for the mirror to settle before
+        reading from Redis; production callers may use this as part of a
+        graceful shutdown sequence.
+        """
+        if not self._pending_writes:
+            return
+        pending = tuple(self._pending_writes)
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    async def refresh_from_redis(self) -> None:
+        """Fold the Redis consensus into the in-process trial counters.
+
+        Reads the cross-actor sum from each ``bandit:trials:{arm}`` and,
+        if it exceeds the local count, raises the local count to match.
+        The reward window is not touched — the doc treats it as a
+        per-actor hot-tier view; only the trial count (and through it
+        the UCB1 exploration term) is brought up to the consensus value.
+
+        Drift detection: when the local count exceeds the consensus, a
+        warning is logged and the local count is kept. This can only
+        happen if a previous write was lost; reducing the local count
+        would also retroactively shift past UCB1 scores.
+        """
+        if not self.is_redis_backed:
+            return
+        assert self._dataplane is not None
+        await self.drain_pending_writes()
+        delta_total = 0
+        for name in self.arm_names:
+            result = await self._dataplane.crdt_read(_trials_key(name))
+            if not isinstance(result, Ok):
+                logger.warning(
+                    "[SlidingWindowUCB1] crdt_read(trials:{}) failed: {}",
+                    name,
+                    result.error,
+                )
+                continue
+            consensus = int(result.value.value)
+            local = self.arms[name].total_pulls
+            if consensus > local:
+                delta = consensus - local
+                self.arms[name].total_pulls = consensus
+                delta_total += delta
+            elif consensus < local:
+                logger.warning(
+                    "[SlidingWindowUCB1] arm {} local pulls {} exceeds Redis "
+                    "consensus {} — keeping local count",
+                    name,
+                    local,
+                    consensus,
+                )
+        self._total_pulls += delta_total
+
+    async def get_mean_reward(self, arm_name: str) -> float:
+        """Return the consensus mean reward for *arm_name*.
+
+        In Redis-backed mode this refreshes the trial counters first and
+        then divides the consensus reward sum (descaled from the fixed-
+        point representation) by the consensus trial count. In in-process
+        mode it returns the mean of the local sliding window — the same
+        value exposed by :meth:`get_stats`.
+
+        Returns ``0.0`` when no pulls have been observed for the arm.
+        """
+        if not self.is_redis_backed:
+            window = self.arms[arm_name].rewards
+            return sum(window) / len(window) if window else 0.0
+        assert self._dataplane is not None
+        await self.refresh_from_redis()
+        trials_result = await self._dataplane.crdt_read(_trials_key(arm_name))
+        sum_result = await self._dataplane.crdt_read(_reward_sum_key(arm_name))
+        if not isinstance(trials_result, Ok) or not isinstance(sum_result, Ok):
+            window = self.arms[arm_name].rewards
+            return sum(window) / len(window) if window else 0.0
+        trial_count = int(trials_result.value.value)
+        if trial_count <= 0:
+            return 0.0
+        reward_sum_fp = int(sum_result.value.value)
+        return reward_sum_fp / trial_count / _REWARD_FIXED_POINT_SCALE
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +483,10 @@ class BanditModelRouter(MultiModelRouter):
         window_size: Number of recent rewards kept per arm.
         fitness_key: Metric key used to read fitness from ``Program.metrics``.
         higher_is_better: Whether higher fitness values are better.
+        dataplane: Optional :class:`DataPlane` for CRDT-backed sharing.
+        actor: Optional :class:`ActorIdentity` for per-actor G-counter
+            sub-counts. Both ``dataplane`` and ``actor`` must be supplied
+            together; otherwise the bandit operates in in-process-only mode.
     """
 
     def __init__(
@@ -242,6 +500,8 @@ class BanditModelRouter(MultiModelRouter):
         window_size: int = 100,
         fitness_key: str,
         higher_is_better: bool = True,
+        dataplane: DataPlane | None = None,
+        actor: ActorIdentity | None = None,
     ):
         super().__init__(models, probabilities, writer=writer, name=name)
         self.fitness_key = fitness_key
@@ -250,6 +510,8 @@ class BanditModelRouter(MultiModelRouter):
             arm_names=self.model_names,
             exploration_constant=exploration_constant,
             window_size=window_size,
+            dataplane=dataplane,
+            actor=actor,
         )
         self._reward_normalizer = RunningPercentileNormalizer()
         logger.info(
