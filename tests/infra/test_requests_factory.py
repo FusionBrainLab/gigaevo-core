@@ -117,6 +117,16 @@ class TestTimeoutSession:
             session.request("GET", "http://example.com", timeout=1.0)
         assert mock_super.call_args.kwargs["timeout"] == 1.0
 
+    def test_explicit_none_timeout_treated_as_default(self) -> None:
+        """``requests`` interprets ``timeout=None`` as "wait forever".
+        This session is supposed to bound every request, so an explicit
+        ``None`` must still hit the session default."""
+        session = _TimeoutSession(default_timeout=(5.0, 7.5))
+        with patch.object(requests.Session, "request", autospec=True) as mock_super:
+            mock_super.return_value = "ok"
+            session.request("GET", "http://example.com", timeout=None)
+        assert mock_super.call_args.kwargs["timeout"] == (5.0, 7.5)
+
     def test_extra_kwargs_forwarded_verbatim(self) -> None:
         """Subclass must forward params= / json= / headers= unchanged."""
         session = _TimeoutSession(default_timeout=(5.0, 7.5))
@@ -270,5 +280,15 @@ class TestMakeRequestsSession:
                 "socket_options"
             )
             assert pool_socket_options == list(DEFAULT_SOCKET_OPTIONS)
+        finally:
+            session.close()
+
+    def test_user_agent_header_set(self) -> None:
+        """Identifies our traffic in upstream server logs instead of
+        bucketing with anonymous ``python-requests`` traffic."""
+        session = make_requests_session("test_role")
+        try:
+            ua = session.headers.get("User-Agent", "")
+            assert ua.startswith("gigaevo-core/")
         finally:
             session.close()

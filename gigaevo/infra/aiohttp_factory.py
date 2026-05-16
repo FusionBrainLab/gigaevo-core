@@ -31,14 +31,22 @@ from __future__ import annotations
 
 import socket
 import ssl
+import sys
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from gigaevo.infra._net import apply_socket_options, build_tls_context
+from gigaevo.infra._net import apply_socket_options, build_tls_context, user_agent
 
 if TYPE_CHECKING:
     from openai import DefaultAioHttpClient
+
+# ``aiohttp.TCPConnector.enable_cleanup_closed=True`` previously countered
+# CPython's SSL-socket close leak; the leak was fixed in CPython 3.12.13
+# (PR python/cpython#118960), and aiohttp 3.13 emits a noisy warning when
+# the kwarg is True on a runtime that already has the fix.  Only pass it
+# on the affected runtime so we keep the leak defense without the noise.
+_ENABLE_CLEANUP_CLOSED = sys.version_info < (3, 12, 13)
 
 
 # ---------------------------------------------------------------------------
@@ -106,23 +114,25 @@ def build_connector(
 ) -> aiohttp.TCPConnector:
     """Build a :class:`_KeepaliveConnector` with module defaults.
 
-    ``enable_cleanup_closed=True`` is always on — aiohttp's documented
-    defense against the connection-leak failure mode. On Python 3.12+
-    aiohttp treats it as a no-op (the SSL leak it countered was fixed
-    upstream); kept on so behavior is correct on older Python.
+    ``enable_cleanup_closed=True`` is conditionally enabled — it was
+    aiohttp's defense against CPython's SSL-socket close leak, and aiohttp
+    3.13 emits a warning when the kwarg is True on a runtime that already
+    has the upstream fix (CPython 3.12.13+).  See ``_ENABLE_CLEANUP_CLOSED``.
 
     ``ssl_context`` defaults to :func:`gigaevo.infra._net.build_tls_context`
     (TLS 1.2+, hostname + CA verification on).
     """
-    return _KeepaliveConnector(
+    kwargs: dict[str, Any] = dict(
         limit=limit,
         limit_per_host=limit_per_host,
         keepalive_timeout=keepalive_timeout,
         ttl_dns_cache=ttl_dns_cache,
         force_close=force_close,
-        enable_cleanup_closed=True,
         ssl=ssl_context if ssl_context is not None else build_tls_context(),
     )
+    if _ENABLE_CLEANUP_CLOSED:
+        kwargs["enable_cleanup_closed"] = True
+    return _KeepaliveConnector(**kwargs)
 
 
 def build_timeout(
@@ -172,17 +182,24 @@ def make_aiohttp_session(
             with bounded defaults is used.
         trust_env: If ``True`` (default), aiohttp honors ``HTTP_PROXY`` /
             ``HTTPS_PROXY`` / ``NO_PROXY`` from the environment.
-        **session_kwargs: Forwarded to ``aiohttp.ClientSession``.
+        **session_kwargs: Forwarded to ``aiohttp.ClientSession``.  A
+            caller-supplied ``headers`` mapping is merged with our
+            default ``User-Agent`` (caller wins on collision).
 
     Returns:
         Open ``aiohttp.ClientSession``. Caller owns the lifetime —
         ``await session.close()`` when done.
     """
     del role  # informational only
+    headers: dict[str, str] = {"User-Agent": user_agent()}
+    extra_headers = session_kwargs.pop("headers", None)
+    if extra_headers:
+        headers.update(extra_headers)
     return aiohttp.ClientSession(
         connector=connector if connector is not None else build_connector(),
         timeout=timeout if timeout is not None else build_timeout(),
         trust_env=trust_env,
+        headers=headers,
         **session_kwargs,
     )
 
@@ -191,19 +208,30 @@ def make_openai_http_client(
     role: str,
     *,
     proxy: str | None = None,
+    timeout: Any = None,
     **overrides: Any,
 ) -> DefaultAioHttpClient:
     """Create an aiohttp-backed ``http_client`` for the openai SDK.
 
-    ``DefaultAioHttpClient`` accepts arbitrary ``**kwargs``; we forward
-    ``proxy`` and any caller overrides. The aiohttp pool semantics that
-    make this migration worthwhile come from openai 2.x's transport
-    layer, not from us — but the configured proxy is honored if passed.
+    ``DefaultAioHttpClient`` is a thin wrapper around
+    ``httpx_aiohttp.HttpxAiohttpClient`` (httpx surface, aiohttp
+    transport).  It accepts httpx-shaped kwargs: ``timeout`` is
+    ``httpx.Timeout``, ``headers`` is a mapping, ``proxy`` is a URL.
+
+    The openai SDK's own default is ``httpx.Timeout(timeout=600,
+    connect=5.0)`` — a 10-minute total per request, easy to hang a
+    coroutine.  We override that to match the aiohttp factory:
+    ``total=300s, connect=15s``.  Pass ``timeout=`` (an ``httpx.Timeout``)
+    to override per-call.
 
     Args:
         role: Informational label.
         proxy: Optional proxy URL.
-        **overrides: Forwarded to ``DefaultAioHttpClient``.
+        timeout: Optional ``httpx.Timeout`` override.  Default is a
+            bounded ``Timeout(timeout=300, connect=15)``.
+        **overrides: Forwarded to ``DefaultAioHttpClient``.  A
+            caller-supplied ``headers`` mapping is merged with our
+            default ``User-Agent`` (caller wins on collision).
 
     Returns:
         ``openai.DefaultAioHttpClient`` instance.
@@ -221,7 +249,23 @@ def make_openai_http_client(
             "aiohttp extra: pip install 'openai[aiohttp]>=2.0.0'."
         ) from exc
 
+    import httpx
+
     kwargs: dict[str, Any] = dict(overrides)
     if proxy is not None:
         kwargs.setdefault("proxy", proxy)
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = (
+            timeout
+            if timeout is not None
+            else httpx.Timeout(
+                timeout=DEFAULT_TIMEOUT_TOTAL,
+                connect=DEFAULT_TIMEOUT_CONNECT,
+            )
+        )
+    headers: dict[str, str] = {"User-Agent": user_agent()}
+    caller_headers = kwargs.get("headers")
+    if caller_headers:
+        headers.update(caller_headers)
+    kwargs["headers"] = headers
     return DefaultAioHttpClient(**kwargs)

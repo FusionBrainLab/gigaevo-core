@@ -20,6 +20,28 @@ import requests
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.infra.requests_factory import make_requests_session
 
+# Response bodies from a misbehaving server can be arbitrarily large or
+# carry control characters; either property is unsafe to splice raw into
+# an exception message that ends up in log sinks.  Truncate first, then
+# strip ANSI escape sequences and other C0/C1 control bytes.
+_RESPONSE_BODY_PREVIEW_BYTES = 512
+
+
+def _safe_response_preview(response: requests.Response) -> str:
+    """Return a short, control-stripped preview of a response body.
+
+    Used in exception messages so transient server failures stay legible
+    without leaking ANSI / CRLF / RLO sequences into log sinks (a sink
+    rendering raw bytes from an attacker-controlled body is the same
+    class of vector this codebase has hardened elsewhere — see T-C1)."""
+    try:
+        text = response.text
+    except Exception:
+        return "<unreadable body>"
+    if len(text) > _RESPONSE_BODY_PREVIEW_BYTES:
+        text = text[:_RESPONSE_BODY_PREVIEW_BYTES] + "… (truncated)"
+    return "".join(ch for ch in text if ch == "\n" or 0x20 <= ord(ch) < 0x7F or ord(ch) > 0xA0)
+
 
 class _ConceptApiClient:
     """Small HTTP client around Memory API entity endpoints."""
@@ -37,12 +59,12 @@ class _ConceptApiClient:
             response = self._http.request(method, url, **kwargs)
         except requests.exceptions.ConnectionError as exc:
             raise MemoryStorageError(
-                f"Cannot connect to Memory API at {self._base_url}. "
+                f"Cannot connect to Memory API at {self._base_url}: {exc}. "
                 "Start the API service or set MEMORY_API_URL to a reachable endpoint."
             ) from exc
         except requests.exceptions.Timeout as exc:
             raise MemoryStorageError(
-                f"Memory API request timed out for {self._base_url}. "
+                f"Memory API request timed out for {self._base_url}: {exc}. "
                 "Check service health and network connectivity."
             ) from exc
         if response.status_code == 204:
@@ -50,7 +72,7 @@ class _ConceptApiClient:
         if response.status_code >= 400:
             raise MemoryStorageError(
                 f"Memory API request failed ({method} {path}): "
-                f"{response.status_code} {response.text}"
+                f"{response.status_code} {_safe_response_preview(response)}"
             )
         return response.json()
 

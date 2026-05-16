@@ -29,7 +29,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
 
-from gigaevo.infra._net import DEFAULT_SOCKET_OPTIONS, build_tls_context
+from gigaevo.infra._net import DEFAULT_SOCKET_OPTIONS, build_tls_context, user_agent
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -80,8 +80,12 @@ class _TimeoutSession(requests.Session):
     """``requests.Session`` that injects a default per-request timeout.
 
     Default is a ``(connect, read)`` tuple so each phase is bounded
-    independently. Callers can still pass ``timeout=`` per call (single
-    float, tuple, or ``None``); only the unset case triggers injection.
+    independently.  Callers can still pass ``timeout=`` per call (single
+    float or tuple).  An explicit ``timeout=None`` is treated the same
+    as omitting the kwarg: the session default applies.  ``requests``
+    interprets ``timeout=None`` as "wait forever", which is never the
+    intent when this session is in use — the whole point of the class
+    is to bound every request.
     """
 
     def __init__(self, *, default_timeout: tuple[float, float]) -> None:
@@ -95,7 +99,8 @@ class _TimeoutSession(requests.Session):
         *args: Any,
         **kwargs: Any,
     ) -> requests.Response:
-        kwargs.setdefault("timeout", self._default_timeout)
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self._default_timeout
         return super().request(method, url, *args, **kwargs)
 
 
@@ -236,6 +241,9 @@ def make_requests_session(
     """
     del role  # informational only
     session = _TimeoutSession(default_timeout=_normalize_timeout(timeout))
+    # Identify our traffic in upstream server logs / WAFs / rate-limiters
+    # instead of bucketing with anonymous ``python-requests`` traffic.
+    session.headers["User-Agent"] = user_agent()
     adapter = _KeepaliveHTTPAdapter(
         pool_connections=pool_connections,
         pool_maxsize=pool_maxsize,

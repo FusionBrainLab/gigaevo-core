@@ -28,6 +28,8 @@ from gigaevo.infra.aiohttp_factory import (
     make_openai_http_client,
 )
 
+_MISSING = object()
+
 # ---------------------------------------------------------------------------
 # build_connector
 # ---------------------------------------------------------------------------
@@ -65,15 +67,25 @@ class TestBuildConnector:
         finally:
             await c.close()
 
-    async def test_enable_cleanup_closed_is_always_passed(self) -> None:
-        """Factory unconditionally passes ``enable_cleanup_closed=True`` —
-        no-op on Py3.12+, helpful on older Python."""
+    async def test_enable_cleanup_closed_conditional_on_python_version(self) -> None:
+        """``enable_cleanup_closed=True`` is passed only on CPython runtimes
+        that still benefit from it (<3.12.13).  On newer runtimes aiohttp
+        warns when the kwarg is True because the underlying SSL leak was
+        fixed upstream (cpython PR #118960)."""
+        import sys
+
         from gigaevo.infra import aiohttp_factory as factory_mod
 
         with patch.object(factory_mod, "_KeepaliveConnector") as mock_ctor:
-            mock_ctor.return_value = mock_ctor  # avoid double-await on close
+            mock_ctor.return_value = mock_ctor
             build_connector()
-        assert mock_ctor.call_args.kwargs.get("enable_cleanup_closed") is True
+        passed = mock_ctor.call_args.kwargs.get("enable_cleanup_closed", _MISSING)
+        if sys.version_info < (3, 12, 13):
+            assert passed is True
+        else:
+            assert passed is _MISSING, (
+                "kwarg should be omitted on modern runtimes to avoid aiohttp's warning"
+            )
 
     async def test_ssl_context_default_pins_tls12_and_verifies(self) -> None:
         c = build_connector()
@@ -256,6 +268,29 @@ class TestMakeAiohttpSession:
         finally:
             await session.close()
 
+    async def test_user_agent_header_set(self) -> None:
+        """Every session identifies itself as ``gigaevo-core/<version>``
+        so upstream WAFs / rate-limiters can apply per-client policies."""
+        session = make_aiohttp_session("test_role")
+        try:
+            ua = session.headers.get("User-Agent", "")
+            assert ua.startswith("gigaevo-core/")
+        finally:
+            await session.close()
+
+    async def test_caller_headers_merge_with_user_agent(self) -> None:
+        """Caller-supplied headers add to the default ``User-Agent``; on
+        explicit ``User-Agent`` collision the caller wins."""
+        session = make_aiohttp_session(
+            "test_role",
+            headers={"X-Custom": "value", "User-Agent": "caller/1.0"},
+        )
+        try:
+            assert session.headers.get("X-Custom") == "value"
+            assert session.headers.get("User-Agent") == "caller/1.0"
+        finally:
+            await session.close()
+
 
 # ---------------------------------------------------------------------------
 # make_openai_http_client
@@ -267,8 +302,12 @@ class TestMakeOpenAIHttpClient:
         """Verify the factory delegates to openai.DefaultAioHttpClient.
 
         We stub the openai module so the test does not require the
-        ``openai[aiohttp]`` extra at test time.
+        ``openai[aiohttp]`` extra at test time.  The factory must inject
+        a bounded ``timeout`` (overriding the openai SDK's 600s default)
+        and a ``User-Agent`` header identifying our traffic.
         """
+        import httpx
+
         constructed: dict[str, object] = {}
 
         class _FakeDefaultAioHttpClient:
@@ -282,7 +321,14 @@ class TestMakeOpenAIHttpClient:
         with patch.dict(sys.modules, {"openai": fake_openai}):
             client = make_openai_http_client("llm_role")
         assert isinstance(client, _FakeDefaultAioHttpClient)
-        assert constructed == {}
+        # Bounded timeout — never the openai 600s default.
+        assert isinstance(constructed["timeout"], httpx.Timeout)
+        assert constructed["timeout"].read == DEFAULT_TIMEOUT_TOTAL
+        assert constructed["timeout"].connect == DEFAULT_TIMEOUT_CONNECT
+        # User-Agent set on every minted client.
+        headers = constructed["headers"]
+        assert isinstance(headers, dict)
+        assert headers.get("User-Agent", "").startswith("gigaevo-core/")
 
     def test_proxy_forwarded(self) -> None:
         constructed: dict[str, object] = {}
@@ -296,9 +342,11 @@ class TestMakeOpenAIHttpClient:
         )
         with patch.dict(sys.modules, {"openai": fake_openai}):
             make_openai_http_client("llm_role", proxy="http://proxy:8080")
-        assert constructed == {"proxy": "http://proxy:8080"}
+        assert constructed.get("proxy") == "http://proxy:8080"
 
     def test_overrides_forwarded(self) -> None:
+        """Caller-supplied kwargs flow through; caller-supplied ``timeout``
+        wins over our default."""
         constructed: dict[str, object] = {}
 
         class _FakeDefaultAioHttpClient:
@@ -310,7 +358,48 @@ class TestMakeOpenAIHttpClient:
         )
         with patch.dict(sys.modules, {"openai": fake_openai}):
             make_openai_http_client("llm_role", timeout=42.0, custom="value")
-        assert constructed == {"timeout": 42.0, "custom": "value"}
+        assert constructed.get("timeout") == 42.0
+        assert constructed.get("custom") == "value"
+
+    def test_explicit_timeout_argument_used(self) -> None:
+        """The ``timeout=`` kwarg accepts an ``httpx.Timeout`` override."""
+        import httpx
+
+        constructed: dict[str, object] = {}
+
+        class _FakeDefaultAioHttpClient:
+            def __init__(self, **kwargs: object) -> None:
+                constructed.update(kwargs)
+
+        fake_openai = types.SimpleNamespace(
+            DefaultAioHttpClient=_FakeDefaultAioHttpClient
+        )
+        custom = httpx.Timeout(timeout=30, connect=5)
+        with patch.dict(sys.modules, {"openai": fake_openai}):
+            make_openai_http_client("llm_role", timeout=custom)
+        assert constructed.get("timeout") is custom
+
+    def test_caller_headers_merged_with_user_agent(self) -> None:
+        """Caller-supplied headers merge with our ``User-Agent``; caller
+        wins on collision (so explicit overrides are honored)."""
+        constructed: dict[str, object] = {}
+
+        class _FakeDefaultAioHttpClient:
+            def __init__(self, **kwargs: object) -> None:
+                constructed.update(kwargs)
+
+        fake_openai = types.SimpleNamespace(
+            DefaultAioHttpClient=_FakeDefaultAioHttpClient
+        )
+        with patch.dict(sys.modules, {"openai": fake_openai}):
+            make_openai_http_client(
+                "llm_role",
+                headers={"X-Custom": "value", "User-Agent": "override/1.0"},
+            )
+        headers = constructed["headers"]
+        assert isinstance(headers, dict)
+        assert headers.get("X-Custom") == "value"
+        assert headers.get("User-Agent") == "override/1.0"
 
     def test_import_error_surfaces_install_instructions(self) -> None:
         # Force openai import to fail

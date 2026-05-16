@@ -25,6 +25,7 @@ the Linux-specific options — the option is simply omitted there.
 
 from __future__ import annotations
 
+import functools
 import socket
 import ssl
 
@@ -95,6 +96,29 @@ def apply_socket_options(sock: socket.socket) -> None:
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=1)
+def user_agent() -> str:
+    """Return the ``User-Agent`` string used by every outbound HTTP call.
+
+    Format: ``gigaevo-core/<version>``.  Identifies our traffic in
+    upstream logs so rate-limiters / WAFs can apply per-client policies
+    instead of bucketing us with anonymous ``python-requests`` traffic.
+    Falls back to ``"unknown"`` for the version segment when the package
+    metadata is unavailable (development checkout without ``pip install``).
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            v = version("gigaevo")
+        except PackageNotFoundError:
+            v = "unknown"
+    except ImportError:  # pragma: no cover — stdlib on 3.8+
+        v = "unknown"
+    return f"gigaevo-core/{v}"
+
+
+@functools.lru_cache(maxsize=1)
 def build_tls_context() -> ssl.SSLContext:
     """Build an ``ssl.SSLContext`` pinned to TLS 1.2+ with verification on.
 
@@ -104,6 +128,12 @@ def build_tls_context() -> ssl.SSLContext:
     those properties explicitly so they survive Python/openssl upgrades
     and are visible in our code rather than implicit in library
     internals.
+
+    The result is cached: ``SSLContext`` is expensive to construct
+    (parses the CA bundle) and the returned object is treated as
+    read-only by every call site in this package.  Do not mutate the
+    returned context; callers needing a customised context should build
+    their own via ``ssl.create_default_context``.
     """
     ctx = ssl.create_default_context()
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
