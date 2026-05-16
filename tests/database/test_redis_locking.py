@@ -158,25 +158,34 @@ class TestRelease:
 
 
 class TestRenew:
-    async def test_renew_updates_value(self, lock, fake_redis):
-        """Renew updates the lock value in Redis with a new timestamp."""
+    async def test_renew_refreshes_ttl(self, lock, fake_redis):
+        """Renew refreshes the TTL on the lock key.
+
+        The stored value is the bare instance id, stable across
+        renewals — the freshness witness is the TTL alone. The
+        token-CAS Lua script requires the stored value to match the
+        caller's token verbatim, so renewals deliberately do not
+        mutate the value.
+        """
         await lock.acquire()
         lock_key = lock._keys.instance_lock()
         old_value = await fake_redis.get(lock_key)
         old_token = lock._token
 
-        # Small sleep so time.time() changes
+        # Burn part of the TTL window so a refresh is observable as an
+        # increase in remaining PTTL.
         await asyncio.sleep(0.02)
+        pttl_before = await fake_redis.pttl(lock_key)
 
         result = await lock.renew()
         assert result is True
 
         new_value = await fake_redis.get(lock_key)
-        assert new_value != old_value, "Renew must change the value in Redis"
-        assert new_value.startswith(lock.instance_id)
-        # Also verify the internal _token was updated
-        assert lock._token != old_token
-        assert lock._token == new_value
+        assert new_value == old_value
+        assert new_value == lock.instance_id
+        assert lock._token == old_token
+        pttl_after = await fake_redis.pttl(lock_key)
+        assert pttl_after >= pttl_before
 
         await lock.release()
 

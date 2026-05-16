@@ -1,10 +1,23 @@
+"""Distributed instance lock with auto-renewal.
+
+The Redis-side semantics live in three Lua scripts under
+``gigaevo/dataplane/scripts/`` and are loaded into Redis via
+``SCRIPT LOAD`` on first use. The token-CAS pattern in those scripts
+closes the classic "TTL expired between when A decided to release and
+when A actually DEL'd, and B has taken over in the meantime" footgun —
+A's blind DEL would have released B's lock; the token-CAS refuses.
+
+The Python-side surface (constructor, acquire / release / renew,
+auto-renewal background task) is kept stable so external callers do
+not need to change.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import os
 import socket
-import time
 import uuid
 
 from loguru import logger
@@ -12,14 +25,23 @@ from loguru import logger
 from gigaevo.database.redis.config import RedisLockConfig
 from gigaevo.database.redis.connection import RedisConnection
 from gigaevo.database.redis.keys import RedisProgramKeys
+from gigaevo.dataplane.ids import ScriptName, make_script_name
+from gigaevo.dataplane.scripts import load_lua_source
 from gigaevo.exceptions import StorageError
 from redis import asyncio as aioredis
+
+_SCRIPT_LOCK_ACQUIRE: ScriptName = make_script_name("instance_lock_acquire")
+_SCRIPT_LOCK_RENEW: ScriptName = make_script_name("instance_lock_renew")
+_SCRIPT_LOCK_RELEASE: ScriptName = make_script_name("instance_lock_release")
 
 
 class RedisInstanceLock:
     """Distributed instance lock with auto-renewal.
 
     Prevents multiple instances from using the same Redis prefix.
+    Backed by three Lua scripts (acquire / renew / release) that
+    token-CAS the lock value so a TTL-expired holder cannot release or
+    renew over a successor's hold.
     """
 
     def __init__(
@@ -32,11 +54,26 @@ class RedisInstanceLock:
         self._keys = keys
         self._config = config
 
-        self._token: str | None = None
-        self._renewal_task: asyncio.Task[None] | None = None
+        # The Lua scripts compare the stored value to the caller's
+        # token verbatim. The legacy implementation stored
+        # ``"{instance_id}:{time.time()}"`` and refreshed the timestamp
+        # on every renew; the new design stores the bare instance_id
+        # and lets the TTL carry the freshness witness. This is
+        # backward-compatible across a rolling upgrade because an
+        # old-format holder's value still trips the NX check on a new
+        # acquire.
         self._instance_id = (
             f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         )
+        self._token: str | None = None
+        self._renewal_task: asyncio.Task[None] | None = None
+
+        self._script_sources: dict[ScriptName, str] = {
+            _SCRIPT_LOCK_ACQUIRE: load_lua_source(_SCRIPT_LOCK_ACQUIRE),
+            _SCRIPT_LOCK_RENEW: load_lua_source(_SCRIPT_LOCK_RENEW),
+            _SCRIPT_LOCK_RELEASE: load_lua_source(_SCRIPT_LOCK_RELEASE),
+        }
+        self._script_shas: dict[ScriptName, str] = {}
 
     @property
     def is_held(self) -> bool:
@@ -46,42 +83,82 @@ class RedisInstanceLock:
     def instance_id(self) -> str:
         return self._instance_id
 
+    # ── Lua plumbing ─────────────────────────────────────────────────
+
+    async def _evalsha(
+        self,
+        r: aioredis.Redis,
+        name: ScriptName,
+        *,
+        keys: list[str],
+        args: list[str | int],
+    ) -> int:
+        """EVALSHA with one-shot NOSCRIPT reload-and-retry.
+
+        Returns the script's integer return value (every instance-lock
+        script returns 1 / 0). Raises whatever Redis errors propagate
+        beyond the second attempt.
+        """
+        sha = self._script_shas.get(name)
+        if sha is None:
+            loaded = await r.script_load(self._script_sources[name])  # type: ignore[misc]
+            sha = loaded if isinstance(loaded, str) else loaded.decode("ascii")
+            self._script_shas[name] = sha
+        try:
+            return int(await r.evalsha(sha, len(keys), *keys, *args))  # type: ignore[misc]
+        except aioredis.ResponseError as exc:
+            if "NOSCRIPT" not in str(exc):
+                raise
+            loaded = await r.script_load(self._script_sources[name])  # type: ignore[misc]
+            sha = loaded if isinstance(loaded, str) else loaded.decode("ascii")
+            self._script_shas[name] = sha
+            return int(await r.evalsha(sha, len(keys), *keys, *args))  # type: ignore[misc]
+
+    # ── public surface ───────────────────────────────────────────────
+
     async def acquire(self) -> bool:
-        """Acquire the instance lock."""
+        """Acquire the instance lock.
+
+        Returns ``True`` on success; raises :class:`StorageError` if
+        another instance holds the lock. The auto-renewal task is
+        spawned on success.
+        """
 
         async def _acquire(r: aioredis.Redis) -> bool:
             lock_key = self._keys.instance_lock()
-            lock_value = f"{self._instance_id}:{time.time()}"
-
-            acquired = await r.set(
-                lock_key, lock_value, nx=True, ex=self._config.lock_expiry_secs
+            ttl_ms = max(1, int(self._config.lock_expiry_secs * 1000))
+            ok = await self._evalsha(
+                r,
+                _SCRIPT_LOCK_ACQUIRE,
+                keys=[lock_key],
+                args=[self._instance_id, ttl_ms],
             )
-
-            if not acquired:
-                existing = await r.get(lock_key)
+            if ok != 1:
+                existing = await r.get(lock_key)  # type: ignore[misc]
                 raise StorageError(
                     f"Cannot start: another instance is using Redis prefix '{self._keys.prefix}'. "
                     f"Lock held by: {existing}. "
                     f"If this is a stale lock from a crashed instance, "
                     f"manually delete Redis key: {lock_key}"
                 )
-
             logger.info(
                 "[RedisInstanceLock] Acquired exclusive lock for prefix '{}'",
                 self._keys.prefix,
             )
-            self._token = lock_value
+            self._token = self._instance_id
             return True
 
         result = await self._conn.execute("acquire_instance_lock", _acquire)
-
-        # Start renewal task
         self._renewal_task = asyncio.create_task(self._renew_periodically())
         return result
 
     async def release(self) -> None:
-        """Release the instance lock."""
-        # Stop renewal task first
+        """Release the instance lock.
+
+        Token-CAS DEL: only deletes the key if its stored value still
+        matches our instance id. Idempotent; an already-released or
+        already-lost lock is a silent no-op.
+        """
         if self._renewal_task:
             self._renewal_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -93,13 +170,19 @@ class RedisInstanceLock:
 
         async def _release(r: aioredis.Redis) -> None:
             lock_key = self._keys.instance_lock()
-            current = await r.get(lock_key)
-            if current and current.startswith(self._instance_id):
-                await r.delete(lock_key)
+            released = await self._evalsha(
+                r,
+                _SCRIPT_LOCK_RELEASE,
+                keys=[lock_key],
+                args=[self._instance_id],
+            )
+            if released == 1:
                 logger.info(
                     "[RedisInstanceLock] Released lock for prefix '{}'",
                     self._keys.prefix,
                 )
+            # released == 0 means our token did not match — another
+            # holder owns the key. We are NOT the owner; do not touch.
             self._token = None
 
         try:
@@ -108,23 +191,29 @@ class RedisInstanceLock:
             logger.warning("[RedisInstanceLock] Failed to release lock: {}", e)
 
     async def renew(self) -> bool:
-        """Renew the instance lock."""
+        """Renew the instance lock.
+
+        Token-CAS PEXPIRE: only refreshes the TTL if the stored value
+        still matches our instance id. Returns ``False`` if the lock
+        was lost (token mismatch or key absent).
+        """
         if not self._token:
             return False
 
         async def _renew(r: aioredis.Redis) -> bool:
             lock_key = self._keys.instance_lock()
-            current = await r.get(lock_key)
-
-            if not current or not current.startswith(self._instance_id):
+            ttl_ms = max(1, int(self._config.lock_expiry_secs * 1000))
+            ok = await self._evalsha(
+                r,
+                _SCRIPT_LOCK_RENEW,
+                keys=[lock_key],
+                args=[self._instance_id, ttl_ms],
+            )
+            if ok != 1:
                 logger.error(
                     "[RedisInstanceLock] Lost lock! Another instance may have taken over."
                 )
                 return False
-
-            lock_value = f"{self._instance_id}:{time.time()}"
-            await r.set(lock_key, lock_value, ex=self._config.lock_expiry_secs)
-            self._token = lock_value
             return True
 
         try:
