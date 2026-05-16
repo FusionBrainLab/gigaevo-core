@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import json
-import re
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -17,45 +16,6 @@ import redis.asyncio as aioredis
 
 if TYPE_CHECKING:
     from gigaevo.evolution.bus.topology import Topology
-
-
-# Lone UTF-16 surrogate code points (U+D800..U+DFFF) survive ``str(exc)`` and
-# ``json.dumps`` (stdlib escapes them as ``\uD800`` literals) but the receiver
-# eventually round-trips the payload back through ``gigaevo.utils.json.dumps``
-# (= orjson) when it persists the migrated Program to Redis. orjson rejects
-# surrogates with ``TypeError: str is not valid UTF-8: surrogates not allowed``,
-# which would crash the migration handler mid-restore. We scrub them at the
-# publish boundary so every consumer downstream sees an orjson-safe payload.
-_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
-
-
-def _scrub_str(value: str) -> str:
-    """Replace lone UTF-16 surrogates with U+FFFD in a single ``str`` leaf.
-
-    Identity on surrogate-free strings; idempotent (``f(f(x)) == f(x)``).
-    """
-    if not _SURROGATE_RE.search(value):
-        return value
-    return _SURROGATE_RE.sub("�", value)
-
-
-def _scrub_surrogates(value: Any) -> Any:
-    """Recursively replace lone UTF-16 surrogate code points with U+FFFD.
-
-    Walks ``dict``/``list``/``tuple`` containers and rewrites every ``str``
-    leaf. Non-string leaves pass through unchanged (identity). The transform
-    is idempotent: ``f(f(x)) == f(x)`` for every input. Cycle-free by
-    construction — ``MigrantEnvelope.program_data`` is the output of
-    ``Program.to_dict()`` which is always a JSON-shaped tree.
-    """
-    if isinstance(value, str):
-        return _scrub_str(value)
-    if isinstance(value, dict):
-        return {k: _scrub_surrogates(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        scrubbed = [_scrub_surrogates(v) for v in value]
-        return type(value)(scrubbed) if isinstance(value, tuple) else scrubbed
-    return value
 
 
 class MigrantEnvelope(BaseModel):
@@ -68,16 +28,10 @@ class MigrantEnvelope(BaseModel):
     generation: int
 
     def to_stream_fields(self) -> dict[str, str]:
-        # Scrub UTF-16 surrogates from every str leaf before serialization.
-        # stdlib ``json.dumps`` would otherwise escape them as ``\uD800``
-        # literals — legal in JSON but rejected by orjson when the receiver
-        # restores the Program and tries to persist it through
-        # ``gigaevo.utils.json.dumps`` (TypeError: surrogates not allowed).
-        # See module docstring for the failure-mode rationale.
         return {
-            "source_run_id": _scrub_str(self.source_run_id),
-            "program_id": _scrub_str(self.program_id),
-            "program_data": json.dumps(_scrub_surrogates(self.program_data)),
+            "source_run_id": self.source_run_id,
+            "program_id": self.program_id,
+            "program_data": json.dumps(self.program_data),
             "published_at": str(self.published_at),
             "generation": str(self.generation),
         }
