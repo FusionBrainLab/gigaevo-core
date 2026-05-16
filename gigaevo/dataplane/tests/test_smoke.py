@@ -71,7 +71,6 @@ def test_method_stubs_raise_notimplemented() -> None:
     # raise lives in the function body, not after an await).
     stub_names = [
         "transition_program_state_batch",
-        "try_replace_elite",
     ]
     for name in stub_names:
         method = getattr(coord, name)

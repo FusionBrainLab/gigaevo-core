@@ -95,6 +95,7 @@ _SCRIPT_LOCK_RENEW: Final[ScriptName] = make_script_name("instance_lock_renew")
 _SCRIPT_LOCK_RELEASE: Final[ScriptName] = make_script_name("instance_lock_release")
 _SCRIPT_LWWR_SET: Final[ScriptName] = make_script_name("lwwr_set")
 _SCRIPT_TRANSITION_STATE: Final[ScriptName] = make_script_name("transition_state")
+_SCRIPT_ARCHIVE_SWAP: Final[ScriptName] = make_script_name("archive_swap")
 
 
 # ── public contract dataclasses ─────────────────────────────────────────
@@ -735,19 +736,49 @@ class DataPlane:
         :data:`EliteSwapOutcome` carries the loser / survivor id so the
         caller can route follow-up work (e.g. discarding the displaced
         program) without a second read.
+
+        ``tiebreak_bit`` controls equal-score behaviour: ``1`` means
+        the candidate wins ties (favours the latest write — useful when
+        equal-score programs should rotate), ``0`` means the occupant
+        wins ties (favours stability — useful when equal-score programs
+        should be left undisturbed).
         """
-        # TODO: call self._require_started("try_replace_elite") before
-        # the compare-and-swap Lua call.
-        _ = (
-            self,
-            cell,
-            candidate_id,
-            token,
-            candidate_score,
-            tiebreak_bit,
-            deadline_monotonic,
+        _ = deadline_monotonic
+        tag = token.consume()
+        if tag != cell:
+            return Err(
+                DataPlaneError(
+                    f"try_replace_elite: token tag {tag!r} does not match cell {cell!r}"
+                )
+            )
+        lua = self._require_lua()
+        prefix = self._connection.key_prefix
+        archive_key = f"{prefix}:archive"
+        reverse_key = f"{prefix}:archive:reverse"
+        scores_key = f"{prefix}:archive:scores"
+        try:
+            raw = await lua.evalsha(
+                _SCRIPT_ARCHIVE_SWAP,
+                keys=[archive_key, reverse_key, scores_key],
+                args=[
+                    cell,
+                    candidate_id,
+                    repr(float(candidate_score)),
+                    str(int(tiebreak_bit)),
+                ],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        status, displaced_or_occupant = raw
+        if status == "inserted":
+            return Ok(EliteInserted())
+        if status == "swapped":
+            return Ok(EliteSwapped(displaced_id=ProgramId(displaced_or_occupant)))
+        if status == "rejected":
+            return Ok(EliteRejected(occupant_id=ProgramId(displaced_or_occupant)))
+        return Err(
+            DataPlaneError(f"try_replace_elite: unexpected Lua status {status!r}")
         )
-        raise NotImplementedError("try_replace_elite")
 
     # ── CRDT counters ────────────────────────────────────────────────
 
@@ -909,6 +940,7 @@ class DataPlane:
             _SCRIPT_LOCK_RELEASE,
             _SCRIPT_LWWR_SET,
             _SCRIPT_TRANSITION_STATE,
+            _SCRIPT_ARCHIVE_SWAP,
         ):
             lua.register(name, load_lua_source(name))
 
