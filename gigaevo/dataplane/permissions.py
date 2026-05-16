@@ -48,9 +48,30 @@ class Token[Tag]:
     Callers SHOULD mint tokens via :func:`mint_root` etc. rather than
     constructing directly — those factories exist as a single grep
     target.
+
+    The class is effectively ``final``: :meth:`__init_subclass__` refuses
+    any subclass. Subclassing would let a derived class override
+    :meth:`__copy__` / :meth:`__deepcopy__` / :meth:`__reduce__` and slip
+    a duplicated witness through Python's copy / pickle machinery,
+    breaking the single-writer-per-subspace contract. The factories
+    intentionally instantiate :class:`Token` directly so all valid mint
+    paths produce the sealed class.
     """
 
     __slots__ = ("_tag", "_consumed")
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        # ``Token`` is the only valid concrete linear-permission class;
+        # subclasses would defeat linearity by overriding the cloning
+        # guards. The guard is documentary as much as runtime — the
+        # error message points the reader at :func:`mint_split` which
+        # is the legitimate way to derive a fresh witness.
+        raise TypeError(
+            "Token<Tag> is final: subclassing would let a derived class "
+            "override __copy__ / __deepcopy__ / __reduce__ and silently "
+            "duplicate the witness. Use mint_split to derive an "
+            "orthogonal sub-token."
+        )
 
     def __init__(self, tag: Tag) -> None:
         self._tag: Tag = tag
@@ -199,7 +220,20 @@ def mint_combine[A, B, Tag](
 
     Inverse of :func:`mint_split`. The combined tag is caller-provided;
     it should denote the union of the two sub-spaces.
+
+    Pre-checks both inputs for already-consumed state before consuming
+    either, so a malformed call cannot leave one side consumed and the
+    other live. This is stricter than :func:`mint_split`, where the
+    parent surrender happens before the duplicate-tag check on purpose
+    (so the caller cannot retry with the same parent). For combine,
+    both inputs are caller-held and rolling forward halfway would leave
+    the caller with a half-consumed pair and no clean recovery — the
+    eager check makes the operation atomic.
     """
+    if left.consumed:
+        raise TokenAlreadyConsumed(tag_repr=repr(left.tag))
+    if right.consumed:
+        raise TokenAlreadyConsumed(tag_repr=repr(right.tag))
     left.consume()
     right.consume()
     return Token(combined_tag)

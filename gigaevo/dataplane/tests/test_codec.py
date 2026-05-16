@@ -118,6 +118,18 @@ class TestEncodeCanonical:
         with pytest.raises(CanonicalEncodingError):
             encode_canonical({"x": Decimal("Infinity")})
 
+    def test_decimal_signed_zero_collapsed(self) -> None:
+        # ``Decimal('-0')`` and ``Decimal('0')`` are numerically the same
+        # value; their canonical bytes must match. Without an explicit
+        # zero-collapse the negative-zero leaves a ``"-"`` in the output
+        # that diverges from the positive-zero encoding.
+        a = encode_canonical({"x": Decimal("-0")})
+        b = encode_canonical({"x": Decimal("0")})
+        c = encode_canonical({"x": Decimal("0.000")})
+        d = encode_canonical({"x": Decimal("-0.0")})
+        assert a == b == c == d
+        assert b'"0"' in a
+
     def test_path_stringified(self) -> None:
         out = encode_canonical({"p": PurePosixPath("/a/b")})
         assert b"/a/b" in out
@@ -262,6 +274,21 @@ class TestDecodeCanonical:
         payload = {"x": 1}
         out = decode_canonical(encode_canonical(payload).decode("utf-8"))
         assert out == payload
+
+    def test_lone_surrogate_str_input_rejected_as_canonical_error(self) -> None:
+        # ``str`` inputs were previously raising ``UnicodeEncodeError``;
+        # the contract is unified so both bytes and str inputs surface
+        # as :class:`CanonicalEncodingError`.
+        with pytest.raises(CanonicalEncodingError):
+            decode_canonical("\udcff")
+
+    def test_malformed_utf8_bytes_rejected_as_canonical_error(self) -> None:
+        with pytest.raises(CanonicalEncodingError):
+            decode_canonical(b"\xff\xfe")
+
+    def test_malformed_json_rejected_as_canonical_error(self) -> None:
+        with pytest.raises(CanonicalEncodingError):
+            decode_canonical(b'{"unclosed":')
 
     def test_round_trip_with_nested_types(self) -> None:
         # Tuples and sets are lossy through canonical: they become

@@ -180,6 +180,14 @@ class CrashWatchedHandle[T, PeerTag, Resource]:
         A flag set DURING the method's execution is not observed by
         this call (we accept stale-but-completed work). The next call
         observes it.
+
+        If the injected ``recover_fn`` raises, the exception propagates
+        unchanged — recovery failure escalates because the resource is
+        unrecoverable and there is no degraded mode for the caller to
+        fall back to. Callers MUST handle this in a single ``try`` at
+        the supervisory layer (engine restart, lease release, fail-fast
+        shutdown); the dataplane does not paper over a broken recovery
+        policy with a synthesised :class:`CrashEvent`.
         """
         if self._flag.is_set():
             event = await self._recover(self._inner)

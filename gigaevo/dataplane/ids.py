@@ -17,7 +17,76 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import NewType
+from typing import Final, NewType
+
+# Hostile inputs reach :class:`ActorIdentity` through wire formats
+# (Redis keys, log lines, stream-entry fields), so the validator must
+# reject any byte that has special meaning to a downstream consumer:
+#
+#     NUL (\x00)     — Postgres / asyncpg / many Redis client libraries
+#                       treat ``\x00`` as a string terminator and either
+#                       reject or silently truncate.
+#     CR / LF        — log-line injection (a single CR can rewrite the
+#                       prior log entry on ANSI terminals).
+#     other C0       — ANSI escape vector (ESC = ``\x1b``) plus assorted
+#                       cursor-positioning bytes.
+#     U+2028 / U+2029 — JSON-encoded as themselves; JS / some parsers
+#                       treat them as line terminators.
+#     U+202E (RLO)   — right-to-left override; reverses visible order in
+#                       logs / dashboards, hiding the trailing portion.
+#
+# The validator is enforced at the :class:`ActorIdentity` boundary; the
+# :data:`ActorId` NewType has no runtime check (it is a bare ``str``),
+# so callers SHOULD construct identities through this typed dataclass.
+_FORBIDDEN_CONTROL_CODEPOINTS: Final[frozenset[int]] = frozenset(
+    # C0 control codes (including NUL, CR, LF, BEL, ESC, etc.) plus
+    # DEL (0x7F). U+0020 (space) and printable ASCII are not in the set.
+    list(range(0x00, 0x20)) + [0x7F]
+)
+_FORBIDDEN_UNICODE_DIRECTIONALS: Final[frozenset[str]] = frozenset(
+    {
+        "‪",  # LEFT-TO-RIGHT EMBEDDING
+        "‫",  # RIGHT-TO-LEFT EMBEDDING
+        "‬",  # POP DIRECTIONAL FORMATTING
+        "‭",  # LEFT-TO-RIGHT OVERRIDE
+        "‮",  # RIGHT-TO-LEFT OVERRIDE
+        "⁦",  # LEFT-TO-RIGHT ISOLATE
+        "⁧",  # RIGHT-TO-LEFT ISOLATE
+        "⁨",  # FIRST STRONG ISOLATE
+        "⁩",  # POP DIRECTIONAL ISOLATE
+        " ",  # LINE SEPARATOR
+        " ",  # PARAGRAPH SEPARATOR
+    }
+)
+
+
+def _validate_identity_part(field_name: str, value: str) -> None:
+    """Reject control bytes, separators, and bidirectional overrides.
+
+    Used by :class:`ActorIdentity` so a wire value carrying a hostile
+    payload (NUL, CR/LF, ANSI ESC, RLO) cannot pass type-check and reach
+    a log line, Redis key, or Postgres column verbatim.
+    """
+    if not value:
+        raise ValueError(f"ActorIdentity.{field_name} is empty")
+    if ":" in value:
+        raise ValueError(
+            f"ActorIdentity.{field_name} contains ':' — would break pack/parse "
+            f"round-trip: {value!r}"
+        )
+    for ch in value:
+        cp = ord(ch)
+        if cp in _FORBIDDEN_CONTROL_CODEPOINTS:
+            raise ValueError(
+                f"ActorIdentity.{field_name} contains control character "
+                f"U+{cp:04X} — would break wire formats / log lines: {value!r}"
+            )
+        if ch in _FORBIDDEN_UNICODE_DIRECTIONALS:
+            raise ValueError(
+                f"ActorIdentity.{field_name} contains bidirectional override "
+                f"U+{cp:04X} — would hide trailing content in renders: {value!r}"
+            )
+
 
 # ── aggregate identity ────────────────────────────────────────────────
 ProgramId = NewType("ProgramId", str)
@@ -84,20 +153,8 @@ class ActorIdentity:
     worker_id: WorkerId
 
     def __post_init__(self) -> None:
-        if not self.run_id:
-            raise ValueError("ActorIdentity.run_id is empty")
-        if not self.worker_id:
-            raise ValueError("ActorIdentity.worker_id is empty")
-        if ":" in self.run_id:
-            raise ValueError(
-                f"ActorIdentity.run_id contains ':' — would break pack/parse "
-                f"round-trip: {self.run_id!r}"
-            )
-        if ":" in self.worker_id:
-            raise ValueError(
-                f"ActorIdentity.worker_id contains ':' — would break pack/parse "
-                f"round-trip: {self.worker_id!r}"
-            )
+        _validate_identity_part("run_id", self.run_id)
+        _validate_identity_part("worker_id", self.worker_id)
 
     def pack(self) -> ActorId:
         """Render the wire-format ``{run_id}:{worker_id}`` :data:`ActorId`."""

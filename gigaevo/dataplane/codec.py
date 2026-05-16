@@ -84,7 +84,14 @@ def _canonical_default(obj: Any) -> Any:
         # Decimal("1.5") and Decimal("1.50") encode to different strings
         # by default — normalise so equal numeric values produce equal
         # canonical bytes. Trailing zeros are not part of the value.
+        # Signed zero is collapsed to ``"0"`` so ``Decimal("-0")`` hashes
+        # identically to ``Decimal("0")`` — IEEE-style negative zero has
+        # no positional value in arbitrary-precision decimals and would
+        # otherwise let two callers passing the "same" zero land on
+        # divergent content hashes.
         if obj.is_finite():
+            if obj.is_zero():
+                return "0"
             return format(obj.normalize(), "f")
         raise CanonicalEncodingError(
             type_name="Decimal",
@@ -206,14 +213,27 @@ def decode_canonical(raw: bytes | str) -> Any:
     """Decode canonical JSON. Lone surrogate code points raise.
 
     The dataplane forbids surrogate-replay behaviour; if the input
-    contains a lone surrogate it raises :class:`UnicodeDecodeError`
-    rather than silently substituting U+FFFD.
+    contains a lone surrogate or a malformed byte sequence the decode
+    fails closed with :class:`CanonicalEncodingError` rather than
+    silently substituting U+FFFD. Both ``bytes`` and ``str`` inputs
+    surface the same error type so callers can write one ``except``
+    branch.
     """
-    if isinstance(raw, bytes):
-        return json.loads(raw.decode("utf-8", errors="strict"))
-    # Strings via str.encode roundtrip detect lone surrogates the same
-    # way as bytes inputs.
-    return json.loads(raw.encode("utf-8", errors="strict").decode("utf-8"))
+    try:
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", errors="strict")
+        else:
+            # ``str.encode`` raises ``UnicodeEncodeError`` on lone
+            # surrogates; that is the desired closed-fail behaviour, but
+            # we surface it as the same typed error as the bytes path so
+            # the caller's exception handling is contract-stable.
+            text = raw.encode("utf-8", errors="strict").decode("utf-8")
+        return json.loads(text)
+    except (UnicodeDecodeError, UnicodeEncodeError, ValueError) as exc:
+        raise CanonicalEncodingError(
+            type_name="bytes" if isinstance(raw, bytes) else "str",
+            reason=str(exc),
+        ) from exc
 
 
 # ── content hash ──────────────────────────────────────────────────────

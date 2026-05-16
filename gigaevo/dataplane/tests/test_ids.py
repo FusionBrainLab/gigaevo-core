@@ -80,6 +80,32 @@ class TestActorIdentity:
         with pytest.raises(ValueError, match="worker_id contains ':'"):
             ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("a:b"))
 
+    @pytest.mark.parametrize("nul", ["\x00", "head\x00tail"])
+    def test_rejects_nul_byte(self, nul: str) -> None:
+        # NUL is a string terminator in many client libraries (Postgres
+        # via asyncpg in particular); accepting it would break wire
+        # round-trips downstream.
+        with pytest.raises(ValueError, match="control character"):
+            ActorIdentity(run_id=RunId(nul), worker_id=WorkerId("w"))
+
+    @pytest.mark.parametrize("ctrl", ["\n", "\r", "\x1b", "\x07", "\x7f"])
+    def test_rejects_control_characters(self, ctrl: str) -> None:
+        # CR / LF / ANSI ESC enable log-line injection on terminals and
+        # in aggregators that ingest unstructured strings.
+        with pytest.raises(ValueError, match="control character"):
+            ActorIdentity(run_id=RunId(ctrl), worker_id=WorkerId("w"))
+        with pytest.raises(ValueError, match="control character"):
+            ActorIdentity(run_id=RunId("r"), worker_id=WorkerId(ctrl))
+
+    @pytest.mark.parametrize("bidi", ["‮", "‭", "⁨", " "])
+    def test_rejects_bidirectional_overrides(self, bidi: str) -> None:
+        # RLO / LRO / line separators reverse or split the visible order
+        # in renders; they must not pass type-check.
+        with pytest.raises(
+            ValueError, match="(bidirectional override|control character)"
+        ):
+            ActorIdentity(run_id=RunId(bidi), worker_id=WorkerId("w"))
+
     def test_frozen(self) -> None:
         ident = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
         with pytest.raises(AttributeError):

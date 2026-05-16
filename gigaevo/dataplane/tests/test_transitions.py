@@ -135,6 +135,21 @@ class TestLockStateFSM:
 
 
 class TestEncodeForLua:
+    def test_rejects_comma_in_state_value(self) -> None:
+        # Comma is the on-wire separator the Lua side uses to detect
+        # legal targets; a comma inside a state value would let a forged
+        # ``"X,Y"`` value satisfy a check for either ``"X"`` or ``"Y"``
+        # alone. The encoder MUST refuse such inputs at the boundary.
+        from enum import StrEnum
+
+        class _BadEnum(StrEnum):
+            OK = "OK"
+            EVIL = "EVIL,STATE"
+
+        table = {_BadEnum.OK: {_BadEnum.EVIL}, _BadEnum.EVIL: {_BadEnum.OK}}
+        with pytest.raises(ValueError, match="contains ','"):
+            encode_for_lua(table)
+
     def test_encodes_each_from_state(self) -> None:
         encoded = encode_for_lua(PROGRAM_STATE_TRANSITIONS)
         # Every from-state with at least one allowed target appears.

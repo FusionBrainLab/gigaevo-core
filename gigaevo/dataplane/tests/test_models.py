@@ -264,6 +264,16 @@ class TestHlcTimestamp:
         with pytest.raises(ValueError, match="non-hex characters"):
             HlcTimestamp.unpack_hex("z" * 24 + "00000000")
 
+    def test_unpack_rejects_uppercase_hex(self) -> None:
+        # ``pack_hex`` emits lowercase; uppercase variants must not
+        # round-trip — otherwise two encodings of the same value would
+        # produce different content-hash inputs and equal HLCs would
+        # land on divergent dedup buckets.
+        t = HlcTimestamp(physical_ns=0xDEADBEEF, counter=42)
+        upper = t.pack_hex().upper()
+        with pytest.raises(ValueError, match="non-hex characters"):
+            HlcTimestamp.unpack_hex(upper)
+
     def test_pack_pad_is_eight_zero_chars(self) -> None:
         # Lock the wire format so a future change that "saves the pad"
         # has to land here too.

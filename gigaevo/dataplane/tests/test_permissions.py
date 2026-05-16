@@ -134,6 +134,38 @@ class TestMintRoot:
         assert t.tag == "root"
 
 
+class TestTokenIsSealed:
+    def test_subclassing_token_rejected(self) -> None:
+        # A subclass could override ``__copy__`` / ``__deepcopy__`` and
+        # silently duplicate the linear witness. The class is sealed at
+        # subclass-time so the attack surface is removed by construction.
+        with pytest.raises(TypeError, match="final"):
+
+            class _EvilToken(Token):  # type: ignore[misc]
+                pass
+
+
+class TestMintCombineAtomicity:
+    def test_already_consumed_left_does_not_consume_right(self) -> None:
+        # If either input is already consumed, neither is consumed by
+        # the failed combine — the operation is atomic with respect to
+        # consumption side-effects.
+        a = mint_root("a")
+        b = mint_root("b")
+        a.consume()
+        with pytest.raises(TokenAlreadyConsumed):
+            mint_combine(a, b, "c")
+        assert b.consumed is False
+
+    def test_already_consumed_right_does_not_consume_left(self) -> None:
+        a = mint_root("a")
+        b = mint_root("b")
+        b.consume()
+        with pytest.raises(TokenAlreadyConsumed):
+            mint_combine(a, b, "c")
+        assert a.consumed is False
+
+
 class TestMintSplit:
     def test_consumes_parent(self) -> None:
         parent = mint_root("parent")

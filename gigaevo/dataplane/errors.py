@@ -43,10 +43,19 @@ def _format_field(value: Any, *, redact: bool) -> str:
     Redacted fields show :data:`_REDACTED_PLACEHOLDER` regardless of the
     underlying value. Non-redacted reprs are truncated at
     :data:`_FIELD_REPR_MAX_CHARS` to keep traceback output bounded.
+
+    A field whose ``__repr__`` raises is rendered as ``<repr-failed>``
+    rather than propagating the inner exception — an error class must
+    always render to a usable string so failure handlers, log
+    aggregators, and tracebacks can attribute the original failure
+    instead of crashing inside ``__post_init__``.
     """
     if redact:
         return _REDACTED_PLACEHOLDER
-    rendered = repr(value)
+    try:
+        rendered = repr(value)
+    except BaseException as repr_exc:  # noqa: BLE001 - defensive boundary
+        return f"<repr-failed: {type(repr_exc).__name__}>"
     if len(rendered) > _FIELD_REPR_MAX_CHARS:
         keep = _FIELD_REPR_MAX_CHARS - len(_FIELD_REPR_ELLIPSIS)
         rendered = rendered[:keep] + _FIELD_REPR_ELLIPSIS

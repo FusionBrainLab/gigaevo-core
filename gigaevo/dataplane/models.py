@@ -315,28 +315,35 @@ class HlcTimestamp:
 
         Raises :class:`ValueError` on any of:
             - length != 32
-            - non-hex characters
+            - any non-lowercase-hex character (``a-f`` or ``0-9``)
             - non-zero trailing pad bits (reserved field invariant)
             - decoded ``physical_ns`` or ``counter`` out of range
+
+        Case strictness matters: ``pack_hex`` emits lowercase, and the
+        canonical content-hash inputs derived from a packed HLC must be
+        byte-identical regardless of which encoder produced them.
+        Accepting both ``"deadbeef"`` and ``"DEADBEEF"`` would let two
+        equivalent values land on different hashes.
         """
         if len(packed) != _HLC_HEX_LEN:
             raise ValueError(
                 "HlcTimestamp.unpack_hex: expected "
                 f"{_HLC_HEX_LEN} hex chars, got {len(packed)}"
             )
+        for ch in packed:
+            if not (ch.isdigit() or ("a" <= ch <= "f")):
+                raise ValueError(
+                    "HlcTimestamp.unpack_hex: non-hex characters "
+                    f"(or uppercase hex) at {ch!r} in {packed!r}"
+                )
         trailing = packed[24:32]
         if trailing != _HLC_TRAILING_PAD:
             raise ValueError(
                 "HlcTimestamp.unpack_hex: trailing 8 hex chars must be "
                 f"{_HLC_TRAILING_PAD!r} (reserved field), got {trailing!r}"
             )
-        try:
-            physical = int(packed[0:16], 16)
-            counter = int(packed[16:24], 16)
-        except ValueError as exc:
-            raise ValueError(
-                f"HlcTimestamp.unpack_hex: non-hex characters in {packed!r}"
-            ) from exc
+        physical = int(packed[0:16], 16)
+        counter = int(packed[16:24], 16)
         return cls(physical_ns=physical, counter=counter)
 
 

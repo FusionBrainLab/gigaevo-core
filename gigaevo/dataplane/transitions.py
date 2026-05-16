@@ -119,13 +119,27 @@ def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
     """Encode an FSM table as ``{from: "to1,to2,to3"}`` for ``HSET``.
 
     The Lua side checks legality with a ``string.find`` on the
-    comma-joined value. Comma is safe because all StrEnum values used
-    by the dataplane are uppercase ASCII without commas.
+    comma-joined value. State values must not contain ``","`` — a comma
+    inside a value would split the encoded list at the wrong boundary
+    and let a forged ``"X,Y"`` value satisfy a check for either ``X`` or
+    ``Y`` alone. The encoder refuses such inputs at the call boundary
+    so the Lua-side ``string.find`` invariant stays inviolable.
     """
-    return {
-        from_state.value: ",".join(sorted(t.value for t in allowed))
-        for from_state, allowed in table.items()
-    }
+    encoded: dict[str, str] = {}
+    for from_state, allowed in table.items():
+        if "," in from_state.value:
+            raise ValueError(
+                f"FSM state value {from_state.value!r} contains ',' — "
+                "comma is the on-wire separator and must be reserved"
+            )
+        for t in allowed:
+            if "," in t.value:
+                raise ValueError(
+                    f"FSM state value {t.value!r} contains ',' — "
+                    "comma is the on-wire separator and must be reserved"
+                )
+        encoded[from_state.value] = ",".join(sorted(t.value for t in allowed))
+    return encoded
 
 
 def fsm_key(key_prefix: str, name: str) -> str:

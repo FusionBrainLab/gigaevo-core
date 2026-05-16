@@ -235,6 +235,28 @@ class TestRegistry:
         assert NotStartedError in types
 
 
+class TestReprFailureContainment:
+    def test_repr_raising_field_does_not_break_error_construction(self) -> None:
+        # A field whose ``__repr__`` raises must not break the error
+        # itself — otherwise a malformed payload would shadow the
+        # original failure with a recursive ``repr-blew-up`` error
+        # nobody can attribute back to a root cause.
+
+        class _BadRepr:
+            def __repr__(self) -> str:
+                raise RuntimeError("repr blown")
+
+        @dataclass(slots=True, frozen=True)
+        class _ErrWithBadField(_StructuredError):
+            payload: object
+
+        err = _ErrWithBadField(payload=_BadRepr())
+        s = str(err)
+        assert "repr-failed" in s
+        # Original error class is still usable for catching.
+        assert isinstance(err, _StructuredError)
+
+
 class TestRedactMetadataDeclaration:
     """Smoke-test that redacted fields are accepted by ``dataclass.field``."""
 
