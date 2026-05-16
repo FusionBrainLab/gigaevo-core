@@ -32,6 +32,67 @@ def _build_redis_config(
     )
 
 
+def _parse_csv_spec(arg: str) -> tuple[Path, str]:
+    """Parse a ``--from-csv`` argument of the form ``path[:label]``.
+
+    The label defaults to the file stem when omitted. Splits on the rightmost
+    ``:`` so paths without a colon never confuse the parser.
+    """
+    if ":" in arg:
+        path_str, label = arg.rsplit(":", 1)
+    else:
+        path_str, label = arg, ""
+    path = Path(path_str)
+    if not label:
+        label = path.stem
+    return path, label
+
+
+def _load_csv_data(
+    csv_specs: list[tuple[Path, str]],
+    metric: str = "fitness",
+    no_frontier_labels: set[str] | None = None,
+    sentinel_value: float | None = None,
+) -> list[tuple[str, pd.DataFrame]]:
+    """Load and prepare DataFrames from exported CSVs. Symmetric to ``_fetch_run_data``.
+
+    CSVs are expected to match ``gigaevo export csv`` output — i.e. contain at
+    least ``iteration`` and ``metric_<metric>`` columns. Missing files or
+    missing required columns raise ``click.ClickException`` so the CLI reports
+    a clear error instead of silently dropping the run.
+    """
+    from gigaevo.utils.dataframes import prepare_iteration_dataframe
+
+    fitness_col = f"metric_{metric}"
+    results: list[tuple[str, pd.DataFrame]] = []
+    for path, label in csv_specs:
+        if not path.exists():
+            raise click.ClickException(f"CSV file not found: {path}")
+        raw_df = pd.read_csv(path)
+        missing_cols = [
+            c for c in ("iteration", fitness_col) if c not in raw_df.columns
+        ]
+        if missing_cols:
+            raise click.ClickException(
+                f"CSV {path} is missing required column(s): "
+                f"{', '.join(missing_cols)}. "
+                f"Expected schema matches `gigaevo export csv` output."
+            )
+        if raw_df.empty:
+            continue
+        skip_frontier = no_frontier_labels is not None and label in no_frontier_labels
+        prepared = prepare_iteration_dataframe(
+            raw_df,
+            fitness_col=fitness_col,
+            compute_frontier=not skip_frontier,
+            sentinel_value=sentinel_value,
+        )
+        if prepared.empty:
+            continue
+        results.append((label, prepared))
+    return results
+
+
 def _fetch_run_data(
     run_configs: list,
     redis_host: str,
@@ -231,6 +292,18 @@ def plot() -> None:
     default=None,
     help="Sentinel fitness value for invalid programs (e.g. -1.0). Filtered before plotting.",
 )
+@click.option(
+    "--from-csv",
+    "from_csv",
+    multiple=True,
+    metavar="PATH[:LABEL]",
+    help=(
+        "Read run data from an exported CSV instead of Redis. "
+        "Repeatable. Label defaults to the file stem. "
+        "Mutually exclusive with -r/-e. CSV schema must match "
+        "`gigaevo export csv` output (columns: iteration, metric_<metric>, ...)."
+    ),
+)
 @click.pass_context
 def comparison(
     ctx: click.Context,
@@ -245,13 +318,18 @@ def comparison(
     max_annotations: int,
     paper: bool,
     sentinel: float | None,
+    from_csv: tuple[str, ...],
 ) -> None:
     """Plot fitness comparison across multiple runs on a single axis.
 
     Produces `evolution_runs_comparison.{png,pdf,svg}` with one mean line
     (with optional +/- 1 std band) per run, plus an optional dashed frontier
-    line. Metric auto-detected from the `--metric` flag; data fetched from
-    Redis via `-r/--run` specs or `-e/--experiment`.
+    line. Metric auto-detected from the `--metric` flag.
+
+    Data sources (mutually exclusive):
+      * Redis: pass `-r/--run` specs or `-e/--experiment` at the group level.
+      * CSV: pass one or more `--from-csv PATH[:LABEL]` flags for fully offline
+        plotting against previously exported CSVs.
     """
     import matplotlib
 
@@ -260,6 +338,13 @@ def comparison(
 
     from gigaevo.utils.plotting import annotate_frontier_points
 
+    # Reject mixing CSV input with Redis selection flags — keeps the legend
+    # source unambiguous and avoids subtle confusion.
+    if from_csv and (ctx.obj["experiment"] or ctx.obj["runs"]):
+        raise click.ClickException(
+            "--from-csv is mutually exclusive with -r/--run and -e/--experiment."
+        )
+
     # Build set of labels to suppress frontier for
     no_frontier_labels: set[str] | None = None
     if no_frontier:
@@ -267,35 +352,48 @@ def comparison(
     elif no_frontier_for:
         no_frontier_labels = {s.strip() for s in no_frontier_for.split(",")}
 
-    run_configs = RunResolver.resolve(
-        ctx.obj["experiment"],
-        ctx.obj["runs"],
-        ctx.obj["redis_host"],
-        ctx.obj["redis_port"],
-    )
-
-    # When --no-frontier applies to ALL runs, pass all labels; otherwise pass specific ones
-    actual_no_frontier: set[str] | None = None
-    if no_frontier_labels and "__ALL__" in no_frontier_labels:
-        # Resolve all labels first, then suppress frontier for all
-        all_labels = {
-            _build_redis_config(
-                rc, ctx.obj["redis_host"], ctx.obj["redis_port"]
-            ).display_label()
-            for rc in run_configs
-        }
-        actual_no_frontier = all_labels
+    if from_csv:
+        csv_specs = [_parse_csv_spec(arg) for arg in from_csv]
+        actual_no_frontier: set[str] | None
+        if no_frontier_labels and "__ALL__" in no_frontier_labels:
+            actual_no_frontier = {label for _, label in csv_specs}
+        else:
+            actual_no_frontier = no_frontier_labels
+        prepared_dfs = _load_csv_data(
+            csv_specs,
+            metric=metric,
+            no_frontier_labels=actual_no_frontier,
+            sentinel_value=sentinel,
+        )
     else:
-        actual_no_frontier = no_frontier_labels
+        run_configs = RunResolver.resolve(
+            ctx.obj["experiment"],
+            ctx.obj["runs"],
+            ctx.obj["redis_host"],
+            ctx.obj["redis_port"],
+        )
 
-    prepared_dfs = _fetch_run_data(
-        run_configs,
-        ctx.obj["redis_host"],
-        ctx.obj["redis_port"],
-        metric=metric,
-        no_frontier_labels=actual_no_frontier,
-        sentinel_value=sentinel,
-    )
+        # When --no-frontier applies to ALL runs, pass all labels; otherwise pass specific ones
+        if no_frontier_labels and "__ALL__" in no_frontier_labels:
+            # Resolve all labels first, then suppress frontier for all
+            all_labels = {
+                _build_redis_config(
+                    rc, ctx.obj["redis_host"], ctx.obj["redis_port"]
+                ).display_label()
+                for rc in run_configs
+            }
+            actual_no_frontier = all_labels
+        else:
+            actual_no_frontier = no_frontier_labels
+
+        prepared_dfs = _fetch_run_data(
+            run_configs,
+            ctx.obj["redis_host"],
+            ctx.obj["redis_port"],
+            metric=metric,
+            no_frontier_labels=actual_no_frontier,
+            sentinel_value=sentinel,
+        )
 
     if not prepared_dfs:
         raise click.ClickException(

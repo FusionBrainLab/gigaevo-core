@@ -147,7 +147,8 @@ Multi-run fitness visualization.
 - `arms-race` — Dual-panel (defender vs adversary) for adversarial experiments
 
 **Flags**:
-- `-e, --experiment` — required
+- `-e, --experiment` — required (unless `--from-csv` is used)
+- `--from-csv PATH[:LABEL]` — read from exported CSV instead of Redis (repeatable, mutually exclusive with `-r/-e`); pair with `gigaevo export csv` for offline / archived-run plotting
 - `--paper` — 300 DPI + Okabe-Ito palette (publication-ready)
 - `--no-frontier` — skip Pareto frontier for adversarial runs
 

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sys
 from unittest.mock import patch
 
+import click
 from click.testing import CliRunner
 import pandas as pd
+import pytest
 
 
 def _make_evolution_df(n_rows: int = 20, label: str = "A") -> pd.DataFrame:
@@ -318,3 +321,213 @@ class TestTrajectoryCommand:
             ["-r", "test/prefix@0:A", "plot", "trajectory"],
         )
         assert result.exit_code != 0
+
+
+def _write_evolution_csv(path: Path, n_rows: int = 20) -> None:
+    """Write a CSV mirroring `gigaevo export csv` output shape."""
+    df = _make_evolution_df(n_rows=n_rows, label=path.stem)
+    df.to_csv(path, index=False)
+
+
+class TestCsvSpecParser:
+    def test_path_without_label_uses_stem(self):
+        from gigaevo.cli.plot_group import _parse_csv_spec
+
+        path, label = _parse_csv_spec("/tmp/runA.csv")
+        assert path == Path("/tmp/runA.csv")
+        assert label == "runA"
+
+    def test_path_with_label_uses_label(self):
+        from gigaevo.cli.plot_group import _parse_csv_spec
+
+        path, label = _parse_csv_spec("/tmp/runA.csv:MyLabel")
+        assert path == Path("/tmp/runA.csv")
+        assert label == "MyLabel"
+
+    def test_relative_path_without_label(self):
+        from gigaevo.cli.plot_group import _parse_csv_spec
+
+        path, label = _parse_csv_spec("outputs/runB.csv")
+        assert path == Path("outputs/runB.csv")
+        assert label == "runB"
+
+
+class TestLoadCsvData:
+    def test_loads_and_prepares_dataframe(self, tmp_path):
+        from gigaevo.cli.plot_group import _load_csv_data
+
+        csv_path = tmp_path / "runA.csv"
+        _write_evolution_csv(csv_path, n_rows=30)
+
+        result = _load_csv_data(
+            [(csv_path, "A")],
+            metric="fitness",
+        )
+
+        assert len(result) == 1
+        label, df = result[0]
+        assert label == "A"
+        # prepare_iteration_dataframe outputs running_mean_fitness
+        assert "running_mean_fitness" in df.columns
+        assert "iteration" in df.columns
+        assert not df.empty
+
+    def test_multiple_csvs_preserve_order_and_labels(self, tmp_path):
+        from gigaevo.cli.plot_group import _load_csv_data
+
+        a = tmp_path / "alpha.csv"
+        b = tmp_path / "beta.csv"
+        _write_evolution_csv(a, n_rows=15)
+        _write_evolution_csv(b, n_rows=15)
+
+        result = _load_csv_data(
+            [(a, "A"), (b, "B")],
+            metric="fitness",
+        )
+
+        assert [label for label, _ in result] == ["A", "B"]
+
+    def test_missing_file_raises_click_exception(self, tmp_path):
+        from gigaevo.cli.plot_group import _load_csv_data
+
+        missing = tmp_path / "does_not_exist.csv"
+        with pytest.raises(click.ClickException, match="does_not_exist.csv"):
+            _load_csv_data([(missing, "A")], metric="fitness")
+
+    def test_missing_metric_column_raises_click_exception(self, tmp_path):
+        from gigaevo.cli.plot_group import _load_csv_data
+
+        csv_path = tmp_path / "no_metric.csv"
+        pd.DataFrame({"iteration": [1, 2, 3], "other_col": [0.1, 0.2, 0.3]}).to_csv(
+            csv_path, index=False
+        )
+
+        with pytest.raises(click.ClickException, match="metric_fitness"):
+            _load_csv_data([(csv_path, "A")], metric="fitness")
+
+
+class TestComparisonFromCsv:
+    def test_comparison_from_csv_creates_plot(self, tmp_path):
+        from gigaevo.cli import main
+
+        csv_path = tmp_path / "runA.csv"
+        _write_evolution_csv(csv_path, n_rows=20)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "plot",
+                "comparison",
+                "--from-csv",
+                str(csv_path),
+                "-o",
+                str(tmp_path / "out"),
+                "--smoothing",
+                "none",
+            ],
+        )
+
+        assert result.exit_code == 0, f"Failed: {result.output}"
+        assert (tmp_path / "out" / "evolution_runs_comparison.png").exists()
+
+    def test_comparison_from_csv_multiple_runs(self, tmp_path):
+        from gigaevo.cli import main
+
+        a = tmp_path / "alpha.csv"
+        b = tmp_path / "beta.csv"
+        _write_evolution_csv(a, n_rows=15)
+        _write_evolution_csv(b, n_rows=15)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "plot",
+                "comparison",
+                "--from-csv",
+                f"{a}:Alpha",
+                "--from-csv",
+                f"{b}:Beta",
+                "-o",
+                str(tmp_path / "out"),
+                "--smoothing",
+                "none",
+            ],
+        )
+
+        assert result.exit_code == 0, f"Failed: {result.output}"
+        summary = json.loads(result.output.strip())
+        assert summary["runs"] == ["Alpha", "Beta"]
+
+    def test_comparison_from_csv_label_defaults_to_stem(self, tmp_path):
+        from gigaevo.cli import main
+
+        csv_path = tmp_path / "MyRun.csv"
+        _write_evolution_csv(csv_path, n_rows=10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "plot",
+                "comparison",
+                "--from-csv",
+                str(csv_path),
+                "-o",
+                str(tmp_path / "out"),
+                "--smoothing",
+                "none",
+            ],
+        )
+
+        assert result.exit_code == 0, f"Failed: {result.output}"
+        summary = json.loads(result.output.strip())
+        assert summary["runs"] == ["MyRun"]
+
+    def test_comparison_rejects_mixing_runs_and_csv(self, tmp_path):
+        from gigaevo.cli import main
+
+        csv_path = tmp_path / "runA.csv"
+        _write_evolution_csv(csv_path, n_rows=10)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "test/prefix@0:A",
+                "plot",
+                "comparison",
+                "--from-csv",
+                str(csv_path),
+                "-o",
+                str(tmp_path / "out"),
+                "--smoothing",
+                "none",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "from-csv" in result.output or "from_csv" in result.output
+
+    def test_comparison_from_csv_missing_file_errors_clearly(self, tmp_path):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "plot",
+                "comparison",
+                "--from-csv",
+                str(tmp_path / "missing.csv"),
+                "-o",
+                str(tmp_path / "out"),
+                "--smoothing",
+                "none",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "missing.csv" in result.output

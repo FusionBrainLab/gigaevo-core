@@ -447,6 +447,25 @@ gigaevo -r chains/hotpotqa/static@4:O \
 
 Output files: `evolution_runs_comparison.{png,pdf,svg}` in the output folder.
 
+**Offline mode (`--from-csv`).** Plot directly from CSVs produced by
+`gigaevo export csv` without touching Redis — useful for archived runs whose
+Redis DB has been flushed, or for sharing data across machines:
+
+```bash
+# Export once
+gigaevo -r chains/hotpotqa/static@4:O export csv -o archives/O.csv
+gigaevo -r chains/hotpotqa/static_r@7:R export csv -o archives/R.csv
+
+# Plot later, no Redis needed
+gigaevo plot comparison \
+    --from-csv archives/O.csv:Original \
+    --from-csv archives/R.csv:Retrieval \
+    -o plots/
+```
+
+Label defaults to the file stem when `:LABEL` is omitted. `--from-csv` is
+mutually exclusive with `-r/--run` and `-e/--experiment`.
+
 ---
 
 ### `gigaevo export` — Export evolution data to CSV
