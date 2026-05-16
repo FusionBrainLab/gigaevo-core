@@ -12,6 +12,7 @@ caller boundary until they are migrated.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Final
 
 from loguru import logger
@@ -31,7 +32,9 @@ class RedisConnection:
     :meth:`startup` which PINGs the server and fails fast with a typed
     :class:`StartupError` on misconfiguration. :meth:`startup` is
     idempotent: a second call on an already-started instance is a
-    no-op.
+    no-op. Concurrent :meth:`startup` / :meth:`shutdown` invocations
+    are serialised by an internal :class:`asyncio.Lock` so two racing
+    callers cannot build two pools nor observe a torn lifecycle.
     """
 
     def __init__(
@@ -49,6 +52,9 @@ class RedisConnection:
         self._socket_timeout_s = socket_timeout_s
         self._socket_connect_timeout_s = socket_connect_timeout_s
         self._pool: aioredis.Redis | None = None
+        # Created lazily inside the running event loop so the connection
+        # object remains safe to construct outside any loop context.
+        self._lifecycle_lock: asyncio.Lock | None = None
 
     @property
     def key_prefix(self) -> str:
@@ -68,47 +74,81 @@ class RedisConnection:
     def is_started(self) -> bool:
         return self._pool is not None
 
+    def _get_lifecycle_lock(self) -> asyncio.Lock:
+        """Lazy-init the lock inside the running loop.
+
+        Creating ``asyncio.Lock`` lazily avoids the historical "wrong
+        loop" trap where a lock created at import time binds to the
+        wrong loop and silently leaks.
+        """
+        if self._lifecycle_lock is None:
+            self._lifecycle_lock = asyncio.Lock()
+        return self._lifecycle_lock
+
     async def startup(self) -> None:
         """Build the pool and verify connectivity.
 
         Idempotent: a second call on a started instance returns
-        immediately. Raises :class:`StartupError` on failure and leaves
-        ``self._pool`` unset (the partially-built pool is closed on the
-        way out so the caller can safely retry without leaking sockets).
+        immediately. Concurrent callers serialise on an internal lock;
+        the first builds the pool, subsequent waiters short-circuit on
+        the already-set ``_pool`` field. Raises :class:`StartupError`
+        on failure and leaves ``self._pool`` unset (the partially-built
+        pool is closed on the way out so the caller can safely retry
+        without leaking sockets). Cancellation mid-PING also closes the
+        partially-built pool — :class:`asyncio.CancelledError` is not
+        an :class:`Exception` subclass and must be handled explicitly.
         """
+        # Fast path with no I/O — re-checked under the lock below.
         if self._pool is not None:
             return
-        pool: aioredis.Redis | None = None
-        try:
-            pool = aioredis.Redis.from_url(
+        async with self._get_lifecycle_lock():
+            if self._pool is not None:
+                return
+            pool: aioredis.Redis | None = None
+            try:
+                pool = aioredis.Redis.from_url(
+                    self._redis_url,
+                    decode_responses=True,
+                    max_connections=self._max_connections,
+                    socket_timeout=self._socket_timeout_s,
+                    socket_connect_timeout=self._socket_connect_timeout_s,
+                )
+                pong = await pool.ping()  # type: ignore[misc]
+                if not pong:
+                    raise StartupError(reason=f"PING returned falsey: {pong!r}")
+            except StartupError:
+                await _safe_close(pool)
+                raise
+            except asyncio.CancelledError:
+                # CancelledError is BaseException — close the half-built
+                # pool before propagating so the caller's retry sees a
+                # clean slate.
+                await _safe_close(pool)
+                raise
+            except Exception as exc:
+                await _safe_close(pool)
+                raise StartupError(reason=f"Redis startup failed: {exc!r}") from exc
+            self._pool = pool
+            logger.info(
+                "RedisConnection ready: url={} prefix={} pool={}",
                 self._redis_url,
-                decode_responses=True,
-                max_connections=self._max_connections,
-                socket_timeout=self._socket_timeout_s,
-                socket_connect_timeout=self._socket_connect_timeout_s,
+                self._key_prefix,
+                self._max_connections,
             )
-            pong = await pool.ping()  # type: ignore[misc]
-            if not pong:
-                raise StartupError(reason=f"PING returned falsey: {pong!r}")
-        except StartupError:
-            await _safe_close(pool)
-            raise
-        except Exception as exc:
-            await _safe_close(pool)
-            raise StartupError(reason=f"Redis startup failed: {exc!r}") from exc
-        self._pool = pool
-        logger.info(
-            "RedisConnection ready: url={} prefix={} pool={}",
-            self._redis_url,
-            self._key_prefix,
-            self._max_connections,
-        )
 
     async def shutdown(self) -> None:
-        """Close the pool. Idempotent. Safe under partial-init failure."""
-        pool = self._pool
-        self._pool = None
-        await _safe_close(pool)
+        """Close the pool. Idempotent. Safe under partial-init failure.
+
+        Serialised against :meth:`startup` via the same internal lock:
+        a shutdown racing with an in-flight startup waits for that
+        startup to either complete (and is then closed by this call)
+        or fail (in which case ``_pool`` stays ``None`` and this is a
+        no-op). The two cannot interleave to leave a dangling pool.
+        """
+        async with self._get_lifecycle_lock():
+            pool = self._pool
+            self._pool = None
+            await _safe_close(pool)
 
 
 async def _safe_close(pool: aioredis.Redis | None) -> None:

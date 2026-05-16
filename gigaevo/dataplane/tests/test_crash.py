@@ -117,3 +117,100 @@ class TestCrashWatchedHandle:
         value, second_evt = await handle.call(lambda r: r.do_work())
         assert second_evt is None
         assert value == "work-new-1"
+
+    @pytest.mark.asyncio
+    async def test_flag_set_during_method_does_not_abort_current_call(
+        self,
+    ) -> None:
+        """If the flag is set while ``method`` is running, this call still
+        returns its completed value. The *next* call observes the flag.
+
+        This is the documented "stale-but-completed" contract — we
+        don't try to inject cancellation mid-method, because doing so
+        risks leaving the underlying resource in a partial state.
+        """
+        inner = _FakeResource("a")
+        flag = OneShotFlag()
+        recovered = _FakeResource("recovered")
+
+        async def recover(_old: _FakeResource) -> CrashEvent[str, _FakeResource]:
+            return CrashEvent(peer="late", resource=recovered)
+
+        handle: CrashWatchedHandle[_FakeResource, str, _FakeResource] = (
+            CrashWatchedHandle(inner, flag, recover)
+        )
+
+        async def slow_work(r: _FakeResource) -> str:
+            # Signal the flag while the method is running. The current
+            # call must still return its completed value, not the
+            # crash event.
+            flag.signal()
+            await asyncio.sleep(0)
+            return await r.do_work()
+
+        value, evt = await handle.call(slow_work)
+        assert evt is None
+        assert value == "work-a-1"
+        # The next call observes the flag and short-circuits to recovery.
+        value2, evt2 = await handle.call(lambda r: r.do_work())
+        assert value2 is None
+        assert evt2 is not None
+        assert evt2.peer == "late"
+
+    @pytest.mark.asyncio
+    async def test_inner_property_exposes_current_resource(self) -> None:
+        inner = _FakeResource("orig")
+        flag = OneShotFlag()
+
+        async def recover(_old: _FakeResource) -> CrashEvent[str, _FakeResource]:
+            return CrashEvent(peer="p", resource=_FakeResource("never"))
+
+        handle: CrashWatchedHandle[_FakeResource, str, _FakeResource] = (
+            CrashWatchedHandle(inner, flag, recover)
+        )
+        assert handle.inner is inner
+        replacement = _FakeResource("replacement")
+        handle.replace_inner(replacement)
+        assert handle.inner is replacement
+
+    @pytest.mark.asyncio
+    async def test_replace_inner_without_new_flag_keeps_existing_flag(
+        self,
+    ) -> None:
+        """If the caller forgets to swap the flag, every subsequent call
+        short-circuits to recovery — documented escape valve, not a bug.
+        """
+        inner = _FakeResource("a")
+        flag = OneShotFlag()
+
+        async def recover(_old: _FakeResource) -> CrashEvent[str, _FakeResource]:
+            return CrashEvent(peer="p", resource=_FakeResource("r"))
+
+        handle: CrashWatchedHandle[_FakeResource, str, _FakeResource] = (
+            CrashWatchedHandle(inner, flag, recover)
+        )
+        flag.signal()
+        _, evt = await handle.call(lambda r: r.do_work())
+        assert evt is not None
+        # Replace inner without a new flag.
+        handle.replace_inner(evt.resource)
+        # Old flag is still set; next call still observes it.
+        _, evt2 = await handle.call(lambda r: r.do_work())
+        assert evt2 is not None
+
+
+class TestCrashEvent:
+    def test_default_survivor_tokens_is_empty_tuple(self) -> None:
+        evt: CrashEvent[str, str] = CrashEvent(peer="p", resource="r")
+        assert evt.survivor_tokens == ()
+
+    def test_frozen(self) -> None:
+        evt: CrashEvent[str, str] = CrashEvent(peer="p", resource="r")
+        with pytest.raises(AttributeError):
+            evt.peer = "x"  # type: ignore[misc]  # frozen dataclass refuses
+
+    def test_survivor_tokens_heterogeneous(self) -> None:
+        evt: CrashEvent[str, str] = CrashEvent(
+            peer="p", resource="r", survivor_tokens=(1, "two", object())
+        )
+        assert len(evt.survivor_tokens) == 3

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Literal
 
 import pytest
 
@@ -11,6 +12,7 @@ from gigaevo.dataplane.models import (
     Err,
     HlcTimestamp,
     Monotonic,
+    MonotonicCounter,
     Ok,
     Sourced,
     Versioned,
@@ -74,17 +76,37 @@ class TestVersioned:
         with pytest.raises((AttributeError, dataclasses.FrozenInstanceError)):
             v.value = 2  # type: ignore[misc]
 
+    def test_rejects_negative_epoch(self) -> None:
+        with pytest.raises(ValueError, match="epoch must be non-negative"):
+            Versioned(value=1, epoch=-1, generation=0)
+
+    def test_rejects_negative_generation(self) -> None:
+        with pytest.raises(ValueError, match="generation must be non-negative"):
+            Versioned(value=1, epoch=0, generation=-1)
+
+    def test_combine_max_value_not_required_comparable(self) -> None:
+        # Wrapped values that do not implement ordering must still
+        # combine cleanly — comparison is on (epoch, generation) only.
+        class Opaque:
+            pass
+
+        a = Versioned(value=Opaque(), epoch=1, generation=0)
+        b = Versioned(value=Opaque(), epoch=2, generation=0)
+        assert a.combine_max(b) is b
+
 
 # ── Sourced ───────────────────────────────────────────────────────────
 
 
 class TestSourced:
     def test_holds_value(self) -> None:
-        s = Sourced(value="hello")
+        # The phantom ``S`` parameter is annotated at the call site so
+        # mypy has something concrete to bind; runtime stores no tag.
+        s: Sourced[str, Literal["local"]] = Sourced(value="hello")
         assert s.value == "hello"
 
     def test_retag_returns_new_wrapper(self) -> None:
-        s = Sourced(value=[1, 2, 3])
+        s: Sourced[list[int], Literal["cached"]] = Sourced(value=[1, 2, 3])
         retagged = s.retag(None)
         assert retagged is not s
         assert retagged.value is s.value
@@ -128,6 +150,17 @@ class TestResult:
         assert label(Ok(value=7)) == "ok-7"
         assert label(Err(error="x")) == "err-x"
 
+    def test_err_unwrap_typed_noreturn(self) -> None:
+        # ``Err.unwrap`` is typed ``NoReturn``. The runtime guarantee is
+        # that it always raises — no code path returns a value. This
+        # test pins the runtime contract that backs the type signature.
+        from typing import NoReturn, get_type_hints
+
+        from gigaevo.dataplane.models import Err as ErrCls
+
+        hints = get_type_hints(ErrCls.unwrap)
+        assert hints["return"] is NoReturn
+
 
 # ── Monotonic ─────────────────────────────────────────────────────────
 
@@ -153,10 +186,25 @@ class TestMonotonic:
             m.advance(3)
 
     def test_bump_increments(self) -> None:
-        m = Monotonic(0)
+        m = MonotonicCounter(0)
         assert m.bump() == 1
         assert m.bump() == 2
         assert m.peek() == 2
+
+    def test_monotonic_base_has_no_bump(self) -> None:
+        # The base ``Monotonic`` accepts any ``_Comparable`` type, so
+        # ``bump()`` (which is integer-only) lives on the subclass. A
+        # caller that has only the base type cannot accidentally invoke
+        # ``+1`` on a stringly-typed counter.
+        m = Monotonic("v1")
+        assert not hasattr(m, "bump")
+
+    def test_monotonic_counter_inherits_advance(self) -> None:
+        m = MonotonicCounter(5)
+        m.advance(7)
+        assert m.peek() == 7
+        with pytest.raises(ValueError, match="Monotonic violation"):
+            m.advance(6)
 
 
 # ── HlcTimestamp ──────────────────────────────────────────────────────
@@ -198,6 +246,30 @@ class TestHlcTimestamp:
     def test_unpack_rejects_bad_length(self) -> None:
         with pytest.raises(ValueError, match="32 hex chars"):
             HlcTimestamp.unpack_hex("deadbeef")
+
+    def test_unpack_rejects_nonzero_trailing_pad(self) -> None:
+        # The reserved trailing 8 hex chars must be zero on the wire so
+        # the format is forward-compatible. A non-zero pad means either
+        # a corrupted blob or an unsupported future encoding.
+        t = HlcTimestamp(physical_ns=1, counter=2)
+        # Replace the trailing pad with something non-zero.
+        bad = t.pack_hex()[:24] + "deadbeef"
+        with pytest.raises(ValueError, match="reserved field"):
+            HlcTimestamp.unpack_hex(bad)
+
+    def test_unpack_rejects_non_hex_characters(self) -> None:
+        # Length is right (32 chars) but characters are non-hex; we
+        # surface a typed ValueError rather than letting ``int()`` raise
+        # an opaque one from inside the parser.
+        with pytest.raises(ValueError, match="non-hex characters"):
+            HlcTimestamp.unpack_hex("z" * 24 + "00000000")
+
+    def test_pack_pad_is_eight_zero_chars(self) -> None:
+        # Lock the wire format so a future change that "saves the pad"
+        # has to land here too.
+        t = HlcTimestamp(physical_ns=0, counter=0)
+        assert t.pack_hex().endswith("00000000")
+        assert len(t.pack_hex()) == 32
 
     def test_hashable(self) -> None:
         t = HlcTimestamp(physical_ns=1, counter=2)

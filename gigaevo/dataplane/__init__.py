@@ -29,9 +29,20 @@ from .codec import (
     decode_canonical,
     encode_canonical,
 )
-from .coordinator import DataPlane
+from .coordinator import (
+    BatchTransitionItem,
+    BatchTransitionOutcome,
+    DataPlane,
+    EliteInserted,
+    EliteRejected,
+    EliteSwapOutcome,
+    EliteSwapped,
+    InstanceLease,
+    ProgramPatch,
+)
 from .crash import CrashEvent, CrashWatchedHandle, OneShotFlag, Recovered
 from .errors import (
+    REDACT_META_KEY,
     CanonicalEncodingError,
     ContentHashMismatchError,
     DataPlaneError,
@@ -47,12 +58,14 @@ from .errors import (
     StartupError,
     TokenAlreadyConsumed,
     TokenNotPickleable,
+    TokenTagCollisionError,
     TransitionError,
     UpcasterMissingError,
     all_error_types,
 )
 from .ids import (
     ActorId,
+    ActorIdentity,
     AggregateId,
     BanditArm,
     CausationId,
@@ -76,6 +89,7 @@ from .ids import (
     StreamName,
     WorkerId,
     make_actor_id,
+    make_script_name,
 )
 from .lattices import (
     BoolLattice,
@@ -93,6 +107,7 @@ from .models import (
     HlcTimestamp,
     LocalValue,
     Monotonic,
+    MonotonicCounter,
     Ok,
     ReplayedValue,
     Result,
@@ -116,7 +131,15 @@ from .transitions import (
 __all__ = [
     "__version__",
     # Coordinator
+    "BatchTransitionItem",
+    "BatchTransitionOutcome",
     "DataPlane",
+    "EliteInserted",
+    "EliteRejected",
+    "EliteSwapOutcome",
+    "EliteSwapped",
+    "InstanceLease",
+    "ProgramPatch",
     # Codec
     "compute_content_hash",
     "compute_content_hash_hex",
@@ -130,6 +153,7 @@ __all__ = [
     "LockHeld",
     "LockLost",
     "NotStartedError",
+    "REDACT_META_KEY",
     "SchemaVersionMissingError",
     "ScriptLostError",
     "ScriptNotRegisteredError",
@@ -138,11 +162,13 @@ __all__ = [
     "StartupError",
     "TokenAlreadyConsumed",
     "TokenNotPickleable",
+    "TokenTagCollisionError",
     "TransitionError",
     "UpcasterMissingError",
     "all_error_types",
     # IDs
     "ActorId",
+    "ActorIdentity",
     "AggregateId",
     "BanditArm",
     "CausationId",
@@ -166,6 +192,7 @@ __all__ = [
     "StreamName",
     "WorkerId",
     "make_actor_id",
+    "make_script_name",
     # Lattices
     "BoolLattice",
     "EpochLattice",
@@ -181,6 +208,7 @@ __all__ = [
     "HlcTimestamp",
     "LocalValue",
     "Monotonic",
+    "MonotonicCounter",
     "Ok",
     "ReplayedValue",
     "Result",

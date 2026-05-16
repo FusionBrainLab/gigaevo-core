@@ -18,6 +18,13 @@ rejects mixed-axis comparisons. Do not consolidate.
 
 A ``HappensBeforeLattice`` for distributed causal order is added when
 the distributed-worker workload requires it; not present here.
+
+The :class:`Lattice` protocol is structural and runtime-checkable, so
+``isinstance(EpochLattice, Lattice)`` and
+``isinstance(ProductLattice(...), Lattice)`` both succeed — the former
+because the *class* exposes ``leq`` / ``join`` / ``meet`` as static
+methods, the latter because the *instance* exposes them as bound
+methods. Callers SHOULD pass whichever shape is convenient.
 """
 
 from __future__ import annotations
@@ -39,11 +46,17 @@ class _Comparable(Protocol):
 class Lattice[E](Protocol):
     """A lattice over ``element_type = E``.
 
-    Implementations expose three static / classmethod operations. ``meet``
-    is required even though early read paths only need ``join`` — keeping
-    the protocol symmetric leaves the door open for CRDT lattices whose
-    ``merge`` is naturally expressed as ``meet`` (and avoids a v2 protocol
-    split later).
+    Implementations expose three operations. ``meet`` is required even
+    though early read paths only need ``join`` — keeping the protocol
+    symmetric leaves the door open for CRDT lattices whose ``merge`` is
+    naturally expressed as ``meet`` (and avoids a v2 protocol split
+    later).
+
+    Implementations may expose the operations as ``@staticmethod``
+    (matching the protocol literally) or as ordinary instance methods
+    on a stateful lattice object such as :class:`ProductLattice`. Both
+    pass ``isinstance(obj, Lattice)`` because ``runtime_checkable``
+    inspects only attribute presence.
     """
 
     @staticmethod
@@ -130,20 +143,39 @@ class ProductLattice[A, B]:
     and generation into a single freshness witness whose admission gate
     is ``is_at_least``. Instances hold the two component lattice types
     so component operations can be dispatched without templating tricks.
+
+    Two ProductLattice instances compare equal iff they were
+    constructed with the same component lattice classes. The class
+    identifies the operation suite, so this is the natural value
+    semantics — anything else would force callers to thread a single
+    shared instance through their dependency graph.
     """
 
+    __slots__ = ("_left", "_right")
+
     def __init__(self, left: type[Lattice[A]], right: type[Lattice[B]]) -> None:
-        self._L: type[Lattice[A]] = left
-        self._R: type[Lattice[B]] = right
+        self._left: type[Lattice[A]] = left
+        self._right: type[Lattice[B]] = right
 
     def leq(self, a: tuple[A, B], b: tuple[A, B]) -> bool:
-        return self._L.leq(a[0], b[0]) and self._R.leq(a[1], b[1])
+        return self._left.leq(a[0], b[0]) and self._right.leq(a[1], b[1])
 
     def join(self, a: tuple[A, B], b: tuple[A, B]) -> tuple[A, B]:
-        return (self._L.join(a[0], b[0]), self._R.join(a[1], b[1]))
+        return (self._left.join(a[0], b[0]), self._right.join(a[1], b[1]))
 
     def meet(self, a: tuple[A, B], b: tuple[A, B]) -> tuple[A, B]:
-        return (self._L.meet(a[0], b[0]), self._R.meet(a[1], b[1]))
+        return (self._left.meet(a[0], b[0]), self._right.meet(a[1], b[1]))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ProductLattice):
+            return NotImplemented
+        return self._left is other._left and self._right is other._right
+
+    def __hash__(self) -> int:
+        return hash((ProductLattice, self._left, self._right))
+
+    def __repr__(self) -> str:
+        return f"ProductLattice({self._left.__name__}, {self._right.__name__})"
 
 
 class MonotoneLattice[C: _Comparable]:

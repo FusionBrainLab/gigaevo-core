@@ -10,12 +10,20 @@ module recovers most of the safety at runtime:
 
     - ``__copy__`` / ``__deepcopy__`` raise — tokens cannot be cloned
       via the standard ``copy`` machinery;
-    - ``__reduce__`` and ``__reduce_ex__`` raise — pickle cannot
-      silently produce a duplicate;
+    - ``__reduce__`` / ``__reduce_ex__`` / ``__getstate__`` raise — no
+      protocol-style serialiser can silently produce a duplicate;
     - a ``_consumed`` flag on each instance flips on ``consume()``; a
       second call raises :class:`TokenAlreadyConsumed`;
     - factories ``mint_root`` / ``mint_split`` / ``mint_split_n`` /
-      ``mint_combine`` are the only legitimate paths to mint a token.
+      ``mint_combine`` are the only legitimate paths to mint a token,
+      and the split factories reject duplicate child tags so two
+      orthogonal sub-tokens cannot accidentally claim the same subspace.
+
+Concurrency model: the dataplane is single-threaded asyncio. ``consume``
+is therefore not protected by a lock — the read-modify-write on
+``_consumed`` is safe only because no two coroutines can preempt each
+other between the read and the write. Tokens MUST NOT be shared across
+threads or processes; the move-only contract implicitly forbids that.
 
 A custom ruff rule (see ``lints.toml``) flags ``t.consume()`` followed
 by any further use of ``t`` so most linear-flow violations are caught at
@@ -24,9 +32,14 @@ lint time too.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, SupportsIndex
 
-from .errors import TokenAlreadyConsumed, TokenNotPickleable
+from .errors import (
+    TokenAlreadyConsumed,
+    TokenNotPickleable,
+    TokenTagCollisionError,
+)
 
 
 class Token[Tag]:
@@ -64,6 +77,17 @@ class Token[Tag]:
         raise TokenNotPickleable(tag_repr=repr(self._tag))
 
     def __reduce_ex__(self, _protocol: SupportsIndex) -> Any:
+        raise TokenNotPickleable(tag_repr=repr(self._tag))
+
+    def __getstate__(self) -> Any:
+        # Some pickler / copier paths probe ``__getstate__`` before
+        # falling through to ``__reduce__``; deny it for symmetry.
+        raise TokenNotPickleable(tag_repr=repr(self._tag))
+
+    def __setstate__(self, _state: Any) -> None:
+        # Cannot legitimately be reached because ``__getstate__`` raises,
+        # but pickle protocol 0 and ``copy.copy`` may probe attributes
+        # directly. Closing this path defends against future protocols.
         raise TokenNotPickleable(tag_repr=repr(self._tag))
 
     # ── consumption ──────────────────────────────────────────────────
@@ -110,6 +134,22 @@ def mint_root[Tag](tag: Tag) -> Token[Tag]:
     return Token(tag)
 
 
+def _reject_duplicate_tags[T](tags: Iterable[T]) -> list[T]:
+    """Return the materialised tag list after enforcing distinctness.
+
+    Tags may be any value the caller cares to use — including
+    non-hashable structures — so distinctness is checked by linear scan
+    rather than by set membership. The cost is O(n^2); call sites mint
+    a handful of children at a time, so this is fine.
+    """
+    materialised: list[T] = list(tags)
+    for i, tag in enumerate(materialised):
+        for earlier in materialised[:i]:
+            if earlier == tag:
+                raise TokenTagCollisionError(duplicate_tag_repr=repr(tag))
+    return materialised
+
+
 def mint_split[In, L, R](
     parent: Token[In],
     left_tag: L,
@@ -118,22 +158,36 @@ def mint_split[In, L, R](
     """Consume ``parent`` and mint two orthogonal sub-tokens.
 
     The parent is consumed so callers cannot accidentally use it after
-    the split. Discipline on the caller: ``left_tag`` and ``right_tag``
-    must denote disjoint subspaces of the parent's space — the type
-    system has no way to verify the disjointness in Python.
+    the split. ``left_tag`` and ``right_tag`` must be distinct values —
+    a duplicate would silently mint two tokens claiming the same
+    subspace, defeating the linearity guarantee. Distinctness is
+    enforced at runtime via :class:`TokenTagCollisionError`.
+
+    The parent is consumed *before* the duplicate check so an invalid
+    split still surrenders the parent; the caller's flow is broken in
+    a clearly visible way (token is gone *and* an exception fires)
+    rather than silently leaving an apparently-valid parent in the
+    caller's hand after a failed split.
     """
     parent.consume()
+    if left_tag == right_tag:
+        raise TokenTagCollisionError(duplicate_tag_repr=repr(left_tag))
     return Token(left_tag), Token(right_tag)
 
 
-def mint_split_n[In, L](parent: Token[In], child_tags: list[L]) -> list[Token[L]]:
+def mint_split_n[In, L](parent: Token[In], child_tags: Iterable[L]) -> list[Token[L]]:
     """Consume ``parent`` and mint N orthogonal sub-tokens.
 
     Useful when fanning a root permission across N workers or N actor
-    instances. Same disjointness discipline as :func:`mint_split`.
+    instances. The child tags must be pairwise distinct; duplicates
+    raise :class:`TokenTagCollisionError`.
+
+    Parent consumption happens first (see :func:`mint_split` for the
+    rationale).
     """
     parent.consume()
-    return [Token(t) for t in child_tags]
+    tags = _reject_duplicate_tags(child_tags)
+    return [Token(t) for t in tags]
 
 
 def mint_combine[A, B, Tag](

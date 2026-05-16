@@ -1,13 +1,25 @@
-"""Smoke tests for the ID taxonomy.
+"""Tests for the ID taxonomy.
 
-NewType aliases are compile-time only — they're indistinguishable from
-their base types at runtime. The only meaningful runtime test is the
-:func:`make_actor_id` helper.
+NewType aliases are compile-time only — indistinguishable from their
+base types at runtime. The meaningful runtime tests are for the
+:class:`ActorIdentity` round-trip and the :func:`make_script_name`
+validator; :func:`make_actor_id` is kept as a thin wrapper for
+existing call sites.
 """
 
 from __future__ import annotations
 
-from gigaevo.dataplane.ids import ActorId, RunId, WorkerId, make_actor_id
+import pytest
+
+from gigaevo.dataplane.ids import (
+    ActorId,
+    ActorIdentity,
+    RunId,
+    ScriptName,
+    WorkerId,
+    make_actor_id,
+    make_script_name,
+)
 
 
 class TestMakeActorId:
@@ -27,3 +39,95 @@ class TestMakeActorId:
         # NewType is erased; ActorId('x') == str at runtime.
         a: ActorId = ActorId("x")
         assert isinstance(a, str)
+
+
+class TestActorIdentity:
+    def test_pack_renders_joined_form(self) -> None:
+        ident = ActorIdentity(run_id=RunId("run-1"), worker_id=WorkerId("w-2"))
+        assert ident.pack() == "run-1:w-2"
+
+    def test_str_equals_pack(self) -> None:
+        ident = ActorIdentity(run_id=RunId("a"), worker_id=WorkerId("b"))
+        assert str(ident) == ident.pack() == "a:b"
+
+    def test_parse_roundtrip(self) -> None:
+        original = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        recovered = ActorIdentity.parse(original.pack())
+        assert recovered == original
+
+    def test_parse_handles_strings_with_internal_dashes(self) -> None:
+        recovered = ActorIdentity.parse(ActorId("run-7:worker-9"))
+        assert recovered.run_id == "run-7"
+        assert recovered.worker_id == "worker-9"
+
+    def test_parse_missing_separator_raises(self) -> None:
+        with pytest.raises(ValueError, match="missing ':'"):
+            ActorIdentity.parse("noseparatorhere")
+
+    def test_construct_empty_run_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="run_id is empty"):
+            ActorIdentity(run_id=RunId(""), worker_id=WorkerId("w"))
+
+    def test_construct_empty_worker_id_raises(self) -> None:
+        with pytest.raises(ValueError, match="worker_id is empty"):
+            ActorIdentity(run_id=RunId("r"), worker_id=WorkerId(""))
+
+    def test_construct_run_id_with_colon_raises(self) -> None:
+        with pytest.raises(ValueError, match="run_id contains ':'"):
+            ActorIdentity(run_id=RunId("a:b"), worker_id=WorkerId("w"))
+
+    def test_construct_worker_id_with_colon_raises(self) -> None:
+        with pytest.raises(ValueError, match="worker_id contains ':'"):
+            ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("a:b"))
+
+    def test_frozen(self) -> None:
+        ident = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        with pytest.raises(AttributeError):
+            ident.run_id = RunId("x")  # type: ignore[misc]  # frozen dataclass refuses
+
+    def test_hashable_for_use_in_sets(self) -> None:
+        a = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        b = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        c = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("x"))
+        assert {a, b, c} == {a, c}
+
+
+class TestMakeScriptName:
+    def test_valid_snake_case(self) -> None:
+        s = make_script_name("transition_program_state")
+        assert s == "transition_program_state"
+        assert isinstance(s, str)
+
+    def test_valid_short(self) -> None:
+        assert make_script_name("a") == "a"
+
+    def test_valid_with_digits(self) -> None:
+        assert make_script_name("rev2_swap") == "rev2_swap"
+
+    def test_rejects_leading_digit(self) -> None:
+        with pytest.raises(ValueError, match="snake_case"):
+            make_script_name("1foo")
+
+    def test_rejects_uppercase(self) -> None:
+        with pytest.raises(ValueError):
+            make_script_name("FooBar")
+
+    def test_rejects_dash(self) -> None:
+        with pytest.raises(ValueError):
+            make_script_name("foo-bar")
+
+    def test_rejects_empty(self) -> None:
+        with pytest.raises(ValueError):
+            make_script_name("")
+
+    def test_rejects_space(self) -> None:
+        with pytest.raises(ValueError):
+            make_script_name("foo bar")
+
+    def test_returns_typed_script_name(self) -> None:
+        s = make_script_name("ok_name")
+        # NewType-erased at runtime, but the typed return makes the
+        # caller's downstream code accept it where ``ScriptName`` is
+        # expected.
+        accepted: ScriptName = s
+        assert accepted == "ok_name"

@@ -8,6 +8,22 @@ pair — recovery becomes a control-flow branch, not an exception unwind.
 The flag is backed by :class:`asyncio.Event`. Hot-path cost is one
 non-blocking flag read per call, which is acceptable at the coarse
 granularity of a network round-trip.
+
+Asyncio-only contract
+=====================
+:class:`OneShotFlag` is **not** thread-safe. It wraps
+``asyncio.Event``, which is documented to be safe only within the
+single event-loop thread that created it. Calling :meth:`signal` from
+:func:`asyncio.to_thread` *appears* to work because ``Event.set`` does
+not itself await — but a coroutine that's parked on :meth:`wait`
+running in the same loop will not be woken until the loop schedules it,
+and there is no guarantee the worker thread's modification is visible
+to the loop thread without an explicit ``loop.call_soon_threadsafe``
+fence. Signalling from off-loop threads is forbidden; cross-thread
+signalling must round-trip through ``call_soon_threadsafe`` (or use a
+different primitive altogether). The dataplane's own watchdogs are
+async coroutines, so this never comes up in production; the rule is
+documented here so future contributors do not introduce it by accident.
 """
 
 from __future__ import annotations
@@ -26,6 +42,9 @@ class OneShotFlag:
     the crash) and consumed by any number of readers. Once set, it stays
     set — the recovery handler runs once, mints survivor permissions,
     and the owning resource is replaced.
+
+    Bound to a single asyncio loop. See the module docstring for the
+    cross-thread contract; the short version is: don't.
     """
 
     __slots__ = ("_event",)
@@ -60,8 +79,17 @@ class CrashEvent[PeerTag, Resource]:
           boundary; subsequent calls require these as proof of
           legitimate post-crash operation.
 
-    The survivor tokens are typed ``object`` because their actual tags
-    differ per crash class; callers cast at the consumption site.
+    Why ``survivor_tokens: tuple[object, ...]`` and not a typed tuple
+    --------------------------------------------------------------
+    A single :class:`CrashEvent` carries a heterogeneous tuple — a
+    program-FSM token, a cell-swap token, and a CRDT-actor token can
+    all be minted for the same crash. The element types vary per crash
+    class and are not known to ``CrashEvent`` itself. A
+    ``tuple[Token[ProgramId] | Token[CellKey] | ...]`` would either
+    spuriously narrow (when one of the variants is absent) or recreate
+    the same ``object``-typed escape hatch behind a longer signature.
+    Callers narrow at the consumption site via ``isinstance`` /
+    pattern-matching; the documentation is the contract.
     """
 
     peer: PeerTag

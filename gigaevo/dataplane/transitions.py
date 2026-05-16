@@ -9,7 +9,7 @@ call site without a Redis round-trip — both layers reinforce each other.
 
 The ProgramState table is the canonical mirror of
 ``gigaevo/programs/program_state.py``. Keeping the two in sync is
-enforced by a parity test added with the program-FSM-API change.
+enforced by a parity test in the application-level test suite.
 """
 
 from __future__ import annotations
@@ -100,18 +100,23 @@ LOCK_STATE_TRANSITIONS: dict[LockState, set[LockState]] = {
 # ── helpers ───────────────────────────────────────────────────────────
 
 
-def is_valid_transition(
-    table: dict[StrEnum, set[StrEnum]],
-    from_state: StrEnum,
-    to_state: StrEnum,
+def is_valid_transition[S: StrEnum](
+    table: dict[S, set[S]],
+    from_state: S,
+    to_state: S,
 ) -> bool:
-    """Client-side legality check. The Lua script re-validates server-side."""
+    """Client-side legality check. The Lua script re-validates server-side.
+
+    Generic over the StrEnum subtype so a ``ProgramState`` value cannot
+    be looked up in the ``LockState`` table at the type level — mypy
+    rejects mixed FSMs without any runtime cost.
+    """
     allowed = table.get(from_state)
     return allowed is not None and to_state in allowed
 
 
-def encode_for_lua(table: dict[StrEnum, set[StrEnum]]) -> dict[str, str]:
-    """Encode an FSM table as ``{from: "to1,to2,to3"}`` for ``HMSET``.
+def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
+    """Encode an FSM table as ``{from: "to1,to2,to3"}`` for ``HSET``.
 
     The Lua side checks legality with a ``string.find`` on the
     comma-joined value. Comma is safe because all StrEnum values used
@@ -133,23 +138,34 @@ def fsm_key(key_prefix: str, name: str) -> str:
     return f"{key_prefix}:fsm:{name}"
 
 
-async def load_fsm_table(
+async def load_fsm_table[S: StrEnum](
     redis_client: aioredis.Redis,
     *,
     key_prefix: str,
     name: str,
-    table: dict[StrEnum, set[StrEnum]],
+    table: dict[S, set[S]],
 ) -> None:
-    """HMSET the encoded table at ``{key_prefix}:fsm:{name}``.
+    """Replace the FSM table at ``{key_prefix}:fsm:{name}`` with ``table``.
 
-    Called once per FSM during ``DataPlane.startup``. Idempotent —
-    re-running overwrites with the same content. The redis client is
-    passed directly rather than reaching into the coordinator's private
-    pool.
+    Called once per FSM during ``DataPlane.startup``. The previous value
+    (if any) is unconditionally deleted before the new mapping is
+    written so removed states do not survive a schema change as stale
+    HSET entries. The DELETE + HSET pair is issued as a single atomic
+    pipeline so a concurrent reader cannot observe an empty key in the
+    gap between the two writes.
+
+    Idempotent under same-content re-runs. Generic over the StrEnum
+    subtype so the caller cannot mix FSM tables (e.g. pass
+    ``CLAIM_STATE_TRANSITIONS`` under the name ``"lock_state"`` with
+    matching ``LockState`` annotations) by type-erasure accident.
     """
     encoded = encode_for_lua(table)
+    key = fsm_key(key_prefix, name)
+    pipe = redis_client.pipeline(transaction=True)
+    pipe.delete(key)
     if encoded:
-        await redis_client.hset(fsm_key(key_prefix, name), mapping=encoded)  # type: ignore[misc]
+        pipe.hset(key, mapping=encoded)
+    await pipe.execute()  # type: ignore[misc]
 
 
 __all__ = [

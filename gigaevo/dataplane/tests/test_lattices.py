@@ -2,10 +2,14 @@
 
 Each concrete lattice must satisfy:
 
-    leq is reflexive and transitive on the test domain
-    join is commutative, associative, idempotent
-    join(a, b) is leq-greater than both a and b
-    meet(a, b) is leq-less than both a and b
+    leq is reflexive and transitive on the test domain.
+    join is commutative, associative, idempotent.
+    join(a, b) is leq-greater than both a and b.
+    meet(a, b) is leq-less than both a and b.
+
+The product lattice additionally has value-equality semantics — two
+``ProductLattice`` instances built from the same component classes
+compare equal and hash equal.
 """
 
 from __future__ import annotations
@@ -47,6 +51,20 @@ class TestEpochLattice:
         assert EpochLattice.meet(3, 7) == 3
         assert EpochLattice.meet(-1, -5) == -5
         assert EpochLattice.meet(0, 0) == 0
+
+    def test_join_dominates_both_inputs(self) -> None:
+        # join(a, b) ⩾ a and join(a, b) ⩾ b for every a, b.
+        for a, b in [(1, 2), (5, -3), (0, 0), (100, 99), (-7, -7)]:
+            j = EpochLattice.join(a, b)
+            assert EpochLattice.leq(a, j)
+            assert EpochLattice.leq(b, j)
+
+    def test_meet_dominated_by_both_inputs(self) -> None:
+        # meet(a, b) ⩽ a and meet(a, b) ⩽ b for every a, b.
+        for a, b in [(1, 2), (5, -3), (0, 0)]:
+            m = EpochLattice.meet(a, b)
+            assert EpochLattice.leq(m, a)
+            assert EpochLattice.leq(m, b)
 
 
 # ── GenerationLattice ────────────────────────────────────────────────
@@ -108,6 +126,48 @@ class TestProductLattice:
     def test_meet_componentwise(self, product: ProductLattice[int, int]) -> None:
         assert product.meet((1, 5), (3, 2)) == (1, 2)
 
+    def test_value_equality(self) -> None:
+        # Two instances with the same component classes compare equal.
+        p1 = ProductLattice(EpochLattice, GenerationLattice)
+        p2 = ProductLattice(EpochLattice, GenerationLattice)
+        assert p1 == p2
+        assert hash(p1) == hash(p2)
+
+    def test_inequality_with_different_components(self) -> None:
+        p1 = ProductLattice(EpochLattice, GenerationLattice)
+        p2 = ProductLattice(GenerationLattice, EpochLattice)
+        # Same classes, swapped roles — still different operation suite.
+        assert p1 != p2
+
+    def test_equality_with_non_product_returns_notimplemented_path(self) -> None:
+        # ``__eq__`` returning NotImplemented surfaces as False when the
+        # comparison runs.
+        p = ProductLattice(EpochLattice, GenerationLattice)
+        assert p != 42
+        assert p != "ProductLattice"
+        assert p != EpochLattice
+
+    def test_repr_mentions_components(self) -> None:
+        p = ProductLattice(EpochLattice, GenerationLattice)
+        r = repr(p)
+        assert "EpochLattice" in r
+        assert "GenerationLattice" in r
+
+    def test_join_dominates_both_inputs(
+        self, product: ProductLattice[int, int]
+    ) -> None:
+        for a, b in [((1, 2), (3, 4)), ((5, 0), (1, 10)), ((-1, -1), (-1, -1))]:
+            j = product.join(a, b)
+            assert product.leq(a, j)
+            assert product.leq(b, j)
+
+    def test_instance_satisfies_protocol(
+        self, product: ProductLattice[int, int]
+    ) -> None:
+        # ``runtime_checkable`` Protocol checks attribute presence; the
+        # instance exposes leq/join/meet bound methods.
+        assert isinstance(product, Lattice)
+
 
 # ── MonotoneLattice ──────────────────────────────────────────────────
 
@@ -126,13 +186,42 @@ class TestMonotoneLattice:
         assert MonotoneLattice.join((1, 0), (1, 1)) == (1, 1)
         assert MonotoneLattice.meet((1, 0), (1, 1)) == (1, 0)
 
+    def test_join_dominates_both_inputs(self) -> None:
+        # join(a, b) ⩾ a and join(a, b) ⩾ b under leq for tuple inputs
+        # — exercises the tuple-comparison code path.
+        pairs = [
+            ((1, 0), (1, 1)),
+            ((2, 0), (1, 5)),
+            ((0, 0), (0, 0)),
+            ((5, 5), (1, 9)),
+        ]
+        for a, b in pairs:
+            j = MonotoneLattice.join(a, b)
+            assert MonotoneLattice.leq(a, j)
+            assert MonotoneLattice.leq(b, j)
+
+    def test_join_idempotent(self) -> None:
+        for x in (0, 1, "abc", (1, 2)):
+            assert MonotoneLattice.join(x, x) == x  # type: ignore[type-var]
+
+    def test_join_commutative(self) -> None:
+        for a, b in [(1, 2), ("a", "b"), ((1, 0), (0, 1))]:
+            assert MonotoneLattice.join(a, b) == MonotoneLattice.join(b, a)  # type: ignore[type-var]
+
 
 # ── Lattice protocol ─────────────────────────────────────────────────
 
 
 class TestLatticeProtocol:
-    def test_concrete_lattices_satisfy_protocol(self) -> None:
-        # runtime_checkable Protocols approximate structural typing;
-        # this is a smoke test, not exhaustive.
-        for cls in (EpochLattice, GenerationLattice, BoolLattice):
+    def test_concrete_static_lattices_satisfy_protocol(self) -> None:
+        # runtime_checkable Protocols approximate structural typing.
+        # Static lattices satisfy at the *class* level — leq/join/meet
+        # are accessible on the class itself.
+        for cls in (EpochLattice, GenerationLattice, BoolLattice, MonotoneLattice):
             assert isinstance(cls, Lattice)
+
+    def test_product_lattice_instance_satisfies_protocol(self) -> None:
+        # Instance-shaped lattice; the protocol still matches because
+        # the *instance* exposes leq/join/meet as bound methods.
+        p = ProductLattice(EpochLattice, GenerationLattice)
+        assert isinstance(p, Lattice)
