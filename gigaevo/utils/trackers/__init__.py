@@ -5,79 +5,35 @@ from gigaevo.utils.trackers.composite import CompositeLogger
 from gigaevo.utils.trackers.configs import RedisMetricsConfig, TBConfig, WBConfig
 from gigaevo.utils.trackers.core import GenericLogger
 
-_tb_default: GenericLogger | None = None
-_wb_default: GenericLogger | None = None
-_redis_default: GenericLogger | None = None
-
 
 def init_tb(
     cfg: TBConfig, *, queue_size: int = 8192, flush_secs: float = 3.0
 ) -> GenericLogger:
-    global _tb_default
-    if _tb_default is not None:
-        return _tb_default
     backend = TBBackend(cfg)
-    _tb_default = GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
-    return _tb_default
-
-
-def get_tb() -> GenericLogger:
-    if _tb_default is None:
-        raise ValueError("TBLogger not initialized. Call init_tb() first.")
-    return _tb_default
+    return GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
 
 
 def init_wandb(
     cfg: WBConfig, *, queue_size: int = 8192, flush_secs: float = 3.0
 ) -> GenericLogger:
-    global _wb_default
-    if _wb_default is not None:
-        return _wb_default
     backend = WandBBackend(cfg)
-    _wb_default = GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
-    return _wb_default
-
-
-def get_wandb() -> GenericLogger:
-    if _wb_default is None:
-        raise ValueError("WandBLogger not initialized. Call init_wandb() first.")
-    return _wb_default
+    return GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
 
 
 def init_redis(
     cfg: RedisMetricsConfig, *, queue_size: int = 8192, flush_secs: float = 3.0
 ) -> GenericLogger:
-    """Initialize Redis metrics logger.
+    """Build a Redis metrics logger.
 
-    Returns a GenericLogger wrapping RedisMetricsBackend.
-    Access the backend directly via logger.backend for query methods.
+    Returns a GenericLogger wrapping RedisMetricsBackend. The backend is
+    available via ``logger.backend`` for direct query methods.
     """
-    global _redis_default
-    if _redis_default is not None:
-        return _redis_default
     backend = RedisMetricsBackend(cfg)
-    _redis_default = GenericLogger(
-        backend, queue_size=queue_size, flush_secs=flush_secs
-    )
-    return _redis_default
-
-
-def get_redis() -> GenericLogger:
-    if _redis_default is None:
-        raise ValueError("RedisLogger not initialized. Call init_redis() first.")
-    return _redis_default
-
-
-def get_redis_backend() -> RedisMetricsBackend:
-    """Get the Redis backend directly for query methods."""
-    logger = get_redis()
-    backend = logger.backend
-    assert isinstance(backend, RedisMetricsBackend)
-    return backend
+    return GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
 
 
 def init_composite(*loggers: GenericLogger) -> CompositeLogger:
-    """Create a composite logger that writes to multiple backends.
+    """Create a composite logger that fans out writes to every backend.
 
     Example:
         >>> tb = init_tb(tb_config)
@@ -95,7 +51,7 @@ def init_tb_redis(
     queue_size: int = 8192,
     flush_secs: float = 3.0,
 ) -> CompositeLogger:
-    """Initialize composite logger with TensorBoard + Redis backends.
+    """Composite logger with TensorBoard + Redis backends.
 
     Hydra usage:
         writer:
@@ -115,7 +71,7 @@ def init_wandb_redis(
     queue_size: int = 8192,
     flush_secs: float = 3.0,
 ) -> CompositeLogger:
-    """Initialize composite logger with WandB + Redis backends.
+    """Composite logger with WandB + Redis backends.
 
     Hydra usage:
         writer:

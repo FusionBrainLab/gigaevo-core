@@ -40,10 +40,7 @@ def _ref_resolver(path, *, _root_):
 
 
 def register_resolvers() -> None:
-    OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.register_new_resolver(
-        "get_object", lambda obj: hydra.utils.get_object(obj)
+        "get_object", lambda obj: hydra.utils.get_object(obj), replace=True
     )
-    OmegaConf.register_new_resolver("merge", lambda x, y: x + y)
-    OmegaConf.register_new_resolver("len", lambda arr: len(arr))
-    OmegaConf.register_new_resolver("ref", _ref_resolver)
+    OmegaConf.register_new_resolver("ref", _ref_resolver, replace=True)

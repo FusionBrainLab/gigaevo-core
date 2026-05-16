@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-import functools
 import os
 from pathlib import Path
 import struct
@@ -188,9 +187,15 @@ class WorkerPool:
             await _kill_process_tree(proc)
 
 
-@functools.lru_cache(maxsize=1)
 def default_exec_runner_pool() -> WorkerPool:
-    """Return the default worker pool (one per process, created on first use)."""
+    """Build a fresh ``WorkerPool``.
+
+    Each call constructs a new pool. Callers that want to amortize subprocess
+    startup across many ``run_exec_runner`` invocations must hold a reference
+    to a single pool and pass it as ``pool=...``. The pool's ``asyncio.Queue``
+    and ``asyncio.Lock`` bind to the running event loop at first use, so the
+    pool must not be shared across distinct ``asyncio.run()`` invocations.
+    """
     return WorkerPool()
 
 

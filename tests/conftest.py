@@ -174,36 +174,18 @@ class NeverCachedStage(Stage):
 
 
 # ---------------------------------------------------------------------------
-# Exec-runner pool cleanup (prevents stale event-loop references)
+# OmegaConf custom resolvers — registered once per session for tests that
+# compose YAMLs without going through ``run.py``. The resolvers use
+# ``replace=True``, so re-import or repeated session-scope evaluation is safe.
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-async def _clear_exec_runner_pool():
-    """Clear the cached WorkerPool between tests to avoid stale event-loop refs.
+@pytest.fixture(autouse=True, scope="session")
+def _register_omegaconf_resolvers():
+    from gigaevo.config.resolvers import register_resolvers
 
-    The default_exec_runner_pool() is an @lru_cache singleton whose asyncio
-    Queue, Lock, and subprocess streams are bound to whatever event loop was
-    running when they were created.  pytest-asyncio creates a fresh loop per
-    test function, so the cached pool must be reset to prevent
-    "Future attached to a different loop" errors.
-
-    On teardown, shutdown() kills idle subprocess workers *before* the loop
-    closes, preventing "Event loop is closed" warnings from transport __del__.
-    """
-    from gigaevo.programs.stages.python_executors.wrapper import (
-        default_exec_runner_pool,
-    )
-
-    default_exec_runner_pool.cache_clear()
+    register_resolvers()
     yield
-    # Kill idle subprocess workers while the event loop is still open.
-    try:
-        pool = default_exec_runner_pool()
-        await pool.shutdown()
-    except Exception:
-        pass
-    default_exec_runner_pool.cache_clear()
 
 
 # ---------------------------------------------------------------------------
