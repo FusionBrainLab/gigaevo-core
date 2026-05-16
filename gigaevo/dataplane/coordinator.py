@@ -36,7 +36,7 @@ from typing import Final, Literal
 
 from loguru import logger
 
-from .codec import decode_canonical, encode_canonical
+from .codec import compute_content_hash_hex, decode_canonical, encode_canonical
 from .connection import RedisConnection
 from .crash import OneShotFlag
 from .errors import (
@@ -46,6 +46,7 @@ from .errors import (
     NotStartedError,
     ShutdownError,
     StaleReadError,
+    TransitionError,
 )
 from .ids import (
     ActorIdentity,
@@ -65,6 +66,7 @@ from .transitions import (
     LOCK_STATE_TRANSITIONS,
     PROGRAM_STATE_TRANSITIONS,
     ProgramState,
+    fsm_key,
     load_fsm_table,
 )
 
@@ -92,6 +94,7 @@ _SCRIPT_LOCK_ACQUIRE: Final[ScriptName] = make_script_name("instance_lock_acquir
 _SCRIPT_LOCK_RENEW: Final[ScriptName] = make_script_name("instance_lock_renew")
 _SCRIPT_LOCK_RELEASE: Final[ScriptName] = make_script_name("instance_lock_release")
 _SCRIPT_LWWR_SET: Final[ScriptName] = make_script_name("lwwr_set")
+_SCRIPT_TRANSITION_STATE: Final[ScriptName] = make_script_name("transition_state")
 
 
 # ── public contract dataclasses ─────────────────────────────────────────
@@ -408,11 +411,81 @@ class DataPlane:
         acceptable; the FSM table still validates ``(from, to)``.
         ``patch`` is a typed :class:`ProgramPatch` merged into the
         persisted program blob before the state advance.
+
+        Idempotency is derived: the wrapper hashes
+        ``(pid, expected_from, to, patch)`` and the Lua script dedups on
+        that hash for 5 minutes, so a network retry of the same logical
+        call returns the previous outcome unchanged.
+
+        Result variants:
+            Ok(Versioned[ProgramSnapshot]) — transition applied (or the
+                same logical call was retried and the prior outcome is
+                being replayed); the value is the post-transition blob,
+                ``epoch`` and ``generation`` are the global counter.
+            Err(TransitionError.stale)   — program blob absent or
+                ``expected_from`` mismatched the observed state.
+            Err(TransitionError.illegal) — FSM table rejects (from, to).
+            Err(TransitionError.unknown) — token-tag mismatch (caller
+                bug) or unrecognised Lua status.
         """
-        # TODO: call self._require_started("transition_program_state")
-        # and replace the NotImplementedError raise with the Lua call.
-        _ = (self, program_id, token, expected_from, to, patch, deadline_monotonic)
-        raise NotImplementedError("transition_program_state")
+        _ = deadline_monotonic
+        tag = token.consume()
+        if tag != program_id:
+            return Err(
+                TransitionError.unknown(
+                    "token-tag-mismatch",
+                    f"token tag {tag!r} does not match program_id {program_id!r}",
+                )
+            )
+        lua = self._require_lua()
+        prefix = self._connection.key_prefix
+        program_key = f"{prefix}:program:{program_id}"
+        events_stream = f"{prefix}:status_events"
+        epoch_key = f"{prefix}:ts"
+        fsm_table = fsm_key(prefix, "program_state")
+        idem_hash = f"{prefix}:idem:program:{program_id}"
+        patch_dict = patch.fields if patch is not None else {}
+        patch_json = encode_canonical(patch_dict).decode("utf-8") if patch_dict else ""
+        idempotency_tok = compute_content_hash_hex(
+            {
+                "pid": program_id,
+                "from": expected_from.value if expected_from else "",
+                "to": to.value,
+                "patch": patch_dict,
+            },
+            schema_version=1,
+        )
+        try:
+            raw = await lua.evalsha(
+                _SCRIPT_TRANSITION_STATE,
+                keys=[
+                    program_key,
+                    events_stream,
+                    epoch_key,
+                    fsm_table,
+                    idem_hash,
+                ],
+                args=[
+                    program_id,
+                    expected_from.value if expected_from else "",
+                    to.value,
+                    patch_json,
+                    idempotency_tok,
+                    prefix,
+                ],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        status, epoch_s, payload = raw
+        epoch = int(epoch_s)
+        if status in ("ok", "duplicate"):
+            blob = decode_canonical(payload)
+            return Ok(Versioned(value=blob, epoch=epoch, generation=epoch))
+        if status == "stale":
+            return Err(TransitionError.stale(payload))
+        if status == "illegal":
+            return Err(TransitionError.illegal(payload))
+        return Err(TransitionError.unknown(status, payload))
 
     async def transition_program_state_batch(
         self,
@@ -448,12 +521,39 @@ class DataPlane:
 
         Returns ``Ok(None)`` if the program is unknown (not yet
         written); ``Ok(Versioned(...))`` if it exists; ``Err(...)`` for
-        infra failures or a freshness-floor violation.
+        decoding failures or a freshness-floor violation.
+
+        ``epoch`` and ``generation`` are both filled from the blob's
+        ``epoch`` field — the per-program generation counter is the
+        same as the global epoch since every transition bumps both. A
+        caller wanting a stricter freshness witness uses ``min_epoch``;
+        the redundant ``min_generation`` parameter is preserved for API
+        consistency with :meth:`crdt_read`.
         """
-        # TODO: call self._require_started("read_program") and dispatch
-        # the read Lua / HGET-pipeline.
-        _ = (self, program_id, min_epoch, min_generation)
-        raise NotImplementedError("read_program")
+        self._require_lua()
+        prefix = self._connection.key_prefix
+        program_key = f"{prefix}:program:{program_id}"
+        raw = await self._connection.pool.get(program_key)  # type: ignore[misc]
+        if raw is None:
+            return Ok(None)
+        try:
+            blob = decode_canonical(raw)
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"read_program: decode failed: {exc!r}"))
+        epoch = int(blob.get("epoch", 0))
+        versioned: Versioned[ProgramSnapshot] = Versioned(
+            value=blob, epoch=epoch, generation=epoch
+        )
+        if not versioned.is_at_least(min_epoch, min_generation):
+            return Err(
+                StaleReadError(
+                    observed_epoch=epoch,
+                    observed_generation=epoch,
+                    min_epoch=min_epoch,
+                    min_generation=min_generation,
+                )
+            )
+        return Ok(versioned)
 
     # ── instance lock ────────────────────────────────────────────────
 
@@ -808,6 +908,7 @@ class DataPlane:
             _SCRIPT_LOCK_RENEW,
             _SCRIPT_LOCK_RELEASE,
             _SCRIPT_LWWR_SET,
+            _SCRIPT_TRANSITION_STATE,
         ):
             lua.register(name, load_lua_source(name))
 
