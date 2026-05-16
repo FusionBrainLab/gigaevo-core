@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.31.0 (2026-05-16)
+
+### Features
+
+- **cli**: --from-csv for `gigaevo plot comparison` (#247)
+  ([#248](https://github.com/KhrulkovV/gigaevo-core-internal/pull/248),
+  [`5dede22`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5dede228a1af3089de7f3fbe42a9098689eebd04))
+
+
 ## v1.30.0 (2026-05-14)
 
 ### Bug Fixes
