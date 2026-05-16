@@ -13,6 +13,7 @@ model:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import requests
@@ -22,9 +23,16 @@ from gigaevo.infra.requests_factory import make_requests_session
 
 # Response bodies from a misbehaving server can be arbitrarily large or
 # carry control characters; either property is unsafe to splice raw into
-# an exception message that ends up in log sinks.  Truncate first, then
-# strip ANSI escape sequences and other C0/C1 control bytes.
+# an exception message that ends up in log sinks.  The preview helper
+# strips ANSI/CSI escape sequences as whole units, drops residual C0/C1
+# control bytes, then truncates.
 _RESPONSE_BODY_PREVIEW_BYTES = 512
+
+# Strip ANSI/CSI escape sequences as a unit so the trailing parameter
+# bytes (``[31m``, ``[0;1;33;45m`` …) don't survive as printable text.
+# A per-char filter only drops the ESC (``\x1b``) byte and leaves the
+# whole readable-but-meaningless CSI tail in place.
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
 def _safe_response_preview(response: requests.Response) -> str:
@@ -33,14 +41,28 @@ def _safe_response_preview(response: requests.Response) -> str:
     Used in exception messages so transient server failures stay legible
     without leaking ANSI / CRLF / RLO sequences into log sinks (a sink
     rendering raw bytes from an attacker-controlled body is the same
-    class of vector this codebase has hardened elsewhere — see T-C1)."""
+    class of vector this codebase has hardened elsewhere — see T-C1).
+
+    Strip controls *before* truncating: if the first 512 bytes of a 4 KB
+    response are an ANSI escape burst with the readable error message
+    trailing, truncating raw bytes first would drop the message before
+    stripping has a chance to compress the leading escapes out."""
     try:
         text = response.text
     except Exception:
         return "<unreadable body>"
-    if len(text) > _RESPONSE_BODY_PREVIEW_BYTES:
-        text = text[:_RESPONSE_BODY_PREVIEW_BYTES] + "… (truncated)"
-    return "".join(ch for ch in text if ch == "\n" or 0x20 <= ord(ch) < 0x7F or ord(ch) > 0xA0)
+    # 1. Drop ANSI/CSI escape sequences as a unit.
+    text = _ANSI_CSI_RE.sub("", text)
+    # 2. Permit printable ASCII + ``\n`` + non-control Unicode (``>= U+00A0``
+    #    keeps NBSP and everything beyond, including legitimate non-Latin
+    #    text).  Strip C0 (incl. DEL=0x7F) and C1 (0x80–0x9F) controls.
+    sanitised = "".join(
+        ch for ch in text if ch == "\n" or 0x20 <= ord(ch) < 0x7F or ord(ch) >= 0xA0
+    )
+    # 3. Truncate the now-sanitised string.
+    if len(sanitised) > _RESPONSE_BODY_PREVIEW_BYTES:
+        sanitised = sanitised[:_RESPONSE_BODY_PREVIEW_BYTES] + "… (truncated)"
+    return sanitised
 
 
 class _ConceptApiClient:

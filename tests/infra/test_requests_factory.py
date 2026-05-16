@@ -336,3 +336,14 @@ class TestBuildRetryForIdempotentPost:
         assert retry.backoff_factor == 0.25
         assert set(retry.status_forcelist) == {429, 503}
         assert "POST" in retry.allowed_methods
+
+    def test_allowed_methods_override(self) -> None:
+        """Symmetric with ``build_retry``: callers can narrow the
+        allowed-methods set when they only want POST + GET (not the
+        full default with HEAD/OPTIONS/PUT/DELETE)."""
+        from gigaevo.infra.requests_factory import build_retry_for_idempotent_post
+
+        retry = build_retry_for_idempotent_post(
+            allowed_methods=("POST", "GET"),
+        )
+        assert set(retry.allowed_methods) == {"POST", "GET"}

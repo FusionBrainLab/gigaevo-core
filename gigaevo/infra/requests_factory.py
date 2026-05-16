@@ -221,6 +221,7 @@ def build_retry_for_idempotent_post(
     backoff_jitter: float = DEFAULT_RETRY_BACKOFF_JITTER,
     backoff_max: float = DEFAULT_RETRY_BACKOFF_MAX,
     status_forcelist: tuple[int, ...] = DEFAULT_RETRY_STATUS_FORCELIST,
+    allowed_methods: tuple[str, ...] = DEFAULT_RETRY_ALLOWED_METHODS_WITH_POST,
 ) -> Retry:
     """Variant of :func:`build_retry` that includes POST in ``allowed_methods``.
 
@@ -233,7 +234,9 @@ def build_retry_for_idempotent_post(
 
     The retry policy honours ``Retry-After`` on 429 / 503 responses so
     callers respect server-supplied backoff before retrying.  All other
-    arguments mirror :func:`build_retry`.
+    arguments mirror :func:`build_retry`; ``allowed_methods`` defaults
+    to :data:`DEFAULT_RETRY_ALLOWED_METHODS_WITH_POST` but is overridable
+    for callers that need a narrower set.
     """
     return Retry(
         total=total,
@@ -244,7 +247,7 @@ def build_retry_for_idempotent_post(
         backoff_jitter=backoff_jitter,
         backoff_max=backoff_max,
         status_forcelist=list(status_forcelist),
-        allowed_methods=list(DEFAULT_RETRY_ALLOWED_METHODS_WITH_POST),
+        allowed_methods=list(allowed_methods),
         respect_retry_after_header=True,
         raise_on_status=False,
     )

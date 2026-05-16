@@ -52,6 +52,37 @@ class TestSafeResponsePreview:
         # \n preserved (multi-line responses are common and readable).
         assert "\n" in out
 
+    def test_preserves_nbsp_and_non_ascii_text(self) -> None:
+        """``U+00A0`` (NBSP) is a legitimate printable character — strip
+        C1 controls (0x80–0x9F) but let everything from ``0xA0`` up pass
+        so non-Latin server messages survive."""
+        body = "résumé completed: ошибка"
+        out = _safe_response_preview(self._make_response(body))
+        assert "résumé" in out
+        assert " " in out
+        assert "ошибка" in out
+
+    def test_strips_c1_controls(self) -> None:
+        """0x80–0x9F is the C1 control range — must not survive."""
+        body = "ok\x85\x9fdone"
+        out = _safe_response_preview(self._make_response(body))
+        assert "\x85" not in out
+        assert "\x9f" not in out
+        assert "okdone" in out
+
+    def test_strip_runs_before_truncation(self) -> None:
+        """A real failure mode: the first 512 bytes are an ANSI escape
+        burst, the readable error message is at position 600.  Stripping
+        first compresses the leading bytes so the readable tail survives
+        the 512-char preview budget."""
+        leading_ansi = "\x1b[31m" * 256  # 1024 bytes of control sequence
+        message = "the real error message"
+        body = leading_ansi + message
+        out = _safe_response_preview(self._make_response(body))
+        assert message in out, (
+            f"readable tail dropped; preview was: {out!r}"
+        )
+
 
 class TestRequestErrorMessages:
     def test_connection_error_preserves_cause(self) -> None:
