@@ -35,17 +35,20 @@ from loguru import logger
 
 from .connection import RedisConnection
 from .crash import OneShotFlag
-from .errors import DataPlaneError, NotStartedError, ShutdownError
+from .errors import DataPlaneError, NotStartedError, ShutdownError, StaleReadError
 from .ids import (
+    ActorIdentity,
     CellKey,
     CounterKey,
     KeyPrefix,
     LeaseToken,
     ProgramId,
+    ScriptName,
+    make_script_name,
 )
-from .models import Result, Versioned
+from .models import Err, Ok, Result, Versioned
 from .permissions import Token
-from .scripts import LuaRegistry
+from .scripts import LuaRegistry, load_lua_source
 from .transitions import (
     CLAIM_STATE_TRANSITIONS,
     LOCK_STATE_TRANSITIONS,
@@ -55,6 +58,15 @@ from .transitions import (
 )
 
 _DEFAULT_KEY_PREFIX: Final[str] = "gigaevo"
+
+
+# ── built-in script names ──────────────────────────────────────────────
+#
+# Each per-resource Lua script registers under a stable name. The names
+# are fixed module constants so callers (and tests) refer to one symbol
+# instead of a magic string repeated at every site.
+
+_SCRIPT_COUNTER_INC: Final[ScriptName] = make_script_name("counter_inc")
 
 
 # ── public contract dataclasses ─────────────────────────────────────────
@@ -235,7 +247,7 @@ class DataPlane:
         await self._connection.startup()
         try:
             lua = LuaRegistry(self._connection.pool)
-            # Per-resource scripts register themselves before load_all.
+            self._register_builtin_scripts(lua)
             await lua.load_all()
             self._lua = lua
             await load_fsm_table(
@@ -477,7 +489,7 @@ class DataPlane:
         self,
         key: CounterKey,
         *,
-        actor: str,
+        actor: ActorIdentity,
         delta: int = 1,
         deadline_monotonic: float | None = None,
     ) -> Result[int, DataPlaneError]:
@@ -485,10 +497,26 @@ class DataPlane:
 
         Returns the post-increment per-actor value (not the cross-actor
         sum). Use :meth:`crdt_read` for the consensus sum.
+
+        ``delta`` may be negative; the per-actor sub-count is signed. The
+        G-counter merge invariant only requires that *each actor* writes
+        monotonically — callers that decrement should hold a token for
+        that actor's subspace.
         """
-        # TODO: call self._require_started("crdt_inc") before HINCRBY.
-        _ = (self, key, actor, delta, deadline_monotonic)
-        raise NotImplementedError("crdt_inc")
+        _ = deadline_monotonic  # deadline propagation lands with the connection-pool wait-timeout
+        lua = self._require_lua()
+        counts_key, gen_key, epoch_key = self._counter_keys(key)
+        try:
+            raw = await lua.evalsha(
+                _SCRIPT_COUNTER_INC,
+                keys=[counts_key, gen_key, epoch_key],
+                args=[actor.pack(), int(delta)],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        # Lua returns ASCII-encoded ints under decode_responses=True.
+        new_count = int(raw[0])
+        return Ok(new_count)
 
     async def crdt_read(
         self,
@@ -501,11 +529,66 @@ class DataPlane:
 
         Per-actor reads are not exposed: a G-counter's only meaningful
         observable is the cross-actor sum. The freshness floor is the
-        usual ``(min_epoch, min_generation)`` pair.
+        usual ``(min_epoch, min_generation)`` pair; reads below either
+        floor return :class:`StaleReadError`.
+
+        Three Redis commands run as a single non-transactional pipeline
+        (one round-trip). The G-counter's eventual-consistency model
+        does not require the three reads to be atomic — a HGETALL that
+        misses the last increment merely yields a slightly-older
+        ``Versioned`` whose epoch / generation reflect that staleness,
+        which is exactly what the freshness floor catches.
         """
-        # TODO: call self._require_started("crdt_read") before HVALS.
-        _ = (self, key, min_epoch, min_generation)
-        raise NotImplementedError("crdt_read")
+        self._require_lua()
+        counts_key, gen_key, epoch_key = self._counter_keys(key)
+        redis = self._connection.pool
+        pipe = redis.pipeline(transaction=False)
+        pipe.hgetall(counts_key)
+        pipe.get(gen_key)
+        pipe.get(epoch_key)
+        counts_map, gen_raw, epoch_raw = await pipe.execute()  # type: ignore[misc]
+        generation = int(gen_raw) if gen_raw is not None else 0
+        epoch = int(epoch_raw) if epoch_raw is not None else 0
+        total = sum(int(v) for v in counts_map.values()) if counts_map else 0
+        versioned = Versioned(value=total, epoch=epoch, generation=generation)
+        if not versioned.is_at_least(min_epoch, min_generation):
+            return Err(
+                StaleReadError(
+                    observed_epoch=epoch,
+                    observed_generation=generation,
+                    min_epoch=min_epoch,
+                    min_generation=min_generation,
+                )
+            )
+        return Ok(versioned)
+
+    # ── built-in-script bookkeeping ──────────────────────────────────
+
+    def _register_builtin_scripts(self, lua: LuaRegistry) -> None:
+        """Load every per-resource Lua source into the registry.
+
+        Called once during :meth:`startup` before :meth:`LuaRegistry.load_all`
+        so the SHA cache is primed in one round-trip. Each script lives
+        as a ``.lua`` file under ``gigaevo/dataplane/scripts/``; the name
+        used here matches the file stem.
+        """
+        lua.register(_SCRIPT_COUNTER_INC, load_lua_source(_SCRIPT_COUNTER_INC))
+
+    def _counter_keys(self, key: CounterKey) -> tuple[str, str, str]:
+        """Resolve the three Redis keys backing a CRDT counter.
+
+        Returns ``(counts_hash, generation_counter, epoch_counter)``.
+        The epoch counter is shared across every coordinator op (any
+        write bumps it); the generation counter is per-counter so two
+        independent counters do not race on each other's freshness
+        witness.
+        """
+        prefix = self._connection.key_prefix
+        return (
+            f"{prefix}:{key}:counts",
+            f"{prefix}:{key}:gen",
+            f"{prefix}:ts",
+        )
 
 
 __all__ = [

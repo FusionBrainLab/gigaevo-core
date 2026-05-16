@@ -23,6 +23,7 @@ used in logging and tests.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -31,6 +32,20 @@ from redis.exceptions import NoScriptError
 
 from .errors import ScriptLostError, ScriptNotRegisteredError
 from .ids import ScriptName
+
+_SCRIPTS_DIR = Path(__file__).parent / "scripts"
+
+
+def load_lua_source(name: ScriptName) -> str:
+    """Read a ``.lua`` source from the ``gigaevo/dataplane/scripts/`` directory.
+
+    Looks up ``<name>.lua`` relative to the package's ``scripts/`` folder.
+    Raises :class:`FileNotFoundError` if the file does not exist — that's
+    a packaging or naming bug, not a runtime condition; we surface it as
+    a plain ``FileNotFoundError`` so it fails loudly at startup.
+    """
+    path = _SCRIPTS_DIR / f"{name}.lua"
+    return path.read_text(encoding="utf-8")
 
 
 class LuaRegistry:
@@ -173,4 +188,4 @@ class LuaRegistry:
         return len(self._sha)
 
 
-__all__ = ["LuaRegistry"]
+__all__ = ["LuaRegistry", "load_lua_source"]

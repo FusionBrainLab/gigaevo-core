@@ -77,8 +77,6 @@ def test_method_stubs_raise_notimplemented() -> None:
         "renew_instance_lock",
         "release_instance_lock",
         "try_replace_elite",
-        "crdt_inc",
-        "crdt_read",
     ]
     for name in stub_names:
         method = getattr(coord, name)
