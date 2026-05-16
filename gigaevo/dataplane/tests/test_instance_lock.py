@@ -315,6 +315,99 @@ class TestAutoRenewal:
         # The task is either cancelled or done — never still running.
         assert task.done() or task.cancelled()
 
+    async def test_wrap_lease_normal_path_passes_through(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """A wrapped lease whose flag is unset returns the call's value verbatim."""
+        acquired = await coord.acquire_instance_lock(
+            dp.KeyPrefix("wrap-normal"), ttl_s=30.0
+        )
+        assert isinstance(acquired, dp.Ok)
+        lease = acquired.value
+        handle = coord.wrap_lease(lease)
+        assert handle.inner is lease
+        assert handle.flag is lease.flag
+
+        async def _renew(
+            current: dp.InstanceLease,
+        ) -> dp.Result[dp.InstanceLease, dp.DataPlaneError]:
+            return await coord.renew_instance_lock(current, ttl_s=30.0)
+
+        value, evt = await handle.call(_renew)
+        assert evt is None
+        assert isinstance(value, dp.Ok)
+        assert value.value.token == lease.token
+
+    async def test_wrap_lease_signalled_returns_crash_event(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """When the lease flag is signalled the wrap short-circuits to a CrashEvent.
+
+        Signal simulates the background renewer detecting loss
+        (:meth:`_renew_lease_loop` calls ``lease.flag.signal()`` on
+        renewal failure). The next call through the wrapped handle
+        must resolve to ``(None, CrashEvent)`` carrying the lock key as
+        ``peer`` and the lost lease as ``resource``, *without*
+        invoking the wrapped operation.
+        """
+        acquired = await coord.acquire_instance_lock(
+            dp.KeyPrefix("wrap-lost"), ttl_s=30.0
+        )
+        assert isinstance(acquired, dp.Ok)
+        lease = acquired.value
+        # Cancel the renewer so the test owns the flag signal timing.
+        await coord._cancel_renewers()  # type: ignore[attr-defined]
+        handle = coord.wrap_lease(lease)
+
+        invocations = 0
+
+        async def _renew(
+            current: dp.InstanceLease,
+        ) -> dp.Result[dp.InstanceLease, dp.DataPlaneError]:
+            nonlocal invocations
+            invocations += 1
+            return await coord.renew_instance_lock(current, ttl_s=30.0)
+
+        # Simulate the renewer detecting loss.
+        lease.flag.signal()
+        value, evt = await handle.call(_renew)
+        assert value is None
+        assert evt is not None
+        assert evt.peer == lease.key
+        assert isinstance(evt.resource, dp.InstanceLease)
+        assert evt.resource.token == lease.token
+        assert evt.survivor_tokens == ()
+        # The wrapped op must not have run — the short-circuit precedes it.
+        assert invocations == 0
+
+    async def test_wrap_is_opt_in_unwrapped_calls_keep_locklost_semantics(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """A signalled flag does not change direct method semantics.
+
+        The wrap is additive: callers that hold the lease directly and
+        call :meth:`renew_instance_lock` / :meth:`release_instance_lock`
+        continue to receive the existing ``Err(LockLost)`` (or no-op
+        release) shape — the flag is an out-of-band signal, not a gate
+        on the underlying ops.
+        """
+        acquired = await coord.acquire_instance_lock(
+            dp.KeyPrefix("wrap-optin"), ttl_s=30.0
+        )
+        assert isinstance(acquired, dp.Ok)
+        lease = acquired.value
+        await coord._cancel_renewers()  # type: ignore[attr-defined]
+        # External DEL plus flag signal — the underlying lock is gone
+        # AND the renewer-style escalation has fired.
+        await coord._connection.pool.delete(lease.key)  # type: ignore[misc]
+        lease.flag.signal()
+        # Direct renew returns Err(LockLost) — the unwrapped semantics.
+        direct = await coord.renew_instance_lock(lease, ttl_s=30.0)
+        assert isinstance(direct, dp.Err)
+        assert isinstance(direct.error, dp.LockLost)
+        # Release is idempotent and does not raise on a lost lock.
+        await coord.release_instance_lock(lease)
+
     async def test_renewer_exception_signals_flag(self, coord: dp.DataPlane) -> None:
         """An exception inside the renewer must escalate to the OneShotFlag.
 

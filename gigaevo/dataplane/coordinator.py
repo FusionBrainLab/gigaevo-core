@@ -39,7 +39,7 @@ from loguru import logger
 
 from .codec import compute_content_hash_hex, decode_canonical, encode_canonical
 from .connection import RedisConnection
-from .crash import OneShotFlag
+from .crash import CrashEvent, CrashWatchedHandle, OneShotFlag
 from .errors import (
     DataPlaneError,
     DeadlineExceeded,
@@ -874,6 +874,47 @@ class DataPlane:
             # Release is idempotent; swallow transient connection
             # errors so callers can use this in a finally block safely.
             pass
+
+    def wrap_lease(
+        self, lease: InstanceLease
+    ) -> CrashWatchedHandle[InstanceLease, str, InstanceLease]:
+        """Wrap a lease in a :class:`CrashWatchedHandle` for typed loss recovery.
+
+        Callers invoke lease-scoped operations through the returned
+        handle and pattern-match the result::
+
+            handle = dp.wrap_lease(lease)
+            match await handle.call(lambda l: dp.renew_instance_lock(l, ttl_s=10)):
+                case (result, None):
+                    ...  # normal path; ``result`` is the wrapped op's Result
+                case (None, evt):
+                    ...  # evt: CrashEvent[str, InstanceLease], evt.peer == lock key,
+                         # evt.resource is the lost lease itself.
+
+        The wrap is opt-in convenience. Unwrapped calls
+        (:meth:`renew_instance_lock`, :meth:`release_instance_lock`)
+        retain their default semantics — a lease whose flag has been
+        signalled by the background renewer continues to return
+        :class:`Err` (:class:`LockLost`) on direct invocation. The
+        handle adds a short-circuit branch *before* the underlying call,
+        so once the renewer has signalled loss every subsequent
+        ``handle.call`` resolves to ``(None, CrashEvent)`` without
+        another Redis round-trip.
+
+        ``peer`` is the canonical lock key (``{prefix}:lock:{caller-prefix}``);
+        ``resource`` is the lost lease, surfaced verbatim so the caller
+        can route compensation by token or key. ``survivor_tokens`` is
+        the empty tuple — the instance lock sits beneath any permission
+        subsystem at this stage, so there are no survivor permissions
+        to mint.
+        """
+
+        async def _recover(
+            lost: InstanceLease,
+        ) -> CrashEvent[str, InstanceLease]:
+            return CrashEvent(peer=lost.key, resource=lost, survivor_tokens=())
+
+        return CrashWatchedHandle(lease, lease.flag, _recover)
 
     async def _renew_lease_loop(self, lease: InstanceLease) -> None:
         """Background renewal loop. Signals the lease's flag on loss.

@@ -197,6 +197,58 @@ class TestInstanceLease:
         with pytest.raises(AttributeError):
             lease.ttl_s = 5.0  # type: ignore[misc]
 
+    @pytest.mark.asyncio
+    async def test_wrap_lease_returns_crashwatchedhandle(self) -> None:
+        """``DataPlane.wrap_lease`` returns a typed handle bound to the lease.
+
+        The wrap is a pure-Python helper — no Redis I/O — so we can
+        exercise the contract against an unstarted coordinator. The
+        handle's flag identity matches the lease, and a pre-signalled
+        flag short-circuits the next ``call`` into a ``CrashEvent``
+        carrying the lock key as ``peer`` and the lease itself as
+        ``resource``.
+        """
+        coord = dp.DataPlane("redis://x/0", key_prefix="smoke")
+        flag = OneShotFlag()
+        lease = InstanceLease(
+            token=LeaseToken("tok-1"),
+            key="smoke:lock:demo",
+            ttl_s=1.0,
+            expires_at_monotonic=2.0,
+            flag=flag,
+        )
+        handle = coord.wrap_lease(lease)
+        assert handle.inner is lease
+        assert handle.flag is flag
+
+        invoked = 0
+
+        async def _op(current: InstanceLease) -> str:
+            nonlocal invoked
+            invoked += 1
+            return current.token
+
+        # Normal path: flag unset, the wrapped op runs and its value is returned.
+        value, evt = await handle.call(_op)
+        assert evt is None
+        assert value == "tok-1"
+        assert invoked == 1
+
+        # Signalled path: pattern-match the recovery branch.
+        flag.signal()
+        match await handle.call(_op):
+            case (None, recovery_evt):
+                assert recovery_evt.peer == "smoke:lock:demo"
+                assert isinstance(recovery_evt.resource, InstanceLease)
+                assert recovery_evt.resource.token == "tok-1"
+                assert recovery_evt.survivor_tokens == ()
+            case (_value, None):
+                raise AssertionError(
+                    "wrap_lease did not short-circuit after flag.signal()"
+                )
+        # Wrapped op was NOT invoked again — the short-circuit precedes it.
+        assert invoked == 1
+
 
 class TestEliteSwapOutcome:
     def test_inserted_variant(self) -> None:
