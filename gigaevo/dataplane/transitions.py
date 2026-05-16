@@ -118,12 +118,21 @@ def is_valid_transition[S: StrEnum](
 def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
     """Encode an FSM table as ``{from: "to1,to2,to3"}`` for ``HSET``.
 
-    The Lua side checks legality with a ``string.find`` on the
+    The Lua side checks legality with a tokenised walk over the
     comma-joined value. State values must not contain ``","`` — a comma
     inside a value would split the encoded list at the wrong boundary
     and let a forged ``"X,Y"`` value satisfy a check for either ``X`` or
     ``Y`` alone. The encoder refuses such inputs at the call boundary
-    so the Lua-side ``string.find`` invariant stays inviolable.
+    so the Lua-side membership invariant stays inviolable.
+
+    Each row is emitted under both its declared key and its lowercase
+    alias; each row's target list carries both the declared form and
+    the lowercase form of every target. A program blob persisted by an
+    application-layer caller whose enum lowercases its ``.value`` (the
+    pre-coordinator on-disk vocabulary) and a coordinator-native caller
+    whose enum keeps the uppercase form share the same FSM hash and the
+    same membership check. When a state's declared value already equals
+    its lowercase form the duplicate write is a no-op overwrite.
     """
     encoded: dict[str, str] = {}
     for from_state, allowed in table.items():
@@ -138,7 +147,16 @@ def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
                     f"FSM state value {t.value!r} contains ',' — "
                     "comma is the on-wire separator and must be reserved"
                 )
-        encoded[from_state.value] = ",".join(sorted(t.value for t in allowed))
+        # Build a target set that carries both case variants of every
+        # member; the comma-list is then sorted for stable on-wire
+        # output (tests pin the exact serialisation).
+        target_variants: set[str] = set()
+        for t in allowed:
+            target_variants.add(t.value)
+            target_variants.add(t.value.lower())
+        joined = ",".join(sorted(target_variants))
+        encoded[from_state.value] = joined
+        encoded[from_state.value.lower()] = joined
     return encoded
 
 

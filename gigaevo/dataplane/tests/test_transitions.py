@@ -152,20 +152,50 @@ class TestEncodeForLua:
 
     def test_encodes_each_from_state(self) -> None:
         encoded = encode_for_lua(PROGRAM_STATE_TRANSITIONS)
-        # Every from-state with at least one allowed target appears.
+        # Every from-state with at least one allowed target appears under
+        # both its declared form and its lowercase alias so callers in
+        # either vocabulary can resolve the row.
         for from_state in PROGRAM_STATE_TRANSITIONS:
             assert from_state.value in encoded
+            assert from_state.value.lower() in encoded
 
     def test_targets_comma_joined_and_sorted(self) -> None:
         encoded = encode_for_lua(PROGRAM_STATE_TRANSITIONS)
         queued_targets = encoded["QUEUED"]
         parts = queued_targets.split(",")
         assert parts == sorted(parts)
-        assert set(parts) == {"DISCARDED", "QUEUED", "RUNNING"}
+        # Each target appears in both declared (uppercase) and lowercase
+        # alias form so the membership walk succeeds for either case.
+        assert set(parts) == {
+            "DISCARDED",
+            "QUEUED",
+            "RUNNING",
+            "discarded",
+            "queued",
+            "running",
+        }
+        # The lowercase row carries an identical comma-list.
+        assert encoded["queued"] == queued_targets
 
     def test_discarded_self_only(self) -> None:
         encoded = encode_for_lua(PROGRAM_STATE_TRANSITIONS)
-        assert encoded["DISCARDED"] == "DISCARDED"
+        # Self-only terminal state — the comma list still carries both
+        # case variants of the single legal target.
+        assert encoded["DISCARDED"] == "DISCARDED,discarded"
+        assert encoded["discarded"] == "DISCARDED,discarded"
+
+    def test_lowercase_alias_resolves_to_same_targets(self) -> None:
+        """A blob persisted with a lowercase state value resolves the same
+        row a coordinator-native (uppercase) caller does.
+
+        Drives the case-tolerance invariant: callers from either
+        vocabulary share the same FSM hash, so the legacy lowercase
+        persisted blob format and the dp-native uppercase enum can
+        co-exist without a separate bridging helper.
+        """
+        encoded = encode_for_lua(PROGRAM_STATE_TRANSITIONS)
+        for src in PROGRAM_STATE_TRANSITIONS:
+            assert encoded[src.value] == encoded[src.value.lower()]
 
 
 class TestFsmKey:
@@ -277,3 +307,48 @@ class TestLoadFsmTable:
         assert a == encode_for_lua(PROGRAM_STATE_TRANSITIONS)
         assert b == encode_for_lua(CLAIM_STATE_TRANSITIONS)
         assert a != b
+
+
+# ── structural invariants ────────────────────────────────────────────
+
+
+class TestRetiredHelpersAreAbsent:
+    """Pin that the case-bridge helpers and dead emitters have been
+    fully retired from the public surfaces.
+
+    These three negative assertions are the structural guard against
+    re-introduction by a future change: a contributor importing the
+    name observes the failing test and either re-justifies the bridge
+    or rewrites their patch to live without it.
+    """
+
+    def test_load_legacy_program_fsm_not_in_engine_startup(self) -> None:
+        from gigaevo.dataplane import engine_startup
+
+        assert not hasattr(engine_startup, "load_legacy_program_fsm"), (
+            "the case-bridge reloader was retired in favour of the "
+            "case-tolerant FSM hash emitted by encode_for_lua"
+        )
+
+    def test_load_legacy_program_fsm_not_exported_from_storage(self) -> None:
+        from gigaevo.database import redis_program_storage
+
+        assert not hasattr(redis_program_storage, "load_legacy_program_fsm"), (
+            "load_legacy_program_fsm was the sticky-tape between an "
+            "uppercase coordinator enum and a lowercase persisted blob; "
+            "the case-tolerant FSM hash removed the case mismatch at "
+            "the source so the helper must not return"
+        )
+
+    def test_publish_status_event_not_on_storage(self) -> None:
+        from gigaevo.database.program_storage import ProgramStorage
+        from gigaevo.database.redis_program_storage import RedisProgramStorage
+
+        assert not hasattr(ProgramStorage, "publish_status_event"), (
+            "publish_status_event had no production callers — the "
+            "dataplane Lua emits status events server-side"
+        )
+        assert not hasattr(RedisProgramStorage, "publish_status_event"), (
+            "publish_status_event had no production callers — the "
+            "dataplane Lua emits status events server-side"
+        )

@@ -562,37 +562,6 @@ class TestWaitForActivity:
 
 
 # ===================================================================
-# Category M: publish_status_event
-# ===================================================================
-
-
-class TestPublishStatusEvent:
-    """redis_program_storage.py L326-340: publish events to stream."""
-
-    async def test_publish_event_with_extra(self, fakeredis_storage):
-        """Extra dict fields are included in the stream event."""
-        await fakeredis_storage.publish_status_event(
-            "done", "prog-123", extra={"reason": "completed"}
-        )
-        # No crash; verify stream has data
-        r = await fakeredis_storage._conn.get()
-        stream_key = fakeredis_storage._keys.status_stream()
-        entries = await r.xrange(stream_key)
-        assert len(entries) >= 1
-        last_entry = entries[-1][1]
-        assert last_entry["id"] == "prog-123"
-        assert last_entry["status"] == "done"
-        assert last_entry["reason"] == "completed"
-
-    async def test_publish_event_without_extra(self, fakeredis_storage):
-        await fakeredis_storage.publish_status_event("queued", "prog-456")
-        r = await fakeredis_storage._conn.get()
-        stream_key = fakeredis_storage._keys.status_stream()
-        entries = await r.xrange(stream_key)
-        assert len(entries) >= 1
-
-
-# ===================================================================
 # Category N: count_by_status
 # ===================================================================
 

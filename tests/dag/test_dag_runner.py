@@ -197,7 +197,6 @@ def _make_mock_storage():
     storage.write_exclusive = AsyncMock()
     storage.exists = AsyncMock(return_value=True)
     storage.get_ids_by_status = AsyncMock(return_value=[])
-    storage.publish_status_event = AsyncMock()
     storage.transition_status = AsyncMock()
     storage.atomic_state_transition = AsyncMock()
     storage.fast_state_transition = AsyncMock()

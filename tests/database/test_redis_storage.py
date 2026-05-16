@@ -716,34 +716,7 @@ class TestWatchErrorRetries:
 
 
 class TestStreamOperations:
-    """Verify publish_status_event, wait_for_activity, and fallback."""
-
-    async def test_publish_status_event(self, fakeredis_storage, make_program):
-        """publish_status_event writes to the status stream with correct fields."""
-        prog = make_program()
-        await fakeredis_storage.add(prog)
-
-        await fakeredis_storage.publish_status_event(
-            status="DONE",
-            program_id=prog.id,
-            extra={"event": "completed"},
-        )
-
-        # Read back from the stream to verify
-        r = await fakeredis_storage._conn.get()
-        stream_key = fakeredis_storage._keys.status_stream()
-        entries = await r.xrange(stream_key)
-        # At least 2 entries: one from add(), one from publish_status_event()
-        assert len(entries) >= 2
-        last_entry = entries[-1]
-        assert last_entry[1]["id"] == prog.id
-        assert last_entry[1]["status"] == "DONE"
-        assert last_entry[1]["event"] == "completed"
-
-        # Verify earlier entries have the expected structure
-        first_entry = entries[0]
-        assert "id" in first_entry[1]
-        assert "status" in first_entry[1]
+    """Verify wait_for_activity and its fallback path."""
 
     async def test_wait_for_activity_returns_on_timeout(self, fakeredis_storage):
         """wait_for_activity returns after the timeout with no events."""

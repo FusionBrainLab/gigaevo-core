@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
-from typing import Any
 
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState, validate_transition
@@ -162,14 +161,6 @@ class ProgramStorage(ABC):
 
     @abstractmethod
     async def exists(self, program_id: str) -> bool: ...
-
-    @abstractmethod
-    async def publish_status_event(
-        self,
-        status: str,
-        program_id: str,
-        extra: dict[str, Any] | None = None,
-    ) -> None: ...
 
     @abstractmethod
     async def get_all(self, *, exclude: frozenset[str] | None = None) -> list[Program]:
