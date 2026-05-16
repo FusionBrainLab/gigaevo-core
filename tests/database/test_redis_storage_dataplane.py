@@ -204,6 +204,158 @@ class TestDpRoutedTransition:
         # another. Both arrive on the same status_events stream key.
         assert len(entries) >= 2
 
+    async def test_transition_event_payload_carries_legacy_and_dp_fields(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        """The Lua-emitted XADD payload covers both wire shapes.
+
+        Legacy readers key on ``id`` / ``status`` / ``event``; dp-aware
+        readers consume the (``pid``, ``from``, ``to``, ``epoch``)
+        triple. A single XADD inside the Lua carries both so neither
+        reader side needs a migration.
+        """
+        storage, _ = dp_storage
+        prog = _program(ProgramState.QUEUED)
+        await storage.add(prog)
+        await storage.fast_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+
+        r = await storage._conn.get()
+        entries = await r.xrange(storage._keys.status_stream(), count=10)
+        transition_entries = [
+            fields
+            for _, fields in entries
+            if fields.get("event") == "transition" and fields.get("id") == prog.id
+        ]
+        assert len(transition_entries) == 1, (
+            f"expected exactly one transition event for {prog.id}, "
+            f"observed {len(transition_entries)} (stream: {entries!r})"
+        )
+        payload = transition_entries[0]
+        # Legacy schema.
+        assert payload["id"] == prog.id
+        assert payload["status"] == ProgramState.RUNNING.value
+        assert payload["event"] == "transition"
+        # dp-native schema.
+        assert payload["pid"] == prog.id
+        assert payload["from"] == ProgramState.QUEUED.value
+        assert payload["to"] == ProgramState.RUNNING.value
+        assert int(payload["epoch"]) >= 1
+
+    async def test_dp_path_emits_exactly_one_event_per_transition(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        """Pin the single-emit invariant on the dp-routed path.
+
+        ``transition_state.lua`` is the sole event source; the wrapper
+        :meth:`RedisProgramStorage._transition_via_dataplane` does not
+        call :meth:`publish_status_event` after the script returns, so
+        the per-transition event count on the status stream is exactly
+        one. The test exercises three transitions and counts events
+        keyed on ``event == "transition"`` matching the program id.
+        """
+        storage, _ = dp_storage
+        prog = _program(ProgramState.QUEUED)
+        await storage.add(prog)
+
+        await storage.fast_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+        await storage.atomic_state_transition(
+            prog, ProgramState.RUNNING.value, ProgramState.DONE.value
+        )
+        await storage.atomic_state_transition(
+            prog, ProgramState.DONE.value, ProgramState.QUEUED.value
+        )
+
+        r = await storage._conn.get()
+        entries = await r.xrange(storage._keys.status_stream(), count=100)
+        transition_count = sum(
+            1
+            for _, fields in entries
+            if fields.get("event") == "transition" and fields.get("id") == prog.id
+        )
+        assert transition_count == 3, (
+            f"expected one event per transition (3 total), observed "
+            f"{transition_count} (stream: {entries!r})"
+        )
+
+    async def test_dp_path_preserves_empty_dict_fields(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        """Empty dict fields survive a dp-routed transition as ``{}``.
+
+        The Lua re-encodes the merged blob with ``cjson.encode``; on
+        Redis builds shipping lua-cjson 2.1+, the directive
+        ``cjson.encode_empty_table_as_object(true)`` at the top of
+        ``transition_state.lua`` keeps empty objects as ``{}``. On
+        environments without the directive (e.g. fakeredis's embedded
+        Lua VM), :meth:`RedisProgramStorage._safe_deserialize`'s coercion
+        recovers the dict shape. Either way, the round-tripped Program
+        instance has dict-typed empty fields, not list-typed.
+        """
+        storage, _ = dp_storage
+        prog = _program(ProgramState.QUEUED)
+        # All three dict-typed fields start empty on a freshly-built
+        # Program; explicit assignment pins the invariant against future
+        # default-factory changes.
+        prog.metrics = {}
+        prog.stage_results = {}
+        prog.metadata = {}
+        await storage.add(prog)
+
+        await storage.fast_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+
+        fetched = await storage.get(prog.id)
+        assert fetched is not None
+        assert fetched.metrics == {} and isinstance(fetched.metrics, dict)
+        assert fetched.stage_results == {} and isinstance(fetched.stage_results, dict)
+        assert fetched.metadata == {} and isinstance(fetched.metadata, dict)
+
+    async def test_dp_path_stamps_atomic_counter_in_blob(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        """The Lua stamps both ``atomic_counter`` and ``epoch`` on the blob.
+
+        The persisted blob carries the legacy field name so dp-routed
+        writes are pass-through for any reader that keys on
+        ``atomic_counter`` (the gigaevo Program merge tiebreaker). The
+        read path then strips ``epoch`` to satisfy the Pydantic model's
+        ``extra="forbid"`` constraint.
+        """
+        storage, _ = dp_storage
+        prog = _program(ProgramState.QUEUED)
+        await storage.add(prog)
+        await storage.fast_state_transition(
+            prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+
+        r = await storage._conn.get()
+        raw = await r.get(storage._keys.program(prog.id))
+        assert raw is not None
+        import json as _json
+
+        blob = _json.loads(raw)
+        assert "atomic_counter" in blob, (
+            f"Lua must stamp atomic_counter on the post-transition blob "
+            f"so legacy readers see the post-INCR counter without a "
+            f"read-side rename; got keys={sorted(blob)!r}"
+        )
+        assert "epoch" in blob, (
+            f"Lua must also stamp epoch for dp-aware consumers; "
+            f"got keys={sorted(blob)!r}"
+        )
+        assert blob["atomic_counter"] == blob["epoch"]
+        assert isinstance(blob["atomic_counter"], int)
+        assert blob["atomic_counter"] >= 1
+
 
 class TestLegacyPathUnchanged:
     async def test_default_storage_has_no_dataplane(self) -> None:

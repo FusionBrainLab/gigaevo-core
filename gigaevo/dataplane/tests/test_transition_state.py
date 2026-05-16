@@ -248,9 +248,73 @@ class TestSideEffects:
         events = await pool.xrange("test:status_events")  # type: ignore[misc]
         assert len(events) >= 1
         _, last_fields = events[-1]
+        # dp-native fields.
         assert last_fields["pid"] == "p-12"
         assert last_fields["from"] == "QUEUED"
         assert last_fields["to"] == "RUNNING"
+        # Legacy fields, emitted alongside so pre-coordinator readers
+        # observe the same wire shape they did on the WATCH/MULTI/EXEC
+        # path.
+        assert last_fields["id"] == "p-12"
+        assert last_fields["status"] == "RUNNING"
+        assert last_fields["event"] == "transition"
+
+    async def test_lua_invokes_encode_empty_table_directive(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """Pin that the Lua source contains the cjson-empty-object guard.
+
+        fakeredis's embedded Lua VM does not expose
+        ``cjson.encode_empty_table_as_object``, so a runtime round-trip
+        test would only check the directive's no-op path. The source-text
+        pin is the strongest verification available without a real Redis
+        instance: it asserts the directive is present at the top of the
+        script and is invoked conditionally so deployments on Redis builds
+        without the function continue to load the script.
+        """
+        from gigaevo.dataplane.scripts import load_lua_source
+
+        source = load_lua_source(
+            __import__(
+                "gigaevo.dataplane.coordinator", fromlist=["_SCRIPT_TRANSITION_STATE"]
+            )._SCRIPT_TRANSITION_STATE
+        )
+        assert "cjson.encode_empty_table_as_object" in source, (
+            "transition_state.lua must call cjson.encode_empty_table_as_object "
+            "so empty Lua tables encode as JSON objects rather than arrays; "
+            "without this directive, persisted dict fields round-trip to []"
+        )
+        # The call must be guarded so older Redis builds / fakeredis pass
+        # the script-load step.
+        assert "type(cjson.encode_empty_table_as_object) == 'function'" in source, (
+            "the directive must be guarded by a type check so script load "
+            "succeeds against Redis builds that omit the function"
+        )
+
+    async def test_atomic_counter_mirrors_epoch_in_blob(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """The Lua stamps both ``epoch`` and ``atomic_counter`` on the blob.
+
+        Application-layer callers that key on ``atomic_counter`` (the
+        gigaevo Program merge tiebreaker) read the persisted blob and
+        expect a monotonic integer there; the dp-native ``epoch`` is the
+        same value under a different name. Both are present so the read
+        path is a pass-through for either field name.
+        """
+        await _put_program(coord, "ac-1", dp.ProgramState.QUEUED)
+        result = await coord.transition_program_state(
+            dp.ProgramId("ac-1"),
+            token=_token("ac-1"),
+            expected_from=dp.ProgramState.QUEUED,
+            to=dp.ProgramState.RUNNING,
+        )
+        assert isinstance(result, dp.Ok)
+        blob = result.value.value
+        assert isinstance(blob, dict)
+        assert "epoch" in blob and "atomic_counter" in blob
+        assert blob["epoch"] == blob["atomic_counter"]
+        assert int(blob["epoch"]) == result.value.epoch
 
 
 # ── read_program ─────────────────────────────────────────────────────

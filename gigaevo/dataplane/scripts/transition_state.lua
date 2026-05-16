@@ -44,6 +44,22 @@ local STREAM_MAXLEN = 10000
 -- and ``epoch`` are advanced server-side; ``id`` identifies the blob.
 local RESERVED_PATCH_FIELDS = {state = true, epoch = true, id = true}
 
+-- cjson distinguishes JSON objects from JSON arrays by the Lua table's
+-- positive-integer key shape; an empty Lua table is ambiguous and the
+-- library defaults to emitting ``[]``. The persisted Program blob has
+-- several dict-typed fields (``stage_results`` / ``metrics`` /
+-- ``metadata``) that are routinely empty at write time, so without this
+-- directive the post-transition blob comes back with ``[]`` where the
+-- Pydantic model expects ``{}``. Redis ships lua-cjson 2.1+ which
+-- exposes ``encode_empty_table_as_object``; the conditional keeps the
+-- script forward-compatible with Redis builds (or test harnesses such
+-- as fakeredis's embedded Lua VM) that omit the function. When the
+-- directive is unavailable, the read-side coercion in
+-- ``RedisProgramStorage._safe_deserialize`` recovers the dict shape.
+if type(cjson.encode_empty_table_as_object) == 'function' then
+    cjson.encode_empty_table_as_object(true)
+end
+
 if ARGV[1] == nil or ARGV[1] == '' then
     return redis.error_reply('transition_state: program_id must be non-empty')
 end
@@ -142,11 +158,30 @@ end
 prog.state = ARGV[3]
 local new_epoch = redis.call('INCR', KEYS[3])
 prog.epoch = new_epoch
+-- Mirror ``epoch`` into the legacy field name so application-layer
+-- readers that key on ``atomic_counter`` (the gigaevo Program model's
+-- per-blob revision used as the merge tiebreaker) observe the
+-- post-transition counter without a read-side rename. The two fields
+-- carry the same value by construction; the dual-name window closes
+-- when the legacy storage path is retired.
+prog.atomic_counter = new_epoch
 
 redis.call('SET', KEYS[1], cjson.encode(prog))
 redis.call('SREM', ARGV[6] .. ':status:' .. from, ARGV[1])
 redis.call('SADD', ARGV[6] .. ':status:' .. ARGV[3], ARGV[1])
+-- Status-event payload carries both the legacy (``id`` / ``status`` /
+-- ``event``) and the dp-native (``pid`` / ``from`` / ``to`` / ``epoch``)
+-- field sets. The Lua script is the sole emitter on the dp-routed
+-- transition path: ``RedisProgramStorage._transition_via_dataplane``
+-- does not append a second event after the script returns, so this
+-- XADD is the single source of truth for the transition fact. Carrying
+-- both shapes lets pre-coordinator readers that key on ``id`` /
+-- ``status`` continue to work alongside dp-aware consumers that prefer
+-- the explicit (from, to, epoch) triple.
 redis.call('XADD', KEYS[2], 'MAXLEN', '~', STREAM_MAXLEN, '*',
+           'id', ARGV[1],
+           'status', ARGV[3],
+           'event', 'transition',
            'pid', ARGV[1],
            'from', from,
            'to', ARGV[3],

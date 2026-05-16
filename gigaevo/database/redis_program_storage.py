@@ -129,14 +129,17 @@ class RedisProgramStorage(ProgramStorage):
         while batch := list(islice(it, n)):
             yield batch
 
-    # ``Program`` Pydantic fields that must remain dicts after a lua
-    # round-trip. Lua / cjson cannot distinguish an empty object ``{}``
-    # from an empty array ``[]``: ``cjson.encode({})`` emits ``[]`` on
-    # both inputs, so any empty dict field on the persisted blob comes
-    # back as a list after the coordinator's ``transition_state.lua``
-    # re-encodes the merged payload. Normalising those fields back to
-    # ``{}`` on read keeps the Program model schema satisfied without
-    # forcing the caller to remember the wire-format quirk.
+    # ``Program`` Pydantic fields whose runtime type is ``dict`` even
+    # when empty. ``transition_state.lua`` calls
+    # ``cjson.encode_empty_table_as_object(true)`` before re-encoding
+    # the merged blob, so on Redis builds shipping lua-cjson 2.1+ the
+    # round-trip preserves ``{}``. The coercion below is defensive
+    # fallback for two scenarios: (a) Redis forks / test harnesses
+    # whose embedded Lua VM omits ``encode_empty_table_as_object`` (e.g.
+    # fakeredis); (b) corrupted blobs from older write paths that
+    # predate the directive. Both surface the same wire artefact —
+    # ``[]`` where the Pydantic model expects ``{}`` — so a single
+    # coercion site keeps the read path uniform.
     _DICT_FIELDS: frozenset[str] = frozenset({"stage_results", "metrics", "metadata"})
 
     @classmethod
@@ -149,15 +152,15 @@ class RedisProgramStorage(ProgramStorage):
     ) -> Program | None:
         try:
             data = _loads(raw)
-            # The dataplane's ``transition_state.lua`` stamps the
-            # post-transition blob with an ``epoch`` field equal to the
-            # bumped global counter (``{prefix}:ts``). The legacy storage
-            # uses the same counter under the name ``atomic_counter`` on
-            # the :class:`Program` Pydantic model, which forbids extra
-            # fields. Promote ``epoch`` into ``atomic_counter`` when the
-            # explicit ``atomic_counter`` is absent so callers see a
-            # uniform field name regardless of which write path produced
-            # the blob.
+            # ``transition_state.lua`` stamps the post-transition blob
+            # with both ``epoch`` (the dp-native field name) and
+            # ``atomic_counter`` (the legacy Program field name) carrying
+            # the same value, so the read path strips ``epoch`` to keep
+            # the Pydantic model's ``extra="forbid"`` constraint
+            # satisfied. The promote branch is the defensive fallback
+            # for blobs persisted before the Lua mirror was added: if
+            # only ``epoch`` is present, copy it into ``atomic_counter``
+            # before discarding.
             if isinstance(data, dict):
                 if "epoch" in data:
                     epoch = data.pop("epoch")
@@ -560,12 +563,19 @@ class RedisProgramStorage(ProgramStorage):
         # Mirror the persisted counter into the in-memory program so
         # subsequent merge-tiebreak comparisons see the post-transition
         # value, matching the legacy-path invariant where the storage
-        # bumps ``atomic_counter`` before returning to the caller.
+        # bumps ``atomic_counter`` before returning to the caller. The
+        # Lua script stamps both ``atomic_counter`` (legacy name) and
+        # ``epoch`` (dp-native name) carrying the same value; prefer
+        # the legacy field when present, fall back to ``epoch`` for
+        # blobs persisted before the dual-stamp landed, then to the
+        # coordinator's own :class:`Versioned` envelope.
         post_blob = result.value.value
-        if isinstance(post_blob, dict) and "epoch" in post_blob:
-            epoch_val = post_blob["epoch"]
-            if isinstance(epoch_val, int):
-                program.atomic_counter = epoch_val
+        if isinstance(post_blob, dict):
+            counter_val = post_blob.get("atomic_counter", post_blob.get("epoch"))
+            if isinstance(counter_val, int):
+                program.atomic_counter = counter_val
+            elif result.value.epoch:
+                program.atomic_counter = result.value.epoch
         elif result.value.epoch:
             program.atomic_counter = result.value.epoch
         # Keep the in-memory state in sync with the persisted blob.
