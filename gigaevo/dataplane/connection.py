@@ -123,7 +123,7 @@ class RedisConnection:
                 # clean slate.
                 await _safe_close(pool)
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - startup boundary, wrapped into StartupError
                 await _safe_close(pool)
                 raise StartupError(reason=f"Redis startup failed: {exc!r}") from exc
             self._pool = pool

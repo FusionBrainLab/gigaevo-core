@@ -329,7 +329,7 @@ class DataPlane:
                 name="lock_state",
                 table=LOCK_STATE_TRANSITIONS,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - startup cleanup, error re-raised verbatim
             # Roll back the pool AND the registry handle so the
             # coordinator is observably in its pre-startup state. A
             # later script-load attempt after a successful pool-startup
@@ -354,7 +354,7 @@ class DataPlane:
         try:
             await self._cancel_renewers()
             await self._connection.shutdown()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - shutdown boundary, wrapped into ShutdownError
             raise ShutdownError(reason=repr(exc)) from exc
         finally:
             self._lua = None
