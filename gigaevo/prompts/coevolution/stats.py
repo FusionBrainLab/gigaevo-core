@@ -9,7 +9,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import hashlib
-import json
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -49,9 +48,18 @@ class RedisPromptStatsProvider(PromptStatsProvider):
     Supports 1-to-many coupling: aggregates trials/successes across multiple
     main runs that all test prompts from the same prompt evolution archive.
 
-    Stats are written by GigaEvoArchivePromptFetcher.record_outcome() and
-    stored as JSON under the key:
-        {prefix}:prompt_stats:{prompt_id}
+    Stats are written by ``GigaEvoArchivePromptFetcher.record_outcome``
+    across two keys per prompt id:
+
+    - Hash ``{prefix}:prompt_stats:{prompt_id}`` with fields
+      ``trials``, ``successes``, ``metrics_count`` and one
+      ``m:<metric_key>`` per metric (the per-metric sum).
+    - List ``{prefix}:prompt_fitnesses:{prompt_id}`` of recent fitness
+      values in most-recent-first order, capped at the writer's window.
+
+    Reads aggregate across all configured sources: counters sum,
+    per-metric sums sum, fitness lists concatenate (the last 20 entries
+    overall feed ``recent_fitnesses``).
 
     Args:
         host: Redis host
@@ -117,18 +125,27 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         for db, prefix in self._sources:
             try:
                 r = self._get_redis(db)
-                key = f"{prefix}:prompt_stats:{prompt_id}"
-                raw = await r.get(key)
-                if raw:
-                    data = json.loads(raw)
-                    total_trials += int(data.get("trials", 0))
-                    total_successes += int(data.get("successes", 0))
-                    total_metrics_count += int(data.get("metrics_count", 0))
-                    all_fitnesses.extend(data.get("fitnesses", []))
-                    for k, v in data.get("metrics_sums", {}).items():
-                        merged_metrics_sums[k] = merged_metrics_sums.get(
-                            k, 0.0
-                        ) + float(v)
+                stats_key = f"{prefix}:prompt_stats:{prompt_id}"
+                fitness_key = f"{prefix}:prompt_fitnesses:{prompt_id}"
+                pipe = r.pipeline(transaction=False)
+                pipe.hgetall(stats_key)
+                pipe.lrange(fitness_key, 0, -1)
+                fields, fitness_values = await pipe.execute()
+                total_trials += int(fields.get("trials", 0))
+                total_successes += int(fields.get("successes", 0))
+                total_metrics_count += int(fields.get("metrics_count", 0))
+                for field_name, value in fields.items():
+                    if field_name.startswith("m:"):
+                        metric_key = field_name[len("m:") :]
+                        merged_metrics_sums[metric_key] = merged_metrics_sums.get(
+                            metric_key, 0.0
+                        ) + float(value)
+                # Fitness list is stored newest-first; convert to floats.
+                for raw in fitness_values:
+                    try:
+                        all_fitnesses.append(float(raw))
+                    except (TypeError, ValueError):
+                        continue
             except Exception as exc:
                 logger.warning(
                     f"[RedisPromptStatsProvider] Error reading stats from "
@@ -143,8 +160,10 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         mean_child_fitness = (
             sum(all_fitnesses) / len(all_fitnesses) if all_fitnesses else 0.0
         )
-        # Keep last 20 fitnesses across all sources
-        recent = all_fitnesses[-20:] if all_fitnesses else None
+        # Each per-source list is newest-first (LPUSH + LTRIM); the
+        # union is the first 20 across the concatenation, treating
+        # every source as equally recent.
+        recent = all_fitnesses[:20] if all_fitnesses else None
 
         # Compute per-metric means using metrics_count (only trials with metrics)
         mean_metrics = None

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
@@ -363,26 +362,20 @@ class TestPromptFitnessStagePrior:
 
 
 class TestMetricsCountTracking:
-    def test_record_outcome_with_metrics_increments_count(self):
-        """M1: record_outcome increments metrics_count when child_metrics provided."""
+    def _fakeredis(self) -> object:
+        import fakeredis
+
+        return fakeredis.FakeStrictRedis(db=0, decode_responses=True)
+
+    def test_record_outcome_with_metrics_increments_count(self) -> None:
+        """metrics_count and per-metric m: sums advance when metrics supplied."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="test_prefix",
             main_redis_db=0,
         )
-
-        # Mock the Redis client
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None  # No existing stats
-        fetcher._redis_main_sync = mock_redis
-
-        captured = {}
-
-        def capture_set(key, value):
-            captured["key"] = key
-            captured["value"] = json.loads(value)
-
-        mock_redis.set.side_effect = capture_set
+        r = self._fakeredis()
+        fetcher._redis_main_sync = r
 
         fetcher.record_outcome(
             prompt_id="abc123",
@@ -393,28 +386,20 @@ class TestMetricsCountTracking:
             child_metrics={"em": 0.6, "f1": 0.8},
         )
 
-        assert captured["value"]["metrics_count"] == 1
-        assert captured["value"]["metrics_sums"]["em"] == 0.6
-        assert captured["value"]["metrics_sums"]["f1"] == 0.8
+        fields = r.hgetall("test_prefix:prompt_stats:abc123")
+        assert int(fields["metrics_count"]) == 1
+        assert float(fields["m:em"]) == 0.6
+        assert float(fields["m:f1"]) == 0.8
 
-    def test_record_outcome_without_metrics_no_count(self):
-        """M1: record_outcome does NOT increment metrics_count without child_metrics."""
+    def test_record_outcome_without_metrics_no_count(self) -> None:
+        """metrics_count stays unset when child_metrics is None."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="test_prefix",
             main_redis_db=0,
         )
-
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None
-        fetcher._redis_main_sync = mock_redis
-
-        captured = {}
-
-        def capture_set(key, value):
-            captured["value"] = json.loads(value)
-
-        mock_redis.set.side_effect = capture_set
+        r = self._fakeredis()
+        fetcher._redis_main_sync = r
 
         fetcher.record_outcome(
             prompt_id="abc123",
@@ -425,7 +410,10 @@ class TestMetricsCountTracking:
             child_metrics=None,
         )
 
-        assert captured["value"]["metrics_count"] == 0
+        fields = r.hgetall("test_prefix:prompt_stats:abc123")
+        # No metrics → no metrics_count field, and no m:* fields either.
+        assert "metrics_count" not in fields
+        assert not any(k.startswith("m:") for k in fields)
 
 
 # ===================================================================

@@ -8,6 +8,7 @@ Two concrete implementations:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 import random
@@ -31,6 +32,26 @@ class _PromptPack:
     system: str
     user: str | None
     prompt_id: str
+
+
+_CURRENT_PACK: ContextVar[_PromptPack | None] = ContextVar(
+    "gigaevo.prompts.fetcher._current_pack", default=None
+)
+"""Per-task pack handle.
+
+Each mutation runs under its own asyncio task; the system-prompt fetch
+stores the sampled pack here, the user-prompt fetch reads it back. Using
+a :class:`ContextVar` keeps concurrent mutations from seeing each
+other's sample even when they share one fetcher instance.
+"""
+
+_FITNESS_WINDOW: int = 20
+"""Max number of recent fitness samples retained per prompt id.
+
+LPUSH inserts at head, LTRIM keeps indices ``0 .. _FITNESS_WINDOW - 1``,
+so the list always carries the newest ``_FITNESS_WINDOW`` values in
+most-recent-first order.
+"""
 
 
 @dataclass
@@ -182,12 +203,11 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._fallback = FixedDirPromptFetcher(fallback_prompts_dir)
         self._fitness_key = fitness_key
 
-        # Cache state — candidates list is cached (expensive Redis read),
-        # but sampling happens fresh on every fetch("mutation", "system") call
-        # so each mutation gets an independently sampled prompt.
-        # The _current_pack persists across system+user calls within one mutation.
+        # Candidate list is shared (expensive Redis read; one cache per
+        # fetcher), but the sampled pack is per-task via ``_CURRENT_PACK``
+        # so concurrent mutations do not see each other's pick between
+        # the system and user fetches.
         self._cached_candidates: list[tuple[str, float, str]] | None = None
-        self._current_pack: _PromptPack | None = None  # current mutation's sample
         self._cached_pack: _PromptPack | None = None  # last sampled (for get_stats)
         self._cache_timestamp: float = 0.0
 
@@ -438,9 +458,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                 )
             pack = self._sample_prompt()
             if pack is not None:
-                self._current_pack = pack
+                _CURRENT_PACK.set(pack)
                 self._cached_pack = pack  # track last sample for get_stats()
-        pack = self._current_pack
+        pack = _CURRENT_PACK.get()
 
         if pack is not None:
             if not self._using_archive:
@@ -479,13 +499,20 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         outcome: MutationOutcome,
         child_metrics: dict[str, float] | None = None,
     ) -> None:
-        """Write mutation outcome stats to Redis for the prompt run to read.
+        """Append one mutation outcome to the Redis stats for ``prompt_id``.
 
-        Stores enriched per-prompt statistics including fitness distribution
-        and metrics breakdown so the prompt evolution run can understand
-        not just success rate but HOW programs perform with each prompt.
+        Writes are partitioned across two keys so each write is atomic
+        against concurrent writers without WATCH/MULTI/EXEC:
 
-        Skips REJECTED_ACCEPTOR (no reliable fitness).
+        - Hash ``{prefix}:prompt_stats:{prompt_id}`` with fields
+          ``trials``, ``successes``, ``metrics_count`` (HINCRBY), and
+          ``m:<metric_key>`` per accumulated metric (HINCRBYFLOAT).
+        - List ``{prefix}:prompt_fitnesses:{prompt_id}`` capped at the
+          most recent ``_FITNESS_WINDOW`` entries via LPUSH + LTRIM.
+
+        Both keys are written in one pipeline so the per-call work is one
+        Redis round-trip. Skips ``REJECTED_ACCEPTOR`` (no reliable
+        fitness) and is a no-op when ``main_redis_db`` is unset.
 
         Args:
             prompt_id: Tracking ID of the prompt used
@@ -501,7 +528,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         from gigaevo.llm.bandit import MutationOutcome as _MutationOutcome
 
         if outcome == _MutationOutcome.REJECTED_ACCEPTOR:
-            return  # No reliable fitness — skip
+            return
 
         if self._redis_main_sync is None:
             logger.debug(
@@ -509,52 +536,31 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             )
             return
 
+        is_improvement = (
+            (child_fitness > parent_fitness)
+            if higher_is_better
+            else (child_fitness < parent_fitness)
+        )
+
+        stats_key = f"{self._main_redis_prefix}:prompt_stats:{prompt_id}"
+        fitness_key = f"{self._main_redis_prefix}:prompt_fitnesses:{prompt_id}"
+
         try:
-            import json as _json
-
-            stats_key = f"{self._main_redis_prefix}:prompt_stats:{prompt_id}"
-            raw = self._redis_main_sync.get(stats_key)
-            if raw:
-                stats = _json.loads(raw)
-            else:
-                stats = {
-                    "trials": 0,
-                    "successes": 0,
-                    "fitnesses": [],
-                    "metrics_sums": {},
-                    "metrics_count": 0,
-                }
-
-            stats["trials"] += 1
-            is_improvement = (
-                (child_fitness > parent_fitness)
-                if higher_is_better
-                else (child_fitness < parent_fitness)
-            )
+            pipe = self._redis_main_sync.pipeline(transaction=False)
+            pipe.hincrby(stats_key, "trials", 1)
             if is_improvement:
-                stats["successes"] += 1
-
-            # Store recent fitness values (keep last 20 for distribution)
-            fitnesses = stats.get("fitnesses", [])
-            fitnesses.append(round(child_fitness, 4))
-            if len(fitnesses) > 20:
-                fitnesses = fitnesses[-20:]
-            stats["fitnesses"] = fitnesses
-
-            # Accumulate per-metric sums for mean computation
+                pipe.hincrby(stats_key, "successes", 1)
+            pipe.lpush(fitness_key, round(child_fitness, 4))
+            pipe.ltrim(fitness_key, 0, _FITNESS_WINDOW - 1)
             if child_metrics:
-                stats["metrics_count"] = stats.get("metrics_count", 0) + 1
-                metrics_sums = stats.get("metrics_sums", {})
+                pipe.hincrby(stats_key, "metrics_count", 1)
                 for k, v in child_metrics.items():
                     if isinstance(v, (int, float)):
-                        metrics_sums[k] = metrics_sums.get(k, 0.0) + float(v)
-                stats["metrics_sums"] = metrics_sums
-
-            self._redis_main_sync.set(stats_key, _json.dumps(stats))
+                        pipe.hincrbyfloat(stats_key, f"m:{k}", float(v))
+            pipe.execute()
             logger.debug(
-                f"[GigaEvoArchivePromptFetcher] Stats updated for {prompt_id}: "
-                f"trials={stats['trials']} successes={stats['successes']} "
-                f"child_fitness={child_fitness:.4f}"
+                f"[GigaEvoArchivePromptFetcher] Recorded outcome for {prompt_id}: "
+                f"improvement={is_improvement} child_fitness={child_fitness:.4f}"
             )
         except Exception as exc:
             logger.warning(f"[GigaEvoArchivePromptFetcher] Stats write error: {exc}")
