@@ -21,8 +21,28 @@
 -- Returns:
 --   { new_per_actor_count, generation, epoch }
 --   all elements are ASCII integer strings (so the client can int(...) them).
+--
+-- Errors out on a non-integer delta / empty actor_id; HINCRBY would
+-- error too, but a Lua-side check produces a clearer message and keeps
+-- the failure path before any side effect.
 
-local new_count = redis.call('HINCRBY', KEYS[1], ARGV[1], tonumber(ARGV[2]))
+if ARGV[1] == nil or ARGV[1] == '' then
+    return redis.error_reply('counter_inc: actor_id must be non-empty')
+end
+local delta = tonumber(ARGV[2])
+-- Reject nil, NaN, +/-inf, and non-integer values. NaN fails the
+-- self-equality check; +/-inf fail the math.huge bounds; fractional
+-- values fail the floor-equality check; non-numeric strings make
+-- tonumber return nil.
+if not delta
+   or delta ~= delta
+   or delta == math.huge
+   or delta == -math.huge
+   or delta ~= math.floor(delta) then
+    return redis.error_reply('counter_inc: delta must be a finite integer, got ' .. tostring(ARGV[2]))
+end
+
+local new_count = redis.call('HINCRBY', KEYS[1], ARGV[1], delta)
 local generation = redis.call('INCR', KEYS[2])
 local epoch = redis.call('INCR', KEYS[3])
 return {tostring(new_count), tostring(generation), tostring(epoch)}

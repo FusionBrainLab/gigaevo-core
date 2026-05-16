@@ -18,10 +18,23 @@
 -- Returns:
 --   'replaced' — candidate HLC was strictly newer; stored value updated
 --   'kept'     — candidate HLC was older or equal; no write
+--
+-- Errors out on a malformed candidate HLC. Lexicographic comparison
+-- is only order-preserving when both operands are equal length and
+-- drawn from the same alphabet; a short / non-hex HLC would compare
+-- non-monotonically against well-formed stored HLCs and silently let
+-- an older write win. The wrapper computes ``hlc.pack_hex()`` which
+-- always returns 32 lowercase hex chars; this check is the server-
+-- side belt.
+
+local cand_hlc = ARGV[2]
+if cand_hlc == nil or #cand_hlc ~= 32 or string.match(cand_hlc, '^[0-9a-f]+$') == nil then
+    return redis.error_reply('lwwr_set: candidate hlc must be 32 lowercase hex chars, got ' .. tostring(cand_hlc))
+end
 
 local cur_hlc = redis.call('HGET', KEYS[1], 'hlc')
-if cur_hlc and cur_hlc >= ARGV[2] then
+if cur_hlc and cur_hlc >= cand_hlc then
     return 'kept'
 end
-redis.call('HSET', KEYS[1], 'value', ARGV[1], 'hlc', ARGV[2])
+redis.call('HSET', KEYS[1], 'value', ARGV[1], 'hlc', cand_hlc)
 return 'replaced'

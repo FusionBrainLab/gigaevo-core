@@ -200,6 +200,49 @@ class TestConcurrency:
         assert read.value.hlc == _hlc(190)
 
 
+# ── hostile HLC inputs ───────────────────────────────────────────────
+
+
+class TestHostileHlc:
+    """The Lua script rejects malformed HLC strings.
+
+    Lexicographic comparison is order-preserving only when both operands
+    have equal length and are drawn from the same alphabet. A short or
+    uppercase or non-hex HLC could compare non-monotonically against a
+    well-formed stored HLC and silently let an older write win. The
+    script must surface these as a script error.
+    """
+
+    async def test_direct_short_hlc_errors(self, coord: dp.DataPlane) -> None:
+        lua = coord._lua  # type: ignore[attr-defined]
+        with pytest.raises(Exception):  # noqa: PT011,BLE001
+            await lua.evalsha(
+                "lwwr_set",
+                keys=["test:lwwr:short"],
+                args=['"v"', "abc123"],  # 6 chars, not 32
+            )
+
+    async def test_direct_uppercase_hlc_errors(self, coord: dp.DataPlane) -> None:
+        lua = coord._lua  # type: ignore[attr-defined]
+        # 32 chars but contains uppercase — the encoder is lowercase-
+        # only, so an uppercase wire value is a tamper / bug signal.
+        with pytest.raises(Exception):  # noqa: PT011,BLE001
+            await lua.evalsha(
+                "lwwr_set",
+                keys=["test:lwwr:upper"],
+                args=['"v"', "AABBCCDDEEFF0000000000000000000A"],
+            )
+
+    async def test_direct_non_hex_hlc_errors(self, coord: dp.DataPlane) -> None:
+        lua = coord._lua  # type: ignore[attr-defined]
+        with pytest.raises(Exception):  # noqa: PT011,BLE001
+            await lua.evalsha(
+                "lwwr_set",
+                keys=["test:lwwr:nonhex"],
+                args=['"v"', "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"],
+            )
+
+
 # ── isolation across keys ────────────────────────────────────────────
 
 

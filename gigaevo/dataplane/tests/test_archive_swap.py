@@ -265,6 +265,161 @@ class TestTokenDiscipline:
         assert token.consumed
 
 
+# ── hostile / out-of-range scores ────────────────────────────────────
+
+
+class TestHostileScores:
+    """Defensive checks for non-finite candidate scores.
+
+    A NaN candidate compares false against every operand, so a naive
+    ``cand < cur`` branch would let it bypass rejection and overwrite
+    the occupant. ``+/-inf`` would encode an always-win sentinel. The
+    Lua script must surface these as ``DataPlaneError`` rather than
+    silently mutating the cell.
+    """
+
+    async def test_nan_score_does_not_overwrite_occupant(
+        self, coord: dp.DataPlane
+    ) -> None:
+        # Seed a healthy occupant.
+        ok = await coord.try_replace_elite(
+            dp.CellKey("nan-cell"),
+            dp.ProgramId("good"),
+            token=_cell_token("nan-cell"),
+            candidate_score=1.0,
+            tiebreak_bit=0,
+        )
+        assert isinstance(ok, dp.Ok)
+        bad = await coord.try_replace_elite(
+            dp.CellKey("nan-cell"),
+            dp.ProgramId("nan-attacker"),
+            token=_cell_token("nan-cell"),
+            candidate_score=float("nan"),
+            tiebreak_bit=1,
+        )
+        assert isinstance(bad, dp.Err)
+        pool = coord._connection.pool  # type: ignore[attr-defined]
+        # Occupant must still be the original.
+        occupant = await pool.hget("test:archive", "nan-cell")  # type: ignore[misc]
+        assert occupant == "good"
+
+    async def test_inf_score_does_not_overwrite_occupant(
+        self, coord: dp.DataPlane
+    ) -> None:
+        ok = await coord.try_replace_elite(
+            dp.CellKey("inf-cell"),
+            dp.ProgramId("good"),
+            token=_cell_token("inf-cell"),
+            candidate_score=1.0,
+            tiebreak_bit=0,
+        )
+        assert isinstance(ok, dp.Ok)
+        bad = await coord.try_replace_elite(
+            dp.CellKey("inf-cell"),
+            dp.ProgramId("inf-attacker"),
+            token=_cell_token("inf-cell"),
+            candidate_score=float("inf"),
+            tiebreak_bit=0,
+        )
+        assert isinstance(bad, dp.Err)
+        pool = coord._connection.pool  # type: ignore[attr-defined]
+        occupant = await pool.hget("test:archive", "inf-cell")  # type: ignore[misc]
+        assert occupant == "good"
+
+    async def test_negative_inf_score_rejected_on_empty_cell(
+        self, coord: dp.DataPlane
+    ) -> None:
+        # Even on an empty cell, a non-finite candidate must not insert
+        # — the cell is meant to hold finite scores only.
+        bad = await coord.try_replace_elite(
+            dp.CellKey("empty-cell"),
+            dp.ProgramId("neg-inf"),
+            token=_cell_token("empty-cell"),
+            candidate_score=float("-inf"),
+            tiebreak_bit=0,
+        )
+        assert isinstance(bad, dp.Err)
+        pool = coord._connection.pool  # type: ignore[attr-defined]
+        occupant = await pool.hget("test:archive", "empty-cell")  # type: ignore[misc]
+        assert occupant is None
+
+
+# ── bijection invariant: each program lives in at most one cell ──────
+
+
+class TestBijectionInvariant:
+    """A program-id must appear as the occupant of at most one cell.
+
+    The forward map ``{prefix}:archive`` and the reverse map
+    ``{prefix}:archive:reverse`` must agree: for every ``cell ->
+    program`` entry there is exactly one ``program -> cell`` reverse
+    entry pointing back. Without explicit vacating in the swap script,
+    a program that ``inserted`` into cell A and then ``inserted`` into
+    cell B would leave cell A's forward entry pointing to the same
+    program — an orphaned pointer the reverse map cannot see.
+    """
+
+    async def test_insert_into_second_cell_vacates_first(
+        self, coord: dp.DataPlane
+    ) -> None:
+        # p stakes a claim on cell-A then beats an empty cell-B; cell-A
+        # must no longer point at p afterwards.
+        first = await coord.try_replace_elite(
+            dp.CellKey("cell-A"),
+            dp.ProgramId("p"),
+            token=_cell_token("cell-A"),
+            candidate_score=1.0,
+            tiebreak_bit=0,
+        )
+        assert isinstance(first, dp.Ok)
+        second = await coord.try_replace_elite(
+            dp.CellKey("cell-B"),
+            dp.ProgramId("p"),
+            token=_cell_token("cell-B"),
+            candidate_score=1.0,
+            tiebreak_bit=0,
+        )
+        assert isinstance(second, dp.Ok)
+        pool = coord._connection.pool  # type: ignore[attr-defined]
+        assert (await pool.hget("test:archive:reverse", "p")) == "cell-B"  # type: ignore[misc]
+        assert (await pool.hget("test:archive", "cell-A")) is None  # type: ignore[misc]
+        assert (await pool.hget("test:archive:scores", "cell-A")) is None  # type: ignore[misc]
+
+    async def test_swap_into_second_cell_vacates_first(
+        self, coord: dp.DataPlane
+    ) -> None:
+        await coord.try_replace_elite(
+            dp.CellKey("cA"),
+            dp.ProgramId("p"),
+            token=_cell_token("cA"),
+            candidate_score=10.0,
+            tiebreak_bit=0,
+        )
+        await coord.try_replace_elite(
+            dp.CellKey("cB"),
+            dp.ProgramId("q"),
+            token=_cell_token("cB"),
+            candidate_score=1.0,
+            tiebreak_bit=0,
+        )
+        result = await coord.try_replace_elite(
+            dp.CellKey("cB"),
+            dp.ProgramId("p"),
+            token=_cell_token("cB"),
+            candidate_score=5.0,
+            tiebreak_bit=0,
+        )
+        assert isinstance(result, dp.Ok)
+        assert isinstance(result.value, dp.EliteSwapped)
+        assert result.value.displaced_id == "q"
+        pool = coord._connection.pool  # type: ignore[attr-defined]
+        assert (await pool.hget("test:archive:reverse", "p")) == "cB"  # type: ignore[misc]
+        assert (await pool.hget("test:archive", "cB")) == "p"  # type: ignore[misc]
+        assert (await pool.hget("test:archive", "cA")) is None  # type: ignore[misc]
+        assert (await pool.hget("test:archive:scores", "cA")) is None  # type: ignore[misc]
+        assert (await pool.hget("test:archive:reverse", "q")) is None  # type: ignore[misc]
+
+
 # ── concurrency ──────────────────────────────────────────────────────
 
 

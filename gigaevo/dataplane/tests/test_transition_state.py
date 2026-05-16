@@ -326,6 +326,56 @@ class TestTokenDiscipline:
             )
 
 
+# ── reserved patch fields ────────────────────────────────────────────
+
+
+class TestReservedPatchFields:
+    """A caller's patch must not be able to corrupt the blob's identity.
+
+    ``state``, ``epoch``, and ``id`` are server-owned; a malicious or
+    buggy caller emitting them in the patch must see them silently
+    dropped rather than overwritten. The script is the single source of
+    truth for ``state`` (the target) and ``epoch`` (the next epoch);
+    ``id`` is the program identifier that pins the blob.
+    """
+
+    async def test_patch_cannot_overwrite_id(self, coord: dp.DataPlane) -> None:
+        await _put_program(coord, "rsvd-1", dp.ProgramState.QUEUED)
+        result = await coord.transition_program_state(
+            dp.ProgramId("rsvd-1"),
+            token=_token("rsvd-1"),
+            expected_from=dp.ProgramState.QUEUED,
+            to=dp.ProgramState.RUNNING,
+            patch=dp.ProgramPatch(fields={"id": "spoofed"}),
+        )
+        assert isinstance(result, dp.Ok)
+        assert result.value.value["id"] == "rsvd-1"
+
+    async def test_patch_cannot_overwrite_state(self, coord: dp.DataPlane) -> None:
+        await _put_program(coord, "rsvd-2", dp.ProgramState.QUEUED)
+        result = await coord.transition_program_state(
+            dp.ProgramId("rsvd-2"),
+            token=_token("rsvd-2"),
+            expected_from=dp.ProgramState.QUEUED,
+            to=dp.ProgramState.RUNNING,
+            patch=dp.ProgramPatch(fields={"state": "DONE"}),
+        )
+        assert isinstance(result, dp.Ok)
+        assert result.value.value["state"] == "RUNNING"
+
+    async def test_patch_cannot_overwrite_epoch(self, coord: dp.DataPlane) -> None:
+        await _put_program(coord, "rsvd-3", dp.ProgramState.QUEUED)
+        result = await coord.transition_program_state(
+            dp.ProgramId("rsvd-3"),
+            token=_token("rsvd-3"),
+            expected_from=dp.ProgramState.QUEUED,
+            to=dp.ProgramState.RUNNING,
+            patch=dp.ProgramPatch(fields={"epoch": 999_999}),
+        )
+        assert isinstance(result, dp.Ok)
+        assert int(result.value.value["epoch"]) < 999_999
+
+
 # ── batch transitions ────────────────────────────────────────────────
 
 

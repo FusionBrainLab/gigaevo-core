@@ -200,7 +200,10 @@ class TestTransitionRace:
 class TestLockRace:
     async def test_only_one_acquirer_wins(self, coord: dp.DataPlane) -> None:
         """20 racers, one key: exactly one returns ``Ok``."""
-        key = "conc:critical-section"
+        # The coordinator's key-component validator rejects colons in
+        # the prefix (they collide with the ``{key_prefix}:lock:`` Redis
+        # namespacing convention), so this fixture passes a flat slug.
+        key = "critical-section"
 
         async def racer() -> dp.Result[dp.InstanceLease, object]:
             return await coord.acquire_instance_lock(key, ttl_s=5.0)

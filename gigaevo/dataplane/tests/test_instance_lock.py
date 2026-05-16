@@ -135,6 +135,43 @@ class TestRenew:
 # ── release ──────────────────────────────────────────────────────────
 
 
+class TestAcquireInputValidation:
+    """Server-side defence for malformed inputs.
+
+    The Python wrapper rejects non-positive ``ttl_s`` before issuing
+    EVALSHA — covered by the existing wrapper-level check. These tests
+    target the Lua script directly to pin its behaviour as the
+    last-line-of-defence belt under the wrapper's suspenders.
+    """
+
+    async def test_direct_zero_ttl_call_errors(self, coord: dp.DataPlane) -> None:
+        lua = coord._lua  # type: ignore[attr-defined]
+        with pytest.raises(Exception):  # noqa: PT011,BLE001
+            await lua.evalsha(
+                "instance_lock_acquire",
+                keys=["test:lock:direct-zero"],
+                args=["sometoken", 0],
+            )
+
+    async def test_direct_negative_ttl_call_errors(self, coord: dp.DataPlane) -> None:
+        lua = coord._lua  # type: ignore[attr-defined]
+        with pytest.raises(Exception):  # noqa: PT011,BLE001
+            await lua.evalsha(
+                "instance_lock_acquire",
+                keys=["test:lock:direct-neg"],
+                args=["sometoken", -1],
+            )
+
+    async def test_direct_empty_token_errors(self, coord: dp.DataPlane) -> None:
+        lua = coord._lua  # type: ignore[attr-defined]
+        with pytest.raises(Exception):  # noqa: PT011,BLE001
+            await lua.evalsha(
+                "instance_lock_acquire",
+                keys=["test:lock:direct-empty"],
+                args=["", 5000],
+            )
+
+
 class TestRelease:
     async def test_release_drops_the_key(self, coord: dp.DataPlane) -> None:
         acquired = await coord.acquire_instance_lock(
@@ -259,3 +296,42 @@ class TestAutoRenewal:
         assert len(renewers) == 3
         await coord._cancel_renewers()  # type: ignore[attr-defined]
         assert len(renewers) == 0
+
+    async def test_release_waits_for_renewer_exit(self, coord: dp.DataPlane) -> None:
+        """``release_instance_lock`` must not return until the renewer is gone.
+
+        Without the explicit ``await`` on cancellation the renewer could
+        still be mid-EXPIRE when the release path issues its DEL,
+        leaving the lock un-bounded for one renew interval. The fix
+        gathers on the task before issuing the release.
+        """
+        acquired = await coord.acquire_instance_lock(
+            dp.KeyPrefix("await-cancel"), ttl_s=30.0
+        )
+        assert isinstance(acquired, dp.Ok)
+        renewers: dict[dp.LeaseToken, asyncio.Task[None]] = coord._renewers  # type: ignore[attr-defined]
+        task = renewers[acquired.value.token]
+        await coord.release_instance_lock(acquired.value)
+        # The task is either cancelled or done — never still running.
+        assert task.done() or task.cancelled()
+
+    async def test_renewer_exception_signals_flag(self, coord: dp.DataPlane) -> None:
+        """An exception inside the renewer must escalate to the OneShotFlag.
+
+        We synthesise the failure by closing the underlying pool so the
+        next renewal raises a non-Err exception. The watchdog must
+        translate that into a flag signal so the holder observes the
+        loss on its next dataplane call instead of silently leaking.
+        """
+        acquired = await coord.acquire_instance_lock(
+            dp.KeyPrefix("renew-explode"), ttl_s=0.3
+        )
+        assert isinstance(acquired, dp.Ok)
+        # Drop the registry so the next ``renew_instance_lock`` raises
+        # ``NotStartedError`` from within the renewer loop.
+        coord._lua = None  # type: ignore[attr-defined]
+        for _ in range(30):
+            if acquired.value.flag.is_set():
+                break
+            await asyncio.sleep(0.05)
+        assert acquired.value.flag.is_set()

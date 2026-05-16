@@ -150,27 +150,34 @@ class LuaRegistry:
     async def _reload(self, name: ScriptName, *, stale_sha: str | None) -> str:
         """Re-issue SCRIPT LOAD for ``name`` and refresh the SHA cache.
 
-        Serialised so two callers racing on NOSCRIPT for the same name
-        produce exactly one SCRIPT LOAD round-trip. The discipline is:
+        Serialised so two callers racing for the same name produce
+        exactly one SCRIPT LOAD round-trip. Two entry shapes share this
+        method:
 
-            - If ``stale_sha is None`` (first-time load), we always
-              issue ``script_load`` once the lock is held — there is no
-              prior SHA to compare against.
-            - If ``stale_sha`` is a value (called from the NOSCRIPT
-              recovery branch), the lock holder first re-reads the
-              cached SHA. If it differs from ``stale_sha`` a peer
-              already reloaded and we reuse its result; otherwise we
-              issue our own ``script_load``.
+            - First-time load (``stale_sha is None``): the call entered
+              ``_reload`` because the SHA cache had no entry for
+              ``name``. After acquiring the lock the holder re-reads
+              the cache; if a peer populated it during the wait we
+              reuse that entry instead of issuing a redundant
+              ``script_load``.
+            - NOSCRIPT recovery (``stale_sha`` is a value): the lock
+              holder compares the cache against ``stale_sha``. A
+              differing cache means a peer already refreshed; reuse
+              that entry. A matching cache means the dead SHA is still
+              the latest, so issue a fresh ``script_load``.
 
-        This collapses concurrent NOSCRIPT recoveries to a single round-
-        trip while preserving the single-caller behaviour that ``evalsha``
-        actually advances past ``NOSCRIPT`` instead of EVALSHA-ing the
+        Both shapes collapse concurrent reloaders to a single Redis
+        round-trip and preserve the single-caller invariant that
+        ``evalsha`` advances past NOSCRIPT instead of EVALSHA-ing the
         same dead SHA forever.
         """
         async with self._get_reload_lock():
             cached = self._sha.get(name)
-            if stale_sha is not None and cached is not None and cached != stale_sha:
-                # A peer already refreshed the cache while we waited.
+            if cached is not None and cached != stale_sha:
+                # Either a first-load peer populated the cache while we
+                # waited (stale_sha is None, cached is set) or a NOSCRIPT
+                # peer already refreshed (stale_sha != cached). Either
+                # way the cached SHA is fresh.
                 return cached
             source = self._scripts[name]
             sha = await self._redis.script_load(source)  # type: ignore[misc]
