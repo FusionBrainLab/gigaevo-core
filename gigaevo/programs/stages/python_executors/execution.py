@@ -27,11 +27,14 @@ T = TypeVar("T")
 
 
 class PythonCodeExecutor[T](Stage):
-    """Execute a user function from dynamic code in a loky-managed subprocess.
+    """Execute a user function from dynamic code in a subprocess.
 
-    The worker is isolated from the parent process and recycled periodically;
-    runtime is bounded by ``timeout``.  Result IPC is disk-spilled, so worker
-    return values are bounded by free disk space rather than parent RAM.
+    Dispatched via :class:`gigaevo.programs.stages.python_executors.backend.ExecutorBackend`;
+    the default implementation is :class:`~gigaevo.programs.stages.python_executors.wrapper.LokyBackend`
+    (local loky subprocess pool).  The worker is isolated from the parent
+    process and recycled periodically; runtime is bounded by ``timeout``.
+    Result IPC is disk-spilled, so worker return values are bounded by
+    free disk space rather than parent RAM.
 
     Args:
         function_name: Name of the function to call in the user code

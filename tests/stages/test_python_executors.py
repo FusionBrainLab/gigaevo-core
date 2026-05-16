@@ -2046,6 +2046,50 @@ class TestLifecycleHooks:
         assert len(b) == 1
         assert len(c) == 1
 
+    async def test_on_complete_fires_with_none_metrics_on_pre_submit_failure(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """If pool construction fails before submit, on_complete still fires —
+        with metrics=None — so observer submit/complete counts stay balanced."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen_submit: list[WorkerCall] = []
+        seen_complete: list[tuple] = []
+        backend.on_submit(seen_submit.append)
+        backend.on_complete(
+            lambda call, metrics, exc: seen_complete.append((call, metrics, exc))
+        )
+
+        # Force _get_executor to raise after on_submit has fired.
+        def boom(self_):
+            raise RuntimeError("pool construction failed")
+
+        monkeypatch.setattr(LokyBackend, "_get_executor", boom)
+
+        try:
+            with pytest.raises(RuntimeError, match="pool construction failed"):
+                await backend.execute(
+                    WorkerCall(code="def f(): return 1", function_name="f"),
+                    deadline_s=30,
+                )
+        finally:
+            # _executor never created; shutdown is a no-op.
+            await backend.shutdown(wait=True)
+
+        assert len(seen_submit) == 1
+        assert len(seen_complete) == 1
+        call, metrics, exc = seen_complete[0]
+        assert metrics is None
+        assert isinstance(exc, RuntimeError)
+
     async def test_handler_exception_does_not_break_siblings(self, tmp_path) -> None:
         from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
         from gigaevo.programs.stages.python_executors.wrapper import (

@@ -32,10 +32,17 @@ SubmitHandler = Callable[["WorkerCall"], None]
 """Handler invoked just before a call is dispatched to the underlying executor."""
 
 CompleteHandler = Callable[
-    ["WorkerCall", "ExecutionMetrics", BaseException | None],
+    ["WorkerCall", "ExecutionMetrics | None", BaseException | None],
     None,
 ]
-"""Handler invoked after execution finishes, with metrics and an optional exception."""
+"""Handler invoked after execution finishes.
+
+``metrics`` is ``None`` when the call did not produce a result envelope —
+for example on wall-clock timeout, on cancellation before the worker
+reported back, or on a failure to construct the worker pool before the
+call was ever submitted.  In those cases ``exc`` carries the reason.
+``metrics`` is non-None whenever the worker actually ran the call,
+including the failure case where the worker reported a ``WorkerError``."""
 
 ShutdownHandler = Callable[[], None]
 """Handler invoked once when :meth:`ExecutorBackend.shutdown` is called."""

@@ -518,9 +518,18 @@ class LokyBackend:
         wall-clock overrun.  On timeout the worker pool is torn down;
         subsequent calls respawn it.
         """
-        self._fire(self._on_submit, call)
-        executor = self._get_executor()
-        fut = executor.submit(_run_task, call, str(self._config.spill_dir))
+        self._fire("submit", self._on_submit, call)
+
+        # Pool construction can fail before the call is ever submitted
+        # (spill_dir mkdir denied by filesystem permissions, loky's pool
+        # construction raises).  Without this guard a hook observer
+        # would see a ``submit`` event with no matching ``complete``.
+        try:
+            executor = self._get_executor()
+            fut = executor.submit(_run_task, call, str(self._config.spill_dir))
+        except BaseException as exc:
+            self._fire_complete(call, None, exc)
+            raise
 
         try:
             result: WorkerResult = await asyncio.wait_for(
@@ -585,18 +594,22 @@ class LokyBackend:
     def on_shutdown(self, handler: ShutdownHandler) -> None:
         self._on_shutdown.append(handler)
 
-    def _fire(self, handlers: list, *args: Any) -> None:
+    def _fire(self, event: str, handlers: list, *args: Any) -> None:
         """Invoke every registered handler; exceptions are logged and swallowed.
 
         A misbehaving handler must not silence the others nor break the
-        execution path.
+        execution path.  ``event`` is the hook name (``submit`` /
+        ``complete`` / ``shutdown``); included in the error log so a bad
+        observer can be traced back to the specific hook.
         """
         for h in handlers:
             try:
                 h(*args)
             except Exception:
                 logger.exception(
-                    "[LokyBackend:{}] hook raised", self._config.pool_id
+                    "[LokyBackend:{}] {} hook raised",
+                    self._config.pool_id,
+                    event,
                 )
 
     def _fire_complete(
@@ -605,16 +618,10 @@ class LokyBackend:
         metrics: ExecutionMetrics | None,
         exc: BaseException | None,
     ) -> None:
-        if metrics is None:
-            metrics = ExecutionMetrics(
-                peak_rss_kb=0,
-                wall_time_s=0.0,
-                user_time_s=0.0,
-                sys_time_s=0.0,
-                worker_pid=0,
-                node_id=self._config.node_id,
-            )
-        self._fire(self._on_complete, call, metrics, exc)
+        """Fire ``on_complete``; ``metrics`` may be ``None`` when the call
+        did not produce a result envelope (timeout, cancel, or pre-submit
+        failure)."""
+        self._fire("complete", self._on_complete, call, metrics, exc)
 
     def _shutdown_sync(self, *, wait: bool = False) -> None:
         """Sync shutdown — the body of :meth:`shutdown` without async wrap.
@@ -629,14 +636,14 @@ class LokyBackend:
             # notify observers exactly once.  Guard with a sentinel so
             # multiple shutdown calls only fire once.
             if self._on_shutdown:
-                self._fire(self._on_shutdown)
+                self._fire("shutdown", self._on_shutdown)
                 self._on_shutdown = []
             return
         with contextlib.suppress(Exception):
             self._executor.shutdown(kill_workers=True, wait=wait)
         self._executor = None
         self._worker_env.clear()
-        self._fire(self._on_shutdown, *())
+        self._fire("shutdown", self._on_shutdown)
         self._on_shutdown = []
 
     async def shutdown(self, *, wait: bool = False) -> None:
@@ -737,14 +744,3 @@ async def run_exec_runner(
     if backend is None:
         backend = default_loky_backend()
     return await backend.execute(call, deadline_s=timeout)
-
-
-# Static structural-conformance check — ``LokyBackend`` must satisfy
-# :class:`ExecutorBackend` for the abstraction to mean anything.
-def _assert_loky_conforms() -> None:
-    """Static check; called once at module import via the test suite."""
-    # Mypy / pyright would catch a mismatch via Protocol structural
-    # comparison even without this; the call exists so a runtime mismatch
-    # in field/method names fails fast.
-    _: ExecutorBackend = LokyBackend.__new__(LokyBackend)  # type: ignore[abstract]
-    del _
