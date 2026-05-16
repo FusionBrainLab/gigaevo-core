@@ -180,22 +180,70 @@ class ExecRunnerError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
-class WorkerResult:
-    """Worker return envelope: either ``spill_path`` (success) or ``error``."""
+class ExecutionMetrics:
+    """Per-call resource and timing measurements.
 
-    spill_path: str | None
-    error: WorkerError | None
+    Constructed in the worker before/after :func:`_run_one`; returned to
+    the driver attached to every :class:`WorkerResult` regardless of
+    success or failure.  Separate from the outcome so a future remote
+    executor backend can reuse the same metrics shape without bundling
+    in the spill-path-vs-error duality.
+    """
+
     peak_rss_kb: int
     wall_time_s: float
     user_time_s: float
     sys_time_s: float
     worker_pid: int
-    # Stable identifiers attached to every result so multi-pool and
-    # multi-host deployments can attribute log events back to source.
-    # ``worker_id`` is generated once per worker process in :func:`_worker_init`;
-    # ``node_id`` is taken from :attr:`WorkerConfig.node_id`.
     worker_id: str = ""
     node_id: str = ""
+    started_at_ns: int = 0
+    finished_at_ns: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerResult:
+    """Worker return envelope: either ``spill_path`` (success) or ``error``,
+    paired with :class:`ExecutionMetrics`.
+
+    Backward-compat: legacy accessors (``peak_rss_kb``, ``wall_time_s``,
+    ``user_time_s``, ``sys_time_s``, ``worker_pid``, ``worker_id``,
+    ``node_id``) read through to ``metrics``.  Callers reading
+    ``result.peak_rss_kb`` continue to work; new callers should read
+    ``result.metrics.peak_rss_kb`` for clarity.
+    """
+
+    spill_path: str | None
+    error: WorkerError | None
+    metrics: ExecutionMetrics
+
+    @property
+    def peak_rss_kb(self) -> int:
+        return self.metrics.peak_rss_kb
+
+    @property
+    def wall_time_s(self) -> float:
+        return self.metrics.wall_time_s
+
+    @property
+    def user_time_s(self) -> float:
+        return self.metrics.user_time_s
+
+    @property
+    def sys_time_s(self) -> float:
+        return self.metrics.sys_time_s
+
+    @property
+    def worker_pid(self) -> int:
+        return self.metrics.worker_pid
+
+    @property
+    def worker_id(self) -> str:
+        return self.metrics.worker_id
+
+    @property
+    def node_id(self) -> str:
+        return self.metrics.node_id
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +349,7 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
     import resource as _resource
 
     t0 = time.monotonic()
+    started_at_ns = time.perf_counter_ns()
     ru_before = _resource.getrusage(_resource.RUSAGE_SELF)
     result, error = _run_one(call)
 
@@ -335,9 +384,7 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
                 )
 
     ru_after = _resource.getrusage(_resource.RUSAGE_SELF)
-    return WorkerResult(
-        spill_path=spill_path,
-        error=error,
+    metrics = ExecutionMetrics(
         peak_rss_kb=int(ru_after.ru_maxrss),
         wall_time_s=time.monotonic() - t0,
         user_time_s=float(ru_after.ru_utime - ru_before.ru_utime),
@@ -345,7 +392,10 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
         worker_pid=os.getpid(),
         worker_id=os.environ.get("GIGAEVO_WORKER_ID", ""),
         node_id=os.environ.get("GIGAEVO_NODE_ID", ""),
+        started_at_ns=started_at_ns,
+        finished_at_ns=time.perf_counter_ns(),
     )
+    return WorkerResult(spill_path=spill_path, error=error, metrics=metrics)
 
 
 def _load_spill(spill_path: str) -> Any:

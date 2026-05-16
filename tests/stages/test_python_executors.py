@@ -1244,7 +1244,10 @@ class TestSerializationDistantCorners:
             WorkerCall,
             WorkerError,
         )
-        from gigaevo.programs.stages.python_executors.wrapper import WorkerResult
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutionMetrics,
+            WorkerResult,
+        )
 
         call = WorkerCall(
             code="def f(): return 1",
@@ -1259,15 +1262,14 @@ class TestSerializationDistantCorners:
         err = WorkerError(stderr="oops", returncode=2)
         assert cloudpickle.loads(cloudpickle.dumps(err)) == err
 
-        res = WorkerResult(
-            spill_path="/tmp/x.pkl",
-            error=None,
+        metrics = ExecutionMetrics(
             peak_rss_kb=4242,
             wall_time_s=0.5,
             user_time_s=0.4,
             sys_time_s=0.1,
             worker_pid=12345,
         )
+        res = WorkerResult(spill_path="/tmp/x.pkl", error=None, metrics=metrics)
         assert cloudpickle.loads(cloudpickle.dumps(res)) == res
 
     async def test_worker_returns_object_with_lock_surfaces_structured_error(
@@ -1744,6 +1746,102 @@ class TestWorkerIdentity:
             results = [f.result(timeout=30) for f in futs]
             ids = {r.worker_id for r in results}
             assert len(ids) == 2, f"expected 2 distinct worker_ids, got {ids}"
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_metrics_carry_identity_and_timestamps(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, node_id="x-node"))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            m = result.metrics
+            assert m.worker_id != ""
+            assert m.node_id == "x-node"
+            assert m.worker_pid > 0
+            assert m.started_at_ns > 0
+            assert m.finished_at_ns >= m.started_at_ns
+            # wall_time_s ≈ (finished - started) / 1e9, within scheduler slack.
+            assert (
+                abs(m.wall_time_s - (m.finished_at_ns - m.started_at_ns) / 1e9)
+                < 0.5
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_metrics_populated_on_failure(self, tmp_path) -> None:
+        """Failed calls still produce metrics — useful for attribution."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(
+                    code="def f(): raise RuntimeError('boom')",
+                    function_name="f",
+                ),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            assert result.error is not None
+            assert "boom" in result.error.stderr
+            # Metrics still populated.
+            assert result.metrics.worker_pid > 0
+            assert result.metrics.worker_id != ""
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_legacy_property_accessors_still_work(self, tmp_path) -> None:
+        """Reading metrics fields directly from WorkerResult is backward-compat."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            # Legacy access reads through to metrics.
+            assert result.peak_rss_kb == result.metrics.peak_rss_kb
+            assert result.wall_time_s == result.metrics.wall_time_s
+            assert result.worker_pid == result.metrics.worker_pid
+            assert result.worker_id == result.metrics.worker_id
+            assert result.node_id == result.metrics.node_id
         finally:
             await backend.shutdown(wait=True)
 
