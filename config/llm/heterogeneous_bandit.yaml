@@ -7,13 +7,13 @@ llm:
   _target_: gigaevo.llm.bandit.BanditModelRouter
   _convert_: all
   models:
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: ${oc.env:LLM_MODEL_1,meta-llama/Llama-3.3-70B-Instruct}
       base_url: ${llm_base_url}
       temperature: 0.8
       max_tokens: 16384
 
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: ${oc.env:LLM_MODEL_2,Qwen/Qwen2.5-72B-Instruct}
       base_url: ${llm_base_url}
       temperature: 0.8

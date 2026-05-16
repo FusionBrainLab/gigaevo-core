@@ -7,9 +7,9 @@ llm:
   _convert_: all
   models:
     # Model 1: Primary workhorse
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: qwen/qwen3-coder
-      api_key: ${oc.env:OPENAI_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY,null}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
@@ -17,9 +17,9 @@ llm:
 
     # Model 2: Alternative model (e.g., for different strengths)
     # Change to your preferred alternative model
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: google/gemini-3-flash-preview # Example alternative
-      api_key: ${oc.env:OPENAI_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY,null}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
