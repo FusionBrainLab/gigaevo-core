@@ -137,10 +137,8 @@ class TestEncodeCanonical:
         assert b"[1,2,3]" in a
 
     def test_heterogeneous_set_deterministic(self) -> None:
-        # Sets like {1, "1"} were previously sorted by str() — and
-        # str(1) == str("1") so the canonical ordering depended on the
-        # set's iteration order, which is not stable across runs. The
-        # canonical-byte ordering pins the result.
+        # A set containing values whose ``str()`` collide (such as
+        # ``1`` and ``"1"``) must still encode deterministically.
         baseline = encode_canonical({1, "1", 2, "2"})
         for _ in range(20):
             items = [1, "1", 2, "2"]

@@ -159,9 +159,9 @@ class CrashWatchedHandle[T, PeerTag, Resource]:
         """Swap in the recovered resource (and optionally a fresh flag).
 
         Called by the caller after handling a :class:`CrashEvent`. If
-        ``new_flag`` is omitted the existing flag stays — callers should
-        only re-use the old flag if they've cleared its asyncio.Event,
-        otherwise every subsequent call short-circuits to recovery.
+        ``new_flag`` is omitted the existing flag is retained; callers
+        retaining a set flag will see every subsequent call short-circuit
+        to recovery, so passing a fresh flag is the usual choice.
         """
         self._inner = new_inner
         if new_flag is not None:

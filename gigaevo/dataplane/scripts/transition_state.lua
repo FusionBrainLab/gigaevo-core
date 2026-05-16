@@ -1,15 +1,15 @@
 -- transition_state.lua — atomic FSM-validated program state transition.
 --
--- One Lua call replaces the entire legacy WATCH/MULTI/EXEC sequence:
+-- One Lua call does the full sequence:
 --   1. fetch the program blob and decode the current state
---   2. enforce the caller's expected_from (if provided)
---   3. validate (from, to) against the FSM table loaded at startup
---   4. dedup via idempotency token (per-call hash); a duplicate call
---      returns the previously-stored blob and epoch unchanged
---   5. merge the caller's patch fields into the blob
---   6. bump the global epoch and stamp it on the blob
---   7. atomically write the new blob, update status-set membership,
---      and emit a status event onto the audit stream
+--   2. short-circuit on idempotency hit; replay returns the stored blob
+--   3. enforce the caller's expected_from (if provided)
+--   4. validate (from, to) against the FSM table loaded at startup
+--   5. record the idempotency token
+--   6. merge the caller's patch fields into the blob
+--   7. bump the global epoch and stamp it on the blob
+--   8. write the new blob, update status-set membership, emit a
+--      status event onto the audit stream
 --
 -- KEYS layout:
 --   KEYS[1] = program blob key        "{prefix}:program:{pid}"
@@ -45,12 +45,11 @@ end
 local prog = cjson.decode(cur)
 local from = prog.state
 
--- Idempotency comes FIRST. A replayed call that was previously applied
--- must return ``duplicate`` even though the post-write state no longer
--- matches the caller's ``expected_from`` (a successful first call would
--- have advanced the state, so by definition the retry's expected_from
--- no longer holds). Returning the current blob here gives the caller a
--- guaranteed-stable response for retries within the 300 s window.
+-- Idempotency is checked before ``expected_from`` so a replay of an
+-- already-applied call returns ``duplicate`` with the stored blob; if
+-- the order were reversed, a successful first call would advance the
+-- state and the retry's ``expected_from`` would no longer match. The
+-- idempotency hash carries a 300 s TTL, which bounds the retry window.
 if redis.call('HEXISTS', KEYS[5], ARGV[5]) == 1 then
     local existing_epoch = tostring(prog.epoch or 0)
     return {'duplicate', existing_epoch, cur}

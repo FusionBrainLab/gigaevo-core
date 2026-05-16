@@ -2,12 +2,10 @@
 
 Owns exactly one ``redis.asyncio`` connection pool per :class:`DataPlane`
 instance. Mandates ``decode_responses=True`` so every command returns
-``str`` not ``bytes`` — the bytes-vs-str confusion from the legacy
-stream transport cannot recur.
+``str`` not ``bytes``.
 
-No sync ``redis.Redis`` fallback inside the dataplane; sync surfaces
-that still need to talk to Redis go through ``asyncio.to_thread`` at the
-caller boundary until they are migrated.
+Sync surfaces that need to talk to Redis go through ``asyncio.to_thread``
+at the caller boundary; the dataplane does not expose a sync client.
 """
 
 from __future__ import annotations

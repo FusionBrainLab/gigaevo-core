@@ -64,10 +64,9 @@ def _canonical_default(obj: Any) -> Any:
     silently-incorrect serialisation cannot land on the wire.
 
     Sets and frozensets are flattened to JSON arrays whose elements are
-    sorted by their own canonical-byte encoding. That ordering is total
+    sorted by their own canonical-byte encoding. The ordering is total
     even for sets containing values that share a ``str()`` representation
-    (the legacy ``key=str`` ordering was non-deterministic for inputs
-    such as ``{1, "1"}``).
+    such as ``{1, "1"}``.
     """
     if isinstance(obj, BaseModel):
         return obj.model_dump(mode="json")

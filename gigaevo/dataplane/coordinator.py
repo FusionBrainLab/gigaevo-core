@@ -263,9 +263,9 @@ class DataPlane:
     """The single object that talks to Redis.
 
     Constructed once per process. Wired through Hydra config (engine
-    startup) or directly in tests. Other modules that previously imported
-    ``redis-py`` are progressively migrated to call this object's
-    methods instead of building their own connection.
+    startup) or directly in tests. Every module that talks to Redis
+    routes through this class's methods rather than building its own
+    connection — see ``lints.toml`` for the policy.
     """
 
     def __init__(

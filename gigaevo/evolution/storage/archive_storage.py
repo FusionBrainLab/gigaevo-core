@@ -13,12 +13,10 @@ from gigaevo.programs.program import Program
 CellDescriptor = tuple[int, ...]
 
 
-# Bounded retry budget for the optimistic compare-and-swap in
+# Retry budget for the optimistic compare-and-swap in
 # :meth:`RedisArchiveStorage.add_elite`. Each retry is one Redis round
-# trip; the legacy implementation looped without a bound and could spin
-# indefinitely under contention. Fifty attempts cover any plausible
-# steady-state contention rate and surface a real outage as a typed
-# failure instead of a hung coroutine.
+# trip; exhaustion surfaces as ``False`` with a warning so a contended
+# cell cannot hang a caller indefinitely.
 _WATCH_MAX_ATTEMPTS: Final[int] = 50
 
 
@@ -85,23 +83,10 @@ class RedisArchiveStorage(ArchiveStorage):
     Each program can be elite in at most one cell at a time; the reverse
     index keeps that invariant cheap to enforce on a swap.
 
-    The legacy implementation paired a ``_elite_cache`` in-memory mirror
-    of the archive hash with an unbounded ``while True`` retry loop on
-    ``WatchError``. The cache delivered a 0-RT fast-reject for
-    non-improving programs at the cost of two correctness hazards:
-
-      1. The cache read happened OUTSIDE the WATCH window, so sibling
-         tasks in the same engine could see different "current" elites
-         and call ``is_better`` against inconsistent inputs.
-      2. The retry was unbounded, so a contended cell could hang a
-         caller indefinitely under pathological conditions.
-
-    Both are gone. Every read consults Redis (one HGET per call, ~0.05
-    ms on a loopback connection); WatchError retries are capped at
-    :data:`_WATCH_MAX_ATTEMPTS` and exhaustion surfaces as a typed
-    failure. The new ``add_elite`` path still optimistically compares
-    via the caller-supplied ``is_better`` predicate; the small Redis-
-    side cost buys correctness that the cache never had.
+    Every read consults Redis (one HGET / HVALS / HLEN per call); there
+    is no in-memory mirror of the archive hash. ``add_elite`` runs
+    optimistic WATCH/MULTI/EXEC with the caller-supplied ``is_better``
+    predicate, capped at :data:`_WATCH_MAX_ATTEMPTS` retries.
     """
 
     def __init__(
@@ -151,19 +136,16 @@ class RedisArchiveStorage(ArchiveStorage):
     ) -> bool:
         """Add elite via bounded WATCH/MULTI/EXEC.
 
-        Always consults Redis for the current occupant — no in-memory
-        cache to drift. Compares the candidate against whichever program
-        Redis returns; if the comparator rejects, the swap is skipped.
-        The retry loop terminates after :data:`_WATCH_MAX_ATTEMPTS`
-        observations of WatchError; on exhaustion the call returns
-        ``False`` with a warning rather than spinning forever.
+        Reads the current occupant from Redis, compares the candidate
+        against it via ``is_better``, and either swaps or rejects. The
+        retry loop terminates after :data:`_WATCH_MAX_ATTEMPTS`
+        observations of ``WatchError``; on exhaustion the call returns
+        ``False`` with a warning.
         """
         field = self._field(cell)
 
-        # Pre-flight: the candidate must exist in the program storage
-        # before we attempt to install it as the elite. The legacy code
-        # did this check after the in-memory fast-reject; with the
-        # cache gone there's no benefit to deferring it.
+        # The candidate must exist in the program storage before being
+        # installed as the elite.
         if not await self._storage.exists(program.id):
             logger.debug("[Archive] add ignored: program {} not in storage", program.id)
             return False
@@ -305,11 +287,10 @@ class RedisArchiveStorage(ArchiveStorage):
     ) -> int:
         """Sequential add_elite over the placements list.
 
-        Re-indexing is rare and correctness dominates throughput. A
-        future optimisation could group placements by cell and pick the
-        best per cell first, but the current loop is the same behaviour
-        the legacy code shipped — just without the divergence-prone
-        cache that used to back it.
+        Iterates one ``add_elite`` per placement. A future optimisation
+        could group by cell and pick the best per cell first; the
+        simple sequential form is correct and adequate for the
+        re-indexing path that calls it.
         """
         if not placements:
             return 0

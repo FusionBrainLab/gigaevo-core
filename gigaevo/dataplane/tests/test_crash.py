@@ -113,7 +113,7 @@ class TestCrashWatchedHandle:
         assert evt is not None
         new_flag = OneShotFlag()
         handle.replace_inner(evt.resource, new_flag)
-        # Subsequent calls now hit the recovered resource and don't observe the old flag.
+        # Subsequent calls hit the recovered resource via the new flag.
         value, second_evt = await handle.call(lambda r: r.do_work())
         assert second_evt is None
         assert value == "work-new-1"

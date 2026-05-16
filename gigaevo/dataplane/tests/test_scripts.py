@@ -98,10 +98,9 @@ class TestRegistration:
     def test_reregister_different_source_drops_sha(self) -> None:
         """Re-registering with a new source must invalidate the cached SHA.
 
-        Otherwise the next ``evalsha`` would EVALSHA the old SHA and
-        either hit NOSCRIPT (best case) or — worse — run the wrong
-        script if a different registrant happened to load the same
-        source under another name.
+        Without invalidation, ``evalsha`` could hit ``NOSCRIPT`` (best
+        case) or run a script whose SHA matched the cached value but
+        not the current source.
         """
         mock = _MockRedis()
         reg = LuaRegistry(mock)  # type: ignore[arg-type]

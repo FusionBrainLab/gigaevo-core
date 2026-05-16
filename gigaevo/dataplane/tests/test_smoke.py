@@ -104,7 +104,7 @@ def test_require_started_raises_when_not_started() -> None:
 
 
 def test_require_lua_alias_still_works() -> None:
-    """The legacy ``_require_lua`` name still raises ``NotStartedError``.
+    """The ``_require_lua`` alias raises ``NotStartedError`` when not started.
 
     Method bodies that have not yet landed call ``_require_lua``; keep
     the alias green until those bodies migrate to

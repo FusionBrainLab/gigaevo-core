@@ -1,15 +1,10 @@
 """Distributed instance lock with auto-renewal.
 
-The Redis-side semantics live in three Lua scripts under
-``gigaevo/dataplane/scripts/`` and are loaded into Redis via
-``SCRIPT LOAD`` on first use. The token-CAS pattern in those scripts
-closes the classic "TTL expired between when A decided to release and
-when A actually DEL'd, and B has taken over in the meantime" footgun —
-A's blind DEL would have released B's lock; the token-CAS refuses.
-
-The Python-side surface (constructor, acquire / release / renew,
-auto-renewal background task) is kept stable so external callers do
-not need to change.
+Prevents multiple instances from using the same Redis prefix. The
+Redis-side semantics live in three Lua scripts under
+``gigaevo/dataplane/scripts/`` (acquire / renew / release); each is
+token-CAS, so renew and release only mutate the key when its stored
+value still matches the holder's token.
 """
 
 from __future__ import annotations
@@ -38,10 +33,10 @@ _SCRIPT_LOCK_RELEASE: ScriptName = make_script_name("instance_lock_release")
 class RedisInstanceLock:
     """Distributed instance lock with auto-renewal.
 
-    Prevents multiple instances from using the same Redis prefix.
-    Backed by three Lua scripts (acquire / renew / release) that
-    token-CAS the lock value so a TTL-expired holder cannot release or
-    renew over a successor's hold.
+    Acquire stores the holder's instance id as the key's value; renew
+    and release token-CAS against that value so a TTL-expired holder
+    cannot operate on a successor's lock. Freshness is carried by the
+    TTL alone, which means the stored value is stable across renewals.
     """
 
     def __init__(
@@ -54,14 +49,6 @@ class RedisInstanceLock:
         self._keys = keys
         self._config = config
 
-        # The Lua scripts compare the stored value to the caller's
-        # token verbatim. The legacy implementation stored
-        # ``"{instance_id}:{time.time()}"`` and refreshed the timestamp
-        # on every renew; the new design stores the bare instance_id
-        # and lets the TTL carry the freshness witness. This is
-        # backward-compatible across a rolling upgrade because an
-        # old-format holder's value still trips the NX check on a new
-        # acquire.
         self._instance_id = (
             f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         )
