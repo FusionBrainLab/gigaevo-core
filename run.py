@@ -10,6 +10,13 @@ from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.dataplane import (
+    DataPlane,
+    build_actor_identity,
+    build_dataplane,
+    wire_bandit_router,
+    wire_storage,
+)
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
@@ -25,6 +32,7 @@ async def run_experiment(cfg: DictConfig) -> None:
 
     redis_storage: RedisProgramStorage | None = None
     writer: LogWriter | None = None
+    dataplane: DataPlane | None = None
     try:
         config_with_instances = instantiate(cfg, recursive=True)
         redis_storage: RedisProgramStorage = config_with_instances.redis_storage
@@ -40,6 +48,24 @@ async def run_experiment(cfg: DictConfig) -> None:
             port=cfg.redis.port,
             pipeline=cfg.get("pipeline_builder", {}).get("_target_", "(default)"),
         )
+
+        # Construct the coordinator after Hydra has built the storage so
+        # the redis_url / key_prefix are sourced from a single config
+        # surface. ``build_dataplane`` starts the connection pool, loads
+        # the seven Lua scripts, and primes the legacy ProgramState FSM
+        # table; failures here surface as :class:`StartupError` before
+        # the engine task starts. ``wire_*`` attach the coordinator to
+        # the already-instantiated storage and bandit so production
+        # routes through the dataplane without altering the Hydra schema.
+        dataplane = await build_dataplane(
+            str(redis_storage.config.redis_url),
+            key_prefix=redis_storage.config.key_prefix,
+        )
+        wire_storage(redis_storage, dataplane)
+        actor = build_actor_identity(run_id=cfg.get("run_id"))
+        llm_wrapper = getattr(evolution_engine.mutation_operator, "llm_wrapper", None)
+        if llm_wrapper is not None:
+            wire_bandit_router(llm_wrapper, dataplane, actor)
 
         await redis_storage.acquire_instance_lock()
 
@@ -87,6 +113,16 @@ async def run_experiment(cfg: DictConfig) -> None:
         await default_exec_runner_pool().shutdown()
         if redis_storage is not None:
             await redis_storage.close()
+        # Shutdown the coordinator after the storage so any tail
+        # writes the storage performs during ``close()`` still go
+        # through a live connection pool. The dataplane's own
+        # ``shutdown`` is idempotent and safe to call after
+        # ``startup`` failed mid-sequence.
+        if dataplane is not None:
+            try:
+                await dataplane.shutdown()
+            except Exception:
+                logger.exception("DataPlane shutdown failed")
         if writer is not None:
             writer.close()
         duration = time.time() - start_time

@@ -43,6 +43,14 @@ from .coordinator import (
     ProgramPatch,
 )
 from .crash import CrashEvent, CrashWatchedHandle, OneShotFlag, Recovered
+from .engine_startup import (
+    ENV_RUN_ID,
+    ENV_WORKER_ID,
+    build_actor_identity,
+    build_dataplane,
+    wire_bandit_router,
+    wire_storage,
+)
 from .errors import (
     REDACT_META_KEY,
     CanonicalEncodingError,
@@ -242,4 +250,11 @@ __all__ = [
     "CrashWatchedHandle",
     "OneShotFlag",
     "Recovered",
+    # Engine startup
+    "ENV_RUN_ID",
+    "ENV_WORKER_ID",
+    "build_actor_identity",
+    "build_dataplane",
+    "wire_bandit_router",
+    "wire_storage",
 ]
