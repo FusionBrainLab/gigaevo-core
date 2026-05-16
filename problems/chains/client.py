@@ -5,9 +5,10 @@ import os
 import re
 from typing import Any
 
-import httpx
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+from gigaevo.infra.aiohttp_factory import make_openai_http_client
 
 
 @dataclass
@@ -24,17 +25,15 @@ def get_async_client(
     api_key: str | None = None,
     base_url: str = "https://openrouter.ai/api/v1",
 ) -> AsyncOpenAI:
-    """Get async OpenAI client for LLM calls."""
+    """Get async OpenAI client for LLM calls.
+
+    Uses the aiohttp-backed http_client factory for connection-pool
+    behavior that survives multi-hour asyncio runs.
+    """
     return AsyncOpenAI(
         api_key=api_key or os.environ.get("OPENAI_API_KEY", "None"),
         base_url=base_url,
-        http_client=httpx.AsyncClient(
-            limits=httpx.Limits(
-                max_connections=300,
-                max_keepalive_connections=10,
-            ),
-            timeout=httpx.Timeout(timeout=None, connect=30.0),
-        ),
+        http_client=make_openai_http_client("llm_chains"),
     )
 
 

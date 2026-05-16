@@ -357,3 +357,54 @@ class TestPoolMetricsTracker:
         tracker.record("http://server-a:8777/v1", 42.0, success=True)
         # Cumulative stats tracked even without writer (for get_stats)
         assert tracker.cumulative["server-a_8777"]["requests"] == 1
+
+
+# ---------------------------------------------------------------------------
+# http_async_client forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestHttpAsyncClientForwarding:
+    """``http_async_client`` must reach every per-endpoint ChatOpenAI so all
+    endpoints share a single underlying connection pool."""
+
+    def test_explicit_http_async_client_reaches_every_endpoint(
+        self, fake_server: fakeredis.FakeServer
+    ) -> None:
+        from gigaevo.infra.aiohttp_factory import make_openai_http_client
+
+        custom_client = make_openai_http_client("test_balanced_chat")
+        try:
+            b = BalancedChatOpenAI(
+                endpoints=ENDPOINTS,
+                pool_name="forward-test",
+                model="test-model",
+                api_key="fake-key",
+                http_async_client=custom_client,
+            )
+            _patch_pool(b, fake_server)
+            for client in b._clients.values():
+                # ChatOpenAI stores http_async_client as a Pydantic attribute.
+                assert getattr(client, "http_async_client", None) is custom_client
+        finally:
+            # DefaultAioHttpClient wraps an aiohttp.ClientSession; closing
+            # here keeps pytest from emitting "Unclosed client session"
+            # warnings.
+            import asyncio
+
+            asyncio.run(custom_client.aclose())
+
+    def test_default_no_kwarg_means_no_injection(
+        self, fake_server: fakeredis.FakeServer
+    ) -> None:
+        """Default ``http_async_client=None`` must not inject — preserves
+        the prior behavior of letting each ChatOpenAI mint its own client."""
+        b = BalancedChatOpenAI(
+            endpoints=ENDPOINTS,
+            pool_name="default-test",
+            model="test-model",
+            api_key="fake-key",
+        )
+        _patch_pool(b, fake_server)
+        for client in b._clients.values():
+            assert getattr(client, "http_async_client", None) is None

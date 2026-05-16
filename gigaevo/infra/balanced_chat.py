@@ -51,8 +51,19 @@ class BalancedChatOpenAI(ChatOpenAI):
         redis_url: str = _DEFAULT_REDIS_URL,
         cooldown_secs: int = 60,
         writer: LogWriter | None = None,
+        http_async_client: Any = None,
         **kwargs: Any,
     ) -> None:
+        # ``http_async_client`` is forwarded to every per-endpoint ChatOpenAI
+        # so all N endpoints share a single underlying connection pool. A
+        # caller passing an ``openai.DefaultAioHttpClient`` (via
+        # :func:`gigaevo.infra.aiohttp_factory.make_openai_http_client`) gets
+        # aiohttp's long-running-process pool semantics across the whole
+        # balanced pool. The default ``None`` preserves the historical
+        # behavior of letting each ChatOpenAI mint its own internal client.
+        if http_async_client is not None:
+            kwargs.setdefault("http_async_client", http_async_client)
+
         # Initialize base ChatOpenAI with first endpoint (for model_name etc.)
         super().__init__(base_url=endpoints[0], **kwargs)
 

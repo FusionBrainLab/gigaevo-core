@@ -5,7 +5,6 @@ verification, _build_entity_meta content, __del__ behavior.
 import json
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
@@ -13,9 +12,10 @@ from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
+from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient  # noqa: F401
 from gigaevo.memory.shared_memory.memory_config import ApiConfig
 from tests.fakes.agentic_memory import make_test_memory
+from tests.memory._fake_http import make_fake_response, make_mocked_client
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,11 +27,7 @@ def _make_memory(tmp_path, **overrides):
 
 
 def _mock_client(handler):
-    client = _ConceptApiClient.__new__(_ConceptApiClient)
-    client._http = httpx.Client(
-        base_url="http://test:8000", transport=httpx.MockTransport(handler)
-    )
-    return client
+    return make_mocked_client(handler, base_url="http://test:8000")
 
 
 # ===========================================================================
@@ -188,7 +184,7 @@ class TestApiClientRequestBody:
         def handler(request):
             captured["body"] = json.loads(request.content)
             captured["method"] = request.method
-            return httpx.Response(200, json={"entity_id": "e1", "version_id": "v1"})
+            return make_fake_response(200, json={"entity_id": "e1", "version_id": "v1"})
 
         client = _mock_client(handler)
         client.save_concept(
@@ -215,7 +211,7 @@ class TestApiClientRequestBody:
 
         def handler(request):
             captured["body"] = json.loads(request.content)
-            return httpx.Response(200, json={"results": [[]]})
+            return make_fake_response(200, json={"results": [[]]})
 
         client = _mock_client(handler)
         client.search_concepts(query="test query", limit=10, namespace="ns1")
@@ -232,7 +228,7 @@ class TestApiClientRequestBody:
         def handler(request):
             captured["url"] = str(request.url)
             captured["method"] = request.method
-            return httpx.Response(204)
+            return make_fake_response(204)
 
         client = _mock_client(handler)
         client.delete_concept("eid-123")
@@ -241,7 +237,7 @@ class TestApiClientRequestBody:
 
     def test_delete_concept_404_raises(self):
         def handler(request):
-            return httpx.Response(404, text="Not Found")
+            return make_fake_response(404, text="Not Found")
 
         client = _mock_client(handler)
         with pytest.raises(MemoryStorageError, match="404"):
@@ -252,7 +248,7 @@ class TestApiClientRequestBody:
 
         def handler(request):
             captured["params"] = dict(request.url.params)
-            return httpx.Response(200, json=[])
+            return make_fake_response(200, json=[])
 
         client = _mock_client(handler)
         client.list_memory_cards(limit=25, offset=10, channel="draft")

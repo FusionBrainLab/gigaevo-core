@@ -1,46 +1,92 @@
 """HTTP client for the Memory API entity endpoints.
 
-Extracted from memory.py for cleaner modularity.
+Sync client backed by ``requests.Session`` over ``urllib3``'s connection
+pool. Retries on transient 5xx responses are configured inside
+``urllib3`` itself via :func:`gigaevo.infra.requests_factory.build_retry`
+so they happen before responses reach this module.
+
+Despite the class name, the client targets the newer Memory API entity
+model:
+- memory cards: ``/v1/memory-cards``
+- search: ``/v1/search/batch``
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-import httpx
+import requests
 
 from gigaevo.exceptions import MemoryStorageError
+from gigaevo.infra.requests_factory import make_requests_session
+
+# Response bodies from a misbehaving server can be arbitrarily large or
+# carry control characters; either property is unsafe to splice raw into
+# an exception message that ends up in log sinks.  The preview helper
+# strips ANSI/CSI escape sequences as whole units, drops residual C0/C1
+# control bytes, then truncates.
+_RESPONSE_BODY_PREVIEW_BYTES = 512
+
+# Strip ANSI/CSI escape sequences as a unit so the trailing parameter
+# bytes (``[31m``, ``[0;1;33;45m`` …) don't survive as printable text.
+# A per-char filter only drops the ESC (``\x1b``) byte and leaves the
+# whole readable-but-meaningless CSI tail in place.
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _safe_response_preview(response: requests.Response) -> str:
+    """Return a short, control-stripped preview of a response body.
+
+    Used in exception messages so transient server failures stay legible
+    without leaking ANSI / CRLF / RLO sequences into log sinks (a sink
+    rendering raw bytes from an attacker-controlled body is the same
+    class of vector this codebase has hardened elsewhere — see T-C1).
+
+    Strip controls *before* truncating: if the first 512 bytes of a 4 KB
+    response are an ANSI escape burst with the readable error message
+    trailing, truncating raw bytes first would drop the message before
+    stripping has a chance to compress the leading escapes out."""
+    try:
+        text = response.text
+    except Exception:
+        return "<unreadable body>"
+    # 1. Drop ANSI/CSI escape sequences as a unit.
+    text = _ANSI_CSI_RE.sub("", text)
+    # 2. Permit printable ASCII + ``\n`` + non-control Unicode (``>= U+00A0``
+    #    keeps NBSP and everything beyond, including legitimate non-Latin
+    #    text).  Strip C0 (incl. DEL=0x7F) and C1 (0x80–0x9F) controls.
+    sanitised = "".join(
+        ch for ch in text if ch == "\n" or 0x20 <= ord(ch) < 0x7F or ord(ch) >= 0xA0
+    )
+    # 3. Truncate the now-sanitised string.
+    if len(sanitised) > _RESPONSE_BODY_PREVIEW_BYTES:
+        sanitised = sanitised[:_RESPONSE_BODY_PREVIEW_BYTES] + "… (truncated)"
+    return sanitised
 
 
 class _ConceptApiClient:
-    """Small HTTP client around Memory API entity endpoints.
-
-    NOTE: despite the class name, this client now targets the newer Memory API
-    entity model:
-    - memory cards: ``/v1/memory-cards``
-    - search: ``/v1/search/batch``
-    """
+    """Small HTTP client around Memory API entity endpoints."""
 
     def __init__(self, base_url: str, timeout: float = 30.0):
-        base = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=base, timeout=timeout)
+        self._base_url = base_url.rstrip("/")
+        self._http = make_requests_session("memory_api", timeout=timeout)
 
     def close(self) -> None:
         self._http.close()
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any] | None:
+        url = f"{self._base_url}{path}"
         try:
-            response = self._http.request(method, path, **kwargs)
-        except httpx.ConnectError as exc:
-            host = str(self._http.base_url).rstrip("/")
+            response = self._http.request(method, url, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
             raise MemoryStorageError(
-                f"Cannot connect to Memory API at {host}. "
+                f"Cannot connect to Memory API at {self._base_url}: {exc}. "
                 "Start the API service or set MEMORY_API_URL to a reachable endpoint."
             ) from exc
-        except httpx.TimeoutException as exc:
-            host = str(self._http.base_url).rstrip("/")
+        except requests.exceptions.Timeout as exc:
             raise MemoryStorageError(
-                f"Memory API request timed out for {host}. "
+                f"Memory API request timed out for {self._base_url}: {exc}. "
                 "Check service health and network connectivity."
             ) from exc
         if response.status_code == 204:
@@ -48,7 +94,7 @@ class _ConceptApiClient:
         if response.status_code >= 400:
             raise MemoryStorageError(
                 f"Memory API request failed ({method} {path}): "
-                f"{response.status_code} {response.text}"
+                f"{response.status_code} {_safe_response_preview(response)}"
             )
         return response.json()
 

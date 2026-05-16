@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import httpx
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from gigaevo.infra.aiohttp_factory import make_openai_http_client
 from problems.prompts.types import CallLog
 
 
@@ -22,17 +22,16 @@ def get_async_client(
     Args:
         api_key: API key (defaults to OPENAI_API_KEY env var)
         base_url: API base URL (defaults to OpenRouter)
+        proxy: Optional proxy URL forwarded to the aiohttp transport.
 
     Returns:
-        AsyncOpenAI client instance
+        AsyncOpenAI client instance backed by aiohttp via
+        ``openai.DefaultAioHttpClient``.
     """
-    http_client = None
-    if proxy is not None:
-        http_client = httpx.AsyncClient(proxy=proxy)
     return AsyncOpenAI(
         api_key=api_key or os.environ["OPENAI_API_KEY"],
         base_url=base_url,
-        http_client=http_client,
+        http_client=make_openai_http_client("llm_prompts", proxy=proxy),
     )
 
 

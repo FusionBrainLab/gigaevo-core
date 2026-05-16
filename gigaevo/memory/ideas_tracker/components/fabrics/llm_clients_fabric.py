@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 from openai import AsyncOpenAI, OpenAI
 
+from gigaevo.infra.aiohttp_factory import make_openai_http_client
 from gigaevo.memory.ideas_tracker.components.prompt_manager import PromptManager
 
 
@@ -33,7 +34,17 @@ def _create_llm_clients(
     if base_url:
         client_kwargs["base_url"] = base_url
 
-    return OpenAI(**client_kwargs), AsyncOpenAI(**client_kwargs), is_openrouter
+    # Only the async client routes through aiohttp — the sync client keeps
+    # the openai SDK default (sync httpx). The async hot path is the one
+    # subject to the documented pool-deadlock failure mode.
+    return (
+        OpenAI(**client_kwargs),
+        AsyncOpenAI(
+            **client_kwargs,
+            http_client=make_openai_http_client("ideas_tracker_async"),
+        ),
+        is_openrouter,
+    )
 
 
 class LLMClient:
