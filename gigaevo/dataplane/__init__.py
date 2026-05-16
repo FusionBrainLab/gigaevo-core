@@ -38,6 +38,8 @@ from .coordinator import (
     EliteSwapOutcome,
     EliteSwapped,
     InstanceLease,
+    LwwrSetOutcome,
+    LwwrValue,
     ProgramPatch,
 )
 from .crash import CrashEvent, CrashWatchedHandle, OneShotFlag, Recovered
@@ -139,6 +141,8 @@ __all__ = [
     "EliteSwapOutcome",
     "EliteSwapped",
     "InstanceLease",
+    "LwwrSetOutcome",
+    "LwwrValue",
     "ProgramPatch",
     # Codec
     "compute_content_hash",

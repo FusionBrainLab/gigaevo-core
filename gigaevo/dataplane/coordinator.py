@@ -36,6 +36,7 @@ from typing import Final, Literal
 
 from loguru import logger
 
+from .codec import decode_canonical, encode_canonical
 from .connection import RedisConnection
 from .crash import OneShotFlag
 from .errors import (
@@ -56,7 +57,7 @@ from .ids import (
     ScriptName,
     make_script_name,
 )
-from .models import Err, Ok, Result, Versioned
+from .models import Err, HlcTimestamp, Ok, Result, Versioned
 from .permissions import Token
 from .scripts import LuaRegistry, load_lua_source
 from .transitions import (
@@ -90,6 +91,7 @@ _SCRIPT_COUNTER_INC: Final[ScriptName] = make_script_name("counter_inc")
 _SCRIPT_LOCK_ACQUIRE: Final[ScriptName] = make_script_name("instance_lock_acquire")
 _SCRIPT_LOCK_RENEW: Final[ScriptName] = make_script_name("instance_lock_renew")
 _SCRIPT_LOCK_RELEASE: Final[ScriptName] = make_script_name("instance_lock_release")
+_SCRIPT_LWWR_SET: Final[ScriptName] = make_script_name("lwwr_set")
 
 
 # ── public contract dataclasses ─────────────────────────────────────────
@@ -204,6 +206,34 @@ class EliteRejected:
 
     occupant_id: ProgramId
     kind: Literal["rejected"] = "rejected"
+
+
+@dataclass(slots=True, frozen=True)
+class LwwrValue:
+    """A LWW-register's stored value alongside its HLC witness.
+
+    Returned by :meth:`DataPlane.lwwr_get`. The ``value`` field is the
+    caller's payload after canonical-JSON round-trip; the ``hlc`` field
+    is the witness that proves causal ordering against other writers.
+    Two LwwrValue instances compare equal when they hold identical
+    value and HLC — useful for "did our write actually land" assertions.
+    """
+
+    value: object
+    hlc: HlcTimestamp
+
+
+type LwwrSetOutcome = Literal["replaced", "kept"]
+"""Outcome of :meth:`DataPlane.lwwr_set`.
+
+``replaced`` — the candidate HLC was strictly newer than the stored
+HLC, so the stored value is now the candidate's.
+
+``kept`` — the candidate HLC was older or equal; the stored value is
+unchanged. The caller's write was silently rejected. This is the
+normal eventual-consistency outcome for an out-of-order arrival; it
+is **not** an error.
+"""
 
 
 type EliteSwapOutcome = EliteInserted | EliteSwapped | EliteRejected
@@ -698,6 +728,70 @@ class DataPlane:
             )
         return Ok(versioned)
 
+    # ── LWW register (HLC-tiebreak last-write-wins) ──────────────────
+
+    async def lwwr_set(
+        self,
+        key: str,
+        value: object,
+        *,
+        hlc: HlcTimestamp,
+    ) -> Result[LwwrSetOutcome, DataPlaneError]:
+        """Atomically write a single-value LWW-register guarded by HLC.
+
+        ``key`` is the logical register name (the coordinator prefixes
+        it with ``{key_prefix}:lwwr:`` to namespace). ``value`` is any
+        canonical-JSON-encodable Python object; the wrapper encodes it
+        via :func:`gigaevo.dataplane.codec.encode_canonical`. ``hlc`` is
+        the witness — writes with a strictly-newer HLC replace; ties
+        and older writes are rejected silently as ``Ok("kept")``.
+
+        Returns ``Ok("replaced")`` on a successful write or
+        ``Ok("kept")`` if the stored register's HLC was already at or
+        beyond the candidate's. ``Err(DataPlaneError)`` surfaces only on
+        connection / script-load failures.
+        """
+        lua = self._require_lua()
+        register_key = f"{self._connection.key_prefix}:lwwr:{key}"
+        encoded_value = encode_canonical(value).decode("utf-8")
+        try:
+            outcome = await lua.evalsha(
+                _SCRIPT_LWWR_SET,
+                keys=[register_key],
+                args=[encoded_value, hlc.pack_hex()],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        # Lua returns 'replaced' or 'kept' (both Literal members of
+        # LwwrSetOutcome); narrow defensively.
+        if outcome == "replaced":
+            return Ok("replaced")
+        if outcome == "kept":
+            return Ok("kept")
+        return Err(DataPlaneError(f"lwwr_set: unexpected Lua return value {outcome!r}"))
+
+    async def lwwr_get(
+        self,
+        key: str,
+    ) -> Result[LwwrValue | None, DataPlaneError]:
+        """Read the current LWW-register value plus HLC.
+
+        Returns ``Ok(None)`` if the register has never been written.
+        Returns ``Ok(LwwrValue(...))`` with the decoded value and its
+        HLC witness otherwise. ``Err(DataPlaneError)`` on connection /
+        decoding failures.
+        """
+        self._require_lua()
+        register_key = f"{self._connection.key_prefix}:lwwr:{key}"
+        redis = self._connection.pool
+        # HMGET is one round-trip and returns [value, hlc] in order.
+        raw = await redis.hmget(register_key, ["value", "hlc"])  # type: ignore[misc]
+        if not raw or raw[0] is None or raw[1] is None:
+            return Ok(None)
+        value_raw, hlc_hex = raw
+        decoded = decode_canonical(value_raw)
+        return Ok(LwwrValue(value=decoded, hlc=HlcTimestamp.unpack_hex(hlc_hex)))
+
     # ── built-in-script bookkeeping ──────────────────────────────────
 
     def _register_builtin_scripts(self, lua: LuaRegistry) -> None:
@@ -713,6 +807,7 @@ class DataPlane:
             _SCRIPT_LOCK_ACQUIRE,
             _SCRIPT_LOCK_RENEW,
             _SCRIPT_LOCK_RELEASE,
+            _SCRIPT_LWWR_SET,
         ):
             lua.register(name, load_lua_source(name))
 
@@ -742,6 +837,8 @@ __all__ = [
     "EliteSwapOutcome",
     "EliteSwapped",
     "InstanceLease",
+    "LwwrSetOutcome",
+    "LwwrValue",
     "ProgramPatch",
     "ProgramSnapshot",
 ]
