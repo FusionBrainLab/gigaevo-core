@@ -237,3 +237,156 @@ class TestEmptyCounter:
         assert read.value.value == 0
         assert read.value.epoch == 0
         assert read.value.generation == 0
+
+
+# ── Freshness admission contract ─────────────────────────────────────
+
+
+class TestFreshnessContract:
+    """The ``freshness=`` parameter is the structural admission contract.
+
+    These tests pin the property that a caller cannot accept a stale
+    G-counter view by accident — every read site must declare which
+    freshness class it tolerates, and a floor violation surfaces as a
+    typed :class:`StaleReadError` rather than a silently-old value.
+    """
+
+    async def test_eventual_admits_any_view(self, coord: dp.DataPlane) -> None:
+        key = dp.CounterKey("eventual-default")
+        await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+        read = await coord.crdt_read(key, freshness=dp.FreshnessEventual())
+        assert isinstance(read, dp.Ok)
+        assert read.value.value == 1
+
+    async def test_at_least_below_observed_succeeds(self, coord: dp.DataPlane) -> None:
+        key = dp.CounterKey("floor-below")
+        await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+        observed = await coord.crdt_read(key)
+        assert isinstance(observed, dp.Ok)
+        # Floor at the observed witness must admit (lattice >= is reflexive).
+        equal = await coord.crdt_read(
+            key,
+            freshness=dp.FreshnessAtLeast(
+                epoch=observed.value.epoch, generation=observed.value.generation
+            ),
+        )
+        assert isinstance(equal, dp.Ok)
+
+    async def test_at_least_above_observed_returns_stale_error(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """``FreshnessAtLeast(epoch=N+1)`` rejects a view that
+        :class:`FreshnessEventual` would have admitted — bug class #11
+        ("stale cache returns as authoritative") is now control flow."""
+        key = dp.CounterKey("floor-above")
+        await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+        observed = await coord.crdt_read(key, freshness=dp.FreshnessEventual())
+        assert isinstance(observed, dp.Ok)
+
+        stale = await coord.crdt_read(
+            key,
+            freshness=dp.FreshnessAtLeast(epoch=observed.value.epoch + 1),
+        )
+        assert isinstance(stale, dp.Err)
+        assert isinstance(stale.error, dp.StaleReadError)
+
+    async def test_strict_admits_post_write_view(self, coord: dp.DataPlane) -> None:
+        """``FreshnessStrict`` snapshots the live counter and admits
+        the pipeline's view when it matches or exceeds the snapshot.
+        Single-writer / no-concurrent-bump path: the snapshot equals
+        the observed epoch, so the floor is exactly cleared."""
+        key = dp.CounterKey("strict-ok")
+        await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+        read = await coord.crdt_read(key, freshness=dp.FreshnessStrict())
+        assert isinstance(read, dp.Ok)
+        assert read.value.value == 1
+
+    async def test_strict_on_empty_counter_admits_zero(
+        self, coord: dp.DataPlane
+    ) -> None:
+        # Live counter is 0 on an untouched key; the pipeline observes
+        # epoch=0 which clears a floor of 0 reflexively.
+        read = await coord.crdt_read(
+            dp.CounterKey("strict-empty"), freshness=dp.FreshnessStrict()
+        )
+        assert isinstance(read, dp.Ok)
+        assert read.value.value == 0
+        assert read.value.epoch == 0
+
+    async def test_two_writers_distinct_epochs(self, coord: dp.DataPlane) -> None:
+        """Two distinct increments produce a strictly-advancing epoch.
+
+        After the first write, ``FreshnessAtLeast(epoch=first_epoch)``
+        admits; after the second write the SAME floor still admits (the
+        lattice only moves forward) but ``FreshnessAtLeast(epoch=
+        first_epoch + 1)`` is required to assert "I have observed the
+        second writer's view".
+        """
+        key = dp.CounterKey("two-writers")
+        a = _actor("run", "w-a")
+        b = _actor("run", "w-b")
+
+        await coord.crdt_inc(key, actor=a)
+        after_first = await coord.crdt_read(key)
+        assert isinstance(after_first, dp.Ok)
+        first_epoch = after_first.value.epoch
+
+        await coord.crdt_inc(key, actor=b)
+        after_second = await coord.crdt_read(key)
+        assert isinstance(after_second, dp.Ok)
+        assert after_second.value.epoch > first_epoch
+
+        # A floor at the first-write epoch admits the second-write view.
+        admitted = await coord.crdt_read(
+            key, freshness=dp.FreshnessAtLeast(epoch=first_epoch)
+        )
+        assert isinstance(admitted, dp.Ok)
+        assert admitted.value.value == 2
+
+        # A floor strictly above the second-write epoch fails loudly.
+        rejected = await coord.crdt_read(
+            key,
+            freshness=dp.FreshnessAtLeast(epoch=after_second.value.epoch + 1),
+        )
+        assert isinstance(rejected, dp.Err)
+        assert isinstance(rejected.error, dp.StaleReadError)
+
+    async def test_legacy_min_kwargs_still_work(self, coord: dp.DataPlane) -> None:
+        """Backwards-compat shim: the legacy ``min_epoch=`` / ``min_generation=``
+        kwargs map to :class:`FreshnessAtLeast` internally."""
+        key = dp.CounterKey("legacy-shim")
+        await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+        observed = await coord.crdt_read(key)
+        assert isinstance(observed, dp.Ok)
+
+        # Below the floor — admitted.
+        ok = await coord.crdt_read(
+            key,
+            min_epoch=observed.value.epoch,
+            min_generation=observed.value.generation,
+        )
+        assert isinstance(ok, dp.Ok)
+
+        # Above the floor — typed StaleReadError.
+        stale = await coord.crdt_read(key, min_epoch=observed.value.epoch + 5)
+        assert isinstance(stale, dp.Err)
+        assert isinstance(stale.error, dp.StaleReadError)
+
+    async def test_mixing_freshness_and_legacy_kwargs_errors(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """Passing both the new ``freshness=`` arg and a non-zero legacy
+        ``min_*`` is a typed :class:`Err(DataPlaneError)` — no silent
+        precedence rule that masks one with the other."""
+        key = dp.CounterKey("mixed-channels")
+        await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+
+        result = await coord.crdt_read(
+            key,
+            freshness=dp.FreshnessAtLeast(epoch=1),
+            min_epoch=1,
+        )
+        assert isinstance(result, dp.Err)
+        assert isinstance(result.error, dp.DataPlaneError)
+        # Error message names the method so the caller can localise it.
+        assert "crdt_read" in str(result.error)

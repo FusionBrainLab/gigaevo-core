@@ -731,7 +731,7 @@ class DataPlane:
         self._validate_floor(min_epoch, min_generation, method="read_program")
         try:
             effective_freshness = self._resolve_freshness(
-                freshness, min_epoch, min_generation
+                freshness, min_epoch, min_generation, method="read_program"
             )
         except ValueError as exc:
             return Err(DataPlaneError(str(exc)))
@@ -810,6 +810,8 @@ class DataPlane:
         freshness: Freshness | None,
         min_epoch: int,
         min_generation: int,
+        *,
+        method: str = "read_program",
     ) -> Freshness:
         """Reconcile the new ``freshness`` arg with the legacy ``min_*`` shim.
 
@@ -827,11 +829,14 @@ class DataPlane:
 
         Negative ``min_*`` is rejected by the call-boundary
         :meth:`_validate_floor` before reaching this resolver.
+
+        ``method`` is threaded into the ambiguity error so a caller that
+        passes both channels sees which API they used in the message.
         """
         if freshness is not None:
             if min_epoch != 0 or min_generation != 0:
                 raise ValueError(
-                    "read_program: pass either freshness= or "
+                    f"{method}: pass either freshness= or "
                     "min_epoch=/min_generation= (legacy shim), not both"
                 )
             return freshness
@@ -1219,15 +1224,32 @@ class DataPlane:
         self,
         key: CounterKey,
         *,
+        freshness: Freshness | None = None,
         min_epoch: int = 0,
         min_generation: int = 0,
     ) -> Result[Versioned[int], DataPlaneError]:
         """Read a G-counter as a :class:`Versioned` sum across all actors.
 
         Per-actor reads are not exposed: a G-counter's only meaningful
-        observable is the cross-actor sum. The freshness floor is the
-        usual ``(min_epoch, min_generation)`` pair; reads below either
-        floor return :class:`StaleReadError`.
+        observable is the cross-actor sum. The ``freshness`` argument
+        declares the admission contract:
+
+            * :class:`FreshnessEventual` — accept any persisted view
+              (the default; matches ``min_epoch=0, min_generation=0``).
+            * :class:`FreshnessAtLeast` — admission floor on
+              ``(epoch, generation)``. A view below the floor returns
+              :class:`StaleReadError` so a caller observing its own
+              prior increment fails loud rather than silently old.
+            * :class:`FreshnessStrict` — snapshot the live epoch counter
+              first; the pipeline's view must clear that snapshot. Costs
+              one extra round-trip and is the right choice for
+              cross-engine readers that cannot supply their own floor.
+
+        ``min_epoch`` / ``min_generation`` remain accepted as a
+        backwards-compat shim mapping to :class:`FreshnessAtLeast`.
+        Passing both an explicit ``freshness`` and a non-zero ``min_*``
+        surfaces as :class:`Err(DataPlaneError)` so the two channels
+        cannot silently disagree.
 
         Three Redis commands run as a single non-transactional pipeline
         (one round-trip). The G-counter's eventual-consistency model
@@ -1240,9 +1262,37 @@ class DataPlane:
             key, method="crdt_read", field_name="key", allow_colon=True
         )
         self._validate_floor(min_epoch, min_generation, method="crdt_read")
+        try:
+            effective_freshness = self._resolve_freshness(
+                freshness, min_epoch, min_generation, method="crdt_read"
+            )
+        except ValueError as exc:
+            return Err(DataPlaneError(str(exc)))
         self._require_started("crdt_read")
         counts_key, gen_key, epoch_key = self._counter_keys(key)
         redis = self._connection.pool
+
+        # FreshnessStrict pre-snapshots the live epoch counter so a
+        # concurrent writer that bumps it after our snapshot is detected
+        # as a stale view. The pipeline reads ``epoch_key`` (which IS
+        # the live counter at ``{prefix}:ts``) again as part of the
+        # pipeline; the floor is ``max(pre-snapshot, the value the
+        # pipeline observes)`` so a counter advance between snapshot and
+        # pipeline closes the same race the ``read_program`` Strict path
+        # closes.
+        strict_floor: int = 0
+        if isinstance(effective_freshness, FreshnessStrict):
+            raw_counter = await redis.get(epoch_key)  # type: ignore[misc]
+            try:
+                strict_floor = int(raw_counter) if raw_counter is not None else 0
+            except (TypeError, ValueError) as exc:
+                return Err(
+                    DataPlaneError(
+                        f"crdt_read: strict-freshness epoch counter "
+                        f"unparseable: {exc!r}"
+                    )
+                )
+
         pipe = redis.pipeline(transaction=False)
         pipe.hgetall(counts_key)
         pipe.get(gen_key)
@@ -1252,13 +1302,26 @@ class DataPlane:
         epoch = int(epoch_raw) if epoch_raw is not None else 0
         total = sum(int(v) for v in counts_map.values()) if counts_map else 0
         versioned = Versioned(value=total, epoch=epoch, generation=generation)
-        if not versioned.is_at_least(min_epoch, min_generation):
+
+        floor_epoch: int
+        floor_generation: int
+        if isinstance(effective_freshness, FreshnessStrict):
+            floor_epoch = strict_floor
+            floor_generation = strict_floor
+        elif isinstance(effective_freshness, FreshnessAtLeast):
+            floor_epoch = effective_freshness.epoch
+            floor_generation = effective_freshness.generation
+        else:
+            floor_epoch = 0
+            floor_generation = 0
+
+        if not versioned.is_at_least(floor_epoch, floor_generation):
             return Err(
                 StaleReadError(
                     observed_epoch=epoch,
                     observed_generation=generation,
-                    min_epoch=min_epoch,
-                    min_generation=min_generation,
+                    min_epoch=floor_epoch,
+                    min_generation=floor_generation,
                 )
             )
         return Ok(versioned)
