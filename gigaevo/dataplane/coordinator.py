@@ -28,14 +28,24 @@ Outside this module, no other code should import ``redis`` or
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
+import secrets
+from time import monotonic
 from typing import Final, Literal
 
 from loguru import logger
 
 from .connection import RedisConnection
 from .crash import OneShotFlag
-from .errors import DataPlaneError, NotStartedError, ShutdownError, StaleReadError
+from .errors import (
+    DataPlaneError,
+    LockHeld,
+    LockLost,
+    NotStartedError,
+    ShutdownError,
+    StaleReadError,
+)
 from .ids import (
     ActorIdentity,
     CellKey,
@@ -59,6 +69,16 @@ from .transitions import (
 
 _DEFAULT_KEY_PREFIX: Final[str] = "gigaevo"
 
+# Cryptographically-random lease token length (bytes). Yields a 22-char
+# urlsafe base64 string, comfortably uniqueness-safe for the lease
+# lifetime even under millions of holders.
+_LEASE_TOKEN_BYTES: Final[int] = 16
+
+# Renewal cadence relative to TTL. A 1/3 ratio gives two safety
+# attempts before the TTL would expire under perfect timing, with room
+# for GC pauses or transient network hiccups.
+_LOCK_RENEW_RATIO: Final[float] = 3.0
+
 
 # ── built-in script names ──────────────────────────────────────────────
 #
@@ -67,6 +87,9 @@ _DEFAULT_KEY_PREFIX: Final[str] = "gigaevo"
 # instead of a magic string repeated at every site.
 
 _SCRIPT_COUNTER_INC: Final[ScriptName] = make_script_name("counter_inc")
+_SCRIPT_LOCK_ACQUIRE: Final[ScriptName] = make_script_name("instance_lock_acquire")
+_SCRIPT_LOCK_RENEW: Final[ScriptName] = make_script_name("instance_lock_renew")
+_SCRIPT_LOCK_RELEASE: Final[ScriptName] = make_script_name("instance_lock_release")
 
 
 # ── public contract dataclasses ─────────────────────────────────────────
@@ -229,6 +252,10 @@ class DataPlane:
         )
         self._lua: LuaRegistry | None = None
         self._started: bool = False
+        # Per-lease background renewers keyed by lease token. Populated
+        # by :meth:`acquire_instance_lock`, drained by
+        # :meth:`release_instance_lock` and :meth:`shutdown`.
+        self._renewers: dict[LeaseToken, asyncio.Task[None]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -291,8 +318,7 @@ class DataPlane:
         if not self._started:
             return
         try:
-            # TODO: cancel registered renewers + drain in-flight sagas as
-            # those become real in their respective follow-up changes.
+            await self._cancel_renewers()
             await self._connection.shutdown()
         except Exception as exc:
             raise ShutdownError(reason=repr(exc)) from exc
@@ -411,16 +437,49 @@ class DataPlane:
         """Acquire a TTL-bounded lease over a key prefix.
 
         Returns a typed :class:`InstanceLease` (carried via :class:`Ok`)
-        or a typed :class:`gigaevo.dataplane.errors.LockHeld` on the
-        contention path. The lease's :class:`OneShotFlag` is owned by
-        this coordinator; a Sentinel failover or detected lock-lost
-        condition raises the flag so the caller's hot path can short-
-        circuit to recovery without a blocking renewal call.
+        on success, or a typed :class:`LockHeld` on contention. The lease
+        spawns a background renewal task on a ``ttl_s / 3`` cadence; if
+        renewal ever fails the task signals the lease's
+        :class:`OneShotFlag` so the caller's hot path can short-circuit
+        without a blocking call.
+
+        ``deadline_monotonic`` is reserved for the future connection-pool
+        wait-timeout integration; for now the call returns whatever the
+        single EVALSHA observes.
         """
-        # TODO: call self._require_started("acquire_instance_lock")
-        # before the SETNX-with-token + EXPIRE Lua call.
-        _ = (self, prefix, ttl_s, deadline_monotonic)
-        raise NotImplementedError("acquire_instance_lock")
+        _ = deadline_monotonic
+        lua = self._require_lua()
+        lock_key = f"{self._connection.key_prefix}:lock:{prefix}"
+        lease_token = LeaseToken(secrets.token_urlsafe(_LEASE_TOKEN_BYTES))
+        try:
+            result = await lua.evalsha(
+                _SCRIPT_LOCK_ACQUIRE,
+                keys=[lock_key],
+                args=[lease_token, max(1, int(ttl_s * 1000))],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        if int(result) != 1:
+            # Best-effort holder lookup for diagnostics. The holder
+            # field is redacted in str(err) so we don't leak the token.
+            holder = await self._connection.pool.get(lock_key)  # type: ignore[misc]
+            return Err(LockHeld(key=lock_key, holder=holder))
+        flag = OneShotFlag()
+        lease = InstanceLease(
+            token=lease_token,
+            key=lock_key,
+            ttl_s=ttl_s,
+            expires_at_monotonic=monotonic() + ttl_s,
+            flag=flag,
+        )
+        # Spawn the background renewer. The task captures ``lease`` by
+        # value; if a future call constructs a fresh lease (e.g. for
+        # ttl_s change) it must call release + acquire, not mutate.
+        task = asyncio.create_task(
+            self._renew_lease_loop(lease), name=f"dataplane.renewer:{lock_key}"
+        )
+        self._renewers[lease_token] = task
+        return Ok(lease)
 
     async def renew_instance_lock(
         self,
@@ -431,21 +490,98 @@ class DataPlane:
         """Token-CAS EXPIRE; fails with :class:`LockLost` on token mismatch.
 
         On success returns a fresh :class:`InstanceLease` with the
-        updated ``ttl_s`` / ``expires_at_monotonic`` — the input lease
-        becomes logically stale and should not be reused for the
-        renew / release call pair after this point.
+        updated ``ttl_s`` / ``expires_at_monotonic`` and the same
+        :class:`OneShotFlag`. The input lease becomes logically stale
+        but remains hashable / equal to the new one for the fields that
+        matter (``compare=False`` on ``flag`` and ``expires_at_monotonic``
+        below the dataclass scope so renewals are transparent to
+        callers holding the lease by value).
         """
-        # TODO: call self._require_started("renew_instance_lock") and
-        # token-CAS the EXPIRE.
-        _ = (self, lease, ttl_s)
-        raise NotImplementedError("renew_instance_lock")
+        lua = self._require_lua()
+        try:
+            result = await lua.evalsha(
+                _SCRIPT_LOCK_RENEW,
+                keys=[lease.key],
+                args=[lease.token, max(1, int(ttl_s * 1000))],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        if int(result) != 1:
+            return Err(LockLost(key=lease.key))
+        return Ok(
+            InstanceLease(
+                token=lease.token,
+                key=lease.key,
+                ttl_s=ttl_s,
+                expires_at_monotonic=monotonic() + ttl_s,
+                flag=lease.flag,
+            )
+        )
 
     async def release_instance_lock(self, lease: InstanceLease) -> None:
-        """Token-CAS DEL; no-op if the lease was already released or lost."""
-        # TODO: call self._require_started("release_instance_lock") and
-        # token-CAS the DEL.
-        _ = (self, lease)
-        raise NotImplementedError("release_instance_lock")
+        """Token-CAS DEL; no-op if the lease was already released or lost.
+
+        Cancels the lease's renewal task before issuing the DEL so the
+        two cannot race (the renewer would otherwise see DEL-then-fail
+        and signal the flag spuriously). Coordinator must be started;
+        an already-shut-down coordinator silently no-ops.
+        """
+        # Cancel the renewer first; the task catches CancelledError in
+        # its asyncio.sleep and exits cleanly.
+        task = self._renewers.pop(lease.token, None)
+        if task is not None:
+            task.cancel()
+        if not self._started or self._lua is None:
+            return
+        lua = self._lua
+        try:
+            await lua.evalsha(
+                _SCRIPT_LOCK_RELEASE,
+                keys=[lease.key],
+                args=[lease.token],
+            )
+        except DataPlaneError:
+            # Release is idempotent; swallow transient connection
+            # errors so callers can use this in a finally block safely.
+            pass
+
+    async def _renew_lease_loop(self, lease: InstanceLease) -> None:
+        """Background renewal loop. Signals the lease's flag on loss.
+
+        Runs forever until either (a) the task is cancelled by
+        :meth:`release_instance_lock` or :meth:`shutdown`, or (b)
+        renewal fails — token mismatch (real loss) OR a transient
+        connection error. Either way, the loop signals the flag and
+        returns.
+
+        Cadence is ``ttl_s / _LOCK_RENEW_RATIO`` with a floor of 1 ms so
+        pathologically tiny TTLs (test fixtures) still make forward
+        progress.
+        """
+        interval = max(lease.ttl_s / _LOCK_RENEW_RATIO, 0.001)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+            result = await self.renew_instance_lock(lease, ttl_s=lease.ttl_s)
+            if isinstance(result, Err):
+                lease.flag.signal()
+                return
+
+    async def _cancel_renewers(self) -> None:
+        """Cancel every active renewer; wait for them to exit.
+
+        Called from :meth:`shutdown`. We gather the tasks with
+        ``return_exceptions=True`` so a stuck or already-failed renewer
+        does not block the shutdown path.
+        """
+        tasks = list(self._renewers.values())
+        self._renewers.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── archive ──────────────────────────────────────────────────────
 
@@ -572,7 +708,13 @@ class DataPlane:
         as a ``.lua`` file under ``gigaevo/dataplane/scripts/``; the name
         used here matches the file stem.
         """
-        lua.register(_SCRIPT_COUNTER_INC, load_lua_source(_SCRIPT_COUNTER_INC))
+        for name in (
+            _SCRIPT_COUNTER_INC,
+            _SCRIPT_LOCK_ACQUIRE,
+            _SCRIPT_LOCK_RENEW,
+            _SCRIPT_LOCK_RELEASE,
+        ):
+            lua.register(name, load_lua_source(name))
 
     def _counter_keys(self, key: CounterKey) -> tuple[str, str, str]:
         """Resolve the three Redis keys backing a CRDT counter.

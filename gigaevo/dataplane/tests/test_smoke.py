@@ -73,9 +73,6 @@ def test_method_stubs_raise_notimplemented() -> None:
         "transition_program_state",
         "transition_program_state_batch",
         "read_program",
-        "acquire_instance_lock",
-        "renew_instance_lock",
-        "release_instance_lock",
         "try_replace_elite",
     ]
     for name in stub_names:
