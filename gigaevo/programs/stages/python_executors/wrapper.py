@@ -1,21 +1,32 @@
 """Loky-backed Python subprocess executor.
 
-Workers spawn lazily inside :class:`LokyBackend`, are reused across calls,
-and on Linux receive ``PR_SET_PDEATHSIG`` so they die with the parent.
-Each call's result is spilled to a file in :attr:`WorkerConfig.spill_dir`
-and the parent reads it via ``mmap`` — result size is bounded by free
-space on the spill volume, not parent RAM.
+:class:`LokyBackend` is the local-subprocess implementation of
+:class:`gigaevo.programs.stages.python_executors.backend.ExecutorBackend`.
+Workers spawn lazily, are reused across calls, and on Linux receive
+``PR_SET_PDEATHSIG`` so they die with the parent.  Each call's result is
+spilled to a file in :attr:`WorkerConfig.spill_dir` and the parent reads
+it via ``mmap`` — result size is bounded by free space on the spill
+volume, not parent RAM.
 
 User code is *not* sandboxed: env scrub and signal-handler reset are the
 only guard rails.  Cloudpickle deserialisation in the parent can run
 ``__reduce__`` gadgets — trust user code as much as you trust whoever
 generated it.
 
-Multiple :class:`LokyBackend` instances can coexist with isolated pools,
-spill directories and env scrub rules; pool-level state is no longer
-module-global.  The module-level :func:`run_exec_runner` and
-:func:`shutdown_executor` are thin wrappers over a process-scoped
-default singleton for backward compatibility with existing call sites.
+Configuration is captured in :class:`WorkerConfig`; multiple backends
+can coexist with isolated pools, spill directories and env scrub rules.
+Result envelopes (:class:`WorkerResult`) carry an :class:`ExecutionMetrics`
+block with timing and resource measurements plus per-worker identity
+(``node_id`` / ``worker_id``).  Lifecycle observers can subscribe via
+:meth:`LokyBackend.on_submit` / :meth:`~LokyBackend.on_complete` /
+:meth:`~LokyBackend.on_shutdown`.
+
+Module-level :func:`run_exec_runner` and :func:`shutdown_executor` are
+thin wrappers over a process-scoped default :class:`LokyBackend`
+singleton for backward compatibility with existing call sites.
+:func:`run_exec_runner` accepts an optional ``backend`` kwarg so callers
+can inject any :class:`ExecutorBackend` implementation — used by tests
+and by deployments to plug in distributed-execution backends.
 """
 
 from __future__ import annotations
