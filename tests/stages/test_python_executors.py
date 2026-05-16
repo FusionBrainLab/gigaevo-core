@@ -716,24 +716,24 @@ class TestSpillDirHardening:
         import tempfile as _tempfile
 
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         monkeypatch.delenv("GIGAEVO_EXECUTOR_SPILL_DIR", raising=False)
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         assert cfg.spill_dir != _Path(_tempfile.gettempdir())
         assert str(os.getuid()) in cfg.spill_dir.name
 
     def test_spill_dir_env_resolves_dotdot(self, monkeypatch, tmp_path) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         target = tmp_path / "real-spill"
         target.mkdir()
         weird = tmp_path / "real-spill" / ".." / "real-spill"
         monkeypatch.setenv("GIGAEVO_EXECUTOR_SPILL_DIR", str(weird))
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         assert cfg.spill_dir == target.resolve()
 
 
@@ -1375,22 +1375,22 @@ class TestXdistWorkerCountAutoCap:
 
     def test_no_xdist_yields_default_none(self, monkeypatch) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
         monkeypatch.delenv("PYTEST_XDIST_WORKER_COUNT", raising=False)
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         assert cfg.max_workers is None
 
     def test_xdist_caps_to_cpu_div_workers(self, monkeypatch) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
         monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "4")
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         # max(1, cpu_count // 4): exact value depends on host, just verify
         # it's a small positive int strictly less than cpu_count.
         cpu = os.cpu_count() or 1
@@ -1402,23 +1402,23 @@ class TestXdistWorkerCountAutoCap:
 
     def test_xdist_one_worker_does_not_cap(self, monkeypatch) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
         monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "1")
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         # Single-worker xdist is effectively no xdist — don't penalize.
         assert cfg.max_workers is None
 
     def test_explicit_max_workers_overrides_xdist(self, monkeypatch) -> None:
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         monkeypatch.setenv("GIGAEVO_EXECUTOR_MAX_WORKERS", "7")
         monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "8")
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         # Operator override wins even on a 1-CPU host where cpu//8 = 0.
         assert cfg.max_workers == 7
 
@@ -1426,13 +1426,13 @@ class TestXdistWorkerCountAutoCap:
         """cpu_count // xdist_count can be 0 on small hosts; we must
         never request max_workers=0 (loky raises ValueError)."""
         from gigaevo.programs.stages.python_executors.wrapper import (
-            ExecutorConfig,
+            WorkerConfig,
         )
 
         monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
         # Pick a count that exceeds any plausible cpu_count.
         monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "10000")
-        cfg = ExecutorConfig.from_env()
+        cfg = WorkerConfig.from_env()
         assert cfg.max_workers is not None
         assert cfg.max_workers >= 1
 
@@ -1488,3 +1488,162 @@ class TestShutdownExecutorWaitFlag:
         elapsed = _time.monotonic() - t0
         # wait=False on a small pool should be < 100ms.  Generous bound.
         assert elapsed < 2.0, f"shutdown_executor(wait=False) took {elapsed:.3f}s"
+
+
+# =============================================================================
+# LokyBackend — multi-instance isolation
+# =============================================================================
+
+
+class TestLokyBackendIsolation:
+    """Two ``LokyBackend`` instances have independent pools, spill dirs, and
+    configurations; tearing one down does not affect the other."""
+
+    async def test_two_backends_have_independent_executors(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill_a = tmp_path / "spill-a"
+        spill_b = tmp_path / "spill-b"
+        spill_a.mkdir()
+        spill_b.mkdir()
+
+        a = LokyBackend(WorkerConfig(spill_dir=spill_a))
+        b = LokyBackend(WorkerConfig(spill_dir=spill_b))
+        try:
+            ra = await a.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+            rb = await b.execute(
+                WorkerCall(code="def f(): return 2", function_name="f"),
+                deadline_s=30,
+            )
+            assert ra == 1
+            assert rb == 2
+            assert a._executor is not b._executor
+        finally:
+            await a.shutdown(wait=True)
+            await b.shutdown(wait=True)
+
+    async def test_shutdown_one_does_not_affect_sibling(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill_a = tmp_path / "spill-a"
+        spill_b = tmp_path / "spill-b"
+        spill_a.mkdir()
+        spill_b.mkdir()
+
+        a = LokyBackend(WorkerConfig(spill_dir=spill_a))
+        b = LokyBackend(WorkerConfig(spill_dir=spill_b))
+        try:
+            await a.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+            await b.execute(
+                WorkerCall(code="def f(): return 2", function_name="f"),
+                deadline_s=30,
+            )
+
+            await a.shutdown(wait=True)
+            assert a._executor is None
+
+            # b is still alive
+            result = await b.execute(
+                WorkerCall(code="def f(): return 3", function_name="f"),
+                deadline_s=30,
+            )
+            assert result == 3
+        finally:
+            await b.shutdown(wait=True)
+
+    def test_pool_id_is_unique_per_instance(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        ids = {WorkerConfig().pool_id for _ in range(50)}
+        assert len(ids) == 50
+
+    def test_node_id_defaults_to_hostname(self) -> None:
+        import socket
+
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        assert WorkerConfig().node_id == socket.gethostname()
+
+    def test_node_id_can_be_overridden(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        cfg = WorkerConfig(node_id="custom-pod-name")
+        assert cfg.node_id == "custom-pod-name"
+
+    def test_env_whitelist_can_be_extended(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            DEFAULT_ENV_WHITELIST,
+            WorkerConfig,
+        )
+
+        extra = DEFAULT_ENV_WHITELIST | {"MY_CORP_PROXY", "MY_CORP_CA_BUNDLE"}
+        cfg = WorkerConfig(env_whitelist=extra)
+        assert "MY_CORP_PROXY" in cfg.env_whitelist
+        assert "PATH" in cfg.env_whitelist  # original entries preserved
+
+    def test_env_prefixes_can_be_extended(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        cfg = WorkerConfig(env_prefixes=("GIGAEVO_", "LOKY_", "MYAPP_"))
+        assert "MYAPP_" in cfg.env_prefixes
+
+    async def test_custom_env_whitelist_reaches_worker(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            DEFAULT_ENV_WHITELIST,
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        os.environ["MY_CORP_PROXY"] = "http://corp-proxy:8080"
+        try:
+            cfg = WorkerConfig(
+                spill_dir=spill,
+                env_whitelist=DEFAULT_ENV_WHITELIST | {"MY_CORP_PROXY"},
+            )
+            backend = LokyBackend(cfg)
+            try:
+                value = await backend.execute(
+                    WorkerCall(
+                        code=(
+                            "import os\n"
+                            "def f():\n"
+                            "    return os.environ.get('MY_CORP_PROXY')\n"
+                        ),
+                        function_name="f",
+                    ),
+                    deadline_s=30,
+                )
+                assert value == "http://corp-proxy:8080"
+            finally:
+                await backend.shutdown(wait=True)
+        finally:
+            os.environ.pop("MY_CORP_PROXY", None)
+
+    def test_default_singleton_is_lazy(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors import wrapper as _wrapper
+
+        # Reset the singleton.
+        monkeypatch.setattr(_wrapper, "_default_backend", None)
+        assert _wrapper._default_backend is None
+
+        backend = _wrapper.default_loky_backend()
+        assert backend is not None
+        assert _wrapper.default_loky_backend() is backend  # cached

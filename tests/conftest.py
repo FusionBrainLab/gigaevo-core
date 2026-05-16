@@ -195,16 +195,18 @@ def _shutdown_loky_executor_at_session_end():
 
 @pytest.fixture
 def isolated_spill_dir(tmp_path, monkeypatch):
-    """Point the wrapper's spill directory at a per-test temp directory."""
-    from dataclasses import replace
+    """Point the wrapper's spill directory at a per-test temp directory.
 
+    Replaces the default :class:`LokyBackend` singleton with one
+    configured for the per-test spill directory; ``monkeypatch.setattr``
+    restores the original singleton on teardown.
+    """
     from gigaevo.programs.stages.python_executors import wrapper as _wrapper
 
     spill = tmp_path / "spill"
     spill.mkdir()
-    monkeypatch.setattr(
-        _wrapper, "_CONFIG", replace(_wrapper._CONFIG, spill_dir=spill)
-    )
+    config = _wrapper.WorkerConfig(spill_dir=spill)
+    monkeypatch.setattr(_wrapper, "_default_backend", _wrapper.LokyBackend(config))
     return spill
 
 
