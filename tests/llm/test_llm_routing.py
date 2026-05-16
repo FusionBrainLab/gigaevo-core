@@ -112,6 +112,107 @@ class TestTokenUsageExtraction:
 
 
 # ---------------------------------------------------------------------------
+# Hostile-payload hardening — provider returns non-dict / non-int values
+#
+# The bandit's ``_safe_track`` wrapper swallows AttributeError from
+# malformed payloads, but direct callers in ``gigaevo/llm/models.py``
+# (``MultiModelRouter.invoke``) have no such guard. Harden the extractor
+# itself so it always returns either a valid ``TokenUsage`` or ``None``.
+# ---------------------------------------------------------------------------
+
+
+class TestTokenUsageHostilePayloads:
+    def test_completion_tokens_details_as_string(self):
+        # Positive: pre-fix this raised AttributeError ('str' has no get).
+        resp = MagicMock()
+        resp.response_metadata = {
+            "token_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "completion_tokens_details": "NOT_A_DICT",
+            }
+        }
+        usage = TokenUsage.from_response(resp)
+        assert usage is not None
+        assert usage.context == 100
+        assert usage.reasoning == 0  # ignored — wrong shape
+
+    def test_usage_as_string(self):
+        # Negative: hostile provider stuffs a JSON-encoded string in place
+        # of the dict. Should return None, not crash.
+        resp = MagicMock()
+        resp.response_metadata = {"token_usage": "broken"}
+        assert TokenUsage.from_response(resp) is None
+
+    def test_response_metadata_as_string(self):
+        # Negative: response_metadata itself wrong type.
+        resp = MagicMock()
+        resp.response_metadata = "not-a-dict"
+        assert TokenUsage.from_response(resp) is None
+
+    def test_string_token_counts_coerced(self):
+        # Positive: provider returns string-encoded counts (some HTTP
+        # clients leave numbers as text). Coerced to int.
+        resp = MagicMock()
+        resp.response_metadata = {
+            "token_usage": {
+                "prompt_tokens": "100",
+                "completion_tokens": "50",
+                "total_tokens": "150",
+            }
+        }
+        usage = TokenUsage.from_response(resp)
+        assert usage.context == 100
+        assert usage.generated == 50
+        assert usage.total == 150
+
+    def test_none_token_counts_default_to_zero(self):
+        # Negative: missing/None counts must not raise on the int field
+        # validator; default to 0.
+        resp = MagicMock()
+        resp.response_metadata = {
+            "token_usage": {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
+        }
+        usage = TokenUsage.from_response(resp)
+        assert usage.context == 0
+        assert usage.generated == 0
+        assert usage.total == 0
+
+    def test_float_token_counts_truncated(self):
+        # Positive: some providers return floats (rare).
+        resp = MagicMock()
+        resp.response_metadata = {
+            "token_usage": {
+                "prompt_tokens": 100.5,
+                "completion_tokens": 50.0,
+                "total_tokens": 150.5,
+            }
+        }
+        usage = TokenUsage.from_response(resp)
+        assert usage.context == 100
+        assert usage.generated == 50
+
+    def test_garbage_string_count_defaults_to_zero(self):
+        # Negative: a string that can't parse as int defaults to 0.
+        resp = MagicMock()
+        resp.response_metadata = {
+            "token_usage": {
+                "prompt_tokens": "not-a-number",
+                "completion_tokens": 50,
+                "total_tokens": 150,
+            }
+        }
+        usage = TokenUsage.from_response(resp)
+        assert usage.context == 0
+        assert usage.generated == 50
+
+
+# ---------------------------------------------------------------------------
 # TokenTracker
 # ---------------------------------------------------------------------------
 

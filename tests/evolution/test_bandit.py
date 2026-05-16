@@ -1307,3 +1307,835 @@ class TestOnProgramIngestedEdgeCases:
         await op.on_program_ingested(child, mock_storage)
 
         mock_storage.mget.assert_called_once_with(parent_ids)
+
+
+# ---------------------------------------------------------------------------
+# Classifier-driven failure dispatch through invoke / ainvoke
+# ---------------------------------------------------------------------------
+
+
+class TestBanditFailureDispatchViaClassifier:
+    """``_select`` records the pull before the LLM call. A failure between
+    those two points used to inflate ``total_pulls`` with no matching reward
+    entry, shrinking the UCB1 confidence term for the failing arm and
+    underexploring flaky models. The new dispatch wraps the LLM call,
+    classifies the exception via ``classify_call_result``, and injects a
+    zero reward via ``_inject_failure_reward`` so pulls and the reward
+    window stay in step on every failure path. The exception still
+    propagates."""
+
+    def _router_with_flaky_arm(
+        self, exc: BaseException
+    ) -> tuple[BanditModelRouter, MagicMock]:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.invoke = MagicMock(side_effect=exc)
+        flaky.ainvoke = AsyncMock(side_effect=exc)
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+
+        healthy = MagicMock()
+        healthy.model_name = "healthy"
+        healthy.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [flaky, healthy],
+            [0.5, 0.5],
+            fitness_key="score",
+            higher_is_better=True,
+        )
+        router._langfuse = None
+        router._bandit.select = lambda: "flaky"  # type: ignore[assignment]
+        return router, flaky
+
+    def test_sync_invoke_failure_records_zero_reward_and_propagates(
+        self,
+    ) -> None:
+        router, _flaky = self._router_with_flaky_arm(RuntimeError("rate limited"))
+
+        with pytest.raises(RuntimeError, match="rate limited"):
+            router.invoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_async_ainvoke_failure_records_zero_reward_and_propagates(
+        self,
+    ) -> None:
+        router, _flaky = self._router_with_flaky_arm(RuntimeError("rate limited"))
+
+        with pytest.raises(RuntimeError, match="rate limited"):
+            await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_repeated_ainvoke_failures_keep_ledgers_in_step(self) -> None:
+        router, _flaky = self._router_with_flaky_arm(RuntimeError("boom"))
+
+        for _ in range(7):
+            with pytest.raises(RuntimeError):
+                await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 7
+        assert stats["flaky"]["window_size"] == 7
+
+    async def test_successful_call_does_not_inject_immediate_reward(self) -> None:
+        # The success path defers the reward to on_mutation_outcome, which
+        # runs later with the fitness result.
+        model = MagicMock()
+        model.model_name = "ok"
+        model.ainvoke = AsyncMock(return_value=MagicMock())
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        # No reward entry yet — on_mutation_outcome drives the real reward.
+        assert stats["ok"]["window_size"] == 0
+
+    def test_structured_output_failure_also_injects_zero_reward(self) -> None:
+        # The bandit's with_structured_output wires the failure_hook through
+        # to _StructuredOutputRouter so the structured-output dispatch path
+        # gets the same ledger-symmetry guarantee.
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.with_structured_output = MagicMock(return_value=flaky)
+        flaky.invoke = MagicMock(side_effect=RuntimeError("structured failure"))
+
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        structured = router.with_structured_output(dict)
+        with pytest.raises(RuntimeError, match="structured failure"):
+            structured.invoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    def test_inject_failure_reward_skips_unknown_arm_silently(self) -> None:
+        # Defense-in-depth symmetry with on_mutation_outcome's unknown-arm
+        # guard. _select cannot normally return a name outside
+        # self._bandit.arms, but if a future caller invokes
+        # _inject_failure_reward directly with a stale name (loaded from a
+        # snapshot, hand-built in a test, etc.) the helper must not raise
+        # KeyError on top of the original exception.
+        router, _ = self._router_with_flaky_arm(RuntimeError("boom"))
+
+        # Should not raise.
+        router._inject_failure_reward(RuntimeError("orig"), "not_an_arm")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["window_size"] == 0
+        assert stats["healthy"]["window_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Re-raise integrity: cause chain, context, traceback survive failure hook
+# ---------------------------------------------------------------------------
+
+
+class TestBanditFailureReRaiseIntegrity:
+    """The classifier dispatch wraps the call in ``except BaseException`` and
+    bare-``raise``s after injecting the zero reward. The original exception
+    object, its traceback, ``__cause__`` (explicit ``raise X from Y``), and
+    ``__context__`` (implicit chain) must all survive untouched — otherwise
+    higher-level retry / logging layers cannot tell the real failure apart
+    from a bandit-side error."""
+
+    def _make_router_raising(self, exc: BaseException) -> BanditModelRouter:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.invoke = MagicMock(side_effect=exc)
+        flaky.ainvoke = AsyncMock(side_effect=exc)
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._bandit.select = lambda: "flaky"  # type: ignore[assignment]
+        return router
+
+    def test_sync_invoke_preserves_explicit_cause_chain(self) -> None:
+        root = ValueError("root cause")
+        try:
+            raise RuntimeError("surface") from root
+        except RuntimeError as e:
+            surface = e
+        router = self._make_router_raising(surface)
+
+        with pytest.raises(RuntimeError, match="surface") as exc_info:
+            router.invoke("hello")
+
+        # Same exception object identity is the strictest possible check.
+        assert exc_info.value is surface
+        assert exc_info.value.__cause__ is root
+        assert exc_info.value.__traceback__ is not None
+
+    async def test_async_ainvoke_preserves_explicit_cause_chain(self) -> None:
+        root = ValueError("root cause async")
+        try:
+            raise RuntimeError("surface async") from root
+        except RuntimeError as e:
+            surface = e
+        router = self._make_router_raising(surface)
+
+        with pytest.raises(RuntimeError, match="surface async") as exc_info:
+            await router.ainvoke("hello")
+        assert exc_info.value is surface
+        assert exc_info.value.__cause__ is root
+
+
+# ---------------------------------------------------------------------------
+# Hardened failure-hook: classifier-internal errors must not mask LLM exc
+# ---------------------------------------------------------------------------
+
+
+class TestBanditFailureHookErrorContainment:
+    """If the classifier itself raises (e.g. a future schema change that
+    refuses some attribute), ``_inject_failure_reward`` must not let the new
+    exception replace the original LLM failure. Same for downstream
+    normalizer / bandit calls. The original exception is what the caller
+    asked to handle; the bandit hook is observability only."""
+
+    def _make_router(self) -> BanditModelRouter:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.invoke = MagicMock(side_effect=RuntimeError("real failure"))
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._bandit.select = lambda: "flaky"  # type: ignore[assignment]
+        return router
+
+    def test_classifier_raising_does_not_mask_real_exception(self) -> None:
+        router = self._make_router()
+        with patch(
+            "gigaevo.llm.bandit.classify_call_result",
+            side_effect=ValueError("classifier exploded"),
+        ):
+            with pytest.raises(RuntimeError, match="real failure"):
+                router.invoke("hello")
+
+
+# ---------------------------------------------------------------------------
+# Structured-output: _process raising after a successful invoke
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredOutputProcessFailureFiresHook:
+    """``_StructuredOutputRouter.invoke`` wraps ``model.invoke`` in
+    try/except so the failure_hook fires on transport errors. But the
+    response goes through ``_process`` afterward to extract the parsed
+    Pydantic object, and the response dict may contain a parser exception
+    that the langchain wrapper surfaces as a ``response['parsing_error']``
+    or by raising directly. If ``_process`` raises, the bandit ledger
+    must still be told (otherwise we have an inflated pull count with no
+    matching reward — exactly the desync the wiring was supposed to
+    prevent)."""
+
+    def test_structured_process_failure_fires_failure_hook(self) -> None:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+
+        # Return a malformed response that crashes _process. The simplest
+        # repro: response.get("raw") evaluates fine, but then we patch the
+        # tracker.track to raise — same effect, no need to mock pydantic.
+        flaky.with_structured_output = MagicMock(return_value=flaky)
+        flaky.invoke = MagicMock(return_value={"raw": MagicMock(), "parsed": None})
+
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        broken_tracker = MagicMock()
+        broken_tracker.track = MagicMock(side_effect=RuntimeError("track exploded"))
+        router._tracker = broken_tracker  # type: ignore[assignment]
+
+        structured = router.with_structured_output(dict)
+        with pytest.raises(RuntimeError, match="track exploded"):
+            structured.invoke("hello")
+
+        # The bandit ledger must be in step: one pull, one reward injection.
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Success-path tracker exception must not leave ledger out of step
+# ---------------------------------------------------------------------------
+
+
+class TestBanditSuccessPathTrackerFailure:
+    """The success path defers reward to ``on_mutation_outcome``. But if
+    ``self._tracker.track`` raises (malformed token_usage from a hostile
+    provider, telemetry-side bug, etc.) the exception leaks back to the
+    caller without the bandit having recorded a reward — same desync as
+    the original failure case. The fix: tracker errors should not be
+    treated as bandit failures (the LLM call succeeded), but the caller
+    deserves a usable response. We swallow tracker errors and continue."""
+
+    def test_sync_success_with_tracker_exception_returns_response(self) -> None:
+        response = MagicMock()
+        model = MagicMock()
+        model.model_name = "ok"
+        model.invoke = MagicMock(return_value=response)
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        broken_tracker = MagicMock()
+        broken_tracker.track = MagicMock(side_effect=RuntimeError("telemetry exploded"))
+        router._tracker = broken_tracker  # type: ignore[assignment]
+
+        # Tracker errors are telemetry; the caller must still get the LLM
+        # response and the bandit must record the pull. The deferred reward
+        # arrives via on_mutation_outcome.
+        result = router.invoke("hello")
+        assert result is response
+
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        # No reward yet — deferred to on_mutation_outcome.
+        assert stats["ok"]["window_size"] == 0
+
+    async def test_async_success_with_tracker_exception_returns_response(
+        self,
+    ) -> None:
+        response = MagicMock()
+        model = MagicMock()
+        model.model_name = "ok"
+        model.ainvoke = AsyncMock(return_value=response)
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        broken_tracker = MagicMock()
+        broken_tracker.track = MagicMock(side_effect=RuntimeError("telemetry exploded"))
+        router._tracker = broken_tracker  # type: ignore[assignment]
+
+        result = await router.ainvoke("hello")
+        assert result is response
+
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        assert stats["ok"]["window_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# ContextVar regression: get_selected_model after bandit routing
+# ---------------------------------------------------------------------------
+
+
+class TestBanditContextVarPropagation:
+    """``MultiModelRouter._select`` calls ``_remember_selected_model`` so that
+    downstream consumers (``MutationAgent``, ``BaseAgent``) can read the
+    selected model via ``get_selected_model()``. ``BanditModelRouter._select``
+    was wired without that call, so any agent stack that consumes
+    ``get_selected_model()`` would see a stale value (whatever the last
+    non-bandit selection left in the ContextVar, or ``None``).
+    """
+
+    async def test_get_selected_model_returns_bandit_arm(self) -> None:
+        from gigaevo.llm.models import get_selected_model
+
+        models = _make_mock_models(["arm_a", "arm_b"])
+        router = BanditModelRouter(
+            models, [0.5, 0.5], fitness_key="score", higher_is_better=True
+        )
+
+        async def _run() -> str | None:
+            router._bandit.select = lambda: "arm_b"  # type: ignore[assignment]
+            router._select()
+            return get_selected_model()
+
+        result = await _run()
+        assert result == "arm_b"
+
+    async def test_structured_select_override_sets_context_var(self) -> None:
+        from gigaevo.llm.models import get_selected_model
+
+        models = _make_mock_models(["arm_a", "arm_b"])
+        router = BanditModelRouter(
+            models, [0.5, 0.5], fitness_key="score", higher_is_better=True
+        )
+
+        async def _run() -> str | None:
+            router._bandit.select = lambda: "arm_a"  # type: ignore[assignment]
+            structured = router.with_structured_output(dict)
+            structured._select()
+            return get_selected_model()
+
+        result = await _run()
+        assert result == "arm_a"
+
+
+class TestBanditStreamingFailureDispatch:
+    """``stream`` and ``astream`` are inherited from ``MultiModelRouter``.
+    Without an override on ``BanditModelRouter`` they call ``_select`` (which
+    records the pull through the bandit's overridden ``_select``) but then
+    iterate ``model.{,a}stream`` with no try/except — a mid-stream failure
+    would inflate ``total_pulls`` for the failing arm without a matching
+    window entry, exactly the asymmetry the classifier wiring exists to
+    eliminate. Streaming must follow the same ledger-symmetry contract as
+    ``invoke``/``ainvoke``."""
+
+    def _flaky_streaming_router(
+        self, exc: BaseException
+    ) -> tuple[BanditModelRouter, MagicMock]:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+
+        def _sync_stream(*_args, **_kwargs):
+            raise exc
+
+        async def _async_stream(*_args, **_kwargs):
+            raise exc
+            yield  # pragma: no cover — unreachable, makes this an async generator
+
+        flaky.stream = MagicMock(side_effect=_sync_stream)
+        flaky.astream = _async_stream
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        return router, flaky
+
+    def test_sync_stream_failure_records_zero_reward_and_propagates(self) -> None:
+        router, _flaky = self._flaky_streaming_router(RuntimeError("stream boom"))
+
+        with pytest.raises(RuntimeError, match="stream boom"):
+            # ``stream`` is a generator — exhaust it to trigger the call.
+            for _ in router.stream("hello"):
+                pass
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        # Without the override the window would still be empty here, leaving
+        # ``total_pulls`` and ``window_size`` permanently out of step.
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_async_astream_failure_records_zero_reward_and_propagates(
+        self,
+    ) -> None:
+        router, _flaky = self._flaky_streaming_router(RuntimeError("astream boom"))
+
+        with pytest.raises(RuntimeError, match="astream boom"):
+            async for _ in router.astream("hello"):
+                pass
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+
+class TestInjectFailureRewardCannotMaskOriginalException:
+    """``BanditModelRouter.invoke``/``ainvoke`` call ``_inject_failure_reward``
+    from inside an ``except`` block.  If the hook itself raises (a logger
+    blowing up, a corrupted normalizer, a classifier regression, etc.) the
+    naive ``raise`` at the end would surface the *hook's* exception instead
+    of the original LLM failure — and the original traceback would be lost.
+    The ``_StructuredOutputRouter`` path already protects against this via
+    ``_maybe_fire_failure_hook``; the direct path must follow suit."""
+
+    def _router_with_broken_hook(self) -> BanditModelRouter:
+        model = MagicMock()
+        model.model_name = "m"
+        model.invoke = MagicMock(side_effect=RuntimeError("real failure"))
+        model.ainvoke = AsyncMock(side_effect=RuntimeError("real failure"))
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        def _explode(_exc, _name):
+            raise RuntimeError("hook bug — must not mask original")
+
+        router._inject_failure_reward = _explode  # type: ignore[assignment]
+        return router
+
+    def test_sync_invoke_surfaces_original_exception_even_if_hook_explodes(
+        self,
+    ) -> None:
+        router = self._router_with_broken_hook()
+        with pytest.raises(RuntimeError, match="real failure"):
+            router.invoke("hi")
+
+    async def test_ainvoke_surfaces_original_exception_even_if_hook_explodes(
+        self,
+    ) -> None:
+        router = self._router_with_broken_hook()
+        with pytest.raises(RuntimeError, match="real failure"):
+            await router.ainvoke("hi")
+
+
+# ---------------------------------------------------------------------------
+# Structured-output: failure_hook errors are warned (not silently swallowed)
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredOutputFailureHookErrorsAreLogged:
+    """``_StructuredOutputRouter._maybe_fire_failure_hook`` suppresses any
+    exception raised by the hook so the original LLM failure still
+    propagates. Previously the suppression was silent (`except Exception:
+    pass`), losing telemetry whenever the hook itself had a bug. The
+    suppression must remain (the hook is observability-only and must not
+    mask the real failure), but the suppressed error has to be visible at
+    warning level so a hook regression does not vanish into the void."""
+
+    def test_warning_emitted_when_failure_hook_raises(self) -> None:
+        from gigaevo.llm.models import _StructuredOutputRouter
+
+        flaky = MagicMock()
+        flaky.invoke = MagicMock(side_effect=RuntimeError("real failure"))
+
+        def _explode_hook(_exc: BaseException, _name: str) -> None:
+            raise RuntimeError("hook bug")
+
+        router = _StructuredOutputRouter(
+            [flaky],
+            ["m"],
+            [1.0],
+            None,
+            MagicMock(),
+            failure_hook=_explode_hook,
+        )
+
+        with patch("gigaevo.llm.models.logger.warning") as mock_warning:
+            with pytest.raises(RuntimeError, match="real failure"):
+                router.invoke("hi")
+
+        # The hook exception must have been logged at warning level so a
+        # hook regression is visible in operator logs.
+        assert mock_warning.called
+        # The warning payload must reference the hook exception so the
+        # operator can identify the broken hook from logs alone.
+        call_args = mock_warning.call_args
+        payload = repr(call_args)
+        assert "hook bug" in payload or "RuntimeError" in payload
+
+
+# ---------------------------------------------------------------------------
+# Pre-_select exceptions: ledger invariant must hold
+# ---------------------------------------------------------------------------
+
+
+class TestPreSelectFailureLedgerInvariant:
+    """If ``_select`` itself raises (e.g. a corrupted bandit state where
+    ``self._bandit.select()`` blows up), the LLM call never happens and the
+    try/except inside ``invoke`` never engages. The invariant the wiring
+    promises is "pulls and rewards stay in step": if no pull was recorded
+    (``record_pull`` is called *inside* ``_select``), no reward must be
+    injected either. Verifying explicitly so a future refactor that moves
+    ``record_pull`` outside ``_select`` doesn't quietly break the
+    invariant."""
+
+    def test_select_failure_before_record_pull_leaves_ledger_clean(self) -> None:
+        models = _make_mock_models(["arm_a"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        # Force bandit.select to raise *before* record_pull has a chance.
+        def _explode() -> str:
+            raise RuntimeError("bandit corrupted")
+
+        router._bandit.select = _explode  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="bandit corrupted"):
+            router.invoke("hello")
+
+        # No pull recorded, no reward injected — ledgers in step.
+        stats = router.get_bandit_stats()
+        assert stats["arm_a"]["total_pulls"] == 0
+        assert stats["arm_a"]["window_size"] == 0
+
+    async def test_aselect_failure_before_record_pull_leaves_ledger_clean(
+        self,
+    ) -> None:
+        models = _make_mock_models(["arm_a"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        def _explode() -> str:
+            raise RuntimeError("bandit corrupted")
+
+        router._bandit.select = _explode  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="bandit corrupted"):
+            await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["arm_a"]["total_pulls"] == 0
+        assert stats["arm_a"]["window_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Engine / mutation-operator integration: no double-injection on failure
+# ---------------------------------------------------------------------------
+
+
+class TestBanditNoDoubleInjectionOnFailure:
+    """Audit hypothesis 3: when an LLM call inside the mutation operator
+    fails, the bandit must receive **exactly one** ledger entry — the
+    immediate ``_inject_failure_reward`` from ``ainvoke``. A failed
+    mutation never reaches persistence (``generate_and_persist_mutation``
+    returns ``None`` on ``MutationError``), which means the engine never
+    fires ``_notify_hook`` and therefore never calls
+    ``on_program_ingested`` → ``on_mutation_outcome``. This test pins
+    that invariant: a future refactor that, say, persists a placeholder
+    program for failed mutations would break it by causing a second
+    reward entry to land in the window for the same pull.
+    """
+
+    async def test_failed_ainvoke_injects_exactly_one_zero_reward(
+        self,
+    ) -> None:
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.ainvoke = AsyncMock(side_effect=RuntimeError("provider 500"))
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        with pytest.raises(RuntimeError, match="provider 500"):
+            await router.ainvoke("hello")
+
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        # Exactly one reward entry — the failure-path zero injection.
+        assert stats["flaky"]["window_size"] == 1
+        # And it really is a zero (normalizer is in warmup so it returns 0.5
+        # for the first sample, but it appended exactly one).
+        assert len(router._bandit.arms["flaky"].rewards) == 1
+
+    async def test_on_mutation_outcome_not_invoked_when_failed_ainvoke(
+        self,
+    ) -> None:
+        """The engine only fires ``on_mutation_outcome`` for persisted
+        programs. A failed LLM call → ``MutationError`` → no persistence
+        → no outcome callback. We simulate the production path: the
+        bandit sees the failure injection, and ``on_mutation_outcome``
+        is never invoked for that same call.
+        """
+        flaky = MagicMock()
+        flaky.model_name = "flaky"
+        flaky.ainvoke = AsyncMock(side_effect=RuntimeError("timeout"))
+        flaky.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [flaky], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        seen_outcomes: list[MutationOutcome] = []
+        original = router.on_mutation_outcome
+
+        def _spy(program, parents, outcome=MutationOutcome.ACCEPTED):  # noqa: ANN001
+            seen_outcomes.append(outcome)
+            return original(program, parents, outcome=outcome)
+
+        router.on_mutation_outcome = _spy  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="timeout"):
+            await router.ainvoke("hello")
+
+        # No on_mutation_outcome call — only the failure-path injection.
+        assert seen_outcomes == []
+        stats = router.get_bandit_stats()
+        assert stats["flaky"]["total_pulls"] == 1
+        assert stats["flaky"]["window_size"] == 1
+
+    async def test_success_then_explicit_outcome_yields_exactly_one_reward(
+        self,
+    ) -> None:
+        """Symmetric to the negative case: a successful ainvoke defers
+        reward to ``on_mutation_outcome``. After the engine calls it once
+        per accepted program, the window holds exactly one entry — no
+        accidental double-injection from a stale failure path."""
+        ok = MagicMock()
+        ok.model_name = "ok"
+        ok.ainvoke = AsyncMock(return_value=MagicMock())
+        ok.with_structured_output = MagicMock(return_value=MagicMock())
+        router = BanditModelRouter(
+            [ok], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._tracker = MagicMock()  # avoid touching real tracker.track
+
+        await router.ainvoke("hello")
+
+        # Deferred — nothing in window yet.
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        assert stats["ok"]["window_size"] == 0
+
+        # Engine path: parent + accepted child with mutation_model metadata.
+        parent = Program(code="x=0")
+        parent.metrics["score"] = 5.0
+        child = Program(code="x=1")
+        child.set_metadata("mutation_model", "ok")
+        child.metrics["score"] = 7.0
+        router.on_mutation_outcome(child, [parent], outcome=MutationOutcome.ACCEPTED)
+
+        stats = router.get_bandit_stats()
+        assert stats["ok"]["total_pulls"] == 1
+        # Exactly one reward — the deferred outcome reward, not a double.
+        assert stats["ok"]["window_size"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Concurrent dispatch stress: success/failure mix invariants
+# ---------------------------------------------------------------------------
+
+
+class TestBanditConcurrentMixedDispatch:
+    """Audit hypothesis 7: under heavy concurrency, the asyncio task-id
+    based context propagation in ``_task_model_map`` must not blur
+    pulls across tasks, and the ledger invariants must hold.
+
+    Each ``ainvoke`` records a pull at ``_select`` time. On failure the
+    classifier injects exactly one zero reward; on success the reward
+    is deferred to ``on_mutation_outcome`` (which we do *not* fire in
+    this test). So after N parallel calls with F failures and S=N-F
+    successes:
+
+        total_pulls == N
+        window_size == F     (only failure-path injections land in the window)
+
+    A regression where the task-id mapping leaked one task's failure
+    into another task's success path would break the second assertion.
+    """
+
+    async def test_32_concurrent_mixed_success_failure_invariants(
+        self,
+    ) -> None:
+        import random as _rnd
+
+        _rnd.seed(0xC0FFEE)
+        outcomes = [_rnd.random() < 0.5 for _ in range(32)]  # True = failure
+        expected_failures = sum(outcomes)
+
+        model = MagicMock()
+        model.model_name = "arm"
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        call_idx = -1
+        lock = asyncio.Lock()
+
+        async def _ainvoke(*args, **kwargs):  # noqa: ANN001
+            nonlocal call_idx
+            async with lock:
+                call_idx += 1
+                will_fail = outcomes[call_idx]
+            # Yield to the event loop so calls truly interleave.
+            await asyncio.sleep(0)
+            if will_fail:
+                raise RuntimeError("flake")
+            return MagicMock()
+
+        model.ainvoke = _ainvoke
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._tracker = MagicMock()
+
+        async def _one() -> bool:
+            try:
+                await router.ainvoke("x")
+                return False
+            except RuntimeError:
+                return True
+
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_one() for _ in range(32)]),
+            timeout=10.0,
+        )
+        observed_failures = sum(results)
+
+        # Sanity: each task observed the outcome that was scheduled for it.
+        assert observed_failures == expected_failures
+
+        stats = router.get_bandit_stats()
+        assert stats["arm"]["total_pulls"] == 32
+        # Only failures inject — successes defer to on_mutation_outcome.
+        assert stats["arm"]["window_size"] == expected_failures
+
+    async def test_concurrent_all_failures_keep_ledger_in_step(self) -> None:
+        """Pure-failure stress: total_pulls == window_size == N."""
+        model = MagicMock()
+        model.model_name = "arm"
+        model.ainvoke = AsyncMock(side_effect=RuntimeError("dead"))
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+
+        async def _one() -> None:
+            with pytest.raises(RuntimeError):
+                await router.ainvoke("x")
+
+        await asyncio.wait_for(
+            asyncio.gather(*[_one() for _ in range(24)]),
+            timeout=10.0,
+        )
+
+        stats = router.get_bandit_stats()
+        assert stats["arm"]["total_pulls"] == 24
+        assert stats["arm"]["window_size"] == 24
+
+    async def test_concurrent_all_successes_defer_all_rewards(self) -> None:
+        """Pure-success stress: total_pulls == N, window_size == 0
+        because every reward is deferred to ``on_mutation_outcome``."""
+        model = MagicMock()
+        model.model_name = "arm"
+        model.ainvoke = AsyncMock(return_value=MagicMock())
+        model.with_structured_output = MagicMock(return_value=MagicMock())
+
+        router = BanditModelRouter(
+            [model], [1.0], fitness_key="score", higher_is_better=True
+        )
+        router._langfuse = None
+        router._tracker = MagicMock()
+
+        async def _one() -> None:
+            await router.ainvoke("x")
+
+        await asyncio.wait_for(
+            asyncio.gather(*[_one() for _ in range(24)]),
+            timeout=10.0,
+        )
+
+        stats = router.get_bandit_stats()
+        assert stats["arm"]["total_pulls"] == 24
+        assert stats["arm"]["window_size"] == 0
