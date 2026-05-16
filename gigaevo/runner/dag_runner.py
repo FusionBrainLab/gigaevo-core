@@ -289,11 +289,10 @@ class DagRunner:
                     )
                 self._metrics.record_timeout()
                 logger.error("[DagScheduler] program {} timed out", info.program_id[:8])
-            except Exception as e:
-                logger.error(
-                    "[DagScheduler] discard after timeout failed for {}: {}",
+            except Exception:
+                logger.exception(
+                    "[DagScheduler] discard after timeout failed for {}",
                     info.program_id[:8],
-                    e,
                 )
 
         for info in finished:
@@ -305,10 +304,10 @@ class DagRunner:
                     "[DagScheduler] harvested completed task for program {}",
                     info.program_id[:8],
                 )
-            except Exception as e:
+            except Exception:
                 self._metrics.increment_dag_errors()
-                logger.error(
-                    "[DagScheduler] program {} failed: {}", info.program_id[:8], e
+                logger.exception(
+                    "[DagScheduler] program {} failed", info.program_id[:8]
                 )
             finally:
                 del info
@@ -339,8 +338,8 @@ class DagRunner:
                 self._storage.get_ids_by_status(ProgramState.QUEUED.value),
                 self._storage.get_ids_by_status(ProgramState.RUNNING.value),
             )
-        except Exception as e:
-            logger.error("[DagScheduler] fetch-by-status failed: {}", e)
+        except Exception:
+            logger.exception("[DagScheduler] fetch-by-status failed")
             return
 
         # Phase 2: handle orphaned RUNNING programs (fetch full data only for these)
@@ -357,15 +356,14 @@ class DagRunner:
                         logger.warning(
                             "[DagScheduler] orphaned program {} discarded", p.short_id
                         )
-                    except Exception as se:
+                    except Exception:
                         self._metrics.record_state_update_failure()
-                        logger.error(
-                            "[DagScheduler] orphan discard failed for {}: {}",
+                        logger.exception(
+                            "[DagScheduler] orphan discard failed for {}",
                             p.short_id,
-                            se,
                         )
-            except Exception as e:
-                logger.error("[DagScheduler] orphan fetch failed: {}", e)
+            except Exception:
+                logger.exception("[DagScheduler] orphan fetch failed")
 
         # Phase 3: launch fresh programs up to capacity (fetch only what we need)
         # Prefetch: create up to max_concurrent_dags * prefetch_factor tasks.
@@ -384,8 +382,8 @@ class DagRunner:
 
         try:
             fresh = await self._storage.mget(to_launch_ids)
-        except Exception as e:
-            logger.error("[DagScheduler] mget for launch failed: {}", e)
+        except Exception:
+            logger.exception("[DagScheduler] mget for launch failed")
             return
 
         launched: list[Program] = []
@@ -402,23 +400,19 @@ class DagRunner:
                     writer=self._writer,
                     caller_handles_persist=True,
                 )
-            except Exception as e:
-                import traceback
-
-                logger.error(
-                    "[DagScheduler] DAG build failed for {}: {}", program.short_id, e
+            except Exception:
+                logger.exception(
+                    "[DagScheduler] DAG build failed for {}", program.short_id
                 )
-                logger.error("[DagScheduler] Traceback:\n{}", traceback.format_exc())
                 self._metrics.record_build_failure()
                 try:
                     await self._state_manager.set_program_state(
                         program, ProgramState.DISCARDED
                     )
-                except Exception as se:
-                    logger.error(
-                        "[DagScheduler] state update failed for {}: {}",
+                except Exception:
+                    logger.exception(
+                        "[DagScheduler] state update failed for {}",
                         program.short_id,
-                        se,
                     )
                     self._metrics.record_state_update_failure()
                 continue
@@ -446,8 +440,8 @@ class DagRunner:
                     prog.state = ProgramState.RUNNING
                 self._metrics.dag_runs_started += count
                 logger.info("[DagScheduler] launched {} programs", count)
-            except Exception as e:
-                logger.error("[DagScheduler] batch mark-started failed: {}", e)
+            except Exception:
+                logger.exception("[DagScheduler] batch mark-started failed")
                 # Cancel tasks whose state transition failed
                 for pid in launched_ids:
                     info = self._active.pop(pid, None)
@@ -459,10 +453,10 @@ class DagRunner:
         eval_start = time.monotonic()
         try:
             await dag.run(program)
-        except Exception as exc:
+        except Exception:
             ok = False
-            logger.error(
-                "[DagScheduler] DAG run failed for {}: {}", program.short_id, exc
+            logger.exception(
+                "[DagScheduler] DAG run failed for {}", program.short_id
             )
         finally:
             # Eagerly release references to allow GC of heavy objects.
@@ -492,12 +486,11 @@ class DagRunner:
                 await self._state_manager.set_program_state(
                     program, ProgramState.DISCARDED
                 )
-            except Exception as se:
+            except Exception:
                 self._metrics.record_state_update_failure()
-                logger.error(
-                    "[DagScheduler] state update failed for {}: {}",
+                logger.exception(
+                    "[DagScheduler] state update failed for {}",
                     program.short_id,
-                    se,
                 )
 
     async def _flush_done_queue(self) -> None:
@@ -515,11 +508,10 @@ class DagRunner:
             logger.debug(
                 "[DagScheduler] batch RUNNING→DONE for {} programs", len(batch)
             )
-        except Exception as e:
-            logger.error(
-                "[DagScheduler] batch RUNNING→DONE failed for {} programs: {}",
+        except Exception:
+            logger.exception(
+                "[DagScheduler] batch RUNNING→DONE failed for {} programs",
                 len(batch),
-                e,
             )
 
     async def _cancel_task(self, info: TaskInfo) -> None:

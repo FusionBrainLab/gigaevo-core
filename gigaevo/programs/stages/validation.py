@@ -73,10 +73,14 @@ class ValidateCodeStage(Stage):
         try:
             compile(code, "<string>", "exec")
         except SyntaxError as e:
-            code_line = (e.text or "").strip() or "<source unavailable>"
-            raise SyntaxError(
-                f"SyntaxError at line {e.lineno}, offset {e.offset}: {e.msg}. Line: `{code_line}`"
-            ) from e
+            # Reconstruct a SyntaxError preserving msg/filename/lineno/offset/text
+            # so downstream tracebacks and ``traceback.format_exception`` retain
+            # the location pointer, not just a flattened message string.
+            new_err = SyntaxError(
+                e.msg or "syntax error",
+                (e.filename, e.lineno, e.offset, e.text),
+            )
+            raise new_err from e
 
         if self.safe_mode:
             self._validate_security_text(code)
