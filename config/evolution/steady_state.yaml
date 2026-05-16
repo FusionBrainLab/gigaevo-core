@@ -5,6 +5,7 @@
 
 defaults:
   - default
+  - _self_
 
 # Override engine config with steady-state tunables
 engine_config:

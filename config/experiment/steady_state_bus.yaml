@@ -23,6 +23,7 @@ defaults:
   - /loader: directory
   - /logging: tensorboard
   - /metrics: default
+  - _self_
 
 # Enable migration bus (fully-connected topology)
 migration_node:

@@ -9,7 +9,6 @@ island_id: fitness_island
 
 # Island configuration
 island_max_size: 75
-migration_rate: 0.10
 primary_resolution: 150
 validity_resolution: 2
 binning_type: linear
