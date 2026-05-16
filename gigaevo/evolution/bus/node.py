@@ -109,6 +109,14 @@ class MigrationNode:
         program.set_metadata("migration_source_id", envelope.program_id)
         program.set_metadata("migration_generation", envelope.generation)
         program.set_metadata("is_migrant", True)
+        # Inbound migrants are re-anchored to DONE regardless of the
+        # rehydrated state. The envelope crosses run boundaries and the
+        # local FSM does not own the source run's history, so we do not
+        # apply :func:`validate_transition` here — the transition table
+        # is an in-run invariant, not a cross-run one. The forced
+        # assignment is the deliberate registration of an alien program
+        # into the local lifecycle at the only state where the rest of
+        # the engine expects to ingest external programs.
         program.state = ProgramState.DONE
         return program
 

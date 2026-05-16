@@ -278,12 +278,20 @@ class ProgramStorage(ABC):
         Default implementation falls back to individual transitions.
         Subclasses may override with pipelined operations.
         Returns the number of programs transitioned.
+
+        Per-program FSM validation runs against the program's actual
+        current state rather than the caller-asserted ``old_state`` so
+        a diverged in-memory state (e.g. an upstream actor mutated the
+        program after this batch was assembled) surfaces as
+        :class:`ValueError` instead of leaking into a persisted blob
+        whose ``state`` field disagrees with the FSM.
         """
         old_enum = ProgramState(old_state)
         new_enum = ProgramState(new_state)
+        validate_transition(old_enum, new_enum)
         count = 0
         for prog in programs:
-            validate_transition(old_enum, new_enum)
+            validate_transition(prog.state, new_enum)
             prog.state = new_enum
             await self.atomic_state_transition(prog, old_state, new_state)
             count += 1

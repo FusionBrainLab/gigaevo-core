@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Iterable
 import gc
 from itertools import islice
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -27,9 +27,16 @@ from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
 from gigaevo.utils.trackers.base import LogWriter
 
+if TYPE_CHECKING:
+    from gigaevo.dataplane import DataPlane
+
 T = TypeVar("T")
 
-__all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
+__all__ = [
+    "RedisProgramStorage",
+    "RedisProgramStorageConfig",
+    "load_legacy_program_fsm",
+]
 
 # Constants
 MGET_CHUNK_SIZE = 1024
@@ -38,10 +45,32 @@ STREAM_MAX_LEN = 10_000
 
 
 class RedisProgramStorage(ProgramStorage):
-    """Redis-backed program storage with distributed locking and metrics."""
+    """Redis-backed program storage with distributed locking and metrics.
+
+    Optional ``dataplane`` parameter enables FSM-validated, single-Lua-call
+    state transitions in :meth:`atomic_state_transition` and
+    :meth:`fast_state_transition`. When ``dataplane`` is ``None`` the
+    legacy WATCH/MULTI/EXEC path runs unchanged — fakeredis-backed
+    integration tests, read-only analytics callers, and any pre-existing
+    deployment that has not yet wired a coordinator continue to work.
+
+    The dataplane path expects the coordinator's
+    ``program_state`` FSM table to be loaded with the gigaevo lowercase
+    state values rather than the dataplane's default uppercase enum (the
+    persisted blob format predates the coordinator and uses lowercase).
+    :func:`load_legacy_program_fsm` reloads the table; engine startup
+    calls it once after :meth:`DataPlane.startup`. Per-call linear
+    permission tokens are minted via :func:`mint_root` inside the
+    routing path; threading a long-lived engine-root token through the
+    storage stack is a follow-up.
+    """
 
     def __init__(
-        self, config: RedisProgramStorageConfig, writer: LogWriter | None = None
+        self,
+        config: RedisProgramStorageConfig,
+        writer: LogWriter | None = None,
+        *,
+        dataplane: DataPlane | None = None,
     ):
         super().__init__()
         self.config = config
@@ -54,6 +83,7 @@ class RedisProgramStorage(ProgramStorage):
         self._metrics = RedisMetricsCollector(
             self._conn, self._keys, writer, config.metrics_interval
         )
+        self._dataplane = dataplane
 
     # --------------------- Context Manager ---------------------
 
@@ -99,15 +129,44 @@ class RedisProgramStorage(ProgramStorage):
         while batch := list(islice(it, n)):
             yield batch
 
-    @staticmethod
+    # ``Program`` Pydantic fields that must remain dicts after a lua
+    # round-trip. Lua / cjson cannot distinguish an empty object ``{}``
+    # from an empty array ``[]``: ``cjson.encode({})`` emits ``[]`` on
+    # both inputs, so any empty dict field on the persisted blob comes
+    # back as a list after the coordinator's ``transition_state.lua``
+    # re-encodes the merged payload. Normalising those fields back to
+    # ``{}`` on read keeps the Program model schema satisfied without
+    # forcing the caller to remember the wire-format quirk.
+    _DICT_FIELDS: frozenset[str] = frozenset({"stage_results", "metrics", "metadata"})
+
+    @classmethod
     def _safe_deserialize(
+        cls,
         raw: str,
         ctx: str,
         *,
         exclude: frozenset[str] | None = None,
     ) -> Program | None:
         try:
-            return Program.from_dict(_loads(raw), exclude=exclude)
+            data = _loads(raw)
+            # The dataplane's ``transition_state.lua`` stamps the
+            # post-transition blob with an ``epoch`` field equal to the
+            # bumped global counter (``{prefix}:ts``). The legacy storage
+            # uses the same counter under the name ``atomic_counter`` on
+            # the :class:`Program` Pydantic model, which forbids extra
+            # fields. Promote ``epoch`` into ``atomic_counter`` when the
+            # explicit ``atomic_counter`` is absent so callers see a
+            # uniform field name regardless of which write path produced
+            # the blob.
+            if isinstance(data, dict):
+                if "epoch" in data:
+                    epoch = data.pop("epoch")
+                    if "atomic_counter" not in data and isinstance(epoch, int):
+                        data["atomic_counter"] = epoch
+                for fname in cls._DICT_FIELDS:
+                    if isinstance(data.get(fname), list) and not data[fname]:
+                        data[fname] = {}
+            return Program.from_dict(data, exclude=exclude)
         except Exception as e:
             logger.warning("[RedisProgramStorage] Corrupt data in {}: {}", ctx, e)
             return None
@@ -406,10 +465,128 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("_ids_for_status", _members)
 
+    async def _transition_via_dataplane(
+        self,
+        program: Program,
+        old_state: str | None,
+        new_state: str,
+        *,
+        method: str,
+    ) -> None:
+        """Route a single-program FSM transition through the coordinator.
+
+        Builds a :class:`ProgramPatch` from the in-memory :class:`Program`
+        (excluding the reserved ``state`` / ``id`` / ``epoch`` fields the
+        Lua script owns), mints a per-call linear permission token, and
+        invokes :meth:`DataPlane.transition_program_state`. The Lua
+        script does the FSM legality check, idempotency dedup, blob
+        merge, status-set update, and audit-stream append atomically.
+
+        On success, the post-transition blob's epoch is mirrored into
+        ``program.atomic_counter`` so callers that read it as a per-program
+        revision (merge tiebreaker) observe a value consistent with the
+        persisted blob.
+
+        Failure modes:
+            * ``Err(TransitionError(kind="illegal"))`` — the FSM table
+              rejected ``(from, to)``; surfaces as :class:`StorageError`
+              with ``illegal_transition`` in the message so call sites
+              that previously got a silent state-machine drift now get
+              a typed, observable failure (bug class #14).
+            * ``Err(TransitionError(kind="stale"))`` — the blob does not
+              exist or ``expected_from`` mismatched the observed state;
+              the caller's pre-image is out of date.
+            * Other ``Err`` variants surface as :class:`StorageError`
+              with the kind and detail attached.
+
+        The minted token is consumed inside :meth:`DataPlane.transition_program_state`;
+        a fresh one is required per call. Threading a long-lived
+        engine-root token through the storage stack so successive calls
+        derive per-program sub-tokens by linear split rather than
+        re-minting is a follow-up that lands together with the engine
+        lifecycle migration.
+        """
+        from gigaevo.dataplane.ids import ProgramId as _DpProgramId
+        from gigaevo.dataplane.models import Err
+        from gigaevo.dataplane.permissions import mint_root
+
+        dp = self._dataplane
+        assert dp is not None  # narrowing for the type checker
+
+        patch_fields = program.to_dict()
+        # ``state`` / ``id`` / ``epoch`` are reserved by the Lua script
+        # itself. ``atomic_counter`` is dropped here so the post-lua blob
+        # carries only the coordinator's ``epoch`` field; the read path
+        # in :meth:`_safe_deserialize` renames ``epoch`` to
+        # ``atomic_counter`` when the latter is absent, keeping the
+        # Program model schema consistent. Sending both would let the
+        # caller-supplied (pre-INCR) value masquerade as the post-INCR
+        # counter and break the monotonicity invariant downstream merge
+        # tiebreakers rely on.
+        for reserved in ("state", "id", "epoch", "atomic_counter"):
+            patch_fields.pop(reserved, None)
+
+        from gigaevo.dataplane.coordinator import ProgramPatch as _ProgramPatch
+
+        program_id = _DpProgramId(program.id)
+        token = mint_root(program_id)
+        expected_from = ProgramState(old_state) if old_state else None
+        target = ProgramState(new_state)
+
+        # The dataplane's ``ProgramState`` enum uses uppercase values
+        # while the persisted blob format uses lowercase; we pass the
+        # gigaevo :class:`ProgramState` (lowercase ``.value``) directly
+        # to the coordinator wrapper, which forwards ``.value`` verbatim
+        # to the Lua script. The coordinator's FSM table must be loaded
+        # with lowercase keys for the membership check to succeed —
+        # see :func:`load_legacy_program_fsm`.
+        result = await dp.transition_program_state(
+            program_id,
+            token=token,  # type: ignore[arg-type]
+            expected_from=cast(Any, expected_from),
+            to=cast(Any, target),
+            patch=_ProgramPatch(fields=patch_fields),
+        )
+
+        if isinstance(result, Err):
+            err = result.error
+            kind = getattr(err, "kind", "unknown")
+            detail = getattr(err, "detail", repr(err))
+            raise StorageError(
+                f"{method}: dataplane transition rejected "
+                f"({kind}): {old_state!r} -> {new_state!r}: {detail}"
+            )
+
+        # Mirror the persisted counter into the in-memory program so
+        # subsequent merge-tiebreak comparisons see the post-transition
+        # value, matching the legacy-path invariant where the storage
+        # bumps ``atomic_counter`` before returning to the caller.
+        post_blob = result.value.value
+        if isinstance(post_blob, dict) and "epoch" in post_blob:
+            epoch_val = post_blob["epoch"]
+            if isinstance(epoch_val, int):
+                program.atomic_counter = epoch_val
+        elif result.value.epoch:
+            program.atomic_counter = result.value.epoch
+        # Keep the in-memory state in sync with the persisted blob.
+        # The Pydantic validator allows the same-state assignment as
+        # a no-op; mismatches between the caller's requested state
+        # and the persisted state are already represented by the
+        # ``Err`` branch above (stale / illegal), so reaching here means
+        # ``program.state`` should equal ``target``.
+        if program.state != target:
+            program.state = target
+
     async def atomic_state_transition(
         self, program: Program, old_state: str | None, new_state: str
     ) -> None:
         self._check_write_allowed("atomic_state_transition")
+
+        if self._dataplane is not None:
+            await self._transition_via_dataplane(
+                program, old_state, new_state, method="atomic_state_transition"
+            )
+            return
 
         async def _atomic(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -495,6 +672,12 @@ class RedisProgramStorage(ProgramStorage):
         """
         self._check_write_allowed("fast_state_transition")
 
+        if self._dataplane is not None:
+            await self._transition_via_dataplane(
+                program, old_state, new_state, method="fast_state_transition"
+            )
+            return
+
         async def _fast(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
             counter = await r.incr(self._keys.timestamp())
@@ -536,8 +719,10 @@ class RedisProgramStorage(ProgramStorage):
 
         old_enum = ProgramState(old_state)
         new_enum = ProgramState(new_state)
-        for prog in programs:
-            validate_transition(old_enum, new_enum)
+        # The (old, new) transition pair is the same for every item in
+        # the batch; validate once before walking the programs rather
+        # than on each iteration.
+        validate_transition(old_enum, new_enum)
 
         async def _batch(r: aioredis.Redis) -> int:
             old_set_key = self._keys.status_set(old_state)
@@ -555,7 +740,13 @@ class RedisProgramStorage(ProgramStorage):
                 pipe = r.pipeline(transaction=False)
                 chunk_ids = []
                 for i, prog in enumerate(chunk):
-                    prog.state = ProgramState(new_state)
+                    # Per-program FSM check: the caller asserts the
+                    # whole batch shares ``old_state`` as its precondition;
+                    # surface a programming error here instead of letting
+                    # a divergent in-memory state slip into the persisted
+                    # blob.
+                    validate_transition(prog.state, new_enum)
+                    prog.state = new_enum
                     data = prog.to_dict()
                     data["atomic_counter"] = int(start_counter + i)
 
@@ -743,6 +934,18 @@ class RedisProgramStorage(ProgramStorage):
                 await self._conn.execute("recover_stranded_clean", _clean)
                 continue
 
+            # Crash recovery is a one-way reset of mid-flight RUNNING
+            # programs back to the front of the queue; the gigaevo
+            # forward FSM does not include RUNNING → QUEUED because
+            # under normal evolution every RUNNING program either
+            # completes (DONE) or is discarded. Assert the precondition
+            # before the bypass so a future caller pointing this code at
+            # a program in any other state surfaces the misuse instead
+            # of silently corrupting the FSM invariant.
+            assert prog.state == ProgramState.RUNNING, (
+                f"recover_stranded_programs: expected RUNNING, "
+                f"got {prog.state.value} for {prog.id}"
+            )
             prog.state = ProgramState.QUEUED
             await self.write_exclusive(prog)
 
@@ -835,3 +1038,55 @@ class RedisProgramStorage(ProgramStorage):
             f"connected={self._conn.is_connected} "
             f"read_only={self.config.read_only}>"
         )
+
+
+async def load_legacy_program_fsm(dataplane: DataPlane) -> None:
+    """Re-load the coordinator's program-state FSM with lowercase values.
+
+    The dataplane ships an uppercase ``ProgramState`` enum whose values
+    drive both the in-Redis FSM hash and the wire protocol of
+    :meth:`DataPlane.transition_program_state`. The legacy program blob
+    format predates the coordinator and persists ``state`` as the
+    lowercase :class:`gigaevo.programs.program_state.ProgramState` value
+    (``"queued"`` / ``"running"`` / ``"done"`` / ``"discarded"``).
+
+    Routing the storage through the coordinator while keeping the
+    persisted blob format unchanged requires the FSM hash to be keyed
+    on the lowercase values so the Lua script's ``HGET FSM[from]``
+    membership check matches what it reads from the blob. This helper
+    reloads ``{key_prefix}:fsm:program_state`` from the gigaevo enum
+    after ``await dataplane.startup()`` so the coordinator's transition
+    semantics line up with the application-layer state vocabulary.
+
+    Idempotent: callers may invoke this once per process at startup or
+    after every coordinator restart. The reload is a single DEL + HSET
+    pipeline.
+    """
+    from gigaevo.dataplane.transitions import load_fsm_table
+
+    legacy_table: dict[ProgramState, set[ProgramState]] = {
+        ProgramState.QUEUED: {
+            ProgramState.QUEUED,
+            ProgramState.RUNNING,
+            ProgramState.DISCARDED,
+        },
+        ProgramState.RUNNING: {
+            ProgramState.RUNNING,
+            ProgramState.DONE,
+            ProgramState.DISCARDED,
+        },
+        ProgramState.DONE: {
+            ProgramState.DONE,
+            ProgramState.QUEUED,
+            ProgramState.DISCARDED,
+        },
+        ProgramState.DISCARDED: {
+            ProgramState.DISCARDED,
+        },
+    }
+    await load_fsm_table(
+        dataplane._connection.pool,  # type: ignore[arg-type]  # private but stable API
+        key_prefix=dataplane.key_prefix,
+        name="program_state",
+        table=legacy_table,
+    )

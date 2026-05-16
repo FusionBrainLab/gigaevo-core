@@ -546,12 +546,15 @@ class EvolutionEngine:
                 reject_ids.append(prog.id)
 
         # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization).
-        # Also update in-memory state so any downstream code sees DISCARDED.
+        # The in-memory mirror routes through the state manager so the
+        # (current, target) pair is FSM-validated and downstream code
+        # cannot observe an illegal DISCARDED assignment slipping past
+        # the bypass that the direct mutation previously allowed.
         if reject_ids:
             reject_set = set(reject_ids)
             for prog in completed:
                 if prog.id in reject_set:
-                    prog.state = ProgramState.DISCARDED
+                    await self.state.set_in_memory_state(prog, ProgramState.DISCARDED)
             try:
                 await self.storage.batch_transition_by_ids(
                     reject_ids,

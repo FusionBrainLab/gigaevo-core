@@ -125,3 +125,30 @@ class ProgramStateManager:
         # Evict after releasing — terminal programs are never transitioned again.
         if new_state in _TERMINAL_STATES:
             self._locks.pop(program.id, None)
+
+    async def set_in_memory_state(
+        self, program: Program, new_state: ProgramState
+    ) -> None:
+        """Validate the FSM transition and update ``program.state`` in memory.
+
+        Companion to :meth:`set_program_state` for call sites that have
+        already persisted the new state via a separate batch operation
+        (``batch_transition_by_ids`` / ``batch_transition_state``) and
+        only need to bring the in-memory :class:`Program` instance in
+        sync with the storage write. Acquires the same per-program lock
+        :meth:`set_program_state` uses so an in-memory mirror cannot
+        race a concurrent canonical transition.
+
+        Raises:
+            ValueError: the (current, new) pair is not in the gigaevo
+                program-state FSM. Surfacing this at the call boundary
+                catches illegal mirror writes that would otherwise leave
+                the in-memory state out of sync with the persisted state.
+        """
+        async with self._lock_for(program.id):
+            if program.state == new_state:
+                return
+            validate_transition(program.state, new_state)
+            program.state = new_state
+        if new_state in _TERMINAL_STATES:
+            self._locks.pop(program.id, None)

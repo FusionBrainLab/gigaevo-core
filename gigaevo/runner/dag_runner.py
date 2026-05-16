@@ -441,9 +441,16 @@ class DagRunner:
                     ProgramState.RUNNING.value,
                 )
                 # Update in-memory state to match Redis so _execute_dag
-                # sees RUNNING (not stale QUEUED) when transitioning to DONE.
+                # sees RUNNING (not stale QUEUED) when transitioning to
+                # DONE. Routing through the state manager validates the
+                # (QUEUED, RUNNING) pair against the FSM at each call,
+                # surfacing any illegal mirror write as a ``ValueError``
+                # instead of silently desyncing the local Program from
+                # its persisted state.
                 for prog in launched:
-                    prog.state = ProgramState.RUNNING
+                    await self._state_manager.set_in_memory_state(
+                        prog, ProgramState.RUNNING
+                    )
                 self._metrics.dag_runs_started += count
                 logger.info("[DagScheduler] launched {} programs", count)
             except Exception as e:
