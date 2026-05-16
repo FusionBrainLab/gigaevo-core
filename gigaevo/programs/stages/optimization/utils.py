@@ -199,10 +199,9 @@ async def evaluate_single(
     score_key: str,
     python_path: Sequence[Path],
     timeout: int,
-    max_memory_mb: int | None,
     log_tag: str = "Opt",
 ) -> tuple[dict[str, float] | None, str | None]:
-    """Run one evaluation in a subprocess and return (score_dict, error_msg).
+    """Run one evaluation in a subprocess and return ``(score_dict, error_msg)``.
 
     Returns ``(None, "error message")`` on failure.
 
@@ -220,22 +219,19 @@ async def evaluate_single(
         Extra ``sys.path`` entries for the subprocess.
     timeout : int
         Per-evaluation timeout in seconds.
-    max_memory_mb : int | None
-        RSS memory cap in MB.
     log_tag : str
         Short prefix for log messages (e.g. ``"CMA"``, ``"Optuna"``).
     """
     args: list[Any] = [context] if context is not None else []
 
     try:
-        result, _, _ = await run_exec_runner(
+        result = await run_exec_runner(
             code=eval_code,
             function_name=eval_fn_name,
             args=args,
             kwargs={},
             python_path=list(python_path),
             timeout=timeout,
-            max_memory_mb=max_memory_mb,
         )
         if isinstance(result, tuple):  # with artifact
             result = result[0]

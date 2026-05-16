@@ -174,36 +174,50 @@ class NeverCachedStage(Stage):
 
 
 # ---------------------------------------------------------------------------
-# Exec-runner pool cleanup (prevents stale event-loop references)
+# Loky executor cleanup
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-async def _clear_exec_runner_pool():
-    """Clear the cached WorkerPool between tests to avoid stale event-loop refs.
-
-    The default_exec_runner_pool() is an @lru_cache singleton whose asyncio
-    Queue, Lock, and subprocess streams are bound to whatever event loop was
-    running when they were created.  pytest-asyncio creates a fresh loop per
-    test function, so the cached pool must be reset to prevent
-    "Future attached to a different loop" errors.
-
-    On teardown, shutdown() kills idle subprocess workers *before* the loop
-    closes, preventing "Event loop is closed" warnings from transport __del__.
-    """
-    from gigaevo.programs.stages.python_executors.wrapper import (
-        default_exec_runner_pool,
-    )
-
-    default_exec_runner_pool.cache_clear()
+@pytest.fixture(scope="session", autouse=True)
+def _shutdown_loky_executor_at_session_end():
+    """Kill loky workers at session end with ``wait=True`` so xdist workers
+    actually reap their loky children before exiting."""
     yield
-    # Kill idle subprocess workers while the event loop is still open.
     try:
-        pool = default_exec_runner_pool()
-        await pool.shutdown()
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            shutdown_executor,
+        )
+
+        shutdown_executor(wait=True)
     except Exception:
         pass
-    default_exec_runner_pool.cache_clear()
+
+
+@pytest.fixture
+def isolated_spill_dir(tmp_path, monkeypatch):
+    """Point the wrapper's spill directory at a per-test temp directory.
+
+    Replaces the default :class:`LokyBackend` singleton with one
+    configured for the per-test spill directory; ``monkeypatch.setattr``
+    restores the original singleton on teardown.
+    """
+    from gigaevo.programs.stages.python_executors import wrapper as _wrapper
+
+    spill = tmp_path / "spill"
+    spill.mkdir()
+    config = _wrapper.WorkerConfig(spill_dir=spill)
+    monkeypatch.setattr(_wrapper, "_default_backend", _wrapper.LokyBackend(config))
+    return spill
+
+
+@pytest.fixture
+def fresh_executor():
+    """Tear down the loky pool before and after the test."""
+    from gigaevo.programs.stages.python_executors.wrapper import shutdown_executor
+
+    shutdown_executor()
+    yield
+    shutdown_executor()
 
 
 # ---------------------------------------------------------------------------

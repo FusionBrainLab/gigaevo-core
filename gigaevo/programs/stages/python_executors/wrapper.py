@@ -1,258 +1,760 @@
+"""Loky-backed Python subprocess executor.
+
+:class:`LokyBackend` is the local-subprocess implementation of
+:class:`gigaevo.programs.stages.python_executors.backend.ExecutorBackend`.
+Workers spawn lazily, are reused across calls, and on Linux receive
+``PR_SET_PDEATHSIG`` so they die with the parent.  Each call's result is
+spilled to a file in :attr:`WorkerConfig.spill_dir` and the parent reads
+it via ``mmap`` — result size is bounded by free space on the spill
+volume, not parent RAM.
+
+User code is *not* sandboxed: env scrub and signal-handler reset are the
+only guard rails.  Cloudpickle deserialisation in the parent can run
+``__reduce__`` gadgets — trust user code as much as you trust whoever
+generated it.
+
+Configuration is captured in :class:`WorkerConfig`; multiple backends
+can coexist with isolated pools, spill directories and env scrub rules.
+Result envelopes (:class:`WorkerResult`) carry an :class:`ExecutionMetrics`
+block with timing and resource measurements plus per-worker identity
+(``node_id`` / ``worker_id``).  :class:`LokyBackend` also conforms to
+:class:`~gigaevo.programs.stages.python_executors.backend.LifecycleObservable`,
+so observers subscribe via :meth:`LokyBackend.on_submit` /
+:meth:`~LokyBackend.on_complete` / :meth:`~LokyBackend.on_shutdown`.
+
+Module-level :func:`run_exec_runner` and :func:`shutdown_executor` are
+thin wrappers over a process-scoped default :class:`LokyBackend`
+singleton for backward compatibility with existing call sites.
+:func:`run_exec_runner` accepts an optional ``backend`` kwarg so callers
+can inject any :class:`ExecutorBackend` implementation — used by tests
+and by deployments to plug in distributed-execution backends.
+
+Thread-safety: :class:`LokyBackend` is designed for use from a single
+asyncio event loop.  The lazy ``_executor`` creation, the hook handler
+lists, and the module-level ``_default_backend`` singleton are not
+guarded by locks; concurrent access from multiple OS threads can race.
+Callers driving the backend from a thread pool must add their own
+serialization.
+"""
+
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
-import functools
+from collections.abc import Mapping, Sequence
+import contextlib
+from dataclasses import dataclass, field
+import json
+import mmap
 import os
 from pathlib import Path
-import struct
+import signal
+import socket
 import sys
+import tempfile
+import time
+import traceback
 from typing import Any
+import uuid
 
 import cloudpickle
-import psutil
+from loguru import logger
+import loky
+from loky.backend.context import get_context
+
+from gigaevo.programs.stages.python_executors.backend import (
+    CompleteHandler,
+    ExecutorBackend,
+    ShutdownHandler,
+    SubmitHandler,
+)
+from gigaevo.programs.stages.python_executors.exec_runner import (
+    WorkerCall,
+    WorkerError,
+    _run_one,
+)
+
+# ---------------------------------------------------------------------------
+# Defaults for env scrubbing
+# ---------------------------------------------------------------------------
+
+DEFAULT_ENV_WHITELIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_COLLATE",
+        "LC_MESSAGES",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONUNBUFFERED",
+        "PYTHONHASHSEED",
+        "VIRTUAL_ENV",
+        "CONDA_PREFIX",
+        "CONDA_DEFAULT_ENV",
+        "PYENV_ROOT",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "CUDA_HOME",
+        "CUDA_PATH",
+        "CUDA_VISIBLE_DEVICES",
+        "NVIDIA_VISIBLE_DEVICES",
+        "JAX_PLATFORMS",
+        "JAX_TRACEBACK_FILTERING",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    }
+)
+
+DEFAULT_ENV_PREFIXES: tuple[str, ...] = ("GIGAEVO_", "LOKY_")
+
+_WORKER_INIT_ENV_KEY = "_GIGAEVO_WORKER_INIT_CONFIG"
+
+
+# ---------------------------------------------------------------------------
+# Public dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerConfig:
+    """Per-pool configuration for a :class:`LokyBackend`.
+
+    All fields are immutable after construction.  Two backends with
+    different ``pool_id`` get isolated spill directories and run in
+    independent loky pools — they do not share state, do not share the
+    underlying executor, and can be shut down independently.
+    """
+
+    max_workers: int | None = None
+    idle_timeout_s: int = 300
+    spill_dir: Path = field(
+        default_factory=lambda: Path(tempfile.gettempdir()) / f"gigaevo-{os.getuid()}"
+    )
+    env_whitelist: frozenset[str] = DEFAULT_ENV_WHITELIST
+    env_prefixes: tuple[str, ...] = DEFAULT_ENV_PREFIXES
+    enable_pdeathsig: bool = True
+    pool_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    node_id: str = field(default_factory=socket.gethostname)
+
+    @classmethod
+    def from_env(cls) -> WorkerConfig:
+        """Construct from ``GIGAEVO_EXECUTOR_*`` env vars.
+
+        Recognised env keys:
+
+        * ``GIGAEVO_EXECUTOR_MAX_WORKERS`` (positive int) — pool size.
+        * ``GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S`` (positive int) — worker
+          idle reap timeout, default 300.
+        * ``GIGAEVO_EXECUTOR_SPILL_DIR`` (path) — spill directory; falls
+          back to ``$TMPDIR/gigaevo-<uid>``.
+        * ``GIGAEVO_EXECUTOR_NODE_ID`` — overrides ``socket.gethostname()``;
+          useful in k8s where the pod name is the meaningful identity.
+        * ``GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG`` (truthy) — opt out of
+          ``PR_SET_PDEATHSIG`` on Linux; useful for debugging worker
+          lifecycle outside a parent-supervised context.
+
+        Under pytest-xdist, ``max_workers`` auto-caps to
+        ``cpu_count // PYTEST_XDIST_WORKER_COUNT`` to avoid an N×cpu_count
+        fork-bomb; an explicit ``GIGAEVO_EXECUTOR_MAX_WORKERS`` overrides.
+        """
+
+        def _pos_int(key: str, default: int | None) -> int | None:
+            raw = os.environ.get(key)
+            if not raw:
+                return default
+            try:
+                v = int(raw)
+            except ValueError:
+                return default
+            return v if v > 0 else default
+
+        def _truthy(key: str) -> bool:
+            return os.environ.get(key, "").strip().lower() in {"1", "true", "yes", "on"}
+
+        spill = os.environ.get("GIGAEVO_EXECUTOR_SPILL_DIR")
+        spill_path = (
+            Path(spill).resolve(strict=False)
+            if spill
+            else Path(tempfile.gettempdir()) / f"gigaevo-{os.getuid()}"
+        )
+
+        max_workers = _pos_int("GIGAEVO_EXECUTOR_MAX_WORKERS", None)
+        if max_workers is None:
+            xdist = _pos_int("PYTEST_XDIST_WORKER_COUNT", None)
+            if xdist and xdist > 1:
+                max_workers = max(1, (os.cpu_count() or 1) // xdist)
+
+        node_id_override = os.environ.get("GIGAEVO_EXECUTOR_NODE_ID", "").strip()
+        node_id = node_id_override or socket.gethostname()
+
+        return cls(
+            max_workers=max_workers,
+            idle_timeout_s=_pos_int("GIGAEVO_EXECUTOR_IDLE_TIMEOUT_S", 300) or 300,
+            spill_dir=spill_path,
+            enable_pdeathsig=not _truthy("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG"),
+            node_id=node_id,
+        )
 
 
 class ExecRunnerError(Exception):
-    """Child process failed. Carries returncode and stderr text."""
+    """User-code failure inside a worker.  ``stderr`` carries the traceback."""
 
-    def __init__(self, *, returncode: int, stderr: str, stdout_bytes: bytes):
-        super().__init__(f"exec_runner failed (exit={returncode})")
+    def __init__(self, *, returncode: int, stderr: str):
+        tail = (stderr or "").rstrip() or "(no stderr)"
+        super().__init__(f"exec_runner failed (exit={returncode}): {tail}")
         self.returncode = returncode
         self.stderr = stderr
-        self.stdout_bytes = stdout_bytes
 
 
-def _find_runner_script() -> Path:
-    """Path to exec_runner.py in this package (same directory as this module)."""
-    return Path(__file__).resolve().parent / "exec_runner.py"
+@dataclass(frozen=True, slots=True)
+class ExecutionMetrics:
+    """Per-call resource and timing measurements.
 
+    Constructed in the worker before/after :func:`_run_one`; returned to
+    the driver attached to every :class:`WorkerResult` regardless of
+    success or failure.  Separate from the outcome so a future remote
+    executor backend can reuse the same metrics shape without bundling
+    in the spill-path-vs-error duality.
 
-def _prepend_sys_path(paths: Sequence[Path | str] | None) -> None:
-    if not paths:
-        return
-    for path in paths:
-        candidate = str(path)
-        if candidate and candidate not in sys.path:
-            sys.path.insert(0, candidate)
+    ``peak_rss_kb`` reports ``getrusage(RUSAGE_SELF).ru_maxrss`` taken
+    after the call.  This is the worker process's lifetime-watermark RSS,
+    not a per-call peak — loky reuses workers across calls, so the value
+    for call N includes peaks from calls 1..N-1 on the same worker.
+    Treat it as "max RSS this worker has ever held", which is the only
+    cheap-to-obtain accurate measurement.  An accurate per-call peak
+    requires sampling RSS during execution (e.g. via ``psutil``) and
+    is left to a future PR if telemetry demands it.
 
-
-async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    ``started_at_ns`` / ``finished_at_ns`` come from
+    :func:`time.perf_counter_ns` in the worker; ``wall_time_s`` is derived
+    from their difference (single monotonic clock).
     """
-    Best-effort termination of a subprocess and its process group.
-    Safe to call multiple times.
+
+    peak_rss_kb: int
+    wall_time_s: float
+    user_time_s: float
+    sys_time_s: float
+    worker_pid: int
+    worker_id: str = ""
+    node_id: str = ""
+    started_at_ns: int = 0
+    finished_at_ns: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerResult:
+    """Worker return envelope: either ``spill_path`` (success) or ``error``,
+    paired with :class:`ExecutionMetrics`.
+
+    Backward-compat: legacy accessors (``peak_rss_kb``, ``wall_time_s``,
+    ``user_time_s``, ``sys_time_s``, ``worker_pid``, ``worker_id``,
+    ``node_id``) read through to ``metrics``.  Callers reading
+    ``result.peak_rss_kb`` continue to work; new callers should read
+    ``result.metrics.peak_rss_kb`` for clarity.
     """
-    try:
-        os.killpg(os.getpgid(proc.pid), 9)
-    except Exception:
+
+    spill_path: str | None
+    error: WorkerError | None
+    metrics: ExecutionMetrics
+
+    @property
+    def peak_rss_kb(self) -> int:
+        return self.metrics.peak_rss_kb
+
+    @property
+    def wall_time_s(self) -> float:
+        return self.metrics.wall_time_s
+
+    @property
+    def user_time_s(self) -> float:
+        return self.metrics.user_time_s
+
+    @property
+    def sys_time_s(self) -> float:
+        return self.metrics.sys_time_s
+
+    @property
+    def worker_pid(self) -> int:
+        return self.metrics.worker_pid
+
+    @property
+    def worker_id(self) -> str:
+        return self.metrics.worker_id
+
+    @property
+    def node_id(self) -> str:
+        return self.metrics.node_id
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers (used by both backend methods and worker init)
+# ---------------------------------------------------------------------------
+
+
+def _scrub_env(
+    env: Mapping[str, str],
+    whitelist: frozenset[str],
+    prefixes: tuple[str, ...],
+) -> dict[str, str]:
+    """Filter env to whitelisted keys + prefixed keys."""
+    return {
+        k: v
+        for k, v in env.items()
+        if k in whitelist or any(k.startswith(p) for p in prefixes)
+    }
+
+
+def _error_from_exc(exc: BaseException, prefix: str) -> WorkerError:
+    buf = [prefix, "\n"]
+    buf.extend(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return WorkerError(stderr="".join(buf))
+
+
+def _worker_init() -> None:
+    """Reset signals, scrub env, request SIGTERM-on-parent-death (Linux).
+
+    Runs once inside each loky worker on spawn.  Reads scrub rules from
+    the env variable :data:`_WORKER_INIT_ENV_KEY` (set by the parent
+    :class:`LokyBackend` when constructing the worker env); falls back to
+    module defaults if absent so direct loky usage outside this module
+    still gets sensible behavior.
+    """
+    # SIGINT -> default_int_handler (raises KeyboardInterrupt, which
+    # _run_one's BaseException catch turns into a structured error).
+    with contextlib.suppress(Exception):
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    for sig_name in ("SIGTERM", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2", "SIGCHLD"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        with contextlib.suppress(Exception):
+            signal.signal(sig, signal.SIG_DFL)
+
+    raw = os.environ.get(_WORKER_INIT_ENV_KEY)
+    node_id = ""
+    if raw:
         try:
-            proc.kill()
-        except Exception:
-            pass
-
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=2.0)
-    except Exception:
-        pass
-
-    for pipe in (proc.stdin, proc.stdout, proc.stderr):
-        if pipe and hasattr(pipe, "close"):
-            try:
-                pipe.close()  # type: ignore[union-attr]
-            except Exception:
-                pass
-
-    # Close the subprocess transport to prevent "Event loop is closed"
-    # warnings from BaseSubprocessTransport.__del__ during GC.
-    transport = getattr(proc, "_transport", None)
-    if transport is not None:
-        try:
-            transport.close()
-        except Exception:
-            pass
-
-
-async def _monitor_rss_limit(
-    proc: asyncio.subprocess.Process, *, max_bytes: int, interval_s: float = 0.2
-) -> None:
-    await asyncio.sleep(0.1)
-
-    try:
-        pproc = psutil.Process(proc.pid)
-    except psutil.Error:
-        return
-
-    while proc.returncode is None:
-        try:
-            mem = pproc.memory_info().rss
-        except psutil.NoSuchProcess:
-            break
-        except psutil.Error:
-            # If psutil can't read stats, just stop monitoring
-            break
-
-        if mem > max_bytes:
-            await _kill_process_tree(proc)
-            break
-
-        await asyncio.sleep(interval_s)
-
-
-async def _start_worker_process(
-    script: str,
-    env: dict[str, str],
-    cwd: str | None,
-) -> asyncio.subprocess.Process:
-    """Start exec_runner in persistent worker mode (--worker)."""
-    return await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-u",
-        script,
-        "--worker",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-    )
-
-
-_MAX_POOL_WORKERS = 32
-
-
-class WorkerPool:
-    """
-    Pool of persistent exec_runner subprocesses so multiple executor stages can run in parallel.
-    Pass to run_exec_runner(pool=...) or use the default from default_exec_runner_pool().
-    """
-
-    __slots__ = ("max_workers", "_queue", "_count", "_lock")
-
-    def __init__(self, max_workers: int | None = None):
-        if max_workers is None:
-            n = (os.cpu_count() or 4) * 2
-            max_workers = max(1, min(_MAX_POOL_WORKERS, n))
-        self.max_workers = max_workers
-        self._queue: asyncio.Queue[asyncio.subprocess.Process] = asyncio.Queue()
-        self._count = 0
-        self._lock = asyncio.Lock()
-
-    async def get_worker(
-        self,
-        script: str,
-        env: dict[str, str],
-        cwd: str | None,
-    ) -> asyncio.subprocess.Process:
-        """Get an available worker, or create one if under limit, or wait for one to be returned."""
-        async with self._lock:
-            try:
-                proc = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                proc = None
-            if proc is None and self._count < self.max_workers:
-                proc = await _start_worker_process(script, env, cwd)
-                self._count += 1
-        if proc is not None:
-            return proc
-        return await self._queue.get()
-
-    async def return_worker(self, proc: asyncio.subprocess.Process) -> None:
-        """Return a healthy worker to the pool; if already dead, decrement count and kill."""
-        if proc.returncode is not None:
-            async with self._lock:
-                self._count -= 1
-            await _kill_process_tree(proc)
-            return
-        self._queue.put_nowait(proc)
-
-    async def discard_worker(self, proc: asyncio.subprocess.Process) -> None:
-        """Remove a dead worker from the pool and kill it."""
-        async with self._lock:
-            self._count -= 1
-        await _kill_process_tree(proc)
-
-    async def shutdown(self) -> None:
-        """Kill all idle workers in the pool.
-
-        Call before the event loop closes to avoid
-        'RuntimeError: Event loop is closed' warnings from
-        subprocess transport ``__del__`` methods.
-        """
-        while not self._queue.empty():
-            try:
-                proc = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            self._count -= 1
-            await _kill_process_tree(proc)
-
-
-@functools.lru_cache(maxsize=1)
-def default_exec_runner_pool() -> WorkerPool:
-    """Return the default worker pool (one per process, created on first use)."""
-    return WorkerPool()
-
-
-async def _run_via_worker(
-    proc: asyncio.subprocess.Process,
-    data: bytes,
-    timeout: int,
-    max_memory_mb: int | None,
-    max_output_size: int | None,
-) -> tuple[Any, bytes, str]:
-    """
-    Send one length-prefixed payload to the worker and read length-prefixed response.
-    Returns (value, raw_stdout_bytes, stderr_text). Raises ExecRunnerError on worker-reported error.
-    """
-    monitor_task: asyncio.Task | None = None
-    if max_memory_mb is not None and proc.returncode is None:
-        limit_bytes = max_memory_mb * 1024 * 1024
-        monitor_task = asyncio.create_task(
-            _monitor_rss_limit(proc, max_bytes=limit_bytes)
-        )
-
-    try:
-        # Write length (4-byte big-endian) + payload
-        assert proc.stdin is not None
-        assert proc.stdout is not None
-        proc.stdin.write(struct.pack(">I", len(data)) + data)
-        await proc.stdin.drain()
-
-        # Read response length then body
-        len_buf = await asyncio.wait_for(proc.stdout.readexactly(4), timeout=timeout)
-        (n,) = struct.unpack(">I", len_buf)
-        if max_output_size is not None and n > max_output_size:
-            raise ExecRunnerError(
-                returncode=0,
-                stderr=f"OutputTooLarge: {n} bytes exceeds limit of {max_output_size} bytes",
-                stdout_bytes=b"",
+            decoded = json.loads(raw)
+            whitelist = frozenset(decoded["whitelist"])
+            prefixes = tuple(decoded["prefixes"])
+            enable_pdeathsig = bool(decoded["pdeathsig"])
+            node_id = str(decoded.get("node_id", ""))
+        except Exception as exc:
+            logger.debug(
+                "[exec_wrapper] worker init config decode failed, using defaults: {}",
+                exc,
             )
-        stdout = await asyncio.wait_for(proc.stdout.readexactly(n), timeout=timeout)
-    except (
-        TimeoutError,
-        asyncio.IncompleteReadError,
-        BrokenPipeError,
-        ConnectionResetError,
-    ):
-        if monitor_task is not None and not monitor_task.done():
-            monitor_task.cancel()
-        await _kill_process_tree(proc)
-        raise
-    finally:
-        if monitor_task is not None and not monitor_task.done():
-            monitor_task.cancel()
+            whitelist = DEFAULT_ENV_WHITELIST
+            prefixes = DEFAULT_ENV_PREFIXES
+            enable_pdeathsig = True
+    else:
+        whitelist = DEFAULT_ENV_WHITELIST
+        prefixes = DEFAULT_ENV_PREFIXES
+        enable_pdeathsig = True
 
-    value = cloudpickle.loads(stdout)
-    if isinstance(value, dict) and value.get("_error"):
-        stderr_text = value.get("stderr", "")
-        returncode = value.get("returncode", 1)
-        raise ExecRunnerError(
-            returncode=returncode,
-            stderr=stderr_text,
-            stdout_bytes=b"",
+    for key in list(os.environ.keys()):
+        if key in whitelist or any(key.startswith(p) for p in prefixes):
+            continue
+        os.environ.pop(key, None)
+
+    # Worker identity: unique uuid generated once per worker process, plus
+    # the parent's node_id.  Surfaced via os.environ (GIGAEVO_* prefix
+    # passes the scrub above) so user code can read them too if it wants.
+    worker_id = uuid.uuid4().hex[:12]
+    os.environ["GIGAEVO_WORKER_ID"] = worker_id
+    if node_id:
+        os.environ["GIGAEVO_NODE_ID"] = node_id
+
+    if not enable_pdeathsig:
+        return
+    if sys.platform != "linux":
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        rc = libc.prctl(1, signal.SIGTERM, 0, 0, 0)  # PR_SET_PDEATHSIG = 1
+        if rc != 0:
+            logger.debug(
+                "[exec_wrapper] PR_SET_PDEATHSIG failed rc={} errno={}",
+                rc,
+                ctypes.get_errno(),
+            )
+    except Exception as exc:
+        logger.debug("[exec_wrapper] PR_SET_PDEATHSIG unavailable: {}", exc)
+
+
+def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
+    """Loky worker entry point.  Picklable; runs in the child process."""
+    import resource as _resource
+
+    started_at_ns = time.perf_counter_ns()
+    ru_before = _resource.getrusage(_resource.RUSAGE_SELF)
+    result, error = _run_one(call)
+
+    spill_path: str | None = None
+    if error is None:
+        # mkstemp: O_CREAT|O_EXCL (no symlink reuse) + mode 0600; matched
+        # parent-side by O_NOFOLLOW in _load_spill.
+        try:
+            fd, spill_path = tempfile.mkstemp(
+                prefix="gevo-result-", suffix=".pkl", dir=spill_dir
+            )
+        except OSError as exc:
+            error = _error_from_exc(
+                exc, f"Failed to create spill file in {spill_dir!r}:"
+            )
+        else:
+            try:
+                try:
+                    f = os.fdopen(fd, "wb")
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    raise
+                with f:
+                    cloudpickle.dump(result, f, protocol=5)
+            except BaseException as exc:
+                with contextlib.suppress(OSError):
+                    os.unlink(spill_path)
+                spill_path = None
+                error = _error_from_exc(
+                    exc, "Failed to serialise result via cloudpickle:"
+                )
+
+    ru_after = _resource.getrusage(_resource.RUSAGE_SELF)
+    finished_at_ns = time.perf_counter_ns()
+    metrics = ExecutionMetrics(
+        peak_rss_kb=int(ru_after.ru_maxrss),
+        wall_time_s=(finished_at_ns - started_at_ns) / 1e9,
+        user_time_s=float(ru_after.ru_utime - ru_before.ru_utime),
+        sys_time_s=float(ru_after.ru_stime - ru_before.ru_stime),
+        worker_pid=os.getpid(),
+        worker_id=os.environ.get("GIGAEVO_WORKER_ID", ""),
+        node_id=os.environ.get("GIGAEVO_NODE_ID", ""),
+        started_at_ns=started_at_ns,
+        finished_at_ns=finished_at_ns,
+    )
+    return WorkerResult(spill_path=spill_path, error=error, metrics=metrics)
+
+
+def _load_spill(spill_path: str) -> Any:
+    """Read a cloudpickle spill file via mmap.
+
+    ``O_NOFOLLOW`` defends against a same-UID attacker swapping the path
+    for a symlink between worker exit and parent read: cloudpickle.loads
+    on attacker-controlled bytes is an RCE primitive in the parent.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(spill_path, flags)
+    with os.fdopen(fd, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        if size == 0:
+            return cloudpickle.loads(b"")
+        try:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                return cloudpickle.loads(mm)
+        except (ValueError, OSError):
+            # Some filesystems (rare tmpfs configs, NFS) reject mmap.
+            f.seek(0)
+            return cloudpickle.loads(f.read())
+
+
+def _unlink_spill_on_done(fut: Any) -> None:
+    try:
+        result = fut.result()
+    except BaseException:
+        return
+    spill = getattr(result, "spill_path", None)
+    if spill:
+        with contextlib.suppress(OSError):
+            os.unlink(spill)
+
+
+# ---------------------------------------------------------------------------
+# LokyBackend — class-encapsulated pool
+# ---------------------------------------------------------------------------
+
+
+class LokyBackend:
+    """Local-subprocess executor backed by loky.
+
+    Encapsulates the loky pool instance, the scrubbed env, and the
+    per-pool spill directory.  Multiple instances can coexist with
+    isolated state.  Lazily creates the underlying pool on first
+    :meth:`execute` call; idempotent shutdown.
+    """
+
+    def __init__(self, config: WorkerConfig | None = None) -> None:
+        self._config = config if config is not None else WorkerConfig.from_env()
+        self._executor: loky.ProcessPoolExecutor | None = None
+        self._worker_env: dict[str, str] = {}
+        self._on_submit: list[SubmitHandler] = []
+        self._on_complete: list[CompleteHandler] = []
+        self._on_shutdown: list[ShutdownHandler] = []
+
+    @property
+    def config(self) -> WorkerConfig:
+        return self._config
+
+    def _build_worker_env(self) -> dict[str, str]:
+        """Build the env dict passed to loky workers.
+
+        Includes the scrubbed parent env plus an encoded init-config blob
+        in :data:`_WORKER_INIT_ENV_KEY` so :func:`_worker_init` knows
+        which scrub rules to apply on the worker side (loky's ``env=``
+        kwarg is additive, not replace).
+        """
+        scrubbed = _scrub_env(
+            os.environ, self._config.env_whitelist, self._config.env_prefixes
         )
-    return value, b"", ""
+        init_config = {
+            "whitelist": list(self._config.env_whitelist),
+            "prefixes": list(self._config.env_prefixes),
+            "pdeathsig": self._config.enable_pdeathsig,
+            "node_id": self._config.node_id,
+        }
+        # Raw JSON in the env var: POSIX env values accept any byte except
+        # NUL, and ``execve`` does not re-tokenise them, so braces / quotes
+        # / colons pass through unmodified.  Base64 would be cargo-culted
+        # paranoia.
+        scrubbed[_WORKER_INIT_ENV_KEY] = json.dumps(init_config)
+        return scrubbed
+
+    def _get_executor(self) -> loky.ProcessPoolExecutor:
+        if self._executor is None:
+            # 0o700 is honoured only on creation; pre-existing dirs keep their mode.
+            self._config.spill_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._worker_env = self._build_worker_env()
+            self._executor = loky.ProcessPoolExecutor(
+                max_workers=self._config.max_workers,
+                timeout=self._config.idle_timeout_s,
+                initializer=_worker_init,
+                env=self._worker_env,
+                context=get_context("loky"),
+            )
+        return self._executor
+
+    async def execute(self, call: WorkerCall, *, deadline_s: int) -> Any:
+        """Run *call* in a worker; return its value or raise.
+
+        Raises :class:`ExecRunnerError` on user-code failure (``.stderr``
+        carries the traceback) or :class:`asyncio.TimeoutError` on
+        wall-clock overrun.  On timeout the worker pool is torn down;
+        subsequent calls respawn it.
+        """
+        self._fire("submit", self._on_submit, call)
+
+        # Pool construction can fail before the call is ever submitted
+        # (spill_dir mkdir denied by filesystem permissions, loky's pool
+        # construction raises).  Without this guard a hook observer
+        # would see a ``submit`` event with no matching ``complete``.
+        try:
+            executor = self._get_executor()
+            fut = executor.submit(_run_task, call, str(self._config.spill_dir))
+        except BaseException as exc:
+            self._fire_complete(call, None, exc)
+            raise
+
+        try:
+            result: WorkerResult = await asyncio.wait_for(
+                asyncio.wrap_future(fut), timeout=deadline_s
+            )
+        except TimeoutError as exc:
+            # Loky has no public per-future kill; tearing the pool down is
+            # the only available primitive.  Other in-flight tasks become
+            # BrokenProcessPool and will be retried by their callers.
+            self._shutdown_sync(wait=False)
+            self._fire_complete(call, None, exc)
+            raise
+        except asyncio.CancelledError as exc:
+            # Don't tear the pool down; just unlink the spill if the
+            # worker still produces one after cancellation.
+            fut.add_done_callback(_unlink_spill_on_done)
+            self._fire_complete(call, None, exc)
+            raise
+
+        logger.trace(
+            "[LokyBackend:{}|{}:{}:{}] fn={} wall={:.3f}s rss={:.1f}MB user={:.3f}s sys={:.3f}s",
+            self._config.pool_id,
+            result.node_id or self._config.node_id,
+            result.worker_id,
+            result.worker_pid,
+            call.function_name,
+            result.wall_time_s,
+            result.peak_rss_kb / 1024.0,
+            result.user_time_s,
+            result.sys_time_s,
+        )
+
+        if result.error is not None:
+            err = ExecRunnerError(
+                returncode=result.error.returncode,
+                stderr=result.error.stderr,
+            )
+            self._fire_complete(call, result.metrics, err)
+            raise err
+
+        assert result.spill_path is not None
+        try:
+            value = _load_spill(result.spill_path)
+        except BaseException as exc:
+            self._fire_complete(call, result.metrics, exc)
+            with contextlib.suppress(OSError):
+                os.unlink(result.spill_path)
+            raise
+        with contextlib.suppress(OSError):
+            os.unlink(result.spill_path)
+        self._fire_complete(call, result.metrics, None)
+        return value
+
+    # --- Lifecycle hook registration (ExecutorBackend Protocol) ---
+
+    def on_submit(self, handler: SubmitHandler) -> None:
+        self._on_submit.append(handler)
+
+    def on_complete(self, handler: CompleteHandler) -> None:
+        self._on_complete.append(handler)
+
+    def on_shutdown(self, handler: ShutdownHandler) -> None:
+        self._on_shutdown.append(handler)
+
+    def _fire(self, event: str, handlers: list, *args: Any) -> None:
+        """Invoke every registered handler; exceptions are logged and swallowed.
+
+        A misbehaving handler must not silence the others nor break the
+        execution path.  ``event`` is the hook name (``submit`` /
+        ``complete`` / ``shutdown``); included in the error log so a bad
+        observer can be traced back to the specific hook.
+        """
+        for h in handlers:
+            try:
+                h(*args)
+            except Exception:
+                logger.exception(
+                    "[LokyBackend:{}] {} hook raised",
+                    self._config.pool_id,
+                    event,
+                )
+
+    def _fire_complete(
+        self,
+        call: WorkerCall,
+        metrics: ExecutionMetrics | None,
+        exc: BaseException | None,
+    ) -> None:
+        """Fire ``on_complete``; ``metrics`` may be ``None`` when the call
+        did not produce a result envelope (timeout, cancel, or pre-submit
+        failure)."""
+        self._fire("complete", self._on_complete, call, metrics, exc)
+
+    def _shutdown_sync(self, *, wait: bool = False) -> None:
+        """Sync shutdown — the body of :meth:`shutdown` without async wrap.
+
+        Separated so module-level :func:`shutdown_executor` can call it
+        from synchronous contexts (atexit, conftest teardown) without
+        going through ``asyncio.run``.
+        """
+        if self._executor is None:
+            # Still fire the shutdown hook for callers that registered
+            # one before any execute() — idempotent shutdown should still
+            # notify observers exactly once.  Guard with a sentinel so
+            # multiple shutdown calls only fire once.
+            if self._on_shutdown:
+                self._fire("shutdown", self._on_shutdown)
+                self._on_shutdown = []
+            return
+        with contextlib.suppress(Exception):
+            self._executor.shutdown(kill_workers=True, wait=wait)
+        self._executor = None
+        self._worker_env.clear()
+        self._fire("shutdown", self._on_shutdown)
+        self._on_shutdown = []
+
+    async def shutdown(self, *, wait: bool = False) -> None:
+        """Kill all workers if any were spawned.
+
+        ``wait=True`` blocks until loky's manager thread has finished its
+        shutdown sequence (incl. firing done-callbacks); use it from
+        explicit teardown paths so spill-unlink callbacks fire before
+        exit.  The ``wait=False`` default is for the timeout branch of
+        :meth:`execute`, which must return promptly to propagate
+        :class:`TimeoutError`.  Racy under concurrent submits by design.
+        """
+        self._shutdown_sync(wait=wait)
+
+
+# ---------------------------------------------------------------------------
+# Default singleton for backward compatibility
+# ---------------------------------------------------------------------------
+
+_default_backend: LokyBackend | None = None
+
+
+def default_loky_backend() -> LokyBackend:
+    """Get or create the process-scoped default :class:`LokyBackend`."""
+    global _default_backend
+    if _default_backend is None:
+        _default_backend = LokyBackend()
+    return _default_backend
+
+
+def shutdown_executor(*, wait: bool = False) -> None:
+    """Backward-compat: shut down the default :class:`LokyBackend` singleton.
+
+    Sync wrapper; safe to call from atexit handlers or sync test teardown.
+    From an async context, prefer ``await default_loky_backend().shutdown()``.
+
+    Hook lifetime: this drops the current default singleton.  Any
+    handlers registered on it via ``on_submit`` / ``on_complete`` /
+    ``on_shutdown`` are released along with the backend; the next call
+    to :func:`default_loky_backend` constructs a fresh backend with
+    empty hook lists.  Observers that should outlive a shutdown cycle
+    must re-register on each new backend instance.
+    """
+    global _default_backend
+    if _default_backend is None:
+        return
+    backend = _default_backend
+    _default_backend = None
+    backend._shutdown_sync(wait=wait)
+
+
+# Module-level backward-compat shims so existing callers that reach for
+# the old internals (`_CONFIG`, `_get_executor()`) continue to work
+# against the default singleton.
+class _ConfigProxy:
+    """Read access to the default backend's :class:`WorkerConfig`."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(default_loky_backend().config, name)
+
+
+_CONFIG = _ConfigProxy()
+
+
+def _get_executor() -> loky.ProcessPoolExecutor:
+    """Backward-compat: return the default singleton's underlying executor."""
+    return default_loky_backend()._get_executor()
+
+
+# ---------------------------------------------------------------------------
+# Public surface used by callers
+# ---------------------------------------------------------------------------
 
 
 async def run_exec_runner(
@@ -264,147 +766,27 @@ async def run_exec_runner(
     python_path: Sequence[Path] | None = None,
     env_updates: dict[str, Any] | None = None,
     timeout: int,
-    max_memory_mb: int | None = None,
-    max_output_size: int | None = None,
-    cwd: Path | None = None,
-    runner_path: Path | None = None,
-    pool: WorkerPool | None = None,
-) -> tuple[Any, bytes, str]:
-    """
-    Run user code in an isolated subprocess with resource limits.
+    backend: ExecutorBackend | None = None,
+) -> Any:
+    """Run a user function in a subprocess and return its value.
+
+    Raises :class:`ExecRunnerError` on user-code failure (``.stderr`` holds
+    the traceback) or :class:`asyncio.TimeoutError` on wall-clock overrun.
 
     Args:
-        code: Python code to execute
-        function_name: Function to call in the code
-        args: Positional arguments for the function
-        kwargs: Keyword arguments for the function
-        python_path: Additional paths to add to sys.path
-        timeout: Maximum execution time in seconds
-        max_memory_mb: Maximum memory in MB (None = unlimited)
-        max_output_size: Maximum output size in bytes (None = unlimited)
-        cwd: Working directory for subprocess
-        runner_path: Path to exec_runner.py script
-        pool: Worker pool for parallel runs; if None, uses default_exec_runner_pool().
-
-    Returns:
-        (result_object, raw_stdout_bytes, stderr_text)
-        Note: raw_stdout_bytes will be empty b"" on success to save memory,
-        unless deserialization fails.
-
-    Raises:
-        ExecRunnerError: On non-zero exit, output too large, or execution failure
-        asyncio.TimeoutError: On timeout
+        backend: Optional :class:`ExecutorBackend` to use instead of the
+            process-scoped default :class:`LokyBackend` singleton.  Used
+            by tests to inject fakes, and by deployments to swap in a
+            remote-execution backend without changing call sites.
     """
-    script = str(runner_path or _find_runner_script())
-    cwd_str = str(cwd) if cwd else None
-    env = os.environ.copy()
-    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    if python_path:
-        python_path_entries = [str(p) for p in python_path]
-        existing_pythonpath = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = os.pathsep.join(
-            python_path_entries + ([existing_pythonpath] if existing_pythonpath else [])
-        )
-
-    payload = {
-        "code": code,
-        "function_name": function_name,
-        "python_path": [str(p) for p in (python_path or [])],
-        "args": list(args or []),
-        "kwargs": dict(kwargs or {}),
-        "env": dict(env_updates) if env_updates else {},
-    }
-    data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
-
-    worker_pool = pool if pool is not None else default_exec_runner_pool()
-    worker = await worker_pool.get_worker(script, env, cwd_str)
-    returned = False
-    try:
-        result = await _run_via_worker(
-            worker,
-            data,
-            timeout=timeout,
-            max_memory_mb=max_memory_mb,
-            max_output_size=max_output_size,
-        )
-        await worker_pool.return_worker(worker)
-        returned = True
-        return result
-    except ExecRunnerError:
-        await worker_pool.return_worker(worker)
-        returned = True
-        raise
-    except (
-        TimeoutError,
-        asyncio.IncompleteReadError,
-        BrokenPipeError,
-        ConnectionResetError,
-    ):
-        await worker_pool.discard_worker(worker)
-        returned = True
-    finally:
-        if not returned:
-            # CancelledError or any other unexpected exception — discard the
-            # worker so it doesn't leak and exhaust the pool.
-            await worker_pool.discard_worker(worker)
-
-    # One-shot: spawn subprocess for this call only.
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-u",
-        script,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd_str,
-        env=env,
-        start_new_session=True,
+    call = WorkerCall(
+        code=code,
+        function_name=function_name,
+        args=list(args or []),
+        kwargs=dict(kwargs or {}),
+        python_path=[str(p) for p in (python_path or [])],
+        env={k: (None if v is None else str(v)) for k, v in (env_updates or {}).items()},
     )
-
-    monitor_task: asyncio.Task | None = None
-    if max_memory_mb is not None:
-        limit_bytes = max_memory_mb * 1024 * 1024
-        monitor_task = asyncio.create_task(
-            _monitor_rss_limit(proc, max_bytes=limit_bytes)
-        )
-
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=data), timeout=timeout
-        )
-    except (TimeoutError, asyncio.CancelledError):
-        if monitor_task is not None:
-            monitor_task.cancel()
-        await _kill_process_tree(proc)
-        raise
-    finally:
-        if monitor_task is not None and not monitor_task.done():
-            monitor_task.cancel()
-
-    returncode = proc.returncode
-    stderr_text = stderr.decode("utf-8", errors="replace")
-
-    if returncode == 0:
-        if max_output_size is not None and len(stdout) > max_output_size:
-            raise ExecRunnerError(
-                returncode=0,
-                stderr=f"OutputTooLarge: Output {len(stdout)} bytes exceeds limit of {max_output_size} bytes\n[stderr]\n{stderr_text}",
-                stdout_bytes=b"",
-            )
-
-        try:
-            _prepend_sys_path(python_path)
-            value = cloudpickle.loads(stdout)
-            del stdout
-        except Exception as e:
-            raise ExecRunnerError(
-                returncode=0,
-                stderr=f"Invalid cloudpickle payload: {e}\n[stderr]\n{stderr_text}",
-                stdout_bytes=stdout,
-            )
-        return value, b"", stderr_text
-
-    raise ExecRunnerError(
-        returncode=returncode or -1, stderr=stderr_text, stdout_bytes=stdout
-    )
+    if backend is None:
+        backend = default_loky_backend()
+    return await backend.execute(call, deadline_s=timeout)

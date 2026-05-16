@@ -107,7 +107,7 @@ async def _execute_entrypoint(
     timeout: int,
     run_exec_runner: Any,
 ) -> Any:
-    outputs, _, _ = await run_exec_runner(
+    outputs = await run_exec_runner(
         code=code,
         function_name="entrypoint",
         args=[context],

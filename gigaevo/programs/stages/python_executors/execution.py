@@ -27,43 +27,36 @@ T = TypeVar("T")
 
 
 class PythonCodeExecutor[T](Stage):
-    """
-    Execute a user function from dynamic code in an isolated subprocess.
+    """Execute a user function from dynamic code in a subprocess.
 
-    The subprocess has resource limits applied for safety:
-    - Memory limits (via resource.RLIMIT_AS) prevent RAM exhaustion
-    - Timeout limits prevent infinite loops
-    - Output size limits prevent excessive data generation
-
-    The output is a Box[T] containing the result of the function call.
+    Dispatched via :class:`gigaevo.programs.stages.python_executors.backend.ExecutorBackend`;
+    the default implementation is :class:`~gigaevo.programs.stages.python_executors.wrapper.LokyBackend`
+    (local loky subprocess pool).  The worker is isolated from the parent
+    process and recycled periodically; runtime is bounded by ``timeout``.
+    Result IPC is disk-spilled, so worker return values are bounded by
+    free disk space rather than parent RAM.
 
     Args:
         function_name: Name of the function to call in the user code
         python_path: Additional paths to add to sys.path
-        max_output_size: Maximum size of output in bytes (default: 64MB)
-        max_memory_mb: Maximum memory in MB (default: None = unlimited)
         timeout: Maximum execution time in seconds (inherited from Stage)
 
-    Subclasses must implement `_build_call(self, program) -> (args, kwargs)`.
+    Subclasses must implement ``_build_call(self, program) -> (args, kwargs)``.
     """
 
     InputsModel: type[StageIO] = VoidInput
-    OutputModel = Box[T]  # type: ignore[valid-type]  # bound TypeVar used as generic alias in base class
+    OutputModel = Box[T]  # bound TypeVar used as generic alias in base class
 
     def __init__(
         self,
         *,
         function_name: str = "run_code",
         python_path: list[Path] | None = None,
-        max_output_size: int = 64 * 1024 * 1024,
-        max_memory_mb: int | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.function_name = function_name
         self.python_path = python_path or []
-        self.max_output_size = int(max_output_size)
-        self.max_memory_mb = int(max_memory_mb) if max_memory_mb is not None else None
 
     def _code_str(self, program: Program) -> str:
         return program.code
@@ -89,7 +82,7 @@ class PythonCodeExecutor[T](Stage):
         )
 
         try:
-            value, stdout_bytes, stderr_text = await run_exec_runner(
+            value = await run_exec_runner(
                 code=dedent_code(code_str),
                 function_name=self.function_name,
                 args=args,
@@ -100,8 +93,6 @@ class PythonCodeExecutor[T](Stage):
                     "GIGAEVO_PROGRAM_ID_SHORT": program.id[:8],
                 },
                 timeout=int(self.timeout),
-                max_memory_mb=self.max_memory_mb,
-                max_output_size=self.max_output_size,
             )
 
             value_parsed = self.parse_output(value)
@@ -113,37 +104,19 @@ class PythonCodeExecutor[T](Stage):
                 type(value_parsed).__name__,
             )
 
-            del stdout_bytes
-            del stderr_text
-
             return self.__class__.OutputModel(data=value_parsed)
 
         except ExecRunnerError as e:
-            # Detect memory limit errors
-            error_type = "SubprocessError"
-            error_msg = str(e)
-
-            if e.stderr and (
-                "MemoryError" in e.stderr or "Cannot allocate memory" in e.stderr
-            ):
-                error_type = "MemoryLimitExceeded"
-                error_msg = (
-                    f"Process exceeded memory limit of {self.max_memory_mb} MB"
-                    if self.max_memory_mb
-                    else "Process ran out of memory"
-                )
-
             logger.warning(
-                "[{}] {} FAILED for {}: {}",
+                "[{}] SubprocessError FAILED for {}: {}",
                 stage_name,
-                error_type,
                 program.id[:8],
-                error_msg[:200],
+                e,
             )
             return ProgramStageResult.failure(
                 error=StageError(
-                    type=error_type,
-                    message=error_msg,
+                    type="SubprocessError",
+                    message=str(e),
                     stage=stage_name,
                     traceback=e.stderr,
                 )
@@ -153,7 +126,7 @@ class PythonCodeExecutor[T](Stage):
                 "[{}] Exception for {}: {}",
                 stage_name,
                 program.id[:8],
-                str(e)[:200],
+                e,
             )
             return ProgramStageResult.failure(
                 error=StageError.from_exception(e, stage=stage_name)

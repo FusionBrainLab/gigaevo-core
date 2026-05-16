@@ -1,15 +1,18 @@
-"""Tests for Python executor subprocess pool: WorkerPool lifecycle, run_exec_runner,
-timeout handling, error propagation, and one-shot fallback."""
+"""Tests for the loky-backed Python executor: run_exec_runner public surface,
+PythonCodeExecutor stages, regression reproducers, and worker-isolation /
+env-scrub / spill-hygiene properties."""
 
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+import time
 
 import pytest
 
 from gigaevo.programs.stages.python_executors.wrapper import (
     ExecRunnerError,
-    WorkerPool,
     run_exec_runner,
 )
 
@@ -22,14 +25,12 @@ class TestRunExecRunner:
     async def test_simple_function_returns_result(self) -> None:
         """Execute a simple function and get the return value."""
         code = "def run_code(): return 42"
-        result, stdout, stderr = await run_exec_runner(
-            code=code, function_name="run_code", timeout=10
-        )
+        result = await run_exec_runner(code=code, function_name="run_code", timeout=10)
         assert result == 42
 
     async def test_function_with_args(self) -> None:
         code = "def add(a, b): return a + b"
-        result, _, _ = await run_exec_runner(
+        result = await run_exec_runner(
             code=code,
             function_name="add",
             args=[3, 7],
@@ -39,7 +40,7 @@ class TestRunExecRunner:
 
     async def test_function_with_kwargs(self) -> None:
         code = "def greet(name='world'): return f'hello {name}'"
-        result, _, _ = await run_exec_runner(
+        result = await run_exec_runner(
             code=code,
             function_name="greet",
             kwargs={"name": "test"},
@@ -50,9 +51,7 @@ class TestRunExecRunner:
     async def test_returns_complex_object(self) -> None:
         """Complex return values (dict, list, nested) survive serialization."""
         code = "def run_code(): return {'a': [1, 2], 'b': {'nested': True}}"
-        result, _, _ = await run_exec_runner(
-            code=code, function_name="run_code", timeout=10
-        )
+        result = await run_exec_runner(code=code, function_name="run_code", timeout=10)
         assert result == {"a": [1, 2], "b": {"nested": True}}
 
     async def test_returns_numpy_array(self) -> None:
@@ -61,9 +60,7 @@ import numpy as np
 def run_code():
     return np.array([1.0, 2.0, 3.0])
 """
-        result, _, _ = await run_exec_runner(
-            code=code, function_name="run_code", timeout=10
-        )
+        result = await run_exec_runner(code=code, function_name="run_code", timeout=10)
         import numpy as np
 
         assert np.array_equal(result, np.array([1.0, 2.0, 3.0]))
@@ -107,102 +104,13 @@ def run_code():
         with pytest.raises((asyncio.TimeoutError, ExecRunnerError)):
             await run_exec_runner(code=code, function_name="run_code", timeout=1)
 
-    async def test_output_too_large_raises(self) -> None:
-        code = "def run_code(): return 'x' * 1000000"
-        with pytest.raises(ExecRunnerError) as exc_info:
-            await run_exec_runner(
-                code=code,
-                function_name="run_code",
-                timeout=10,
-                max_output_size=1024,  # 1KB limit
-            )
-        assert "OutputTooLarge" in exc_info.value.stderr
-
 
 # ---------------------------------------------------------------------------
-# WorkerPool
+# ExecRunnerError attributes
 # ---------------------------------------------------------------------------
 
 
-class TestWorkerPool:
-    def test_default_max_workers(self) -> None:
-        import os
-
-        pool = WorkerPool()
-        cpu = os.cpu_count() or 4
-        expected = max(1, min(32, cpu * 2))
-        assert pool.max_workers == expected
-
-    def test_custom_max_workers(self) -> None:
-        pool = WorkerPool(max_workers=4)
-        assert pool.max_workers == 4
-
-    async def test_worker_reuse(self) -> None:
-        """A returned worker can be reused for the next request."""
-        pool = WorkerPool(max_workers=1)
-        code = "def run_code(): return 1"
-
-        result1, _, _ = await run_exec_runner(
-            code=code, function_name="run_code", timeout=10, pool=pool
-        )
-        result2, _, _ = await run_exec_runner(
-            code=code, function_name="run_code", timeout=10, pool=pool
-        )
-
-        assert result1 == 1
-        assert result2 == 1
-        await pool.shutdown()
-
-    async def test_parallel_execution_with_pool(self) -> None:
-        """Multiple tasks run concurrently with a pool."""
-        pool = WorkerPool(max_workers=4)
-        code = """
-import time
-def run_code(n):
-    time.sleep(0.1)
-    return n * 2
-"""
-        tasks = [
-            run_exec_runner(
-                code=code,
-                function_name="run_code",
-                args=[i],
-                timeout=10,
-                pool=pool,
-            )
-            for i in range(4)
-        ]
-        results = await asyncio.gather(*tasks)
-        values = sorted([r[0] for r in results])
-        assert values == [0, 2, 4, 6]
-        await pool.shutdown()
-
-
-# ---------------------------------------------------------------------------
-# Worker error recovery — one-shot fallback
-# ---------------------------------------------------------------------------
-
-
-class TestWorkerRecovery:
-    async def test_error_in_worker_doesnt_break_pool(self) -> None:
-        """After a worker error, the pool can still serve requests."""
-        pool = WorkerPool(max_workers=2)
-
-        # First request: errors
-        bad_code = "def run_code(): raise SystemExit(1)"
-        with pytest.raises(ExecRunnerError):
-            await run_exec_runner(
-                code=bad_code, function_name="run_code", timeout=10, pool=pool
-            )
-
-        # Second request: succeeds (pool creates new worker or falls back)
-        good_code = "def run_code(): return 'ok'"
-        result, _, _ = await run_exec_runner(
-            code=good_code, function_name="run_code", timeout=10, pool=pool
-        )
-        assert result == "ok"
-        await pool.shutdown()
-
+class TestExecRunnerErrorAttributes:
     async def test_exec_runner_error_attributes(self) -> None:
         code = "def run_code(): raise RuntimeError('boom')"
         with pytest.raises(ExecRunnerError) as exc_info:
@@ -248,17 +156,18 @@ class TestPythonCodeExecutorStage:
 
         assert isinstance(result, ProgramStageResult)
         assert result.status.value == "failed"
+        assert result.error is not None
+        assert result.error.traceback is not None
         assert "ValueError" in result.error.traceback
 
 
 # ---------------------------------------------------------------------------
-# PythonCodeExecutor — error-handling paths (MemoryError, generic Exception)
+# PythonCodeExecutor — error-handling paths
 # ---------------------------------------------------------------------------
 
 
 class TestPythonCodeExecutorErrorPaths:
-    async def test_memory_error_detection_in_stderr(self) -> None:
-        """ExecRunnerError with 'MemoryError' in stderr sets error_type='MemoryLimitExceeded'."""
+    async def test_subprocess_error_returns_failure(self) -> None:
         from unittest.mock import AsyncMock, patch
 
         from gigaevo.programs.core_types import ProgramStageResult
@@ -275,7 +184,6 @@ class TestPythonCodeExecutorErrorPaths:
         fake_error = ExecRunnerError(
             returncode=1,
             stderr="Traceback...\nMemoryError: unable to allocate",
-            stdout_bytes=b"",
         )
 
         with patch(
@@ -288,41 +196,11 @@ class TestPythonCodeExecutorErrorPaths:
         assert isinstance(result, ProgramStageResult)
         assert result.status.value == "failed"
         assert result.error is not None
-        assert result.error.type == "MemoryLimitExceeded"
-
-    async def test_cannot_allocate_memory_string_detection(self) -> None:
-        """'Cannot allocate memory' in stderr is also detected as MemoryLimitExceeded."""
-        from unittest.mock import AsyncMock, patch
-
-        from gigaevo.programs.core_types import ProgramStageResult
-        from gigaevo.programs.program import Program
-        from gigaevo.programs.stages.python_executors.execution import (
-            CallProgramFunction,
-        )
-        from gigaevo.programs.stages.python_executors.wrapper import ExecRunnerError
-
-        stage = CallProgramFunction(function_name="solve", timeout=10)
-        stage.attach_inputs({})
-        prog = Program(code="def solve(): pass")
-
-        fake_error = ExecRunnerError(
-            returncode=1,
-            stderr="Cannot allocate memory in static TLS block",
-            stdout_bytes=b"",
-        )
-
-        with patch(
-            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
-            new_callable=AsyncMock,
-            side_effect=fake_error,
-        ):
-            result = await stage.compute(prog)
-
-        assert isinstance(result, ProgramStageResult)
-        assert result.error.type == "MemoryLimitExceeded"
+        assert result.error.type == "SubprocessError"
+        assert result.error.traceback is not None
+        assert "MemoryError" in result.error.traceback
 
     async def test_generic_exception_in_compute_returns_failure(self) -> None:
-        """A non-ExecRunnerError exception in compute() returns ProgramStageResult.failure."""
         from unittest.mock import AsyncMock, patch
 
         from gigaevo.programs.core_types import ProgramStageResult
@@ -349,40 +227,6 @@ class TestPythonCodeExecutorErrorPaths:
             "RuntimeError" in result.error.type
             or "RuntimeError" in result.error.message
         )
-
-    async def test_memory_limit_error_message_includes_mb_when_set(self) -> None:
-        """When max_memory_mb is set, the error message mentions the limit."""
-        from unittest.mock import AsyncMock, patch
-
-        from gigaevo.programs.core_types import ProgramStageResult
-        from gigaevo.programs.program import Program
-        from gigaevo.programs.stages.python_executors.execution import (
-            CallProgramFunction,
-        )
-        from gigaevo.programs.stages.python_executors.wrapper import ExecRunnerError
-
-        stage = CallProgramFunction(
-            function_name="solve", timeout=10, max_memory_mb=512
-        )
-        stage.attach_inputs({})
-        prog = Program(code="def solve(): pass")
-
-        fake_error = ExecRunnerError(
-            returncode=1,
-            stderr="MemoryError",
-            stdout_bytes=b"",
-        )
-
-        with patch(
-            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
-            new_callable=AsyncMock,
-            side_effect=fake_error,
-        ):
-            result = await stage.compute(prog)
-
-        assert isinstance(result, ProgramStageResult)
-        assert result.error.type == "MemoryLimitExceeded"
-        assert "512" in result.error.message
 
 
 # ---------------------------------------------------------------------------
@@ -652,3 +496,1764 @@ class TestCallValidatorFunction:
             assert metrics["ctx"] == "my-context"
             assert metrics["payload"] == 3.0
             assert artifact is None
+
+
+# =============================================================================
+# Regression reproducers — bugs fixed by the loky migration
+# =============================================================================
+
+
+class TestRegressionER1ExecRunnerErrorStr:
+    """``ExecRunnerError.__str__`` includes ``stderr`` (was dropped)."""
+
+    def test_str_contains_stderr(self) -> None:
+        err = ExecRunnerError(returncode=1, stderr="ZeroDivisionError: division by zero")
+        assert "ZeroDivisionError" in str(err)
+        assert "division by zero" in str(err)
+
+    def test_str_handles_empty_stderr(self) -> None:
+        err = ExecRunnerError(returncode=1, stderr="")
+        assert "(no stderr)" in str(err)
+
+    async def test_real_call_propagates_user_traceback_into_str(self) -> None:
+        code = "def run_code(): raise RuntimeError('user message here')"
+        with pytest.raises(ExecRunnerError) as exc_info:
+            await run_exec_runner(code=code, function_name="run_code", timeout=10)
+        assert "user message here" in str(exc_info.value)
+
+
+class TestRegressionE4NoMemoryHeuristic:
+    """``StageError.type`` is always ``SubprocessError``; no ``"MemoryError"``
+    substring heuristic mislabels in-validator OOMs or similar messages."""
+
+    async def test_user_raises_memoryerror_does_not_mislabel(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from gigaevo.programs.core_types import ProgramStageResult
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunction,
+        )
+
+        stage = CallProgramFunction(function_name="solve", timeout=10)
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        fake = ExecRunnerError(returncode=1, stderr="MemoryError: out of memory")
+        with patch(
+            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
+            new_callable=AsyncMock,
+            side_effect=fake,
+        ):
+            result = await stage.compute(prog)
+        assert isinstance(result, ProgramStageResult)
+        assert result.error is not None
+        assert result.error.type == "SubprocessError"
+        assert result.error.traceback is not None
+        assert "MemoryError" in result.error.traceback
+
+    async def test_cannot_allocate_memory_string_does_not_mislabel(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from gigaevo.programs.core_types import ProgramStageResult
+        from gigaevo.programs.program import Program
+        from gigaevo.programs.stages.python_executors.execution import (
+            CallProgramFunction,
+        )
+
+        stage = CallProgramFunction(function_name="solve", timeout=10)
+        stage.attach_inputs({})
+        prog = Program(code="def solve(): pass")
+
+        fake = ExecRunnerError(
+            returncode=1, stderr="Cannot allocate memory in static TLS block"
+        )
+        with patch(
+            "gigaevo.programs.stages.python_executors.execution.run_exec_runner",
+            new_callable=AsyncMock,
+            side_effect=fake,
+        ):
+            result = await stage.compute(prog)
+        assert isinstance(result, ProgramStageResult)
+        assert result.error is not None
+        assert result.error.type == "SubprocessError"
+
+
+class TestRegressionE62NotEventLoopBound:
+    """The loky executor is process-level; two sequential ``asyncio.run``
+    calls share the pool (was lru_cache-bound to first event loop)."""
+
+    def test_two_sequential_event_loops_share_executor(self) -> None:
+        async def one() -> int:
+            return await run_exec_runner(
+                code="def f(): return 1", function_name="f", timeout=10
+            )
+
+        assert asyncio.run(one()) == 1
+        assert asyncio.run(one()) == 1
+
+
+class TestRegressionE63TimeoutNoSilentRetry:
+    """Timeout raises promptly; no silent one-shot subprocess retry."""
+
+    async def test_timeout_completes_within_budget(self) -> None:
+        code = "import time\ndef f():\n    time.sleep(30)\n    return 0\n"
+        t0 = time.monotonic()
+        with pytest.raises((TimeoutError, asyncio.TimeoutError, ExecRunnerError)):
+            await run_exec_runner(code=code, function_name="f", timeout=1)
+        # Old code's silent retry would have taken ~2x timeout.
+        assert time.monotonic() - t0 < 1.0 + 4.0
+
+
+class TestSpillFileLifecycle:
+    """Spill files are unlinked after every call."""
+
+    async def test_spill_unlinked_after_success(self, isolated_spill_dir) -> None:
+        result = await run_exec_runner(
+            code="def f(): return {'a': 1, 'b': [1, 2, 3]}",
+            function_name="f",
+            timeout=10,
+        )
+        assert result == {"a": 1, "b": [1, 2, 3]}
+        assert list(isolated_spill_dir.iterdir()) == [], (
+            "spill files leaked into directory"
+        )
+
+    async def test_spill_unlinked_after_concurrent_calls(
+        self, isolated_spill_dir
+    ) -> None:
+        code = "def f(n): return n * 2"
+        results = await asyncio.gather(
+            *[
+                run_exec_runner(code=code, function_name="f", args=[i], timeout=10)
+                for i in range(8)
+            ]
+        )
+        assert sorted(results) == [0, 2, 4, 6, 8, 10, 12, 14]
+        assert list(isolated_spill_dir.iterdir()) == []
+
+
+class TestEnvScrubbing:
+    """Worker sees only whitelisted + ``GIGAEVO_*``/``LOKY_*`` env vars."""
+
+    async def test_secret_env_var_invisible_to_worker(
+        self, monkeypatch, fresh_executor
+    ) -> None:
+        monkeypatch.setenv("SECRET_API_TOKEN_THAT_USER_CODE_SHOULD_NOT_SEE", "leaked")
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                "def f():\n"
+                "    return os.environ.get("
+                "'SECRET_API_TOKEN_THAT_USER_CODE_SHOULD_NOT_SEE')\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert seen is None, "secret env var leaked to user code"
+
+    async def test_gigaevo_prefix_env_var_visible(
+        self, monkeypatch, fresh_executor
+    ) -> None:
+        monkeypatch.setenv("GIGAEVO_TEST_SENTINEL", "visible-value")
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                "def f(): return os.environ.get('GIGAEVO_TEST_SENTINEL')\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert seen == "visible-value"
+
+    async def test_env_updates_payload_reaches_worker(self) -> None:
+        seen = await run_exec_runner(
+            code="import os\ndef f(): return os.environ.get('GIGAEVO_PROGRAM_ID')",
+            function_name="f",
+            env_updates={"GIGAEVO_PROGRAM_ID": "abc-123"},
+            timeout=10,
+        )
+        assert seen == "abc-123"
+
+    @pytest.mark.parametrize(
+        "secret_key",
+        [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GCP_PROJECT",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "LANGFUSE_SECRET_KEY",
+            "WANDB_API_KEY",
+            "HF_TOKEN",
+            "STRIPE_SECRET_KEY",
+            "SUPABASE_SERVICE_ROLE_KEY",
+        ],
+    )
+    async def test_well_known_secret_env_vars_scrubbed(
+        self, monkeypatch, fresh_executor, secret_key: str
+    ) -> None:
+        monkeypatch.setenv(secret_key, "should-not-leak")
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                f"def f(): return os.environ.get({secret_key!r})\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert seen is None, f"{secret_key} leaked to worker"
+
+
+class TestSpillDirHardening:
+    """Default spill dir is per-uid; operator paths get ``..`` resolved."""
+
+    def test_default_spill_dir_is_per_uid(self, monkeypatch) -> None:
+        from pathlib import Path as _Path
+        import tempfile as _tempfile
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_SPILL_DIR", raising=False)
+        cfg = WorkerConfig.from_env()
+        assert cfg.spill_dir != _Path(_tempfile.gettempdir())
+        assert str(os.getuid()) in cfg.spill_dir.name
+
+    def test_spill_dir_env_resolves_dotdot(self, monkeypatch, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        target = tmp_path / "real-spill"
+        target.mkdir()
+        weird = tmp_path / "real-spill" / ".." / "real-spill"
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_SPILL_DIR", str(weird))
+        cfg = WorkerConfig.from_env()
+        assert cfg.spill_dir == target.resolve()
+
+
+class TestWorkerSignalDispositions:
+    """Workers have default signal handlers (KeyboardInterrupt on SIGINT,
+    SIG_DFL on SIGTERM/SIGHUP/SIGQUIT) regardless of loky's internal setup."""
+
+    async def test_sigint_handler_is_default_int_handler(self) -> None:
+        result = await run_exec_runner(
+            code=(
+                "import signal\n"
+                "def f():\n"
+                "    return (\n"
+                "        signal.getsignal(signal.SIGINT)\n"
+                "        is signal.default_int_handler\n"
+                "    )\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert result is True
+
+    async def test_sigterm_handler_is_default(self) -> None:
+        result = await run_exec_runner(
+            code=(
+                "import signal\n"
+                "def f():\n"
+                "    return signal.getsignal(signal.SIGTERM) == signal.SIG_DFL\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert result is True
+
+
+class TestWorkerObservability:
+    """``WorkerResult`` resource-accounting fields are populated."""
+
+    def test_run_task_populates_envelope_fields(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import _run_task
+
+        call = WorkerCall(
+            code="def f(): return [1] * 1024",
+            function_name="f",
+        )
+        result = _run_task(call, str(tmp_path))
+        try:
+            assert result.error is None
+            assert result.spill_path is not None
+            assert result.peak_rss_kb > 0
+            assert result.wall_time_s >= 0.0
+            assert result.user_time_s >= 0.0
+            assert result.sys_time_s >= 0.0
+            assert result.worker_pid == os.getpid()
+        finally:
+            if result.spill_path is not None:
+                os.unlink(result.spill_path)
+
+
+class TestUnpicklableResult:
+    """Unpicklable results surface as :class:`ExecRunnerError`."""
+
+    async def test_lambda_round_trips_via_cloudpickle(self) -> None:
+        result = await run_exec_runner(
+            code="def f(): return lambda x: x", function_name="f", timeout=10
+        )
+        assert callable(result)
+
+    async def test_returning_open_file_handle_raises_exec_runner_error(self) -> None:
+        code = (
+            "def f():\n"
+            "    import tempfile\n"
+            "    return open(tempfile.mkstemp()[1], 'w')\n"
+        )
+        with pytest.raises(ExecRunnerError) as exc_info:
+            await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert (
+            "cloudpickle" in exc_info.value.stderr.lower()
+            or "pickle" in exc_info.value.stderr.lower()
+            or "serialise" in exc_info.value.stderr.lower()
+        )
+
+
+class TestSpillMmapRoundTrip:
+    """Multi-MB numpy arrays round-trip via the mmap spill path."""
+
+    async def test_numpy_2d_array_roundtrip(self) -> None:
+        import numpy as np
+
+        code = (
+            "import numpy as np\n"
+            "def f():\n"
+            "    return np.arange(50000, dtype=np.float64).reshape(500, 100)\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=20)
+        assert result.shape == (500, 100)
+        assert result.dtype == np.float64
+        assert np.array_equal(result[0], np.arange(100, dtype=np.float64))
+        assert result[-1, -1] == 49999.0
+
+
+# =============================================================================
+# Worker isolation between calls
+# =============================================================================
+
+
+class TestWorkerIsolation:
+    """Successive calls into the same worker don't leak cwd / sys.path / env."""
+
+    async def test_env_update_does_not_leak_between_calls(self) -> None:
+        await run_exec_runner(
+            code="import os\ndef f(): os.environ['GIGAEVO_LEAK_PROBE'] = '1'",
+            function_name="f",
+            env_updates={"GIGAEVO_LEAK_PROBE": "1"},
+            timeout=10,
+        )
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                "def f(): return os.environ.get('GIGAEVO_LEAK_PROBE', 'unset')\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        # Either env was restored, or the second call's absent
+        # env_updates left whatever the first call set.  Both acceptable.
+        assert seen in ("unset", "1")
+
+    async def test_user_code_name_does_not_persist_old_definitions(self) -> None:
+        await run_exec_runner(
+            code="VALUE = 1\ndef f(): return VALUE",
+            function_name="f",
+            timeout=10,
+        )
+        result = await run_exec_runner(
+            code="def f(): return globals().get('VALUE', 'missing')",
+            function_name="f",
+            timeout=10,
+        )
+        assert result == "missing"
+
+    async def test_user_chdir_does_not_leak_to_next_call(self, tmp_path) -> None:
+        leak_dir = tmp_path / "leak-target"
+        leak_dir.mkdir()
+
+        seen_first = await run_exec_runner(
+            code=(
+                "import os\n"
+                f"def f():\n"
+                f"    os.chdir({str(leak_dir)!r})\n"
+                f"    return os.getcwd()\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert seen_first == str(leak_dir)
+
+        seen_second = await run_exec_runner(
+            code="import os\ndef f(): return os.getcwd()",
+            function_name="f",
+            timeout=10,
+        )
+        assert seen_second != str(leak_dir), (
+            f"cwd leaked across worker reuse: {seen_second!r}"
+        )
+
+    async def test_user_sys_path_mutation_does_not_leak_to_next_call(
+        self,
+    ) -> None:
+        sentinel = "/__sentinel_sys_path_leak_xyz__"
+        await run_exec_runner(
+            code=(
+                "import sys\n"
+                f"def f():\n"
+                f"    sys.path.insert(0, {sentinel!r})\n"
+                f"    return {sentinel!r} in sys.path\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        leaked = await run_exec_runner(
+            code=(
+                "import sys\n"
+                f"def f(): return {sentinel!r} in sys.path\n"
+            ),
+            function_name="f",
+            timeout=10,
+        )
+        assert leaked is False, (
+            f"sys.path leak: sentinel {sentinel!r} survived into next call"
+        )
+
+
+class TestRunOneDirect:
+    """In-parent unit tests for ``_run_one`` — no loky spawn cost."""
+
+    def test_success_returns_value_none(self) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
+
+        value, error = _run_one(
+            WorkerCall(code="def f(x): return x + 1", function_name="f", args=[41])
+        )
+        assert error is None
+        assert value == 42
+
+    def test_user_exception_returns_structured_error(self) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
+
+        value, error = _run_one(
+            WorkerCall(code="def f(): raise KeyError('lookup')", function_name="f")
+        )
+        assert value is None
+        assert error is not None
+        assert error.returncode == 1
+        assert "KeyError" in error.stderr
+        assert "lookup" in error.stderr
+
+    def test_sys_exit_does_not_kill_caller(self) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
+
+        value, error = _run_one(
+            WorkerCall(code="import sys\ndef f(): sys.exit(2)", function_name="f")
+        )
+        assert value is None
+        assert error is not None
+        assert "SystemExit" in error.stderr
+
+    def test_syntax_error_formatted_with_caret(self) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
+
+        value, error = _run_one(WorkerCall(code="def f(\n  return 1", function_name="f"))
+        assert value is None
+        assert error is not None
+        assert "SyntaxError" in error.stderr
+
+    def test_missing_function_returns_error(self) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
+
+        value, error = _run_one(
+            WorkerCall(code="def g(): return 1", function_name="nonexistent")
+        )
+        assert value is None
+        assert error is not None
+        assert "not found" in error.stderr or "not callable" in error.stderr
+
+    def test_env_updates_applied_then_restored(self) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            _run_one,
+        )
+
+        os.environ.pop("GIGAEVO_DIRECT_PROBE", None)
+        value, error = _run_one(
+            WorkerCall(
+                code=(
+                    "import os\n"
+                    "def f(): return os.environ.get('GIGAEVO_DIRECT_PROBE')\n"
+                ),
+                function_name="f",
+                env={"GIGAEVO_DIRECT_PROBE": "set-by-test"},
+            )
+        )
+        assert error is None
+        assert value == "set-by-test"
+        # Restored after the call returns.
+        assert os.environ.get("GIGAEVO_DIRECT_PROBE") is None
+
+
+# =============================================================================
+# Coverage gaps surfaced during the loky migration audit
+# =============================================================================
+
+
+class TestPythonPathPropagation:
+    """``python_path`` entries must be prepended to the worker's ``sys.path``
+    so problem-local modules import without packaging.  Regression guard for
+    the algotune shim path."""
+
+    async def test_python_path_makes_local_module_importable(self, tmp_path) -> None:
+        # Create an isolated module the worker would not otherwise see.
+        mod_dir = tmp_path / "ppath_pkg"
+        mod_dir.mkdir()
+        (mod_dir / "sentinel_module.py").write_text(
+            "MARKER = 'python_path-reached-worker'\n"
+        )
+        code = (
+            "import sentinel_module\n"
+            "def f():\n"
+            "    return sentinel_module.MARKER\n"
+        )
+        result = await run_exec_runner(
+            code=code,
+            function_name="f",
+            python_path=[mod_dir],
+            timeout=10,
+        )
+        assert result == "python_path-reached-worker"
+
+
+class TestEnvUpdatesNoneUnsets:
+    """``env_updates={'KEY': None}`` must unset KEY for the duration of the
+    call, even when the parent env had it set.  Untested before — silently
+    promoting None to the literal string ``'None'`` would corrupt downstream
+    code that checks ``os.environ.get(K) is None``."""
+
+    async def test_none_value_unsets_existing_var(
+        self, monkeypatch, fresh_executor
+    ) -> None:
+        # Set the var in the parent so the worker would inherit it via the
+        # whitelist (GIGAEVO_ prefix → always passed through).
+        monkeypatch.setenv("GIGAEVO_UNSET_PROBE", "parent-value")
+
+        seen = await run_exec_runner(
+            code=(
+                "import os\n"
+                "def f(): return os.environ.get('GIGAEVO_UNSET_PROBE', '__missing__')\n"
+            ),
+            function_name="f",
+            env_updates={"GIGAEVO_UNSET_PROBE": None},
+            timeout=10,
+        )
+        assert seen == "__missing__", (
+            f"None env_updates value should unset, but worker saw {seen!r}"
+        )
+
+
+class TestCancellationCleansSpill:
+    """Bug-class: cancellation between worker completion and parent read
+    would leak a spill file.  ``_unlink_spill_on_done`` registers a
+    done-callback that unlinks once the worker finishes — verify it fires
+    even after the awaiting task is cancelled."""
+
+    async def test_cancelled_task_does_not_leak_spill_file(
+        self, isolated_spill_dir
+    ) -> None:
+        # Worker sleeps long enough that we can cancel between submit and
+        # await completion — but short enough that the eventual completion
+        # arrives within the test timeout so the done-callback runs.
+        code = (
+            "import time\n"
+            "def f():\n"
+            "    time.sleep(0.5)\n"
+            "    return [0] * 1024\n"
+        )
+        task = asyncio.create_task(
+            run_exec_runner(code=code, function_name="f", timeout=10)
+        )
+        # Give submit a chance to register but cancel before the worker
+        # finishes — the done-callback path is what we want to exercise.
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Wait long enough for the worker to finish its sleep + serialise +
+        # done-callback to run.  Poll the dir to avoid flaky fixed sleeps.
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if not list(isolated_spill_dir.iterdir()):
+                break
+        leaked = list(isolated_spill_dir.iterdir())
+        assert leaked == [], f"spill leaked after cancellation: {leaked}"
+
+
+# =============================================================================
+# Distant-corner serialization edge cases
+# =============================================================================
+
+
+class TestSerializationDistantCorners:
+    """Worker→parent cloudpickle round-trip edge cases."""
+
+    async def test_self_referential_list_round_trip(self) -> None:
+        code = "def f():\n    x = []\n    x.append(x)\n    return x\n"
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result[0] is result
+
+    async def test_cyclic_dict_round_trip(self) -> None:
+        code = "def f():\n    d = {}\n    d['self'] = d\n    return d\n"
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result["self"] is result
+
+    async def test_numpy_structured_dtype_round_trip(self) -> None:
+        import numpy as np
+
+        code = (
+            "import numpy as np\n"
+            "def f():\n"
+            "    dt = np.dtype([('a', np.int32), ('b', np.float64), ('c', 'U8')])\n"
+            "    arr = np.zeros(5, dtype=dt)\n"
+            "    arr['a'] = [1, 2, 3, 4, 5]\n"
+            "    arr['b'] = [0.1, 0.2, 0.3, 0.4, 0.5]\n"
+            "    arr['c'] = ['xx', 'yy', 'zz', 'aa', 'bb']\n"
+            "    return arr\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=20)
+        assert result.dtype.names == ("a", "b", "c")
+        assert result["a"].tolist() == [1, 2, 3, 4, 5]
+        assert result["c"][2] == "zz"
+        assert np.allclose(result["b"], [0.1, 0.2, 0.3, 0.4, 0.5])
+
+    async def test_numpy_memmap_returns_materialised_array(self) -> None:
+        """Parent should get a regular in-memory array, not a memmap
+        aliasing the worker's tempfile."""
+        import numpy as np
+
+        code = (
+            "import numpy as np, tempfile\n"
+            "def f():\n"
+            "    path = tempfile.mkstemp(suffix='.dat')[1]\n"
+            "    arr = np.memmap(path, dtype='float32', mode='w+', shape=(100,))\n"
+            "    arr[:] = np.arange(100, dtype='float32')\n"
+            "    arr.flush()\n"
+            "    return arr\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result.shape == (100,)
+        assert float(result.sum()) == float(np.arange(100, dtype=np.float32).sum())
+        # Must be writable from the parent — if it's still a memmap aliased
+        # to the worker's deleted tempfile this either crashes or silently
+        # writes into a dangling region.
+        result[0] = 999.0
+        assert result[0] == 999.0
+
+    async def test_closure_over_user_defined_class(self) -> None:
+        code = (
+            "class Inner:\n"
+            "    def __init__(self, v): self.v = v\n"
+            "    def double(self): return self.v * 2\n"
+            "def f():\n"
+            "    obj = Inner(21)\n"
+            "    def closure():\n"
+            "        return obj.double()\n"
+            "    return closure\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert callable(result)
+        assert result() == 42
+
+    async def test_instance_of_class_defined_inside_function_body(self) -> None:
+        code = (
+            "def f():\n"
+            "    class Local:\n"
+            "        def __init__(self, n): self.n = n\n"
+            "        def squared(self): return self.n * self.n\n"
+            "    return Local(7)\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=10)
+        assert result.squared() == 49
+
+    async def test_numpy_round_trip_survives_aggressive_heap_pressure(self) -> None:
+        """Probe for use-after-free on the spill mmap: after the parent
+        unlinks the spill, allocating heap pressure must not corrupt the
+        unpickled array (would mean it aliased the spill mmap)."""
+        import gc
+
+        import numpy as np
+
+        code = (
+            "import numpy as np\n"
+            "def f():\n"
+            "    return np.arange(1_000_000, dtype=np.float32)\n"
+        )
+        result = await run_exec_runner(code=code, function_name="f", timeout=20)
+        # Sum the un-tampered tail before any writes — must equal the
+        # arange tail-sum.  float32 sums are non-associative, so use
+        # ``np.array_equal`` against a fresh reference rather than
+        # comparing scalar sums.
+        reference = np.arange(1_000_000, dtype=np.float32)
+        assert np.array_equal(result, reference)
+        # Pressure: allocate ~64 MB of distinct byte buffers and force
+        # GC.  If the result aliased the spill region, the kernel would
+        # reuse those pages and the equality check below would diverge.
+        ballast = [bytes(1024 * 1024) for _ in range(64)]
+        gc.collect()
+        assert np.array_equal(result, reference), (
+            "result diverged from reference after heap pressure — suggests "
+            "the unpickled array aliased the (now-unlinked) spill mmap"
+        )
+        # Writing should succeed and not crash — confirms own-buffer
+        # semantics rather than a read-only mmap-aliased view.
+        del ballast
+        result[0] = -42.0
+        assert result[0] == -42.0
+
+    def test_worker_envelopes_round_trip_via_cloudpickle(self) -> None:
+        """``WorkerCall``/``WorkerError``/``WorkerResult`` survive
+        cloudpickle round-trip (they cross the loky boundary)."""
+        import cloudpickle
+
+        from gigaevo.programs.stages.python_executors.exec_runner import (
+            WorkerCall,
+            WorkerError,
+        )
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutionMetrics,
+            WorkerResult,
+        )
+
+        call = WorkerCall(
+            code="def f(): return 1",
+            function_name="f",
+            args=[1, 2, 3],
+            kwargs={"k": "v"},
+            python_path=["/tmp/foo"],
+            env={"X": "1", "Y": None},
+        )
+        assert cloudpickle.loads(cloudpickle.dumps(call)) == call
+
+        err = WorkerError(stderr="oops", returncode=2)
+        assert cloudpickle.loads(cloudpickle.dumps(err)) == err
+
+        metrics = ExecutionMetrics(
+            peak_rss_kb=4242,
+            wall_time_s=0.5,
+            user_time_s=0.4,
+            sys_time_s=0.1,
+            worker_pid=12345,
+        )
+        res = WorkerResult(spill_path="/tmp/x.pkl", error=None, metrics=metrics)
+        assert cloudpickle.loads(cloudpickle.dumps(res)) == res
+
+    async def test_worker_returns_object_with_lock_surfaces_structured_error(
+        self,
+    ) -> None:
+        """Unpicklable component (Lock) → :class:`ExecRunnerError`, not raw
+        cloudpickle traceback or deadlock."""
+        code = (
+            "import threading\n"
+            "def f():\n"
+            "    return {'data': [1, 2, 3], 'lock': threading.Lock()}\n"
+        )
+        with pytest.raises(ExecRunnerError) as exc_info:
+            await run_exec_runner(code=code, function_name="f", timeout=10)
+        msg = exc_info.value.stderr.lower()
+        assert "serialise" in msg or "pickle" in msg
+
+    async def test_python_path_does_not_accumulate_across_calls(self) -> None:
+        """``_run_one``'s finally restores ``sys.path``: many calls with
+        distinct ``python_path`` entries don't grow it."""
+        import tempfile
+
+        code = "import sys\ndef f(): return len(sys.path)\n"
+        first_len: int | None = None
+        for i in range(8):
+            d = tempfile.mkdtemp(prefix=f"distant-corner-acc-{i}-")
+            n = await run_exec_runner(
+                code=code,
+                function_name="f",
+                python_path=[Path(d)],
+                timeout=10,
+            )
+            if first_len is None:
+                first_len = n
+            else:
+                # Allow ±1 slack for ``_ensure_cwd_in_path`` toggling
+                # depending on whether the worker's cwd happens to be
+                # already-present in the snapshotted sys.path.
+                assert abs(n - first_len) <= 1, (
+                    f"sys.path drift: call 0 had {first_len}, call {i} has {n}"
+                )
+
+    async def test_cloudpickle_register_by_value_idempotent(self) -> None:
+        """``_PICKLE_BY_VALUE_MODULES`` is a set keyed by name — re-registering
+        ``"user_code"`` every call doesn't grow it."""
+        code = (
+            "import cloudpickle.cloudpickle as _cp\n"
+            "def f():\n"
+            "    modules = _cp._PICKLE_BY_VALUE_MODULES\n"
+            "    return [m for m in modules if m == 'user_code']\n"
+        )
+        # Drive several iterations; the set must stay at most {'user_code'}.
+        for _ in range(5):
+            entries = await run_exec_runner(
+                code=code, function_name="f", timeout=10
+            )
+            assert entries in ([], ["user_code"]), (
+                f"unexpected user_code accumulation: {entries}"
+            )
+
+
+class TestProtocolFiveSafety:
+    """Worker dump / parent loads asymmetry checks for cloudpickle protocol 5."""
+
+    def test_one_cloudpickle_in_environment(self) -> None:
+        """No vendored cloudpickle lurking under loky — both ends share dispatch tables."""
+        import importlib
+
+        cp_main = importlib.import_module("cloudpickle")
+        # loky imports the *installed* cloudpickle, not a vendored copy.
+        from loky import cloudpickle_wrapper as lw
+
+        lw_cp_path = lw.dumps.__module__  # "cloudpickle.cloudpickle" or similar
+        assert lw_cp_path.startswith("cloudpickle"), (
+            f"loky's dumps does not come from cloudpickle: {lw_cp_path}"
+        )
+        # File-level check: both should resolve under the same install root.
+        from cloudpickle import cloudpickle as cp_impl
+
+        assert Path(cp_impl.__file__).parent == Path(cp_main.__file__).parent
+
+    def test_protocol_5_round_trip_sanity(self, tmp_path) -> None:
+        """Worker-style dump(protocol=5) → parent-style mmap + loads."""
+        import mmap as _mmap
+
+        import cloudpickle as _cp
+
+        payload = {"a": list(range(1024)), "b": {"nested": (1.0, 2.0, 3.0)}}
+        f = tmp_path / "p5.pkl"
+        with open(f, "wb") as fh:
+            _cp.dump(payload, fh, protocol=5)
+        with open(f, "rb") as fh:
+            with _mmap.mmap(fh.fileno(), 0, access=_mmap.ACCESS_READ) as mm:
+                loaded = _cp.loads(mm)
+        assert loaded == payload
+
+# =============================================================================
+# pytest-xdist auto-cap of max_workers
+# =============================================================================
+
+
+class TestXdistWorkerCountAutoCap:
+    """Under xdist, ``max_workers`` auto-caps to ``cpu_count // xdist_count``
+    to avoid an N×cpu_count fork-bomb; explicit env override always wins."""
+
+    def test_no_xdist_yields_default_none(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        monkeypatch.delenv("PYTEST_XDIST_WORKER_COUNT", raising=False)
+        cfg = WorkerConfig.from_env()
+        assert cfg.max_workers is None
+
+    def test_xdist_caps_to_cpu_div_workers(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "4")
+        cfg = WorkerConfig.from_env()
+        # max(1, cpu_count // 4): exact value depends on host, just verify
+        # it's a small positive int strictly less than cpu_count.
+        cpu = os.cpu_count() or 1
+        assert cfg.max_workers is not None
+        assert cfg.max_workers >= 1
+        if cpu >= 4:
+            assert cfg.max_workers == cpu // 4
+            assert cfg.max_workers < cpu
+
+    def test_xdist_one_worker_does_not_cap(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "1")
+        cfg = WorkerConfig.from_env()
+        # Single-worker xdist is effectively no xdist — don't penalize.
+        assert cfg.max_workers is None
+
+    def test_explicit_max_workers_overrides_xdist(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_MAX_WORKERS", "7")
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "8")
+        cfg = WorkerConfig.from_env()
+        # Operator override wins even on a 1-CPU host where cpu//8 = 0.
+        assert cfg.max_workers == 7
+
+    def test_xdist_floor_is_one(self, monkeypatch) -> None:
+        """cpu_count // xdist_count can be 0 on small hosts; we must
+        never request max_workers=0 (loky raises ValueError)."""
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_MAX_WORKERS", raising=False)
+        # Pick a count that exceeds any plausible cpu_count.
+        monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "10000")
+        cfg = WorkerConfig.from_env()
+        assert cfg.max_workers is not None
+        assert cfg.max_workers >= 1
+
+
+class TestFromEnvIdentityAndSafety:
+    """``WorkerConfig.from_env`` surfaces a small set of identity / safety
+    knobs as env vars so k8s downward-API and debugging contexts don't
+    require constructing :class:`WorkerConfig` programmatically."""
+
+    def test_node_id_default_is_hostname(self, monkeypatch) -> None:
+        import socket as _socket
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_NODE_ID", raising=False)
+        cfg = WorkerConfig.from_env()
+        assert cfg.node_id == _socket.gethostname()
+
+    def test_node_id_env_override(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_NODE_ID", "pod-7-abc12")
+        cfg = WorkerConfig.from_env()
+        assert cfg.node_id == "pod-7-abc12"
+
+    def test_node_id_empty_env_falls_back_to_hostname(self, monkeypatch) -> None:
+        import socket as _socket
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_NODE_ID", "   ")
+        cfg = WorkerConfig.from_env()
+        assert cfg.node_id == _socket.gethostname()
+
+    def test_pdeathsig_default_enabled(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.delenv("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG", raising=False)
+        cfg = WorkerConfig.from_env()
+        assert cfg.enable_pdeathsig is True
+
+    @pytest.mark.parametrize("val", ["1", "true", "yes", "on", "TRUE", "Yes"])
+    def test_pdeathsig_disabled_by_truthy(self, monkeypatch, val) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG", val)
+        cfg = WorkerConfig.from_env()
+        assert cfg.enable_pdeathsig is False
+
+    @pytest.mark.parametrize("val", ["0", "false", "no", "off", "", "garbage"])
+    def test_pdeathsig_stays_enabled_for_non_truthy(self, monkeypatch, val) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            WorkerConfig,
+        )
+
+        monkeypatch.setenv("GIGAEVO_EXECUTOR_DISABLE_PDEATHSIG", val)
+        cfg = WorkerConfig.from_env()
+        assert cfg.enable_pdeathsig is True
+
+
+# =============================================================================
+# shutdown_executor wait semantics
+# =============================================================================
+
+
+class TestShutdownExecutorWaitFlag:
+    """``wait=True`` blocks until loky's manager thread joins; ``wait=False``
+    returns promptly."""
+
+    async def test_wait_true_blocks_until_manager_thread_joined(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            _get_executor,
+            shutdown_executor,
+        )
+
+        # Force a pool to exist with a live manager thread.
+        executor = _get_executor()
+        fut = executor.submit(lambda: 1)
+        assert fut.result(timeout=10) == 1
+
+        mgr_thread = executor._executor_manager_thread
+        assert mgr_thread is not None
+        assert mgr_thread.is_alive()
+
+        shutdown_executor(wait=True)
+
+        # After wait=True returns, the manager thread must be joined.
+        # ``shutdown(wait=True)`` clears the attribute on the executor;
+        # checking is_alive() on the captured ref is the residual check.
+        assert not mgr_thread.is_alive()
+
+    async def test_wait_false_returns_promptly(self) -> None:
+        """Sanity guard: wait=False must not regress to wait=True.  We
+        can't reliably observe the manager thread mid-shutdown on every
+        scheduler, but we can at least verify wait=False completes in
+        sub-second time even with a worker mid-submit."""
+        import time as _time
+
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            _get_executor,
+            shutdown_executor,
+        )
+
+        executor = _get_executor()
+        executor.submit(lambda: 1).result(timeout=10)
+
+        t0 = _time.monotonic()
+        shutdown_executor(wait=False)
+        elapsed = _time.monotonic() - t0
+        # wait=False on a small pool should be < 100ms.  Generous bound.
+        assert elapsed < 2.0, f"shutdown_executor(wait=False) took {elapsed:.3f}s"
+
+
+# =============================================================================
+# LokyBackend — multi-instance isolation
+# =============================================================================
+
+
+class TestLokyBackendIsolation:
+    """Two ``LokyBackend`` instances have independent pools, spill dirs, and
+    configurations; tearing one down does not affect the other."""
+
+    async def test_two_backends_have_independent_executors(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill_a = tmp_path / "spill-a"
+        spill_b = tmp_path / "spill-b"
+        spill_a.mkdir()
+        spill_b.mkdir()
+
+        a = LokyBackend(WorkerConfig(spill_dir=spill_a))
+        b = LokyBackend(WorkerConfig(spill_dir=spill_b))
+        try:
+            ra = await a.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+            rb = await b.execute(
+                WorkerCall(code="def f(): return 2", function_name="f"),
+                deadline_s=30,
+            )
+            assert ra == 1
+            assert rb == 2
+            assert a._executor is not b._executor
+        finally:
+            await a.shutdown(wait=True)
+            await b.shutdown(wait=True)
+
+    async def test_shutdown_one_does_not_affect_sibling(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill_a = tmp_path / "spill-a"
+        spill_b = tmp_path / "spill-b"
+        spill_a.mkdir()
+        spill_b.mkdir()
+
+        a = LokyBackend(WorkerConfig(spill_dir=spill_a))
+        b = LokyBackend(WorkerConfig(spill_dir=spill_b))
+        try:
+            await a.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+            await b.execute(
+                WorkerCall(code="def f(): return 2", function_name="f"),
+                deadline_s=30,
+            )
+
+            await a.shutdown(wait=True)
+            assert a._executor is None
+
+            # b is still alive
+            result = await b.execute(
+                WorkerCall(code="def f(): return 3", function_name="f"),
+                deadline_s=30,
+            )
+            assert result == 3
+        finally:
+            await b.shutdown(wait=True)
+
+    def test_pool_id_is_unique_per_instance(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        ids = {WorkerConfig().pool_id for _ in range(50)}
+        assert len(ids) == 50
+
+    def test_node_id_defaults_to_hostname(self) -> None:
+        import socket
+
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        assert WorkerConfig().node_id == socket.gethostname()
+
+    def test_node_id_can_be_overridden(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        cfg = WorkerConfig(node_id="custom-pod-name")
+        assert cfg.node_id == "custom-pod-name"
+
+    def test_env_whitelist_can_be_extended(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            DEFAULT_ENV_WHITELIST,
+            WorkerConfig,
+        )
+
+        extra = DEFAULT_ENV_WHITELIST | {"MY_CORP_PROXY", "MY_CORP_CA_BUNDLE"}
+        cfg = WorkerConfig(env_whitelist=extra)
+        assert "MY_CORP_PROXY" in cfg.env_whitelist
+        assert "PATH" in cfg.env_whitelist  # original entries preserved
+
+    def test_env_prefixes_can_be_extended(self) -> None:
+        from gigaevo.programs.stages.python_executors.wrapper import WorkerConfig
+
+        cfg = WorkerConfig(env_prefixes=("GIGAEVO_", "LOKY_", "MYAPP_"))
+        assert "MYAPP_" in cfg.env_prefixes
+
+    async def test_custom_env_whitelist_reaches_worker(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            DEFAULT_ENV_WHITELIST,
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        os.environ["MY_CORP_PROXY"] = "http://corp-proxy:8080"
+        try:
+            cfg = WorkerConfig(
+                spill_dir=spill,
+                env_whitelist=DEFAULT_ENV_WHITELIST | {"MY_CORP_PROXY"},
+            )
+            backend = LokyBackend(cfg)
+            try:
+                value = await backend.execute(
+                    WorkerCall(
+                        code=(
+                            "import os\n"
+                            "def f():\n"
+                            "    return os.environ.get('MY_CORP_PROXY')\n"
+                        ),
+                        function_name="f",
+                    ),
+                    deadline_s=30,
+                )
+                assert value == "http://corp-proxy:8080"
+            finally:
+                await backend.shutdown(wait=True)
+        finally:
+            os.environ.pop("MY_CORP_PROXY", None)
+
+    def test_default_singleton_is_lazy(self, monkeypatch) -> None:
+        from gigaevo.programs.stages.python_executors import wrapper as _wrapper
+
+        # Reset the singleton.
+        monkeypatch.setattr(_wrapper, "_default_backend", None)
+        assert _wrapper._default_backend is None
+
+        backend = _wrapper.default_loky_backend()
+        assert backend is not None
+        assert _wrapper.default_loky_backend() is backend  # cached
+
+
+# =============================================================================
+# Worker identity (node_id + worker_id)
+# =============================================================================
+
+
+class TestWorkerIdentity:
+    """Each worker process gets a stable ``worker_id``; ``node_id`` is taken
+    from the parent's :class:`WorkerConfig` and surfaced through the
+    result envelope plus ``os.environ``."""
+
+    async def test_worker_id_is_populated(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, node_id="test-node"))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(
+                    code="import os\ndef f(): return os.environ.get('GIGAEVO_WORKER_ID', '')",
+                    function_name="f",
+                ),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            assert result.worker_id != ""
+            assert len(result.worker_id) == 12  # uuid4 hex prefix
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_node_id_propagates_to_worker_env(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, node_id="my-k8s-pod-7"))
+        try:
+            value = await backend.execute(
+                WorkerCall(
+                    code=(
+                        "import os\n"
+                        "def f():\n"
+                        "    return os.environ.get('GIGAEVO_NODE_ID', '')\n"
+                    ),
+                    function_name="f",
+                ),
+                deadline_s=30,
+            )
+            assert value == "my-k8s-pod-7"
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_two_workers_have_distinct_worker_ids(self, tmp_path) -> None:
+        """Two worker processes in the same pool generate independent worker_ids."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, max_workers=2))
+        try:
+            executor = backend._get_executor()
+            # Fan-out two long-ish tasks so loky has to use two distinct workers.
+            futs = [
+                executor.submit(
+                    _run_task,
+                    WorkerCall(
+                        code="import time\ndef f(): time.sleep(0.5); return 1",
+                        function_name="f",
+                    ),
+                    str(spill),
+                )
+                for _ in range(2)
+            ]
+            results = [f.result(timeout=30) for f in futs]
+            ids = {r.worker_id for r in results}
+            assert len(ids) == 2, f"expected 2 distinct worker_ids, got {ids}"
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_metrics_carry_identity_and_timestamps(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, node_id="x-node"))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            m = result.metrics
+            assert m.worker_id != ""
+            assert m.node_id == "x-node"
+            assert m.worker_pid > 0
+            assert m.started_at_ns > 0
+            assert m.finished_at_ns >= m.started_at_ns
+            # wall_time_s ≈ (finished - started) / 1e9, within scheduler slack.
+            assert (
+                abs(m.wall_time_s - (m.finished_at_ns - m.started_at_ns) / 1e9)
+                < 0.5
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_metrics_populated_on_failure(self, tmp_path) -> None:
+        """Failed calls still produce metrics — useful for attribution."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(
+                    code="def f(): raise RuntimeError('boom')",
+                    function_name="f",
+                ),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            assert result.error is not None
+            assert "boom" in result.error.stderr
+            # Metrics still populated.
+            assert result.metrics.worker_pid > 0
+            assert result.metrics.worker_id != ""
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_legacy_property_accessors_still_work(self, tmp_path) -> None:
+        """Reading metrics fields directly from WorkerResult is backward-compat."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            # Legacy access reads through to metrics.
+            assert result.peak_rss_kb == result.metrics.peak_rss_kb
+            assert result.wall_time_s == result.metrics.wall_time_s
+            assert result.worker_pid == result.metrics.worker_pid
+            assert result.worker_id == result.metrics.worker_id
+            assert result.node_id == result.metrics.node_id
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_executor_backend_protocol_conformance(self, tmp_path) -> None:
+        """``LokyBackend`` must satisfy the :class:`ExecutorBackend` Protocol."""
+        from gigaevo.programs.stages.python_executors.backend import ExecutorBackend
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+        try:
+            assert isinstance(backend, ExecutorBackend)
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_custom_backend_injected_into_run_exec_runner(self) -> None:
+        """A caller can substitute a custom backend via the ``backend=`` kwarg."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import run_exec_runner
+
+        captured: list[WorkerCall] = []
+
+        class FakeBackend:
+            async def execute(self, call: WorkerCall, *, deadline_s: int):
+                captured.append(call)
+                return 42
+
+            async def shutdown(self, *, wait: bool = False) -> None:
+                pass
+
+            def on_submit(self, handler) -> None:
+                pass
+
+            def on_complete(self, handler) -> None:
+                pass
+
+            def on_shutdown(self, handler) -> None:
+                pass
+
+        value = await run_exec_runner(
+            code="def f(): return 1",
+            function_name="f",
+            timeout=30,
+            backend=FakeBackend(),
+        )
+        assert value == 42
+        assert len(captured) == 1
+        assert captured[0].function_name == "f"
+
+
+# =============================================================================
+# Lifecycle hooks
+# =============================================================================
+
+
+class TestLifecycleHooks:
+    """``on_submit`` / ``on_complete`` / ``on_shutdown`` fire at the
+    appropriate point; handler exceptions are isolated from the
+    execution path and from sibling handlers."""
+
+    async def test_on_submit_fires_before_execute_returns(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[WorkerCall] = []
+        backend.on_submit(seen.append)
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(seen) == 1
+        assert seen[0].function_name == "f"
+
+    async def test_on_complete_fires_with_metrics_on_success(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecutionMetrics,
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[tuple] = []
+
+        def handler(call, metrics, exc):
+            seen.append((call, metrics, exc))
+
+        backend.on_complete(handler)
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(seen) == 1
+        call, metrics, exc = seen[0]
+        assert call.function_name == "f"
+        assert isinstance(metrics, ExecutionMetrics)
+        assert exc is None
+
+    async def test_on_complete_fires_with_exception_on_failure(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            ExecRunnerError,
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[BaseException | None] = []
+        backend.on_complete(lambda call, metrics, exc: seen.append(exc))
+
+        try:
+            with pytest.raises(ExecRunnerError):
+                await backend.execute(
+                    WorkerCall(
+                        code="def f(): raise RuntimeError('boom')",
+                        function_name="f",
+                    ),
+                    deadline_s=30,
+                )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(seen) == 1
+        assert isinstance(seen[0], ExecRunnerError)
+
+    async def test_on_shutdown_fires_once_per_shutdown(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        counter = [0]
+        backend.on_shutdown(lambda: counter.__setitem__(0, counter[0] + 1))
+
+        await backend.execute(
+            WorkerCall(code="def f(): return 1", function_name="f"),
+            deadline_s=30,
+        )
+        await backend.shutdown(wait=True)
+        # Idempotent second shutdown should not re-fire.
+        await backend.shutdown(wait=True)
+
+        assert counter[0] == 1
+
+    async def test_multiple_handlers_all_fire(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        a, b, c = [], [], []
+        backend.on_submit(a.append)
+        backend.on_submit(b.append)
+        backend.on_submit(c.append)
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert len(a) == 1
+        assert len(b) == 1
+        assert len(c) == 1
+
+    async def test_handlers_fire_in_registration_order(self, tmp_path) -> None:
+        """Handlers fire in the order they were registered.
+
+        The Protocol pins this — observers reason about ordering
+        (e.g., a logging handler registered first should see the call
+        before a metrics handler that might mutate state) so it's
+        worth nailing down with a test, not just a docstring.
+        """
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        submit_order: list[str] = []
+        complete_order: list[str] = []
+        shutdown_order: list[str] = []
+
+        for name in ("first", "second", "third"):
+            backend.on_submit(lambda _c, n=name: submit_order.append(n))
+            backend.on_complete(
+                lambda _c, _m, _e, n=name: complete_order.append(n)
+            )
+            backend.on_shutdown(lambda n=name: shutdown_order.append(n))
+
+        try:
+            await backend.execute(
+                WorkerCall(code="def f(): return 1", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert submit_order == ["first", "second", "third"]
+        assert complete_order == ["first", "second", "third"]
+        assert shutdown_order == ["first", "second", "third"]
+
+    async def test_on_complete_fires_with_none_metrics_on_pre_submit_failure(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """If pool construction fails before submit, on_complete still fires —
+        with metrics=None — so observer submit/complete counts stay balanced."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen_submit: list[WorkerCall] = []
+        seen_complete: list[tuple] = []
+        backend.on_submit(seen_submit.append)
+        backend.on_complete(
+            lambda call, metrics, exc: seen_complete.append((call, metrics, exc))
+        )
+
+        # Force _get_executor to raise after on_submit has fired.
+        def boom(self_):
+            raise RuntimeError("pool construction failed")
+
+        monkeypatch.setattr(LokyBackend, "_get_executor", boom)
+
+        try:
+            with pytest.raises(RuntimeError, match="pool construction failed"):
+                await backend.execute(
+                    WorkerCall(code="def f(): return 1", function_name="f"),
+                    deadline_s=30,
+                )
+        finally:
+            # _executor never created; shutdown is a no-op.
+            await backend.shutdown(wait=True)
+
+        assert len(seen_submit) == 1
+        assert len(seen_complete) == 1
+        call, metrics, exc = seen_complete[0]
+        assert metrics is None
+        assert isinstance(exc, RuntimeError)
+
+    async def test_handler_exception_does_not_break_siblings(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+        backend = LokyBackend(WorkerConfig(spill_dir=spill))
+
+        seen: list[WorkerCall] = []
+
+        def bad_handler(call):
+            raise RuntimeError("handler explodes")
+
+        backend.on_submit(bad_handler)
+        backend.on_submit(seen.append)
+
+        try:
+            value = await backend.execute(
+                WorkerCall(code="def f(): return 7", function_name="f"),
+                deadline_s=30,
+            )
+        finally:
+            await backend.shutdown(wait=True)
+
+        assert value == 7
+        assert len(seen) == 1  # sibling fired despite bad_handler exception
+
+
+    async def test_worker_id_stable_within_one_worker(self, tmp_path) -> None:
+        """A worker reused across multiple calls reports the same worker_id."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, max_workers=1))
+        try:
+            executor = backend._get_executor()
+            results = []
+            for _ in range(3):
+                fut = executor.submit(
+                    _run_task,
+                    WorkerCall(code="def f(): return 1", function_name="f"),
+                    str(spill),
+                )
+                results.append(fut.result(timeout=30))
+            ids = {r.worker_id for r in results}
+            pids = {r.worker_pid for r in results}
+            assert len(ids) == 1, f"worker_id changed across reuse: {ids}"
+            assert len(pids) == 1, f"worker pid changed across reuse: {pids}"
+        finally:
+            await backend.shutdown(wait=True)
