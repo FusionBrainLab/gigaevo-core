@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
@@ -761,9 +762,9 @@ class TestStreamOperations:
 
         r.xread = broken_xread
 
-        start = asyncio.get_event_loop().time()
+        start = time.monotonic()
         await fakeredis_storage.wait_for_activity(timeout=0.05)
-        elapsed = asyncio.get_event_loop().time() - start
+        elapsed = time.monotonic() - start
         # Should have fallen back to asyncio.sleep(0.05)
         assert elapsed >= 0.04
 

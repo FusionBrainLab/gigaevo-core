@@ -306,8 +306,13 @@ class TestPromptEvolutionPipelineConfig:
 
 
 def _run(coro):
-    """Helper to run async tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Helper to run async tests.
+
+    ``asyncio.run`` creates a fresh event loop per call and cleans it up,
+    avoiding the ``DeprecationWarning`` (3.12) / hard removal (3.13) of
+    the implicit-loop case in ``asyncio.get_event_loop()``.
+    """
+    return asyncio.run(coro)
 
 
 def _make_program(code: str) -> Program:
