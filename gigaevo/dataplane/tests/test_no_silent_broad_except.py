@@ -38,19 +38,23 @@ def _python_files() -> list[Path]:
     return out
 
 
-def _line_has_marker(source_lines: list[str], lineno: int) -> bool:
-    """True if ``source_lines[lineno - 1]`` carries the noqa marker.
+def _line_has_marker(
+    source_lines: list[str], lineno: int, end_lineno: int | None = None
+) -> bool:
+    """True if any line in the ``except`` clause carries the noqa marker.
 
-    Handles multi-line ``except`` clauses by walking forward until a
-    non-blank line is found (typical ruff convention places the noqa
-    on the same line as the ``except`` keyword, but defensive handling
-    avoids false positives if a future formatter wraps the line).
+    A single-line clause has ``end_lineno == lineno`` and only one line
+    to inspect. A wrapped clause such as ``except (A, Exception):`` spans
+    several physical lines; ruff convention places the noqa on the line
+    closing the parenthesised tuple, so the full span ``lineno
+    .. end_lineno`` is checked.
     """
-    if 1 <= lineno <= len(source_lines):
-        line = source_lines[lineno - 1]
-        if _NOQA_MARKER in line:
-            return True
-    return False
+    if end_lineno is None or end_lineno < lineno:
+        end_lineno = lineno
+    if not 1 <= lineno <= len(source_lines):
+        return False
+    upper = min(end_lineno, len(source_lines))
+    return any(_NOQA_MARKER in source_lines[i - 1] for i in range(lineno, upper + 1))
 
 
 def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
@@ -99,7 +103,7 @@ def test_broad_except_requires_noqa_marker() -> None:
                 continue
             if not _is_broad_handler(node):
                 continue
-            if not _line_has_marker(lines, node.lineno):
+            if not _line_has_marker(lines, node.lineno, node.end_lineno):
                 offenders.append(
                     f"{path}:{node.lineno}: broad `except` without "
                     f"`# {_NOQA_MARKER}` rationale marker"
@@ -109,3 +113,65 @@ def test_broad_except_requires_noqa_marker() -> None:
         "marker. Either narrow the exception class or annotate the site:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def _scan_source(source: str) -> list[tuple[int, str]]:
+    """Run the same checks against an in-memory source; return offenders.
+
+    Used by the self-tests to verify the discipline fires on known-bad
+    constructs without writing temporary files to the dataplane tree.
+    """
+    out: list[tuple[int, str]] = []
+    lines = source.splitlines()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        if node.type is None:
+            out.append((node.lineno, "bare"))
+            continue
+        if _is_broad_handler(node) and not _line_has_marker(
+            lines, node.lineno, node.end_lineno
+        ):
+            out.append((node.lineno, "broad"))
+    return out
+
+
+class TestSelfChecks:
+    """The guard catches the violations it claims to catch."""
+
+    def test_bare_except_caught(self) -> None:
+        src = "try:\n    pass\nexcept:\n    pass\n"
+        assert _scan_source(src) == [(3, "bare")]
+
+    def test_broad_except_without_marker_caught(self) -> None:
+        src = "try:\n    pass\nexcept Exception:\n    pass\n"
+        assert _scan_source(src) == [(3, "broad")]
+
+    def test_broad_except_with_marker_accepted(self) -> None:
+        src = "try:\n    pass\nexcept Exception:  # noqa: BLE001\n    pass\n"
+        assert _scan_source(src) == []
+
+    def test_broad_except_tuple_form_caught(self) -> None:
+        src = "try:\n    pass\nexcept (ValueError, Exception):\n    pass\n"
+        assert _scan_source(src) == [(3, "broad")]
+
+    def test_multiline_tuple_marker_on_closing_paren_accepted(self) -> None:
+        src = (
+            "try:\n"
+            "    pass\n"
+            "except (\n"
+            "    ValueError,\n"
+            "    Exception,\n"
+            "):  # noqa: BLE001\n"
+            "    pass\n"
+        )
+        assert _scan_source(src) == []
+
+    def test_baseexception_caught(self) -> None:
+        src = "try:\n    pass\nexcept BaseException:\n    pass\n"
+        assert _scan_source(src) == [(3, "broad")]
+
+    def test_narrow_except_unaffected(self) -> None:
+        src = "try:\n    pass\nexcept ValueError:\n    pass\n"
+        assert _scan_source(src) == []

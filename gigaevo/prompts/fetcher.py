@@ -1,8 +1,8 @@
 """PromptFetcher abstraction for decoupling prompt acquisition from LLM agents.
 
 Two concrete implementations:
-  - FixedDirPromptFetcher: reads from a directory or package defaults (current behavior)
-  - GigaEvoArchivePromptFetcher: reads champion from a co-evolving GigaEvo archive
+  - FixedDirPromptFetcher: reads from a directory or package defaults.
+  - GigaEvoArchivePromptFetcher: reads champion from a co-evolving GigaEvo archive.
 """
 
 from __future__ import annotations
@@ -65,10 +65,9 @@ class FetchedPrompt:
 class PromptFetcher(ABC):
     """Abstracts how a system/user prompt is obtained by an LLM agent.
 
-    Replaces prompts_dir: str | Path | None throughout agent factories.
     Two concrete implementations:
-      - FixedDirPromptFetcher: reads from files (default, current behavior)
-      - GigaEvoArchivePromptFetcher: reads champion from a co-evolving GigaEvo archive
+      - FixedDirPromptFetcher: reads from files (default).
+      - GigaEvoArchivePromptFetcher: reads champion from a co-evolving GigaEvo archive.
     """
 
     @property
@@ -126,7 +125,7 @@ class PromptFetcher(ABC):
 
 
 class FixedDirPromptFetcher(PromptFetcher):
-    """Reads from a directory or package defaults. Current behavior, backward-compat.
+    """Reads from a directory or package defaults.
 
     Caches loaded templates in memory to avoid repeated disk reads.
     """
@@ -513,6 +512,18 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         Both keys are written in one pipeline so the per-call work is one
         Redis round-trip. Skips ``REJECTED_ACCEPTOR`` (no reliable
         fitness) and is a no-op when ``main_redis_db`` is unset.
+
+        Concurrency posture
+        -------------------
+        The body uses a synchronous ``redis.Redis`` client because the
+        ``PromptFetcher`` ABC contract makes ``record_outcome`` a sync
+        method. Callers running inside an asyncio task therefore block
+        the event loop for the duration of the round-trip; the
+        recommended bridge at the call site is
+        ``await asyncio.to_thread(fetcher.record_outcome, ...)`` when
+        the caller is async. Inlining the bridge here would require
+        changing the ABC signature and is left to the broader sync→async
+        migration tracked at the prompt-fitness coordinator boundary.
 
         Args:
             prompt_id: Tracking ID of the prompt used

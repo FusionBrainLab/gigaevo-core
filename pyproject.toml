@@ -133,7 +133,6 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "gigaevo/database/redis_program_storage.py" = ["TID251"]
 "gigaevo/evolution/bus/transport.py" = ["TID251"]
 "gigaevo/evolution/storage/archive_storage.py" = ["TID251"]
-"gigaevo/llm/bandit.py" = ["TID251"]
 "gigaevo/prompts/fetcher.py" = ["TID251"]
 "gigaevo/prompts/coevolution/stats.py" = ["TID251"]
 "gigaevo/prompts/coevolution/sync.py" = ["TID251"]

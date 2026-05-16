@@ -9,9 +9,19 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import hashlib
+from typing import Final
 
 from loguru import logger
 from redis import asyncio as aioredis
+
+_RECENT_FITNESS_WINDOW: Final[int] = 20
+"""Cap on entries returned in ``PromptMutationStats.recent_fitnesses``.
+
+Each per-source list is already capped writer-side by
+``gigaevo.prompts.fetcher._FITNESS_WINDOW``; this value bounds the
+multi-source concatenation independently so the reader contract does
+not silently inflate when sources are added.
+"""
 
 
 @dataclass
@@ -161,9 +171,9 @@ class RedisPromptStatsProvider(PromptStatsProvider):
             sum(all_fitnesses) / len(all_fitnesses) if all_fitnesses else 0.0
         )
         # Each per-source list is newest-first (LPUSH + LTRIM); the
-        # union is the first 20 across the concatenation, treating
-        # every source as equally recent.
-        recent = all_fitnesses[:20] if all_fitnesses else None
+        # union is the first _RECENT_FITNESS_WINDOW across the
+        # concatenation, treating every source as equally recent.
+        recent = all_fitnesses[:_RECENT_FITNESS_WINDOW] if all_fitnesses else None
 
         # Compute per-metric means using metrics_count (only trials with metrics)
         mean_metrics = None

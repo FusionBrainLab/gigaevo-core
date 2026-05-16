@@ -61,6 +61,7 @@ class RedisInstanceLock:
             _SCRIPT_LOCK_RELEASE: load_lua_source(_SCRIPT_LOCK_RELEASE),
         }
         self._script_shas: dict[ScriptName, str] = {}
+        self._reload_lock: asyncio.Lock | None = None
 
     @property
     def is_held(self) -> bool:
@@ -71,6 +72,42 @@ class RedisInstanceLock:
         return self._instance_id
 
     # ── Lua plumbing ─────────────────────────────────────────────────
+
+    def _get_reload_lock(self) -> asyncio.Lock:
+        """Lazy-init the reload lock inside the running loop.
+
+        Constructing the lock inside ``__init__`` would bind it to
+        whichever loop happens to be current at object creation, which
+        is not necessarily the loop that drives the renewer.
+        """
+        if self._reload_lock is None:
+            self._reload_lock = asyncio.Lock()
+        return self._reload_lock
+
+    async def _load_sha(
+        self,
+        r: aioredis.Redis,
+        name: ScriptName,
+        *,
+        stale_sha: str | None,
+    ) -> str:
+        """SCRIPT LOAD ``name`` and refresh the SHA cache, coalesced.
+
+        Concurrent NOSCRIPT recoveries for the same script collapse to
+        one SCRIPT LOAD round-trip: callers that wait on the lock find
+        the SHA refreshed by the first arrival and reuse it. The
+        ``stale_sha`` argument is the SHA that just raised NOSCRIPT;
+        when it differs from the cache we are looking at a peer's
+        already-installed result and skip the redundant LOAD.
+        """
+        async with self._get_reload_lock():
+            cached = self._script_shas.get(name)
+            if stale_sha is not None and cached is not None and cached != stale_sha:
+                return cached
+            loaded = await r.script_load(self._script_sources[name])  # type: ignore[misc]
+            sha = loaded if isinstance(loaded, str) else loaded.decode("ascii")
+            self._script_shas[name] = sha
+            return sha
 
     async def _evalsha(
         self,
@@ -88,17 +125,13 @@ class RedisInstanceLock:
         """
         sha = self._script_shas.get(name)
         if sha is None:
-            loaded = await r.script_load(self._script_sources[name])  # type: ignore[misc]
-            sha = loaded if isinstance(loaded, str) else loaded.decode("ascii")
-            self._script_shas[name] = sha
+            sha = await self._load_sha(r, name, stale_sha=None)
         try:
             return int(await r.evalsha(sha, len(keys), *keys, *args))  # type: ignore[misc]
         except aioredis.ResponseError as exc:
             if "NOSCRIPT" not in str(exc):
                 raise
-            loaded = await r.script_load(self._script_sources[name])  # type: ignore[misc]
-            sha = loaded if isinstance(loaded, str) else loaded.decode("ascii")
-            self._script_shas[name] = sha
+            sha = await self._load_sha(r, name, stale_sha=sha)
             return int(await r.evalsha(sha, len(keys), *keys, *args))  # type: ignore[misc]
 
     # ── public surface ───────────────────────────────────────────────
@@ -145,6 +178,12 @@ class RedisInstanceLock:
         Token-CAS DEL: only deletes the key if its stored value still
         matches our instance id. Idempotent; an already-released or
         already-lost lock is a silent no-op.
+
+        After ``release()`` returns the renewer is fully drained and the
+        local holder state (``is_held``, ``_token``) is cleared, even if
+        the Redis side errored — the caller's lock-holding posture ends
+        at the call site regardless of network reachability so a follow-
+        up acquire is not blocked by stale local state.
         """
         if self._renewal_task:
             self._renewal_task.cancel()
@@ -168,14 +207,13 @@ class RedisInstanceLock:
                     "[RedisInstanceLock] Released lock for prefix '{}'",
                     self._keys.prefix,
                 )
-            # released == 0 means our token did not match — another
-            # holder owns the key. We are NOT the owner; do not touch.
-            self._token = None
 
         try:
             await self._conn.execute("release_instance_lock", _release)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("[RedisInstanceLock] Failed to release lock: {}", e)
+        finally:
+            self._token = None
 
     async def renew(self) -> bool:
         """Renew the instance lock.

@@ -209,6 +209,23 @@ class TestRenew:
         lock._token = None
         await lock.release()
 
+    async def test_renew_deleted_key_returns_false(self, lock, fake_redis):
+        """If the lock key was DELETEd, the token-CAS renew fails closed.
+
+        The renew script's ``GET == ARGV[1]`` check returns nil when the
+        key is absent; comparing nil to a non-nil token is false in Lua
+        so the script returns 0, which the wrapper surfaces as ``False``.
+        """
+        await lock.acquire()
+        lock_key = lock._keys.instance_lock()
+        await fake_redis.delete(lock_key)
+
+        result = await lock.renew()
+        assert result is False
+
+        lock._token = None
+        await lock.release()
+
 
 # ---------------------------------------------------------------------------
 # TestRenewPeriodically
@@ -292,23 +309,28 @@ class TestReleaseRobustness:
         assert remaining == other_value
 
     async def test_tolerates_connection_error(self, fake_redis):
-        """Release swallows connection errors without raising."""
+        """Release swallows connection errors without raising.
+
+        ``release()`` clears the local holder state in a ``finally``
+        block so a Redis-side failure on shutdown does not leave the
+        caller stuck reporting ``is_held=True`` for a lock it cannot
+        reach. The renewer is drained before the Redis attempt, so a
+        zombie renewer is impossible regardless of release outcome.
+        """
         lock = _make_lock(fake_redis)
         await lock.acquire()
         assert lock._token is not None
 
-        # Make the connection execute raise an error
         async def failing_execute(name, fn):
             raise ConnectionError("redis gone")
 
         lock._conn.execute = failing_execute
 
-        # Should not raise
         await lock.release()
 
-        # _token is set to None inside the callback, which never ran,
-        # so token may still be set. But renewal task should be cancelled.
         assert lock._renewal_task is None
+        assert lock._token is None
+        assert lock.is_held is False
 
     async def test_acquire_sets_expiry(self, lock, fake_redis):
         """Acquired lock has a TTL set in Redis."""
