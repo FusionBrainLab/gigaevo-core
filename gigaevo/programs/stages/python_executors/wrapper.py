@@ -402,7 +402,7 @@ async def run_exec_runner(
                 returncode=0,
                 stderr=f"Invalid cloudpickle payload: {e}\n[stderr]\n{stderr_text}",
                 stdout_bytes=stdout,
-            ) from e
+            )
         return value, b"", stderr_text
 
     raise ExecRunnerError(
