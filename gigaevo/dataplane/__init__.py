@@ -46,8 +46,10 @@ from .crash import CrashEvent, CrashWatchedHandle, OneShotFlag, Recovered
 from .engine_startup import (
     ENV_RUN_ID,
     ENV_WORKER_ID,
+    EngineRoot,
     build_actor_identity,
     build_dataplane,
+    build_engine_root,
     wire_bandit_router,
     wire_storage,
 )
@@ -114,6 +116,10 @@ from .models import (
     CachedValue,
     Err,
     ExternalValue,
+    Freshness,
+    FreshnessAtLeast,
+    FreshnessEventual,
+    FreshnessStrict,
     GossipedValue,
     HlcTimestamp,
     LocalValue,
@@ -218,6 +224,10 @@ __all__ = [
     "CachedValue",
     "Err",
     "ExternalValue",
+    "Freshness",
+    "FreshnessAtLeast",
+    "FreshnessEventual",
+    "FreshnessStrict",
     "GossipedValue",
     "HlcTimestamp",
     "LocalValue",
@@ -253,8 +263,10 @@ __all__ = [
     # Engine startup
     "ENV_RUN_ID",
     "ENV_WORKER_ID",
+    "EngineRoot",
     "build_actor_identity",
     "build_dataplane",
+    "build_engine_root",
     "wire_bandit_router",
     "wire_storage",
 ]

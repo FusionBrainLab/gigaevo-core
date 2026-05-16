@@ -109,6 +109,90 @@ class Versioned[T]:
         )
 
 
+# ── Freshness ────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class FreshnessEventual:
+    """Accept any persisted value, regardless of staleness.
+
+    Equivalent to "I don't care which epoch this is, just give me what
+    Redis has now." Read methods consulted with this freshness never
+    raise :class:`StaleReadError` on the freshness axis; decoding errors
+    and absent keys still surface normally.
+    """
+
+
+@dataclass(slots=True, frozen=True)
+class FreshnessAtLeast:
+    """Demand a freshness floor on the ``(epoch, generation)`` lattice.
+
+    The read returns ``Ok(Versioned(...))`` iff the persisted blob's
+    ``(epoch, generation)`` is component-wise ``>= (epoch, generation)``
+    on this declaration. Otherwise the read returns
+    ``Err(StaleReadError(...))`` so a downstream caller observes the
+    staleness as control flow rather than a silently-old value.
+
+    Defaults to ``epoch=0`` / ``generation=0`` — the identity floor that
+    every persisted blob trivially clears — so the type is constructible
+    without arguments only as a degenerate case. Production callers pin
+    the real expected counter explicitly.
+    """
+
+    epoch: int = 0
+    generation: int = 0
+
+    def __post_init__(self) -> None:
+        if self.epoch < 0:
+            raise ValueError(
+                f"FreshnessAtLeast.epoch must be non-negative: {self.epoch}"
+            )
+        if self.generation < 0:
+            raise ValueError(
+                f"FreshnessAtLeast.generation must be non-negative: {self.generation}"
+            )
+
+
+@dataclass(slots=True, frozen=True)
+class FreshnessStrict:
+    """Demand that the read observes the latest epoch at call time.
+
+    The coordinator reads the global epoch counter first; the persisted
+    blob's epoch must be ``>=`` that snapshot. A concurrent transition
+    that bumps the counter after our snapshot but before our blob read
+    raises :class:`StaleReadError`; the caller retries.
+
+    This is the strongest freshness witness the dataplane offers on a
+    plain GET. Stronger ("the exact write you just performed") is the
+    coordinator's :meth:`transition_program_state` return value, which
+    is the post-transition blob carried in the same atomic round-trip
+    and therefore needs no separate freshness declaration.
+    """
+
+
+type Freshness = FreshnessEventual | FreshnessAtLeast | FreshnessStrict
+"""Discriminated declaration of how stale a read may be.
+
+Every reader passes one explicit value:
+
+    * :class:`FreshnessEventual` — no floor; the value as-of-now is fine
+      (caches, lazy projections, observability sinks).
+    * :class:`FreshnessAtLeast(epoch=N, generation=M)` — staleness
+      below the floor is :class:`StaleReadError`. The typical caller
+      writes ``(epoch=expected_epoch_after_my_write)`` so the read
+      observes its own prior write or fails loudly.
+    * :class:`FreshnessStrict` — observe the latest persisted epoch at
+      call time. Worth two round-trips (epoch counter + blob); use it
+      only when the caller cannot supply its own floor.
+
+Choice of three flat dataclasses (rather than e.g. an
+``IntEnum.STRICT`` plus optional ``floor=`` kwargs) keeps the API
+type-safe: ``match`` over the union is exhaustive, and the
+``FreshnessAtLeast`` floor is structurally part of the variant rather
+than a separate optional field that can drift.
+"""
+
+
 # ── Sourced ───────────────────────────────────────────────────────────
 
 
@@ -351,6 +435,10 @@ __all__ = [
     "CachedValue",
     "Err",
     "ExternalValue",
+    "Freshness",
+    "FreshnessAtLeast",
+    "FreshnessEventual",
+    "FreshnessStrict",
     "GossipedValue",
     "HlcTimestamp",
     "LocalValue",

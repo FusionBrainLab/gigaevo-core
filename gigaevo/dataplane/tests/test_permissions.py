@@ -272,3 +272,85 @@ class TestSplitCombineRoundTrip:
         # Either ab or cd remains live and could be combined further.
         assert not ab.consumed
         assert not cd.consumed
+
+
+class TestEngineRootThreading:
+    """Engine-root structural invariants.
+
+    The :class:`EngineRoot` carries a single root token per subspace and
+    derives per-call witnesses by linear split. The rotation discipline
+    is the structural pin: after each split, the engine retains a new
+    long-lived witness and surrenders the consumed parent, so the
+    "single live witness per subspace" invariant is preserved across
+    arbitrarily many splits.
+    """
+
+    def test_engine_root_mints_one_token_per_subspace(self) -> None:
+        from gigaevo.dataplane import build_engine_root
+
+        root = build_engine_root()
+        # Three orthogonal subspace witnesses, none consumed at start.
+        assert root._program_root.tag.startswith("engine:program-root")  # type: ignore[attr-defined]
+        assert root._cell_root.tag.startswith("engine:cell-root")  # type: ignore[attr-defined]
+        assert root._counter_root.tag.startswith("engine:counter-root")  # type: ignore[attr-defined]
+        assert not root._program_root.consumed  # type: ignore[attr-defined]
+        assert not root._cell_root.consumed  # type: ignore[attr-defined]
+        assert not root._counter_root.consumed  # type: ignore[attr-defined]
+
+    def test_split_program_token_carries_program_id(self) -> None:
+        from gigaevo.dataplane import build_engine_root
+        from gigaevo.dataplane.ids import ProgramId
+
+        root = build_engine_root()
+        pid = ProgramId("prog-abc")
+        per_call = root.split_program_token(pid)
+        # The per-call token carries the program id as its tag so the
+        # coordinator's ``consume() == program_id`` check succeeds.
+        assert per_call.tag == pid
+        assert not per_call.consumed
+
+    def test_split_program_token_rotates_root(self) -> None:
+        from gigaevo.dataplane import build_engine_root
+        from gigaevo.dataplane.ids import ProgramId
+
+        root = build_engine_root()
+        original_root = root._program_root  # type: ignore[attr-defined]
+        root.split_program_token(ProgramId("p1"))
+        # The old root token is consumed by the split.
+        assert original_root.consumed
+        # The engine retains a fresh, unconsumed root for the next call.
+        new_root = root._program_root  # type: ignore[attr-defined]
+        assert new_root is not original_root
+        assert not new_root.consumed
+
+    def test_many_splits_preserve_single_live_root(self) -> None:
+        from gigaevo.dataplane import build_engine_root
+        from gigaevo.dataplane.ids import ProgramId
+
+        root = build_engine_root()
+        seen_roots: list[object] = [root._program_root]  # type: ignore[attr-defined]
+        for i in range(8):
+            pid = ProgramId(f"p{i}")
+            per_call = root.split_program_token(pid)
+            assert per_call.tag == pid
+            # The current root is the latest unconsumed witness.
+            seen_roots.append(root._program_root)  # type: ignore[attr-defined]
+        # Every earlier root has been consumed exactly once.
+        for prior in seen_roots[:-1]:
+            assert prior.consumed  # type: ignore[attr-defined]
+        # The final root is still live and ready for the next split.
+        assert not seen_roots[-1].consumed  # type: ignore[attr-defined]
+
+    def test_split_cell_and_counter_tokens(self) -> None:
+        # Symmetric coverage for the other two subspaces — same shape,
+        # different tag types.
+        from gigaevo.dataplane import build_engine_root
+        from gigaevo.dataplane.ids import CellKey, CounterKey
+
+        root = build_engine_root()
+        cell = root.split_cell_token(CellKey("cell-12"))
+        counter = root.split_counter_token(CounterKey("ctr-77"))
+        assert cell.tag == "cell-12"
+        assert counter.tag == "ctr-77"
+        assert not cell.consumed
+        assert not counter.consumed

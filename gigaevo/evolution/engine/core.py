@@ -29,6 +29,8 @@ from gigaevo.utils.trackers.base import LogWriter
 if TYPE_CHECKING:
     from typing import Any
 
+    from gigaevo.dataplane import DataPlane, EngineRoot
+
 # Redis run-state field names (used for resume persistence)
 _RUN_STATE_TOTAL_GENERATIONS = "engine:total_generations"
 
@@ -54,12 +56,25 @@ class EvolutionEngine:
         metrics_tracker: MetricsTracker,
         pre_step_hook: Callable[[], Awaitable[None]] | None = None,
         post_run_hook: PostRunHook | None = None,
+        *,
+        dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
         self.mutation_operator = mutation_operator
         self.config = config
         self._writer = writer.bind(path=["evolution_engine"])
+        # Engine-scoped coordination handles. When wired, freshness-pinned
+        # reads on the dataplane and per-call linear permission tokens
+        # derived from the engine root flow into the engine's own state
+        # mutation paths (and indirectly into the storage that the engine
+        # holds — :func:`wire_storage` attaches both there as well). Both
+        # default to ``None`` so tests that construct the engine without
+        # an engine-startup sequence continue to operate on the legacy
+        # path.
+        self._dataplane = dataplane
+        self._engine_root = engine_root
 
         self._running = False
         self._paused = False

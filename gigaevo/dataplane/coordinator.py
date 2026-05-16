@@ -61,7 +61,17 @@ from .ids import (
     ScriptName,
     make_script_name,
 )
-from .models import Err, HlcTimestamp, Ok, Result, Versioned
+from .models import (
+    Err,
+    Freshness,
+    FreshnessAtLeast,
+    FreshnessEventual,
+    FreshnessStrict,
+    HlcTimestamp,
+    Ok,
+    Result,
+    Versioned,
+)
 from .permissions import Token
 from .scripts import LuaRegistry, load_lua_source
 from .transitions import (
@@ -120,6 +130,7 @@ _SCRIPT_LOCK_RELEASE: Final[ScriptName] = make_script_name("instance_lock_releas
 _SCRIPT_LWWR_SET: Final[ScriptName] = make_script_name("lwwr_set")
 _SCRIPT_TRANSITION_STATE: Final[ScriptName] = make_script_name("transition_state")
 _SCRIPT_ARCHIVE_SWAP: Final[ScriptName] = make_script_name("archive_swap")
+_SCRIPT_BOUNDED_LIST_PUSH: Final[ScriptName] = make_script_name("bounded_list_push")
 
 
 # ── public contract dataclasses ─────────────────────────────────────────
@@ -673,29 +684,93 @@ class DataPlane:
         self,
         program_id: ProgramId,
         *,
+        freshness: Freshness | None = None,
         min_epoch: int = 0,
         min_generation: int = 0,
     ) -> Result[Versioned[ProgramSnapshot] | None, DataPlaneError]:
-        """Versioned program read with optional freshness floor.
+        """Versioned program read with an explicit freshness declaration.
+
+        ``freshness`` is the structural admission contract every reader
+        must state. The variants are:
+
+            * :class:`FreshnessEventual` — accept any persisted blob;
+              the read never raises :class:`StaleReadError` on the
+              freshness axis. The default; matches the legacy
+              ``min_epoch=0, min_generation=0`` behaviour.
+            * :class:`FreshnessAtLeast` — admission floor on the
+              ``(epoch, generation)`` lattice. A blob below the floor
+              raises :class:`StaleReadError` so a caller observing its
+              own write (or a downstream replica's catch-up) fails loud
+              rather than silently old.
+            * :class:`FreshnessStrict` — re-read the global epoch
+              counter and require the blob's epoch to match-or-exceed
+              that snapshot. Costs one extra round-trip; use it only
+              when the caller cannot supply a floor itself.
+
+        ``min_epoch`` / ``min_generation`` remain accepted as a
+        backwards-compat shim so existing callers keep working; a
+        non-zero value (with ``freshness`` unset) constructs a
+        :class:`FreshnessAtLeast` internally. Passing both an explicit
+        ``freshness`` and a non-zero ``min_*`` raises
+        :class:`ValueError` so a typo cannot mask one with the other.
 
         Returns ``Ok(None)`` if the program is unknown (not yet
-        written); ``Ok(Versioned(...))`` if it exists; ``Err(...)`` for
-        decoding failures or a freshness-floor violation.
-
-        ``epoch`` and ``generation`` are both filled from the blob's
-        ``epoch`` field — the per-program generation counter is the
-        same as the global epoch since every transition bumps both. A
-        caller wanting a stricter freshness witness uses ``min_epoch``;
-        the redundant ``min_generation`` parameter is preserved for API
-        consistency with :meth:`crdt_read`.
+        written); ``Ok(Versioned(...))`` if it exists and passes the
+        freshness contract; ``Err(...)`` for decoding failures or a
+        freshness-floor violation.
         """
         self._validate_key_component(
             program_id, method="read_program", field_name="program_id"
         )
+        # Negative ``min_*`` raises :class:`ValueError` at the boundary
+        # per the legacy contract (callers never expected this to return
+        # an ``Err``). Conflicts between an explicit ``freshness`` and a
+        # legacy ``min_*`` value still surface as ``Err`` because they
+        # represent a genuine programming ambiguity rather than a
+        # malformed numeric input.
         self._validate_floor(min_epoch, min_generation, method="read_program")
+        try:
+            effective_freshness = self._resolve_freshness(
+                freshness, min_epoch, min_generation
+            )
+        except ValueError as exc:
+            return Err(DataPlaneError(str(exc)))
         self._require_started("read_program")
         prefix = self._connection.key_prefix
         program_key = f"{prefix}:program:{program_id}"
+
+        # FreshnessStrict reads the live epoch counter first so the
+        # subsequent blob GET admits only values stamped at or after
+        # that snapshot. The two GETs are not transactional — a
+        # concurrent transition between them is the exact race that
+        # Strict catches: the blob's epoch will be the post-transition
+        # value, which is >= our snapshot, so the read succeeds; the
+        # earlier blob is invisible. The race that *fails* the floor is
+        # the inverse — counter ahead of blob — which on a single-writer
+        # engine cannot happen, but is the case Strict is designed for
+        # cross-engine reads.
+        floor_epoch: int
+        floor_generation: int
+        if isinstance(effective_freshness, FreshnessStrict):
+            epoch_key = f"{prefix}:ts"
+            raw_counter = await self._connection.pool.get(epoch_key)  # type: ignore[misc]
+            try:
+                floor_epoch = int(raw_counter) if raw_counter is not None else 0
+            except (TypeError, ValueError) as exc:
+                return Err(
+                    DataPlaneError(
+                        f"read_program: strict-freshness epoch counter "
+                        f"unparseable: {exc!r}"
+                    )
+                )
+            floor_generation = floor_epoch
+        elif isinstance(effective_freshness, FreshnessAtLeast):
+            floor_epoch = effective_freshness.epoch
+            floor_generation = effective_freshness.generation
+        else:
+            floor_epoch = 0
+            floor_generation = 0
+
         raw = await self._connection.pool.get(program_key)  # type: ignore[misc]
         if raw is None:
             return Ok(None)
@@ -719,16 +794,50 @@ class DataPlane:
         versioned: Versioned[ProgramSnapshot] = Versioned(
             value=blob, epoch=epoch, generation=epoch
         )
-        if not versioned.is_at_least(min_epoch, min_generation):
+        if not versioned.is_at_least(floor_epoch, floor_generation):
             return Err(
                 StaleReadError(
                     observed_epoch=epoch,
                     observed_generation=epoch,
-                    min_epoch=min_epoch,
-                    min_generation=min_generation,
+                    min_epoch=floor_epoch,
+                    min_generation=floor_generation,
                 )
             )
         return Ok(versioned)
+
+    @staticmethod
+    def _resolve_freshness(
+        freshness: Freshness | None,
+        min_epoch: int,
+        min_generation: int,
+    ) -> Freshness:
+        """Reconcile the new ``freshness`` arg with the legacy ``min_*`` shim.
+
+        Resolution rules:
+
+            * ``freshness`` explicit and non-default ``min_*`` ⇒
+              :class:`ValueError`. The two channels would otherwise
+              disagree silently.
+            * ``freshness`` explicit ⇒ used verbatim.
+            * ``freshness=None`` and ``min_*`` zero ⇒
+              :class:`FreshnessEventual` (the default).
+            * ``freshness=None`` and ``min_*`` non-zero ⇒
+              :class:`FreshnessAtLeast(epoch, generation)` constructed
+              from the kwargs (legacy compatibility).
+
+        Negative ``min_*`` is rejected by the call-boundary
+        :meth:`_validate_floor` before reaching this resolver.
+        """
+        if freshness is not None:
+            if min_epoch != 0 or min_generation != 0:
+                raise ValueError(
+                    "read_program: pass either freshness= or "
+                    "min_epoch=/min_generation= (legacy shim), not both"
+                )
+            return freshness
+        if min_epoch == 0 and min_generation == 0:
+            return FreshnessEventual()
+        return FreshnessAtLeast(epoch=min_epoch, generation=min_generation)
 
     # ── instance lock ────────────────────────────────────────────────
 
@@ -1224,6 +1333,236 @@ class DataPlane:
         decoded = decode_canonical(value_raw)
         return Ok(LwwrValue(value=decoded, hlc=HlcTimestamp.unpack_hex(hlc_hex)))
 
+    # ── bounded recency list ────────────────────────────────────────
+    #
+    # A bounded recency list holds the newest N entries of a value
+    # stream — pure LWW semantics, no per-actor merge. Writers push
+    # at the head and the script trims to the cap atomically so
+    # concurrent pushers cannot leave the list briefly over-cap.
+    # Reads return the slice ``[0, count)`` in insertion-newest-first
+    # order. Used by the prompt-fitness window (§5.6) as a lighter
+    # alternative to a CRDT counter for "last N samples".
+
+    async def bounded_list_push(
+        self,
+        key: str,
+        value: object,
+        *,
+        cap: int,
+        deadline_monotonic: float | None = None,
+    ) -> Result[int, DataPlaneError]:
+        """Atomically LPUSH ``value`` at the head and trim to ``cap`` entries.
+
+        ``key`` is the fully-qualified Redis list key (the coordinator
+        prefixes it with ``{key_prefix}:list:`` to namespace). ``value``
+        is encoded via :func:`gigaevo.dataplane.codec.encode_canonical`,
+        so any canonical-JSON-encodable Python value round-trips. The
+        ``cap`` cap is enforced server-side by the Lua script (positive
+        integer); a non-positive cap returns
+        :class:`DataPlaneError` rather than silently becoming a
+        no-op trim.
+
+        Returns ``Ok(new_length)`` on success — the post-trim length of
+        the list, capped at ``cap``. Concurrent writers race only on
+        ordering of their values; each push is itself atomic.
+        """
+        self._validate_key_component(
+            key, method="bounded_list_push", field_name="key", allow_colon=True
+        )
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+            return Err(
+                DataPlaneError(
+                    f"bounded_list_push: cap must be a positive int, got {cap!r}"
+                )
+            )
+        try:
+            self._check_deadline(deadline_monotonic, "bounded_list_push")
+        except DeadlineExceeded as exc:
+            return Err(exc)
+        lua = self._require_started("bounded_list_push")
+        list_key = f"{self._connection.key_prefix}:list:{key}"
+        encoded = encode_canonical(value).decode("utf-8")
+        try:
+            raw = await lua.evalsha(
+                _SCRIPT_BOUNDED_LIST_PUSH,
+                keys=[list_key],
+                args=[encoded, int(cap)],
+            )
+        except DataPlaneError as exc:
+            return Err(exc)
+        return Ok(int(raw[0]))
+
+    async def bounded_list_range(
+        self,
+        key: str,
+        *,
+        count: int,
+    ) -> Result[list[object], DataPlaneError]:
+        """Read the first ``count`` entries of a bounded list, newest-first.
+
+        Returns the canonical-decoded values in the order Redis returns
+        them (LPUSH puts the newest at index 0, so the result is
+        most-recent-first). An empty or unknown list yields ``Ok([])``.
+        Each entry is decoded via :func:`decode_canonical`; a malformed
+        entry surfaces as an :class:`Err` with the offending index in
+        the message rather than silently dropping the entry.
+        """
+        self._validate_key_component(
+            key, method="bounded_list_range", field_name="key", allow_colon=True
+        )
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            return Err(
+                DataPlaneError(
+                    f"bounded_list_range: count must be a positive int, got {count!r}"
+                )
+            )
+        self._require_started("bounded_list_range")
+        list_key = f"{self._connection.key_prefix}:list:{key}"
+        try:
+            raw = await self._connection.pool.lrange(list_key, 0, count - 1)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"bounded_list_range: lrange failed: {exc!r}"))
+        out: list[object] = []
+        for i, entry in enumerate(raw):
+            try:
+                out.append(decode_canonical(entry))
+            except Exception as exc:  # noqa: BLE001 - coordinator boundary
+                return Err(
+                    DataPlaneError(
+                        f"bounded_list_range: entry index {i} failed to decode: {exc!r}"
+                    )
+                )
+        return Ok(out)
+
+    # ── small-set directory ──────────────────────────────────────────
+    #
+    # A directory of opaque string members. Members are deduplicated
+    # server-side by SADD; reads return the unordered set. The size of
+    # the set is unbounded — callers that need a cap should size their
+    # member alphabet, not the set. Used for the per-prompt metric-name
+    # registry that feeds the stats reader.
+
+    async def set_add(
+        self,
+        key: str,
+        member: str,
+    ) -> Result[int, DataPlaneError]:
+        """Add ``member`` to the named set; idempotent under duplicate adds.
+
+        Returns ``Ok(1)`` when a new member was added, ``Ok(0)`` when
+        the member was already present. SADD is atomic in Redis, so no
+        Lua script is needed.
+        """
+        self._validate_key_component(
+            key, method="set_add", field_name="key", allow_colon=True
+        )
+        if not isinstance(member, str) or not member:
+            return Err(
+                DataPlaneError(
+                    f"set_add: member must be a non-empty string, got {member!r}"
+                )
+            )
+        self._require_started("set_add")
+        set_key = f"{self._connection.key_prefix}:set:{key}"
+        try:
+            added = await self._connection.pool.sadd(set_key, member)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"set_add: sadd failed: {exc!r}"))
+        return Ok(int(added))
+
+    async def set_members(
+        self,
+        key: str,
+    ) -> Result[frozenset[str], DataPlaneError]:
+        """Read every member of the named set; unordered, deduplicated.
+
+        Returns ``Ok(frozenset())`` for an unknown / empty set. The
+        frozenset shape signals to the caller that the return is a
+        snapshot — concurrent writers may have added new members
+        between the read and the caller's use; a stale-cache witness
+        is not provided because the set has no canonical version.
+        """
+        self._validate_key_component(
+            key, method="set_members", field_name="key", allow_colon=True
+        )
+        self._require_started("set_members")
+        set_key = f"{self._connection.key_prefix}:set:{key}"
+        try:
+            raw = await self._connection.pool.smembers(set_key)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"set_members: smembers failed: {exc!r}"))
+        return Ok(frozenset(str(m) for m in raw))
+
+    # ── raw-key access (cross-namespace) ─────────────────────────────
+    #
+    # The dataplane's typed primitives bake the coordinator's
+    # ``key_prefix`` into every key. Some callers — notably the prompt
+    # co-evolution path, which reads keys written by an independently
+    # configured "main run" with its own prefix — need to address keys
+    # *outside* the coordinator's own namespace. These primitives accept
+    # the fully-qualified Redis key and skip prefix prepending. They are
+    # the only sanctioned escape hatch; new code should still prefer the
+    # typed primitives above.
+
+    async def raw_hash_get(
+        self,
+        key: str,
+        field: str,
+    ) -> Result[str | None, DataPlaneError]:
+        """HGET ``field`` from a fully-qualified hash key.
+
+        Returns ``Ok(None)`` when the hash or field is missing,
+        ``Ok(str)`` when present. The dataplane's connection mandates
+        ``decode_responses=True`` so the value is always a Python
+        ``str``.
+        """
+        self._validate_key_component(
+            key, method="raw_hash_get", field_name="key", allow_colon=True
+        )
+        self._validate_key_component(
+            field, method="raw_hash_get", field_name="field", allow_colon=True
+        )
+        self._require_started("raw_hash_get")
+        try:
+            raw = await self._connection.pool.hget(key, field)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"raw_hash_get: hget failed: {exc!r}"))
+        if raw is None:
+            return Ok(None)
+        return Ok(str(raw))
+
+    async def raw_hash_values(
+        self,
+        key: str,
+    ) -> Result[list[str], DataPlaneError]:
+        """HVALS for a fully-qualified hash key; empty list when missing."""
+        self._validate_key_component(
+            key, method="raw_hash_values", field_name="key", allow_colon=True
+        )
+        self._require_started("raw_hash_values")
+        try:
+            raw = await self._connection.pool.hvals(key)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"raw_hash_values: hvals failed: {exc!r}"))
+        return Ok([str(v) for v in raw])
+
+    async def raw_get(
+        self,
+        key: str,
+    ) -> Result[str | None, DataPlaneError]:
+        """GET a fully-qualified string key; ``Ok(None)`` when missing."""
+        self._validate_key_component(
+            key, method="raw_get", field_name="key", allow_colon=True
+        )
+        self._require_started("raw_get")
+        try:
+            raw = await self._connection.pool.get(key)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001 - coordinator boundary
+            return Err(DataPlaneError(f"raw_get: get failed: {exc!r}"))
+        if raw is None:
+            return Ok(None)
+        return Ok(str(raw))
+
     # ── built-in-script bookkeeping ──────────────────────────────────
 
     def _register_builtin_scripts(self, lua: LuaRegistry) -> None:
@@ -1242,6 +1581,7 @@ class DataPlane:
             _SCRIPT_LWWR_SET,
             _SCRIPT_TRANSITION_STATE,
             _SCRIPT_ARCHIVE_SWAP,
+            _SCRIPT_BOUNDED_LIST_PUSH,
         ):
             lua.register(name, load_lua_source(name))
 

@@ -10,6 +10,10 @@ import pytest
 from gigaevo.dataplane.errors import StaleReadError
 from gigaevo.dataplane.models import (
     Err,
+    Freshness,
+    FreshnessAtLeast,
+    FreshnessEventual,
+    FreshnessStrict,
     HlcTimestamp,
     Monotonic,
     MonotonicCounter,
@@ -93,6 +97,75 @@ class TestVersioned:
         a = Versioned(value=Opaque(), epoch=1, generation=0)
         b = Versioned(value=Opaque(), epoch=2, generation=0)
         assert a.combine_max(b) is b
+
+
+# ── Freshness ────────────────────────────────────────────────────────
+
+
+class TestFreshnessShape:
+    """The discriminated freshness type is structurally pinned.
+
+    These tests document the shape contract so a contributor cannot
+    silently rename a variant or add a fourth alternative without
+    breaking them — the union is the load-bearing thing.
+    """
+
+    def test_eventual_constructs(self) -> None:
+        f = FreshnessEventual()
+        assert isinstance(f, FreshnessEventual)
+
+    def test_at_least_default_zero(self) -> None:
+        # Identity floor — every persisted blob clears (0, 0). The
+        # default constructor exists as a degenerate case; production
+        # callers pin a real expected counter explicitly.
+        f = FreshnessAtLeast()
+        assert f.epoch == 0
+        assert f.generation == 0
+
+    def test_at_least_carries_floor(self) -> None:
+        f = FreshnessAtLeast(epoch=7, generation=3)
+        assert f.epoch == 7
+        assert f.generation == 3
+
+    def test_at_least_rejects_negative_epoch(self) -> None:
+        with pytest.raises(ValueError, match="epoch must be non-negative"):
+            FreshnessAtLeast(epoch=-1, generation=0)
+
+    def test_at_least_rejects_negative_generation(self) -> None:
+        with pytest.raises(ValueError, match="generation must be non-negative"):
+            FreshnessAtLeast(epoch=0, generation=-1)
+
+    def test_strict_constructs(self) -> None:
+        # Strict carries no payload — its semantics live in the
+        # coordinator's read-time epoch snapshot. The dataclass exists
+        # so ``match`` over the union is exhaustive without ``case _``.
+        f = FreshnessStrict()
+        assert isinstance(f, FreshnessStrict)
+
+    def test_variants_frozen(self) -> None:
+        # All three variants are frozen — a contributor cannot mutate
+        # the floor after construction (which would race the in-flight
+        # read).
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            FreshnessAtLeast(epoch=1, generation=0).epoch = 99  # type: ignore[misc]
+
+    def test_union_is_exhaustive_via_match(self) -> None:
+        # The discriminated union must support exhaustive pattern
+        # matching so a fourth variant added in the future surfaces as
+        # a mypy error at every reader site rather than a runtime
+        # fall-through bug.
+        def admit(f: Freshness) -> str:
+            match f:
+                case FreshnessEventual():
+                    return "eventual"
+                case FreshnessAtLeast(epoch=e, generation=g):
+                    return f"at-least({e},{g})"
+                case FreshnessStrict():
+                    return "strict"
+
+        assert admit(FreshnessEventual()) == "eventual"
+        assert admit(FreshnessAtLeast(epoch=2, generation=3)) == "at-least(2,3)"
+        assert admit(FreshnessStrict()) == "strict"
 
 
 # ── Sourced ───────────────────────────────────────────────────────────

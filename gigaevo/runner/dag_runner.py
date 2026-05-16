@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import gc
 import os
 import time
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, computed_field, field_validator
@@ -21,6 +21,9 @@ from gigaevo.programs.program_state import ProgramState
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.trackers.base import LogWriter
+
+if TYPE_CHECKING:
+    from gigaevo.dataplane import DataPlane, EngineRoot
 
 
 class TaskInfo(NamedTuple):
@@ -149,6 +152,8 @@ class DagRunner:
         writer: LogWriter,
         *,
         prioritizer: ProgramPrioritizer | None = None,
+        dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ) -> None:
         self._storage = storage
         self._dag_blueprint = dag_blueprint
@@ -172,6 +177,16 @@ class DagRunner:
 
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
+
+        # Engine-scoped coordination handles. When wired, the dataplane
+        # serves freshness-pinned reads (e.g. the timeout-discard path
+        # below admits a stale-cached program only after passing a
+        # :class:`FreshnessAtLeast` floor) and the engine root is the
+        # single-writer witness origin for any per-program write the
+        # runner originates. Both default to None so non-dataplane
+        # deployments and unit tests continue to work unchanged.
+        self._dataplane = dataplane
+        self._engine_root = engine_root
 
     @property
     def task(self) -> asyncio.Task | None:
@@ -226,6 +241,51 @@ class DagRunner:
     def active_count(self) -> int:
         return sum(1 for info in self._active.values() if not info.task.done())
 
+    async def _timeout_read_is_fresh(self, prog: Program) -> bool:
+        """Return True if the program snapshot passes the freshness floor.
+
+        Routes the freshness check through
+        :meth:`gigaevo.dataplane.DataPlane.read_program` with a
+        :class:`FreshnessAtLeast` floor derived from the snapshot's own
+        ``atomic_counter``. If the dataplane is not wired (legacy
+        deployments and tests), returns ``True`` so behaviour matches
+        the pre-dataplane code path.
+
+        The motivating race: ``storage.get`` returns ``prog`` whose
+        cached ``state`` says RUNNING. Between the ``get`` and the
+        timeout-discard call below, a concurrent transition advances
+        the persisted blob to DONE (and bumps the global epoch
+        counter). The legacy code would discard a program that already
+        finished; with the freshness re-read, the coordinator observes
+        the epoch bump and either returns the post-write snapshot or
+        :class:`StaleReadError` — both of which defer the discard.
+        """
+        dp = self._dataplane
+        if dp is None:
+            return True
+        # Local import to avoid a static dependency from the runner to
+        # the dataplane package surface; the runner is otherwise
+        # dataplane-agnostic.
+        from gigaevo.dataplane import FreshnessAtLeast, Ok
+        from gigaevo.dataplane.ids import ProgramId
+
+        floor = max(0, int(getattr(prog, "atomic_counter", 0)))
+        result = await dp.read_program(
+            ProgramId(prog.id),
+            freshness=FreshnessAtLeast(epoch=floor, generation=floor),
+        )
+        if not isinstance(result, Ok):
+            # ``Err`` here means the read did not clear the floor —
+            # the persisted blob is older than our in-memory snapshot
+            # which is itself suspicious (we already loaded the blob
+            # via ``storage.get``). Refusing to discard is the safe
+            # default; the next ``_maintain`` tick re-attempts.
+            return False
+        # ``Ok(None)`` means the blob is gone (someone deleted it).
+        # That is not the freshness contract we wanted to assert; treat
+        # as "not fresh enough to act on" and defer.
+        return result.value is not None
+
     async def _run(self) -> None:
         logger.info("[DagScheduler] start")
         try:
@@ -273,6 +333,26 @@ class DagRunner:
             try:
                 prog = await self._storage.get(info.program_id)
                 if prog:
+                    # Freshness-pinned re-read: a TOCTOU race between
+                    # ``get(...)`` and the discard decision can return a
+                    # stale snapshot whose ``state`` still reads RUNNING
+                    # even though a concurrent write advanced the
+                    # program to DONE. When the dataplane is wired, the
+                    # coordinator's :meth:`read_program` admits the
+                    # snapshot only if its epoch is at-least the
+                    # in-memory ``atomic_counter`` we observed; otherwise
+                    # the timeout-discard is skipped and the next
+                    # ``_maintain`` tick re-evaluates. The bare
+                    # ``await storage.get(...)`` above stays as the
+                    # primary read so non-dataplane deployments retain
+                    # the existing behaviour exactly.
+                    if not await self._timeout_read_is_fresh(prog):
+                        logger.info(
+                            "[DagScheduler] program {} timeout-read failed "
+                            "freshness floor — deferring discard",
+                            info.program_id[:8],
+                        )
+                        continue
                     if prog.state == ProgramState.DONE:
                         # TOCTOU guard: the task completed successfully between the
                         # "timed out" classification and this point. Don't discard
