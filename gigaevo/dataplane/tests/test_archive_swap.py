@@ -298,6 +298,9 @@ class TestHostileScores:
             tiebreak_bit=1,
         )
         assert isinstance(bad, dp.Err)
+        # Surfaces as the typed variant — not a generic DataPlaneError —
+        # so callers can fan out on the candidate-was-malformed branch.
+        assert isinstance(bad.error, dp.EliteInvalidError)
         pool = coord._connection.pool  # type: ignore[attr-defined]
         # Occupant must still be the original.
         occupant = await pool.hget("test:archive", "nan-cell")  # type: ignore[misc]

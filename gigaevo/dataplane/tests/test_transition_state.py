@@ -376,6 +376,34 @@ class TestReservedPatchFields:
         assert int(result.value.value["epoch"]) < 999_999
 
 
+# ── typed `invalid` error surfacing ──────────────────────────────────
+
+
+class TestInvalidStatusTypedError:
+    """Lua ``'invalid'`` returns surface as ``TransitionError(kind="invalid")``.
+
+    Distinct from ``illegal`` (FSM table rejects the pair) and from
+    ``stale`` (expected_from mismatch); ``invalid`` covers caller-side
+    input that the script could not act on at all (malformed patch
+    JSON, corrupt persisted blob).
+    """
+
+    async def test_corrupt_blob_surfaces_as_invalid(self, coord: dp.DataPlane) -> None:
+        pool = coord._connection.pool  # type: ignore[attr-defined]
+        # Inject a malformed JSON blob — the Lua decode pcall returns
+        # ``invalid`` with a descriptive payload.
+        await pool.set("test:program:corrupt", "not-a-json-object")  # type: ignore[misc]
+        result = await coord.transition_program_state(
+            dp.ProgramId("corrupt"),
+            token=_token("corrupt"),
+            expected_from=None,
+            to=dp.ProgramState.RUNNING,
+            patch=dp.ProgramPatch(),
+        )
+        assert isinstance(result, dp.Err)
+        assert result.error.kind == "invalid"
+
+
 # ── batch transitions ────────────────────────────────────────────────
 
 

@@ -43,6 +43,7 @@ from .crash import OneShotFlag
 from .errors import (
     DataPlaneError,
     DeadlineExceeded,
+    EliteInvalidError,
     LockHeld,
     LockLost,
     NotStartedError,
@@ -616,6 +617,8 @@ class DataPlane:
             return Err(TransitionError.stale(payload))
         if status == "illegal":
             return Err(TransitionError.illegal(payload))
+        if status == "invalid":
+            return Err(TransitionError.invalid(payload))
         return Err(TransitionError.unknown(status, payload))
 
     async def transition_program_state_batch(
@@ -973,16 +976,14 @@ class DataPlane:
         )
         if math.isnan(candidate_score) or math.isinf(candidate_score):
             return Err(
-                DataPlaneError(
-                    f"try_replace_elite: candidate_score must be finite, "
-                    f"got {candidate_score!r}"
+                EliteInvalidError(
+                    detail=(f"candidate_score must be finite, got {candidate_score!r}")
                 )
             )
         if int(tiebreak_bit) not in (0, 1):
             return Err(
-                DataPlaneError(
-                    f"try_replace_elite: tiebreak_bit must be 0 or 1, "
-                    f"got {tiebreak_bit!r}"
+                EliteInvalidError(
+                    detail=f"tiebreak_bit must be 0 or 1, got {tiebreak_bit!r}"
                 )
             )
         try:
@@ -1021,6 +1022,13 @@ class DataPlane:
             return Ok(EliteSwapped(displaced_id=ProgramId(displaced_or_occupant)))
         if status == "rejected":
             return Ok(EliteRejected(occupant_id=ProgramId(displaced_or_occupant)))
+        if status == "invalid":
+            # The Lua script rejected the candidate at the input boundary
+            # (non-finite score, empty cell or candidate id). The payload
+            # carries the reason verbatim from the script.
+            return Err(
+                EliteInvalidError(detail=str(displaced_or_occupant)),
+            )
         return Err(
             DataPlaneError(f"try_replace_elite: unexpected Lua status {status!r}")
         )

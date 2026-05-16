@@ -200,8 +200,15 @@ class ScriptNotRegisteredError(_StructuredError):
 class TransitionError(_StructuredError):
     """A state-machine transition was rejected.
 
-    ``kind`` is one of ``"stale" | "illegal" | "duplicate" | "unknown"``;
-    classmethod constructors below produce the appropriate variant.
+    ``kind`` is one of ``"stale" | "illegal" | "duplicate" | "invalid"
+    | "unknown"``; classmethod constructors below produce the
+    appropriate variant.
+
+    The ``"invalid"`` variant covers caller-side input that the Lua
+    script could not act on (malformed patch JSON, corrupt persisted
+    blob); it is distinct from ``"illegal"`` (the transition pair is
+    rejected by the FSM table) and from ``"unknown"`` (a server-side
+    status the wrapper did not anticipate).
     """
 
     kind: str
@@ -220,6 +227,10 @@ class TransitionError(_StructuredError):
         return cls(kind="duplicate", detail=detail)
 
     @classmethod
+    def invalid(cls, detail: str) -> TransitionError:
+        return cls(kind="invalid", detail=detail)
+
+    @classmethod
     def unknown(cls, status: str, payload: str) -> TransitionError:
         return cls(kind="unknown", detail=f"{status}: {payload}")
 
@@ -232,6 +243,19 @@ class StaleReadError(_StructuredError):
     observed_generation: int
     min_epoch: int
     min_generation: int
+
+
+@dataclass(slots=True, frozen=True)
+class EliteInvalidError(_StructuredError):
+    """An elite-swap candidate was rejected at the script input boundary.
+
+    Distinct from a ``rejected`` outcome (which carries the surviving
+    occupant); this variant signals the candidate could not be compared
+    at all — non-finite score, empty cell key, empty candidate id, or
+    similar caller-side malformations.
+    """
+
+    detail: str
 
 
 # ── locks ─────────────────────────────────────────────────────────────
