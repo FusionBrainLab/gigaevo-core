@@ -5,7 +5,7 @@
 
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
-  problem_ctx: ${problem_context}
+  problem_ctx: ${ref:problem_context}
   llm_wrapper: ${ref:llm}
   storage: ${ref:redis_storage}
   prompts_dir: ${prompts.dir}
@@ -77,7 +77,7 @@ dag_blueprint:
       _target_: gigaevo.programs.stages.metrics.EnsureMetricsStage
       _partial_: true
       metrics_factory: ${ref:metrics_context::get_sentinels}
-      metrics_context: ${metrics_context}
+      metrics_context: ${ref:metrics_context}
       timeout: ${stage_timeout}
 
     # Insights generation (uses LLM to generate insights)
@@ -86,7 +86,7 @@ dag_blueprint:
       _partial_: true
       llm: ${ref:llm}
       task_description: ${ref:problem_context::task_description}
-      metrics_context: ${metrics_context}
+      metrics_context: ${ref:metrics_context}
       max_insights: ${max_insights}
       prompts_dir: ${prompts.dir}
       timeout: ${stage_timeout}
@@ -98,7 +98,7 @@ dag_blueprint:
       storage: ${ref:redis_storage}
       selector:
         _target_: gigaevo.programs.stages.ancestry_selector.AncestrySelector
-        metrics_context: ${metrics_context}
+        metrics_context: ${ref:metrics_context}
         strategy: best_fitness
         max_selected: 1
       timeout: ${stage_timeout}
@@ -110,7 +110,7 @@ dag_blueprint:
       storage: ${ref:redis_storage}
       selector:
         _target_: gigaevo.programs.stages.ancestry_selector.AncestrySelector
-        metrics_context: ${metrics_context}
+        metrics_context: ${ref:metrics_context}
         strategy: best_fitness
         max_selected: 2
       timeout: ${stage_timeout}
@@ -121,7 +121,7 @@ dag_blueprint:
       _partial_: true
       llm: ${ref:llm}
       task_description: ${ref:problem_context::task_description}
-      metrics_context: ${metrics_context}
+      metrics_context: ${ref:metrics_context}
       storage: ${ref:redis_storage}
       prompts_dir: ${prompts.dir}
       timeout: ${stage_timeout}
@@ -146,7 +146,7 @@ dag_blueprint:
     MutationContextStage:
       _target_: gigaevo.programs.stages.mutation_context.MutationContextStage
       _partial_: true
-      metrics_context: ${metrics_context}
+      metrics_context: ${ref:metrics_context}
       timeout: ${stage_timeout}
 
   # Data flow edges (source -> destination with input name) (defines how the data flows between the stages)

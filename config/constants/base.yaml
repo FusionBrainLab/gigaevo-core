@@ -12,3 +12,4 @@ defaults:
   - llm          # LLM default parameters
   - logging      # Logging configuration
   - endpoints    # API endpoint defaults
+  - _self_

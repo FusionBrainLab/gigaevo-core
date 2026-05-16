@@ -16,3 +16,4 @@ defaults:
   - /runner: default
   - /loader: directory
   - /logging: tensorboard
+  - _self_
