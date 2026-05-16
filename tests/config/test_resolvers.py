@@ -1,7 +1,7 @@
 """Tests for OmegaConf custom resolvers (config/resolvers.py).
 
-Covers _ref_resolver edge cases: nested paths, method chains, invalid syntax,
-and the register_resolvers function.
+Covers _ref_resolver edge cases plus the public registration surface
+exposed by ``register_resolvers``.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 from omegaconf import OmegaConf
 import pytest
 
-from gigaevo.config.resolvers import _ref_resolver
+from gigaevo.config.resolvers import _ref_resolver, register_resolvers
 
 
 class TestRefResolver:
@@ -35,3 +35,42 @@ class TestRefResolver:
         cfg = OmegaConf.create({"a": {"b": 42}})
         with pytest.raises(ValueError, match="Invalid syntax"):
             _ref_resolver("a::invalid-name", _root_=cfg)
+
+
+class TestRegisterResolvers:
+    """The public ``register_resolvers`` surface."""
+
+    def test_dangerous_resolvers_are_absent(self):
+        """``eval``, ``merge``, ``len`` must not be registered.
+
+        ``eval`` exposes ``builtins.eval`` to any interpolation site, an
+        unconditional remote-code-execution surface reachable through CLI
+        overrides. ``merge`` and ``len`` have no in-tree call sites.
+        """
+        register_resolvers()
+        assert OmegaConf.has_resolver("eval") is False
+        assert OmegaConf.has_resolver("merge") is False
+        assert OmegaConf.has_resolver("len") is False
+
+    def test_required_resolvers_are_present(self):
+        register_resolvers()
+        assert OmegaConf.has_resolver("ref") is True
+        assert OmegaConf.has_resolver("get_object") is True
+
+    def test_double_registration_is_idempotent(self):
+        """A second ``register_resolvers()`` call must not raise.
+
+        Hydra raises ``ValueError`` if a resolver is re-registered without
+        ``replace=True``; tests, notebooks, and certain multirun plugin
+        orderings hit this path.
+        """
+        register_resolvers()
+        register_resolvers()  # must not raise
+
+    def test_ref_resolver_resolves_via_interpolation(self):
+        """End-to-end: a YAML-like config with ``${ref:...}`` resolves."""
+        register_resolvers()
+        cfg = OmegaConf.create(
+            {"target": {"value": 7}, "pointer": "${ref:target.value}"}
+        )
+        assert cfg.pointer == 7
