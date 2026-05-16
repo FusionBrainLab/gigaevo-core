@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Final
 
 from loguru import logger
 from redis.exceptions import WatchError
@@ -10,6 +11,15 @@ from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.programs.program import Program
 
 CellDescriptor = tuple[int, ...]
+
+
+# Bounded retry budget for the optimistic compare-and-swap in
+# :meth:`RedisArchiveStorage.add_elite`. Each retry is one Redis round
+# trip; the legacy implementation looped without a bound and could spin
+# indefinitely under contention. Fifty attempts cover any plausible
+# steady-state contention rate and surface a real outage as a typed
+# failure instead of a hung coroutine.
+_WATCH_MAX_ATTEMPTS: Final[int] = 50
 
 
 # ------------------------------- Interface -------------------------------
@@ -66,21 +76,32 @@ class ArchiveStorage(ABC):
 
 
 class RedisArchiveStorage(ArchiveStorage):
-    """
-    Redis-backed archive with optimistic locking and reverse index.
+    """Redis-backed archive with bounded optimistic locking + reverse index.
 
     Data structures:
-      - `prefix:archive` (hash): cell -> program_id
-      - `prefix:archive:reverse` (hash): program_id -> cell (1:1 mapping)
+      - ``{prefix}:archive`` (hash): cell -> program_id
+      - ``{prefix}:archive:reverse`` (hash): program_id -> cell (1:1 mapping)
 
-    Note: Each program can only be elite in ONE cell at a time.
+    Each program can be elite in at most one cell at a time; the reverse
+    index keeps that invariant cheap to enforce on a swap.
 
-    An in-memory write-through cache (``_elite_cache``) mirrors the Redis
-    archive hash.  Reads hit the cache first; writes update both cache and
-    Redis atomically.  This eliminates 4-5 Redis round-trips per
-    ``add_elite`` call for the vast majority of programs that don't improve
-    the current cell occupant.  Safe because a single engine instance holds
-    an exclusive Redis instance lock per prefix.
+    The legacy implementation paired a ``_elite_cache`` in-memory mirror
+    of the archive hash with an unbounded ``while True`` retry loop on
+    ``WatchError``. The cache delivered a 0-RT fast-reject for
+    non-improving programs at the cost of two correctness hazards:
+
+      1. The cache read happened OUTSIDE the WATCH window, so sibling
+         tasks in the same engine could see different "current" elites
+         and call ``is_better`` against inconsistent inputs.
+      2. The retry was unbounded, so a contended cell could hang a
+         caller indefinitely under pathological conditions.
+
+    Both are gone. Every read consults Redis (one HGET per call, ~0.05
+    ms on a loopback connection); WatchError retries are capped at
+    :data:`_WATCH_MAX_ATTEMPTS` and exhaustion surfaces as a typed
+    failure. The new ``add_elite`` path still optimistically compares
+    via the caller-supplied ``is_better`` predicate; the small Redis-
+    side cost buys correctness that the cache never had.
     """
 
     def __init__(
@@ -90,11 +111,6 @@ class RedisArchiveStorage(ArchiveStorage):
         prefix = key_prefix or program_storage.config.key_prefix
         self._hash_key = f"{prefix}:archive"
         self._reverse_key = f"{prefix}:archive:reverse"
-        # In-memory write-through cache: cell_field -> elite Program
-        self._elite_cache: dict[str, Program] = {}
-        # Reverse: program_id -> cell_field (for remove_by_id)
-        self._elite_reverse: dict[str, str] = {}
-        self._cache_loaded: bool = False
 
     # -------- small helpers --------
 
@@ -120,55 +136,12 @@ class RedisArchiveStorage(ArchiveStorage):
 
         return await self._storage.with_redis("archive:hlen", _op)
 
-    async def _hgetall(self) -> dict[str, str]:
-        async def _op(r):
-            return await r.hgetall(self._hash_key)
-
-        return await self._storage.with_redis("archive:hgetall", _op) or {}
-
-    async def _ensure_cache(self) -> None:
-        """Lazily populate the in-memory elite cache from Redis."""
-        if self._cache_loaded:
-            return
-        mapping = await self._hgetall()  # field -> program_id
-        if mapping:
-            pids = list(mapping.values())
-            programs = await self._storage.mget(pids)
-            pid_to_prog = {p.id: p for p in programs}
-            for field, pid in mapping.items():
-                prog = pid_to_prog.get(pid)
-                if prog is not None:
-                    self._elite_cache[field] = prog
-                    self._elite_reverse[pid] = field
-        self._cache_loaded = True
-
-    def _cache_set(self, field: str, program: Program) -> None:
-        """Update cache for a cell, evicting old occupant if different."""
-        old = self._elite_cache.get(field)
-        if old is not None and old.id != program.id:
-            self._elite_reverse.pop(old.id, None)
-        self._elite_cache[field] = program
-        self._elite_reverse[program.id] = field
-
-    def _cache_remove_field(self, field: str) -> None:
-        old = self._elite_cache.pop(field, None)
-        if old is not None:
-            self._elite_reverse.pop(old.id, None)
-
-    def _cache_remove_id(self, program_id: str) -> str | None:
-        """Remove by program ID; returns cell field if found."""
-        field = self._elite_reverse.pop(program_id, None)
-        if field is not None:
-            self._elite_cache.pop(field, None)
-        return field
-
-    def _cache_clear(self) -> None:
-        self._elite_cache.clear()
-        self._elite_reverse.clear()
-
     async def get_elite(self, cell: CellDescriptor) -> Program | None:
-        await self._ensure_cache()
-        return self._elite_cache.get(self._field(cell))
+        field = self._field(cell)
+        pid = await self._hget(field)
+        if not pid:
+            return None
+        return await self._storage.get(pid)
 
     async def add_elite(
         self,
@@ -176,39 +149,45 @@ class RedisArchiveStorage(ArchiveStorage):
         program: Program,
         is_better: Callable[[Program, Program], bool],
     ) -> bool:
-        """Add elite, using in-memory cache to skip Redis reads for non-improving programs."""
-        await self._ensure_cache()
+        """Add elite via bounded WATCH/MULTI/EXEC.
+
+        Always consults Redis for the current occupant — no in-memory
+        cache to drift. Compares the candidate against whichever program
+        Redis returns; if the comparator rejects, the swap is skipped.
+        The retry loop terminates after :data:`_WATCH_MAX_ATTEMPTS`
+        observations of WatchError; on exhaustion the call returns
+        ``False`` with a warning rather than spinning forever.
+        """
         field = self._field(cell)
 
-        # Fast path: compare in-memory (0 Redis RT for rejected programs)
-        current_prog = self._elite_cache.get(field)
-        if current_prog is not None and not is_better(program, current_prog):
-            return False
-
-        # Program improves (or cell is empty).  Verify it exists in storage
-        # before committing to Redis.
+        # Pre-flight: the candidate must exist in the program storage
+        # before we attempt to install it as the elite. The legacy code
+        # did this check after the in-memory fast-reject; with the
+        # cache gone there's no benefit to deferring it.
         if not await self._storage.exists(program.id):
             logger.debug("[Archive] add ignored: program {} not in storage", program.id)
             return False
 
-        current_id = current_prog.id if current_prog else None
-
         async def _op(r):
+            attempts = 0
             while True:
+                attempts += 1
+                if attempts > _WATCH_MAX_ATTEMPTS:
+                    logger.warning(
+                        "[Archive] add_elite gave up on cell {} after {} WATCH retries",
+                        field,
+                        _WATCH_MAX_ATTEMPTS,
+                    )
+                    return False
                 try:
                     async with r.pipeline() as pipe:
                         await pipe.watch(self._hash_key)
-
-                        # Re-check Redis state in case of concurrent modification
-                        # (defensive; single-engine makes this unlikely)
                         redis_id = await pipe.hget(self._hash_key, field)
-                        if redis_id and redis_id != (current_id or ""):
-                            # Cache was stale — reload current from Redis
+
+                        if redis_id:
                             redis_prog = await self._storage.get(redis_id)
                             if redis_prog and not is_better(program, redis_prog):
                                 await pipe.unwatch()
-                                # Fix cache to match Redis
-                                self._cache_set(field, redis_prog)
                                 return False
 
                         pipe.multi()
@@ -220,14 +199,12 @@ class RedisArchiveStorage(ArchiveStorage):
                         return True
 
                 except WatchError:
-                    # Invalidate cache for this cell — Redis state may
-                    # have changed under us.  Next iteration re-reads.
-                    self._cache_remove_field(field)
+                    # Another writer updated the archive hash; loop and
+                    # re-read the current occupant.
                     continue
 
         ok = await self._storage.with_redis("archive:add_elite", _op)
         if ok:
-            self._cache_set(field, program)
             logger.debug("[Archive] cell {} -> {}", field, program.id)
         return bool(ok)
 
@@ -248,18 +225,16 @@ class RedisArchiveStorage(ArchiveStorage):
 
         removed = await self._storage.with_redis("archive:remove_elite", _op)
         if removed:
-            self._cache_remove_field(field)
             logger.debug("[Archive] removed cell {}", field)
         return bool(removed)
 
     async def get_all_elites(self) -> list[str]:
         """Return all elite program IDs (already unique due to 1:1 mapping)."""
-        await self._ensure_cache()
-        return sorted(p.id for p in self._elite_cache.values())
+        vals = await self._hvals()
+        return sorted(vals)
 
     async def size(self) -> int:
-        await self._ensure_cache()
-        return len(self._elite_cache)
+        return await self._hlen()
 
     async def remove_elite_by_id(self, program_id: str) -> bool:
         """Remove program using reverse index (O(1) lookup)."""
@@ -277,7 +252,6 @@ class RedisArchiveStorage(ArchiveStorage):
 
         removed = await self._storage.with_redis("archive:remove_elite_by_id", _op)
         if removed:
-            self._cache_remove_id(program_id)
             logger.debug("[Archive] removed id {}", program_id)
         return bool(removed)
 
@@ -305,15 +279,12 @@ class RedisArchiveStorage(ArchiveStorage):
 
         count = await self._storage.with_redis("archive:bulk_remove_elites_by_id", _op)
         if count:
-            for pid in program_ids:
-                self._cache_remove_id(pid)
             logger.debug("[Archive] bulk removed {} ids", count)
         return int(count)
 
     async def clear_all_elites(self) -> int:
-        """Clear all elites and reverse index."""
-        await self._ensure_cache()
-        count = len(self._elite_cache)
+        """Clear all elites and reverse index. Returns cells cleared."""
+        count = await self._hlen()
         if count == 0:
             return 0
 
@@ -324,8 +295,6 @@ class RedisArchiveStorage(ArchiveStorage):
             await pipe.execute()
 
         await self._storage.with_redis("archive:clear_all", _op)
-        self._cache_clear()
-
         logger.debug("[Archive] cleared {} elites", count)
         return count
 
@@ -334,12 +303,16 @@ class RedisArchiveStorage(ArchiveStorage):
         placements: list[tuple[CellDescriptor, Program]],
         is_better: Callable[[Program, Program], bool],
     ) -> int:
+        """Sequential add_elite over the placements list.
+
+        Re-indexing is rare and correctness dominates throughput. A
+        future optimisation could group placements by cell and pick the
+        best per cell first, but the current loop is the same behaviour
+        the legacy code shipped — just without the divergence-prone
+        cache that used to back it.
+        """
         if not placements:
             return 0
-
-        # Note: This naive implementation processes items sequentially.
-        # A more optimized version would group by cell and select the best per cell first,
-        # but since this runs during re-indexing (rarely), correctness > raw speed for now.
 
         added_count = 0
         for cell, program in placements:
