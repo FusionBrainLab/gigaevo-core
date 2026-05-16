@@ -5,6 +5,8 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextvars import ContextVar
 import os
 import random
+import threading
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.language_models import LanguageModelInput
@@ -31,6 +33,113 @@ def get_selected_model() -> str | None:
 
 def _remember_selected_model(model_name: str) -> None:
     _selected_model_var.set(model_name)
+
+
+# ---------------------------------------------------------------------------
+# Startup model-verification helpers
+# ---------------------------------------------------------------------------
+#
+# Multiple ``MultiModelRouter`` instances and multiple driver processes
+# all call ``_verify_models`` from ``__init__``.  Without coordination
+# that synchronous burst against ``GET {base_url}/models`` is a textbook
+# thundering herd at boot.  Within a single process the cache below
+# collapses repeat probes; across processes the jitter spreads them.
+
+_VERIFY_CACHE_TTL_SUCCESS_S = 300.0
+"""Cache successful probes for 5 minutes.  Re-probing more often than
+this adds no value — the upstream's model list changes on the timescale
+of deployments."""
+
+_VERIFY_CACHE_TTL_FAILURE_S = 30.0
+"""Cache failures briefly so retries are still possible without
+re-burning the jitter sleep on every router instantiation."""
+
+_VERIFY_JITTER_MAX_S = 2.0
+"""Each probe sleeps a uniform [0, max] seconds before issuing the GET so
+concurrent router constructions land staggered, not synchronously."""
+
+# Maps ``base_url`` -> (cached_at_monotonic, available_models_or_None).
+_verify_cache: dict[str, tuple[float, frozenset[str] | None]] = {}
+_verify_cache_lock = threading.Lock()
+
+
+def _model_base_url(model: ChatOpenAI) -> str | None:
+    """Pick the OpenAI-compatible base URL off a langchain model object.
+
+    Different langchain-openai versions surface this as ``base_url`` or
+    ``openai_api_base``; check both."""
+    return getattr(model, "base_url", None) or getattr(model, "openai_api_base", None)
+
+
+def _model_api_key(model: ChatOpenAI) -> str | None:
+    """Return the API key as plaintext for the ``Authorization`` header.
+
+    ``ChatOpenAI.openai_api_key`` is a ``pydantic.SecretStr``;
+    ``.get_secret_value()`` unwraps it.  ``None`` if the model has no
+    key configured (in-cluster vLLM / SGLang typically need none)."""
+    secret = getattr(model, "openai_api_key", None)
+    if secret is None:
+        return None
+    try:
+        return secret.get_secret_value()
+    except AttributeError:
+        return str(secret) or None
+
+
+def _fetch_available_models_at(
+    base_url: str, api_key: str | None
+) -> frozenset[str] | None:
+    """Return the set of model ids advertised by an OpenAI-compatible server.
+
+    Process-wide TTL-cached + jittered.  Sends ``Authorization: Bearer``
+    when an API key is configured so authenticated providers
+    (openai.com, OpenRouter) return real results instead of 401.
+
+    Returns ``None`` on probe failure; the caller is expected to skip
+    verification logging for that base URL rather than treat ``None``
+    as "no models available".
+    """
+    now = time.monotonic()
+    with _verify_cache_lock:
+        cached = _verify_cache.get(base_url)
+        if cached is not None:
+            cached_at, cached_value = cached
+            ttl = (
+                _VERIFY_CACHE_TTL_SUCCESS_S
+                if cached_value is not None
+                else _VERIFY_CACHE_TTL_FAILURE_S
+            )
+            if (now - cached_at) < ttl:
+                return cached_value
+
+    # Stagger probes across coexisting routers / drivers.
+    time.sleep(random.uniform(0, _VERIFY_JITTER_MAX_S))
+
+    from gigaevo.infra.requests_factory import make_requests_session
+
+    headers: dict[str, str] | None = None
+    if api_key:
+        headers = {"Authorization": f"Bearer {api_key}"}
+    session = make_requests_session("model_verify", timeout=(5.0, 10.0))
+    available: frozenset[str] | None
+    try:
+        response = session.get(f"{base_url}/models", headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        available = frozenset(
+            d["id"] for d in data.get("data", []) if isinstance(d, dict) and "id" in d
+        )
+    except Exception as exc:
+        logger.warning(
+            "[MultiModelRouter] Cannot verify models at {}: {}", base_url, exc
+        )
+        available = None
+    finally:
+        session.close()
+
+    with _verify_cache_lock:
+        _verify_cache[base_url] = (time.monotonic(), available)
+    return available
 
 
 def _create_langfuse_handler() -> CallbackHandler | None:
@@ -129,57 +238,47 @@ class MultiModelRouter(Runnable):
     def _verify_models(self) -> None:
         """Best-effort startup probe — verify configured models exist on servers.
 
-        Uses :func:`gigaevo.infra.requests_factory.make_requests_session` so
-        the probe carries the same urllib3 retry / TCP keepalive / TLS
-        settings as the rest of the sync HTTP layer (rather than the
-        unconfigured ``urllib.request.urlopen`` that lived here before).
+        Routed through :func:`_fetch_available_models_at`, which adds a
+        process-wide TTL cache + random jitter before each probe so
+        multiple routers and multiple drivers don't synchronously
+        hammer the inference server's ``/models`` endpoint at boot.
+        Sends the model's API key as ``Authorization: Bearer …`` so the
+        probe works against authenticated providers (OpenAI, OpenRouter)
+        instead of silently logging 401s and continuing.
         """
-        from gigaevo.infra.requests_factory import make_requests_session
-
-        session = make_requests_session("model_verify", timeout=(5.0, 10.0))
-        try:
-            checked: set[str] = set()
-            for model in self.models:
-                base_url = getattr(model, "base_url", None) or getattr(
-                    model, "openai_api_base", None
-                )
-                if not base_url or base_url in checked:
+        checked: set[str] = set()
+        for model in self.models:
+            base_url = _model_base_url(model)
+            # ``isinstance(str)`` short-circuits mock objects that return
+            # truthy ``MagicMock`` attributes — those models never have a
+            # real URL to probe, and exercising the network path with a
+            # mock-stringified URL just produces noise in test logs.
+            if not isinstance(base_url, str) or base_url in checked:
+                continue
+            checked.add(base_url)
+            api_key = _model_api_key(model)
+            available = _fetch_available_models_at(base_url, api_key)
+            if available is None:
+                continue  # probe failure already logged at the helper layer
+            for m in self.models:
+                if _model_base_url(m) != base_url:
                     continue
-                checked.add(base_url)
-                try:
-                    response = session.get(f"{base_url}/models")
-                    response.raise_for_status()
-                    data = response.json()
-                    available = [d["id"] for d in data.get("data", [])]
-                    for m in self.models:
-                        m_url = getattr(m, "base_url", None) or getattr(
-                            m, "openai_api_base", None
-                        )
-                        if m_url == base_url:
-                            if m.model_name in available:
-                                logger.info(
-                                    "[MultiModelRouter:{}] Model {} verified on {}",
-                                    self._name,
-                                    m.model_name,
-                                    base_url,
-                                )
-                            else:
-                                logger.warning(
-                                    "[MultiModelRouter:{}] Model {} NOT FOUND on {}. Available: {}",
-                                    self._name,
-                                    m.model_name,
-                                    base_url,
-                                    available,
-                                )
-                except Exception as exc:
-                    logger.warning(
-                        "[MultiModelRouter:{}] Cannot verify models at {}: {}",
+                if m.model_name in available:
+                    logger.info(
+                        "[MultiModelRouter:{}] Model {} verified on {}",
                         self._name,
+                        m.model_name,
                         base_url,
-                        exc,
                     )
-        finally:
-            session.close()
+                else:
+                    logger.warning(
+                        "[MultiModelRouter:{}] Model {} NOT FOUND on {}. "
+                        "Available: {}",
+                        self._name,
+                        m.model_name,
+                        base_url,
+                        sorted(available),
+                    )
 
     @staticmethod
     def _current_task_id() -> int | None:

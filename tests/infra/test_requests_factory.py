@@ -292,3 +292,47 @@ class TestMakeRequestsSession:
             assert ua.startswith("gigaevo-core/")
         finally:
             session.close()
+
+
+class TestBuildRetryForIdempotentPost:
+    """``build_retry_for_idempotent_post`` is the opt-in variant for
+    callers whose server-side POST is idempotent — LLM chat completions
+    qualify (stateless on the server) but resource-creating POSTs like
+    ``POST /v1/memory-cards`` do not."""
+
+    def test_post_in_allowed_methods(self) -> None:
+        from gigaevo.infra.requests_factory import build_retry_for_idempotent_post
+
+        retry = build_retry_for_idempotent_post()
+        assert "POST" in retry.allowed_methods
+
+    def test_status_forcelist_matches_conservative_variant(self) -> None:
+        """The idempotent-POST variant must also retry 429 / 408 / 425 /
+        5xx — the same set the conservative ``build_retry`` covers."""
+        from gigaevo.infra.requests_factory import (
+            DEFAULT_RETRY_STATUS_FORCELIST,
+            build_retry_for_idempotent_post,
+        )
+
+        retry = build_retry_for_idempotent_post()
+        for code in DEFAULT_RETRY_STATUS_FORCELIST:
+            assert code in retry.status_forcelist
+
+    def test_respects_retry_after_header(self) -> None:
+        from gigaevo.infra.requests_factory import build_retry_for_idempotent_post
+
+        retry = build_retry_for_idempotent_post()
+        assert retry.respect_retry_after_header is True
+
+    def test_overrides_applied(self) -> None:
+        from gigaevo.infra.requests_factory import build_retry_for_idempotent_post
+
+        retry = build_retry_for_idempotent_post(
+            total=9,
+            backoff_factor=0.25,
+            status_forcelist=(429, 503),
+        )
+        assert retry.total == 9
+        assert retry.backoff_factor == 0.25
+        assert set(retry.status_forcelist) == {429, 503}
+        assert "POST" in retry.allowed_methods

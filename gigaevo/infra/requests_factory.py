@@ -65,6 +65,21 @@ DEFAULT_RETRY_ALLOWED_METHODS = (
     "DELETE",
 )
 
+# Methods set for callers whose POST endpoints are idempotent from the
+# server's perspective (LLM chat completions are stateless; a duplicate
+# request produces a fresh sampled output but no server-side side
+# effect, so a transient 429 / 5xx is safe to retry).  Use
+# :func:`build_retry_for_idempotent_post` to mint a ``Retry`` policy
+# that includes POST.
+DEFAULT_RETRY_ALLOWED_METHODS_WITH_POST = (
+    "HEAD",
+    "GET",
+    "OPTIONS",
+    "PUT",
+    "DELETE",
+    "POST",
+)
+
 
 def _normalize_timeout(
     value: float | tuple[float, float],
@@ -191,6 +206,45 @@ def build_retry(
         backoff_max=backoff_max,
         status_forcelist=list(status_forcelist),
         allowed_methods=list(allowed_methods),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+
+
+def build_retry_for_idempotent_post(
+    *,
+    total: int = DEFAULT_RETRY_TOTAL,
+    connect: int | None = DEFAULT_RETRY_CONNECT,
+    read: int | None = DEFAULT_RETRY_READ,
+    status: int | None = DEFAULT_RETRY_STATUS,
+    backoff_factor: float = DEFAULT_RETRY_BACKOFF_FACTOR,
+    backoff_jitter: float = DEFAULT_RETRY_BACKOFF_JITTER,
+    backoff_max: float = DEFAULT_RETRY_BACKOFF_MAX,
+    status_forcelist: tuple[int, ...] = DEFAULT_RETRY_STATUS_FORCELIST,
+) -> Retry:
+    """Variant of :func:`build_retry` that includes POST in ``allowed_methods``.
+
+    Use ONLY for callers whose server-side POST is idempotent — every
+    LLM chat completion endpoint qualifies (the server holds no state
+    about prior requests; the same prompt produces a fresh sampled
+    completion but no side effect).  ``POST /v1/memory-cards`` and any
+    other resource-creating POST do NOT qualify and must keep the
+    conservative :func:`build_retry` policy.
+
+    The retry policy honours ``Retry-After`` on 429 / 503 responses so
+    callers respect server-supplied backoff before retrying.  All other
+    arguments mirror :func:`build_retry`.
+    """
+    return Retry(
+        total=total,
+        connect=connect,
+        read=read,
+        status=status,
+        backoff_factor=backoff_factor,
+        backoff_jitter=backoff_jitter,
+        backoff_max=backoff_max,
+        status_forcelist=list(status_forcelist),
+        allowed_methods=list(DEFAULT_RETRY_ALLOWED_METHODS_WITH_POST),
         respect_retry_after_header=True,
         raise_on_status=False,
     )
