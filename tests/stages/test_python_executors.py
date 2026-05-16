@@ -1647,3 +1647,132 @@ class TestLokyBackendIsolation:
         backend = _wrapper.default_loky_backend()
         assert backend is not None
         assert _wrapper.default_loky_backend() is backend  # cached
+
+
+# =============================================================================
+# Worker identity (node_id + worker_id)
+# =============================================================================
+
+
+class TestWorkerIdentity:
+    """Each worker process gets a stable ``worker_id``; ``node_id`` is taken
+    from the parent's :class:`WorkerConfig` and surfaced through the
+    result envelope plus ``os.environ``."""
+
+    async def test_worker_id_is_populated(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, node_id="test-node"))
+        try:
+            executor = backend._get_executor()
+            fut = executor.submit(
+                _run_task,
+                WorkerCall(
+                    code="import os\ndef f(): return os.environ.get('GIGAEVO_WORKER_ID', '')",
+                    function_name="f",
+                ),
+                str(spill),
+            )
+            result = fut.result(timeout=30)
+            assert result.worker_id != ""
+            assert len(result.worker_id) == 12  # uuid4 hex prefix
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_node_id_propagates_to_worker_env(self, tmp_path) -> None:
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, node_id="my-k8s-pod-7"))
+        try:
+            value = await backend.execute(
+                WorkerCall(
+                    code=(
+                        "import os\n"
+                        "def f():\n"
+                        "    return os.environ.get('GIGAEVO_NODE_ID', '')\n"
+                    ),
+                    function_name="f",
+                ),
+                deadline_s=30,
+            )
+            assert value == "my-k8s-pod-7"
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_two_workers_have_distinct_worker_ids(self, tmp_path) -> None:
+        """Two worker processes in the same pool generate independent worker_ids."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, max_workers=2))
+        try:
+            executor = backend._get_executor()
+            # Fan-out two long-ish tasks so loky has to use two distinct workers.
+            futs = [
+                executor.submit(
+                    _run_task,
+                    WorkerCall(
+                        code="import time\ndef f(): time.sleep(0.5); return 1",
+                        function_name="f",
+                    ),
+                    str(spill),
+                )
+                for _ in range(2)
+            ]
+            results = [f.result(timeout=30) for f in futs]
+            ids = {r.worker_id for r in results}
+            assert len(ids) == 2, f"expected 2 distinct worker_ids, got {ids}"
+        finally:
+            await backend.shutdown(wait=True)
+
+    async def test_worker_id_stable_within_one_worker(self, tmp_path) -> None:
+        """A worker reused across multiple calls reports the same worker_id."""
+        from gigaevo.programs.stages.python_executors.exec_runner import WorkerCall
+        from gigaevo.programs.stages.python_executors.wrapper import (
+            LokyBackend,
+            WorkerConfig,
+            _run_task,
+        )
+
+        spill = tmp_path / "spill"
+        spill.mkdir()
+
+        backend = LokyBackend(WorkerConfig(spill_dir=spill, max_workers=1))
+        try:
+            executor = backend._get_executor()
+            results = []
+            for _ in range(3):
+                fut = executor.submit(
+                    _run_task,
+                    WorkerCall(code="def f(): return 1", function_name="f"),
+                    str(spill),
+                )
+                results.append(fut.result(timeout=30))
+            ids = {r.worker_id for r in results}
+            pids = {r.worker_pid for r in results}
+            assert len(ids) == 1, f"worker_id changed across reuse: {ids}"
+            assert len(pids) == 1, f"worker pid changed across reuse: {pids}"
+        finally:
+            await backend.shutdown(wait=True)

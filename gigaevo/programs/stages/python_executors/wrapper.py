@@ -190,6 +190,12 @@ class WorkerResult:
     user_time_s: float
     sys_time_s: float
     worker_pid: int
+    # Stable identifiers attached to every result so multi-pool and
+    # multi-host deployments can attribute log events back to source.
+    # ``worker_id`` is generated once per worker process in :func:`_worker_init`;
+    # ``node_id`` is taken from :attr:`WorkerConfig.node_id`.
+    worker_id: str = ""
+    node_id: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +243,14 @@ def _worker_init() -> None:
             signal.signal(sig, signal.SIG_DFL)
 
     raw = os.environ.get(_WORKER_INIT_ENV_KEY)
+    node_id = ""
     if raw:
         try:
             decoded = json.loads(base64.b64decode(raw).decode("utf-8"))
             whitelist = frozenset(decoded["whitelist"])
             prefixes = tuple(decoded["prefixes"])
             enable_pdeathsig = bool(decoded["pdeathsig"])
+            node_id = str(decoded.get("node_id", ""))
         except Exception as exc:
             logger.debug(
                 "[exec_wrapper] worker init config decode failed, using defaults: {}",
@@ -260,6 +268,14 @@ def _worker_init() -> None:
         if key in whitelist or any(key.startswith(p) for p in prefixes):
             continue
         os.environ.pop(key, None)
+
+    # Worker identity: unique uuid generated once per worker process, plus
+    # the parent's node_id.  Surfaced via os.environ (GIGAEVO_* prefix
+    # passes the scrub above) so user code can read them too if it wants.
+    worker_id = uuid.uuid4().hex[:12]
+    os.environ["GIGAEVO_WORKER_ID"] = worker_id
+    if node_id:
+        os.environ["GIGAEVO_NODE_ID"] = node_id
 
     if not enable_pdeathsig:
         return
@@ -327,6 +343,8 @@ def _run_task(call: WorkerCall, spill_dir: str) -> WorkerResult:
         user_time_s=float(ru_after.ru_utime - ru_before.ru_utime),
         sys_time_s=float(ru_after.ru_stime - ru_before.ru_stime),
         worker_pid=os.getpid(),
+        worker_id=os.environ.get("GIGAEVO_WORKER_ID", ""),
+        node_id=os.environ.get("GIGAEVO_NODE_ID", ""),
     )
 
 
@@ -401,6 +419,7 @@ class LokyBackend:
             "whitelist": list(self._config.env_whitelist),
             "prefixes": list(self._config.env_prefixes),
             "pdeathsig": self._config.enable_pdeathsig,
+            "node_id": self._config.node_id,
         }
         scrubbed[_WORKER_INIT_ENV_KEY] = base64.b64encode(
             json.dumps(init_config).encode("utf-8")
@@ -449,10 +468,12 @@ class LokyBackend:
             raise
 
         logger.trace(
-            "[LokyBackend:{}] fn={} pid={} wall={:.3f}s rss={:.1f}MB user={:.3f}s sys={:.3f}s",
+            "[LokyBackend:{}|{}:{}:{}] fn={} wall={:.3f}s rss={:.1f}MB user={:.3f}s sys={:.3f}s",
             self._config.pool_id,
-            call.function_name,
+            result.node_id or self._config.node_id,
+            result.worker_id,
             result.worker_pid,
+            call.function_name,
             result.wall_time_s,
             result.peak_rss_kb / 1024.0,
             result.user_time_s,
