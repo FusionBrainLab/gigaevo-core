@@ -89,17 +89,30 @@ target-version = "py312"
 exclude = [".claude/worktrees", "experiments/*/top_programs_*", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
 
 [tool.ruff.lint]
-# Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
-# See https://beta.ruff.rs/docs/rules/ for more possible rules
-select = ["E", "F", "I", "UP"]
+# Enable pycodestyle (`E`), Pyflakes (`F`), isort (`I`), pyupgrade (`UP`),
+# and flake8-tidy-imports (`TID`) for the banned-api policy below.
+select = ["E", "F", "I", "UP", "TID"]
 ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
+
+# Banned-import policy:
+#
+# Every Redis interaction goes through ``gigaevo.dataplane`` so we have
+# one place where atomicity, schema versioning, and crash-recovery
+# semantics live. The dataplane package itself, the legacy reference
+# at ``gigaevo/infra/endpoint_pool.py``, and any not-yet-migrated
+# call site listed in ``per-file-ignores`` below are exempt; new code
+# outside those paths is rejected at lint time.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"redis".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
+"redis.asyncio".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
+"redis.exceptions".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
 
 [tool.ruff.lint.per-file-ignores]
 "run.py" = ["E402"]
 "run_hydra.py" = ["E402"]
-"tools/**/*.py" = ["E402"]
+"tools/**/*.py" = ["E402", "TID251"]  # operator tools; allowed direct redis until they migrate
 "__init__.py" = ["F401"]
-"problems/**/*.py" = ["E402", "E722", "E741", "F841"]
+"problems/**/*.py" = ["E402", "E722", "E741", "F841", "TID251"]
 "gigaevo/memory/ideas_tracker/run_ideas_tracker_from_csv.py" = ["E402"]
 "gigaevo/memory/examples/a_mem_memory_creation.py" = ["E402"]
 "gigaevo/memory/shared_memory/amem_gam_retriever.py" = ["E402"]
@@ -107,6 +120,28 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "gigaevo/memory/examples/memory_usage_example.py" = ["E402"]
 "gigaevo/memory_platform/shared_memory/memory.py" = ["E402"]
 "gigaevo/memory_platform/shared_memory/remote_gam_retriever.py" = ["E402"]
+# Dataplane owns the Redis boundary.
+"gigaevo/dataplane/**/*.py" = ["TID251"]
+# Reference Lua-CAS implementation that predates the dataplane; kept as
+# the existence proof for the pattern. Eventually inherits the SHA-cache
+# helpers from ``gigaevo.dataplane.scripts.LuaRegistry`` and becomes
+# eligible for the ban.
+"gigaevo/infra/endpoint_pool.py" = ["TID251"]
+# Legacy call sites awaiting migration. Each exemption is removed as
+# the corresponding call site is rewritten through gigaevo.dataplane.
+"gigaevo/database/redis/**/*.py" = ["TID251"]
+"gigaevo/database/redis_program_storage.py" = ["TID251"]
+"gigaevo/evolution/bus/transport.py" = ["TID251"]
+"gigaevo/evolution/storage/archive_storage.py" = ["TID251"]
+"gigaevo/llm/bandit.py" = ["TID251"]
+"gigaevo/prompts/fetcher.py" = ["TID251"]
+"gigaevo/prompts/coevolution/stats.py" = ["TID251"]
+"gigaevo/prompts/coevolution/sync.py" = ["TID251"]
+"gigaevo/utils/trackers/backends/redis.py" = ["TID251"]
+# Tests that exercise legacy paths directly. Once those paths are
+# migrated their test files inherit the ban naturally; until then they
+# may import redis / fakeredis.aioredis as needed.
+"tests/**/*.py" = ["TID251"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["gigaevo"]
