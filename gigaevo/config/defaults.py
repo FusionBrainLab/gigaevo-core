@@ -1,0 +1,122 @@
+"""Typed module-level constants replacing config/constants/*.yaml.
+
+Every scalar that today lives in ``config/constants/{pipeline,redis,
+evolution,islands,runner,llm,logging,endpoints}.yaml`` lands here with
+the same value and a typed annotation. Experiment files import these
+constants and pass them to schema constructors; the YAMLs that
+referenced ``${primary_resolution}``, ``${stage_timeout}`` etc. get the
+literal value at YAML→Python conversion time, eliminating the
+``OmegaConf`` interpolation machinery for the constants subtree.
+
+The constants are grouped by domain and named with a ``DEFAULT_`` prefix
+so an import site reads as ``from gigaevo.config.defaults import
+DEFAULT_DAG_TIMEOUT_S`` rather than ``from ... import dag_timeout``. A
+regression test under ``tests/config/test_defaults.py`` walks every
+YAML and asserts the corresponding constant carries the byte-equal
+value, gating any future drift.
+"""
+
+from __future__ import annotations
+
+from typing import Final
+
+from gigaevo.programs.metrics.context import VALIDITY_KEY as _VALIDITY_KEY
+
+# ---------------------------------------------------------------------------
+# Pipeline execution — config/constants/pipeline.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_STAGE_TIMEOUT_S: Final[int] = 2400
+DEFAULT_DAG_TIMEOUT_S: Final[int] = 7200
+DEFAULT_OPTIMIZATION_TIME_BUDGET_S: Final[float | None] = None
+DEFAULT_DAG_CONCURRENCY: Final[int] = 16
+DEFAULT_MAX_CODE_LENGTH: Final[int] = 30_000
+DEFAULT_MAX_INSIGHTS: Final[int] = 8
+
+
+# ---------------------------------------------------------------------------
+# Redis connection — config/constants/redis.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_REDIS_MAX_CONNECTIONS: Final[int] = 150
+DEFAULT_REDIS_CONNECTION_POOL_TIMEOUT_S: Final[float] = 45.0
+DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_S: Final[int] = 120
+DEFAULT_REDIS_MAX_RETRIES: Final[int] = 5
+DEFAULT_REDIS_RETRY_DELAY_S: Final[float] = 0.5
+
+
+# ---------------------------------------------------------------------------
+# Evolution engine — config/constants/evolution.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_LOOP_INTERVAL_S: Final[float] = 1.0
+DEFAULT_MAX_ELITES_PER_GENERATION: Final[int] = 5
+DEFAULT_MAX_MUTATIONS_PER_GENERATION: Final[int] = 8
+DEFAULT_NUM_PARENTS: Final[int] = 2
+DEFAULT_MUTATION_MODE: Final[str] = "rewrite"
+DEFAULT_MAX_GENERATIONS: Final[int | None] = None
+DEFAULT_STRIP_COMMENTS_AND_DOCSTRINGS: Final[bool] = False
+
+
+# ---------------------------------------------------------------------------
+# MAP-Elites islands — config/constants/islands.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_MIGRATION_INTERVAL: Final[int] = 25
+DEFAULT_MAX_MIGRANTS_PER_ISLAND: Final[int] = 5
+DEFAULT_ENABLE_MIGRATION: Final[bool] = True
+DEFAULT_ISLAND_ID: Final[str] = "fitness_island"
+DEFAULT_ISLAND_MAX_SIZE: Final[int] = 75
+DEFAULT_PRIMARY_RESOLUTION: Final[int] = 150
+DEFAULT_VALIDITY_RESOLUTION: Final[int] = 2
+DEFAULT_BINNING_TYPE: Final[str] = "linear"
+# The validity-metric key lives next to the rest of the metrics-context
+# vocabulary; re-export it under the canonical constant name so the
+# schema layer can import a single value instead of crossing into the
+# metrics package directly.
+DEFAULT_VALIDITY_KEY: Final[str] = _VALIDITY_KEY
+
+
+# ---------------------------------------------------------------------------
+# DAG runner — config/constants/runner.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_RUNNER_POLL_INTERVAL_S: Final[float] = 5.0
+DEFAULT_MAX_CONCURRENT_DAGS: Final[int] = 10
+
+
+# ---------------------------------------------------------------------------
+# LLM defaults — config/constants/llm.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_LLM_TEMPERATURE: Final[float] = 0.6
+DEFAULT_LLM_MAX_TOKENS: Final[int] = 81_920
+DEFAULT_LLM_TOP_P: Final[float] = 0.95
+DEFAULT_LLM_TOP_K: Final[int] = 20
+DEFAULT_LLM_REQUEST_TIMEOUT_S: Final[int] = 600
+
+
+# ---------------------------------------------------------------------------
+# Logging — config/constants/logging.yaml
+# ---------------------------------------------------------------------------
+
+DEFAULT_LOG_ROTATION: Final[str] = "50 MB"
+DEFAULT_LOG_RETENTION: Final[str] = "30 days"
+DEFAULT_LOG_TAG: Final[str] = "experiment"
+# ``log_dir`` had no module-level scalar in the YAML — it was a
+# ``${hydra:runtime.output_dir}`` interpolation resolved at run time.
+# In the typed CLI the resolved output directory comes from
+# ``ExperimentConfig.output_dir / experiment_id`` and is set by
+# the LoggingConfig schema's build() method when hydra-2.4 lands.
+
+
+# ---------------------------------------------------------------------------
+# Endpoint defaults — config/constants/endpoints.yaml
+# ---------------------------------------------------------------------------
+
+# These two values are deployment-specific and routinely overridden in
+# experiment files. The defaults below match the YAML for byte-equality
+# but production deployments substitute their own (e.g. an internal
+# Qwen3 endpoint or a different OpenRouter slug).
+DEFAULT_LLM_BASE_URL: Final[str] = "https://openrouter.ai/api/v1"
+DEFAULT_MODEL_NAME: Final[str] = "google/gemini-3-flash-preview"
