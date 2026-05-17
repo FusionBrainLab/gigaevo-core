@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from gigaevo.config.schemas._base import FrozenStrictModel
 from gigaevo.config.schemas.algorithm import AlgorithmConfig, MultiIslandConfig
@@ -33,6 +33,16 @@ class ExperimentConfig(FrozenStrictModel):
     name: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_\-]+$")
     seed: int = Field(default=42)
     output_dir: Path = Field(default_factory=lambda: Path("outputs"))
+
+    @field_validator("output_dir")
+    @classmethod
+    def _output_dir_not_empty_or_cwd(cls, value: Path) -> Path:
+        if str(value) in ("", "."):
+            raise ValueError(
+                "output_dir must be a real path; "
+                f"got {value!r} which resolves to the current working directory"
+            )
+        return value
 
     redis: RedisConfig
     dataplane: DataPlaneSettings

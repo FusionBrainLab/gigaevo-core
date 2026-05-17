@@ -216,3 +216,31 @@ class TestJSONRoundTrip:
         parsed = ExperimentConfig.model_validate_json(as_json)
         assert parsed.name == "round_trip"
         assert parsed.experiment_id == cfg.experiment_id
+
+    def test_cross_field_validators_fire_on_json_load(self) -> None:
+        """A maliciously-edited config.json with a broken key_prefix
+        must still trip the cross-field validator at load time, not
+        only at Python construction."""
+        cfg = ExperimentConfig(**_kwargs(name="json_validator"))
+        as_dict = cfg.model_dump()
+        as_dict["dataplane"]["key_prefix"] = "tampered:prefix"
+        with pytest.raises(ValidationError, match="key_prefix must equal"):
+            ExperimentConfig.model_validate(as_dict)
+
+
+class TestOutputDir:
+    def test_default_is_outputs(self) -> None:
+        cfg = ExperimentConfig(**_kwargs())
+        assert cfg.output_dir == Path("outputs")
+
+    def test_empty_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="output_dir"):
+            ExperimentConfig(**_kwargs(output_dir=Path("")))
+
+    def test_cwd_dot_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="output_dir"):
+            ExperimentConfig(**_kwargs(output_dir=Path(".")))
+
+    def test_custom_path_accepted(self) -> None:
+        cfg = ExperimentConfig(**_kwargs(output_dir=Path("/srv/gigaevo/out")))
+        assert cfg.output_dir == Path("/srv/gigaevo/out")
