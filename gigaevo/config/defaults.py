@@ -1,19 +1,15 @@
-"""Typed module-level constants replacing config/constants/*.yaml.
+"""Typed module-level constants consumed by the schema layer.
 
-Every scalar that today lives in ``config/constants/{pipeline,redis,
-evolution,islands,runner,llm,logging,endpoints}.yaml`` lands here with
-the same value and a typed annotation. Experiment files import these
-constants and pass them to schema constructors; the YAMLs that
-referenced ``${primary_resolution}``, ``${stage_timeout}`` etc. get the
-literal value at YAML→Python conversion time, eliminating the
-``OmegaConf`` interpolation machinery for the constants subtree.
+Each scalar is a ``Final``-typed module-level binding grouped by
+domain (pipeline, redis, evolution, islands, runner, llm, logging,
+endpoints). Experiment files and preset builders import these
+constants and pass them to schema constructors so the default values
+are shared across the typed surface from a single source.
 
-The constants are grouped by domain and named with a ``DEFAULT_`` prefix
-so an import site reads as ``from gigaevo.config.defaults import
-DEFAULT_DAG_TIMEOUT_S`` rather than ``from ... import dag_timeout``. A
-regression test under ``tests/config/test_defaults.py`` walks every
-YAML and asserts the corresponding constant carries the byte-equal
-value, gating any future drift.
+The naming convention is ``DEFAULT_<DOMAIN>_<KNOB>``; the
+``test_defaults.TestImmutabilitySurface`` checks both that every
+public symbol follows the prefix and that no foreign module leaks
+into the namespace.
 """
 
 from __future__ import annotations

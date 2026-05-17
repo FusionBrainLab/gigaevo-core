@@ -1,18 +1,15 @@
 """Tests for the strict-construction wrapper around ``ChatOpenAI``.
 
 The wrapper closes two failure modes that the underlying class exposes:
-unknown kwargs silently fall through into ``model_kwargs`` and the
-``${oc.env:OPENAI_API_KEY}`` interpolation resolves to ``None`` when the
-env var is unset. Both behaviours used to manifest deep inside the OpenAI
-client or as opaque Hydra interpolation tracebacks.
+unknown kwargs silently fall through into ``model_kwargs``, and a
+``None`` ``api_key`` (often the result of an unset env var) constructs
+an instance that fails opaquely later in the OpenAI client. Both
+surface here as :class:`StrictChatOpenAIError`.
 """
 
 from __future__ import annotations
 
-from hydra.errors import InstantiationException
-from hydra.utils import instantiate
 from langchain_openai import ChatOpenAI
-from omegaconf import OmegaConf
 import pytest
 
 from gigaevo.llm.strict_chat_openai import (
@@ -89,60 +86,3 @@ def test_missing_openai_api_key_field_form_raises() -> None:
     with pytest.raises(StrictChatOpenAIError) as excinfo:
         strict_chat_openai(model="gpt-4o-mini", openai_api_key=None)
     assert "OPENAI_API_KEY" in str(excinfo.value)
-
-
-def test_via_hydra_instantiate_typo_raises() -> None:
-    """``hydra.utils.instantiate`` surfaces the typo at construction time.
-
-    Hydra wraps target exceptions in ``InstantiationException`` and chains
-    the original via ``__cause__``; the typed wrapper is therefore the
-    cause, not the directly raised exception.
-    """
-    cfg = OmegaConf.create(
-        {
-            "_target_": "gigaevo.llm.strict_chat_openai.strict_chat_openai",
-            "model": "gpt-4o-mini",
-            "api_key": "sk-test",
-            "tempetature": 0.5,
-        }
-    )
-    with pytest.raises(InstantiationException) as excinfo:
-        instantiate(cfg)
-    cause = excinfo.value.__cause__
-    assert isinstance(cause, StrictChatOpenAIError)
-    assert "tempetature" in str(cause)
-
-
-def test_via_hydra_instantiate_missing_env_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``${oc.env:OPENAI_API_KEY,null}`` unset surfaces as a typed error."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    cfg = OmegaConf.create(
-        {
-            "_target_": "gigaevo.llm.strict_chat_openai.strict_chat_openai",
-            "model": "gpt-4o-mini",
-            "api_key": "${oc.env:OPENAI_API_KEY,null}",
-        }
-    )
-    with pytest.raises(InstantiationException) as excinfo:
-        instantiate(cfg)
-    cause = excinfo.value.__cause__
-    assert isinstance(cause, StrictChatOpenAIError)
-    assert "OPENAI_API_KEY" in str(cause)
-
-
-def test_via_hydra_instantiate_present_env_constructs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When the env var is set, instantiation succeeds via Hydra."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-from-env")
-    cfg = OmegaConf.create(
-        {
-            "_target_": "gigaevo.llm.strict_chat_openai.strict_chat_openai",
-            "model": "gpt-4o-mini",
-            "api_key": "${oc.env:OPENAI_API_KEY,null}",
-        }
-    )
-    instance = instantiate(cfg)
-    assert isinstance(instance, ChatOpenAI)
