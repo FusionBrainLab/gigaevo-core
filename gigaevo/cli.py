@@ -43,11 +43,14 @@ _RUN_OBJECT_GRAPH_PENDING = (
 )
 
 
-def _parse_initial_args(argv: list[str]) -> tuple[Path, list[str]]:
+def _parse_initial_args(
+    argv: list[str],
+) -> tuple[Path, bool, list[str]]:
+    """Parse the experiment-path + dry-run prefix; forward the remainder
+    to tyro for nested field overrides."""
     parser = argparse.ArgumentParser(
         prog="gigaevo",
         description="Evolutionary search runtime — typed entry point",
-        add_help=False,
     )
     parser.add_argument(
         "experiment",
@@ -59,22 +62,8 @@ def _parse_initial_args(argv: list[str]) -> tuple[Path, list[str]]:
         action="store_true",
         help="Load, validate, and dump the resolved config without invoking the engine",
     )
-    parser.add_argument(
-        "--help",
-        "-h",
-        action="store_true",
-        help="Show this help message plus the experiment's tyro overrides",
-    )
-
     parsed, overrides = parser.parse_known_args(argv)
-    if parsed.help:
-        parser.print_help()
-        if not parsed.experiment:
-            sys.exit(0)
-    if parsed.dry_run and "--dry-run" not in overrides:
-        # surface the flag back to tyro? no — strip it.
-        pass
-    return parsed.experiment, overrides
+    return parsed.experiment, parsed.dry_run, overrides
 
 
 def _apply_tyro_overrides(
@@ -118,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
-    experiment_path, override_args = _parse_initial_args(argv)
+    experiment_path, dry_run, override_args = _parse_initial_args(argv)
 
     load_dotenv()
 
@@ -127,7 +116,6 @@ def main(argv: list[str] | None = None) -> int:
 
     config_path = _dump_resolved_config(cfg)
 
-    dry_run = "--dry-run" in override_args or "--dry-run" in argv
     if dry_run:
         logger.info(
             "Dry run complete. Validated config at {}. Engine invocation skipped.",

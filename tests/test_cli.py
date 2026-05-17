@@ -132,3 +132,37 @@ class TestCliErrors:
 
         with pytest.raises(ExperimentModuleError):
             main([str(bad), "--dry-run"])
+
+
+class TestCliTyroOverride:
+    def test_seed_override_propagates_to_dumped_config(self, tmp_path: Path) -> None:
+        """The tyro path must materialise the override against the
+        Pydantic field tree and re-trigger validation; the dumped JSON
+        is the ground truth."""
+        from gigaevo.cli import main
+
+        exp = _make_experiment(tmp_path)
+        exit_code = main([str(exp), "--dry-run", "--seed", "7"])
+        assert exit_code == 0
+
+        out_root = tmp_path / "outputs"
+        run_dirs = list(out_root.iterdir())
+        assert len(run_dirs) == 1
+        dumped = json.loads((run_dirs[0] / "config.json").read_text())
+        assert dumped["seed"] == 7
+        # The default seed in the experiment is 99, so the override
+        # genuinely changed the resolved value.
+        assert dumped["seed"] != 99
+
+    def test_override_triggers_cross_field_validator(self, tmp_path: Path) -> None:
+        """tyro merges overrides then Pydantic re-validates. An override
+        that violates a cross-field invariant must raise — not be
+        accepted silently."""
+        from gigaevo.cli import main
+
+        exp = _make_experiment(tmp_path)
+        # The experiment's name is "cli_test", so dataplane.key_prefix
+        # must equal "gigaevo:cli_test". Renaming the experiment via
+        # CLI without updating key_prefix breaks the invariant.
+        with pytest.raises(Exception):
+            main([str(exp), "--dry-run", "--name", "renamed"])
