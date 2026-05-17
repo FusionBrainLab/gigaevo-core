@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+import contextvars
 import os
 from pathlib import Path
 import struct
@@ -199,6 +200,31 @@ def default_exec_runner_pool() -> WorkerPool:
     return WorkerPool()
 
 
+_ambient_pool: contextvars.ContextVar[WorkerPool | None] = contextvars.ContextVar(
+    "gigaevo_exec_runner_pool", default=None
+)
+
+
+def set_ambient_exec_runner_pool(pool: WorkerPool | None) -> contextvars.Token:
+    """Bind ``pool`` as the ambient pool for ``run_exec_runner(pool=None)`` callers.
+
+    The returned token is required by ``reset_ambient_exec_runner_pool`` to
+    restore the previous binding. The ambient pool is consulted only when a
+    caller passes ``pool=None``; explicit ``pool=...`` always wins.
+    """
+    return _ambient_pool.set(pool)
+
+
+def reset_ambient_exec_runner_pool(token: contextvars.Token) -> None:
+    """Restore the ambient pool to the value held before the matching ``set``."""
+    _ambient_pool.reset(token)
+
+
+def get_ambient_exec_runner_pool() -> WorkerPool | None:
+    """Return the currently bound ambient pool, or ``None`` if unset."""
+    return _ambient_pool.get()
+
+
 async def _run_via_worker(
     proc: asyncio.subprocess.Process,
     data: bytes,
@@ -289,7 +315,10 @@ async def run_exec_runner(
         max_output_size: Maximum output size in bytes (None = unlimited)
         cwd: Working directory for subprocess
         runner_path: Path to exec_runner.py script
-        pool: Worker pool for parallel runs; if None, uses default_exec_runner_pool().
+        pool: Worker pool for parallel runs. If None, falls back first to the
+            ambient pool bound via ``set_ambient_exec_runner_pool`` (the
+            experiment-scoped lifecycle owner), and otherwise to
+            ``default_exec_runner_pool()`` which constructs a fresh pool.
 
     Returns:
         (result_object, raw_stdout_bytes, stderr_text)
@@ -322,7 +351,11 @@ async def run_exec_runner(
     }
     data = cloudpickle.dumps(payload, protocol=cloudpickle.DEFAULT_PROTOCOL)
 
-    worker_pool = pool if pool is not None else default_exec_runner_pool()
+    if pool is not None:
+        worker_pool = pool
+    else:
+        ambient = _ambient_pool.get()
+        worker_pool = ambient if ambient is not None else default_exec_runner_pool()
     worker = await worker_pool.get_worker(script, env, cwd_str)
     returned = False
     try:
