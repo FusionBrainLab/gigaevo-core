@@ -51,6 +51,8 @@ from .engine_startup import (
     build_dataplane,
     build_engine_root,
     wire_bandit_router,
+    wire_dag_runner,
+    wire_evolution_engine,
     wire_prompt_fetcher,
     wire_storage,
 )
@@ -269,6 +271,8 @@ __all__ = [
     "build_dataplane",
     "build_engine_root",
     "wire_bandit_router",
+    "wire_dag_runner",
+    "wire_evolution_engine",
     "wire_prompt_fetcher",
     "wire_storage",
 ]

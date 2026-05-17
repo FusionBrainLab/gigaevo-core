@@ -17,6 +17,8 @@ from gigaevo.dataplane import (
     build_dataplane,
     build_engine_root,
     wire_bandit_router,
+    wire_dag_runner,
+    wire_evolution_engine,
     wire_prompt_fetcher,
     wire_storage,
 )
@@ -98,11 +100,11 @@ async def run_experiment(cfg: DictConfig) -> None:
         # through :meth:`DataPlane.read_program`. The engine_root is
         # forwarded for future writes; storage already owns the
         # canonical reference and rotates the program-subspace witness
-        # on every transition.
-        dag_runner._dataplane = dataplane
-        dag_runner._engine_root = engine_root
-        evolution_engine._dataplane = dataplane
-        evolution_engine._engine_root = engine_root
+        # on every transition. The wire helpers reject conflicting
+        # re-attach so a second call within the same run-loop is a
+        # programming error, not a silent overwrite.
+        wire_dag_runner(dag_runner, dataplane, engine_root)
+        wire_evolution_engine(evolution_engine, dataplane, engine_root)
         actor = build_actor_identity(run_id=cfg.get("run_id"))
         llm_wrapper = getattr(evolution_engine.mutation_operator, "llm_wrapper", None)
         if llm_wrapper is not None:

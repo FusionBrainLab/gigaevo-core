@@ -36,7 +36,10 @@ import gigaevo.dataplane as dp
 from gigaevo.dataplane import (
     DataPlane,
     build_actor_identity,
+    build_engine_root,
     wire_bandit_router,
+    wire_dag_runner,
+    wire_evolution_engine,
     wire_prompt_fetcher,
     wire_storage,
 )
@@ -512,6 +515,87 @@ class TestPromptFetcherWiring:
             await _coord_shutdown(main_coord, main_fake)
             await _coord_shutdown(other_coord, other_fake)
             await _coord_shutdown(prompt_coord, prompt_fake)
+
+
+class TestDagRunnerAndEngineWiring:
+    """The runner / engine wiring helpers mirror the storage/bandit contract.
+
+    A successful wire records the same ``(dataplane, engine_root)`` pair
+    the storage already observes. Idempotent re-wire with identical
+    arguments is a no-op; re-wire with conflicting arguments raises.
+    """
+
+    async def test_wire_dag_runner_idempotent_and_rejects_conflicts(self) -> None:
+        _reset_counter()
+        server = fakeredis.FakeServer()
+        storage, dag_runner, engine, _ = _build(server, max_generations=1)
+        coord, fake = await _build_coordinator_against_fake(
+            server, key_prefix="minirun"
+        )
+        other_coord, other_fake = await _build_coordinator_against_fake(
+            server, key_prefix="other"
+        )
+        root = build_engine_root()
+        try:
+            assert dag_runner._dataplane is None
+            assert dag_runner._engine_root is None
+
+            assert wire_dag_runner(dag_runner, coord, root) is True
+            assert dag_runner._dataplane is coord
+            assert dag_runner._engine_root is root
+
+            # Identical re-wire is a silent no-op.
+            assert wire_dag_runner(dag_runner, coord, root) is True
+            assert dag_runner._dataplane is coord
+
+            # Conflicting re-wire raises and preserves the original.
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                wire_dag_runner(dag_runner, other_coord, root)
+            assert dag_runner._dataplane is coord
+
+            # Non-runner input degrades silently.
+            assert wire_dag_runner(MagicMock(), coord, root) is False
+        finally:
+            await storage.close()
+            await _coord_shutdown(coord, fake)
+            await _coord_shutdown(other_coord, other_fake)
+
+    async def test_wire_evolution_engine_idempotent_and_rejects_conflicts(
+        self,
+    ) -> None:
+        _reset_counter()
+        server = fakeredis.FakeServer()
+        storage, dag_runner, engine, _ = _build(server, max_generations=1)
+        coord, fake = await _build_coordinator_against_fake(
+            server, key_prefix="minirun"
+        )
+        other_coord, other_fake = await _build_coordinator_against_fake(
+            server, key_prefix="other"
+        )
+        root = build_engine_root()
+        try:
+            assert engine._dataplane is None
+            assert engine._engine_root is None
+
+            assert wire_evolution_engine(engine, coord, root) is True
+            assert engine._dataplane is coord
+            assert engine._engine_root is root
+
+            # Identical re-wire is a silent no-op.
+            assert wire_evolution_engine(engine, coord, root) is True
+            assert engine._dataplane is coord
+
+            # Conflicting re-wire raises and preserves the original.
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                wire_evolution_engine(engine, other_coord, root)
+            assert engine._dataplane is coord
+
+            # Non-engine input degrades silently.
+            assert wire_evolution_engine(MagicMock(), coord, root) is False
+        finally:
+            await storage.close()
+            await _coord_shutdown(coord, fake)
+            await _coord_shutdown(other_coord, other_fake)
 
 
 class TestActorIdentity:

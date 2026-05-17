@@ -49,8 +49,10 @@ from gigaevo.dataplane.permissions import Token, mint_root, mint_split
 
 if TYPE_CHECKING:
     from gigaevo.database.redis_program_storage import RedisProgramStorage
+    from gigaevo.evolution.engine.core import EvolutionEngine
     from gigaevo.llm.models import MultiModelRouter
     from gigaevo.prompts.fetcher import PromptFetcher
+    from gigaevo.runner.dag_runner import DagRunner
 
 __all__ = [
     "ENV_RUN_ID",
@@ -62,6 +64,8 @@ __all__ = [
     "wire_storage",
     "wire_bandit_router",
     "wire_prompt_fetcher",
+    "wire_dag_runner",
+    "wire_evolution_engine",
 ]
 
 
@@ -385,4 +389,81 @@ def wire_prompt_fetcher(
     if not isinstance(fetcher, GigaEvoArchivePromptFetcher):
         return False
     fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+    return True
+
+
+def wire_dag_runner(
+    runner: DagRunner,
+    dataplane: DataPlane,
+    engine_root: EngineRoot,
+) -> bool:
+    """Attach coordinator + engine root to a :class:`DagRunner`, if applicable.
+
+    Returns ``True`` when the rebind happened, ``False`` for a non-DagRunner
+    input (the entrypoint can call this unconditionally regardless of the
+    Hydra runner selection without inspecting the runtime type first).
+
+    Idempotency: a second call with the exact same triple is a silent
+    no-op. A second call with a different coordinator or engine root
+    raises :class:`RuntimeError` — silent overwrite would corrupt the
+    single-writer single-actor invariant that the per-call linear
+    permission tokens derived from the engine root rely on.
+
+    Must be called before :meth:`DagRunner.start`; the dataplane and
+    engine-root references are read on every state-mutation path the
+    runner originates, so a mid-run rebind is undefined.
+    """
+    from gigaevo.runner.dag_runner import DagRunner as _DagRunner
+
+    if not isinstance(runner, _DagRunner):
+        return False
+    if runner._dataplane is dataplane and runner._engine_root is engine_root:
+        return True
+    if (runner._dataplane is not None or runner._engine_root is not None) and (
+        runner._dataplane is not dataplane or runner._engine_root is not engine_root
+    ):
+        raise RuntimeError(
+            "DagRunner already has a different DataPlane or EngineRoot "
+            "attached; refusing to overwrite. Construct a fresh runner "
+            "or detach the existing handles before reattaching."
+        )
+    runner._dataplane = dataplane
+    runner._engine_root = engine_root
+    logger.info("DagRunner wired to DataPlane: prefix={}", dataplane.key_prefix)
+    return True
+
+
+def wire_evolution_engine(
+    engine: EvolutionEngine,
+    dataplane: DataPlane,
+    engine_root: EngineRoot,
+) -> bool:
+    """Attach coordinator + engine root to an :class:`EvolutionEngine`.
+
+    Returns ``True`` when the rebind happened, ``False`` for a
+    non-EvolutionEngine input. Same idempotency and conflict-rejection
+    contract as :func:`wire_dag_runner`: identical re-attach is a
+    silent no-op, conflicting re-attach raises.
+
+    Must be called before :meth:`EvolutionEngine.start`; the engine
+    reads the dataplane and engine-root references on every state-
+    mutation path it originates.
+    """
+    from gigaevo.evolution.engine.core import EvolutionEngine as _EvolutionEngine
+
+    if not isinstance(engine, _EvolutionEngine):
+        return False
+    if engine._dataplane is dataplane and engine._engine_root is engine_root:
+        return True
+    if (engine._dataplane is not None or engine._engine_root is not None) and (
+        engine._dataplane is not dataplane or engine._engine_root is not engine_root
+    ):
+        raise RuntimeError(
+            "EvolutionEngine already has a different DataPlane or "
+            "EngineRoot attached; refusing to overwrite. Construct a "
+            "fresh engine or detach the existing handles before reattaching."
+        )
+    engine._dataplane = dataplane
+    engine._engine_root = engine_root
+    logger.info("EvolutionEngine wired to DataPlane: prefix={}", dataplane.key_prefix)
     return True
