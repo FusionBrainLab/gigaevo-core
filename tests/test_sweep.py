@@ -1,0 +1,224 @@
+"""Regression tests for :mod:`gigaevo.sweep`.
+
+The sweep runner exists to give every run a fresh Python interpreter
+so module-level state cannot leak between iterations of a parameter
+sweep. The tests below pin the structural promises:
+
+  * distinct overrides land in distinct ``outputs/{experiment_id}/``
+    directories (proves subprocess isolation actually runs separate
+    interpreters),
+  * a failure in one run does not block the rest,
+  * the aggregate exit code reflects whether every subprocess
+    succeeded.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+from textwrap import dedent
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-for-sweep")
+
+
+def _write_experiment(target: Path, output_dir: Path) -> Path:
+    """Materialise a minimal experiment file whose ``output_dir``
+    points at the test's temporary directory."""
+    body = dedent(
+        f"""
+        from pathlib import Path
+        from gigaevo.config.schemas import (
+            BehaviorSpaceConfig,
+            ChatOpenAIConfig,
+            DataPlaneSettings,
+            DefaultPipelineBuilderConfig,
+            EnsembleRouterConfig,
+            ExperimentConfig,
+            FitnessProportionalEliteSelectorConfig,
+            IslandConfig,
+            PipelineConfig,
+            ProblemConfig,
+            RedisConfig,
+            SingleIslandConfig,
+            SteadyStateEngineConfig,
+            SumArchiveSelectorConfig,
+            TopFitnessMigrantSelectorConfig,
+        )
+
+
+        def build() -> ExperimentConfig:
+            redis = RedisConfig()
+            return ExperimentConfig(
+                name="sweep_test",
+                seed=1,
+                output_dir=Path({str(output_dir)!r}),
+                redis=redis,
+                dataplane=DataPlaneSettings(redis=redis, key_prefix="gigaevo:sweep_test"),
+                problem=ProblemConfig(name="sweep_test", problem_dir=Path("/srv/x")),
+                algorithm=SingleIslandConfig(
+                    island=IslandConfig(
+                        island_id="main",
+                        behavior_space=BehaviorSpaceConfig(
+                            keys=["fitness"],
+                            bounds=[(0.0, 1.0)],
+                            resolutions=[100],
+                            binning_types=["linear"],
+                        ),
+                        archive_selector=SumArchiveSelectorConfig(
+                            fitness_keys=["fitness"], fitness_key_higher_is_better=[True]
+                        ),
+                        elite_selector=FitnessProportionalEliteSelectorConfig(
+                            fitness_key="fitness"
+                        ),
+                        migrant_selector=TopFitnessMigrantSelectorConfig(
+                            fitness_key="fitness"
+                        ),
+                    )
+                ),
+                engine=SteadyStateEngineConfig(),
+                pipeline=PipelineConfig(builder=DefaultPipelineBuilderConfig()),
+                llm=EnsembleRouterConfig(models=[ChatOpenAIConfig(model="gpt-4o-mini")]),
+            )
+        """
+    )
+    target.write_text(body)
+    return target
+
+
+def _write_sweep(target: Path, runs: list[list[str]]) -> Path:
+    body = "def define_sweep() -> list[list[str]]:\n"
+    body += f"    return {runs!r}\n"
+    target.write_text(body)
+    return target
+
+
+def _invoke_sweep(experiment: Path, sweep: Path, *, parallel: int = 1) -> subprocess.CompletedProcess[str]:
+    cmd = [
+        sys.executable,
+        "-m",
+        "gigaevo.sweep",
+        str(experiment),
+        str(sweep),
+        "--parallel",
+        str(parallel),
+    ]
+    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
+
+
+class TestSweepIsolation:
+    def test_distinct_overrides_produce_distinct_output_dirs(
+        self, tmp_path: Path
+    ) -> None:
+        """Three runs with three different seeds materialise three
+        directories under the experiment's ``output_dir``."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = _write_sweep(
+            tmp_path / "sweep.py",
+            [["--dry-run", "--seed", str(seed)] for seed in (1, 2, 3)],
+        )
+
+        result = _invoke_sweep(experiment, sweep)
+
+        assert result.returncode == 0, result.stderr
+        run_dirs = sorted(p for p in out_dir.iterdir() if p.is_dir())
+        assert len(run_dirs) == 3, (
+            f"expected 3 distinct output dirs, got {[p.name for p in run_dirs]}"
+        )
+
+        seeds = sorted(
+            json.loads((d / "config.json").read_text())["seed"] for d in run_dirs
+        )
+        assert seeds == [1, 2, 3]
+
+    def test_parallel_run_matches_sequential(self, tmp_path: Path) -> None:
+        """``--parallel 2`` produces the same set of output dirs as
+        the sequential run (idempotent against the resolved
+        ``experiment_id``)."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = _write_sweep(
+            tmp_path / "sweep.py",
+            [["--dry-run", "--seed", str(seed)] for seed in (7, 8, 9, 10)],
+        )
+
+        result = _invoke_sweep(experiment, sweep, parallel=2)
+
+        assert result.returncode == 0, result.stderr
+        run_dirs = sorted(p for p in out_dir.iterdir() if p.is_dir())
+        assert len(run_dirs) == 4
+        seeds = sorted(
+            json.loads((d / "config.json").read_text())["seed"] for d in run_dirs
+        )
+        assert seeds == [7, 8, 9, 10]
+
+
+class TestSweepFailurePropagation:
+    def test_one_bogus_override_does_not_block_others(self, tmp_path: Path) -> None:
+        """Three runs total: the middle run carries an invalid
+        override and fails; the other two still produce output dirs.
+        The aggregate exit code is non-zero."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = _write_sweep(
+            tmp_path / "sweep.py",
+            [
+                ["--dry-run", "--seed", "11"],
+                ["--dry-run", "--seed", "not-an-int"],
+                ["--dry-run", "--seed", "13"],
+            ],
+        )
+
+        result = _invoke_sweep(experiment, sweep)
+
+        assert result.returncode == 1, result.stderr
+        run_dirs = sorted(p for p in out_dir.iterdir() if p.is_dir())
+        seeds = sorted(
+            json.loads((d / "config.json").read_text())["seed"] for d in run_dirs
+        )
+        assert seeds == [11, 13]
+
+
+class TestSweepShape:
+    def test_missing_define_sweep_raises(self, tmp_path: Path) -> None:
+        """A sweep module that forgets ``define_sweep`` fails fast
+        with a non-zero exit and a stderr message naming the
+        attribute."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = tmp_path / "sweep.py"
+        sweep.write_text("# no define_sweep\n")
+
+        result = _invoke_sweep(experiment, sweep)
+
+        assert result.returncode != 0
+        assert "define_sweep" in result.stderr
+
+    def test_wrong_return_type_raises(self, tmp_path: Path) -> None:
+        """``define_sweep`` returning the wrong shape fails fast
+        before any subprocess is spawned."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = tmp_path / "sweep.py"
+        sweep.write_text(
+            "def define_sweep():\n    return ['flat', 'list']\n"
+        )
+
+        result = _invoke_sweep(experiment, sweep)
+
+        assert result.returncode != 0
+        assert "list[list[str]]" in result.stderr

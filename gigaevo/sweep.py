@@ -18,11 +18,11 @@ Invocation::
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 import importlib.util
+from pathlib import Path
 import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor
-from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
