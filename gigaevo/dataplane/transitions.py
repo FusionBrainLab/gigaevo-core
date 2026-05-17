@@ -1,15 +1,11 @@
 """FSM transition tables.
 
-State machines that the dataplane validates server-side in Lua. The
-tables are loaded into Redis at ``DataPlane.startup`` so the
-transition-checking Lua scripts can consult them via ``HGET``.
+State machines validated server-side in Lua. The tables are loaded into
+Redis at ``DataPlane.startup`` so the transition Lua scripts can HGET
+them; the same Python tables let callers fast-fail without a round-trip.
 
-Mirrors of these tables stay in Python so callers can fast-fail at the
-call site without a Redis round-trip — both layers reinforce each other.
-
-The ProgramState table is the canonical mirror of
-``gigaevo/programs/program_state.py``. Keeping the two in sync is
-enforced by a parity test in the application-level test suite.
+ProgramState mirrors ``gigaevo/programs/program_state.py``; parity is
+enforced by a test in the application-level suite.
 """
 
 from __future__ import annotations
@@ -105,11 +101,9 @@ def is_valid_transition[S: StrEnum](
     from_state: S,
     to_state: S,
 ) -> bool:
-    """Client-side legality check. The Lua script re-validates server-side.
+    """Client-side legality check; the Lua script re-validates server-side.
 
-    Generic over the StrEnum subtype so a ``ProgramState`` value cannot
-    be looked up in the ``LockState`` table at the type level — mypy
-    rejects mixed FSMs without any runtime cost.
+    Generic over StrEnum so mypy rejects mixed-FSM lookups statically.
     """
     allowed = table.get(from_state)
     return allowed is not None and to_state in allowed
@@ -118,21 +112,14 @@ def is_valid_transition[S: StrEnum](
 def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
     """Encode an FSM table as ``{from: "to1,to2,to3"}`` for ``HSET``.
 
-    The Lua side checks legality with a tokenised walk over the
-    comma-joined value. State values must not contain ``","`` — a comma
-    inside a value would split the encoded list at the wrong boundary
-    and let a forged ``"X,Y"`` value satisfy a check for either ``X`` or
-    ``Y`` alone. The encoder refuses such inputs at the call boundary
-    so the Lua-side membership invariant stays inviolable.
+    The Lua membership check walks comma-separated targets, so state
+    values containing ``","`` are rejected at the boundary (a forged
+    ``"X,Y"`` value would otherwise satisfy a check for either alone).
 
-    Each row is emitted under both its declared key and its lowercase
-    alias; each row's target list carries both the declared form and
-    the lowercase form of every target. A program blob persisted by an
-    application-layer caller whose enum lowercases its ``.value`` (the
-    pre-coordinator on-disk vocabulary) and a coordinator-native caller
-    whose enum keeps the uppercase form share the same FSM hash and the
-    same membership check. When a state's declared value already equals
-    its lowercase form the duplicate write is a no-op overwrite.
+    Each row is emitted under both its declared key and the lowercase
+    alias, and each target list carries both case variants — application
+    callers that lowercase enum values share the FSM hash with
+    coordinator-native uppercase callers.
     """
     encoded: dict[str, str] = {}
     for from_state, allowed in table.items():
@@ -147,9 +134,7 @@ def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
                     f"FSM state value {t.value!r} contains ',' — "
                     "comma is the on-wire separator and must be reserved"
                 )
-        # Build a target set that carries both case variants of every
-        # member; the comma-list is then sorted for stable on-wire
-        # output (tests pin the exact serialisation).
+        # Sort target variants for stable on-wire output (tests pin it).
         target_variants: set[str] = set()
         for t in allowed:
             target_variants.add(t.value)
@@ -161,12 +146,7 @@ def encode_for_lua[S: StrEnum](table: dict[S, set[S]]) -> dict[str, str]:
 
 
 def fsm_key(key_prefix: str, name: str) -> str:
-    """Return the Redis key under which ``name``'s FSM table is stored.
-
-    Prefixing prevents collisions when multiple runs share a Redis
-    instance. The Lua scripts read from the same prefixed key so the
-    convention is shared by both sides.
-    """
+    """Return the Redis key under which ``name``'s FSM table is stored."""
     return f"{key_prefix}:fsm:{name}"
 
 
@@ -179,17 +159,10 @@ async def load_fsm_table[S: StrEnum](
 ) -> None:
     """Replace the FSM table at ``{key_prefix}:fsm:{name}`` with ``table``.
 
-    Called once per FSM during ``DataPlane.startup``. The previous value
-    (if any) is unconditionally deleted before the new mapping is
-    written so removed states do not survive a schema change as stale
-    HSET entries. The DELETE + HSET pair is issued as a single atomic
-    pipeline so a concurrent reader cannot observe an empty key in the
-    gap between the two writes.
-
-    Idempotent under same-content re-runs. Generic over the StrEnum
-    subtype so the caller cannot mix FSM tables (e.g. pass
-    ``CLAIM_STATE_TRANSITIONS`` under the name ``"lock_state"`` with
-    matching ``LockState`` annotations) by type-erasure accident.
+    DELETE + HSET in one transactional pipeline so removed states do not
+    survive a schema change and so a concurrent reader cannot observe an
+    empty key between the two writes. Idempotent under same-content runs.
+    Generic over StrEnum so the table type matches the named FSM.
     """
     encoded = encode_for_lua(table)
     key = fsm_key(key_prefix, name)

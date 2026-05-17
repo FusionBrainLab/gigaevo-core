@@ -50,10 +50,8 @@ async def run_experiment(cfg: DictConfig) -> None:
     program_loader: InitialProgramLoader | None = None
     config_with_instances: Any | None = None
 
-    # One pool per experiment. Bound as the ambient pool so every
-    # ``run_exec_runner(pool=None)`` call site inside this asyncio.run
-    # amortizes subprocess startup across the run instead of spinning a
-    # fresh ``WorkerPool`` per call.
+    # Ambient pool: ``run_exec_runner(pool=None)`` resolves to this pool
+    # for the lifetime of the run, amortizing subprocess startup.
     exec_runner_pool: WorkerPool = default_exec_runner_pool()
     pool_token = set_ambient_exec_runner_pool(exec_runner_pool)
     try:
@@ -77,39 +75,22 @@ async def run_experiment(cfg: DictConfig) -> None:
             pipeline=cfg.get("pipeline_builder", {}).get("_target_", "(default)"),
         )
 
-        # Construct the coordinator after Hydra has built the storage so
-        # the redis_url / key_prefix are sourced from a single config
-        # surface. ``build_dataplane`` starts the connection pool, loads
-        # the seven Lua scripts, and primes the legacy ProgramState FSM
-        # table; failures here surface as :class:`StartupError` before
-        # the engine task starts. ``wire_*`` attach the coordinator to
-        # the already-instantiated storage and bandit so production
-        # routes through the dataplane without altering the Hydra schema.
+        # Build the coordinator from the already-instantiated storage's
+        # connection info; ``build_dataplane`` opens the connection pool,
+        # loads Lua scripts, and primes the FSM table.
         dataplane = await build_dataplane(
             str(redis_storage.config.redis_url),
             key_prefix=redis_storage.config.key_prefix,
         )
-        # One engine, one root-token bundle. The engine root flows into
-        # the storage so per-call FSM tokens derive by linear split from
-        # this single origin — every per-program write is structurally
-        # a child of the engine's single ProgramId subspace witness.
+        # Single engine root: per-call FSM tokens derive by linear split
+        # from this origin, so every per-program write is a child of the
+        # engine's ProgramId subspace witness.
         engine_root = build_engine_root()
         wire_storage(redis_storage, dataplane, engine_root)
-        # Hand the runner and engine the dataplane handle so their
-        # freshness-pinned reads (currently: the timeout-discard
-        # re-read in :class:`DagRunner._timeout_read_is_fresh`) route
-        # through :meth:`DataPlane.read_program`. The engine_root is
-        # forwarded for future writes; storage already owns the
-        # canonical reference and rotates the program-subspace witness
-        # on every transition. The wire helpers reject conflicting
-        # re-attach so a second call within the same run-loop is a
-        # programming error, not a silent overwrite.
         wire_dag_runner(dag_runner, dataplane, engine_root)
         wire_evolution_engine(evolution_engine, dataplane, engine_root)
-        # Archive cells live across every island under the strategy; the
-        # wire helper is idempotent on a non-archive input so the loop is
-        # safe to run regardless of the strategy's concrete shape. Future
-        # strategies that don't expose ``.islands`` skip the loop cleanly.
+        # Wire archive cells for any strategy that exposes ``.islands``;
+        # strategies without islands skip the loop cleanly.
         strategy = getattr(evolution_engine, "strategy", None)
         islands = getattr(strategy, "islands", None) if strategy is not None else None
         if islands is not None:
@@ -122,15 +103,9 @@ async def run_experiment(cfg: DictConfig) -> None:
         if llm_wrapper is not None:
             wire_bandit_router(llm_wrapper, dataplane, actor, engine_root)
 
-        # Share the engine's main DataPlane with the prompt fetcher (so
-        # prompt-outcome G-counters live under the same connection pool
-        # the storage and bandit already own) while constructing a
-        # separate :class:`DataPlane` for the co-evolved prompt archive
-        # reads: that archive is in a different Redis DB, so it needs
-        # its own connection pool dialled at a different URL. The
-        # fetcher carries the prompt-archive DB / host / port / prefix
-        # from its Hydra config; we read them directly off the instance
-        # so the engine surface stays unaware of the fetcher's schema.
+        # Prompt-outcome counters share the engine's DataPlane; the
+        # co-evolved prompt archive lives in a different Redis DB so it
+        # gets its own DataPlane dialled at the fetcher's URL.
         prompt_fetcher = getattr(
             evolution_engine.mutation_operator, "_prompt_fetcher", None
         )
@@ -185,13 +160,10 @@ async def run_experiment(cfg: DictConfig) -> None:
                 on_stop=(evolution_engine.task, dag_runner.task),
             )
         finally:
-            # ``serve_until_signal`` already calls the two ``stop`` coros on
-            # the happy path. If anything between ``start()`` and the
-            # ``await serve_until_signal`` raises, the tasks are still alive
-            # and would leak past the ``except`` block. ``stop()`` on both
-            # components is idempotent: cancelling an already-cancelled task
-            # and closing an already-closed storage / connection are no-ops,
-            # so calling them twice on the happy path is safe.
+            # Idempotent stops: covers the path where something between
+            # ``start()`` and ``serve_until_signal`` raises and leaves
+            # the tasks alive. ``stop()`` on an already-stopped component
+            # is a no-op.
             try:
                 await evolution_engine.stop()
             except Exception:
@@ -207,9 +179,9 @@ async def run_experiment(cfg: DictConfig) -> None:
         logger.exception("Experiment failed")
         raise
     finally:
-        # Drain pool workers before unbinding the contextvar so any
-        # late ``run_exec_runner`` calls during shutdown still amortize
-        # through the shared pool.
+        # Drain pool workers before unbinding the contextvar so late
+        # ``run_exec_runner`` calls during shutdown still resolve to
+        # the shared pool.
         try:
             await exec_runner_pool.shutdown()
         except Exception:
@@ -220,20 +192,15 @@ async def run_experiment(cfg: DictConfig) -> None:
                 await redis_storage.close()
             except Exception:
                 logger.exception("RedisProgramStorage close failed")
-        # Shutdown the coordinator after the storage so any tail
-        # writes the storage performs during ``close()`` still go
-        # through a live connection pool. The dataplane's own
-        # ``shutdown`` is idempotent and safe to call after
-        # ``startup`` failed mid-sequence.
+        # Shut the coordinator down after the storage so any tail writes
+        # storage performs during ``close()`` still see a live pool.
         if dataplane is not None:
             try:
                 await dataplane.shutdown()
             except Exception:
                 logger.exception("DataPlane shutdown failed")
-        # The prompt-archive coordinator is independent (separate DB
-        # and key prefix) and therefore needs its own shutdown step;
-        # ordering relative to ``dataplane`` does not matter because
-        # the two pools share no resources.
+        # Prompt-archive coordinator uses its own pool; ordering vs
+        # ``dataplane`` is independent.
         if prompt_dataplane is not None:
             try:
                 await prompt_dataplane.shutdown()

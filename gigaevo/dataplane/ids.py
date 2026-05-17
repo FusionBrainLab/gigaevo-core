@@ -19,28 +19,15 @@ from dataclasses import dataclass
 import re
 from typing import Final, NewType
 
-# Hostile inputs reach :class:`ActorIdentity` through wire formats
-# (Redis keys, log lines, stream-entry fields), so the validator must
-# reject any byte that has special meaning to a downstream consumer:
-#
-#     NUL (\x00)     — Postgres / asyncpg / many Redis client libraries
-#                       treat ``\x00`` as a string terminator and either
-#                       reject or silently truncate.
-#     CR / LF        — log-line injection (a single CR can rewrite the
-#                       prior log entry on ANSI terminals).
-#     other C0       — ANSI escape vector (ESC = ``\x1b``) plus assorted
-#                       cursor-positioning bytes.
-#     U+2028 / U+2029 — JSON-encoded as themselves; JS / some parsers
-#                       treat them as line terminators.
-#     U+202E (RLO)   — right-to-left override; reverses visible order in
-#                       logs / dashboards, hiding the trailing portion.
-#
-# The validator is enforced at the :class:`ActorIdentity` boundary; the
-# :data:`ActorId` NewType has no runtime check (it is a bare ``str``),
-# so callers SHOULD construct identities through this typed dataclass.
+# Reject control bytes that have special meaning to downstream consumers:
+# NUL truncates strings in many clients; CR/LF enable log injection;
+# C0 carries ANSI ESC; U+2028/U+2029 act as line terminators in JS;
+# U+202E and friends hide trailing content via bidi override. The
+# validator runs on :class:`ActorIdentity` only; bare :data:`ActorId`
+# NewType has no runtime check, so callers should go through the
+# typed dataclass.
 _FORBIDDEN_CONTROL_CODEPOINTS: Final[frozenset[int]] = frozenset(
-    # C0 control codes (including NUL, CR, LF, BEL, ESC, etc.) plus
-    # DEL (0x7F). U+0020 (space) and printable ASCII are not in the set.
+    # C0 controls (NUL/CR/LF/BEL/ESC/etc.) + DEL (0x7F).
     list(range(0x00, 0x20)) + [0x7F]
 )
 _FORBIDDEN_UNICODE_DIRECTIONALS: Final[frozenset[str]] = frozenset(
@@ -137,16 +124,10 @@ ScriptName = NewType("ScriptName", str)
 class ActorIdentity:
     """Typed composite of ``(run_id, worker_id)`` that packs to ``ActorId``.
 
-    The ``{run_id}:{worker_id}`` convention is a wire-format detail;
-    Python call sites should pass :class:`ActorIdentity` so the parts
-    are not stringly-typed and a typo (``"runworker"`` instead of
-    ``"run:worker"``) cannot pass type-check. Use :meth:`pack` to obtain
-    the wire-format :data:`ActorId` and :meth:`parse` to round-trip a
-    received string back into a typed identity.
-
-    Validation rejects empty parts and parts containing ``":"`` so the
-    pack / parse round-trip is total: every constructible identity
-    serialises to a unique string and parses back to the same identity.
+    The ``{run_id}:{worker_id}`` shape is a wire-format detail; call
+    sites pass :class:`ActorIdentity` so a missing separator cannot pass
+    type-check. Validation rejects empty parts and parts containing
+    ``":"`` so pack/parse is total.
     """
 
     run_id: RunId
@@ -165,13 +146,7 @@ class ActorIdentity:
 
     @classmethod
     def parse(cls, actor_id: ActorId | str) -> ActorIdentity:
-        """Inverse of :meth:`pack`.
-
-        Splits on the *first* ``":"``; raises :class:`ValueError` if the
-        input is missing the separator. Strict against the
-        ``__post_init__`` contract so a malformed wire value never
-        produces a malformed identity.
-        """
+        """Inverse of :meth:`pack`; raises :class:`ValueError` on missing ``":"``."""
         run, sep, worker = actor_id.partition(":")
         if not sep:
             raise ValueError(f"ActorId missing ':' separator: {actor_id!r}")
@@ -182,13 +157,8 @@ class ActorIdentity:
 
 
 def make_actor_id(run_id: RunId, worker_id: WorkerId) -> ActorId:
-    """Compose an :data:`ActorId` from its parts.
-
-    Convenience wrapper around :meth:`ActorIdentity.pack` for call sites
-    that already work with raw NewType ids. New code should prefer
-    :class:`ActorIdentity` directly — the typed dataclass surfaces the
-    composition in the type system instead of hiding it behind a
-    string-returning helper.
+    """Compose an :data:`ActorId` from its parts (wrapper over
+    :meth:`ActorIdentity.pack`; new code should prefer the dataclass).
     """
     return ActorIdentity(run_id=run_id, worker_id=worker_id).pack()
 
@@ -197,15 +167,7 @@ _SCRIPT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def make_script_name(name: str) -> ScriptName:
-    """Validate ``name`` and tag it as :data:`ScriptName`.
-
-    Enforces a snake_case alphabet (lowercase ASCII letters, digits,
-    underscores; leading char must be a letter) so the registry's
-    logical names stay predictable in logs and Redis EVAL output.
-
-    Raises :class:`ValueError` on any other shape — this is a startup-
-    time error, not a runtime fault, so failing fast is the right thing.
-    """
+    """Validate ``name`` (snake_case, ASCII, leading letter) and tag it."""
     if not _SCRIPT_NAME_RE.fullmatch(name):
         raise ValueError(
             f"ScriptName must match {_SCRIPT_NAME_RE.pattern!r} "

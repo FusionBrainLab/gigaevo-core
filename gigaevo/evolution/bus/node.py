@@ -110,13 +110,9 @@ class MigrationNode:
         program.set_metadata("migration_source_id", envelope.program_id)
         program.set_metadata("migration_generation", envelope.generation)
         program.set_metadata("is_migrant", True)
-        # Inbound migrants are re-anchored to DONE regardless of the
-        # rehydrated state. The envelope crosses run boundaries and the
-        # local FSM does not own the source run's history, so the
-        # registration is funnelled through
-        # :func:`register_external_terminal_state` — a named bypass that
-        # restricts the unchecked transition to terminal states and is
-        # greppable from every cross-run ingestion site.
+        # Inbound migrants are re-anchored at DONE: the local FSM has
+        # no causal predecessor for the source run's state, so the
+        # transition goes through the named cross-run terminal bypass.
         register_external_terminal_state(program, ProgramState.DONE)
         return program
 

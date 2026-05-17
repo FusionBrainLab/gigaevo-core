@@ -1,10 +1,8 @@
 """Lattice catalog and the protocol every lattice satisfies.
 
-A *lattice* is a set with a partial order plus join (least upper bound)
-and meet (greatest lower bound). The dataplane uses lattices to compose
-freshness witnesses (epoch and generation) and to back CRDT merge.
-
-The catalog is intentionally small:
+A *lattice* is a set with a partial order plus join and meet. The
+dataplane uses lattices to compose freshness witnesses (epoch and
+generation) and to back CRDT merge.
 
     EpochLattice         total order on int, join = max
     GenerationLattice    total order on int, join = max
@@ -12,19 +10,12 @@ The catalog is intentionally small:
     MonotoneLattice[T]   total order under a Comparator, join = max
     BoolLattice          {False, True}, join = OR
 
-``EpochLattice`` and ``GenerationLattice`` are byte-identical
-implementations — the *point* is that they are separate types so mypy
-rejects mixed-axis comparisons. Do not consolidate.
+``EpochLattice`` and ``GenerationLattice`` are byte-identical but kept
+as distinct types so mypy rejects mixed-axis comparisons.
 
-A ``HappensBeforeLattice`` for distributed causal order is added when
-the distributed-worker workload requires it; not present here.
-
-The :class:`Lattice` protocol is structural and runtime-checkable, so
-``isinstance(EpochLattice, Lattice)`` and
-``isinstance(ProductLattice(...), Lattice)`` both succeed — the former
-because the *class* exposes ``leq`` / ``join`` / ``meet`` as static
-methods, the latter because the *instance* exposes them as bound
-methods. Callers SHOULD pass whichever shape is convenient.
+The :class:`Lattice` protocol is structural and runtime-checkable; both
+class-level (static methods) and instance-level (bound methods)
+implementations satisfy it.
 """
 
 from __future__ import annotations
@@ -44,19 +35,11 @@ class _Comparable(Protocol):
 
 @runtime_checkable
 class Lattice[E](Protocol):
-    """A lattice over ``element_type = E``.
+    """A lattice over ``element_type = E`` exposing leq / join / meet.
 
-    Implementations expose three operations. ``meet`` is required even
-    though early read paths only need ``join`` — keeping the protocol
-    symmetric leaves the door open for CRDT lattices whose ``merge`` is
-    naturally expressed as ``meet`` (and avoids a v2 protocol split
-    later).
-
-    Implementations may expose the operations as ``@staticmethod``
-    (matching the protocol literally) or as ordinary instance methods
-    on a stateful lattice object such as :class:`ProductLattice`. Both
-    pass ``isinstance(obj, Lattice)`` because ``runtime_checkable``
-    inspects only attribute presence.
+    Implementations may expose the operations as ``@staticmethod`` or as
+    instance methods on a stateful lattice such as
+    :class:`ProductLattice`; both satisfy ``isinstance(obj, Lattice)``.
     """
 
     @staticmethod
@@ -81,10 +64,9 @@ class Lattice[E](Protocol):
 class EpochLattice:
     """Total order on ``int``; join = max, meet = min.
 
-    Tracks the global write epoch (incremented on every state-changing
-    coordinator call). Kept structurally identical to and distinct from
-    :class:`GenerationLattice` so mismatched-axis comparisons fail at
-    mypy time.
+    Tracks the global write epoch. Structurally identical to
+    :class:`GenerationLattice`; the two are distinct types so mypy
+    rejects mixed-axis comparisons.
     """
 
     @staticmethod
@@ -101,11 +83,7 @@ class EpochLattice:
 
 
 class GenerationLattice:
-    """Total order on ``int``; join = max, meet = min.
-
-    Per-aggregate generation counter. Distinct type from
-    :class:`EpochLattice` on purpose (see module docstring).
-    """
+    """Total order on ``int``; join = max, meet = min. Per-aggregate counter."""
 
     @staticmethod
     def leq(a: int, b: int) -> bool:
@@ -139,16 +117,9 @@ class BoolLattice:
 class ProductLattice[A, B]:
     """Pointwise join over a pair ``(A, B)``.
 
-    Used by :class:`gigaevo.dataplane.models.Versioned` to compose epoch
-    and generation into a single freshness witness whose admission gate
-    is ``is_at_least``. Instances hold the two component lattice types
-    so component operations can be dispatched without templating tricks.
-
-    Two ProductLattice instances compare equal iff they were
-    constructed with the same component lattice classes. The class
-    identifies the operation suite, so this is the natural value
-    semantics — anything else would force callers to thread a single
-    shared instance through their dependency graph.
+    Composes epoch and generation into a single freshness witness. Two
+    instances compare equal iff their component lattice classes match,
+    so callers do not need to thread a shared instance.
     """
 
     __slots__ = ("_left", "_right")
@@ -179,14 +150,7 @@ class ProductLattice[A, B]:
 
 
 class MonotoneLattice[C: _Comparable]:
-    """Total order under ``<=``; join = max, meet = min.
-
-    Generic over any totally-ordered element type. The lattice
-    vocabulary backs every monotonic-counter shape the dataplane
-    persists (epoch counters, generation counters, HLC physical_ns
-    component) — join is the natural admission operation for a
-    retrograde-rejecting field.
-    """
+    """Total order under ``<=``; join = max, meet = min. Generic over ``C``."""
 
     @staticmethod
     def leq(a: C, b: C) -> bool:

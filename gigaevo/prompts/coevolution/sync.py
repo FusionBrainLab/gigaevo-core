@@ -21,26 +21,21 @@ from gigaevo.dataplane import DataPlane, Err
 class MainRunSyncHook:
     """Pre-step hook that blocks until main run(s) advance by 1 generation.
 
-    Polls each main run's ``engine:total_generations`` counter — persisted
-    by :class:`~gigaevo.database.redis_program_storage.RedisProgramStorage`
-    inside the ``{prefix}:run_state`` hash — through
-    :meth:`DataPlane.raw_hash_get`. Waits until the minimum across all
-    sources exceeds the previous value.
-
-    Supports both single-source (backwards compat) and multi-source configs.
+    Polls each main run's ``engine:total_generations`` counter from its
+    ``{prefix}:run_state`` hash via :meth:`DataPlane.raw_hash_get`, and
+    waits until the minimum across all sources exceeds the previous value.
 
     Args:
-        host: Redis host
-        port: Redis port
-        db: Redis DB of a single main run (backwards compat)
-        prefix: Key prefix of a single main run (backwards compat)
-        sources: List of {"db": int, "prefix": str} for multi-source sync.
-            If provided, ``db`` and ``prefix`` are ignored.
-        timeout: Maximum seconds to wait before proceeding anyway
-        poll_interval: Seconds between polls
-        dataplanes: Optional list of pre-wired :class:`DataPlane` handles
-            (one per source). When ``None`` the hook lazily constructs its
-            own; lifecycle is managed via :meth:`close`.
+        host: Redis host.
+        port: Redis port.
+        db: Redis DB of a single main run.
+        prefix: Key prefix of a single main run.
+        sources: List of ``{"db", "prefix"}`` dicts for multi-source sync;
+            takes precedence over ``db`` / ``prefix``.
+        timeout: Maximum seconds to wait before proceeding anyway.
+        poll_interval: Seconds between polls.
+        dataplanes: Optional pre-wired :class:`DataPlane` handles (one per
+            source); length must match ``sources``.
     """
 
     def __init__(

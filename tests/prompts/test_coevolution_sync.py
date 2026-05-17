@@ -1,10 +1,7 @@
 """Tests for gigaevo.prompts.coevolution.sync — MainRunSyncHook.
 
-Routes every Redis read through a stand-in :class:`DataPlane` (an
-``AsyncMock`` exposing :meth:`raw_hash_get`). The hook itself owns no
-direct ``redis``-py import; per-source DataPlane handles are injected
-via the ``dataplanes=`` constructor parameter so tests need not dial a
-real Redis instance.
+DataPlane handles are injected via ``dataplanes=`` and stubbed with an
+``AsyncMock`` exposing :meth:`raw_hash_get`.
 """
 
 from __future__ import annotations
@@ -18,12 +15,7 @@ from gigaevo.prompts.coevolution.sync import MainRunSyncHook
 
 
 def _stub_dataplane(*, hget_returns) -> AsyncMock:
-    """Build an AsyncMock standing in for DataPlane.raw_hash_get.
-
-    ``hget_returns`` is either a single return value or a side-effect
-    list. Wraps each value in :class:`Ok` so the production code path
-    matches the real DataPlane contract.
-    """
+    """Stand-in for DataPlane.raw_hash_get; wraps values in :class:`Ok`."""
     dp = AsyncMock()
     if isinstance(hget_returns, list):
         dp.raw_hash_get = AsyncMock(side_effect=[Ok(v) for v in hget_returns])

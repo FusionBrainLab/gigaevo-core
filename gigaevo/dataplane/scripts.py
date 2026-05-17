@@ -1,23 +1,14 @@
 """Lua script registry.
 
-Lifted from the proven pattern in :mod:`gigaevo.infra.endpoint_pool`:
-load every script at startup, cache its SHA, EVALSHA on the hot path,
+Load every script at startup, cache its SHA, EVALSHA on the hot path,
 on ``NOSCRIPT`` reload-and-retry exactly once. A second consecutive
-``NOSCRIPT`` raises :class:`ScriptLostError` — that should not happen,
-and we want loud failure if it does.
+``NOSCRIPT`` raises :class:`ScriptLostError`.
 
-Scripts are registered by name via :meth:`register`, loaded into Redis
-en masse via :meth:`load_all` at coordinator startup, and invoked by
-name via :meth:`evalsha`. This module ships without any scripts
-registered; each per-resource module registers its own during
-coordinator startup.
-
-Concurrency contract: every coroutine method takes an internal lock on
-the SHA cache so the NOSCRIPT recovery path stays atomic — two callers
-hitting NOSCRIPT for the same script at the same time will reload
-exactly once, not twice. Reads of ``registered`` / ``loaded_count`` /
-``is_registered`` do not take the lock; they are best-effort snapshots
-used in logging and tests.
+Concurrency: coroutine methods take an internal lock on the SHA cache
+so the NOSCRIPT recovery path is atomic — concurrent callers hitting
+NOSCRIPT for the same script reload exactly once. Reads of
+``registered`` / ``loaded_count`` / ``is_registered`` are lockless
+snapshots for logging and tests.
 """
 
 from __future__ import annotations
@@ -66,25 +57,17 @@ class LuaRegistry:
     def register(self, name: ScriptName, source: str) -> None:
         """Store a Lua source under a logical name.
 
-        The script is not yet loaded into Redis; :meth:`load_all` does
-        that. Re-registering an existing name overwrites — useful in
-        tests that swap scripts, mildly surprising in production.
-        Overwriting also invalidates any cached SHA for ``name`` so the
-        next :meth:`evalsha` reloads against the new source instead of
-        EVALSHA-ing the stale SHA and getting a confusing miss.
-
-        Registration after :meth:`load_all` is supported: the missing
-        SHA path inside :meth:`evalsha` will SCRIPT LOAD on first use.
+        Not loaded into Redis until :meth:`load_all`. Re-registering an
+        existing name overwrites and invalidates any cached SHA so the
+        next :meth:`evalsha` reloads against the new source. Registration
+        after :meth:`load_all` is supported via the SHA-miss path.
         """
         existing = self._scripts.get(name)
         if existing is not None and existing != source:
             logger.warning(
                 "LuaRegistry.register: overwriting existing script {!r}", name
             )
-            # The previously cached SHA refers to the old source. Drop
-            # it so the next evalsha reloads against ``source`` rather
-            # than EVALSHA-ing a SHA that does not match the script the
-            # caller just installed.
+            # Drop the SHA so evalsha reloads against the new source.
             self._sha.pop(name, None)
         self._scripts[name] = source
 
@@ -95,13 +78,9 @@ class LuaRegistry:
     async def load_all(self) -> None:
         """SCRIPT LOAD every registered script; cache the SHAs.
 
-        On failure of any individual load, the SHAs cached so far are
-        retained but the caller's startup will surface the exception —
-        partial load leaves the registry in a "some loaded, some not"
-        state that subsequent :meth:`evalsha` calls will repair via the
-        NOSCRIPT reload path. Calls to :meth:`register` made between
-        partial load failure and retry are picked up by the next
-        :meth:`load_all`.
+        Partial-load failures surface to the caller; already-cached SHAs
+        are retained and any missing ones repair through the NOSCRIPT
+        path on first :meth:`evalsha`.
         """
         async with self._get_reload_lock():
             for name, source in self._scripts.items():
@@ -137,10 +116,8 @@ class LuaRegistry:
         try:
             return await self._redis.evalsha(sha, len(keys), *keys, *args)  # type: ignore[misc]
         except NoScriptError:
-            # The ``stale_sha`` we just EVALSHA-d is what NOSCRIPT
-            # rejected; pass it so concurrent NOSCRIPT recoveries that
-            # already refreshed the cache short-circuit instead of
-            # issuing a redundant SCRIPT LOAD.
+            # Pass the rejected SHA so concurrent reloaders short-circuit
+            # if a peer already refreshed the cache.
             sha = await self._reload(name, stale_sha=sha)
             try:
                 return await self._redis.evalsha(sha, len(keys), *keys, *args)  # type: ignore[misc]
@@ -150,34 +127,15 @@ class LuaRegistry:
     async def _reload(self, name: ScriptName, *, stale_sha: str | None) -> str:
         """Re-issue SCRIPT LOAD for ``name`` and refresh the SHA cache.
 
-        Serialised so two callers racing for the same name produce
-        exactly one SCRIPT LOAD round-trip. Two entry shapes share this
-        method:
-
-            - First-time load (``stale_sha is None``): the call entered
-              ``_reload`` because the SHA cache had no entry for
-              ``name``. After acquiring the lock the holder re-reads
-              the cache; if a peer populated it during the wait we
-              reuse that entry instead of issuing a redundant
-              ``script_load``.
-            - NOSCRIPT recovery (``stale_sha`` is a value): the lock
-              holder compares the cache against ``stale_sha``. A
-              differing cache means a peer already refreshed; reuse
-              that entry. A matching cache means the dead SHA is still
-              the latest, so issue a fresh ``script_load``.
-
-        Both shapes collapse concurrent reloaders to a single Redis
-        round-trip and preserve the single-caller invariant that
-        ``evalsha`` advances past NOSCRIPT instead of EVALSHA-ing the
-        same dead SHA forever.
+        Serialised so concurrent callers produce one SCRIPT LOAD. Two
+        entry shapes: first-time load (``stale_sha is None``) and
+        NOSCRIPT recovery. Both reuse a peer-refreshed cache entry when
+        present (``cached != stale_sha``) instead of issuing a duplicate
+        load.
         """
         async with self._get_reload_lock():
             cached = self._sha.get(name)
             if cached is not None and cached != stale_sha:
-                # Either a first-load peer populated the cache while we
-                # waited (stale_sha is None, cached is set) or a NOSCRIPT
-                # peer already refreshed (stale_sha != cached). Either
-                # way the cached SHA is fresh.
                 return cached
             source = self._scripts[name]
             sha = await self._redis.script_load(source)  # type: ignore[misc]

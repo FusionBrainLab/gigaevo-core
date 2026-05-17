@@ -448,18 +448,14 @@ class TestConcurrentSameStageKey:
 
 
 class TestRegisterExternalTerminalState:
-    """Cross-engine migrant ingestion: pin a terminal state without
-    consulting the in-run FSM. The helper is the only sanctioned
-    bypass of :func:`validate_transition` and is restricted to
-    terminal states so the exception cannot leak into non-terminal
-    transitions where the FSM legitimately governs progression.
-    """
+    """Pin a terminal state without consulting the in-run FSM. The
+    bypass is restricted to terminal states so non-terminal progression
+    still routes through :func:`validate_transition`."""
 
     def test_pins_state_to_done_without_validation(self, make_program) -> None:
         from gigaevo.database.state_manager import register_external_terminal_state
 
-        # QUEUED -> DONE is not in PROGRAM_STATE_TRANSITIONS; the named
-        # bypass succeeds where set_in_memory_state would raise.
+        # QUEUED -> DONE is not in PROGRAM_STATE_TRANSITIONS.
         prog = make_program(state=ProgramState.QUEUED)
         assert prog.state == ProgramState.QUEUED
         register_external_terminal_state(prog, ProgramState.DONE)

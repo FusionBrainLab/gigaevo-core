@@ -26,21 +26,14 @@ class ArchiveSelector(ABC):
         """Determine if new program should replace current elite."""
 
     def reduce_to_score(self, program: Program) -> float | None:
-        """Reduce a program to a single comparison score, if possible.
+        """Return a scalar score for ``program``, or ``None``.
 
-        Selectors that compute a total ordering from a scalar return that
-        scalar; the archive storage uses it to route the cell swap through
-        an atomic Lua script that compares scores server-side. Selectors
-        whose ``__call__`` cannot be expressed as ``score(new) > score(current)``
-        — multi-criteria dominance, for example — must return ``None`` so the
-        archive falls back to its optimistic-locking path with the full
-        ``is_better`` callback.
-
-        The returned scalar must satisfy ``__call__(a, b) is True`` iff
-        ``reduce_to_score(a) > reduce_to_score(b)`` for every pair on which
-        ``__call__`` returns a defined boolean. Ties are resolved by the
-        caller via a tiebreak bit; see the archive storage for the
-        in-use convention.
+        Contract: ``__call__(a, b) is True`` iff
+        ``reduce_to_score(a) > reduce_to_score(b)`` for every pair on
+        which ``__call__`` returns a defined boolean. Selectors that
+        cannot satisfy this (multi-criteria dominance, etc.) MUST
+        return ``None`` so the archive falls back to its full-callback
+        path. Ties are resolved by a caller-supplied tiebreak bit.
         """
         return None
 

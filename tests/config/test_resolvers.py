@@ -41,12 +41,7 @@ class TestRegisterResolvers:
     """The public ``register_resolvers`` surface."""
 
     def test_dangerous_resolvers_are_absent(self):
-        """``eval``, ``merge``, ``len`` must not be registered.
-
-        ``eval`` exposes ``builtins.eval`` to any interpolation site, an
-        unconditional remote-code-execution surface reachable through CLI
-        overrides. ``merge`` and ``len`` have no in-tree call sites.
-        """
+        """``eval``, ``merge``, ``len`` must not be registered."""
         register_resolvers()
         assert OmegaConf.has_resolver("eval") is False
         assert OmegaConf.has_resolver("merge") is False
@@ -58,17 +53,10 @@ class TestRegisterResolvers:
         assert OmegaConf.has_resolver("get_object") is True
 
     def test_double_registration_is_idempotent(self):
-        """A second ``register_resolvers()`` call must not raise.
-
-        Hydra raises ``ValueError`` if a resolver is re-registered without
-        ``replace=True``; tests, notebooks, and certain multirun plugin
-        orderings hit this path.
-        """
         register_resolvers()
-        register_resolvers()  # must not raise
+        register_resolvers()
 
     def test_ref_resolver_resolves_via_interpolation(self):
-        """End-to-end: a YAML-like config with ``${ref:...}`` resolves."""
         register_resolvers()
         cfg = OmegaConf.create(
             {"target": {"value": 7}, "pointer": "${ref:target.value}"}

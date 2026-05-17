@@ -65,14 +65,7 @@ class EvolutionEngine:
         self.mutation_operator = mutation_operator
         self.config = config
         self._writer = writer.bind(path=["evolution_engine"])
-        # Engine-scoped coordination handles. When wired, freshness-pinned
-        # reads on the dataplane and per-call linear permission tokens
-        # derived from the engine root flow into the engine's own state
-        # mutation paths (and indirectly into the storage that the engine
-        # holds — :func:`wire_storage` attaches both there as well). Both
-        # default to ``None`` so tests that construct the engine without
-        # an engine-startup sequence continue to operate on the legacy
-        # path.
+        # Engine-scoped coordination handles; both default to ``None``.
         self._dataplane = dataplane
         self._engine_root = engine_root
 
@@ -560,11 +553,9 @@ class EvolutionEngine:
                 )
                 reject_ids.append(prog.id)
 
-        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization).
-        # The in-memory mirror routes through the state manager so the
-        # (current, target) pair is FSM-validated and downstream code
-        # cannot observe an illegal DISCARDED assignment slipping past
-        # the bypass that the direct mutation previously allowed.
+        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic).
+        # In-memory mirror goes through the state manager so the
+        # (current, target) pair is FSM-validated.
         if reject_ids:
             reject_set = set(reject_ids)
             for prog in completed:

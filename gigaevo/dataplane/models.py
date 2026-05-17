@@ -28,22 +28,10 @@ from .errors import StaleReadError
 class Versioned[T]:
     """A value witnessed by an ``(epoch, generation)`` pair.
 
-    Every cached / projected read carries one. Callers that require
-    freshness pass ``min_epoch=`` / ``min_generation=``; values below
-    either floor raise :class:`StaleReadError`.
-
-    The two axes compose pointwise via the product lattice: epoch is
-    bumped by the global epoch counter on every state-changing
-    coordinator call; generation is per-aggregate.
-
-    Invariants enforced in ``__post_init__``:
-        - ``epoch >= 0``
-        - ``generation >= 0``
-
-    Both axes are unsigned counters in the persisted representation;
-    negative values would round-trip incorrectly and are rejected at the
-    construction boundary so a corrupted blob fails loudly rather than
-    silently lying about freshness.
+    Every cached / projected read carries one. Below-floor reads raise
+    :class:`StaleReadError`. ``epoch`` is bumped by the global counter
+    on every state-changing call; ``generation`` is per-aggregate. Both
+    axes are non-negative (corrupted blobs fail loudly at construction).
     """
 
     value: T
@@ -74,28 +62,18 @@ class Versioned[T]:
         return self
 
     def combine_max(self, other: Versioned[T]) -> Versioned[T]:
-        """Pointwise lattice JOIN on the ``(epoch, generation)`` pair.
+        """Pointwise lattice JOIN on ``(epoch, generation)``.
 
-        Picks the side with the strictly-greater ``(epoch, generation)``
-        tuple. On a tie, returns ``self`` deterministically (stable
-        choice for re-application).
-
-        Comparison is on ``(epoch, generation)`` only — the wrapped
-        ``value`` is NOT required to be comparable. ``T`` may be any
-        type. This is the right semantics for the dataplane: freshness
-        is decided by the witness, not by the value's natural order.
+        Picks the strictly-greater side; ties return ``self`` (stable for
+        re-application). ``T`` is not required to be comparable — freshness
+        is decided by the witness, not the value.
         """
         if (other.epoch, other.generation) > (self.epoch, self.generation):
             return other
         return self
 
     def map(self, fn: Any) -> Versioned[Any]:
-        """Apply ``fn`` to the value, preserve epoch / generation.
-
-        Convenient when the read pipeline transforms the inner value
-        (e.g. project a single field from a Program) without losing the
-        freshness witness.
-        """
+        """Apply ``fn`` to the value, preserving the freshness witness."""
         return Versioned(
             value=fn(self.value), epoch=self.epoch, generation=self.generation
         )
@@ -106,29 +84,22 @@ class Versioned[T]:
 
 @dataclass(slots=True, frozen=True)
 class FreshnessEventual:
-    """Accept any persisted value, regardless of staleness.
+    """Accept any persisted value regardless of staleness.
 
-    Equivalent to "I don't care which epoch this is, just give me what
-    Redis has now." Read methods consulted with this freshness never
-    raise :class:`StaleReadError` on the freshness axis; decoding errors
-    and absent keys still surface normally.
+    Read methods consulted with this freshness never raise
+    :class:`StaleReadError` on the freshness axis; decoding errors and
+    absent keys still surface.
     """
 
 
 @dataclass(slots=True, frozen=True)
 class FreshnessAtLeast:
-    """Demand a freshness floor on the ``(epoch, generation)`` lattice.
+    """Demand a floor on the ``(epoch, generation)`` lattice.
 
-    The read returns ``Ok(Versioned(...))`` iff the persisted blob's
-    ``(epoch, generation)`` is component-wise ``>= (epoch, generation)``
-    on this declaration. Otherwise the read returns
-    ``Err(StaleReadError(...))`` so a downstream caller observes the
-    staleness as control flow rather than a silently-old value.
-
-    Defaults to ``epoch=0`` / ``generation=0`` — the identity floor that
-    every persisted blob trivially clears — so the type is constructible
-    without arguments only as a degenerate case. Production callers pin
-    the real expected counter explicitly.
+    Reads return ``Ok(Versioned(...))`` iff component-wise above the
+    floor; otherwise ``Err(StaleReadError(...))``. The ``epoch=0``,
+    ``generation=0`` default is the trivially-clearable identity floor;
+    production callers pin the expected counter explicitly.
     """
 
     epoch: int = 0
@@ -147,41 +118,26 @@ class FreshnessAtLeast:
 
 @dataclass(slots=True, frozen=True)
 class FreshnessStrict:
-    """Demand that the read observes the latest epoch at call time.
+    """Demand the read observes the latest epoch at call time.
 
-    The coordinator reads the global epoch counter first; the persisted
-    blob's epoch must be ``>=`` that snapshot. A concurrent transition
-    that bumps the counter after our snapshot but before our blob read
-    raises :class:`StaleReadError`; the caller retries.
+    The coordinator snapshots the global epoch counter first; the
+    persisted blob's epoch must be ``>=`` that snapshot. A concurrent
+    bump between snapshot and blob read raises :class:`StaleReadError`.
 
-    This is the strongest freshness witness the dataplane offers on a
-    plain GET. Stronger ("the exact write you just performed") is the
-    coordinator's :meth:`transition_program_state` return value, which
-    is the post-transition blob carried in the same atomic round-trip
-    and therefore needs no separate freshness declaration.
+    Strongest freshness witness available on a plain GET; the post-write
+    return value from :meth:`transition_program_state` is stronger still
+    (same atomic round-trip, no declaration needed).
     """
 
 
 type Freshness = FreshnessEventual | FreshnessAtLeast | FreshnessStrict
 """Discriminated declaration of how stale a read may be.
 
-Every reader passes one explicit value:
-
-    * :class:`FreshnessEventual` — no floor; the value as-of-now is fine
-      (caches, lazy projections, observability sinks).
-    * :class:`FreshnessAtLeast(epoch=N, generation=M)` — staleness
-      below the floor is :class:`StaleReadError`. The typical caller
-      writes ``(epoch=expected_epoch_after_my_write)`` so the read
-      observes its own prior write or fails loudly.
-    * :class:`FreshnessStrict` — observe the latest persisted epoch at
-      call time. Worth two round-trips (epoch counter + blob); use it
-      only when the caller cannot supply its own floor.
-
-Choice of three flat dataclasses (rather than e.g. an
-``IntEnum.STRICT`` plus optional ``floor=`` kwargs) keeps the API
-type-safe: ``match`` over the union is exhaustive, and the
-``FreshnessAtLeast`` floor is structurally part of the variant rather
-than a separate optional field that can drift.
+    * :class:`FreshnessEventual` — no floor.
+    * :class:`FreshnessAtLeast(epoch=N, generation=M)` — below-floor
+      raises :class:`StaleReadError`.
+    * :class:`FreshnessStrict` — re-read the epoch counter first. Two
+      round-trips; use only when the caller cannot supply its own floor.
 """
 
 
@@ -205,15 +161,9 @@ class Sourced[T, S]:
     def retag(self, _new_tag_marker: Any) -> Sourced[T, Any]:
         """Re-tag the value with a different provenance marker.
 
-        Runtime: this is intentionally a near-no-op — ``S`` is a phantom
-        ``Literal`` type parameter with no runtime field, so retagging is
-        a fresh wrapper around the same value. The new tag flows through
-        the caller's annotation: ``local: LocalValue[int] = cached.retag(...)``
-        assigns the call-site type.
-
-        The marker parameter exists so a future strengthening that
-        captures the new tag at runtime (e.g. for logging or audit) can
-        land without changing call sites. It is otherwise unused.
+        Near-no-op at runtime since ``S`` is phantom; the new tag flows
+        through the caller's annotation. The marker parameter is reserved
+        for a future runtime-capture extension.
         """
         return Sourced(value=self.value)
 
@@ -258,15 +208,12 @@ class Err[E]:
         return True
 
     def unwrap(self) -> NoReturn:
-        """Raise the underlying error. Never returns.
+        """Raise the underlying error; never returns.
 
-        ``Err.error`` is usually a :class:`gigaevo.dataplane.errors.DataPlaneError`
-        (which is an ``Exception``) so raising directly works. Non-
-        exception ``E`` types are wrapped in ``RuntimeError``.
-
-        Typed ``NoReturn`` because the function always raises; mypy will
-        consider any code after ``r.unwrap()`` unreachable, which is the
-        intended contract.
+        ``Err.error`` is usually a :class:`DataPlaneError` (Exception
+        subclass) and raises directly; non-exception payloads are wrapped
+        in ``RuntimeError``. ``NoReturn`` so mypy marks post-call code
+        unreachable.
         """
         err = self.error
         if isinstance(err, BaseException):
@@ -277,10 +224,8 @@ class Err[E]:
 type Result[T, E] = Ok[T] | Err[E]
 """Discriminated return; callers ``match result: case Ok(v): ... case Err(e): ...``.
 
-The ``E`` parameter is unbounded at the alias level so the type can hold
-any payload, but every coordinator-level signature in this package
-bounds ``E`` to :class:`gigaevo.dataplane.errors.DataPlaneError` so
-callers know which exception classes ``match Err(e)`` can yield.
+``E`` is unbounded at the alias level; every coordinator-level signature
+bounds it to :class:`DataPlaneError` so the caller knows the variants.
 """
 
 
@@ -319,17 +264,10 @@ class HlcTimestamp:
     def pack_hex(self) -> str:
         """Big-endian 32-hex-char encoding ``physical_ns||counter||pad``.
 
-        Layout (32 hex chars, big-endian):
-            - chars 0-15  : ``physical_ns`` as 16-hex (uint64)
-            - chars 16-23 : ``counter`` as 8-hex (uint32)
-            - chars 24-31 : reserved-zero pad (8-hex)
-
-        The trailing 32 bits are reserved for a future shard-id /
-        process-id field that the Lua write path may inject server-side.
-        Today they are written and required to be zero on the wire so
-        the format is forward-compatible: a future reader can split the
-        field at the same offset without an encoding flag day.
-        :meth:`unpack_hex` rejects non-zero trailing bits.
+        Layout: chars 0-15 ``physical_ns`` (uint64), 16-23 ``counter``
+        (uint32), 24-31 reserved-zero pad. The pad reserves space for a
+        future shard/process-id field; :meth:`unpack_hex` rejects non-zero
+        trailing bits to keep the format forward-compatible.
         """
         return f"{self.physical_ns:016x}{self.counter:08x}{_HLC_TRAILING_PAD}"
 
@@ -337,17 +275,10 @@ class HlcTimestamp:
     def unpack_hex(cls, packed: str) -> HlcTimestamp:
         """Decode a packed HLC string. Rejects malformed inputs eagerly.
 
-        Raises :class:`ValueError` on any of:
-            - length != 32
-            - any non-lowercase-hex character (``a-f`` or ``0-9``)
-            - non-zero trailing pad bits (reserved field invariant)
-            - decoded ``physical_ns`` or ``counter`` out of range
-
-        Case strictness matters: ``pack_hex`` emits lowercase, and the
-        canonical content-hash inputs derived from a packed HLC must be
-        byte-identical regardless of which encoder produced them.
-        Accepting both ``"deadbeef"`` and ``"DEADBEEF"`` would let two
-        equivalent values land on different hashes.
+        Raises :class:`ValueError` for: length != 32, non-lowercase-hex
+        characters, non-zero trailing pad bits, or out-of-range fields.
+        Strict lowercase keeps content-hash inputs byte-stable across
+        encoders.
         """
         if len(packed) != _HLC_HEX_LEN:
             raise ValueError(

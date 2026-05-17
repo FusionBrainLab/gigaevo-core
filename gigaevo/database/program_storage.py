@@ -270,12 +270,9 @@ class ProgramStorage(ABC):
         Subclasses may override with pipelined operations.
         Returns the number of programs transitioned.
 
-        Per-program FSM validation runs against the program's actual
-        current state rather than the caller-asserted ``old_state`` so
-        a diverged in-memory state (e.g. an upstream actor mutated the
-        program after this batch was assembled) surfaces as
-        :class:`ValueError` instead of leaking into a persisted blob
-        whose ``state`` field disagrees with the FSM.
+        Per-program FSM validation runs against each program's actual
+        current state so a diverged in-memory state surfaces as
+        :class:`ValueError` rather than being silently persisted.
         """
         old_enum = ProgramState(old_state)
         new_enum = ProgramState(new_state)

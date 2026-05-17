@@ -17,10 +17,7 @@
 --   both as ASCII integer strings. ``new_length`` is the list length
 --   AFTER the trim, capped at ``cap``.
 --
--- Errors out on cap <= 0 — an "unbounded" list is exactly what this
--- primitive is meant to prevent, so the silent fall-through case is
--- rejected at the boundary rather than letting LTRIM 0 -1 produce
--- a no-op trim.
+-- Reject cap <= 0; LTRIM 0 -1 would silently no-op the cap.
 
 local cap = tonumber(ARGV[2])
 if not cap or cap ~= math.floor(cap) or cap <= 0 then

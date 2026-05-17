@@ -19,7 +19,6 @@ from gigaevo.dataplane import (
     Freshness,
     FreshnessEventual,
     ProgramId,
-    StaleReadError,
     Token,
     mint_root,
 )
@@ -31,17 +30,13 @@ if TYPE_CHECKING:
 CellDescriptor = tuple[int, ...]
 
 
-# Retry budget for the optimistic compare-and-swap in
-# :meth:`RedisArchiveStorage.add_elite`. Each retry is one Redis round
-# trip; exhaustion surfaces as ``False`` with a warning so a contended
-# cell cannot hang a caller indefinitely.
+# Retry budget for the optimistic CAS in
+# :meth:`RedisArchiveStorage.add_elite`; exhaustion surfaces as
+# ``False`` so a contended cell cannot hang a caller indefinitely.
 _WATCH_MAX_ATTEMPTS: Final[int] = 50
 
-# Stable-by-default tie-break: the occupant wins equal-score comparisons
-# so an already-installed elite is not churned by a freshly-arrived
-# program of identical score. The legacy ``is_better`` callback follows
-# the same convention — strict ``>`` in :class:`SumArchiveSelector` —
-# so this matches the existing behaviour on the WATCH path.
+# Stable-by-default tie-break: occupant wins equal-score comparisons,
+# matching :class:`SumArchiveSelector`'s strict ``>`` callback.
 _DEFAULT_TIEBREAK_BIT: Final[int] = 0
 
 
@@ -53,16 +48,11 @@ def _reduce_selector_score(
 ) -> float | None:
     """Probe a selector for its scalar score, if it exposes one.
 
-    The dataplane swap path needs a single float per candidate. Selectors
-    that subclass :class:`gigaevo.evolution.strategies.selectors.ArchiveSelector`
-    advertise their scalar via ``reduce_to_score``. Bare callables (e.g.
-    ad-hoc test lambdas) and multi-criteria selectors return ``None`` and
-    fall through to the WATCH-based path.
-
-    Non-finite scores are also rejected: a NaN or infinite score would
-    surface as :class:`gigaevo.dataplane.EliteInvalidError` at the Lua
-    boundary and abort the swap; surfacing it Python-side here keeps
-    the fallback path available for a degenerate metric.
+    Selectors that subclass :class:`ArchiveSelector` expose a scalar via
+    ``reduce_to_score``; bare callables and multi-criteria selectors
+    return ``None`` and the caller takes the WATCH path. NaN / inf
+    scores are also rejected here so the fallback handles a degenerate
+    metric without round-tripping to Lua.
     """
     reducer = getattr(selector, "reduce_to_score", None)
     if reducer is None:
@@ -139,29 +129,14 @@ class RedisArchiveStorage(ArchiveStorage):
 
     Data structures:
       - ``{prefix}:archive`` (hash): cell -> program_id
-      - ``{prefix}:archive:reverse`` (hash): program_id -> cell (1:1 mapping)
+      - ``{prefix}:archive:reverse`` (hash): program_id -> cell (1:1)
       - ``{prefix}:archive:scores`` (hash): cell -> occupant score
-        (only populated by the dataplane swap path; see ``add_elite``)
+        (populated by the dataplane swap path only)
 
-    Each program can be elite in at most one cell at a time; the reverse
-    index keeps that invariant cheap to enforce on a swap.
-
-    Every read consults Redis (one HGET / HVALS / HLEN per call); there
-    is no in-memory mirror of the archive hash. ``add_elite`` has two
-    code paths:
-
-    - **Dataplane path** (when ``dataplane`` is supplied AND the caller's
-      selector exposes a scalar :meth:`reduce_to_score`): the swap runs
-      server-side in one atomic Lua call via
-      :meth:`DataPlane.try_replace_elite`. Comparison reduces to a
-      ``(candidate_score, tiebreak_bit)`` pair embedded in ``ARGV``; the
-      script writes the new score into ``{prefix}:archive:scores`` so
-      future swaps stay atomic without a Python-side round trip.
-    - **Optimistic-locking fallback**: the original WATCH/MULTI/EXEC
-      compare-and-swap with the caller's full ``is_better`` callback,
-      bounded by :data:`_WATCH_MAX_ATTEMPTS`. This is the path for
-      multi-criteria comparators (Pareto dominance) whose ordering
-      cannot be flattened into a single scalar.
+    ``add_elite`` dispatches on the comparator's expressiveness: scalar-
+    reducible selectors take the dataplane path (one atomic Lua swap),
+    multi-criteria selectors fall back to a WATCH/MULTI/EXEC CAS
+    bounded by :data:`_WATCH_MAX_ATTEMPTS`.
     """
 
     def __init__(
@@ -177,11 +152,8 @@ class RedisArchiveStorage(ArchiveStorage):
         self._hash_key = f"{prefix}:archive"
         self._reverse_key = f"{prefix}:archive:reverse"
         self._dataplane = dataplane
-        # Optional: when wired by :func:`gigaevo.dataplane.wire_archive_storage`,
-        # every dataplane-path swap derives its per-call cell token via
-        # linear split from this engine root. When ``None`` the swap path
-        # still works via :func:`mint_root` and the structural traceability
-        # to a single engine origin degrades to a per-call ad-hoc root.
+        # When supplied, per-call swap tokens are derived by linear
+        # split from this root rather than ad-hoc minted.
         self._engine_root = engine_root
 
     # -------- small helpers --------
@@ -216,17 +188,12 @@ class RedisArchiveStorage(ArchiveStorage):
     ) -> Program | None:
         """Return the elite program occupying ``cell``, or ``None``.
 
-        ``freshness`` is the structural admission contract on the
-        underlying program-blob read. Default :class:`FreshnessEventual`
-        keeps the legacy two-step (HGET cell + storage.get) verbatim:
-        whatever Redis has now is admitted. A stricter floor — e.g.
-        :class:`FreshnessAtLeast(epoch=N)` — routes the program read
-        through :meth:`DataPlane.read_program` and raises
-        :class:`StaleReadError` when the persisted blob's epoch is
-        below the floor. A stricter freshness requires a dataplane: if
-        none is wired, :class:`StaleReadError` cannot be evaluated and
-        the call raises :class:`RuntimeError` so a silent stale read is
-        not possible.
+        Default :class:`FreshnessEventual` reads admit whatever Redis
+        has now. A stricter floor (e.g. :class:`FreshnessAtLeast`)
+        routes through :meth:`DataPlane.read_program` and raises
+        :class:`StaleReadError` on epoch underflow; a wired dataplane
+        is required, otherwise :class:`RuntimeError` is raised so a
+        silent stale read is not possible.
         """
         field = self._field(cell)
         pid = await self._hget(field)
@@ -237,9 +204,6 @@ class RedisArchiveStorage(ArchiveStorage):
         )
         if isinstance(effective_freshness, FreshnessEventual):
             return await self._storage.get(pid)
-        # Stricter freshness contracts route through the coordinator's
-        # epoch-aware program read so a floor violation surfaces as a
-        # typed error rather than a silently-stale blob.
         if self._dataplane is None:
             raise RuntimeError(
                 "RedisArchiveStorage.get_elite: non-eventual freshness "
@@ -249,21 +213,12 @@ class RedisArchiveStorage(ArchiveStorage):
             ProgramId(pid), freshness=effective_freshness
         )
         if isinstance(result, Err):
-            if isinstance(result.error, StaleReadError):
-                raise result.error
-            # Non-staleness coordinator errors (decode, key shape) bubble
-            # up as a runtime fault — the archive cannot recover from
-            # them on the read path.
             raise result.error
-        # ``Ok(None)`` means the program blob is gone (deleted out from
-        # under us). The archive has no policy for that beyond surfacing
-        # the absence; keep the legacy ``None`` return.
         if result.value is None:
             return None
-        # The dataplane's freshness check has already cleared; defer
-        # rehydration to the legacy ``storage.get`` so a single code
-        # path owns Program decoding (atomic_counter retention, dict
-        # field fallback, exclude semantics).
+        # Freshness has cleared; defer Program decoding to a single
+        # owner so atomic_counter / dict-field / exclude semantics stay
+        # consistent with non-coordinator reads.
         return await self._storage.get(pid)
 
     async def add_elite(
@@ -272,30 +227,16 @@ class RedisArchiveStorage(ArchiveStorage):
         program: Program,
         is_better: Callable[[Program, Program], bool],
     ) -> bool:
-        """Add elite, dispatching on the comparator's expressiveness.
+        """Add ``program`` to ``cell``, dispatching on comparator shape.
 
-        Scalar-reducible comparators (those whose :meth:`reduce_to_score`
-        returns a finite number for ``program``) take the dataplane path
-        when a :class:`DataPlane` is wired into this archive: one atomic
-        Lua call performs the compare-and-swap server-side against the
-        score stored alongside the cell.
-
-        Comparators that return ``None`` from ``reduce_to_score`` —
-        multi-criteria dominance, callable closures without a class
-        wrapper — fall back to the bounded WATCH/MULTI/EXEC path with
-        the full ``is_better`` callback. The retry loop terminates after
-        :data:`_WATCH_MAX_ATTEMPTS` observations of ``WatchError``; on
-        exhaustion the call returns ``False`` with a warning.
-
-        Returns ``True`` if the candidate was installed (insert or
-        swap), ``False`` otherwise.
+        Scalar-reducible comparators take the dataplane CAS path; the
+        rest fall back to bounded WATCH/MULTI/EXEC. Returns ``True``
+        when the candidate was installed (inserted or swapped).
         """
         field = self._field(cell)
 
-        # The candidate must exist in the program storage before being
-        # installed as the elite. Holds on both dispatch branches: the
-        # dataplane Lua takes only the program id and trusts the caller
-        # to have persisted the blob.
+        # Candidate must already exist in program storage; both paths
+        # trust the caller to have persisted the blob.
         if not await self._storage.exists(program.id):
             logger.debug("[Archive] add ignored: program {} not in storage", program.id)
             return False
@@ -335,8 +276,6 @@ class RedisArchiveStorage(ArchiveStorage):
                         return True
 
                 except WatchError:
-                    # Another writer updated the archive hash; loop and
-                    # re-read the current occupant.
                     continue
 
         ok = await self._storage.with_redis("archive:add_elite", _op)
@@ -347,24 +286,13 @@ class RedisArchiveStorage(ArchiveStorage):
     async def _add_elite_via_dataplane(
         self, field: str, program: Program, score: float
     ) -> bool:
-        """Atomic compare-and-swap through :meth:`DataPlane.try_replace_elite`.
+        """Atomic CAS through :meth:`DataPlane.try_replace_elite`.
 
-        One token is minted per call: the coordinator consumes it server-
-        side once the swap completes, so concurrent writers on the same
-        cell each carry their own witness and the linearity check happens
-        without an extra round-trip. The tiebreak bit stays at
-        :data:`_DEFAULT_TIEBREAK_BIT` (occupant wins ties) — strict ``>``,
-        identical to the legacy callback for :class:`SumArchiveSelector`.
-
-        When an :class:`EngineRoot` is wired (via
-        :func:`gigaevo.dataplane.wire_archive_storage`), the per-call
-        token is derived by linear split from the engine's cell-root
-        witness so every swap is structurally traceable to the engine's
-        single cell-subspace origin. Without an engine root the token is
-        minted ad-hoc via :func:`mint_root` — correct, but the
-        provenance to the engine root is lost.
+        Per-call token: derived from the engine cell root when wired,
+        otherwise ad-hoc via :func:`mint_root`. Tiebreak bit pinned to
+        :data:`_DEFAULT_TIEBREAK_BIT` (occupant wins).
         """
-        assert self._dataplane is not None  # gate at the call site
+        assert self._dataplane is not None  # type narrowing
         cell_key = CellKey(field)
         if self._engine_root is not None:
             token: Token[CellKey] = self._engine_root.split_cell_token(cell_key)
@@ -396,11 +324,8 @@ class RedisArchiveStorage(ArchiveStorage):
             return True
         if isinstance(outcome, EliteRejected):
             return False
-        # Defensive: every concrete variant is handled above; an unknown
-        # variant means the coordinator API has grown a new branch and the
-        # storage has not caught up. Logging the value at warning level
-        # surfaces the drift on the first call rather than silently
-        # accepting a swap that did not happen.
+        # Unknown variant: log so a coordinator API drift surfaces on
+        # the first call rather than masquerading as a no-op swap.
         logger.warning(
             "[Archive] dataplane swap on cell {} returned unknown outcome {!r}",
             field,
@@ -503,13 +428,7 @@ class RedisArchiveStorage(ArchiveStorage):
         placements: list[tuple[CellDescriptor, Program]],
         is_better: Callable[[Program, Program], bool],
     ) -> int:
-        """Sequential add_elite over the placements list.
-
-        Iterates one ``add_elite`` per placement. A future optimisation
-        could group by cell and pick the best per cell first; the
-        simple sequential form is correct and adequate for the
-        re-indexing path that calls it.
-        """
+        """Sequential :meth:`add_elite` over the placements list."""
         if not placements:
             return 0
 

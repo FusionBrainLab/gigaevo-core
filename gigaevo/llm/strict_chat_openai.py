@@ -1,24 +1,11 @@
 """Strict-construction wrapper around ``langchain_openai.ChatOpenAI``.
 
-``ChatOpenAI`` declares ``model_config['extra'] = 'ignore'`` and silently
-reroutes unknown kwargs into ``model_kwargs``, then ships them verbatim to
-the OpenAI HTTP endpoint. A typo such as ``tempetature: 0.5`` therefore
-survives composition, survives instantiation, and only fails (or is
-ignored) at the remote API. The fault surfaces as an opaque OpenAI error
-far from the YAML site that introduced it.
-
-This module exposes a thin factory, :func:`strict_chat_openai`, that
-validates every kwarg against the union of ``ChatOpenAI.model_fields``
-and the Pydantic aliases (``api_key`` ↔ ``openai_api_key``,
-``max_tokens`` ↔ ``max_completion_tokens``, ``request_timeout`` ↔
-``timeout`` etc.) *before* construction. Unknown kwargs raise
-:class:`StrictChatOpenAIError` naming the offender. The factory also
-refuses an explicit ``api_key=None`` (the resolved value of
-``${oc.env:OPENAI_API_KEY,null}`` when the env var is unset) with an
-application-layer message that names the missing variable.
-
-The returned object is an unmodified :class:`ChatOpenAI` instance so the
-LangChain runtime contract is preserved.
+``ChatOpenAI`` silently reroutes unknown kwargs into ``model_kwargs`` and
+ships them to the OpenAI HTTP endpoint, so a YAML typo only surfaces as
+an opaque remote error. :func:`strict_chat_openai` validates every
+kwarg against the union of ``ChatOpenAI.model_fields`` and its Pydantic
+aliases before construction; unknown kwargs and an unresolved
+``api_key=None`` raise :class:`StrictChatOpenAIError` at the call site.
 """
 
 from __future__ import annotations

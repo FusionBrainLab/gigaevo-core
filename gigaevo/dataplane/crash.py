@@ -1,29 +1,14 @@
 """Crash-event recovery primitives.
 
-The pattern: a hot-path consumer peeks a one-shot flag on every call,
-and on the rare true path the caller's next dataplane invocation
-returns ``(None, CrashEvent)`` instead of the normal ``(value, None)``
-pair — recovery becomes a control-flow branch, not an exception unwind.
+A hot-path consumer peeks a one-shot flag on every call; on the rare
+true path the next dataplane call returns ``(None, CrashEvent)`` instead
+of ``(value, None)``. Recovery is a control-flow branch, not an
+exception unwind. Hot-path cost is one non-blocking flag read per call.
 
-The flag is backed by :class:`asyncio.Event`. Hot-path cost is one
-non-blocking flag read per call, which is acceptable at the coarse
-granularity of a network round-trip.
-
-Asyncio-only contract
-=====================
-:class:`OneShotFlag` is **not** thread-safe. It wraps
-``asyncio.Event``, which is documented to be safe only within the
-single event-loop thread that created it. Calling :meth:`signal` from
-:func:`asyncio.to_thread` *appears* to work because ``Event.set`` does
-not itself await — but a coroutine that's parked on :meth:`wait`
-running in the same loop will not be woken until the loop schedules it,
-and there is no guarantee the worker thread's modification is visible
-to the loop thread without an explicit ``loop.call_soon_threadsafe``
-fence. Signalling from off-loop threads is forbidden; cross-thread
-signalling must round-trip through ``call_soon_threadsafe`` (or use a
-different primitive altogether). The dataplane's own watchdogs are
-async coroutines, so this never comes up in production; the rule is
-documented here so future contributors do not introduce it by accident.
+Asyncio-only contract: :class:`OneShotFlag` wraps :class:`asyncio.Event`
+and is single-loop only. Cross-thread signalling must round-trip via
+``loop.call_soon_threadsafe``; the dataplane's own watchdogs are
+coroutines so this never comes up in production.
 """
 
 from __future__ import annotations
@@ -38,13 +23,8 @@ from dataclasses import dataclass, field
 class OneShotFlag:
     """Single-direction "the peer is dead" / "the lock is lost" signal.
 
-    The flag is produced by exactly one party (the watchdog that detects
-    the crash) and consumed by any number of readers. Once set, it stays
-    set — the recovery handler runs once, mints survivor permissions,
-    and the owning resource is replaced.
-
-    Bound to a single asyncio loop. See the module docstring for the
-    cross-thread contract; the short version is: don't.
+    Produced by one watchdog, consumed by any number of readers; once
+    set, it stays set. Single-loop only (see module docstring).
     """
 
     __slots__ = ("_event",)
@@ -71,25 +51,13 @@ class OneShotFlag:
 class CrashEvent[PeerTag, Resource]:
     """Typed recovery payload returned in place of a normal value.
 
-    Carries:
-        - the dead peer's tag (so handlers can route to a recovery policy)
-        - the recovered resource (e.g. a fresh Redis connection after
-          Sentinel failover, or a fresh lease after re-acquisition)
-        - a tuple of survivor permission tokens minted at the crash
-          boundary; subsequent calls require these as proof of
-          legitimate post-crash operation.
+    Carries the dead peer's tag (for routing to a recovery policy), the
+    recovered resource (e.g. a fresh lease after re-acquisition), and a
+    tuple of survivor permission tokens minted at the crash boundary.
 
-    Why ``survivor_tokens: tuple[object, ...]`` and not a typed tuple
-    --------------------------------------------------------------
-    A single :class:`CrashEvent` carries a heterogeneous tuple — a
-    program-FSM token, a cell-swap token, and a CRDT-actor token can
-    all be minted for the same crash. The element types vary per crash
-    class and are not known to ``CrashEvent`` itself. A
-    ``tuple[Token[ProgramId] | Token[CellKey] | ...]`` would either
-    spuriously narrow (when one of the variants is absent) or recreate
-    the same ``object``-typed escape hatch behind a longer signature.
-    Callers narrow at the consumption site via ``isinstance`` /
-    pattern-matching; the documentation is the contract.
+    ``survivor_tokens`` is ``tuple[object, ...]`` because a single event
+    may mix heterogeneous tokens (program / cell / counter). Callers
+    narrow at the consumption site.
     """
 
     peer: PeerTag
@@ -121,18 +89,11 @@ Callers match::
 class CrashWatchedHandle[T, PeerTag, Resource]:
     """Wraps an inner resource plus a :class:`OneShotFlag`.
 
-    Every call peeks the flag first. If the flag is set, the call short-
-    circuits to a recovery path that mints survivors and returns the
-    crash event. Otherwise the inner method runs and its result is
-    returned as ``(value, None)``.
-
-    After a recovery event, callers replace the wrapped resource via
-    :meth:`replace_inner`. The :class:`OneShotFlag` may be cleared by
-    the caller or replaced by minting a fresh flag for the new resource;
-    the dataplane's convention is to mint a fresh flag.
-
-    The reconnect / survivor-minting policy is injected via
-    ``recover_fn`` so this class stays mechanism-only.
+    Each call peeks the flag first; a set flag short-circuits to
+    ``recover_fn`` and returns the crash event. Callers swap in the
+    recovered resource via :meth:`replace_inner` (minting a fresh flag
+    by convention). The recovery policy is caller-injected so this class
+    stays mechanism-only.
     """
 
     __slots__ = ("_inner", "_flag", "_recover")
@@ -158,10 +119,9 @@ class CrashWatchedHandle[T, PeerTag, Resource]:
     def replace_inner(self, new_inner: T, new_flag: OneShotFlag | None = None) -> None:
         """Swap in the recovered resource (and optionally a fresh flag).
 
-        Called by the caller after handling a :class:`CrashEvent`. If
-        ``new_flag`` is omitted the existing flag is retained; callers
-        retaining a set flag will see every subsequent call short-circuit
-        to recovery, so passing a fresh flag is the usual choice.
+        If ``new_flag`` is omitted, the existing flag is retained — a
+        still-set flag will short-circuit every subsequent call, so the
+        usual choice is to pass a fresh flag.
         """
         self._inner = new_inner
         if new_flag is not None:
@@ -173,21 +133,11 @@ class CrashWatchedHandle[T, PeerTag, Resource]:
     ) -> Recovered[R, PeerTag, Resource]:
         """Invoke ``method`` on the inner handle with crash interception.
 
-        If the flag is set before the call, recovery runs and a
-        :class:`CrashEvent` is returned. Otherwise the method runs to
-        completion and its result is returned as ``(value, None)``.
-
-        A flag set DURING the method's execution is not observed by
-        this call (we accept stale-but-completed work). The next call
-        observes it.
-
-        If the injected ``recover_fn`` raises, the exception propagates
-        unchanged — recovery failure escalates because the resource is
-        unrecoverable and there is no degraded mode for the caller to
-        fall back to. Callers MUST handle this in a single ``try`` at
-        the supervisory layer (engine restart, lease release, fail-fast
-        shutdown); the dataplane does not paper over a broken recovery
-        policy with a synthesised :class:`CrashEvent`.
+        Flag set before the call ⇒ recovery runs, returns
+        ``(None, CrashEvent)``. Otherwise the method runs and returns
+        ``(value, None)``. A flag set *during* execution is observed only
+        on the next call. A raising ``recover_fn`` propagates unchanged
+        — the supervisory layer must catch it.
         """
         if self._flag.is_set():
             event = await self._recover(self._inner)

@@ -12,10 +12,8 @@ def pickle_b64_serialize(value: Any) -> str:
 
 
 def pickle_b64_deserialize(value: str) -> Any:
-    # Deserializes a b64-encoded cloudpickle payload that originates from
-    # the program-content round-trip in ``gigaevo.core_types`` (the same
-    # process writes and reads it). The migration target is a typed wire
-    # format so that this helper no longer needs the pickle escape hatch.
+    # Deserializes a b64-encoded cloudpickle payload written by the same
+    # process; the bytes never cross a trust boundary.
     return cloudpickle.loads(base64.b64decode(value.encode("utf-8")))  # noqa: TID251
 
 

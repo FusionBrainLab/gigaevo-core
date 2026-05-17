@@ -354,13 +354,9 @@ class TestRedisArchiveStorageConcurrency:
 
 
 class TestDataplaneSwapPath:
-    """The dataplane branch of :meth:`add_elite`.
-
-    Reducible comparators with ``reduce_to_score`` should route through
-    :meth:`DataPlane.try_replace_elite`. Non-reducible comparators —
-    bare callables and Pareto dominance — must fall back to the legacy
-    WATCH path even when a dataplane is wired in.
-    """
+    """The dataplane branch of :meth:`add_elite`. Reducible comparators
+    route through :meth:`DataPlane.try_replace_elite`; non-reducible
+    comparators fall back to the WATCH path."""
 
     async def test_sum_selector_inserts_via_dataplane(self, dp_storage, dp_archive):
         p = _prog(metrics={"score": 5.0})
@@ -416,9 +412,8 @@ class TestDataplaneSwapPath:
         await dp_storage.add(first)
         await dp_storage.add(second)
         selector = ParetoFrontSelector(fitness_keys=["a", "b"])
-        # ``reduce_to_score`` returns None for the Pareto selector, so the
-        # storage stays on the legacy WATCH path; an incomparable
-        # candidate cannot dominate and must be rejected.
+        # Pareto's ``reduce_to_score`` returns None, so the storage uses
+        # the WATCH path; an incomparable candidate cannot dominate.
         assert await dp_archive.add_elite((0,), first, selector) is True
         assert await dp_archive.add_elite((0,), second, selector) is False
         elite = await dp_archive.get_elite((0,))
@@ -467,14 +462,9 @@ class TestDataplaneSwapPath:
 
 
 class TestArchiveEngineRootWiring:
-    """Engine-root-backed archive derives per-call cell tokens by split.
-
-    The constructor accepts ``engine_root``; the swap path then mints
-    the per-call ``Token[CellKey]`` via :meth:`EngineRoot.split_cell_token`
-    instead of ad-hoc :func:`mint_root`. Backwards compat: an archive
-    constructed without an engine root keeps the legacy mint-per-call
-    behaviour exactly.
-    """
+    """When ``engine_root`` is supplied, the swap path mints the per-call
+    ``Token[CellKey]`` via :meth:`EngineRoot.split_cell_token`. Without
+    one, the archive keeps the mint-per-call behaviour."""
 
     async def test_engine_root_wired_swap_succeeds(self, dp_storage, coord):
         from gigaevo.dataplane.engine_startup import build_engine_root
@@ -524,14 +514,11 @@ class TestArchiveEngineRootWiring:
 
 
 class TestArchiveGetEliteFreshness:
-    """``get_elite`` accepts a freshness contract on the program-blob read.
-
-    Default :class:`FreshnessEventual` preserves the legacy two-step
-    (HGET cell + ``storage.get``) verbatim. A stricter floor routes the
-    underlying program read through :meth:`DataPlane.read_program` and
-    raises :class:`StaleReadError` when the persisted blob is below the
-    floor.
-    """
+    """``get_elite`` accepts a freshness contract on the program-blob read:
+    the default :class:`FreshnessEventual` returns the two-step HGET-cell
+    + ``storage.get`` view, and :class:`FreshnessAtLeast` routes the
+    program read through :meth:`DataPlane.read_program`, raising
+    :class:`StaleReadError` when the floor is not met."""
 
     async def test_default_freshness_is_eventual(self, dp_storage, dp_archive):
         p = _prog(metrics={"score": 5.0})
@@ -571,9 +558,8 @@ class TestArchiveGetEliteFreshness:
             )
 
     async def test_non_eventual_without_dataplane_raises(self, storage, archive):
-        """A stricter freshness without a wired DataPlane is a structural
-        error: there is no admission-floor evaluator. Raise rather than
-        silently degrade to the legacy unbounded path."""
+        """A stricter freshness without a wired DataPlane raises: no
+        admission-floor evaluator exists on the unwired path."""
         p = _prog(metrics={"score": 5.0})
         await storage.add(p)
         await archive.add_elite((0,), p, _always_better)

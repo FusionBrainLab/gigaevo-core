@@ -1,69 +1,34 @@
 """Bandit-based adaptive model selection for LLM ensembles.
 
-Implements UCB1 with sliding window and running-percentile reward normalization,
-inspired by ShinkaEvolve (arxiv 2509.19349).  The ``BanditModelRouter`` subclass
-of ``MultiModelRouter`` replaces static probability-based selection with an
-adaptive strategy that learns which LLM produces the best fitness improvements.
+Implements UCB1 with sliding window and running-percentile reward
+normalization, inspired by ShinkaEvolve (arxiv 2509.19349). The
+``BanditModelRouter`` subclass of ``MultiModelRouter`` replaces static
+probability-based selection with an adaptive strategy that learns which
+LLM produces the best fitness improvements.
 
-Mutation-outcome reward policy
-------------------------------
+Reward policy
+-------------
 
-:meth:`BanditModelRouter.on_mutation_outcome` is called after the DAG
-has decided whether to admit the child program. The three outcomes
-shape the bandit signal as follows:
-
-    - :data:`MutationOutcome.ACCEPTED` and
-      :data:`MutationOutcome.REJECTED_STRATEGY`: the child reached the
-      strategy with a measurable fitness, so the reward is the
-      normalised improvement over the best parent. The strategy reject
-      branch still produces an informative signal — a model that
-      consistently produces valid-but-uncompetitive code shows up as a
-      low-mean arm.
-    - :data:`MutationOutcome.REJECTED_ACCEPTOR`: the program crashed,
-      lacked the validity metric, or otherwise failed the acceptor
-      pipeline (``gigaevo.evolution.engine.acceptor``). The fitness is
-      unreliable — the DAG never produced a real measurement, only a
-      sentinel — and the failure is not necessarily attributable to the
-      model: it can sit anywhere from "the LLM produced incoherent
-      code" to "an upstream stage crashed on otherwise sound code".
-      Recording a synthetic 0.0 reward conflates these classes and
-      drags the model's posterior toward a value the data does not
-      support. The chosen policy is to **skip the reward update** for
-      this outcome; the per-arm pull counter already incremented at
-      selection time, so the trial is still represented in the UCB1
-      exploration term — only the reward window stays free of
-      synthetic zeros. This matches the precedent in
-      ``gigaevo.prompts.fetcher`` which also drops ``REJECTED_ACCEPTOR``
-      outcomes from its stats writes.
-
-The trade-off is acknowledged: a model that systematically produces
-crash-inducing code looks better than it should, because those trials
-contribute pulls but no rewards. The ``REJECTED_STRATEGY`` branch still
-carries a real-fitness signal, which catches the broader class of
-"valid but weak" outputs; chronically broken outputs surface as a low
-ratio of recorded rewards to recorded pulls, which downstream tooling
-can inspect through :meth:`SlidingWindowUCB1.get_stats`.
+``ACCEPTED`` and ``REJECTED_STRATEGY`` outcomes carry a real
+fitness-derived reward (normalised improvement over the best parent).
+``REJECTED_ACCEPTOR`` has unreliable fitness — the failure is not
+necessarily attributable to the model — and is gated on the
+``skip_reward_on_acceptor_reject`` constructor flag: when set, no
+reward is recorded for that outcome and only the UCB1 exploration term
+moves; when unset, a normalised 0.0 is appended for callers that need
+the historical signal shape.
 
 Optional Redis-backed ledger
 ----------------------------
 
-When constructed with a :class:`~gigaevo.dataplane.DataPlane` and an
-:class:`~gigaevo.dataplane.ActorIdentity`, the bandit mirrors its trial
-count and reward sum into Redis G-counters via ``crdt_inc``. Two engines
-sharing the same Redis prefix observe each other's pulls after a refresh
-and a restart no longer loses all history.
-
-Key scheme (relative to the dataplane key prefix):
-
-    - ``bandit:trials:{arm}``      — per-arm trial G-counter, integer delta.
-    - ``bandit:reward_sum:{arm}``  — per-arm fixed-point reward sum,
-      scaled by :data:`_REWARD_FIXED_POINT_SCALE` so HINCRBY (integer-only)
-      suffices. The float reward is rounded half-even then summed.
-
-The in-process windowed UCB stays authoritative for fast selection (the
-hot path is sync and must not block on Redis). Redis is the audit trail
-and cross-engine sharing tier; :meth:`SlidingWindowUCB1.refresh_from_redis`
-re-syncs the local trial counters from the Redis consensus sum.
+When constructed with a :class:`DataPlane` and an
+:class:`ActorIdentity`, the bandit mirrors trial counts and reward
+sums into per-arm CRDT G-counters
+(``bandit:trials:{arm}`` / ``bandit:reward_sum:{arm}``). Rewards are
+scaled by :data:`_REWARD_FIXED_POINT_SCALE` to fit ``HINCRBY``'s
+integer contract. The in-process windowed UCB stays authoritative for
+selection; :meth:`SlidingWindowUCB1.refresh_from_redis` folds the
+consensus trial count back into the local state.
 """
 
 from __future__ import annotations
@@ -138,13 +103,10 @@ def _reward_sum_key(arm: str) -> CounterKey:
 
 
 def _reward_to_fixed_point(reward: float) -> int:
-    """Convert a normalized reward in ``[0, 1]`` to a Redis-storable integer.
+    """Convert a normalized reward in ``[0, 1]`` to a storable integer.
 
-    Banker's rounding (``round``) keeps the bias-free property when the
-    same series of rewards is summed across actors. Rewards outside
-    ``[0, 1]`` are clamped: ``normalize`` is contractually bounded, but
-    we keep the clamp as defence-in-depth so a bug in the normalizer
-    cannot poison the consensus reward sum.
+    Banker's rounding is bias-free across actors. ``reward`` is clamped
+    defensively in case the normalizer ever produces out-of-range values.
     """
     clamped = max(0.0, min(1.0, reward))
     return round(clamped * _REWARD_FIXED_POINT_SCALE)
@@ -231,37 +193,23 @@ class ArmStats:
 class SlidingWindowUCB1:
     """Upper Confidence Bound (UCB1) bandit with a sliding reward window.
 
-    Arms that have never been pulled are selected first (round-robin warmup).
-    After warmup, the arm with the highest UCB1 score is selected:
+    Arms that have never been pulled are selected first (round-robin
+    warmup). After warmup the arm with the highest UCB1 score is
+    selected: ``UCB1 = mean(windowed_rewards) + c * sqrt(ln(N) / n_i)``.
 
-        UCB1 = mean(windowed_rewards) + c * sqrt(ln(N) / n_i)
-
-    When ``dataplane`` and ``actor`` are both supplied, every ``record_pull``
-    and ``update_reward`` also fires a non-blocking CRDT increment against
-    the corresponding ``bandit:trials:{arm}`` / ``bandit:reward_sum:{arm}``
-    G-counter. Selection always reads from the in-process window — the
-    Redis ledger is the audit trail and the cross-engine sharing tier, not
-    the hot path. Call :meth:`refresh_from_redis` to fold the consensus
-    sum back into the in-process counters.
-
-    When ``engine_root`` is additionally supplied, every background
-    ``crdt_inc`` carries a fresh per-call permission witness split from
-    the engine's counter-root token. The Redis-backed ledger then
-    satisfies the single-writer-per-subspace invariant the coordinator
-    asserts for FSM transitions and archive swaps; without the engine
-    root the legacy token-less ledger contract still applies.
+    Supplying ``dataplane`` and ``actor`` enables a non-blocking CRDT
+    mirror of trial counts and reward sums; selection still reads the
+    in-process window so the hot path stays sync. Supplying
+    ``engine_root`` makes every mirror write carry a per-call token
+    split from the engine's counter root.
 
     Args:
         arm_names: Names identifying each arm.
         exploration_constant: UCB1 exploration parameter *c*.
         window_size: Maximum number of recent rewards kept per arm.
-        dataplane: Optional :class:`DataPlane` for CRDT-backed sharing.
-        actor: Optional :class:`ActorIdentity` for the per-actor G-counter
-            sub-counts. Both ``dataplane`` and ``actor`` must be supplied
-            together; otherwise the bandit operates in in-process-only mode.
-        engine_root: Optional :class:`EngineRoot`. When supplied alongside
-            ``dataplane`` and ``actor``, every ledger write derives a
-            per-call linear token from the engine's counter root.
+        dataplane: Optional :class:`DataPlane` for the CRDT mirror.
+        actor: Optional :class:`ActorIdentity`; must accompany ``dataplane``.
+        engine_root: Optional :class:`EngineRoot`; requires the dataplane.
     """
 
     arm_names: list[str]
@@ -287,17 +235,11 @@ class SlidingWindowUCB1:
             name: ArmStats(rewards=deque(maxlen=window_size)) for name in arm_names
         }
         self._total_pulls = 0
-        # CRDT mirror is enabled only when both surfaces are present; an
-        # asymmetric configuration (one without the other) is a caller
-        # bug, not a legitimate fallback path.
         if (dataplane is None) != (actor is None):
             raise ValueError(
                 "SlidingWindowUCB1: dataplane and actor must be supplied together "
                 "or both omitted"
             )
-        # Engine-root without a dataplane is meaningless — the token's
-        # consumer lives on the coordinator. Reject the asymmetric case
-        # rather than silently degrading.
         if engine_root is not None and dataplane is None:
             raise ValueError(
                 "SlidingWindowUCB1: engine_root requires a dataplane (and actor)"
@@ -305,9 +247,9 @@ class SlidingWindowUCB1:
         self._dataplane: DataPlane | None = dataplane
         self._actor: ActorIdentity | None = actor
         self._engine_root: EngineRoot | None = engine_root
-        # Strong refs to in-flight background increments — without this set
-        # asyncio.create_task results are GC-eligible immediately and the
-        # write may be cancelled before it reaches Redis.
+        # Strong refs to in-flight background increments; without these
+        # asyncio.create_task results are GC-eligible and may be cancelled
+        # before reaching Redis.
         self._pending_writes: set[asyncio.Task[Any]] = set()
 
     @property
@@ -349,10 +291,8 @@ class SlidingWindowUCB1:
     def record_pull(self, arm_name: str) -> None:
         """Increment pull counter for *arm_name*.
 
-        In Redis-backed mode the local counters update synchronously and
-        a background ``crdt_inc`` task is scheduled on the running event
-        loop. Outside a running loop the Redis mirror is skipped — the
-        in-process state remains authoritative.
+        Schedules a background ``crdt_inc`` when Redis-backed and a
+        running event loop is present; otherwise in-process only.
         """
         self.arms[arm_name].total_pulls += 1
         self._total_pulls += 1
@@ -361,10 +301,8 @@ class SlidingWindowUCB1:
     def update_reward(self, arm_name: str, reward: float) -> None:
         """Append *reward* to the sliding window for *arm_name*.
 
-        In Redis-backed mode the per-arm reward sum G-counter is also
-        bumped by the fixed-point representation of *reward*. Zero-delta
-        bumps are skipped to avoid no-op round trips when the rounded
-        reward is exactly zero.
+        Mirrors the reward into the per-arm sum G-counter when Redis-
+        backed; zero-delta bumps are skipped to avoid no-op round trips.
         """
         self.arms[arm_name].rewards.append(reward)
         delta = _reward_to_fixed_point(reward)
@@ -389,15 +327,8 @@ class SlidingWindowUCB1:
         """Fire-and-forget a ``crdt_inc`` on the running loop, if any.
 
         Sync callers (no running loop) silently fall back to in-process
-        only. Errors from the background write are logged and dropped —
-        the in-process state remains correct; the consensus sum simply
-        lags by one increment until the next successful write.
-
-        When an engine-root token bundle is wired, the per-call token is
-        minted synchronously on this thread (the engine root's internal
-        rotation is sync and must observe the same single-threaded
-        asyncio discipline as the consumer); the token then rides the
-        background task to the coordinator.
+        only. Background errors are logged and dropped — the in-process
+        state remains correct.
         """
         if not self.is_redis_backed:
             return
@@ -407,9 +338,9 @@ class SlidingWindowUCB1:
             return
         assert self._dataplane is not None
         assert self._actor is not None
-        # Mint the per-call counter token on the synchronous path so the
-        # engine root's rotation happens deterministically before the
-        # task is enqueued; the token is consumed inside ``crdt_inc``.
+        # Mint the per-call counter token synchronously so the engine
+        # root's rotation happens before the task is enqueued; the token
+        # is consumed inside ``crdt_inc``.
         counter_token: Token[CounterKey] | None = None
         if self._engine_root is not None:
             counter_token = self._engine_root.split_counter_token(key)
@@ -429,14 +360,9 @@ class SlidingWindowUCB1:
     ) -> None:
         """Issue one ``crdt_inc`` and log any error without propagating.
 
-        The bandit is allowed to degrade gracefully if the dataplane is
-        unreachable — UCB1 selection still works on the in-process state.
-        Surfacing the error to the hot path would make every LLM call
-        depend on Redis availability, which the design explicitly avoids.
-
-        ``token`` is the per-call permission witness when the bandit was
-        constructed with an engine root; ``None`` preserves the legacy
-        token-less ledger contract.
+        Surfacing the error to the hot path would force every LLM call
+        to depend on Redis availability; the bandit degrades gracefully
+        on in-process state instead.
         """
         try:
             result = await dataplane.crdt_inc(
@@ -473,16 +399,10 @@ class SlidingWindowUCB1:
     async def refresh_from_redis(self) -> None:
         """Fold the Redis consensus into the in-process trial counters.
 
-        Reads the cross-actor sum from each ``bandit:trials:{arm}`` and,
-        if it exceeds the local count, raises the local count to match.
-        The reward window is not touched — the doc treats it as a
-        per-actor hot-tier view; only the trial count (and through it
-        the UCB1 exploration term) is brought up to the consensus value.
-
-        Drift detection: when the local count exceeds the consensus, a
-        warning is logged and the local count is kept. This can only
-        happen if a previous write was lost; reducing the local count
-        would also retroactively shift past UCB1 scores.
+        Raises each ``arm.total_pulls`` to the cross-actor sum if it
+        exceeds the local value. Local-exceeds-consensus is logged and
+        the local count is preserved — lowering it would retroactively
+        shift past UCB1 scores. Reward windows are not modified.
         """
         if not self.is_redis_backed:
             return
@@ -520,25 +440,14 @@ class SlidingWindowUCB1:
         *,
         freshness: Freshness | None = None,
     ) -> float:
-        """Return the consensus mean reward for *arm_name*.
+        """Return the mean reward for *arm_name*, or ``0.0`` if untouched.
 
-        In Redis-backed mode this refreshes the trial counters first and
-        then divides the consensus reward sum (descaled from the fixed-
-        point representation) by the consensus trial count. In in-process
-        mode it returns the mean of the local sliding window — the same
-        value exposed by :meth:`get_stats`.
+        Redis-backed: refreshes trial counters then divides the consensus
+        reward sum (descaled from fixed point) by the consensus trial
+        count. In-process: mean of the local sliding window.
 
-        ``freshness`` is the structural admission contract on the two
-        underlying ``crdt_read`` calls (trials counter and reward-sum
-        counter). Defaults to :class:`FreshnessEventual` which matches
-        the legacy behaviour: any persisted view is acceptable. Callers
-        that need to observe their own writes pass
-        :class:`FreshnessAtLeast(epoch=...)`; on a floor violation the
-        underlying reads return :class:`StaleReadError` and this method
-        propagates it by raising — the caller has explicitly asked for a
-        consistency property the ledger does not satisfy.
-
-        Returns ``0.0`` when no pulls have been observed for the arm.
+        ``freshness`` defaults to :class:`FreshnessEventual`; a stricter
+        floor propagates :class:`StaleReadError` to the caller.
         """
         if not self.is_redis_backed:
             window = self.arms[arm_name].rewards
@@ -554,10 +463,8 @@ class SlidingWindowUCB1:
         sum_result = await self._dataplane.crdt_read(
             _reward_sum_key(arm_name), freshness=effective_freshness
         )
-        # Honour the freshness contract: an explicit floor violation is
-        # control flow the caller has opted into. Default-eventual reads
-        # cannot raise :class:`StaleReadError` so the legacy path keeps
-        # its silent-fallback semantics.
+        # Honour the freshness contract: a floor violation is opt-in
+        # control flow; default-eventual reads cannot raise StaleReadError.
         for result in (trials_result, sum_result):
             if isinstance(result, Err) and isinstance(result.error, StaleReadError):
                 raise result.error
@@ -596,19 +503,10 @@ class BanditModelRouter(MultiModelRouter):
         fitness_key: Metric key used to read fitness from ``Program.metrics``.
         higher_is_better: Whether higher fitness values are better.
         skip_reward_on_acceptor_reject: When ``True``, ``REJECTED_ACCEPTOR``
-            outcomes do not append a synthetic 0.0 to the reward window
-            (see module docstring for the rationale). When ``False`` —
-            the default for backwards compatibility — the historical
-            behaviour applies: a 0.0 is normalised and recorded. New
-            deployments should set this to ``True``.
-        dataplane: Optional :class:`DataPlane` for CRDT-backed sharing.
-        actor: Optional :class:`ActorIdentity` for per-actor G-counter
-            sub-counts. Both ``dataplane`` and ``actor`` must be supplied
-            together; otherwise the bandit operates in in-process-only mode.
-        engine_root: Optional :class:`EngineRoot` for splitting per-call
-            counter tokens off the engine's counter-root permission. When
-            supplied alongside ``dataplane`` and ``actor``, every ledger
-            write carries a structurally-traceable permission witness.
+            outcomes do not append a synthetic 0.0 to the reward window.
+        dataplane: Optional :class:`DataPlane` for the CRDT mirror.
+        actor: Optional :class:`ActorIdentity`; must accompany ``dataplane``.
+        engine_root: Optional :class:`EngineRoot`; requires the dataplane.
     """
 
     def __init__(
@@ -672,20 +570,10 @@ class BanditModelRouter(MultiModelRouter):
     ) -> None:
         """Update the bandit with the reward from a completed mutation.
 
-        Reward shaping by outcome:
-
-        - ``ACCEPTED`` and ``REJECTED_STRATEGY`` produce a real
-          fitness-derived reward (improvement over best parent, run
-          through the running-percentile normaliser).
-        - ``REJECTED_ACCEPTOR`` is gated on
-          :attr:`_skip_reward_on_acceptor_reject`. When the flag is set,
-          the reward window stays free of synthetic zeros (the policy
-          documented in the module docstring); when unset (the historical
-          default), a normalised 0.0 is recorded.
-
-        Calls with no ``mutation_model`` metadata are silently dropped:
-        the program did not come from a routed mutation and there is no
-        arm to credit.
+        ``ACCEPTED`` / ``REJECTED_STRATEGY`` use the fitness-derived
+        reward. ``REJECTED_ACCEPTOR`` is skipped or zero-recorded based
+        on :attr:`_skip_reward_on_acceptor_reject`. Programs without
+        ``mutation_model`` metadata are dropped silently.
         """
         model_name = program.get_metadata("mutation_model")
         if not model_name:
@@ -700,9 +588,6 @@ class BanditModelRouter(MultiModelRouter):
                     outcome.value,
                 )
                 return
-            # Legacy path: inject a normalised zero so the older
-            # downstream signal shape is preserved for callers that have
-            # not opted into the new policy.
             normalized = self._reward_normalizer.normalize(0.0)
             self._bandit.update_reward(model_name, normalized)
             logger.debug(

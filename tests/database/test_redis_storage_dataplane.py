@@ -1,20 +1,16 @@
 """Storage tests covering the optional dataplane-routed transition path.
 
-When :class:`RedisProgramStorage` is constructed with a ``dataplane``
-parameter, :meth:`atomic_state_transition` and
+With ``dataplane`` wired in, :meth:`atomic_state_transition` and
 :meth:`fast_state_transition` route through
-:meth:`gigaevo.dataplane.DataPlane.transition_program_state` instead of
-the legacy WATCH / MULTI / EXEC pipeline. The coordinator's
-``transition_state.lua`` script validates the (from, to) pair against
-the FSM hash, merges the patch into the persisted blob, updates the
-status set, and emits an audit-stream event in one atomic round-trip.
+:meth:`DataPlane.transition_program_state` instead of the WATCH / MULTI
+/ EXEC pipeline. The ``transition_state.lua`` script validates the
+(from, to) pair against the FSM hash, merges the patch into the
+persisted blob, updates the status set, and emits an audit-stream event
+in one atomic round-trip.
 
-The coordinator emits the FSM hash with case-tolerant rows: every
-entry is written under both its uppercase enum key and its lowercase
-form so a program blob persisted by an application-layer caller whose
-enum lowercases its ``.value`` resolves the same row as a dataplane
-caller that keeps the uppercase form. These tests exercise the routed
-path against the case-tolerant table.
+The FSM hash is case-tolerant: every row is written under both
+uppercase and lowercase keys so callers serializing either form resolve
+the same transition.
 """
 
 from __future__ import annotations
@@ -143,9 +139,8 @@ class TestDpRoutedTransition:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """The FSM rejects QUEUED → DONE; the dp wrapper surfaces it as
-        a typed :class:`StorageError` so the legacy bypass that previously
-        let illegal pairs slip past now fails loudly (bug class #14)."""
+        """FSM rejects QUEUED → DONE; the dp wrapper surfaces it as a
+        typed :class:`StorageError`."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -161,18 +156,10 @@ class TestDpRoutedTransition:
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
         """When ``old_state`` does not match the persisted state, the dp
-        returns the ``stale`` variant which surfaces as :class:`StorageError`.
-
-        The legal-but-stale pair ``(DONE, QUEUED)`` is used so the FSM
-        membership check passes — the dp's lua compares ``expected_from``
-        to the observed blob state and fires the stale branch when the
-        caller's pre-image is older than the persisted state.
-        """
+        returns the ``stale`` variant which surfaces as :class:`StorageError`."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
-        # The blob is QUEUED; the caller asserts ``old=DONE``. The dp
-        # rejects the call as stale before applying the patch.
         with pytest.raises(StorageError) as excinfo:
             await storage.fast_state_transition(
                 prog, ProgramState.DONE.value, ProgramState.QUEUED.value
@@ -183,9 +170,8 @@ class TestDpRoutedTransition:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """The dp-routed path emits the same status_events stream the
-        legacy path appends to, so existing readers continue to observe
-        every transition."""
+        """The dp-routed path appends to the same status_events stream
+        as the non-dp path."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -203,13 +189,9 @@ class TestDpRoutedTransition:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """The Lua-emitted XADD payload covers both wire shapes.
-
-        Legacy readers key on ``id`` / ``status`` / ``event``; dp-aware
-        readers consume the (``pid``, ``from``, ``to``, ``epoch``)
-        triple. A single XADD inside the Lua carries both so neither
-        reader side needs a migration.
-        """
+        """The XADD payload carries both wire shapes: the
+        ``id``/``status``/``event`` triple and the
+        ``pid``/``from``/``to``/``epoch`` triple."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -317,14 +299,10 @@ class TestDpRoutedTransition:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """The Lua stamps both ``atomic_counter`` and ``epoch`` on the blob.
-
-        The persisted blob carries the legacy field name so dp-routed
-        writes are pass-through for any reader that keys on
-        ``atomic_counter`` (the gigaevo Program merge tiebreaker). The
-        read path then strips ``epoch`` to satisfy the Pydantic model's
-        ``extra="forbid"`` constraint.
-        """
+        """The Lua stamps both ``atomic_counter`` and ``epoch`` on the
+        blob so readers keying on either field see a consistent value.
+        The read path strips ``epoch`` to satisfy the Pydantic model's
+        ``extra="forbid"`` constraint."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -340,8 +318,7 @@ class TestDpRoutedTransition:
         blob = _json.loads(raw)
         assert "atomic_counter" in blob, (
             f"Lua must stamp atomic_counter on the post-transition blob "
-            f"so legacy readers see the post-INCR counter without a "
-            f"read-side rename; got keys={sorted(blob)!r}"
+            f"so readers see the post-INCR counter; got keys={sorted(blob)!r}"
         )
         assert "epoch" in blob, (
             f"Lua must also stamp epoch for dp-aware consumers; "
@@ -353,32 +330,19 @@ class TestDpRoutedTransition:
 
 
 class TestCaseTolerantFsmVocabulary:
-    """The FSM hash resolves either case, removing the bridge helper.
-
-    These tests pin the case-tolerance invariant from the storage's
-    point of view: regardless of whether the persisted blob carries a
-    lowercase ``state`` (the application-layer enum) or the dataplane's
-    uppercase value, a dp-routed transition succeeds. Before the
-    case-tolerant emit, an explicit reloader had to overwrite the FSM
-    hash with the lowercase mirror so the membership check matched the
-    persisted vocabulary; the test exercises the no-bridge path.
-    """
+    """The FSM hash resolves either case: a dp-routed transition
+    succeeds whether the persisted blob carries a lowercase ``state``
+    or the uppercase dataplane value."""
 
     async def test_lowercase_blob_resolves_through_dp(
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
         """A lowercase persisted state value advances via the dp path
-        without any external FSM-table rewrite — case tolerance lives
-        in the hash itself.
-        """
+        because case tolerance lives in the FSM hash itself."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
-        # The on-disk ``state`` is the lowercase ``queued``; the dp
-        # path forwards it verbatim to the Lua script and the FSM hash
-        # accepts the row even though the dp's own ``ProgramState``
-        # enum prefers uppercase.
         await storage.fast_state_transition(
             prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
         )
@@ -391,13 +355,7 @@ class TestCaseTolerantFsmVocabulary:
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
         """The dp-routed write preserves the application-layer
-        lowercase vocabulary in the on-disk blob.
-
-        The case-tolerant FSM hash means the dp does not need to
-        normalise the wire vocabulary; the persisted blob format is
-        unchanged so legacy / analytics readers keying on lowercase
-        ``state`` strings keep working without a migration.
-        """
+        lowercase vocabulary in the on-disk blob."""
         storage, _ = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -411,32 +369,18 @@ class TestCaseTolerantFsmVocabulary:
         import json as _json
 
         blob = _json.loads(raw)
-        # The on-disk vocabulary stays lowercase regardless of the
-        # case-tolerant FSM hash.
         assert blob["state"] == "running"
 
 
 class TestSafeDeserializeNoRename:
-    """The read-side fixups are gone; ``_safe_deserialize`` is reduced
-    to the schema-boundary ``epoch`` strip plus the fakeredis-only
-    empty-dict fallback.
-    """
+    """``_safe_deserialize`` does the schema-boundary ``epoch`` strip
+    plus the fakeredis-only empty-dict fallback."""
 
     def test_no_epoch_promotion_to_atomic_counter(self) -> None:
-        """A blob without ``atomic_counter`` no longer has it synthesised
-        from ``epoch``.
-
-        The Lua now stamps ``atomic_counter`` directly so the promote
-        branch was dead code. This test pins the absence of the
-        rename: a deserialised blob with only ``epoch`` falls back to
-        the model's default counter rather than copying ``epoch`` over.
-        """
+        """A blob carrying only ``epoch`` does not synthesise
+        ``atomic_counter`` from it; the model default applies."""
         from gigaevo.utils.json import dumps as _dumps
 
-        # A blob that only carries ``epoch`` — the legacy promote
-        # branch would have copied it into ``atomic_counter``. With the
-        # fixup removed the read-side must respect the schema-boundary
-        # strip and leave ``atomic_counter`` at the model default.
         blob = {
             "id": str(uuid.uuid4()),
             "code": "def f(): pass",
@@ -446,17 +390,11 @@ class TestSafeDeserializeNoRename:
         raw = _dumps(blob)
         prog = RedisProgramStorage._safe_deserialize(raw, ctx="no-rename")
         assert prog is not None
-        # ``atomic_counter`` falls back to the Program model default
-        # because the read path no longer renames ``epoch`` for us.
         assert prog.atomic_counter != 99
 
     def test_empty_dict_round_trip_without_lua_directive(self) -> None:
-        """The fakeredis-only fallback keeps empty dict fields as ``{}``.
-
-        Simulates the wire shape fakeredis emits — list-typed empty
-        fields — and asserts the read path recovers the dict shape so
-        the Pydantic model loads cleanly.
-        """
+        """The fakeredis-only fallback recovers list-typed empty fields
+        as ``{}`` so the Pydantic model loads cleanly."""
         from gigaevo.utils.json import dumps as _dumps
 
         blob = {
@@ -478,9 +416,8 @@ class TestSafeDeserializeNoRename:
 
 class TestLegacyPathUnchanged:
     async def test_default_storage_has_no_dataplane(self) -> None:
-        """Storage constructed without ``dataplane`` keeps the legacy
-        WATCH/MULTI/EXEC path, leaving fakeredis-only tests and any
-        read-only / Hydra-instantiated storage operational unchanged."""
+        """Storage without a wired ``dataplane`` uses the
+        WATCH/MULTI/EXEC path."""
         server = fakeredis.FakeServer()
         config = RedisProgramStorageConfig(
             redis_url="redis://fake:6379/0", key_prefix="legacy"
@@ -494,12 +431,8 @@ class TestLegacyPathUnchanged:
             assert storage._dataplane is None
             prog = _program(ProgramState.QUEUED)
             await storage.add(prog)
-            # Legacy fast_state_transition reads ``program.state`` from
-            # the caller-supplied object; the caller is responsible for
-            # updating the in-memory state before persisting (see
-            # :meth:`ProgramStateManager.set_program_state`). The
-            # dataplane-routed path mirrors this update internally, but
-            # the legacy path does not.
+            # Without the dataplane mirror, the caller updates
+            # ``program.state`` before persisting.
             prog.state = ProgramState.RUNNING
             await storage.fast_state_transition(
                 prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
@@ -518,13 +451,8 @@ class TestEngineRootStorageWiring:
     async def dp_storage_with_root(
         self,
     ) -> AsyncIterator[tuple[RedisProgramStorage, dp.DataPlane, dp.EngineRoot]]:
-        """Same wiring as :func:`dp_storage` but with an :class:`EngineRoot`.
-
-        The root flows into storage via the constructor keyword; per-call
-        FSM tokens are derived by :meth:`EngineRoot.split_program_token`
-        inside :meth:`_transition_via_dataplane` rather than minted
-        ad-hoc.
-        """
+        """Same wiring as :func:`dp_storage` but with an
+        :class:`EngineRoot` threaded into storage via the constructor."""
         server = fakeredis.FakeServer()
         config = RedisProgramStorageConfig(
             redis_url="redis://fake:6379/0",
@@ -574,28 +502,21 @@ class TestEngineRootStorageWiring:
         dp_storage_with_root: tuple[RedisProgramStorage, dp.DataPlane, dp.EngineRoot],
     ) -> None:
         """Two transitions both succeed because the engine root rotates
-        its long-lived witness on each split. If the engine consumed the
-        root token directly (instead of via the rotating split helper),
-        the second transition would raise :class:`TokenAlreadyConsumed`.
-        """
+        its long-lived witness on each split."""
         storage, _, engine_root = dp_storage_with_root
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
 
-        # First transition consumes the initial program root via split.
         initial_root = engine_root._program_root  # type: ignore[attr-defined]
         await storage.fast_state_transition(
             prog, ProgramState.QUEUED.value, ProgramState.RUNNING.value
         )
         assert initial_root.consumed
 
-        # The engine retains a fresh root, unconsumed.
         rotated_root = engine_root._program_root  # type: ignore[attr-defined]
         assert rotated_root is not initial_root
         assert not rotated_root.consumed
 
-        # Second transition succeeds — the rotation preserved the
-        # single-live-witness invariant across two calls.
         await storage.atomic_state_transition(
             prog, ProgramState.RUNNING.value, ProgramState.DONE.value
         )
@@ -607,11 +528,8 @@ class TestEngineRootStorageWiring:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """Backwards-compat invariant: storage built without an
-        engine_root mints a per-call root inside ``_transition_via_dataplane``
-        and the FSM transition still succeeds. The ``dp_storage`` fixture
-        uses the no-engine-root construction; this test pins that
-        regression."""
+        """Storage built without ``engine_root`` mints a per-call root
+        inside ``_transition_via_dataplane`` and transitions still succeed."""
         storage, _ = dp_storage
         assert storage._engine_root is None  # type: ignore[attr-defined]
         prog = _program(ProgramState.QUEUED)
@@ -625,12 +543,9 @@ class TestEngineRootStorageWiring:
 
 
 class TestReadProgramFreshness:
-    """The :class:`Freshness` admission contract on :meth:`read_program`.
-
-    Every reader passes one explicit value; a stale read at a tighter
-    floor returns :class:`StaleReadError` instead of the silently-old
-    blob the legacy unguarded read would have returned.
-    """
+    """The :class:`Freshness` admission contract on :meth:`read_program`:
+    every reader supplies an explicit floor, and a stale read returns
+    :class:`StaleReadError` instead of an old blob."""
 
     async def test_eventual_returns_value_at_any_epoch(
         self,
@@ -659,10 +574,9 @@ class TestReadProgramFreshness:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """The mechanical demonstration: a stale read at
-        :class:`FreshnessAtLeast` returns :class:`StaleReadError` even
-        when the same value would have been returned at
-        :class:`FreshnessEventual`."""
+        """A stale read at :class:`FreshnessAtLeast` returns
+        :class:`StaleReadError` where :class:`FreshnessEventual` would
+        have returned the value."""
         storage, coord = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -703,9 +617,8 @@ class TestReadProgramFreshness:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """A single-writer engine's blob always >= the live counter, so
-        :class:`FreshnessStrict` succeeds. The two-round-trip cost is
-        the price of the cross-engine race guard."""
+        """A single-writer engine's persisted blob is always >= the live
+        counter, so :class:`FreshnessStrict` succeeds."""
         storage, coord = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -726,9 +639,8 @@ class TestReadProgramFreshness:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """The bare ``min_epoch=`` kwarg routes through the legacy shim
-        and constructs a :class:`FreshnessAtLeast` internally so older
-        callers do not need a flag-day migration."""
+        """The bare ``min_epoch=`` kwarg constructs a
+        :class:`FreshnessAtLeast` internally."""
         storage, coord = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -753,9 +665,8 @@ class TestReadProgramFreshness:
         self,
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
-        """Mixing ``freshness=`` with a non-zero legacy ``min_*`` is a
-        type-system ambiguity; the resolver surfaces it as ``Err`` so a
-        typo cannot silently pick one over the other."""
+        """Mixing ``freshness=`` with a non-zero ``min_*`` is ambiguous;
+        the resolver returns ``Err``."""
         storage, coord = dp_storage
         prog = _program(ProgramState.QUEUED)
         await storage.add(prog)
@@ -781,10 +692,8 @@ class TestStateManagerInMemoryHelper:
     async def test_set_in_memory_state_validates_and_assigns(
         self, state_manager: ProgramStateManager, make_program
     ) -> None:
-        """The mirror helper validates the FSM transition and updates
-        ``program.state`` without writing to storage; call sites that
-        already persisted via a batch op rely on this to keep the
-        in-memory Program object in sync."""
+        """Validates the FSM transition and updates ``program.state``
+        without writing to storage."""
         prog = make_program(state=ProgramState.QUEUED)
         await state_manager.set_in_memory_state(prog, ProgramState.RUNNING)
         assert prog.state == ProgramState.RUNNING
@@ -793,8 +702,7 @@ class TestStateManagerInMemoryHelper:
         self, state_manager: ProgramStateManager, make_program
     ) -> None:
         """An illegal mirror write (e.g. QUEUED → DONE) raises
-        :class:`ValueError` instead of silently desyncing the in-memory
-        state — bug class #14 caught at the source of the bypass."""
+        :class:`ValueError`; the in-memory state is unchanged."""
         prog = make_program(state=ProgramState.QUEUED)
         with pytest.raises(ValueError):
             await state_manager.set_in_memory_state(prog, ProgramState.DONE)
@@ -804,9 +712,8 @@ class TestStateManagerInMemoryHelper:
     async def test_set_in_memory_state_self_loop_is_noop(
         self, state_manager: ProgramStateManager, make_program
     ) -> None:
-        """Same-state assignment short-circuits without raising; this
-        matches :meth:`set_program_state`'s idempotent semantics so the
-        helper is safe to call inside a re-entrant ingestion loop."""
+        """Same-state assignment short-circuits without raising,
+        matching :meth:`set_program_state`'s idempotent semantics."""
         prog = make_program(state=ProgramState.RUNNING)
         await state_manager.set_in_memory_state(prog, ProgramState.RUNNING)
         assert prog.state == ProgramState.RUNNING
@@ -814,9 +721,7 @@ class TestStateManagerInMemoryHelper:
 
 class TestBatchTransitionViaDataplane:
     """Batch transitions route per-item through the FSM Lua when the
-    dataplane is wired, preserving per-item atomicity. The legacy
-    raw-pipeline path remains the default when ``dataplane=None``.
-    """
+    dataplane is wired; without one, the raw-pipeline path is used."""
 
     async def test_batch_transition_state_routes_through_dp(
         self,
@@ -864,8 +769,7 @@ class TestBatchTransitionViaDataplane:
         dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
     ) -> None:
         """Only programs whose current state matches ``old_state`` are
-        transitioned; non-matching ids are silently skipped, mirroring
-        the legacy raw-JSON path's filter semantics."""
+        transitioned; non-matching ids are silently skipped."""
         storage, _ = dp_storage
         queued = _program(ProgramState.QUEUED)
         running = _program(ProgramState.RUNNING)
@@ -902,8 +806,8 @@ class TestBatchTransitionViaDataplane:
             )
 
     async def test_batch_transition_legacy_path_when_dp_absent(self) -> None:
-        """A storage without a wired dataplane keeps the legacy raw
-        pipeline behaviour for both batch methods."""
+        """A storage without a wired dataplane uses the raw-pipeline
+        path for both batch methods."""
         server = fakeredis.FakeServer()
         config = RedisProgramStorageConfig(
             redis_url="redis://fake:6379/0", key_prefix="legacy-batch"

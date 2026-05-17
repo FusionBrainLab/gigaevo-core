@@ -1,25 +1,15 @@
 """End-to-end smoke test for the engine-startup dataplane wiring.
 
-Mirrors :mod:`test_mini_run` (deterministic mutation operator, mock
-stages, fakeredis) but constructs the engine with a coordinator wired
-into the storage and the bandit router. The test asserts:
+Builds the engine with a coordinator wired into storage and bandit
+router and asserts: ``dp.started`` during the run,
+:attr:`RedisProgramStorage._dataplane` points at the coordinator, the
+bandit's internal :class:`SlidingWindowUCB1` carries the
+``dataplane`` + ``actor`` pair, and ``dp.shutdown()`` flips
+``started`` to ``False``.
 
-- ``dp.started`` is ``True`` while the engine is running;
-- :attr:`RedisProgramStorage._dataplane` points at the same coordinator
-  (so the storage routes through the dataplane path);
-- the bandit's internal :class:`SlidingWindowUCB1` carries the
-  ``dataplane`` + ``actor`` pair after :func:`wire_bandit_router`;
-- ``dp.shutdown()`` runs at teardown and leaves the coordinator in
-  ``started == False``.
-
-The test does not call :func:`build_dataplane` directly because that
-helper opens a real Redis socket via :meth:`aioredis.Redis.from_url`;
-fakeredis cannot intercept that path. Instead, the test bypasses the
-URL-based startup and injects a shared :class:`fakeredis.FakeServer`
-into both the storage's connection and the coordinator's connection,
-then exercises :func:`wire_storage` and :func:`wire_bandit_router`
-exactly as the production entrypoint does. The FSM hash is primed via
-:func:`load_fsm_table` since the test bypasses :meth:`DataPlane.startup`.
+A shared :class:`fakeredis.FakeServer` is injected into both the
+storage and the coordinator (URL-based startup cannot be intercepted
+by fakeredis). The FSM hash is primed via :func:`load_fsm_table`.
 """
 
 from __future__ import annotations
@@ -60,12 +50,7 @@ async def _build_coordinator_against_fake(
     *,
     key_prefix: str,
 ) -> tuple[DataPlane, fakeredis.aioredis.FakeRedis]:
-    """Wire a coordinator on top of an existing :class:`FakeServer`.
-
-    Construction mirrors the production sequence — instantiate, inject
-    pool, register scripts, load the case-tolerant FSM table — but
-    skips the URL-based startup so fakeredis is preserved.
-    """
+    """Wire a coordinator on top of an existing :class:`FakeServer`."""
     coord = DataPlane(
         "redis://embedded/0",
         key_prefix=key_prefix,
@@ -75,10 +60,8 @@ async def _build_coordinator_against_fake(
     lua = LuaRegistry(fake)
     coord._register_builtin_scripts(lua)  # type: ignore[attr-defined]
     await lua.load_all()
-    # FSM table primes the program-state transition matrix in the
-    # case-tolerant form the script consults. The dataplane bridge no
-    # longer ships a legacy-vocab reloader; ``load_fsm_table`` emits
-    # rows under both vocabularies in one pass.
+    # Prime the program-state transition matrix in the case-tolerant
+    # form the Lua script consults.
     from gigaevo.dataplane.transitions import (
         PROGRAM_STATE_TRANSITIONS,
         load_fsm_table,
@@ -240,10 +223,9 @@ class TestEngineRootWiring:
             await _coord_shutdown(coord, fake)
 
     async def test_two_transitions_on_one_program_both_succeed(self) -> None:
-        """The structural invariant: rotation preserves single-live-witness
-        across consecutive transitions on the same program. The legacy
-        ``mint_root`` path was per-call; the engine-root path replaces
-        it with ``mint_split`` from the rotating engine root."""
+        """Rotation preserves single-live-witness across consecutive
+        transitions on the same program via ``mint_split`` from the
+        rotating engine root."""
         from gigaevo.dataplane import build_engine_root
 
         _reset_counter()
@@ -284,9 +266,7 @@ class TestBanditWiring:
     """The router-wiring helper rebinds private state without errors."""
 
     def _make_bandit_router(self) -> BanditModelRouter:
-        """A bandit with two dummy models — no real LLM calls in this test."""
-        # MagicMock stands in for ``ChatOpenAI`` instances; the bandit
-        # never invokes them in this test, only routes between names.
+        """Bandit with two dummy models; the test only routes between names."""
         model_a = MagicMock()
         model_a.model_name = "alpha"
         model_b = MagicMock()
@@ -337,15 +317,8 @@ class TestBanditWiring:
 
 
 class TestPromptFetcherWiring:
-    """The prompt-fetcher wiring helper pins the shared-dataplane discipline.
-
-    Mirrors the bandit-wiring contract: the helper is silent on
-    non-co-evolved fetchers and rebinds private state on the
-    :class:`GigaEvoArchivePromptFetcher` case. The structural invariant
-    is that the main DataPlane the fetcher writes through is the SAME
-    instance the storage and bandit observe — eliminating the second
-    connection pool the fetcher would lazily build otherwise.
-    """
+    """Wiring rebinds the fetcher's main DataPlane to the engine's
+    shared instance and is a no-op on non-co-evolved fetchers."""
 
     async def test_wire_prompt_fetcher_attaches_and_shares_main_dp(
         self, tmp_path

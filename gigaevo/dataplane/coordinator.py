@@ -1,11 +1,5 @@
 """The :class:`DataPlane` — sole public surface for every Redis interaction.
 
-This module ships as a *shell* with explicit lifecycle methods and
-per-resource method stubs that raise :class:`NotImplementedError`. The
-public contract — argument shapes, return shapes, error variants — is
-fully expressed in the type system today so call sites can be staged
-against the real signatures while the method bodies are still landing.
-
 The coordinator owns:
 
     - one :class:`RedisConnection` (the connection pool)
@@ -14,16 +8,12 @@ The coordinator owns:
       :func:`gigaevo.dataplane.transitions.load_fsm_table`
     - the engine-root :class:`Token`\\ s (split per subspace)
 
-The FSM transition tables are NOT copied into the coordinator — the
-single source of truth lives in :mod:`gigaevo.dataplane.transitions` and
-the coordinator references those module-level constants by name during
-:meth:`startup`. A copy would create a second place that drifts; a
-property accessor would imply the coordinator owned mutable state. The
-tables are intentionally immutable singletons.
+The FSM transition tables are not copied into the coordinator — the
+single source of truth lives in :mod:`gigaevo.dataplane.transitions`
+as immutable module-level constants.
 
 Outside this module, no other code should import ``redis`` or
-``redis.asyncio`` directly — the ruff config enforces this (see
-``lints.toml``).
+``redis.asyncio`` directly — ``lints.toml`` enforces this.
 """
 
 from __future__ import annotations
@@ -137,38 +127,24 @@ _SCRIPT_BOUNDED_LIST_PUSH: Final[ScriptName] = make_script_name("bounded_list_pu
 
 # ── public contract dataclasses ─────────────────────────────────────────
 #
-# Every method on :class:`DataPlane` returns a typed shape. The
-# dataclasses below are the public contract: callers can write the
-# pattern-match arms today even though the method bodies still raise
-# ``NotImplementedError``. Each is frozen + slotted so the wire / cache
-# representation cannot drift.
+# Every method on :class:`DataPlane` returns a typed shape. Each is frozen
+# + slotted so the wire / cache representation cannot drift.
 
 
 @dataclass(slots=True, frozen=True)
 class ProgramPatch:
-    """Field-level patch applied during a program FSM transition.
+    """Field-level patch merged into the program blob before state advance.
 
-    A ``ProgramPatch`` is a JSON-serialisable mapping that the server
-    merges into the persisted program blob *before* it advances the
-    state. The frozen-dataclass shape rather than a bare ``dict`` exists
-    so a) the caller cannot mutate the patch after construction (which
-    would race the in-flight Lua call), b) future fields (e.g. a JSON
-    pointer / a content-hash floor) can be added without rewriting every
-    call site, and c) tests can assert against an exact value.
-
-    The ``fields`` payload is constrained to JSON-serialisable values at
-    the codec boundary; this dataclass does not re-validate the shape.
+    The Lua script merges ``fields`` into the persisted JSON server-side.
+    Frozen so the in-flight call cannot race against caller mutation.
+    JSON-serialisability is validated at the codec boundary.
     """
 
     fields: dict[str, object] = field(default_factory=dict)
 
 
-# A placeholder for the future :class:`gigaevo.programs.program.Program`
-# concrete type. The coordinator's Lua scripts treat the blob opaquely:
-# they merge ``ProgramPatch.fields`` into the persisted JSON and advance
-# the state. The Python-side shape is whatever the application layer
-# decodes the blob into. When the Program module lands its concrete
-# dataclass it will replace this alias in one edit.
+# Coordinator Lua treats the blob opaquely; the Python-side shape is
+# whatever the application layer decodes the blob into.
 type ProgramSnapshot = dict[str, object]
 
 
@@ -253,11 +229,9 @@ class EliteRejected:
 class LwwrValue:
     """A LWW-register's stored value alongside its HLC witness.
 
-    Returned by :meth:`DataPlane.lwwr_get`. The ``value`` field is the
-    caller's payload after canonical-JSON round-trip; the ``hlc`` field
-    is the witness that proves causal ordering against other writers.
-    Two LwwrValue instances compare equal when they hold identical
-    value and HLC — useful for "did our write actually land" assertions.
+    Returned by :meth:`DataPlane.lwwr_get`. ``value`` is the caller's
+    payload after canonical-JSON round-trip; ``hlc`` is the causal-order
+    witness against other writers.
     """
 
     value: object
@@ -323,17 +297,11 @@ class DataPlane:
         )
         self._lua: LuaRegistry | None = None
         self._started: bool = False
-        # Per-lease background renewers keyed by lease token. Populated
-        # by :meth:`acquire_instance_lock`, drained by
-        # :meth:`release_instance_lock` and :meth:`shutdown`.
+        # Per-lease background renewers keyed by lease token.
         self._renewers: dict[LeaseToken, asyncio.Task[None]] = {}
-        # Serialises the whole startup / shutdown sequence so two racing
-        # callers cannot torn-init the coordinator's own ``_lua`` and
-        # ``_started`` fields. The underlying :class:`RedisConnection`
-        # has its own lifecycle lock for the pool itself; this lock
-        # protects the coordinator-level state that wraps it. Lazily
-        # built inside the running event loop so construction stays
-        # cheap and loop-agnostic.
+        # Serialises startup/shutdown to protect coordinator-level state
+        # (``_lua``/``_started``); the pool itself has its own lock.
+        # Lazy so construction stays loop-agnostic.
         self._lifecycle_lock: asyncio.Lock | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────
@@ -380,11 +348,8 @@ class DataPlane:
                         table=table,
                     )
             except BaseException:  # noqa: BLE001 - startup rollback, error re-raised verbatim
-                # ``BaseException`` so a cancellation mid-FSM-load still
-                # rolls the pool back. ``self._lua`` is reset to ``None``
-                # so the invariant ``self._started == (self._lua is not
-                # None)`` holds even after a partial script load
-                # populated the local ``lua`` variable above.
+                # BaseException so cancellation mid-load still rolls back;
+                # ``_lua = None`` preserves ``_started == (_lua is not None)``.
                 await self._connection.shutdown()
                 self._lua = None
                 raise
@@ -410,9 +375,7 @@ class DataPlane:
             try:
                 await self._cancel_renewers()
             except BaseException as exc:  # noqa: BLE001 - shutdown deferral, surfaced below
-                # Defer the failure until after the pool is closed; a
-                # renewer-cancel error must not leak a live connection
-                # pool. Re-raised below wrapped in ShutdownError.
+                # Defer so the pool still closes even if renewer-cancel fails.
                 cancel_exc = exc
             close_exc: BaseException | None = None
             try:
@@ -438,10 +401,8 @@ class DataPlane:
     def _require_started(self, method: str) -> LuaRegistry:
         """Return the LuaRegistry or raise :class:`NotStartedError`.
 
-        Every state-access method body that lands in subsequent changes
-        must call this guard first; the ``method`` argument flows into
-        the error's diagnostic field so a misbehaving caller is
-        identified without a traceback walk.
+        ``method`` is recorded in the error for diagnostics; every
+        state-access method body must call this guard first.
         """
         lua = self._lua
         if lua is None:
@@ -481,11 +442,8 @@ class DataPlane:
     def _validate_ttl(ttl_s: float, *, method: str) -> None:
         """Reject NaN / Inf / non-positive TTLs at the call boundary.
 
-        ``int(NaN * 1000)`` raises ``ValueError`` deep in the renew path;
-        we'd rather surface that as a clean ``ValueError`` at the entry
-        point with the offending value attached. Non-positive TTLs would
-        round to zero milliseconds and produce a lock that's immediately
-        expired — refuse them up front.
+        Non-positive TTLs would round to zero ms and produce an instantly
+        expired lock; NaN propagates deep into the renew path otherwise.
         """
         if not isinstance(ttl_s, (int, float)) or isinstance(ttl_s, bool):
             raise ValueError(
@@ -509,12 +467,7 @@ class DataPlane:
             )
 
     def _check_deadline(self, deadline_monotonic: float | None, method: str) -> None:
-        """Surface a typed :class:`DeadlineExceeded` if the budget is gone.
-
-        Called at the top of every public method that accepts a
-        deadline; we'd rather fail fast at the boundary than start a
-        Redis call we know we cannot afford to finish.
-        """
+        """Surface a typed :class:`DeadlineExceeded` if the budget is gone."""
         if deadline_monotonic is None:
             return
         now = monotonic()
@@ -695,51 +648,37 @@ class DataPlane:
         ``freshness`` is the structural admission contract every reader
         must state. The variants are:
 
-            * :class:`FreshnessEventual` — accept any persisted blob;
-              the read never raises :class:`StaleReadError` on the
-              freshness axis. The default; matches the legacy
-              ``min_epoch=0, min_generation=0`` behaviour.
+            * :class:`FreshnessEventual` — accept any persisted blob; the
+              read never raises :class:`StaleReadError` on the freshness
+              axis. The default.
             * :class:`FreshnessAtLeast` — admission floor on the
               ``(epoch, generation)`` lattice. A blob below the floor
-              raises :class:`StaleReadError` so a caller observing its
-              own write (or a downstream replica's catch-up) fails loud
-              rather than silently old.
-            * :class:`FreshnessStrict` — re-read the global epoch
-              counter and require the blob's epoch to match-or-exceed
-              that snapshot. Costs one extra round-trip; use it only
-              when the caller cannot supply a floor itself.
+              raises :class:`StaleReadError`.
+            * :class:`FreshnessStrict` — re-read the global epoch counter
+              and require the blob's epoch to match-or-exceed that
+              snapshot. Costs one extra round-trip.
 
-        ``min_epoch`` / ``min_generation`` remain accepted as a
-        backwards-compat shim so existing callers keep working; a
-        non-zero value (with ``freshness`` unset) constructs a
+        ``min_epoch`` / ``min_generation`` are accepted as a compatibility
+        shim; a non-zero value (with ``freshness`` unset) constructs a
         :class:`FreshnessAtLeast` internally. Passing both an explicit
-        ``freshness`` and a non-zero ``min_*`` raises
-        :class:`ValueError` so a typo cannot mask one with the other.
+        ``freshness`` and a non-zero ``min_*`` raises :class:`ValueError`.
 
-        The successful return is wrapped in :data:`LocalValue` —
-        the :class:`Sourced` phantom-tag alias for a fresh local read
-        out of Redis. Cache-fronted readers, gossip-propagated readers,
-        and replay loops carry their own provenance tags so a single
-        ``rg "LocalValue\\|CachedValue\\|ReplayedValue"`` over the
-        dataplane consumers surfaces every read-source distinction at
-        the static-type level (bug class #13 — "stale cache returns
-        as fresh authoritative" — is now a phantom-type discrimination
-        at the function-signature boundary).
+        The successful return is wrapped in :data:`LocalValue` — the
+        :class:`Sourced` phantom-tag alias for a fresh local read out of
+        Redis. Cache-fronted readers, gossip-propagated readers, and
+        replay loops carry their own provenance tags so read-source
+        distinctions are visible at the static-type level.
 
-        Returns ``Ok(None)`` if the program is unknown (not yet
-        written); ``Ok(LocalValue(Versioned(...)))`` if it exists and
-        passes the freshness contract; ``Err(...)`` for decoding
-        failures or a freshness-floor violation.
+        Returns ``Ok(None)`` if the program is unknown; ``Ok(LocalValue(
+        Versioned(...)))`` if it passes the freshness contract;
+        ``Err(...)`` for decoding failures or floor violations.
         """
         self._validate_key_component(
             program_id, method="read_program", field_name="program_id"
         )
-        # Negative ``min_*`` raises :class:`ValueError` at the boundary
-        # per the legacy contract (callers never expected this to return
-        # an ``Err``). Conflicts between an explicit ``freshness`` and a
-        # legacy ``min_*`` value still surface as ``Err`` because they
-        # represent a genuine programming ambiguity rather than a
-        # malformed numeric input.
+        # Negative ``min_*`` raises ValueError at the boundary; conflicts
+        # between explicit ``freshness`` and non-zero ``min_*`` surface as
+        # Err (programming ambiguity, not malformed numeric input).
         self._validate_floor(min_epoch, min_generation, method="read_program")
         try:
             effective_freshness = self._resolve_freshness(
@@ -753,14 +692,8 @@ class DataPlane:
 
         # FreshnessStrict reads the live epoch counter first so the
         # subsequent blob GET admits only values stamped at or after
-        # that snapshot. The two GETs are not transactional — a
-        # concurrent transition between them is the exact race that
-        # Strict catches: the blob's epoch will be the post-transition
-        # value, which is >= our snapshot, so the read succeeds; the
-        # earlier blob is invisible. The race that *fails* the floor is
-        # the inverse — counter ahead of blob — which on a single-writer
-        # engine cannot happen, but is the case Strict is designed for
-        # cross-engine reads.
+        # that snapshot. The two GETs are non-transactional; the race
+        # Strict catches is counter-ahead-of-blob across engines.
         floor_epoch: int
         floor_generation: int
         if isinstance(effective_freshness, FreshnessStrict):
@@ -831,31 +764,22 @@ class DataPlane:
         *,
         method: str = "read_program",
     ) -> Freshness:
-        """Reconcile the new ``freshness`` arg with the legacy ``min_*`` shim.
+        """Reconcile the ``freshness`` arg with the ``min_*`` compat shim.
 
         Resolution rules:
 
-            * ``freshness`` explicit and non-default ``min_*`` ⇒
-              :class:`ValueError`. The two channels would otherwise
-              disagree silently.
+            * ``freshness`` explicit + non-default ``min_*`` ⇒ ValueError.
             * ``freshness`` explicit ⇒ used verbatim.
-            * ``freshness=None`` and ``min_*`` zero ⇒
-              :class:`FreshnessEventual` (the default).
-            * ``freshness=None`` and ``min_*`` non-zero ⇒
-              :class:`FreshnessAtLeast(epoch, generation)` constructed
-              from the kwargs (legacy compatibility).
+            * ``freshness=None`` + ``min_*`` zero ⇒ :class:`FreshnessEventual`.
+            * ``freshness=None`` + ``min_*`` non-zero ⇒ :class:`FreshnessAtLeast`.
 
-        Negative ``min_*`` is rejected by the call-boundary
-        :meth:`_validate_floor` before reaching this resolver.
-
-        ``method`` is threaded into the ambiguity error so a caller that
-        passes both channels sees which API they used in the message.
+        Negative ``min_*`` is rejected upstream by :meth:`_validate_floor`.
         """
         if freshness is not None:
             if min_epoch != 0 or min_generation != 0:
                 raise ValueError(
                     f"{method}: pass either freshness= or "
-                    "min_epoch=/min_generation= (legacy shim), not both"
+                    "min_epoch=/min_generation=, not both"
                 )
             return freshness
         if min_epoch == 0 and min_generation == 0:
@@ -909,10 +833,8 @@ class DataPlane:
         except DataPlaneError as exc:
             return Err(exc)
         if int(result) != 1:
-            # Best-effort holder lookup for diagnostics. The holder
-            # field is redacted in str(err) so we don't leak the token.
-            # A failed lookup must not mask the underlying LockHeld
-            # outcome — degrade gracefully to a holder-less Err.
+            # Diagnostic-only holder lookup; redacted in str(err). Must
+            # never mask the underlying LockHeld outcome.
             try:
                 holder = await self._connection.pool.get(lock_key)  # type: ignore[misc]
             except Exception:  # noqa: BLE001 - diagnostic-only lookup, degrade silently
@@ -926,9 +848,8 @@ class DataPlane:
             expires_at_monotonic=monotonic() + ttl_s,
             flag=flag,
         )
-        # Spawn the background renewer. The task captures ``lease`` by
-        # value; if a future call constructs a fresh lease (e.g. for
-        # ttl_s change) it must call release + acquire, not mutate.
+        # Background renewer captures ``lease`` by value; ttl_s changes
+        # require release + acquire, never mutation.
         task = asyncio.create_task(
             self._renew_lease_loop(lease), name=f"dataplane.renewer:{lock_key}"
         )
@@ -943,13 +864,8 @@ class DataPlane:
     ) -> Result[InstanceLease, DataPlaneError]:
         """Token-CAS EXPIRE; fails with :class:`LockLost` on token mismatch.
 
-        On success returns a fresh :class:`InstanceLease` with the
-        updated ``ttl_s`` / ``expires_at_monotonic`` and the same
-        :class:`OneShotFlag`. The input lease becomes logically stale
-        but remains hashable / equal to the new one for the fields that
-        matter (``compare=False`` on ``flag`` and ``expires_at_monotonic``
-        below the dataclass scope so renewals are transparent to
-        callers holding the lease by value).
+        On success returns a fresh :class:`InstanceLease` with the updated
+        ``ttl_s`` / ``expires_at_monotonic`` and the same :class:`OneShotFlag`.
         """
         self._validate_ttl(ttl_s, method="renew_instance_lock")
         lua = self._require_started("renew_instance_lock")
@@ -977,21 +893,15 @@ class DataPlane:
         """Token-CAS DEL; no-op if the lease was already released or lost.
 
         Cancels the lease's renewal task AND awaits its exit before
-        issuing the DEL so a renewer that's mid-Redis-call cannot race
-        the release. Without the wait the renewer's pending EXPIRE
-        could land after our DEL, leaving the lock un-bounded for one
-        renew interval. Coordinator must be started; an already-shut-
-        down coordinator silently no-ops.
+        issuing the DEL so a mid-call renewer cannot land an EXPIRE after
+        our DEL. An already-shut-down coordinator silently no-ops.
         """
         task = self._renewers.pop(lease.token, None)
         if task is not None:
             task.cancel()
-            # ``return_exceptions=True`` so an unrelated renewer
-            # exception (e.g. flag-signalled mid-renew) does not mask
-            # the release path. The renewer can still race with DEL on
-            # a renewing EXPIRE iff Redis processes its request before
-            # our cancellation; the Lua script's token-CAS handles
-            # that — the EXPIRE on a missing key returns 0.
+            # return_exceptions=True so an unrelated renewer failure does
+            # not mask release. Token-CAS in the Lua release handles the
+            # late-EXPIRE race (EXPIRE on a missing key returns 0).
             await asyncio.gather(task, return_exceptions=True)
         if not self._started or self._lua is None:
             return
@@ -1003,8 +913,8 @@ class DataPlane:
                 args=[lease.token],
             )
         except DataPlaneError:
-            # Release is idempotent; swallow transient connection
-            # errors so callers can use this in a finally block safely.
+            # Release is idempotent; transient connection errors are
+            # swallowed so callers can use this in a finally block.
             pass
 
     def wrap_lease(
@@ -1023,22 +933,13 @@ class DataPlane:
                     ...  # evt: CrashEvent[str, InstanceLease], evt.peer == lock key,
                          # evt.resource is the lost lease itself.
 
-        The wrap is opt-in convenience. Unwrapped calls
-        (:meth:`renew_instance_lock`, :meth:`release_instance_lock`)
-        retain their default semantics — a lease whose flag has been
-        signalled by the background renewer continues to return
-        :class:`Err` (:class:`LockLost`) on direct invocation. The
-        handle adds a short-circuit branch *before* the underlying call,
-        so once the renewer has signalled loss every subsequent
-        ``handle.call`` resolves to ``(None, CrashEvent)`` without
-        another Redis round-trip.
+        The wrap is opt-in convenience. Unwrapped calls retain their
+        default semantics; the handle adds a flag-checked short-circuit
+        so post-loss invocations skip the Redis round-trip.
 
-        ``peer`` is the canonical lock key (``{prefix}:lock:{caller-prefix}``);
-        ``resource`` is the lost lease, surfaced verbatim so the caller
-        can route compensation by token or key. ``survivor_tokens`` is
-        the empty tuple — the instance lock sits beneath any permission
-        subsystem at this stage, so there are no survivor permissions
-        to mint.
+        ``peer`` is the canonical lock key; ``resource`` is the lost
+        lease verbatim; ``survivor_tokens`` is empty (the instance lock
+        is below the permission subsystem).
         """
 
         async def _recover(
@@ -1051,38 +952,23 @@ class DataPlane:
     async def _renew_lease_loop(self, lease: InstanceLease) -> None:
         """Background renewal loop. Signals the lease's flag on loss.
 
-        Runs forever until either (a) the task is cancelled (typical
-        path: :meth:`release_instance_lock` or :meth:`shutdown`), or (b)
-        renewal fails — token mismatch (real loss), a typed
-        :class:`DataPlaneError`, or any unexpected exception. Cases
-        other than cancellation signal the lease's flag so the holder
-        observes the loss on its next dataplane call.
-
-        Cadence is ``ttl_s / _LOCK_RENEW_RATIO`` with a floor of 1 ms so
-        pathologically tiny TTLs (test fixtures) still make forward
-        progress.
+        Exits on cancellation (release / shutdown) without signalling;
+        on any other failure signals the flag and exits so the holder
+        observes the loss on its next call. Cadence is
+        ``ttl_s / _LOCK_RENEW_RATIO`` floored at 1 ms.
         """
         interval = max(lease.ttl_s / _LOCK_RENEW_RATIO, 0.001)
         while True:
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
-                # Cooperative cancellation from release / shutdown; the
-                # caller does not treat this as a lock loss.
                 return
             try:
                 result = await self.renew_instance_lock(lease, ttl_s=lease.ttl_s)
             except asyncio.CancelledError:
-                # Cancellation racing the in-flight renew: propagate so
-                # the gather() in :meth:`_cancel_renewers` observes it.
-                # The flag stays unset — cancellation is not loss.
+                # Propagate so _cancel_renewers' gather() sees it; flag stays unset.
                 raise
             except Exception:  # noqa: BLE001 - watchdog boundary, surfaced via flag
-                # Any other failure (NotStartedError after shutdown,
-                # programming bug, transient client error not wrapped
-                # as DataPlaneError) is escalated to the holder via
-                # the one-shot flag. The exception is swallowed because
-                # nobody is awaiting this task in steady state.
                 lease.flag.signal()
                 return
             if isinstance(result, Err):
@@ -1090,12 +976,7 @@ class DataPlane:
                 return
 
     async def _cancel_renewers(self) -> None:
-        """Cancel every active renewer; wait for them to exit.
-
-        Called from :meth:`shutdown`. We gather the tasks with
-        ``return_exceptions=True`` so a stuck or already-failed renewer
-        does not block the shutdown path.
-        """
+        """Cancel every active renewer; gather with return_exceptions=True."""
         tasks = list(self._renewers.values())
         self._renewers.clear()
         for task in tasks:
@@ -1187,9 +1068,7 @@ class DataPlane:
         if status == "rejected":
             return Ok(EliteRejected(occupant_id=ProgramId(displaced_or_occupant)))
         if status == "invalid":
-            # The Lua script rejected the candidate at the input boundary
-            # (non-finite score, empty cell or candidate id). The payload
-            # carries the reason verbatim from the script.
+            # Lua rejected at the input boundary; payload carries the reason.
             return Err(
                 EliteInvalidError(detail=str(displaced_or_occupant)),
             )
@@ -1218,15 +1097,13 @@ class DataPlane:
         monotonically — callers that decrement should hold a token for
         that actor's subspace.
 
-        ``token`` is the move-only permission witness for the
-        ``CounterKey`` subspace. When supplied, the wrapper consumes it
-        before the Lua call and verifies the tag matches ``key`` — the
-        same single-writer discipline that :meth:`transition_program_state`
-        and :meth:`try_replace_elite` apply to their subspaces. ``None``
-        preserves the legacy ledger-only contract used by callers that
-        have not yet been wired to the engine-root token bundle; new
-        production call sites SHOULD supply a token split from the
-        engine's counter root.
+        ``token`` is the move-only permission witness for the ``CounterKey``
+        subspace. When supplied, the wrapper consumes it before the Lua
+        call and verifies the tag matches ``key`` — same single-writer
+        discipline as :meth:`transition_program_state` and
+        :meth:`try_replace_elite`. ``None`` keeps the token-less ledger
+        contract; new production call sites SHOULD supply a token split
+        from the engine's counter root.
         """
         self._validate_key_component(
             key, method="crdt_inc", field_name="key", allow_colon=True
@@ -1271,29 +1148,20 @@ class DataPlane:
         observable is the cross-actor sum. The ``freshness`` argument
         declares the admission contract:
 
-            * :class:`FreshnessEventual` — accept any persisted view
-              (the default; matches ``min_epoch=0, min_generation=0``).
+            * :class:`FreshnessEventual` — accept any view (the default).
             * :class:`FreshnessAtLeast` — admission floor on
-              ``(epoch, generation)``. A view below the floor returns
-              :class:`StaleReadError` so a caller observing its own
-              prior increment fails loud rather than silently old.
-            * :class:`FreshnessStrict` — snapshot the live epoch counter
-              first; the pipeline's view must clear that snapshot. Costs
-              one extra round-trip and is the right choice for
-              cross-engine readers that cannot supply their own floor.
+              ``(epoch, generation)``; below-floor returns
+              :class:`StaleReadError`.
+            * :class:`FreshnessStrict` — snapshot the live epoch first;
+              the pipeline's view must clear it. One extra round-trip.
 
-        ``min_epoch`` / ``min_generation`` remain accepted as a
-        backwards-compat shim mapping to :class:`FreshnessAtLeast`.
-        Passing both an explicit ``freshness`` and a non-zero ``min_*``
-        surfaces as :class:`Err(DataPlaneError)` so the two channels
-        cannot silently disagree.
+        ``min_epoch`` / ``min_generation`` are a compat shim mapping to
+        :class:`FreshnessAtLeast`; mixing channels surfaces as
+        :class:`Err(DataPlaneError)`.
 
-        Three Redis commands run as a single non-transactional pipeline
-        (one round-trip). The G-counter's eventual-consistency model
-        does not require the three reads to be atomic — a HGETALL that
-        misses the last increment merely yields a slightly-older
-        ``Versioned`` whose epoch / generation reflect that staleness,
-        which is exactly what the freshness floor catches.
+        Three Redis commands run as a non-transactional pipeline; the
+        G-counter's eventual-consistency model lets a slightly-stale
+        view be caught by the freshness floor.
         """
         self._validate_key_component(
             key, method="crdt_read", field_name="key", allow_colon=True
@@ -1310,13 +1178,7 @@ class DataPlane:
         redis = self._connection.pool
 
         # FreshnessStrict pre-snapshots the live epoch counter so a
-        # concurrent writer that bumps it after our snapshot is detected
-        # as a stale view. The pipeline reads ``epoch_key`` (which IS
-        # the live counter at ``{prefix}:ts``) again as part of the
-        # pipeline; the floor is ``max(pre-snapshot, the value the
-        # pipeline observes)`` so a counter advance between snapshot and
-        # pipeline closes the same race the ``read_program`` Strict path
-        # closes.
+        # concurrent writer's bump after our snapshot is detected as stale.
         strict_floor: int = 0
         if isinstance(effective_freshness, FreshnessStrict):
             raw_counter = await redis.get(epoch_key)  # type: ignore[misc]
@@ -1435,13 +1297,10 @@ class DataPlane:
 
     # ── bounded recency list ────────────────────────────────────────
     #
-    # A bounded recency list holds the newest N entries of a value
-    # stream — pure LWW semantics, no per-actor merge. Writers push
-    # at the head and the script trims to the cap atomically so
-    # concurrent pushers cannot leave the list briefly over-cap.
-    # Reads return the slice ``[0, count)`` in insertion-newest-first
-    # order. Used by the prompt-fitness window (§5.6) as a lighter
-    # alternative to a CRDT counter for "last N samples".
+    # Holds the newest N entries of a value stream — pure LWW, no
+    # per-actor merge. The Lua push atomically LPUSHes and trims to
+    # cap so concurrent pushers cannot leave the list briefly over-cap.
+    # Reads return [0, count) in newest-first order.
 
     async def bounded_list_push(
         self,
@@ -1536,11 +1395,9 @@ class DataPlane:
 
     # ── small-set directory ──────────────────────────────────────────
     #
-    # A directory of opaque string members. Members are deduplicated
-    # server-side by SADD; reads return the unordered set. The size of
-    # the set is unbounded — callers that need a cap should size their
-    # member alphabet, not the set. Used for the per-prompt metric-name
-    # registry that feeds the stats reader.
+    # Opaque string members deduplicated server-side by SADD; reads
+    # return the unordered set. Unbounded; callers that need a cap
+    # should size the member alphabet.
 
     async def set_add(
         self,
@@ -1595,14 +1452,10 @@ class DataPlane:
 
     # ── raw-key access (cross-namespace) ─────────────────────────────
     #
-    # The dataplane's typed primitives bake the coordinator's
-    # ``key_prefix`` into every key. Some callers — notably the prompt
-    # co-evolution path, which reads keys written by an independently
-    # configured "main run" with its own prefix — need to address keys
-    # *outside* the coordinator's own namespace. These primitives accept
-    # the fully-qualified Redis key and skip prefix prepending. They are
-    # the only sanctioned escape hatch; new code should still prefer the
-    # typed primitives above.
+    # Escape hatch for callers that must address keys outside the
+    # coordinator's own ``key_prefix`` (e.g. cross-run reads). These
+    # primitives accept the fully-qualified Redis key and skip prefix
+    # prepending; new code should prefer the typed primitives above.
 
     async def raw_hash_get(
         self,

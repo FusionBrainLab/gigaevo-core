@@ -431,13 +431,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 )
                 reject_ids.append(prog.id)
 
-        # Batch DONE -> DISCARDED for rejects. The persisted transition
-        # is the batch SREM/SADD pipeline below; the in-memory mirror
-        # routes through :meth:`ProgramStateManager.set_in_memory_state`
-        # so the (current, target) pair is FSM-validated at the call
-        # boundary — illegal mirror writes that previously slipped past
-        # the bypass surface as ``ValueError`` here instead of leaving
-        # the local Program object out of sync with its persisted state.
+        # Batch DONE -> DISCARDED for rejects. In-memory mirror goes
+        # through the state manager so the (current, target) pair is
+        # FSM-validated; the persisted transition follows below.
         if reject_ids:
             reject_set = set(reject_ids)
             for prog in completed:

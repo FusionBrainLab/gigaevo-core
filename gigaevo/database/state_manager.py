@@ -16,28 +16,16 @@ _TERMINAL_STATES = frozenset({ProgramState.DISCARDED, ProgramState.DONE})
 
 
 def register_external_terminal_state(program: Program, new_state: ProgramState) -> None:
-    """Pin an externally-finalized program at a terminal state, in memory.
+    """Pin a freshly-ingested program at a terminal state, in memory.
 
-    The narrow case is cross-engine migration ingestion: a fresh
-    :class:`Program` rehydrated from a :class:`MigrantEnvelope` carries
-    the source engine's last-known state, which has no causal
-    predecessor in the local FSM. The in-run transition table is an
-    in-run invariant, so :func:`validate_transition` is deliberately
-    not consulted.
-
-    No locking is needed because the program object is freshly
-    constructed at the call site (typically with a freshly-generated
-    UUID) and is not yet observable to any other coroutine. The
-    function intentionally names the bypass so a code reviewer can
-    grep for every cross-run terminal-state ingestion.
-
-    ``new_state`` must be terminal (DONE or DISCARDED); restricting the
-    bypass to terminal states keeps the exception out of paths where
-    the FSM legitimately governs progression.
+    Cross-engine migration ingestion: the source engine's terminal
+    state has no causal predecessor in the local FSM, so
+    :func:`validate_transition` is deliberately bypassed. The program
+    must be freshly constructed (not yet observable to any other
+    coroutine) and ``new_state`` must be DONE or DISCARDED.
 
     Raises:
-        ValueError: ``new_state`` is not a terminal state, signalling a
-            misuse where the in-run FSM should govern the transition.
+        ValueError: ``new_state`` is not a terminal state.
     """
     if new_state not in _TERMINAL_STATES:
         raise ValueError(
@@ -163,21 +151,14 @@ class ProgramStateManager:
     async def set_in_memory_state(
         self, program: Program, new_state: ProgramState
     ) -> None:
-        """Validate the FSM transition and update ``program.state`` in memory.
+        """Validate and mirror an FSM transition into ``program.state``.
 
-        Companion to :meth:`set_program_state` for call sites that have
-        already persisted the new state via a separate batch operation
-        (``batch_transition_by_ids`` / ``batch_transition_state``) and
-        only need to bring the in-memory :class:`Program` instance in
-        sync with the storage write. Acquires the same per-program lock
-        :meth:`set_program_state` uses so an in-memory mirror cannot
-        race a concurrent canonical transition.
+        For call sites that persist via a batch operation and only need
+        the in-memory instance brought in sync; holds the per-program
+        lock so the mirror cannot race the canonical transition.
 
         Raises:
-            ValueError: the (current, new) pair is not in the gigaevo
-                program-state FSM. Surfacing this at the call boundary
-                catches illegal mirror writes that would otherwise leave
-                the in-memory state out of sync with the persisted state.
+            ValueError: (current, new) pair rejected by the FSM.
         """
         async with self._lock_for(program.id):
             if program.state == new_state:

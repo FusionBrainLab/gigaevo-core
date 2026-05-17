@@ -1,30 +1,20 @@
-"""Engine-startup bridge between the legacy storage stack and the dataplane.
+"""Engine-startup bridge wiring the dataplane into Hydra-built objects.
 
-The Hydra config tree instantiates :class:`RedisProgramStorage` and
-:class:`BanditModelRouter` independently of the coordinator, and each
-constructor accepts an optional ``dataplane=`` parameter that — when
-``None`` — keeps the legacy WATCH/MULTI/EXEC and in-process bandit
-paths in place. Engine startup constructs a process-local
-:class:`DataPlane`, primes it with the legacy program-state FSM table,
+The Hydra config tree instantiates :class:`RedisProgramStorage`,
+:class:`BanditModelRouter`, etc. independently of the coordinator. Each
+constructor accepts ``dataplane=None`` and falls back to its own path.
+This module constructs a process-local :class:`DataPlane`, primes it,
 and rebinds the private ``dataplane`` / ``actor`` slots on the
-already-instantiated storage and router so production flips to the new
-substrate without touching the Hydra schema.
+already-instantiated objects so production flips to the new substrate
+without touching the Hydra schema.
 
-The rebinding is intentional: the alternative is teaching the Hydra
-resolver to instantiate a coordinator before the dependent objects and
-to inject it into their ``_args_``, which adds a config-schema surface
-and a Hydra-cache lifetime risk (see :issue:`dataplane_gigaevo §10.4
-#10`). Post-instantiation rebind keeps the wiring local to the
-engine-entrypoint script and leaves the Hydra config free of
-dataplane-specific keys.
+Post-instantiation rebind keeps the wiring local to the engine
+entrypoint and leaves the Hydra config free of dataplane-specific keys.
 
-A note on lifetimes: every call to :func:`build_dataplane` constructs a
-new instance. This module does not cache. Two engine runs in the same
-Python process (uncommon, but observed in notebook drivers and
-integration test suites that call ``run_experiment`` twice) must
-construct two independent dataplanes; a process-wide singleton would
-share connection pool state across runs and turn a clean shutdown into
-a use-after-shutdown on the second run.
+Every call to :func:`build_dataplane` constructs a fresh instance; this
+module does not cache. Two engine runs in the same Python process must
+build two independent dataplanes — a process-wide singleton would share
+pool state and turn shutdown into use-after-shutdown.
 """
 
 from __future__ import annotations
@@ -71,48 +61,34 @@ __all__ = [
 ]
 
 
-#: Root subspace tags. Each one names a logically-disjoint Redis
-#: key-space owned by this engine; ``mint_split`` from the matching
-#: root token witnesses every per-call write into that space. The
-#: literal values are namespaced under ``engine:`` so a caller-supplied
-#: per-program / per-cell / per-counter tag cannot collide with a root
-#: tag and silently claim the wrong subspace.
+#: Root subspace tags. ``mint_split`` from the matching root token
+#: witnesses every per-call write into that space. Namespaced under
+#: ``engine:`` so a caller-supplied per-call tag cannot collide.
 _PROGRAM_ROOT_TAG: str = "engine:program-root"
 _CELL_ROOT_TAG: str = "engine:cell-root"
 _COUNTER_ROOT_TAG: str = "engine:counter-root"
 
 
 class EngineRoot:
-    """Single-engine root permission witnesses for the three Redis subspaces.
+    """Per-engine root permission witnesses for the three Redis subspaces.
 
-    One engine instance owns exactly one of these. Each interior token
-    witnesses the engine's exclusive write claim over the matching
-    key-space (``program:*``, archive cells, CRDT counters). Per-call
-    writes are minted by linear split from the matching root via
-    :meth:`split_program_token` / :meth:`split_cell_token` /
-    :meth:`split_counter_token`, so the per-call token is *traceable*
-    to the engine root rather than minted ex nihilo at the call site.
+    One engine owns exactly one instance. Each interior token witnesses
+    the engine's exclusive write claim over the matching key-space
+    (``program:*``, archive cells, CRDT counters). Per-call sub-tokens
+    are derived by linear split from the matching root.
 
-    Two engines on the same Redis cluster MUST use disjoint key
-    prefixes (set on :class:`DataPlane.key_prefix`); the linear tokens
-    enforce single-writer within the prefix but cannot, by themselves,
-    detect two engines minting orthogonal roots over the same prefix.
+    Two engines on the same Redis cluster MUST use disjoint key prefixes
+    — linear tokens enforce single-writer within a prefix but cannot
+    detect orthogonal roots minted over the same one.
 
-    Linearity-vs-longevity trade-off: the engine needs a long-lived
-    witness over each subspace, but :func:`mint_split` consumes its
-    parent. The class privately rotates the long-lived witness on each
-    split — the public split helpers consume the current root and store
-    the "next" sub-token from the split as the new root in one
-    statement. Callers never see the rotation; they receive only the
-    fresh per-call sub-token.
+    :func:`mint_split` consumes its parent, but the engine needs a
+    long-lived witness over each subspace; the split helpers atomically
+    consume the current root and store the "next" sub-token as the new
+    root, hiding the rotation from callers.
 
-    The class is not a frozen dataclass because the internal rotation
-    requires re-binding ``_program_root`` / ``_cell_root`` /
-    ``_counter_root`` in place. The tokens themselves remain move-only
-    (their move-only contract is enforced by :class:`Token`, not by the
-    container) so an :class:`EngineRoot` instance cannot be silently
-    duplicated via ``copy.deepcopy`` — the nested token's
-    ``__deepcopy__`` raises and propagates out.
+    Not a frozen dataclass because rotation rebinds the slots in place.
+    The tokens themselves remain move-only via :class:`Token`, so the
+    container cannot be silently duplicated via ``copy.deepcopy``.
     """
 
     __slots__ = ("_program_root", "_cell_root", "_counter_root")
@@ -128,18 +104,11 @@ class EngineRoot:
         self._counter_root: Token[CounterKey] = counter_root
 
     def split_program_token(self, program_id: ProgramId) -> Token[ProgramId]:
-        """Derive a fresh per-program permission witness.
+        """Derive a fresh per-program permission witness; rotates the program root.
 
-        Consumes the current program root via :func:`mint_split`,
-        retains the "next" sub-token as the new long-lived root, and
-        returns the per-call sub-token tagged with ``program_id`` so
-        :meth:`DataPlane.transition_program_state` can verify
-        ``token.consume() == program_id`` and reject mismatched routing
-        deterministically.
-
-        The rotation is in-place on the engine root; concurrent split
-        calls within a single engine instance MUST be serialised by the
-        caller (the dataplane is single-threaded asyncio, which it is).
+        The returned token is tagged with ``program_id`` so the coordinator
+        can token-CAS against the routed key. Concurrent split calls
+        within one engine MUST be caller-serialised (asyncio single-thread).
         """
         next_root, per_call = mint_split(
             self._program_root,
@@ -174,18 +143,9 @@ def build_engine_root() -> EngineRoot:
     """Mint the per-subspace root tokens for this engine instance.
 
     Called exactly once during engine startup, immediately after
-    :func:`build_dataplane`. The returned :class:`EngineRoot` is
-    threaded into the storage's constructor (or attached via
-    :func:`wire_storage` together with the dataplane) so per-call
-    writes derive their permission witnesses from this single origin
-    rather than minting fresh roots ad-hoc.
-
-    The three subspace tags are module-level constants; using literal
-    strings rather than the inferred ``Token[ProgramId]`` phantom tag is
-    intentional: the actual ``Tag`` value carried by the token is what
-    :meth:`Token.consume` returns, and we want that value to be a
-    stable, grep-able identifier rather than a per-program string that
-    a later code reviewer might mistakenly assume to be a real id.
+    :func:`build_dataplane`. The subspace tags are stable, grep-able
+    string constants — using a per-id tag here would let a reviewer
+    mistake the root for a per-call token.
     """
     return EngineRoot(
         program_root=mint_root(ProgramId(_PROGRAM_ROOT_TAG)),
@@ -215,15 +175,10 @@ async def build_dataplane(
 ) -> DataPlane:
     """Construct a started :class:`DataPlane`.
 
-    Reuses the storage's Redis URL and key prefix so coordinator and
-    legacy storage write into the same logical namespace. The caller
-    owns the lifetime; :func:`DataPlane.shutdown` MUST be called in a
+    Coordinator and surrounding storage share the same Redis URL and key
+    prefix so they write into the same logical namespace. The caller
+    owns the lifetime; :func:`DataPlane.shutdown` MUST run in a
     ``finally`` block around the engine run-loop.
-
-    :meth:`DataPlane.startup` loads the program-state FSM table with
-    rows keyed under both the dp enum's uppercase form and the
-    application-layer lowercase form, so a coordinator-routed call
-    resolves the same row whichever vocabulary the persisted blob uses.
     """
     dp = DataPlane(
         redis_url,
@@ -245,18 +200,12 @@ def build_actor_identity(
 
     Resolution order:
 
-    1. Explicit ``run_id`` / ``worker_id`` arguments (typically the
-       Hydra config's run identifier).
-    2. ``GIGAEVO_DATAPLANE_RUN_ID`` / ``GIGAEVO_DATAPLANE_WORKER_ID``
-       environment variables — useful when the engine is launched by
-       an external orchestrator that already knows its identity.
-    3. A fresh ULID-style run id (uuid4 hex without dashes) plus
-       ``{hostname}-{pid}`` for the worker id.
+    1. Explicit ``run_id`` / ``worker_id`` arguments.
+    2. ``GIGAEVO_DATAPLANE_RUN_ID`` / ``GIGAEVO_DATAPLANE_WORKER_ID`` env vars.
+    3. ``uuid4().hex`` for run; ``{hostname}-{pid}`` for worker.
 
     The identity flows into bandit CRDT counters as ``{run}:{worker}``;
-    two engines that collide on this pair share a bandit counter cell.
-    The host+pid worker default is collision-free in practice on a
-    single host; cross-host collisions require an environment override.
+    two engines that collide on this pair share a counter cell.
     """
     resolved_run = run_id or os.environ.get(ENV_RUN_ID) or uuid4().hex
     resolved_worker = (
@@ -283,25 +232,11 @@ def wire_storage(
 ) -> None:
     """Attach the coordinator and (optionally) the engine root to a storage.
 
-    The storage constructor accepts ``dataplane=`` and ``engine_root=``;
-    both end up on private attributes that the routing logic in
-    :meth:`atomic_state_transition` and :meth:`fast_state_transition`
-    reads. Post-Hydra rebinding is safe because:
-
-    - the legacy path is the default and remains correct;
-    - the dataplane path activates iff ``self._dataplane is not None``;
-    - the engine-root path activates iff ``self._engine_root is not None``;
-    - no concurrent caller can be inside a transition at startup
-      (engine tasks haven't been started yet).
-
-    Subsequent calls overwrite — the bridge is idempotent enough that
-    a test fixture can rebind a coordinator without first nulling the
-    previous one. Rebinding mid-run is undefined; the engine startup
-    sequence places this call before ``engine.start()``.
-
-    ``engine_root`` is optional so legacy entrypoints continue to wire
-    storage with just a dataplane; when supplied, per-call FSM tokens
-    derive from the engine root via linear split.
+    Post-Hydra rebinding is safe because the routing logic activates iff
+    ``self._dataplane is not None``, the fallback path stays correct
+    otherwise, and no engine task is in-flight at startup. Subsequent
+    calls overwrite (idempotent for test fixtures); rebinding mid-run is
+    undefined — call this before ``engine.start()``.
     """
     storage._dataplane = dataplane
     if engine_root is not None:
@@ -315,18 +250,10 @@ def wire_archive_storage(
 ) -> bool:
     """Attach coordinator + engine root to a :class:`RedisArchiveStorage`.
 
-    Returns ``True`` when the rebind happened, ``False`` for a non-
-    archive input (the entrypoint can call this unconditionally). The
-    archive's dataplane swap path then derives per-call cell tokens via
-    :meth:`EngineRoot.split_cell_token` instead of minting an ad-hoc
-    root, so every swap is structurally traceable to the engine's
-    single cell-subspace origin.
-
-    Idempotent within a run: re-attaching the same coordinator + engine
-    root is a silent no-op. A different coordinator or engine root is
-    not rejected because the archive does not track equality on either
-    handle internally — the post-startup engine flow only ever wires
-    once.
+    Returns ``True`` on rebind, ``False`` for a non-archive input so the
+    entrypoint can call unconditionally. The archive's swap path derives
+    per-call cell tokens via :meth:`EngineRoot.split_cell_token`, so
+    every swap is structurally traceable to the engine's cell root.
     """
     # Lazy import to keep the dataplane package self-contained.
     from gigaevo.evolution.storage.archive_storage import RedisArchiveStorage
@@ -348,36 +275,24 @@ def wire_bandit_router(
     actor: ActorIdentity,
     engine_root: EngineRoot | None = None,
 ) -> bool:
-    """Attach coordinator + actor (+ engine root) to a bandit router, if present.
+    """Attach coordinator + actor (+ engine root) to a bandit router, if applicable.
 
-    Returns ``True`` when the router is a
-    :class:`~gigaevo.llm.bandit.BanditModelRouter` and the rebind
-    happened, ``False`` for the static :class:`MultiModelRouter` case
-    (no bandit ledger to share). Non-bandit routers degrade silently
-    so the entrypoint can call this unconditionally regardless of
-    which LLM config the user selected.
-
-    The bandit's internal :class:`SlidingWindowUCB1` validates that
-    ``dataplane`` and ``actor`` are supplied together; this helper sets
-    both atomically to keep that invariant intact.
-
-    ``engine_root`` is optional: when supplied, every ledger write
-    derives a per-call counter-token via
-    :meth:`EngineRoot.split_counter_token`, satisfying the single-writer
-    discipline the coordinator already enforces for FSM transitions and
-    archive swaps. ``None`` keeps the legacy token-less ledger contract.
+    Returns ``True`` on rebind, ``False`` for the static router case
+    so the entrypoint can call unconditionally. The bandit's
+    :class:`SlidingWindowUCB1` requires ``dataplane`` and ``actor``
+    together; this helper sets both atomically. When ``engine_root`` is
+    supplied, every ledger write derives a per-call counter token via
+    :meth:`EngineRoot.split_counter_token`.
     """
-    # Lazy import to avoid the dataplane package importing the llm
-    # tree at module load — keeps the dataplane self-contained.
+    # Lazy import to keep the dataplane package self-contained.
     from gigaevo.llm.bandit import BanditModelRouter, SlidingWindowUCB1
 
     if not isinstance(router, BanditModelRouter):
         return False
     bandit = router._bandit
     if not isinstance(bandit, SlidingWindowUCB1):
-        # Defensive: a subclass could replace _bandit with another
-        # adapter. Skip silently rather than corrupt that adapter's
-        # internal state with attribute assignment it doesn't expect.
+        # A subclass could replace _bandit; skip silently rather than
+        # poke attributes the adapter does not expect.
         return False
     bandit._dataplane = dataplane
     bandit._actor = actor
@@ -401,35 +316,15 @@ def wire_prompt_fetcher(
 ) -> bool:
     """Attach engine-owned DataPlanes + actor to a prompt fetcher, if applicable.
 
-    Returns ``True`` when the fetcher is a
-    :class:`~gigaevo.prompts.fetcher.GigaEvoArchivePromptFetcher` and
-    the rebind happened, ``False`` for the static
-    :class:`~gigaevo.prompts.fetcher.FixedDirPromptFetcher` case (no
-    co-evolution archive read and no per-prompt outcome ledger).
-    Non-archive fetchers degrade silently so the entrypoint can call
-    this unconditionally regardless of which prompt-fetcher config the
-    user selected.
-
-    The fetcher writes prompt-outcome stats to ``main_dp`` (same
-    key-space the storage and bandit already own) and reads the
-    co-evolution archive from ``prompt_dp`` (typically a different
-    Redis DB under a different key prefix). Sharing ``main_dp`` with
-    the rest of the engine eliminates the second connection pool the
-    fetcher would otherwise build lazily in
-    :meth:`GigaEvoArchivePromptFetcher.start`.
-
-    ``actor`` is the same :class:`ActorIdentity` passed to
-    :func:`wire_bandit_router`: one engine, one identity, multiple
-    write surfaces. The fetcher writes under the
-    ``prompt:trials:{id}`` counter namespace; the bandit writes under
-    ``bandit:trials:{arm}``; identical ``(run_id, worker_id)`` keeps
-    every per-engine sub-count addressable under one actor.
-
-    Idempotency and conflict-detection are delegated to
+    Returns ``True`` on rebind, ``False`` for the static fetcher case so
+    the entrypoint can call unconditionally. The fetcher writes prompt
+    outcome stats to ``main_dp`` (same key-space as the rest of the
+    engine) and reads the co-evolution archive from ``prompt_dp``
+    (typically a different DB / prefix). Idempotency and conflict
+    detection are delegated to
     :meth:`GigaEvoArchivePromptFetcher.attach_dataplane`.
     """
-    # Lazy import to avoid the dataplane package importing the prompts
-    # tree at module load — keeps the dataplane self-contained.
+    # Lazy import to keep the dataplane package self-contained.
     from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
 
     if not isinstance(fetcher, GigaEvoArchivePromptFetcher):
@@ -445,19 +340,11 @@ def wire_dag_runner(
 ) -> bool:
     """Attach coordinator + engine root to a :class:`DagRunner`, if applicable.
 
-    Returns ``True`` when the rebind happened, ``False`` for a non-DagRunner
-    input (the entrypoint can call this unconditionally regardless of the
-    Hydra runner selection without inspecting the runtime type first).
-
-    Idempotency: a second call with the exact same triple is a silent
-    no-op. A second call with a different coordinator or engine root
-    raises :class:`RuntimeError` — silent overwrite would corrupt the
-    single-writer single-actor invariant that the per-call linear
-    permission tokens derived from the engine root rely on.
-
-    Must be called before :meth:`DagRunner.start`; the dataplane and
-    engine-root references are read on every state-mutation path the
-    runner originates, so a mid-run rebind is undefined.
+    Returns ``True`` on rebind, ``False`` for a non-DagRunner input.
+    Idempotent for identical triples; a conflicting re-attach raises
+    :class:`RuntimeError` because silent overwrite would corrupt the
+    single-writer invariant the per-call linear tokens rely on. Must be
+    called before :meth:`DagRunner.start`.
     """
     from gigaevo.runner.dag_runner import DagRunner as _DagRunner
 
@@ -486,14 +373,10 @@ def wire_evolution_engine(
 ) -> bool:
     """Attach coordinator + engine root to an :class:`EvolutionEngine`.
 
-    Returns ``True`` when the rebind happened, ``False`` for a
-    non-EvolutionEngine input. Same idempotency and conflict-rejection
-    contract as :func:`wire_dag_runner`: identical re-attach is a
-    silent no-op, conflicting re-attach raises.
-
-    Must be called before :meth:`EvolutionEngine.start`; the engine
-    reads the dataplane and engine-root references on every state-
-    mutation path it originates.
+    Same contract as :func:`wire_dag_runner`: ``True`` on rebind,
+    ``False`` for a non-engine input, idempotent for identical triples,
+    raises :class:`RuntimeError` on conflicting re-attach. Must be
+    called before :meth:`EvolutionEngine.start`.
     """
     from gigaevo.evolution.engine.core import EvolutionEngine as _EvolutionEngine
 

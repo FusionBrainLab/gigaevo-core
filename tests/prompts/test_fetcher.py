@@ -177,17 +177,15 @@ class TestGigaEvoArchivePromptFetcher:
     async def test_main_redis_db_none_leaves_stats_write_disabled(
         self, tmp_prompts_dir: Path
     ):
-        """Without main_redis_db (and no injected DataPlane), record_outcome
-        is a silent no-op — the main DataPlane handle is not constructed.
-        """
+        """Without main_redis_db and no injected DataPlane, record_outcome
+        is a silent no-op."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="prefix",
-            main_redis_db=None,  # explicit None
+            main_redis_db=None,
             fallback_prompts_dir=tmp_prompts_dir,
         )
         assert fetcher._main_dp is None
-        # record_outcome must be silent no-op, not raise
         await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.7,
@@ -199,16 +197,14 @@ class TestGigaEvoArchivePromptFetcher:
     def test_main_redis_db_provided_defers_dataplane_construction(
         self, tmp_prompts_dir: Path
     ):
-        """The constructor records the main DB but defers DataPlane build to start()."""
+        """Constructor records main_redis_db; DataPlane is built in start()."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="prefix",
-            main_redis_db=5,  # main run's DB
+            main_redis_db=5,
             fallback_prompts_dir=tmp_prompts_dir,
         )
         assert fetcher._main_redis_db == 5
-        # DataPlane is only constructed when start() is awaited, so that
-        # the Hydra-instantiation phase (sync) does not dial Redis.
         assert fetcher._main_dp is None
 
     def test_fetch_user_returns_fallback_when_no_champion(self, tmp_prompts_dir: Path):
@@ -306,18 +302,14 @@ class TestGigaEvoArchivePromptFetcher:
 
 
 class TestAttachDataplane:
-    """Structural-invariant tests for :meth:`GigaEvoArchivePromptFetcher.attach_dataplane`.
-
-    These pin the rebind contract used by
+    """The rebind contract used by
     :func:`gigaevo.dataplane.engine_startup.wire_prompt_fetcher`:
-    idempotent on identical input, raises on conflicting input, and
-    suppresses the lazy-build branch in :meth:`start` once the slots
-    are populated.
-    """
+    idempotent on identical input, rejects conflicting input, and
+    suppresses the lazy-build branch in :meth:`start` once attached."""
 
     @staticmethod
     def _fake_dataplane(prefix: str):
-        """Build a started fake-pool DataPlane suitable for attach tests."""
+        """Started fake-pool DataPlane for attach tests."""
         import fakeredis
         import fakeredis.aioredis
 
@@ -355,9 +347,8 @@ class TestAttachDataplane:
             assert fetcher._main_dp is main_dp
             assert fetcher._prompt_dp is prompt_dp
             assert fetcher._actor == actor
-            # Engine owns the lifetime; the fetcher must NOT mark them
-            # as owned, otherwise ``stop`` would tear down the engine's
-            # shared pool.
+            # Engine owns the lifetime; fetcher.stop must not tear down
+            # the engine's shared pool.
             assert fetcher._main_dp_owned is False
             assert fetcher._prompt_dp_owned is False
         finally:
@@ -435,11 +426,7 @@ class TestAttachDataplane:
 
     @pytest.mark.asyncio
     async def test_start_skips_lazy_build_when_attached(self, tmp_prompts_dir: Path):
-        """After attach, :meth:`start` must not construct a second DataPlane.
-
-        The pre-attach handles are the engine's; rebuilding would
-        defeat the entire point of the wire helper.
-        """
+        """After attach, :meth:`start` must not construct a second DataPlane."""
         from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
 
         main_dp = await self._fake_dataplane("main")()
@@ -453,10 +440,7 @@ class TestAttachDataplane:
         )
         try:
             fetcher.attach_dataplane(main_dp, prompt_dp, actor)
-            # ``start`` is async; both handles are already started in
-            # the fake-pool setup, so ``DataPlane.startup()`` is a
-            # cheap no-op here. The point is identity: the slots stay
-            # pinned to the injected pair.
+            # ``start`` must not rebind the injected handles.
             await fetcher.start()
             assert fetcher._main_dp is main_dp
             assert fetcher._prompt_dp is prompt_dp

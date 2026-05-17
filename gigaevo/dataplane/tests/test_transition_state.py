@@ -362,9 +362,8 @@ class TestReadProgram:
         self, coord: dp.DataPlane
     ) -> None:
         """The successful return is wrapped in :data:`LocalValue` — the
-        :class:`Sourced` phantom-tag alias for a fresh local read. This
-        is the structural discriminator for bug class #13 (stale cache
-        returns as authoritative)."""
+        :class:`Sourced` phantom-tag alias for a fresh local read; the
+        structural discriminator against stale-cache-as-authoritative."""
         await _put_program(coord, "p-localvalue", dp.ProgramState.QUEUED)
         result = await coord.read_program(dp.ProgramId("p-localvalue"))
         assert isinstance(result, dp.Ok)

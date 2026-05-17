@@ -8,20 +8,11 @@ executed server-side via Lua scripts; every value carries a freshness
 witness (:class:`Versioned`); every multi-writer hazard is gated by a
 move-only permission token (:class:`Token`).
 
-The foundation in this module is additive — type vocabulary, Lua
-script registry, connection pool, coordinator shell. Method bodies,
-Lua scripts, and call-site migrations land separately.
-
-The reference for the Lua-CAS pattern used here is
-:mod:`gigaevo.infra.endpoint_pool`; the :class:`LuaRegistry` mechanism
-generalises that module's script-load / SHA-cache / NOSCRIPT-reload
-behaviour.
-
-Some primitives in this package ship today with no production consumer
-and are kept as typed substrate for scheduled Phase 2 work
-(event-streams, consumer groups, distributed HLC, bandit-router
-admission). The keep-list and the Phase 2 destination of each item are
-documented in ``_phase2_substrate.md`` co-located with this package.
+Some primitives in this package ship without an in-tree consumer and
+are kept as typed substrate for follow-up work (event-streams,
+consumer groups, distributed HLC, bandit-router admission); the
+keep-list is documented in ``_phase2_substrate.md`` co-located with
+this package.
 """
 
 from __future__ import annotations

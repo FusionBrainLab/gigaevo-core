@@ -32,11 +32,7 @@ from gigaevo.prompts.fetcher import (
 async def _wired_dataplane(
     server: fakeredis.FakeServer, *, key_prefix: str
 ) -> DataPlane:
-    """Build a started DataPlane whose connection pool is a fakeredis client.
-
-    Mirrors the fixture pattern used by the dataplane unit tests so a
-    pool dialled at a real Redis URL is never required for these tests.
-    """
+    """Build a started DataPlane whose connection pool is a fakeredis client."""
     dp = DataPlane("redis://embedded/0", key_prefix=key_prefix)
     fake = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
     dp._connection._pool = fake  # type: ignore[attr-defined]

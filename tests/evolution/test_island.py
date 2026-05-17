@@ -690,24 +690,14 @@ class TestIslandConfigSchema:
     """Pin the IslandConfig field set to prevent silent kwarg drift."""
 
     def test_no_migration_rate_field(self) -> None:
-        """`migration_rate` must not appear in the model.
-
-        Migration cadence is controlled globally by
-        `MapElitesMultiIsland.migration_interval` and the volume by
-        `max_migrants_per_island`. A per-island `migration_rate` has no
-        consumer in the engine; leaving the kwarg silently accepted would
-        revive the original double-drop bug.
-        """
+        """`migration_rate` is not a model field. Cadence and volume are
+        owned by `MapElitesMultiIsland.migration_interval` and
+        `max_migrants_per_island`."""
         assert "migration_rate" not in IslandConfig.model_fields
 
     def test_migration_rate_kwarg_is_silently_dropped_or_rejected(self) -> None:
-        """Constructing with `migration_rate` must not store the value.
-
-        With the model's current `extra='ignore'` default the kwarg is
-        dropped; if the project later switches to `extra='forbid'` the call
-        will raise. Either outcome is acceptable — the unacceptable
-        outcome is the value being silently kept and read by future code.
-        """
+        """Constructing with `migration_rate` either drops or rejects the
+        kwarg, but never stores the value."""
         bs = _make_behavior_space()
         try:
             cfg = IslandConfig(
@@ -721,6 +711,5 @@ class TestIslandConfigSchema:
                 migration_rate=0.25,  # type: ignore[call-arg]
             )
         except Exception:
-            # `extra='forbid'` path — fine, the field is rejected.
             return
         assert not hasattr(cfg, "migration_rate")

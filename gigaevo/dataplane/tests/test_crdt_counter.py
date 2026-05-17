@@ -276,8 +276,8 @@ class TestFreshnessContract:
         self, coord: dp.DataPlane
     ) -> None:
         """``FreshnessAtLeast(epoch=N+1)`` rejects a view that
-        :class:`FreshnessEventual` would have admitted — bug class #11
-        ("stale cache returns as authoritative") is now control flow."""
+        :class:`FreshnessEventual` would have admitted; stale-cache-as-
+        authoritative becomes control flow."""
         key = dp.CounterKey("floor-above")
         await coord.crdt_inc(key, actor=_actor("run", "w-1"))
         observed = await coord.crdt_read(key, freshness=dp.FreshnessEventual())

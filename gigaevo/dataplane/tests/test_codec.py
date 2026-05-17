@@ -275,9 +275,7 @@ class TestDecodeCanonical:
         assert out == payload
 
     def test_lone_surrogate_str_input_rejected_as_canonical_error(self) -> None:
-        # ``str`` inputs were previously raising ``UnicodeEncodeError``;
-        # the contract is unified so both bytes and str inputs surface
-        # as :class:`CanonicalEncodingError`.
+        # Both bytes and str inputs surface as CanonicalEncodingError.
         with pytest.raises(CanonicalEncodingError):
             decode_canonical("\udcff")
 

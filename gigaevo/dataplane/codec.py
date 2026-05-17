@@ -62,11 +62,6 @@ def _canonical_default(obj: Any) -> Any:
     Each branch produces a canonical, order-independent representation.
     Unknown types fail closed with :class:`CanonicalEncodingError` so a
     silently-incorrect serialisation cannot land on the wire.
-
-    Sets and frozensets are flattened to JSON arrays whose elements are
-    sorted by their own canonical-byte encoding. The ordering is total
-    even for sets containing values that share a ``str()`` representation
-    such as ``{1, "1"}``.
     """
     if isinstance(obj, BaseModel):
         return obj.model_dump(mode="json")
@@ -81,14 +76,8 @@ def _canonical_default(obj: Any) -> Any:
     if isinstance(obj, _dt.time):
         return obj.isoformat()
     if isinstance(obj, Decimal):
-        # Decimal("1.5") and Decimal("1.50") encode to different strings
-        # by default — normalise so equal numeric values produce equal
-        # canonical bytes. Trailing zeros are not part of the value.
-        # Signed zero is collapsed to ``"0"`` so ``Decimal("-0")`` hashes
-        # identically to ``Decimal("0")`` — IEEE-style negative zero has
-        # no positional value in arbitrary-precision decimals and would
-        # otherwise let two callers passing the "same" zero land on
-        # divergent content hashes.
+        # Normalise so Decimal("1.5") and Decimal("1.50") hash identically;
+        # collapse signed zero so Decimal("-0") == Decimal("0") on the wire.
         if obj.is_finite():
             if obj.is_zero():
                 return "0"
@@ -116,9 +105,7 @@ def _canonical_sorted_set(items: set[Any] | frozenset[Any]) -> list[Any]:
 
     Sorting on the encoded form gives a total order regardless of the
     runtime types — ``{1, "1"}`` produces ``[1, "1"]`` deterministically
-    even though ``str(1) == str("1")`` collides on a naive ``key=str``
-    sort. The keys are discarded after sorting; the originals are kept
-    so they can be canonicalised once more inside ``json.dumps``.
+    even though ``str(1) == str("1")`` collides on a naive ``key=str`` sort.
     """
     keyed = [(encode_canonical(element), element) for element in items]
     keyed.sort(key=lambda pair: pair[0])
@@ -128,25 +115,13 @@ def _canonical_sorted_set(items: set[Any] | frozenset[Any]) -> list[Any]:
 def _check_int_range(payload: Any, _seen: set[int] | None = None) -> None:
     """Recursively reject integer values outside the signed-64-bit range.
 
-    Run before ``json.dumps`` so the failure surfaces as
-    :class:`CanonicalEncodingError` rather than as an opaque downstream
-    truncation. Containers are traversed; dict keys (which are always
-    JSON-coerced to strings) are stringified by ``json.dumps`` itself
-    and therefore are not range-checked here — only the values matter
-    for the hash invariant.
-
-    The traversal handles only the JSON-native containers (``dict``,
-    ``list``, ``tuple``); other container types reach ``_canonical_default``
-    where the int check is unnecessary (e.g. ``bytes`` carries no int
-    children).
-
-    The ``_seen`` set defends against circular containers — without it
-    the traversal would blow the stack before ``json.dumps`` got the
-    chance to raise its own ``ValueError("Circular reference detected")``.
+    Runs before ``json.dumps`` so the failure surfaces as
+    :class:`CanonicalEncodingError` rather than as opaque downstream
+    truncation. Only JSON-native containers (dict/list/tuple) are
+    traversed; ``_seen`` defends against circular references.
     """
     if isinstance(payload, bool):
-        # ``bool`` is a subclass of ``int``; True / False are always in
-        # range and ``json.dumps`` emits ``true`` / ``false``.
+        # bool is a subclass of int; True / False are always in range.
         return
     if isinstance(payload, int):
         if not (_INT64_MIN <= payload <= _INT64_MAX):
@@ -164,9 +139,7 @@ def _check_int_range(payload: Any, _seen: set[int] | None = None) -> None:
     seen = _seen if _seen is not None else set()
     payload_id = id(payload)
     if payload_id in seen:
-        # Cycle: defer the actual error to ``json.dumps`` which renders
-        # a clean ``ValueError("Circular reference detected")`` we wrap
-        # in :class:`CanonicalEncodingError` at the top level.
+        # Cycle: ``json.dumps`` will raise "Circular reference detected".
         return
     seen.add(payload_id)
     try:
@@ -212,21 +185,16 @@ def encode_canonical(payload: Any) -> bytes:
 def decode_canonical(raw: bytes | str) -> Any:
     """Decode canonical JSON. Lone surrogate code points raise.
 
-    The dataplane forbids surrogate-replay behaviour; if the input
-    contains a lone surrogate or a malformed byte sequence the decode
-    fails closed with :class:`CanonicalEncodingError` rather than
-    silently substituting U+FFFD. Both ``bytes`` and ``str`` inputs
-    surface the same error type so callers can write one ``except``
-    branch.
+    Lone surrogates or malformed byte sequences fail closed with
+    :class:`CanonicalEncodingError`; both ``bytes`` and ``str`` inputs
+    surface the same error type so callers can write one ``except`` branch.
     """
     try:
         if isinstance(raw, bytes):
             text = raw.decode("utf-8", errors="strict")
         else:
-            # ``str.encode`` raises ``UnicodeEncodeError`` on lone
-            # surrogates; that is the desired closed-fail behaviour, but
-            # we surface it as the same typed error as the bytes path so
-            # the caller's exception handling is contract-stable.
+            # Re-encode via UTF-8 strict so lone surrogates raise the same
+            # error type as the bytes path.
             text = raw.encode("utf-8", errors="strict").decode("utf-8")
         return json.loads(text)
     except (UnicodeDecodeError, UnicodeEncodeError, ValueError) as exc:

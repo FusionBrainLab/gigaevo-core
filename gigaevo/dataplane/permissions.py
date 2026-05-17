@@ -1,33 +1,22 @@
 """Move-only ``Token[Tag]`` linear permission tokens.
 
-A token's presence in a function signature is the witness that the
-caller is the sole writer of the subspace tagged by ``Tag``. Tokens are
-*linear*: each one can be consumed exactly once, and they cannot be
-duplicated.
+A token's presence in a function signature witnesses that the caller is
+the sole writer of the subspace tagged by ``Tag``. Linear: consumed
+exactly once, never duplicated. Python cannot enforce linearity at
+compile time; runtime safety comes from:
 
-Python's type system cannot enforce linearity at compile time, so this
-module recovers most of the safety at runtime:
+    - ``__copy__`` / ``__deepcopy__`` raise.
+    - ``__reduce__`` / ``__reduce_ex__`` / ``__getstate__`` raise.
+    - ``consume()`` flips a ``_consumed`` flag; re-consumption raises
+      :class:`TokenAlreadyConsumed`.
+    - The :func:`mint_root` / :func:`mint_split` / :func:`mint_split_n`
+      factories are the only mint paths; the split factories reject
+      duplicate child tags.
 
-    - ``__copy__`` / ``__deepcopy__`` raise — tokens cannot be cloned
-      via the standard ``copy`` machinery;
-    - ``__reduce__`` / ``__reduce_ex__`` / ``__getstate__`` raise — no
-      protocol-style serialiser can silently produce a duplicate;
-    - a ``_consumed`` flag on each instance flips on ``consume()``; a
-      second call raises :class:`TokenAlreadyConsumed`;
-    - factories ``mint_root`` / ``mint_split`` / ``mint_split_n`` are
-      the only legitimate paths to mint a token, and the split factories
-      reject duplicate child tags so two orthogonal sub-tokens cannot
-      accidentally claim the same subspace.
-
-Concurrency model: the dataplane is single-threaded asyncio. ``consume``
-is therefore not protected by a lock — the read-modify-write on
-``_consumed`` is safe only because no two coroutines can preempt each
-other between the read and the write. Tokens MUST NOT be shared across
-threads or processes; the move-only contract implicitly forbids that.
-
-A custom ruff rule (see ``lints.toml``) flags ``t.consume()`` followed
-by any further use of ``t`` so most linear-flow violations are caught at
-lint time too.
+Concurrency: the dataplane is single-threaded asyncio, so ``consume``
+takes no lock. Tokens MUST NOT be shared across threads or processes;
+the move-only contract forbids that implicitly. A ruff rule in
+``lints.toml`` flags post-consume reuse statically.
 """
 
 from __future__ import annotations
@@ -45,27 +34,15 @@ from .errors import (
 class Token[Tag]:
     """Linear, move-only permission witness for the subspace ``Tag``.
 
-    Callers SHOULD mint tokens via :func:`mint_root` etc. rather than
-    constructing directly — those factories exist as a single grep
-    target.
-
-    The class is effectively ``final``: :meth:`__init_subclass__` refuses
-    any subclass. Subclassing would let a derived class override
-    :meth:`__copy__` / :meth:`__deepcopy__` / :meth:`__reduce__` and slip
-    a duplicated witness through Python's copy / pickle machinery,
-    breaking the single-writer-per-subspace contract. The factories
-    intentionally instantiate :class:`Token` directly so all valid mint
-    paths produce the sealed class.
+    Mint via :func:`mint_root` / :func:`mint_split` / :func:`mint_split_n`
+    (single grep target). The class is final via
+    :meth:`__init_subclass__` — a subclass could override the cloning
+    guards and slip a duplicate witness through copy/pickle.
     """
 
     __slots__ = ("_tag", "_consumed")
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        # ``Token`` is the only valid concrete linear-permission class;
-        # subclasses would defeat linearity by overriding the cloning
-        # guards. The guard is documentary as much as runtime — the
-        # error message points the reader at :func:`mint_split` which
-        # is the legitimate way to derive a fresh witness.
         raise TypeError(
             "Token<Tag> is final: subclassing would let a derived class "
             "override __copy__ / __deepcopy__ / __reduce__ and silently "
@@ -101,25 +78,18 @@ class Token[Tag]:
         raise TokenNotPickleable(tag_repr=repr(self._tag))
 
     def __getstate__(self) -> Any:
-        # Some pickler / copier paths probe ``__getstate__`` before
-        # falling through to ``__reduce__``; deny it for symmetry.
+        # Some pickler/copier paths probe __getstate__ before __reduce__.
         raise TokenNotPickleable(tag_repr=repr(self._tag))
 
     def __setstate__(self, _state: Any) -> None:
-        # Cannot legitimately be reached because ``__getstate__`` raises,
-        # but pickle protocol 0 and ``copy.copy`` may probe attributes
-        # directly. Closing this path defends against future protocols.
+        # Unreachable in practice; closes the protocol surface defensively.
         raise TokenNotPickleable(tag_repr=repr(self._tag))
 
     # ── consumption ──────────────────────────────────────────────────
 
     @property
     def tag(self) -> Tag:
-        """The phantom subspace tag carried by this token.
-
-        Reading the tag is allowed even after :meth:`consume` — it's
-        useful for debugging and post-consume cleanup logging.
-        """
+        """The phantom subspace tag. Readable even after :meth:`consume`."""
         return self._tag
 
     @property
@@ -146,22 +116,15 @@ class Token[Tag]:
 
 
 def mint_root[Tag](tag: Tag) -> Token[Tag]:
-    """Mint a fresh root token for ``tag``.
-
-    There should be exactly one call site per logical subspace per
-    process — typically at engine startup. The token then flows down
-    the call graph via moves and ``mint_split``.
-    """
+    """Mint a fresh root token for ``tag`` (one call site per subspace)."""
     return Token(tag)
 
 
 def _reject_duplicate_tags[T](tags: Iterable[T]) -> list[T]:
-    """Return the materialised tag list after enforcing distinctness.
+    """Materialise ``tags`` and reject duplicates.
 
-    Tags may be any value the caller cares to use — including
-    non-hashable structures — so distinctness is checked by linear scan
-    rather than by set membership. The cost is O(n^2); call sites mint
-    a handful of children at a time, so this is fine.
+    Linear scan rather than set membership so non-hashable tags work;
+    O(n^2) is fine since call sites mint a handful at a time.
     """
     materialised: list[T] = list(tags)
     for i, tag in enumerate(materialised):
@@ -178,17 +141,11 @@ def mint_split[In, L, R](
 ) -> tuple[Token[L], Token[R]]:
     """Consume ``parent`` and mint two orthogonal sub-tokens.
 
-    The parent is consumed so callers cannot accidentally use it after
-    the split. ``left_tag`` and ``right_tag`` must be distinct values —
-    a duplicate would silently mint two tokens claiming the same
-    subspace, defeating the linearity guarantee. Distinctness is
-    enforced at runtime via :class:`TokenTagCollisionError`.
-
-    The parent is consumed *before* the duplicate check so an invalid
-    split still surrenders the parent; the caller's flow is broken in
-    a clearly visible way (token is gone *and* an exception fires)
-    rather than silently leaving an apparently-valid parent in the
-    caller's hand after a failed split.
+    ``left_tag`` and ``right_tag`` MUST be distinct or
+    :class:`TokenTagCollisionError` fires. The parent is consumed
+    *before* the duplicate check so an invalid split still surrenders
+    the parent — callers see a gone token plus an exception, not a
+    deceptively-live parent.
     """
     parent.consume()
     if left_tag == right_tag:
@@ -199,12 +156,8 @@ def mint_split[In, L, R](
 def mint_split_n[In, L](parent: Token[In], child_tags: Iterable[L]) -> list[Token[L]]:
     """Consume ``parent`` and mint N orthogonal sub-tokens.
 
-    Useful when fanning a root permission across N workers or N actor
-    instances. The child tags must be pairwise distinct; duplicates
-    raise :class:`TokenTagCollisionError`.
-
-    Parent consumption happens first (see :func:`mint_split` for the
-    rationale).
+    Child tags must be pairwise distinct. Parent consumption precedes the
+    duplicate check (see :func:`mint_split`).
     """
     parent.consume()
     tags = _reject_duplicate_tags(child_tags)

@@ -1,18 +1,13 @@
-# Lint rules that the dataplane package enforces over the wider codebase.
+# Lint rules the dataplane package documents for the wider codebase.
 #
-# This file is documentation only; the actual ruff config lives in the
-# repo's top-level pyproject.toml. The rules below are the contract that
-# subsequent dataplane changes will wire into the live configuration.
-#
-# Lifting them here keeps the rule set co-located with the code that
-# justifies them, so review of a future "tighten the linter" change can
-# diff against a concrete spec instead of inventing one.
+# This file is documentation; the live ruff config lives in the repo's
+# pyproject.toml. The rules are kept here so the spec stays co-located
+# with the code that justifies them.
 
 # ── direct redis imports ────────────────────────────────────────────
 #
-# After the dataplane substrate lands, no other module should import
-# ``redis`` or ``redis.asyncio`` directly. All Redis interaction flows
-# through :class:`gigaevo.dataplane.DataPlane`.
+# No module outside the dataplane should import ``redis`` or
+# ``redis.asyncio`` directly; all interaction flows through :class:`DataPlane`.
 #
 # Implementation (when wired into pyproject.toml):
 #
@@ -36,9 +31,8 @@ files = [
 
 # ── pickle ban ──────────────────────────────────────────────────────
 #
-# ``pickle.loads`` over Redis blobs is an RCE primitive. The initial
-# tightening bans deserialise; a follow-up ban removes the serialise
-# path entirely once all call sites are migrated to JSON.
+# pickle.loads over Redis blobs is an RCE primitive; this ban covers
+# deserialise. Serialise still allowed pending JSON migration.
 
 [banned_calls]
 "pickle.loads" = "Pickle deserialise is banned. Use gigaevo.dataplane.codec."

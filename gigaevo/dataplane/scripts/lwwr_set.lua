@@ -19,13 +19,9 @@
 --   'replaced' — candidate HLC was strictly newer; stored value updated
 --   'kept'     — candidate HLC was older or equal; no write
 --
--- Errors out on a malformed candidate HLC. Lexicographic comparison
--- is only order-preserving when both operands are equal length and
--- drawn from the same alphabet; a short / non-hex HLC would compare
--- non-monotonically against well-formed stored HLCs and silently let
--- an older write win. The wrapper computes ``hlc.pack_hex()`` which
--- always returns 32 lowercase hex chars; this check is the server-
--- side belt.
+-- Reject malformed candidate HLC: lex compare is only order-preserving
+-- on equal-length strings drawn from the same alphabet; a short / non-hex
+-- HLC could let an older write win. Server-side belt.
 
 local cand_hlc = ARGV[2]
 if cand_hlc == nil or #cand_hlc ~= 32 or string.match(cand_hlc, '^[0-9a-f]+$') == nil then

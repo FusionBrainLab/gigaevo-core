@@ -22,18 +22,13 @@
 --   { new_per_actor_count, generation, epoch }
 --   all elements are ASCII integer strings (so the client can int(...) them).
 --
--- Errors out on a non-integer delta / empty actor_id; HINCRBY would
--- error too, but a Lua-side check produces a clearer message and keeps
--- the failure path before any side effect.
+-- Lua-side input check keeps the failure path before any side effect.
 
 if ARGV[1] == nil or ARGV[1] == '' then
     return redis.error_reply('counter_inc: actor_id must be non-empty')
 end
 local delta = tonumber(ARGV[2])
--- Reject nil, NaN, +/-inf, and non-integer values. NaN fails the
--- self-equality check; +/-inf fail the math.huge bounds; fractional
--- values fail the floor-equality check; non-numeric strings make
--- tonumber return nil.
+-- Reject nil / NaN / ±inf / non-integer.
 if not delta
    or delta ~= delta
    or delta == math.huge

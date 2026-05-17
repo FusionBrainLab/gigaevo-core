@@ -44,18 +44,9 @@ local STREAM_MAXLEN = 10000
 -- and ``epoch`` are advanced server-side; ``id`` identifies the blob.
 local RESERVED_PATCH_FIELDS = {state = true, epoch = true, id = true}
 
--- cjson distinguishes JSON objects from JSON arrays by the Lua table's
--- positive-integer key shape; an empty Lua table is ambiguous and the
--- library defaults to emitting ``[]``. The persisted Program blob has
--- several dict-typed fields (``stage_results`` / ``metrics`` /
--- ``metadata``) that are routinely empty at write time, so without this
--- directive the post-transition blob comes back with ``[]`` where the
--- Pydantic model expects ``{}``. Redis ships lua-cjson 2.1+ which
--- exposes ``encode_empty_table_as_object``; the conditional keeps the
--- script forward-compatible with Redis builds (or test harnesses such
--- as fakeredis's embedded Lua VM) that omit the function. When the
--- directive is unavailable, the read-side coercion in
--- ``RedisProgramStorage._safe_deserialize`` recovers the dict shape.
+-- cjson defaults empty tables to ``[]``; force object encoding so the
+-- Program blob's empty dict fields round-trip as ``{}``. Conditional
+-- because some Lua VMs (test harnesses) omit the function.
 if type(cjson.encode_empty_table_as_object) == 'function' then
     cjson.encode_empty_table_as_object(true)
 end
@@ -85,10 +76,9 @@ if type(from) ~= 'string' or from == '' then
 end
 
 -- Idempotency is checked before ``expected_from`` so a replay of an
--- already-applied call returns ``duplicate`` with the stored blob; if
--- the order were reversed, a successful first call would advance the
--- state and the retry's ``expected_from`` would no longer match. The
--- idempotency hash carries an ``IDEM_TTL_SECONDS`` window.
+-- already-applied call returns ``duplicate`` with the stored blob.
+-- Reversed order would let the advanced state break the retry's
+-- ``expected_from`` check.
 if redis.call('HEXISTS', KEYS[5], ARGV[5]) == 1 then
     local existing_epoch = tostring(prog.epoch or 0)
     return {'duplicate', existing_epoch, cur}
@@ -115,11 +105,9 @@ if not legal then
     return {'illegal', '0', tostring(from) .. ' -> ' .. ARGV[3] .. ' not in FSM'}
 end
 
--- Decode the patch BEFORE the idempotency HSET. A malformed patch
--- aborts the script as a Lua error; Redis does not roll back the
--- already-executed commands, so persisting the idem token first would
--- make subsequent (legal) replays return 'duplicate' with the
--- pre-transition blob — silently swallowing the call.
+-- Decode the patch BEFORE the idempotency HSET; persisting the idem
+-- token first would let a malformed patch turn subsequent legal replays
+-- into 'duplicate' returns with the pre-transition blob.
 local patch = nil
 if ARGV[4] ~= '' then
     local decoded
@@ -134,19 +122,13 @@ if ARGV[4] ~= '' then
 end
 
 -- Record the idempotency token now so a concurrent retry observes the
--- hit on its HEXISTS above. ``HEXPIRE`` of the field would be cleaner
--- (Redis 7.4+) but EXPIRE on the whole hash matches the deployment
--- floor; the per-replay window is identical to the per-program window
--- because every program owns its own idem hash key.
+-- hit on its HEXISTS above. EXPIRE on the whole hash (per-program key)
+-- matches the deployment floor; HEXPIRE would need Redis 7.4+.
 redis.call('HSET', KEYS[5], ARGV[5], '1')
 redis.call('EXPIRE', KEYS[5], IDEM_TTL_SECONDS)
 
--- Merge the caller's patch fields into the blob. Reserved fields are
--- silently dropped — the script owns ``state`` and ``epoch``, and ``id``
--- pins the blob's identity. A future hardening pass could reject the
--- patch as 'invalid' instead of dropping, but silent-drop is the
--- conservative choice while callers may still emit a legacy ``epoch``
--- key by accident.
+-- Merge patch fields into the blob; reserved fields are silently
+-- dropped (the script owns state/epoch, id pins identity).
 if patch ~= nil then
     for k, v in pairs(patch) do
         if not RESERVED_PATCH_FIELDS[k] then
@@ -158,26 +140,18 @@ end
 prog.state = ARGV[3]
 local new_epoch = redis.call('INCR', KEYS[3])
 prog.epoch = new_epoch
--- Mirror ``epoch`` into the legacy field name so application-layer
--- readers that key on ``atomic_counter`` (the gigaevo Program model's
--- per-blob revision used as the merge tiebreaker) observe the
--- post-transition counter without a read-side rename. The two fields
--- carry the same value by construction; the dual-name window closes
--- when the legacy storage path is retired.
+-- Mirror ``epoch`` into ``atomic_counter`` (the Program model's per-blob
+-- revision used as merge tiebreaker) so the two fields carry the same
+-- value and application readers observe the post-transition counter.
 prog.atomic_counter = new_epoch
 
 redis.call('SET', KEYS[1], cjson.encode(prog))
 redis.call('SREM', ARGV[6] .. ':status:' .. from, ARGV[1])
 redis.call('SADD', ARGV[6] .. ':status:' .. ARGV[3], ARGV[1])
--- Status-event payload carries both the legacy (``id`` / ``status`` /
--- ``event``) and the dp-native (``pid`` / ``from`` / ``to`` / ``epoch``)
--- field sets. The Lua script is the sole emitter on the dp-routed
--- transition path: ``RedisProgramStorage._transition_via_dataplane``
--- does not append a second event after the script returns, so this
--- XADD is the single source of truth for the transition fact. Carrying
--- both shapes lets pre-coordinator readers that key on ``id`` /
--- ``status`` continue to work alongside dp-aware consumers that prefer
--- the explicit (from, to, epoch) triple.
+-- Status event carries both the (id/status/event) and the dp-native
+-- (pid/from/to/epoch) field sets so application readers keyed on either
+-- shape observe the transition. The XADD here is the single source of
+-- truth for the transition fact on the dp-routed path.
 redis.call('XADD', KEYS[2], 'MAXLEN', '~', STREAM_MAXLEN, '*',
            'id', ARGV[1],
            'status', ARGV[3],

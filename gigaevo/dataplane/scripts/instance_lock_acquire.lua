@@ -11,16 +11,13 @@
 --
 -- ARGV layout:
 --   ARGV[1] = lease_token   — client-minted opaque random string
---   ARGV[2] = ttl_ms        — positive integer; millisecond precision
---                             (sub-second TTLs need PX, not EX)
+--   ARGV[2] = ttl_ms        — positive integer (PX precision)
 --
 -- Returns:
---   1  — lock acquired (the caller now holds it for up to ttl_ms ms)
---   0  — lock currently held by some other token; caller must retry or fail
+--   1  — lock acquired
+--   0  — lock currently held by some other token
 --
--- Errors out with a script error on invalid TTL / empty token; both are
--- caller bugs and surfaceable as ``DataPlaneError`` rather than silent
--- "couldn't acquire" returns.
+-- Invalid TTL / empty token surface as script errors (caller bugs).
 
 local ttl_ms = tonumber(ARGV[2])
 if not ttl_ms or ttl_ms < 1 then

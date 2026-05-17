@@ -1,10 +1,8 @@
 """Tests for the strict-construction wrapper around ``ChatOpenAI``.
 
-The wrapper closes two failure modes that the underlying class exposes:
-unknown kwargs silently fall through into ``model_kwargs`` and the
-``${oc.env:OPENAI_API_KEY}`` interpolation resolves to ``None`` when the
-env var is unset. Both behaviours used to manifest deep inside the OpenAI
-client or as opaque Hydra interpolation tracebacks.
+The wrapper rejects unknown kwargs (instead of silently dropping them
+into ``model_kwargs``) and refuses to construct when the API key is
+``None``.
 """
 
 from __future__ import annotations

@@ -1,19 +1,16 @@
 """DataPlane error hierarchy.
 
-Every error that crosses the dataplane boundary is a typed subclass of
-:class:`DataPlaneError`. Subclasses that carry structured fields inherit
+Every error crossing the dataplane boundary is a typed subclass of
+:class:`DataPlaneError`. Subclasses carrying structured fields inherit
 from :class:`_StructuredError`, which populates ``Exception.args`` from
 the dataclass fields so ``str(err)`` shows the failure detail.
 
 Structured fields may opt into redaction via
 ``dataclasses.field(metadata={"redact": True})`` — the field name still
-appears in ``str(err)`` but the value is replaced with ``<redacted>``.
-Used on fields that can hold lease tokens, holder identities, or other
-material that should not land in logs verbatim.
+appears in ``str(err)``, the value is replaced with ``<redacted>``.
 
-Callers that want exception-style handling can ``except`` on a base
-class. Callers that prefer discriminated returns use
-:class:`gigaevo.dataplane.models.Result` and match on ``Err``.
+Callers can ``except`` on a base class or pattern-match on
+:class:`gigaevo.dataplane.models.Result` (``Err`` variant).
 """
 
 from __future__ import annotations
@@ -40,15 +37,10 @@ _FIELD_REPR_ELLIPSIS: Final[str] = "...<truncated>"
 def _format_field(value: Any, *, redact: bool) -> str:
     """Format one field value for inclusion in ``str(err)``.
 
-    Redacted fields show :data:`_REDACTED_PLACEHOLDER` regardless of the
-    underlying value. Non-redacted reprs are truncated at
-    :data:`_FIELD_REPR_MAX_CHARS` to keep traceback output bounded.
-
-    A field whose ``__repr__`` raises is rendered as ``<repr-failed>``
-    rather than propagating the inner exception — an error class must
-    always render to a usable string so failure handlers, log
-    aggregators, and tracebacks can attribute the original failure
-    instead of crashing inside ``__post_init__``.
+    Redacted values show :data:`_REDACTED_PLACEHOLDER`. Non-redacted
+    reprs are truncated at :data:`_FIELD_REPR_MAX_CHARS`. A field whose
+    ``__repr__`` raises renders as ``<repr-failed>`` so an error class
+    always produces a usable string.
     """
     if redact:
         return _REDACTED_PLACEHOLDER
@@ -73,21 +65,14 @@ class DataPlaneError(Exception):
 class _StructuredError(DataPlaneError):
     """Mixin that wires ``Exception.args`` from the dataclass fields.
 
-    ``@dataclass.__init__`` does not call ``super().__init__``, so
-    ``str(err)`` would otherwise be empty. The ``__post_init__`` hook
-    inherited by every subclass formats the fields into ``Exception.args``
-    so tracebacks and log messages stay informative.
-
-    Subclasses MUST be ``@dataclass(slots=True, frozen=True)``. The
-    :meth:`__init_subclass__` hook enforces this and rejects any field
-    whose declared type is mutable (``list`` / ``dict`` / ``set``); error
-    instances are hashable, so their fields must be too.
+    ``@dataclass.__init__`` does not call ``super().__init__``;
+    ``__post_init__`` here populates ``Exception.args`` so tracebacks
+    stay informative. Subclasses MUST be
+    ``@dataclass(slots=True, frozen=True)`` with hashable fields — the
+    :meth:`__init_subclass__` hook rejects mutable-container field types
+    by name (string-annotation-aware best effort, not a full type check).
     """
 
-    # Field types that defeat ``frozen=True`` hashability. The check is
-    # type-name based because evaluating string annotations at class
-    # creation time is unreliable; this is a guard rail, not a full type
-    # check.
     _BANNED_FIELD_TYPE_NAMES: ClassVar[frozenset[str]] = frozenset(
         {"list", "dict", "set", "bytearray"}
     )
@@ -95,16 +80,12 @@ class _StructuredError(DataPlaneError):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         if not dataclasses.is_dataclass(cls):
-            # Non-dataclass intermediate bases (e.g. abstract markers)
-            # are allowed; ``__post_init__`` still tolerates them.
+            # Non-dataclass intermediate bases (abstract markers) are fine.
             return
         for f in dataclasses.fields(cls):
             type_repr = (
                 f.type if isinstance(f.type, str) else getattr(f.type, "__name__", "")
             )
-            # Strip ``Optional[...]`` / ``X | None`` wrappers crudely for
-            # the name check — the goal is to catch obvious offenders, not
-            # to reimplement typing.get_type_hints.
             banned = cls._BANNED_FIELD_TYPE_NAMES
             if any(banned_name in type_repr for banned_name in banned):
                 raise TypeError(
@@ -124,9 +105,7 @@ class _StructuredError(DataPlaneError):
             try:
                 value = getattr(self, f.name)
             except AttributeError:
-                # Slot declared but not initialised — pre-empt the
-                # AttributeError so ``str(err)`` still produces useful
-                # output during partially-constructed-instance teardown.
+                # Slot declared but not initialised; surface in str(err).
                 parts.append(f"{f.name}=<uninitialised>")
                 continue
             redact = bool(f.metadata.get(REDACT_META_KEY, False))
@@ -178,9 +157,8 @@ class ScriptLostError(_StructuredError):
     """``EVALSHA`` returned ``NOSCRIPT`` twice in a row.
 
     First ``NOSCRIPT`` triggers a reload-and-retry inside
-    :class:`gigaevo.dataplane.scripts.LuaRegistry`. A second one in
-    immediate succession surfaces here — Redis is in a bad state and the
-    caller should not paper over it.
+    :class:`gigaevo.dataplane.scripts.LuaRegistry`; a second immediate
+    failure surfaces here as a loud error rather than a silent retry.
     """
 
     script_name: str
@@ -265,10 +243,8 @@ class EliteInvalidError(_StructuredError):
 class LockHeld(_StructuredError):
     """``acquire_instance_lock`` failed because the lock is currently held.
 
-    ``holder`` is a lease-token-like identifier; it is treated as
-    sensitive and redacted from ``str(err)`` so it cannot leak through
-    logs verbatim. The field is still accessible on the instance for
-    callers that legitimately need to inspect it.
+    ``holder`` is lease-token-like and redacted from ``str(err)``; the
+    attribute itself is accessible on the instance.
     """
 
     key: str

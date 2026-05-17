@@ -1,20 +1,9 @@
-"""Lifecycle / leak-prevention tests for ``run.run_experiment``.
+"""Lifecycle and leak-prevention tests for ``run.run_experiment``.
 
-Two failure modes covered:
-
-* ``start()`` succeeds, then something between ``start()`` and the
-  ``serve_until_signal`` return raises. The two background tasks
-  (``evolution_engine.task`` and ``dag_runner.task``) must still receive
-  ``stop()`` before the exception unwinds. The fix wraps the inner block in
-  a ``try/finally`` that always awaits both ``stop`` coros.
-
-* The recursive ``instantiate`` builds the engine, runner, writer, etc. into
-  one container object. A later ``_target_`` raising mid-recursion leaves
-  earlier-built objects unreachable from the ``finally`` block in the
-  original code (it only checked ``writer is not None``). The fix walks
-  every non-None local in the outer ``finally``; when ``instantiate``
-  succeeds and a downstream step raises, every assigned component must be
-  closed.
+Covers: (1) ``serve_until_signal`` raising after ``start()`` still
+fires both ``stop()`` calls; (2) ``instantiate`` failing mid-tree still
+runs the outer ``finally``; (3) ``stop()`` is idempotent on both
+EvolutionEngine and DagRunner.
 """
 
 from __future__ import annotations
@@ -29,14 +18,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_start_then_exception_still_stops_runner_and_engine():
-    """If ``serve_until_signal`` raises, both ``stop()`` calls fire.
-
-    Mirrors the M3 shape: ``dag_runner.start()`` and
-    ``evolution_engine.start()`` already created background asyncio tasks,
-    then ``serve_until_signal`` raises (e.g. KeyboardInterrupt or an
-    OSError installing the signal handler). The two tasks must not leak
-    past ``run_experiment``'s return; both ``stop()`` calls must run.
-    """
+    """If ``serve_until_signal`` raises after the two tasks started,
+    both ``stop()`` calls must still fire before the exception escapes."""
     import run as run_module
 
     fake_dag_runner = MagicMock()
@@ -136,13 +119,9 @@ async def test_start_then_exception_still_stops_runner_and_engine():
 
 @pytest.mark.asyncio
 async def test_instantiate_failure_does_not_leak_pool_or_call_writer():
-    """If ``instantiate`` raises, the outer ``finally`` still runs.
-
-    No partial component is reachable from the local scope, so the
-    finally block must tolerate every ``X is None`` check without
-    crashing. The pool shutdown must still execute and the ambient
-    pool token must be reset.
-    """
+    """``instantiate`` raising leaves no component reachable; the outer
+    ``finally`` must tolerate every ``X is None`` check, shut the pool
+    down, and reset the ambient pool token."""
     from gigaevo.programs.stages.python_executors.wrapper import (
         get_ambient_exec_runner_pool,
     )
@@ -178,12 +157,7 @@ async def test_instantiate_failure_does_not_leak_pool_or_call_writer():
 
 @pytest.mark.asyncio
 async def test_engine_stop_is_idempotent_after_serve_already_stopped_it():
-    """``stop()`` called twice on EvolutionEngine and DagRunner is a no-op.
-
-    The fix relies on this: ``serve_until_signal`` awaits ``stop()`` once
-    on the happy path; the outer ``finally`` awaits ``stop()`` again so
-    failure paths still get cleanup. Both must coexist without raising.
-    """
+    """``stop()`` called twice on EvolutionEngine and DagRunner is a no-op."""
     # Engine.stop() with no task and no metrics collector
     engine = object.__new__(
         __import__(

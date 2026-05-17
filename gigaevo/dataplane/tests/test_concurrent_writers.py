@@ -12,9 +12,8 @@ no two writers can stomp each other:
 - ``try_replace_elite``: 20 candidates all targeting the same archive
   cell — the highest-scoring candidate wins, never a lower-scoring one.
 
-These tests are the structural assurance that bug class #1 ("lost
-update on read-modify-write") cannot re-emerge in any of the
-dataplane primitives without one of these assertions flipping colour.
+These tests structurally guard against lost-update regressions on
+read-modify-write across the dataplane primitives.
 """
 
 from __future__ import annotations

@@ -1,13 +1,9 @@
-"""Regression tests for ``default_exec_runner_pool`` and the ambient pool.
+"""Tests for ``default_exec_runner_pool`` and the ambient-pool ContextVar.
 
-The factory builds a fresh ``WorkerPool`` per call. Callers that want to
-amortize subprocess startup across many ``run_exec_runner`` invocations must
-either pass a single pool via ``pool=...`` or bind one via
-``set_ambient_exec_runner_pool`` for the duration of an ``asyncio.run``.
-
-Each ``WorkerPool`` binds its ``asyncio.Queue`` and ``asyncio.Lock`` to the
-event loop it is first used on, so an instance must not survive across
-distinct ``asyncio.run()`` invocations.
+The factory builds a fresh ``WorkerPool`` per call; to amortize
+subprocess startup, callers pass ``pool=...`` or bind one via
+``set_ambient_exec_runner_pool`` for the lifetime of an ``asyncio.run``.
+Each ``WorkerPool`` binds its primitives to the loop it is first used on.
 """
 
 from __future__ import annotations
@@ -37,12 +33,7 @@ def test_factory_returns_fresh_instance_per_call():
 
 
 def test_factory_has_no_lru_cache_attribute():
-    """The factory must not be wrapped by ``functools.lru_cache``.
-
-    A wrapped function would expose ``cache_clear`` / ``cache_info``; the
-    plain function does not. The check fails fast if the cache decorator
-    re-appears.
-    """
+    """The factory is not wrapped by ``functools.lru_cache``."""
     assert not hasattr(default_exec_runner_pool, "cache_clear")
     assert not hasattr(default_exec_runner_pool, "cache_info")
 
@@ -58,13 +49,8 @@ def test_each_pool_owns_its_asyncio_primitives():
 
 
 def test_fresh_pool_is_safe_across_sequential_event_loops():
-    """A pool built in one event loop is not reused in a second.
-
-    Simulates the multirun pattern: a hypothetical caller that requests the
-    default factory in one ``asyncio.run`` and again in another receives two
-    pools with independent ``asyncio`` primitives bound to the respective
-    loops.
-    """
+    """Distinct ``asyncio.run`` calls each receive a fresh pool with
+    primitives bound to the local loop."""
     loop_a_pool: WorkerPool | None = None
 
     async def in_loop_a() -> WorkerPool:
@@ -105,13 +91,8 @@ def test_ambient_pool_round_trip():
 
 
 def test_run_exec_runner_reuses_ambient_pool_when_pool_is_none():
-    """``run_exec_runner(pool=None)`` resolves to the bound ambient pool.
-
-    A captured-pool fake stands in for the real ``WorkerPool``: every
-    ``run_exec_runner`` invocation through this fake records itself, so
-    the test sees that the same pool object served two successive
-    ``run_exec_runner`` calls within one experiment scope.
-    """
+    """``run_exec_runner(pool=None)`` resolves to the bound ambient pool
+    so two successive calls share one pool object."""
     seen_pools: list[WorkerPool] = []
 
     class _FakeProc:

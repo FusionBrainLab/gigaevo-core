@@ -34,24 +34,16 @@ if ARGV[2] == nil or ARGV[2] == '' then
 end
 
 local cand_score = tonumber(ARGV[3])
--- A finite real is the only acceptable score. ``tonumber`` returns nil
--- for non-numeric input; for NaN every comparison is false so a naive
--- check would let NaN candidates bypass the rejection branch and
--- silently overwrite the occupant. For +/-inf the comparisons are
--- valid but a sentinel encodes "always-win" which is not a thing we
--- want to allow on the wire. The wrapper is expected to reject these
--- values client-side; this is the server-side belt.
+-- Reject non-numeric, NaN (compares false to everything), and ±inf
+-- (always-wins sentinel). Server-side belt; the wrapper rejects too.
 if not cand_score or cand_score ~= cand_score or cand_score == math.huge or cand_score == -math.huge then
     return {'invalid', 'candidate score not finite: ' .. tostring(ARGV[3])}
 end
 
 local cur_id = redis.call('HGET', KEYS[1], ARGV[1])
 if not cur_id then
-    -- The candidate may already occupy a different cell; if so, vacate
-    -- that prior cell first so the (program → at-most-one-cell)
-    -- bijection holds. Without this, the candidate would simultaneously
-    -- occupy two cells (the prior cell still points to it via the
-    -- forward map, with no reverse pointer to detect it).
+    -- Vacate any prior cell the candidate occupies; preserves the
+    -- (program → at-most-one-cell) bijection.
     local prior_cell = redis.call('HGET', KEYS[2], ARGV[2])
     if prior_cell and prior_cell ~= ARGV[1] then
         redis.call('HDEL', KEYS[1], prior_cell)
@@ -65,9 +57,7 @@ end
 
 local cur_score_str = redis.call('HGET', KEYS[3], ARGV[1])
 local cur_score = tonumber(cur_score_str)
--- A stored score that fails to parse is treated as 0.0 (legacy /
--- corrupt rows). NaN somehow stored would propagate the same false-on-
--- all-compares trap, so guard the same way.
+-- Unparseable or NaN stored score ⇒ treat as 0.0 (corrupt rows).
 if not cur_score or cur_score ~= cur_score then
     cur_score = 0.0
 end
@@ -79,12 +69,9 @@ if cand_score == cur_score and ARGV[4] == '0' then
     return {'rejected', cur_id}
 end
 
--- Swap: cur_id loses, candidate becomes the new occupant.
--- If the candidate already occupies a different cell (its prior
--- reverse pointer differs from this cell), vacate that prior cell so
--- the (program → at-most-one-cell) bijection holds across the swap.
--- The candidate == cur_id case is a no-op: HDEL on the candidate's
--- reverse entry runs and HSET re-creates it pointing to this same cell.
+-- Swap: cur_id loses, candidate becomes the new occupant. Vacate any
+-- prior cell the candidate held to preserve the bijection. The
+-- candidate == cur_id case re-points the reverse entry to the same cell.
 if ARGV[2] ~= cur_id then
     local prior_cell = redis.call('HGET', KEYS[2], ARGV[2])
     if prior_cell and prior_cell ~= ARGV[1] then

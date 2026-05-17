@@ -79,12 +79,7 @@ class RedisConnection:
         return self._pool is not None
 
     def _get_lifecycle_lock(self) -> asyncio.Lock:
-        """Lazy-init the lock inside the running loop.
-
-        Creating ``asyncio.Lock`` lazily avoids the historical "wrong
-        loop" trap where a lock created at import time binds to the
-        wrong loop and silently leaks.
-        """
+        """Lazy-init the lock inside the running loop to avoid wrong-loop binding."""
         if self._lifecycle_lock is None:
             self._lifecycle_lock = asyncio.Lock()
         return self._lifecycle_lock
@@ -124,9 +119,7 @@ class RedisConnection:
                 await _safe_close(pool)
                 raise
             except asyncio.CancelledError:
-                # CancelledError is BaseException — close the half-built
-                # pool before propagating so the caller's retry sees a
-                # clean slate.
+                # CancelledError is BaseException, not caught below — close pool first.
                 await _safe_close(pool)
                 raise
             except Exception as exc:  # noqa: BLE001 - startup boundary, wrapped into StartupError
@@ -159,10 +152,8 @@ async def _safe_close(pool: aioredis.Redis | None) -> None:
     """Best-effort close of a Redis client; never raises, bounded latency.
 
     ``aclose`` is wrapped in :func:`asyncio.wait_for` because a peer that
-    half-closes the socket can otherwise stall the call forever and pin
-    the entire shutdown path. A timeout-elapsed close still leaks the
-    underlying socket, but the process can proceed; surface that as a
-    warning so operators see the leak.
+    half-closes the socket can otherwise stall the call forever. A
+    timed-out close may leak the underlying socket; surface as warning.
     """
     if pool is None:
         return

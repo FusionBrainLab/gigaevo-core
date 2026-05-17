@@ -1,16 +1,8 @@
-"""Regression tests for the tracker factory functions.
+"""Tests for the tracker factory functions.
 
-Each ``init_*`` factory builds a fresh ``GenericLogger`` / ``CompositeLogger``
-per call. There is no module-level memoization, so sequential calls in the
-same process (sweeps, notebook re-runs, multirun plugins) get isolated
-instances pointing at the configs they were handed.
-
-The factories instantiate ``GenericLogger`` directly, which opens the
-underlying backend (filesystem / Redis / W&B) on construction and spins up a
-flusher thread. To exercise the factory plumbing in isolation, the test
-suite monkeypatches each backend's ``open``/``close``/``flush`` to no-ops,
-keeping the ``cfg`` plumbing intact so identity and config-routing claims
-can still be asserted.
+Each ``init_*`` factory builds a fresh
+``GenericLogger`` / ``CompositeLogger`` per call. Backends are stubbed
+to no-ops so identity and config routing can be asserted in isolation.
 """
 
 from __future__ import annotations

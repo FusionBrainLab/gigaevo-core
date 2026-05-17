@@ -27,9 +27,7 @@ if ARGV[1] == nil or ARGV[1] == '' then
     return redis.error_reply('instance_lock_renew: lease_token must be non-empty')
 end
 
--- ``GET`` on a missing key returns Redis nil → Lua false; ``false ==
--- ARGV[1]`` is false for any string ARGV[1] so the absent-key branch
--- falls through to ``return 0`` without further work.
+-- GET on missing key returns false; the comparison falls through to 0.
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     redis.call('PEXPIRE', KEYS[1], ttl_ms)
     return 1

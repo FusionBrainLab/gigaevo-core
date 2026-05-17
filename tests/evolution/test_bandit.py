@@ -1430,12 +1430,8 @@ from gigaevo.llm.bandit import (  # noqa: E402
 
 
 async def _make_coord(server: fakeredis.FakeServer) -> dp.DataPlane:
-    """Wire a DataPlane to an in-process fakeredis instance.
-
-    Mirrors the fixture used by ``gigaevo/dataplane/tests/test_crdt_counter.py``
-    so the bandit's call paths exercise the real coordinator code and Lua
-    scripts without standing up a Redis server.
-    """
+    """Wire a DataPlane to an in-process fakeredis instance so the bandit
+    exercises real coordinator and Lua-script code paths."""
     coord = dp.DataPlane("redis://embedded/0", key_prefix="test")
     fake = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
     coord._connection._pool = fake  # type: ignore[attr-defined]
@@ -1934,12 +1930,10 @@ class TestSlidingWindowUCB1EngineRoot:
 
 
 class TestGetMeanRewardFreshness:
-    """``get_mean_reward`` accepts a freshness contract.
-
-    Default :class:`FreshnessEventual` preserves the legacy behaviour;
-    an explicit :class:`FreshnessAtLeast` raises :class:`StaleReadError`
-    when the persisted view does not clear the floor.
-    """
+    """``get_mean_reward`` accepts a freshness contract: the default
+    :class:`FreshnessEventual` returns whatever is persisted, and
+    :class:`FreshnessAtLeast` raises :class:`StaleReadError` when the
+    persisted view does not clear the floor."""
 
     async def test_default_freshness_is_eventual(self) -> None:
         from gigaevo.llm.bandit import SlidingWindowUCB1

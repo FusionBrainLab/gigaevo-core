@@ -4,39 +4,21 @@ Two concrete implementations:
   - FixedDirPromptFetcher: reads from a directory or package defaults.
   - GigaEvoArchivePromptFetcher: reads champion from a co-evolving GigaEvo archive.
 
-Storage layout for :class:`GigaEvoArchivePromptFetcher` outcome stats
--------------------------------------------------------------------
+Outcome-stats key layout for :class:`GigaEvoArchivePromptFetcher`:
 
-Every per-prompt mutation outcome is written to a small fixed set of
-:class:`gigaevo.dataplane.DataPlane` keys. The shapes mirror the
-established bandit-ledger pattern at ``bandit:trials:{arm}`` so a
-reader that already understands CRDT G-counters can pattern-match
-across both subsystems:
+    prompt:trials:{prompt_id}         G-counter, total trials
+    prompt:successes:{prompt_id}      G-counter, improvement count
+    prompt:metrics_count:{prompt_id}  G-counter, denominator for
+                                       per-metric mean sums
+    prompt:metric:{prompt_id}:{key}   G-counter, fixed-point metric sum
+                                       (scale :data:`_METRIC_FIXED_POINT_SCALE`)
+    prompt:metric_keys:{prompt_id}    Set of observed metric keys
+    prompt:fitnesses:{prompt_id}      Bounded list capped at
+                                       :data:`_FITNESS_WINDOW`
 
-    prompt:trials:{prompt_id}         G-counter (cross-actor sum =
-                                       total trials recorded)
-    prompt:successes:{prompt_id}      G-counter (count of outcomes
-                                       judged to be improvements)
-    prompt:metrics_count:{prompt_id}  G-counter (count of trials
-                                       whose ``child_metrics`` was
-                                       supplied; the denominator for
-                                       per-metric mean sums)
-    prompt:metric:{prompt_id}:{key}   G-counter (per-metric running
-                                       sum; fixed-point scaled by
-                                       :data:`_METRIC_FIXED_POINT_SCALE`
-                                       so HINCRBY-only suffices)
-    prompt:metric_keys:{prompt_id}    Redis Set listing every metric
-                                       key that has been observed for
-                                       this prompt id (read-path
-                                       discovery vector)
-    prompt:fitnesses:{prompt_id}      Bounded recency list (LPUSH +
-                                       LTRIM via the dataplane's
-                                       ``bounded_list_push`` primitive;
-                                       capped at ``_FITNESS_WINDOW``)
-
-Every increment is partitioned by ``ActorIdentity`` so two engines
-writing the same prompt id never collide on a single integer cell;
-the consensus value is the sum across actors.
+Every increment is partitioned by :class:`ActorIdentity` so two engines
+on the same prompt id never collide; the consensus value is the sum
+across actors.
 """
 
 from __future__ import annotations
@@ -79,28 +61,17 @@ class _PromptPack:
 _CURRENT_PACK: ContextVar[_PromptPack | None] = ContextVar(
     "gigaevo.prompts.fetcher._current_pack", default=None
 )
-"""Per-task pack handle.
-
-Each mutation runs under its own asyncio task; the system-prompt fetch
-stores the sampled pack here, the user-prompt fetch reads it back. Using
-a :class:`ContextVar` keeps concurrent mutations from seeing each
-other's sample even when they share one fetcher instance.
-"""
+"""Per-task pack handle. The system-prompt fetch stores the sampled
+pack; the user-prompt fetch reads it back. A :class:`ContextVar`
+isolates concurrent mutations even when they share one fetcher."""
 
 _FITNESS_WINDOW: int = 20
-"""Max number of recent fitness samples retained per prompt id.
-
-The dataplane's :meth:`DataPlane.bounded_list_push` enforces this cap
-server-side via an atomic LPUSH + LTRIM; the list always carries the
-newest ``_FITNESS_WINDOW`` values in most-recent-first order.
-"""
+"""Max recent fitness samples retained per prompt id; enforced
+server-side via :meth:`DataPlane.bounded_list_push` (LPUSH + LTRIM)."""
 
 _METRIC_FIXED_POINT_SCALE: int = 1000
-"""Multiplier used to coerce float metric values into HINCRBY-friendly
-integers. The reader divides by the same scale to recover the mean. The
-choice of 1000 preserves three decimal digits of precision — sufficient
-for the F1/EM/accuracy band typically reported by evaluator stages.
-"""
+"""Scale used to coerce float metric values into integer HINCRBY
+deltas; three decimal digits of precision."""
 
 
 def _trials_key(prompt_id: str) -> CounterKey:
@@ -136,10 +107,8 @@ def _fitness_list_key(prompt_id: str) -> str:
 def _metric_to_fixed_point(value: float) -> int:
     """Coerce a metric float into an HINCRBY-friendly signed integer.
 
-    The reader recovers ``mean = sum / metrics_count / scale`` so the
-    rounding error is bounded by ``1 / _METRIC_FIXED_POINT_SCALE``. A
-    non-finite input is squashed to zero rather than propagated into the
-    counter where it would corrupt every future read.
+    Non-finite values are squashed to zero rather than corrupting the
+    counter. Rounding error is bounded by 1 / ``_METRIC_FIXED_POINT_SCALE``.
     """
     if not isinstance(value, (int, float)):
         return 0
@@ -310,25 +279,19 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         self._fallback = FixedDirPromptFetcher(fallback_prompts_dir)
         self._fitness_key = fitness_key
 
-        # Candidate list is shared (expensive Redis read; one cache per
-        # fetcher), but the sampled pack is per-task via ``_CURRENT_PACK``
-        # so concurrent mutations do not see each other's pick between
-        # the system and user fetches.
+        # Candidate list is shared per fetcher; the sampled pack is
+        # per-task via ``_CURRENT_PACK``.
         self._cached_candidates: list[tuple[str, float, str]] | None = None
         self._cached_pack: _PromptPack | None = None  # last sampled (for get_stats)
         self._cache_timestamp: float = 0.0
 
-        # DataPlane handles. The fetcher owns each one if and only if it
-        # constructed it lazily in :meth:`start`; an injected handle
-        # belongs to the engine startup path and survives the fetcher's
-        # ``stop``.
+        # DataPlane handles. ``_owned`` is True only when constructed
+        # lazily by :meth:`start`; injected handles live with the engine.
         self._main_dp: DataPlane | None = main_dataplane
         self._prompt_dp: DataPlane | None = prompt_dataplane
         self._main_dp_owned: bool = False
         self._prompt_dp_owned: bool = False
 
-        # Resolved at :meth:`start` time so the identity carries the
-        # eventually-wired actor instead of the import-time fallback.
         self._actor: ActorIdentity = actor or self._derive_default_actor()
 
         self._fetch_errors: int = 0
@@ -354,18 +317,15 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     def _derive_default_actor(self) -> ActorIdentity:
         """Synthesise an :class:`ActorIdentity` from prefix + pid.
 
-        Used when the caller does not supply one; the resulting actor is
-        unique per process under one main-run prefix so two engines on
-        the same prefix never collide on a G-counter cell.
+        Used when the caller does not supply one; the resulting actor
+        is process-unique under one main-run prefix.
         """
         import os
         import socket
 
         from gigaevo.dataplane import RunId, WorkerId
 
-        # Sanitise the prefix so the typed validator inside ActorIdentity
-        # accepts it (the prefix can carry "/" but never ":" given Hydra's
-        # naming convention).
+        # ActorIdentity rejects ':' / '/' so sanitise before construction.
         clean_prefix = self._main_redis_prefix.replace(":", "-").replace("/", "-")
         if not clean_prefix:
             clean_prefix = "prompts"
@@ -375,12 +335,7 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         )
 
     def _build_dataplane(self, db: int, key_prefix: str) -> DataPlane:
-        """Construct a DataPlane bound to the requested Redis DB and prefix.
-
-        The connection URL is composed from ``host``, ``port``, ``db``
-        — kept consistent with the Hydra config surface so callers that
-        already plumb host/port don't need to learn a new shape.
-        """
+        """Construct a DataPlane bound to the given Redis DB and prefix."""
         url = f"redis://{self._host}:{self._port}/{db}"
         return DataPlane(url, key_prefix=key_prefix)
 
@@ -392,27 +347,10 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     ) -> None:
         """Rebind engine-owned DataPlane handles + actor onto this fetcher.
 
-        Called from :func:`gigaevo.dataplane.engine_startup.wire_prompt_fetcher`
-        post-Hydra instantiation so the fetcher shares the engine's
-        already-started main DataPlane (the same instance bound to the
-        storage and the bandit) instead of lazily building a second one
-        in :meth:`start`. The prompt-archive read surface lives in a
-        different Redis DB and therefore receives its own pre-started
-        DataPlane.
-
-        Both handles are recorded as engine-owned (``_owned == False``)
-        so :meth:`stop` leaves their lifecycle to the engine and does
-        not attempt a duplicate shutdown.
-
-        Idempotency: a second call with the exact same triple is a
-        silent no-op. A second call with a different triple raises
-        :class:`RuntimeError` — silent overwrite would corrupt the
-        single-engine / single-actor invariant the bandit and storage
-        already rely on.
-
-        Must be called before :meth:`start`; after attachment, the
-        lazy-build branches in :meth:`start` see the slots populated
-        and skip construction.
+        Both handles are recorded as engine-owned so :meth:`stop` does
+        not shut them down. Idempotent on identical triples; a different
+        triple raises :class:`RuntimeError`. Must be called before
+        :meth:`start`.
         """
         if (
             self._main_dp is main_dataplane
@@ -451,12 +389,10 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
     async def start(self, storage: ProgramStorage | None = None) -> None:
         """Lazily construct + start DataPlane handles.
 
-        The fetcher only owns a DataPlane if it constructed one; an
-        injected handle has its lifecycle managed by the engine startup
-        path. Re-callable safely: an already-started DataPlane returns
-        from ``startup()`` immediately.
+        Already-started handles are returned in place. Safe to call
+        multiple times.
         """
-        del storage  # not currently used; reserved for ProgramStorage-aware tests.
+        del storage  # reserved for ProgramStorage-aware tests
         if self._main_dp is None and self._main_redis_db is not None:
             self._main_dp = self._build_dataplane(
                 self._main_redis_db, self._main_redis_prefix
@@ -473,11 +409,9 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
             await self._prompt_dp.startup()
 
     async def stop(self) -> None:
-        """Tear down any DataPlane handles the fetcher constructed itself.
+        """Tear down DataPlane handles the fetcher constructed itself.
 
-        Injected handles are left alone — they belong to the engine. The
-        method is idempotent so a double-stop after a partial start does
-        not raise.
+        Injected handles are left alone. Idempotent.
         """
         if self._main_dp is not None and self._main_dp_owned:
             try:
@@ -566,20 +500,12 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         return candidates if candidates else None
 
     def _refresh_candidates(self) -> list[tuple[str, float, str]] | None:
-        """Sync bridge to :meth:`_refresh_candidates_async`.
-
-        Called from :meth:`fetch`, which itself is invoked synchronously
-        from the agent hot path. We dispatch the async refresh onto a
-        worker thread so the agent's calling event loop is not blocked
-        by Redis I/O even though the fetch interface itself is sync.
-        """
+        """Sync bridge to :meth:`_refresh_candidates_async`."""
         try:
             return asyncio.run(self._refresh_candidates_async())
         except RuntimeError:
-            # Already inside an event loop (e.g. test that drives fetch
-            # synchronously from within a coroutine). Run the coroutine
-            # on a fresh loop in a worker thread so the outer loop is
-            # not re-entered.
+            # Already inside an event loop; run the coroutine on a
+            # fresh loop in a worker thread to avoid re-entry.
             import threading
 
             holder: list[list[tuple[str, float, str]] | None] = [None]
@@ -772,25 +698,11 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         outcome: MutationOutcome,
         child_metrics: dict[str, float] | None = None,
     ) -> None:
-        """Record one mutation outcome through the dataplane substrate.
+        """Record one mutation outcome through the dataplane.
 
-        Bumps four conceptual counters and pushes one fitness sample
-        onto a bounded list, each via an atomic dataplane primitive:
-
-        - ``prompt:trials:{prompt_id}`` G-counter +1
-        - ``prompt:successes:{prompt_id}`` G-counter +1 iff the child
-          improved over the best parent
-        - ``prompt:metrics_count:{prompt_id}`` G-counter +1 iff
-          ``child_metrics`` is provided
-        - ``prompt:metric:{prompt_id}:{key}`` G-counter += fixed-point
-          metric value, for every key in ``child_metrics``
-        - ``prompt:metric_keys:{prompt_id}`` set adds every observed
-          metric key (read-path discovery)
-        - ``prompt:fitnesses:{prompt_id}`` bounded list LPUSH +
-          LTRIM, capped at :data:`_FITNESS_WINDOW`
-
-        Skips ``REJECTED_ACCEPTOR`` outcomes (no reliable fitness) and
-        is a no-op when the main DataPlane handle is unset.
+        See the module docstring for the key layout. Skips
+        ``REJECTED_ACCEPTOR`` outcomes; no-op when no main DataPlane
+        is configured.
         """
         if prompt_id is None:
             return
@@ -831,10 +743,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
                         continue
                     fixed = _metric_to_fixed_point(float(v))
                     if fixed == 0 and v != 0:
-                        # Out-of-range value coerced to zero; record the
-                        # name so future writes for the same key sum up
-                        # under the dataplane registry, but skip the
-                        # fixed-point write itself.
+                        # Non-zero value coerced to zero (out of range);
+                        # skip the write rather than corrupt the sum.
                         continue
                     await dp_.crdt_inc(
                         _metric_sum_key(prompt_id, k), actor=actor, delta=fixed

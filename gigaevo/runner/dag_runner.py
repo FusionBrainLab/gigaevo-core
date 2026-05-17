@@ -178,13 +178,7 @@ class DagRunner:
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
 
-        # Engine-scoped coordination handles. When wired, the dataplane
-        # serves freshness-pinned reads (e.g. the timeout-discard path
-        # below admits a stale-cached program only after passing a
-        # :class:`FreshnessAtLeast` floor) and the engine root is the
-        # single-writer witness origin for any per-program write the
-        # runner originates. Both default to None so non-dataplane
-        # deployments and unit tests continue to work unchanged.
+        # Engine-scoped coordination handles; both default to None.
         self._dataplane = dataplane
         self._engine_root = engine_root
 
@@ -242,30 +236,18 @@ class DagRunner:
         return sum(1 for info in self._active.values() if not info.task.done())
 
     async def _timeout_read_is_fresh(self, prog: Program) -> bool:
-        """Return True if the program snapshot passes the freshness floor.
+        """Return True if ``prog`` clears the freshness floor.
 
-        Routes the freshness check through
-        :meth:`gigaevo.dataplane.DataPlane.read_program` with a
+        Routes through :meth:`DataPlane.read_program` with a
         :class:`FreshnessAtLeast` floor derived from the snapshot's own
-        ``atomic_counter``. If the dataplane is not wired (legacy
-        deployments and tests), returns ``True`` so behaviour matches
-        the pre-dataplane code path.
-
-        The motivating race: ``storage.get`` returns ``prog`` whose
-        cached ``state`` says RUNNING. Between the ``get`` and the
-        timeout-discard call below, a concurrent transition advances
-        the persisted blob to DONE (and bumps the global epoch
-        counter). The legacy code would discard a program that already
-        finished; with the freshness re-read, the coordinator observes
-        the epoch bump and either returns the post-write snapshot or
-        :class:`StaleReadError` — both of which defer the discard.
+        ``atomic_counter``; returns ``True`` unconditionally when no
+        dataplane is wired. Used to gate the timeout-discard path
+        against a concurrent RUNNING → DONE transition that advanced
+        the persisted blob between ``storage.get`` and this call.
         """
         dp = self._dataplane
         if dp is None:
             return True
-        # Local import to avoid a static dependency from the runner to
-        # the dataplane package surface; the runner is otherwise
-        # dataplane-agnostic.
         from gigaevo.dataplane import FreshnessAtLeast, Ok
         from gigaevo.dataplane.ids import ProgramId
 
@@ -275,21 +257,10 @@ class DagRunner:
             freshness=FreshnessAtLeast(epoch=floor, generation=floor),
         )
         if not isinstance(result, Ok):
-            # ``Err`` here means the read did not clear the floor —
-            # the persisted blob is older than our in-memory snapshot
-            # which is itself suspicious (we already loaded the blob
-            # via ``storage.get``). Refusing to discard is the safe
-            # default; the next ``_maintain`` tick re-attempts.
+            # Floor not cleared: defer the discard to the next tick.
             return False
-        # ``Ok(None)`` means the blob is gone (someone deleted it).
-        # That is not the freshness contract we wanted to assert; treat
-        # as "not fresh enough to act on" and defer. Otherwise the
-        # coordinator returns a :data:`LocalValue` (the phantom-tag
-        # alias for a fresh local read) wrapping the
-        # :class:`Versioned` admission record; we only need its
-        # presence here, not the inner value.
-        local_value = result.value
-        return local_value is not None
+        # Ok(None) means the blob was deleted; defer rather than discard.
+        return result.value is not None
 
     async def _run(self) -> None:
         logger.info("[DagScheduler] start")
@@ -338,19 +309,10 @@ class DagRunner:
             try:
                 prog = await self._storage.get(info.program_id)
                 if prog:
-                    # Freshness-pinned re-read: a TOCTOU race between
-                    # ``get(...)`` and the discard decision can return a
-                    # stale snapshot whose ``state`` still reads RUNNING
-                    # even though a concurrent write advanced the
-                    # program to DONE. When the dataplane is wired, the
-                    # coordinator's :meth:`read_program` admits the
-                    # snapshot only if its epoch is at-least the
-                    # in-memory ``atomic_counter`` we observed; otherwise
-                    # the timeout-discard is skipped and the next
-                    # ``_maintain`` tick re-evaluates. The bare
-                    # ``await storage.get(...)`` above stays as the
-                    # primary read so non-dataplane deployments retain
-                    # the existing behaviour exactly.
+                    # Freshness-pinned re-read: guard the timeout-discard
+                    # against a RUNNING → DONE transition between the
+                    # ``get`` above and this decision. A no-op when no
+                    # dataplane is wired.
                     if not await self._timeout_read_is_fresh(prog):
                         logger.info(
                             "[DagScheduler] program {} timeout-read failed "
@@ -525,13 +487,8 @@ class DagRunner:
                     ProgramState.QUEUED.value,
                     ProgramState.RUNNING.value,
                 )
-                # Update in-memory state to match Redis so _execute_dag
-                # sees RUNNING (not stale QUEUED) when transitioning to
-                # DONE. Routing through the state manager validates the
-                # (QUEUED, RUNNING) pair against the FSM at each call,
-                # surfacing any illegal mirror write as a ``ValueError``
-                # instead of silently desyncing the local Program from
-                # its persisted state.
+                # Mirror Redis into the in-memory state via the state
+                # manager so the (QUEUED, RUNNING) pair is FSM-validated.
                 for prog in launched:
                     await self._state_manager.set_in_memory_state(
                         prog, ProgramState.RUNNING

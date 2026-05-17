@@ -17,20 +17,13 @@ from gigaevo.dataplane import CounterKey, DataPlane, Err, Ok
 
 _RECENT_FITNESS_WINDOW: Final[int] = 20
 """Cap on entries returned in ``PromptMutationStats.recent_fitnesses``.
-
-Each per-source list is already capped writer-side by
-``gigaevo.prompts.fetcher._FITNESS_WINDOW``; this value bounds the
-multi-source concatenation independently so the reader contract does
-not silently inflate when sources are added.
-"""
+Per-source lists are also writer-capped; this bounds the multi-source
+concatenation independently."""
 
 _METRIC_FIXED_POINT_SCALE: Final[int] = 1000
-"""Reverse of :data:`gigaevo.prompts.fetcher._METRIC_FIXED_POINT_SCALE`.
-
-The writer scales each float metric by this factor before HINCRBY-ing
-the per-actor sub-count; the reader recovers the mean by dividing the
-cross-actor sum by ``metrics_count * _METRIC_FIXED_POINT_SCALE``.
-"""
+"""Mirror of :data:`gigaevo.prompts.fetcher._METRIC_FIXED_POINT_SCALE`.
+The reader divides the cross-actor sum by
+``metrics_count * _METRIC_FIXED_POINT_SCALE`` to recover the mean."""
 
 
 @dataclass
@@ -64,25 +57,20 @@ class PromptStatsProvider(ABC):
 class RedisPromptStatsProvider(PromptStatsProvider):
     """Reads prompt stats written by main run(s) via :class:`DataPlane`.
 
-    Supports 1-to-many coupling: aggregates trials/successes across
-    multiple main runs that all test prompts from the same prompt
-    evolution archive. Each source carries an independent
-    :class:`DataPlane` handle bound to its DB + prefix; reads route
-    through :meth:`DataPlane.crdt_read` for G-counters, the bounded-list
-    primitive for fitness samples, and the set primitive for the
-    metric-name directory.
+    Aggregates trials/successes across multiple main runs that share a
+    prompt evolution archive. Each source carries an independent
+    :class:`DataPlane` handle bound to its DB + prefix.
 
     Args:
         host: Redis host
         port: Redis port
-        db: Redis DB of a single main run (for backwards compat)
-        prefix: Key prefix of a single main run (for backwards compat)
-        sources: List of {"db": int, "prefix": str} dicts for multi-source
-            aggregation. If provided, ``db`` and ``prefix`` are ignored.
-        min_trials: Minimum trials before reporting real success rate
-        dataplanes: Optional list of pre-wired :class:`DataPlane` handles
-            (one per source). When ``None`` the provider lazily constructs
-            its own; index alignment with ``sources`` is enforced.
+        db: Redis DB of a single main run.
+        prefix: Key prefix of a single main run.
+        sources: List of ``{"db", "prefix"}`` dicts for multi-source
+            aggregation; takes precedence over ``db`` / ``prefix``.
+        min_trials: Minimum trials before reporting a real success rate.
+        dataplanes: Optional pre-wired :class:`DataPlane` handles (one
+            per source); length must match ``sources``.
     """
 
     def __init__(
@@ -138,9 +126,9 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         return dp
 
     async def close(self) -> None:
-        """Tear down any DataPlane handles the provider constructed itself.
+        """Tear down DataPlane handles the provider constructed itself.
 
-        Injected handles are left alone. Safe to call multiple times.
+        Injected handles are left alone. Idempotent.
         """
         for i, dp in enumerate(self._dataplanes):
             if dp is None or not self._dp_owned[i]:
@@ -171,7 +159,7 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         all_fitnesses: list[float] = []
         merged_metrics_sums: dict[str, int] = {}
 
-        for idx, (db, prefix) in enumerate(self._sources):
+        for idx in range(len(self._sources)):
             try:
                 dp = await self._get_dataplane(idx)
             except Exception as exc:  # noqa: BLE001 - read boundary
@@ -194,7 +182,6 @@ class RedisPromptStatsProvider(PromptStatsProvider):
             all_fitnesses.extend(fitnesses)
             for k, v in per_metric.items():
                 merged_metrics_sums[k] = merged_metrics_sums.get(k, 0) + v
-            del db, prefix  # captured only for the log line above
 
         if total_trials < self._min_trials:
             success_rate = 0.0
@@ -204,13 +191,11 @@ class RedisPromptStatsProvider(PromptStatsProvider):
         mean_child_fitness = (
             sum(all_fitnesses) / len(all_fitnesses) if all_fitnesses else 0.0
         )
-        # Each per-source list is newest-first (LPUSH + LTRIM); the
-        # union is the first _RECENT_FITNESS_WINDOW across the
-        # concatenation, treating every source as equally recent.
+        # Per-source lists are newest-first (LPUSH + LTRIM); take the
+        # first _RECENT_FITNESS_WINDOW across the concatenation.
         recent = all_fitnesses[:_RECENT_FITNESS_WINDOW] if all_fitnesses else None
 
-        # Per-metric means: sum is in fixed-point integer space; divide
-        # by metrics_count * scale to recover the float mean.
+        # Fixed-point sums divided by metrics_count * scale → mean.
         mean_metrics: dict[str, float] | None = None
         if total_metrics_count > 0 and merged_metrics_sums:
             divisor = total_metrics_count * _METRIC_FIXED_POINT_SCALE
@@ -231,12 +216,10 @@ class RedisPromptStatsProvider(PromptStatsProvider):
 async def _read_one_source(
     dp: DataPlane, prompt_id: str
 ) -> tuple[int, int, int, list[float], dict[str, int]]:
-    """Read all five quantities for one (DataPlane, prompt) pair.
+    """Read ``(trials, successes, metrics_count, fitnesses, per_metric)``.
 
-    Returns a tuple ``(trials, successes, metrics_count, fitnesses,
-    per_metric_sums)``. Each field defaults to its empty value on a
-    per-key miss, so an unknown prompt id surfaces as zeros — never an
-    exception — which is the contract the reader caller depends on.
+    Each field defaults to its empty value on a per-key miss; an unknown
+    prompt id surfaces as zeros rather than an exception.
     """
     from gigaevo.prompts.fetcher import (
         _fitness_list_key,
