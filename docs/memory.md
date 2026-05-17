@@ -14,13 +14,13 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 4. [How Memory Flows Through the Pipeline](#how-memory-flows-through-the-pipeline)
 5. [Architecture: The Provider Pattern](#architecture-the-provider-pattern)
 6. [Configuration Reference](#configuration-reference)
-   - [Hydra Config Group (memory=...)](#hydra-config-group)
+   - [Memory Backend Selection](#memory-backend-selection)
    - [SelectorMemoryProvider Parameters](#selectormemoryprovider-parameters)
-   - [Backend Config (memory_backend.yaml)](#backend-config-memory_backendyaml)
+   - [Backend Config](#backend-config)
 7. [The Ideas Tracker (Write Phase)](#the-ideas-tracker-write-phase)
    - [What It Does](#what-it-does)
    - [Two Entry Points: PostRunHook vs CLI](#two-entry-points-postrunhook-vs-cli)
-   - [Hydra Config Group (ideas_tracker=...)](#ideas-tracker-hydra-config-group)
+   - [Ideas Tracker Configuration](#ideas-tracker-configuration)
    - [CLI Reference](#cli-reference)
    - [CLI Examples](#cli-examples)
    - [Pipeline Internals](#pipeline-internals)
@@ -42,13 +42,16 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 
 ## The 30-Second Version
 
+Select the memory provider on the ``ExperimentConfig`` in your
+experiment file (or with a ``--memory.kind`` tyro override):
+
 ```bash
-python run.py memory=none  ...   # No memory (default)
-python run.py memory=local ...   # Memory from local backend
-python run.py memory=api   ...   # Memory from remote API service
+python run.py experiments/<name>.py --memory.kind none    # No memory (default)
+python run.py experiments/<name>.py --memory.kind local   # Memory from local backend
+python run.py experiments/<name>.py --memory.kind api     # Memory from remote API service
 ```
 
-One Hydra override. Everything else is automatic.
+Everything else is automatic once the backend is selected.
 
 ---
 

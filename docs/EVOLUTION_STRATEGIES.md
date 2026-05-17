@@ -20,19 +20,20 @@
 
 ```bash
 # Single island (default) — one MAP-Elites archive
-python run.py problem.name=heilbron
+python run.py experiments/base.py
 
 # Multi-island — fitness + simplicity islands with migration
-python run.py experiment=multi_island_complexity problem.name=heilbron
+python run.py experiments/multi_island_complexity.py
 
 # Multi-LLM — diverse mutation models, single island
-python run.py experiment=multi_llm_exploration problem.name=heilbron
+python run.py experiments/multi_llm_exploration.py
 
 # Full featured — multi-island + multi-LLM
-python run.py experiment=full_featured problem.name=heilbron
+python run.py experiments/full_featured.py
 ```
 
-See `config/algorithm/` for all island configurations and `config/experiment/` for complete presets.
+See ``gigaevo/config/algorithm_presets.py`` for the island builder
+functions and ``experiments/`` for the shipped composition presets.
 
 ## Overview
 

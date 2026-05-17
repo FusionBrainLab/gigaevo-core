@@ -8,17 +8,16 @@ and ingested continuously.
 ## Quick Start
 
 ```bash
-# Using the experiment preset (recommended)
-python run.py experiment=steady_state problem.name=heilbron
+# Steady-state engine on the default problem
+python run.py experiments/steady_state.py
 
-# Or as a single Hydra override on any existing setup
-python run.py evolution=steady_state problem.name=heilbron
-
-# Combined with migration bus for maximum throughput
-python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
+# Combined with the cross-run migration bus for maximum throughput
+python run.py experiments/steady_state_bus.py --redis.db 0
 ```
 
-Works with any problem — just change `problem.name`. All other config (strategy, pipeline, LLM) stays the same.
+For other problems, copy ``experiments/steady_state.py`` and swap the
+problem preset in the ``build()`` function; the strategy / pipeline /
+LLM selections can stay the same.
 
 ## How It Works
 

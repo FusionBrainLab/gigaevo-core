@@ -12,15 +12,10 @@ Each experiment run is statically pinned to one LLM server. With 4 runs and 4 se
 
 ## Quick Start
 
-```bash
-# Instead of:
-python run.py llm_base_url=http://server-1:8777/v1 ...
-
-# Use:
-python run.py llm=balanced ...
-```
-
-All endpoints are listed in `config/llm/balanced.yaml`. No per-run `llm_base_url` needed.
+Wire the load-balanced router into your experiment file by selecting
+``BalancedChatOpenAIConfig`` from the LLM schemas (or build it via
+``llm_presets``); endpoints are then listed once on that config and
+every run shares the pool. No per-run ``base_url`` override needed.
 
 ## How It Works
 

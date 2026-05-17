@@ -108,15 +108,15 @@ conda activate <your-gigaevo-core-env>
 cd /home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal
 
 export MEMORY_API_URL=http://localhost:8000
-python run.py problem.name=heilbron memory_enabled=true ideas_tracker=true namespace=exp9 redis.db=1
+python run.py experiments/<heilbron_memory>.py --memory.namespace exp9 --redis.db 1
 ```
 
-Notes:
-
-- `namespace=exp9` selects the remote memory bank to read/write
-- `memory_enabled=true` tests runtime retrieval
-- `ideas_tracker=true` tests the final write pipeline
-- `checkpoint_dir` is optional in API mode; it only changes local runtime artifacts
+The memory provider, ideas-tracker setting, and namespace are
+selected on the ``ExperimentConfig`` in the chosen experiment file
+(start from ``experiments/base.py`` and add the memory + ideas-tracker
+schemas). ``namespace`` picks the remote memory bank to read and
+write; ``checkpoint_dir`` is optional in API mode and only affects
+local runtime artifacts.
 
 ## 5. What success looks like
 

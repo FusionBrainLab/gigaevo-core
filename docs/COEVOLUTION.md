@@ -12,12 +12,13 @@ Launch two processes — one for programs, one for prompts:
 
 ```bash
 # 1. Main run — uses co-evolved prompts from DB 6
-python run.py experiment=prompt_coevolution problem.name=heilbron \
-    redis.db=4 prompt_fetcher.prompt_redis_db=6
+python run.py experiments/prompt_coevolution.py \
+    --redis.db 4 --prompt_fetcher.prompt_redis_db 6
 
 # 2. Prompt run — evolves mutation prompts, reads outcomes from DB 4
-python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
-    redis.db=6 main_redis_db=4 main_redis_prefix=heilbron
+# (the prompt-evolution preset is its own experiment file; copy
+# experiments/prompt_coevolution.py and adapt for the prompt side, or
+# write a dedicated experiments/prompt_evolution.py)
 ```
 
 The main run fetches the current best mutation prompt from the prompt run's archive. The prompt run reads fitness outcomes from the main run to select for prompts that produce better mutations.

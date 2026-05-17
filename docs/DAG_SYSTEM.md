@@ -16,23 +16,32 @@
 
 ## Quick Start
 
-The DAG pipeline is selected via the `pipeline` config group:
+The DAG pipeline is selected on ``PipelineConfig.builder`` in the
+experiment file. Each shipped builder lives in
+``gigaevo/config/pipeline_presets.py``:
 
-```bash
-# Standard pipeline (validate → execute → metrics → insights)
-python run.py pipeline=standard problem.name=heilbron
-
-# With mutation context (adds lineage + statistics to mutation prompt)
-python run.py pipeline=with_context problem.name=heilbron
-
-# Auto-detect pipeline from problem (default)
-python run.py pipeline=auto problem.name=heilbron
-
-# Custom pipeline — define your own in config/pipeline/my_pipeline.yaml
-python run.py pipeline=my_pipeline problem.name=heilbron
+```python
+# experiments/my_run.py
+from gigaevo.config.pipeline_presets import (
+    build_default,         # validate -> execute -> metrics -> insights
+    build_context,         # default + AddContext stage
+    build_auto,            # context if problem.is_contextual, else default
+    build_structural_metrics,
+    # build_algotune_speed, build_cma_opt, build_optuna_opt, ...
+)
+# ...
+pipeline=PipelineConfig(builder=build_auto())
 ```
 
-See `config/pipeline/` for all available pipelines. To build a custom pipeline visually, use `bash tools/dag_builder/start.sh`.
+For ad-hoc switching at the command line, override the builder kind:
+
+```bash
+python run.py experiments/base.py --pipeline.builder.kind context
+```
+
+To prototype a custom pipeline visually, use ``bash
+tools/dag_builder/start.sh`` -- it emits the typed
+``PipelineBuilderConfig`` you can drop into a new experiment file.
 
 ## Overview
 
