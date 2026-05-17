@@ -24,7 +24,6 @@ from gigaevo.dataplane.errors import (
 )
 from gigaevo.dataplane.permissions import (
     Token,
-    mint_combine,
     mint_root,
     mint_split,
     mint_split_n,
@@ -145,27 +144,6 @@ class TestTokenIsSealed:
                 pass
 
 
-class TestMintCombineAtomicity:
-    def test_already_consumed_left_does_not_consume_right(self) -> None:
-        # If either input is already consumed, neither is consumed by
-        # the failed combine — the operation is atomic with respect to
-        # consumption side-effects.
-        a = mint_root("a")
-        b = mint_root("b")
-        a.consume()
-        with pytest.raises(TokenAlreadyConsumed):
-            mint_combine(a, b, "c")
-        assert b.consumed is False
-
-    def test_already_consumed_right_does_not_consume_left(self) -> None:
-        a = mint_root("a")
-        b = mint_root("b")
-        b.consume()
-        with pytest.raises(TokenAlreadyConsumed):
-            mint_combine(a, b, "c")
-        assert a.consumed is False
-
-
 class TestMintSplit:
     def test_consumes_parent(self) -> None:
         parent = mint_root("parent")
@@ -233,45 +211,6 @@ class TestMintSplitN:
         parent = mint_root("p")
         children = mint_split_n(parent, (f"c{i}" for i in range(3)))
         assert [c.tag for c in children] == ["c0", "c1", "c2"]
-
-
-class TestMintCombine:
-    def test_consumes_both_inputs(self) -> None:
-        a = mint_root("a")
-        b = mint_root("b")
-        c = mint_combine(a, b, "combined")
-        assert a.consumed and b.consumed
-        assert c.tag == "combined"
-        assert not c.consumed
-
-    def test_cannot_combine_consumed_input(self) -> None:
-        a = mint_root("a")
-        a.consume()
-        b = mint_root("b")
-        with pytest.raises(TokenAlreadyConsumed):
-            mint_combine(a, b, "c")
-
-
-class TestSplitCombineRoundTrip:
-    def test_split_then_combine_works(self) -> None:
-        root = mint_root("root")
-        left, right = mint_split(root, "L", "R")
-        recombined = mint_combine(left, right, "root-again")
-        assert recombined.tag == "root-again"
-        assert not recombined.consumed
-
-    def test_split_n_then_combine_pairwise(self) -> None:
-        # Fan-out then re-combine pairs — exercises the discipline
-        # callers will use when collapsing worker permissions.
-        root = mint_root("root")
-        a, b, c, d = mint_split_n(root, ["a", "b", "c", "d"])
-        ab = mint_combine(a, b, "ab")
-        cd = mint_combine(c, d, "cd")
-        assert ab.tag == "ab"
-        assert cd.tag == "cd"
-        # Either ab or cd remains live and could be combined further.
-        assert not ab.consumed
-        assert not cd.consumed
 
 
 class TestEngineRootThreading:

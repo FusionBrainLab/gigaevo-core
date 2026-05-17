@@ -14,10 +14,10 @@ module recovers most of the safety at runtime:
       protocol-style serialiser can silently produce a duplicate;
     - a ``_consumed`` flag on each instance flips on ``consume()``; a
       second call raises :class:`TokenAlreadyConsumed`;
-    - factories ``mint_root`` / ``mint_split`` / ``mint_split_n`` /
-      ``mint_combine`` are the only legitimate paths to mint a token,
-      and the split factories reject duplicate child tags so two
-      orthogonal sub-tokens cannot accidentally claim the same subspace.
+    - factories ``mint_root`` / ``mint_split`` / ``mint_split_n`` are
+      the only legitimate paths to mint a token, and the split factories
+      reject duplicate child tags so two orthogonal sub-tokens cannot
+      accidentally claim the same subspace.
 
 Concurrency model: the dataplane is single-threaded asyncio. ``consume``
 is therefore not protected by a lock — the read-modify-write on
@@ -211,37 +211,8 @@ def mint_split_n[In, L](parent: Token[In], child_tags: Iterable[L]) -> list[Toke
     return [Token(t) for t in tags]
 
 
-def mint_combine[A, B, Tag](
-    left: Token[A],
-    right: Token[B],
-    combined_tag: Tag,
-) -> Token[Tag]:
-    """Consume two orthogonal sub-tokens and mint one combined token.
-
-    Inverse of :func:`mint_split`. The combined tag is caller-provided;
-    it should denote the union of the two sub-spaces.
-
-    Pre-checks both inputs for already-consumed state before consuming
-    either, so a malformed call cannot leave one side consumed and the
-    other live. This is stricter than :func:`mint_split`, where the
-    parent surrender happens before the duplicate-tag check on purpose
-    (so the caller cannot retry with the same parent). For combine,
-    both inputs are caller-held and rolling forward halfway would leave
-    the caller with a half-consumed pair and no clean recovery — the
-    eager check makes the operation atomic.
-    """
-    if left.consumed:
-        raise TokenAlreadyConsumed(tag_repr=repr(left.tag))
-    if right.consumed:
-        raise TokenAlreadyConsumed(tag_repr=repr(right.tag))
-    left.consume()
-    right.consume()
-    return Token(combined_tag)
-
-
 __all__ = [
     "Token",
-    "mint_combine",
     "mint_root",
     "mint_split",
     "mint_split_n",

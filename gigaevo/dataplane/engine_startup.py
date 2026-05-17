@@ -72,9 +72,9 @@ __all__ = [
 #: Root subspace tags. Each one names a logically-disjoint Redis
 #: key-space owned by this engine; ``mint_split`` from the matching
 #: root token witnesses every per-call write into that space. The
-#: literal values are namespaced under ``engine:`` so a future
-#: ``mint_combine`` (which uses caller-supplied tags) cannot accidentally
-#: collide with a per-program / per-cell / per-counter tag.
+#: literal values are namespaced under ``engine:`` so a caller-supplied
+#: per-program / per-cell / per-counter tag cannot collide with a root
+#: tag and silently claim the wrong subspace.
 _PROGRAM_ROOT_TAG: str = "engine:program-root"
 _CELL_ROOT_TAG: str = "engine:cell-root"
 _COUNTER_ROOT_TAG: str = "engine:counter-root"
