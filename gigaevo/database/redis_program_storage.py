@@ -706,6 +706,93 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._conn.execute("fast_state_transition", _fast)
 
+    async def _batch_transition_via_dataplane(
+        self,
+        programs: list[Program],
+        old_state: str | None,
+        new_state: str,
+        *,
+        method: str,
+    ) -> int:
+        """Route a batch of single-program FSM transitions through the coordinator.
+
+        Each item is dispatched as an independent
+        :meth:`DataPlane.transition_program_state` call inside
+        :meth:`DataPlane.transition_program_state_batch`; per-item
+        atomicity is preserved, the batch as a whole is not. A failure
+        on item *k* leaves items ``0 .. k-1`` committed and surfaces as
+        :class:`StorageError` so the caller learns the partial-commit
+        count from the bare error message rather than picking through a
+        ``Result`` envelope.
+
+        Each item mints its own per-call permission token via
+        :meth:`EngineRoot.split_program_token` when the engine root is
+        wired; otherwise falls back to :func:`mint_root` per item. The
+        post-transition counter is mirrored into ``program.atomic_counter``
+        for the same reason the single-program path does it: downstream
+        merge tiebreakers read the in-memory value.
+        """
+        from gigaevo.dataplane.coordinator import (
+            BatchTransitionItem as _BatchTransitionItem,
+        )
+        from gigaevo.dataplane.coordinator import ProgramPatch as _ProgramPatch
+        from gigaevo.dataplane.ids import ProgramId as _DpProgramId
+        from gigaevo.dataplane.models import Err
+        from gigaevo.dataplane.permissions import mint_root
+
+        dp = self._dataplane
+        assert dp is not None  # narrowing for the type checker
+        if not programs:
+            return 0
+
+        expected_from = ProgramState(old_state) if old_state else None
+        target = ProgramState(new_state)
+
+        items: list[_BatchTransitionItem] = []
+        for program in programs:
+            patch_fields = program.to_dict()
+            for reserved in ("state", "id", "epoch", "atomic_counter"):
+                patch_fields.pop(reserved, None)
+            program_id = _DpProgramId(program.id)
+            if self._engine_root is not None:
+                token = self._engine_root.split_program_token(program_id)
+            else:
+                token = mint_root(program_id)
+            items.append(
+                _BatchTransitionItem(
+                    program_id=program_id,
+                    token=token,  # type: ignore[arg-type]
+                    expected_from=cast(Any, expected_from),
+                    to=cast(Any, target),
+                    patch=_ProgramPatch(fields=patch_fields),
+                )
+            )
+
+        result = await dp.transition_program_state_batch(tuple(items))
+        if isinstance(result, Err):
+            err = result.error
+            kind = getattr(err, "kind", "unknown")
+            detail = getattr(err, "detail", repr(err))
+            raise StorageError(
+                f"{method}: dataplane batch transition rejected "
+                f"({kind}): {old_state!r} -> {new_state!r}: {detail}"
+            )
+
+        outcomes = result.value.items
+        for program, outcome in zip(programs, outcomes, strict=False):
+            post_blob = outcome.value
+            if isinstance(post_blob, dict):
+                counter_val = post_blob.get("atomic_counter", post_blob.get("epoch"))
+                if isinstance(counter_val, int):
+                    program.atomic_counter = counter_val
+                elif outcome.epoch:
+                    program.atomic_counter = outcome.epoch
+            elif outcome.epoch:
+                program.atomic_counter = outcome.epoch
+            if program.state != target:
+                program.state = target
+        return len(outcomes)
+
     async def batch_transition_state(
         self,
         programs: list[Program],
@@ -730,6 +817,11 @@ class RedisProgramStorage(ProgramStorage):
         # the batch; validate once before walking the programs rather
         # than on each iteration.
         validate_transition(old_enum, new_enum)
+
+        if self._dataplane is not None:
+            return await self._batch_transition_via_dataplane(
+                programs, old_state, new_state, method="batch_transition_state"
+            )
 
         async def _batch(r: aioredis.Redis) -> int:
             old_set_key = self._keys.status_set(old_state)
@@ -796,6 +888,25 @@ class RedisProgramStorage(ProgramStorage):
             return 0
 
         validate_transition(ProgramState(old_state), ProgramState(new_state))
+
+        if self._dataplane is not None:
+            # Coordinator-routed branch: per-item atomicity via the FSM
+            # Lua script. Trades the raw-JSON fast-path's avoided
+            # Pydantic round-trip for the cross-writer guarantees the
+            # dataplane provides. The ID list is materialised through
+            # parallel :meth:`get` so the dp call walks proper
+            # :class:`Program` instances; programs whose current state
+            # does not match ``old_state`` are filtered out (matching
+            # the legacy raw-JSON semantics).
+            fetched = await asyncio.gather(*(self.get(pid) for pid in program_ids))
+            filtered = [
+                p for p in fetched if p is not None and p.state.value == old_state
+            ]
+            if not filtered:
+                return 0
+            return await self._batch_transition_via_dataplane(
+                filtered, old_state, new_state, method="batch_transition_by_ids"
+            )
 
         async def _batch_raw(r: aioredis.Redis) -> int:
             old_set_key = self._keys.status_set(old_state)

@@ -809,3 +809,122 @@ class TestStateManagerInMemoryHelper:
         prog = make_program(state=ProgramState.RUNNING)
         await state_manager.set_in_memory_state(prog, ProgramState.RUNNING)
         assert prog.state == ProgramState.RUNNING
+
+
+class TestBatchTransitionViaDataplane:
+    """Batch transitions route per-item through the FSM Lua when the
+    dataplane is wired, preserving per-item atomicity. The legacy
+    raw-pipeline path remains the default when ``dataplane=None``.
+    """
+
+    async def test_batch_transition_state_routes_through_dp(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        storage, _ = dp_storage
+        progs = [_program(ProgramState.QUEUED) for _ in range(3)]
+        for p in progs:
+            await storage.add(p)
+
+        count = await storage.batch_transition_state(
+            progs, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+        assert count == 3
+
+        running_ids = set(await storage.get_ids_by_status(ProgramState.RUNNING.value))
+        queued_ids = set(await storage.get_ids_by_status(ProgramState.QUEUED.value))
+        for p in progs:
+            assert p.id in running_ids
+            assert p.id not in queued_ids
+            # In-memory mirror follows the persisted state.
+            assert p.state == ProgramState.RUNNING
+
+    async def test_batch_transition_by_ids_routes_through_dp(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        storage, _ = dp_storage
+        progs = [_program(ProgramState.QUEUED) for _ in range(3)]
+        for p in progs:
+            await storage.add(p)
+        ids = [p.id for p in progs]
+
+        count = await storage.batch_transition_by_ids(
+            ids, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+        )
+        assert count == 3
+
+        running_ids = set(await storage.get_ids_by_status(ProgramState.RUNNING.value))
+        for pid in ids:
+            assert pid in running_ids
+
+    async def test_batch_transition_by_ids_filters_mismatched_state(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        """Only programs whose current state matches ``old_state`` are
+        transitioned; non-matching ids are silently skipped, mirroring
+        the legacy raw-JSON path's filter semantics."""
+        storage, _ = dp_storage
+        queued = _program(ProgramState.QUEUED)
+        running = _program(ProgramState.RUNNING)
+        await storage.add(queued)
+        await storage.add(running)
+
+        count = await storage.batch_transition_by_ids(
+            [queued.id, running.id],
+            ProgramState.QUEUED.value,
+            ProgramState.RUNNING.value,
+        )
+        assert count == 1
+        running_ids = set(await storage.get_ids_by_status(ProgramState.RUNNING.value))
+        assert queued.id in running_ids
+        # The unrelated already-RUNNING program is untouched.
+        assert running.id in running_ids
+
+    async def test_batch_transition_illegal_pair_surfaces_as_storage_error(
+        self,
+        dp_storage: tuple[RedisProgramStorage, dp.DataPlane],
+    ) -> None:
+        """An (old, new) pair the FSM rejects raises before any dp call."""
+        storage, _ = dp_storage
+        prog = _program(ProgramState.DISCARDED)
+        await storage.add(prog)
+        # DISCARDED is terminal in the FSM; DISCARDED -> RUNNING is not
+        # in the transition table and validate_transition rejects it
+        # before the dp call.
+        with pytest.raises((ValueError, StorageError)):
+            await storage.batch_transition_state(
+                [prog],
+                ProgramState.DISCARDED.value,
+                ProgramState.RUNNING.value,
+            )
+
+    async def test_batch_transition_legacy_path_when_dp_absent(self) -> None:
+        """A storage without a wired dataplane keeps the legacy raw
+        pipeline behaviour for both batch methods."""
+        server = fakeredis.FakeServer()
+        config = RedisProgramStorageConfig(
+            redis_url="redis://fake:6379/0", key_prefix="legacy-batch"
+        )
+        storage = RedisProgramStorage(config)
+        storage._conn._redis = fakeredis.aioredis.FakeRedis(  # type: ignore[attr-defined]
+            server=server, decode_responses=True
+        )
+        storage._conn._closing = False  # type: ignore[attr-defined]
+        try:
+            assert storage._dataplane is None
+            progs = [_program(ProgramState.QUEUED) for _ in range(2)]
+            for p in progs:
+                await storage.add(p)
+            count = await storage.batch_transition_state(
+                progs, ProgramState.QUEUED.value, ProgramState.RUNNING.value
+            )
+            assert count == 2
+            running_ids = set(
+                await storage.get_ids_by_status(ProgramState.RUNNING.value)
+            )
+            for p in progs:
+                assert p.id in running_ids
+        finally:
+            await storage.close()
