@@ -54,11 +54,15 @@ jobs:
         env:
           OPENAI_API_KEY: test-key-for-ci-dry-run
         run: |
-          set -e
+          set -eo pipefail
           for exp in experiments/*.py; do
-            echo "--- $exp"
-            python -m gigaevo.cli "$exp" --dry-run
+            echo "--- smoke: $exp"
+            if ! timeout 30s python -m gigaevo.cli "$exp" --dry-run; then
+              echo "::error file=$exp::dry-run failed or exceeded 30s timeout"
+              exit 1
+            fi
           done
+          echo "All experiments validated successfully."
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
