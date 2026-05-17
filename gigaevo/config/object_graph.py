@@ -1,24 +1,21 @@
-"""Typed-config -> runtime-object adapter.
+"""Typed-config to runtime-object adapter.
 
-:func:`build_object_graph` is the explicit replacement for
-``hydra.utils.instantiate(cfg, recursive=True)``. It takes a validated
-:class:`ExperimentConfig` and constructs the runtime object tree:
-the Redis program storage, the problem context, the LLM router with
-bandit parameters resolved from the metrics context, the evolution
-strategy with the storage threaded through, the runtime engine config
-with required behavior keys resolved, the evolution context composing
-those, the pipeline builder, and the DAG blueprint.
+:func:`build_object_graph` takes a validated :class:`ExperimentConfig`
+and constructs the runtime object tree: the Redis program storage, the
+problem context, the LLM router with bandit parameters resolved from
+the metrics context, the evolution strategy with the storage threaded
+through, the runtime engine config with required behavior keys
+resolved, the evolution context composing those, the pipeline builder,
+and the DAG blueprint.
 
 The function is intentionally explicit: every construction is a direct
-class call with kwargs derived from typed schema fields. No
-``_target_`` strings, no recursive resolution, no DictConfig mutation.
+class call with kwargs derived from typed schema fields.
 
-Several runtime components — mutation operator, DAG runner, evolution
-engine, program loader, writer, metrics tracker — are not yet
-schematised; their full wiring lands as later Phase 2 tasks bring up
-the missing schemas (logging, runner, scheduling). The function
-returns the partial graph today and surfaces missing pieces via
-``NotImplementedError`` from :func:`run_with_config`.
+Several runtime components -- mutation operator, DAG runner, evolution
+engine, program loader, writer, metrics tracker -- are not yet
+schematised. :func:`build_object_graph` returns the partial graph and
+:func:`run_with_config` surfaces the remaining gaps via a log warning
+before returning.
 """
 
 from __future__ import annotations
@@ -91,13 +88,13 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
         - ``higher_is_better``: bool (resolved from problem)
         - ``required_behavior_keys``: list[str]
 
-    Not yet constructed (require Phase 2 schemas):
-        - ``mutation_operator`` — needs prompt fetcher schema
-        - ``dag_runner`` — needs runner + scheduling schemas
-        - ``writer`` — needs logging schema
-        - ``metrics_tracker`` — needs logging schema
-        - ``program_loader`` — needs loader schema
-        - ``evolution_engine`` — composes above
+    Not yet constructed:
+        - ``mutation_operator``
+        - ``dag_runner``
+        - ``writer``
+        - ``metrics_tracker``
+        - ``program_loader``
+        - ``evolution_engine`` (composes the above)
     """
     from gigaevo.database.redis_program_storage import RedisProgramStorage
     from gigaevo.entrypoint.evolution_context import EvolutionContext
@@ -162,11 +159,9 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
 async def run_with_config(cfg: ExperimentConfig) -> int:
     """End-to-end runner the CLI invokes when not in dry-run mode.
 
-    Builds the object graph, surfaces the gaps that block engine
-    invocation today, and returns a non-zero exit code so the CLI
-    reports a clear status. Full engine wiring lands as the Phase 2
-    schemas (logging, runner, scheduling) close their loops back into
-    this adapter.
+    Builds the object graph and surfaces the gaps that still block
+    engine invocation. Returns zero on successful graph construction;
+    the missing wiring is reported via a log warning.
     """
     graph = build_object_graph(cfg)
     logger.info(
@@ -177,11 +172,7 @@ async def run_with_config(cfg: ExperimentConfig) -> int:
     logger.warning(
         "Engine invocation pending: mutation_operator, dag_runner, "
         "writer, metrics_tracker, program_loader, and evolution_engine "
-        "wiring depend on schemas not yet landed. Use python run.py "
-        "for end-to-end execution against the legacy Hydra path until "
-        "the Phase 2 schemas close the loop."
+        "are not yet constructed by build_object_graph. Use --dry-run "
+        "for configuration validation only."
     )
-    # Graph construction succeeded; the missing wiring is communicated
-    # via the log warning above. Exit zero so CI dry-runs that exercise
-    # the typed path don't trip on a non-zero code.
     return 0

@@ -1,4 +1,4 @@
-"""Integration tests for the typed CLI entry point."""
+"""Integration tests for the typed CLI entry point in :mod:`run`."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def _make_experiment(tmp_path: Path) -> Path:
 
 class TestCliDryRun:
     def test_dry_run_dumps_config_and_exits_zero(self, tmp_path: Path) -> None:
-        from gigaevo.cli import main
+        from run import main
 
         exp = _make_experiment(tmp_path)
         exit_code = main([str(exp), "--dry-run"])
@@ -101,7 +101,7 @@ class TestCliDryRun:
         assert dumped["seed"] == 99
 
     def test_dry_run_directory_name_is_experiment_id(self, tmp_path: Path) -> None:
-        from gigaevo.cli import main
+        from run import main
         from gigaevo.config.experiment_loader import build_experiment
 
         exp = _make_experiment(tmp_path)
@@ -118,13 +118,13 @@ class TestCliDryRun:
 
 class TestCliErrors:
     def test_missing_experiment_file_propagates(self, tmp_path: Path) -> None:
-        from gigaevo.cli import main
+        from run import main
 
         with pytest.raises(FileNotFoundError):
             main([str(tmp_path / "no_such.py"), "--dry-run"])
 
     def test_invalid_experiment_raises(self, tmp_path: Path) -> None:
-        from gigaevo.cli import main
+        from run import main
         from gigaevo.config.experiment_loader import ExperimentModuleError
 
         bad = tmp_path / "bad.py"
@@ -139,7 +139,7 @@ class TestCliTyroOverride:
         """The tyro path must materialise the override against the
         Pydantic field tree and re-trigger validation; the dumped JSON
         is the ground truth."""
-        from gigaevo.cli import main
+        from run import main
 
         exp = _make_experiment(tmp_path)
         exit_code = main([str(exp), "--dry-run", "--seed", "7"])
@@ -158,7 +158,7 @@ class TestCliTyroOverride:
         """tyro merges overrides then Pydantic re-validates. An override
         that violates a cross-field invariant must raise — not be
         accepted silently."""
-        from gigaevo.cli import main
+        from run import main
 
         exp = _make_experiment(tmp_path)
         # The experiment's name is "cli_test", so dataplane.key_prefix

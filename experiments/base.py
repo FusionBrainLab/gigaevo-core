@@ -7,7 +7,7 @@ shipped YAML documents in its usage comments.
 
 Override at the CLI to retarget:
 
-    python -m gigaevo.cli experiments/base.py --problem.problem_dir=/path/to/other
+    python run.py experiments/base.py --problem.problem_dir=/path/to/other
 """
 
 from __future__ import annotations

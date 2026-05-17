@@ -8,7 +8,7 @@ The shipped YAML uses ``${problem.name}@db${redis.db}`` as the run
 identifier; the preset hardcodes ``heilbron@db0`` as the canonical
 default. Override via tyro to run a second peer:
 
-    python -m gigaevo.cli experiments/migration_bus.py \\
+    python run.py experiments/migration_bus.py \\
         --engine.migration_bus.run_id heilbron@db1 \\
         --redis.db 1
 """

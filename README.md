@@ -74,27 +74,19 @@ redis-server
 
 ### 4. Run Evolution
 
-Typed entry point (canonical post-cutover form):
-
-```bash
-python -m gigaevo.cli experiments/base.py
-```
-
 Each shipped experiment file under `experiments/` exports
-`build() -> ExperimentConfig` and runs end-to-end via the
-typed CLI. Use `--dry-run` to validate the configuration and dump
-the resolved tree to `outputs/{experiment_id}/config.json` without
-invoking the engine. Override any field through tyro:
+`build() -> ExperimentConfig` and runs end-to-end via the typed CLI:
 
 ```bash
-python -m gigaevo.cli experiments/base.py --seed 7 --engine.max_generations 200
+python run.py experiments/base.py
 ```
 
-Legacy Hydra entry point (still functional until the cutover commit
-in hydra-3.5):
+Use `--dry-run` to validate the configuration and dump the resolved
+tree to `outputs/{experiment_id}/config.json` without invoking the
+engine. Override any field through tyro:
 
 ```bash
-python run.py problem.name=heilbron
+python run.py experiments/base.py --seed 7 --engine.max_generations 200
 ```
 
 Evolution starts immediately. Logs are saved to `outputs/`.

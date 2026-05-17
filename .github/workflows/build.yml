@@ -57,7 +57,7 @@ jobs:
           set -eo pipefail
           for exp in experiments/*.py; do
             echo "--- smoke: $exp"
-            if ! timeout 30s python -m gigaevo.cli "$exp" --dry-run; then
+            if ! timeout 30s python run.py "$exp" --dry-run; then
               echo "::error file=$exp::dry-run failed or exceeded 30s timeout"
               exit 1
             fi
