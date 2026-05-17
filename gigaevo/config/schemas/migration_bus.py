@@ -94,7 +94,11 @@ class MigrationBusConfig(FrozenStrictModel):
     ``run_ids`` list must contain the local ``run_id`` (the runtime
     ``RingTopology`` silently rejects everything otherwise); the
     cross-field validator below catches that misconfiguration at
-    load time."""
+    load time.
+
+    ``max_imports_per_generation`` is NOT carried here — it is a
+    parameter of ``BusedEvolutionEngine`` (not ``MigrationNode``) and
+    lives on :class:`BusedEngineConfig`."""
 
     run_id: str = Field(min_length=1)
     transport: RedisStreamTransportConfig
@@ -102,7 +106,6 @@ class MigrationBusConfig(FrozenStrictModel):
     max_buffer_size: int = Field(default=50, ge=1)
     consume_interval: float = Field(default=5.0, gt=0.0)
     max_consume_per_poll: int = Field(default=20, ge=1)
-    max_imports_per_generation: int = Field(default=10, ge=1)
 
     @model_validator(mode="after")
     def _run_id_matches_transport(self) -> "MigrationBusConfig":

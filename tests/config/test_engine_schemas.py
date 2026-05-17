@@ -8,10 +8,14 @@ from pydantic import TypeAdapter, ValidationError
 from gigaevo.config.schemas import (
     AcceptorConfig,
     AllCombinationsParentSelectorConfig,
+    BusTopologyConfig,
+    BusedEngineConfig,
     EngineConfig,
     GenerationalEngineConfig,
+    MigrationBusConfig,
     ParentSelectorConfig,
     RandomParentSelectorConfig,
+    RedisStreamTransportConfig,
     StandardAcceptorConfig,
     SteadyStateEngineConfig,
 )
@@ -195,3 +199,62 @@ class TestEngineConfig:
         ta: TypeAdapter[EngineConfig] = TypeAdapter(EngineConfig)
         with pytest.raises(ValidationError):
             ta.validate_python({"kind": "no_such_engine"})
+
+
+def _bus_config(run_id: str = "exp@db0") -> MigrationBusConfig:
+    return MigrationBusConfig(
+        run_id=run_id,
+        transport=RedisStreamTransportConfig(
+            run_id=run_id,
+            stream_key=f"gigaevo:{run_id}:bus",
+        ),
+        topology=BusTopologyConfig(),
+    )
+
+
+class TestBusedEngineConfig:
+    def test_construct_default(self) -> None:
+        cfg = BusedEngineConfig(migration_bus=_bus_config())
+        assert cfg.kind == "bus"
+        assert cfg.max_imports_per_generation == 10
+
+    def test_max_imports_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            BusedEngineConfig(
+                migration_bus=_bus_config(), max_imports_per_generation=0
+            )
+
+    def test_migration_bus_required(self) -> None:
+        with pytest.raises(ValidationError):
+            BusedEngineConfig()  # type: ignore[call-arg]
+
+    def test_round_trip_through_engine_union(self) -> None:
+        ta: TypeAdapter[EngineConfig] = TypeAdapter(EngineConfig)
+        cfg = BusedEngineConfig(
+            migration_bus=_bus_config("exp@db0"),
+            max_imports_per_generation=25,
+        )
+        parsed = ta.validate_python(cfg.model_dump())
+        assert isinstance(parsed, BusedEngineConfig)
+        assert parsed.max_imports_per_generation == 25
+
+    def test_build_runtime_config_returns_engine_config(self) -> None:
+        from gigaevo.evolution.engine.config import (
+            EngineConfig as RuntimeEngineConfig,
+        )
+
+        cfg = BusedEngineConfig(migration_bus=_bus_config())
+        runtime = cfg.build_runtime_config(required_behavior_keys=["fitness"])
+        # BusedEngineConfig.build_runtime_config returns the base
+        # EngineConfig; the BusedEvolutionEngine itself is constructed
+        # by build_object_graph wrapping this config + the migration_node.
+        assert isinstance(runtime, RuntimeEngineConfig)
+
+    def test_each_variant_has_unique_kind(self) -> None:
+        kinds = [
+            GenerationalEngineConfig.model_fields["kind"].default,
+            SteadyStateEngineConfig.model_fields["kind"].default,
+            BusedEngineConfig.model_fields["kind"].default,
+        ]
+        assert len(set(kinds)) == len(kinds)
+        assert set(kinds) == {"generational", "steady_state", "bus"}

@@ -161,7 +161,6 @@ class TestMigrationBusConfig:
             max_buffer_size=100,
             consume_interval=2.5,
             max_consume_per_poll=15,
-            max_imports_per_generation=20,
         )
         parsed = MigrationBusConfig.model_validate_json(cfg.model_dump_json())
         assert parsed.run_id == "exp@db0"
@@ -170,7 +169,6 @@ class TestMigrationBusConfig:
         assert parsed.max_buffer_size == 100
         assert parsed.consume_interval == 2.5
         assert parsed.max_consume_per_poll == 15
-        assert parsed.max_imports_per_generation == 20
 
     def test_build_constructs_runtime_migration_node(self) -> None:
         from gigaevo.evolution.bus.node import MigrationNode

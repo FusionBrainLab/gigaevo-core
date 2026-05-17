@@ -26,6 +26,7 @@ from gigaevo.config.schemas.algorithm import (
 from gigaevo.config.schemas.engine import (
     AcceptorConfig,
     AllCombinationsParentSelectorConfig,
+    BusedEngineConfig,
     EngineConfig,
     GenerationalEngineConfig,
     ParentSelectorConfig,
@@ -96,6 +97,7 @@ __all__ = [
     "BanditRouterConfig",
     "BehaviorSpaceConfig",
     "BusTopologyConfig",
+    "BusedEngineConfig",
     "CMAOptPipelineBuilderConfig",
     "ChainFeatureExtractorConfig",
     "ChatOpenAIConfig",

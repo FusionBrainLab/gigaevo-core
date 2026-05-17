@@ -192,21 +192,45 @@ class TestExperimentId:
 
 
 class TestBusInvariant:
-    """Bus engine variants ship in hydra-2.5; the validator runs as a
-    no-op against the currently-shipped engine kinds. Documenting the
-    behavior here so the next variant landing trips the test on
-    forgotten test updates."""
+    """The bus engine variant landed in hydra-2.5; the cross-field
+    validator now actively enforces 'bus engine requires bandit
+    router' against real bus configs."""
 
-    def test_no_bus_kind_today(self) -> None:
-        cfg = ExperimentConfig(**_kwargs())
-        assert getattr(cfg.engine, "kind", None) in ("steady_state", "generational")
+    def _bus_engine(self) -> "BusedEngineConfig":
+        from gigaevo.config.schemas import (
+            BusTopologyConfig,
+            BusedEngineConfig,
+            MigrationBusConfig,
+            RedisStreamTransportConfig,
+        )
 
-    def test_validator_dormant_against_current_kinds(self) -> None:
+        return BusedEngineConfig(
+            migration_bus=MigrationBusConfig(
+                run_id="hotpot_test@db0",
+                transport=RedisStreamTransportConfig(
+                    run_id="hotpot_test@db0",
+                    stream_key="gigaevo:hotpot:bus",
+                ),
+                topology=BusTopologyConfig(),
+            )
+        )
+
+    def test_bus_engine_with_bandit_accepted(self) -> None:
         bandit_llm = BanditRouterConfig(models=[ChatOpenAIConfig(model="m")])
-        cfg = ExperimentConfig(**_kwargs(llm=bandit_llm))
-        # The validator only fires when engine.kind == "bus" which is not
-        # in the current EngineConfig union — passes by no-op.
+        cfg = ExperimentConfig(
+            **_kwargs(engine=self._bus_engine(), llm=bandit_llm)
+        )
+        assert cfg.engine.kind == "bus"
         assert cfg.llm.kind == "bandit"
+
+    def test_bus_engine_with_ensemble_rejected(self) -> None:
+        ensemble_llm = EnsembleRouterConfig(
+            models=[ChatOpenAIConfig(model="gpt-4o-mini")]
+        )
+        with pytest.raises(ValidationError, match="bus engine requires"):
+            ExperimentConfig(
+                **_kwargs(engine=self._bus_engine(), llm=ensemble_llm)
+            )
 
 
 class TestJSONRoundTrip:

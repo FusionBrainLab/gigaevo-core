@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 from pydantic import Field
 
 from gigaevo.config.schemas._base import FrozenStrictModel
+from gigaevo.config.schemas.migration_bus import MigrationBusConfig
 
 if TYPE_CHECKING:
     from gigaevo.evolution.engine.acceptor import ProgramEvolutionAcceptor
@@ -155,7 +156,45 @@ class SteadyStateEngineConfig(_EngineConfigBase):
         )
 
 
+class BusedEngineConfig(_EngineConfigBase):
+    """Generational engine plus cross-run migration bus.
+
+    ``BusedEvolutionEngine`` wraps the base engine with a
+    :class:`MigrationNode` that publishes rejected-but-valid programs
+    to a Redis Stream and drains migrants from peer runs before each
+    generation step. The schema composes a :class:`MigrationBusConfig`
+    with the base engine knobs plus ``max_imports_per_generation``
+    which caps the per-step migrant intake.
+
+    The cross-field validator on :class:`ExperimentConfig`
+    (_bus_engine_requires_bandit_router) requires the experiment's
+    llm to be a :class:`BanditRouterConfig` when this engine variant
+    is selected — the bus's reward signal needs the bandit's
+    bookkeeping to propagate."""
+
+    kind: Literal["bus"] = "bus"
+    migration_bus: MigrationBusConfig
+    max_imports_per_generation: int = Field(default=10, ge=1)
+
+    def build_runtime_config(
+        self, *, required_behavior_keys: list[str]
+    ) -> "RuntimeEngineConfig":
+        from gigaevo.evolution.engine.config import EngineConfig as RuntimeEngineConfig
+
+        return RuntimeEngineConfig(
+            loop_interval=self.loop_interval,
+            max_elites_per_generation=self.max_elites_per_generation,
+            max_mutations_per_generation=self.max_mutations_per_generation,
+            metrics_collection_interval=self.metrics_collection_interval,
+            max_generations=self.max_generations,
+            parent_selector=self.parent_selector.build(),
+            program_acceptor=self.program_acceptor.build(
+                required_behavior_keys=required_behavior_keys
+            ),
+        )
+
+
 EngineConfig = Annotated[
-    GenerationalEngineConfig | SteadyStateEngineConfig,
+    GenerationalEngineConfig | SteadyStateEngineConfig | BusedEngineConfig,
     Field(discriminator="kind"),
 ]
