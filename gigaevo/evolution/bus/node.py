@@ -12,6 +12,7 @@ import uuid
 
 from loguru import logger
 
+from gigaevo.database.state_manager import register_external_terminal_state
 from gigaevo.evolution.bus.topology import Topology
 from gigaevo.evolution.bus.transport import MigrantEnvelope, Transport
 from gigaevo.programs.program import Lineage, Program
@@ -111,13 +112,12 @@ class MigrationNode:
         program.set_metadata("is_migrant", True)
         # Inbound migrants are re-anchored to DONE regardless of the
         # rehydrated state. The envelope crosses run boundaries and the
-        # local FSM does not own the source run's history, so we do not
-        # apply :func:`validate_transition` here — the transition table
-        # is an in-run invariant, not a cross-run one. The forced
-        # assignment is the deliberate registration of an alien program
-        # into the local lifecycle at the only state where the rest of
-        # the engine expects to ingest external programs.
-        program.state = ProgramState.DONE
+        # local FSM does not own the source run's history, so the
+        # registration is funnelled through
+        # :func:`register_external_terminal_state` — a named bypass that
+        # restricts the unchecked transition to terminal states and is
+        # greppable from every cross-run ingestion site.
+        register_external_terminal_state(program, ProgramState.DONE)
         return program
 
     async def _poll_loop(self) -> None:

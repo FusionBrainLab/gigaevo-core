@@ -440,3 +440,43 @@ class TestConcurrentSameStageKey:
         assert final_value in values, (
             f"Final value {final_value} is not one of the expected values {values}"
         )
+
+
+# ===================================================================
+# Category I: register_external_terminal_state
+# ===================================================================
+
+
+class TestRegisterExternalTerminalState:
+    """Cross-engine migrant ingestion: pin a terminal state without
+    consulting the in-run FSM. The helper is the only sanctioned
+    bypass of :func:`validate_transition` and is restricted to
+    terminal states so the exception cannot leak into non-terminal
+    transitions where the FSM legitimately governs progression.
+    """
+
+    def test_pins_state_to_done_without_validation(self, make_program) -> None:
+        from gigaevo.database.state_manager import register_external_terminal_state
+
+        # QUEUED -> DONE is not in PROGRAM_STATE_TRANSITIONS; the named
+        # bypass succeeds where set_in_memory_state would raise.
+        prog = make_program(state=ProgramState.QUEUED)
+        assert prog.state == ProgramState.QUEUED
+        register_external_terminal_state(prog, ProgramState.DONE)
+        assert prog.state == ProgramState.DONE
+
+    def test_pins_state_to_discarded(self, make_program) -> None:
+        from gigaevo.database.state_manager import register_external_terminal_state
+
+        prog = make_program()
+        register_external_terminal_state(prog, ProgramState.DISCARDED)
+        assert prog.state == ProgramState.DISCARDED
+
+    def test_rejects_non_terminal_state(self, make_program) -> None:
+        from gigaevo.database.state_manager import register_external_terminal_state
+
+        prog = make_program()
+        with pytest.raises(ValueError, match="terminal state"):
+            register_external_terminal_state(prog, ProgramState.RUNNING)
+        with pytest.raises(ValueError, match="terminal state"):
+            register_external_terminal_state(prog, ProgramState.QUEUED)

@@ -95,6 +95,20 @@ class TestOrphanConversion:
         assert orphan.metrics["fitness"] == 0.9
         assert orphan.metrics["is_valid"] == 1.0
 
+    def test_orphan_registration_routes_through_named_helper(self) -> None:
+        """The migrant's terminal-state assignment is funnelled through
+        :func:`register_external_terminal_state` — a greppable bypass
+        site rather than a raw ``program.state =`` write that would
+        re-introduce the cross-run FSM hole.
+        """
+        node, _ = _make_node()
+        env = _envelope(source_run_id="src@db1", generation=5)
+        with unittest.mock.patch(
+            "gigaevo.evolution.bus.node.register_external_terminal_state"
+        ) as mock_register:
+            orphan = node._envelope_to_orphan(env)
+            mock_register.assert_called_once_with(orphan, ProgramState.DONE)
+
 
 # ---------------------------------------------------------------------------
 # Buffer draining

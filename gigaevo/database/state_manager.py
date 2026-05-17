@@ -15,6 +15,40 @@ from gigaevo.programs.program_state import ProgramState, validate_transition
 _TERMINAL_STATES = frozenset({ProgramState.DISCARDED, ProgramState.DONE})
 
 
+def register_external_terminal_state(program: Program, new_state: ProgramState) -> None:
+    """Pin an externally-finalized program at a terminal state, in memory.
+
+    The narrow case is cross-engine migration ingestion: a fresh
+    :class:`Program` rehydrated from a :class:`MigrantEnvelope` carries
+    the source engine's last-known state, which has no causal
+    predecessor in the local FSM. The in-run transition table is an
+    in-run invariant, so :func:`validate_transition` is deliberately
+    not consulted.
+
+    No locking is needed because the program object is freshly
+    constructed at the call site (typically with a freshly-generated
+    UUID) and is not yet observable to any other coroutine. The
+    function intentionally names the bypass so a code reviewer can
+    grep for every cross-run terminal-state ingestion.
+
+    ``new_state`` must be terminal (DONE or DISCARDED); restricting the
+    bypass to terminal states keeps the exception out of paths where
+    the FSM legitimately governs progression.
+
+    Raises:
+        ValueError: ``new_state`` is not a terminal state, signalling a
+            misuse where the in-run FSM should govern the transition.
+    """
+    if new_state not in _TERMINAL_STATES:
+        raise ValueError(
+            f"register_external_terminal_state requires a terminal state; "
+            f"got {new_state!r}. Use ProgramStateManager.set_in_memory_state "
+            f"or ProgramStateManager.set_program_state for non-terminal "
+            f"transitions."
+        )
+    program.state = new_state
+
+
 class ProgramStateManager:
     """
     Serialize per-program updates (stage results & program state) and persist them.
