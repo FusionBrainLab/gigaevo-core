@@ -126,6 +126,42 @@ class AutoPipelineBuilderConfig(_PipelineBuilderBase):
         )
 
 
+class ProblemSpecificPipelineBuilderConfig(_PipelineBuilderBase):
+    """Builder dispatched by a fully-qualified dotted import path.
+
+    Used by the hotpotqa_* and hover_* pipeline YAMLs that ship
+    pipeline builders inside their problem directories rather than
+    under :mod:`gigaevo.entrypoint.default_pipelines`. The
+    ``builder_path`` is the dotted import path of the builder class;
+    :meth:`build` imports the module lazily and invokes the class
+    with ``(ctx, dag_timeout=...)``.
+
+    Lazy import keeps the schema layer free of cross-package
+    dependencies — the problem-specific module is only loaded when
+    the experiment selects this variant."""
+
+    kind: Literal["problem_specific"] = "problem_specific"
+    builder_path: str = Field(min_length=1)
+
+    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+        import importlib
+
+        module_name, _, class_name = self.builder_path.rpartition(".")
+        if not module_name or not class_name:
+            raise ValueError(
+                f"builder_path must be a fully-qualified dotted name "
+                f"with at least one '.'; got {self.builder_path!r}"
+            )
+        module = importlib.import_module(module_name)
+        builder_class = getattr(module, class_name, None)
+        if builder_class is None:
+            raise ImportError(
+                f"{module_name} does not export {class_name!r}; "
+                f"check the builder_path on the pipeline preset"
+            )
+        return builder_class(ctx, dag_timeout=self.dag_timeout)
+
+
 PipelineBuilderConfig = Annotated[
     DefaultPipelineBuilderConfig
     | ContextPipelineBuilderConfig
@@ -133,7 +169,8 @@ PipelineBuilderConfig = Annotated[
     | CMAOptPipelineBuilderConfig
     | OptunaOptPipelineBuilderConfig
     | StructuralMetricsPipelineBuilderConfig
-    | AutoPipelineBuilderConfig,
+    | AutoPipelineBuilderConfig
+    | ProblemSpecificPipelineBuilderConfig,
     Field(discriminator="kind"),
 ]
 
