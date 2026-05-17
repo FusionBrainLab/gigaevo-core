@@ -11,7 +11,9 @@ if TYPE_CHECKING:
     from gigaevo.utils.trackers.core import GenericLogger
 
 
-_LOG_LEVELS = Literal["TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+_LOG_LEVELS = Literal[
+    "TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"
+]
 
 
 class LoggingSettings(FrozenStrictModel):
@@ -136,18 +138,21 @@ TrackerConfig = Annotated[
 
 class LoggingConfig(FrozenStrictModel):
     """Top-level logging composition. Holds the file-logger settings
-    plus a list of metric trackers that fan out via
-    :class:`CompositeLogger`. Empty ``trackers`` is a no-op
-    composition for experiments that only need file logs."""
+    plus at least one metric tracker; ``build_writer`` fans them out
+    through :class:`CompositeLogger`.
+
+    The runtime :class:`CompositeLogger` raises on construction with
+    zero backends — there is no observable distinction between
+    "no metrics" and "metrics ignored", and the latter is more useful.
+    Experiments that genuinely want zero metric output point at a
+    Redis tracker bound to a local instance and ignore the writes;
+    that matches production deployments where the Redis backend is
+    the canonical write-and-discard path."""
 
     settings: LoggingSettings = Field(default_factory=lambda: LoggingSettings())
-    trackers: list[TrackerConfig] = Field(default_factory=list)
+    trackers: list[TrackerConfig] = Field(min_length=1)
 
     def build_writer(self) -> "GenericLogger":
-        """Construct the composite tracker. Returns a
-        :class:`CompositeLogger` even when ``trackers`` is empty so
-        callers get a uniform interface — empty composition silently
-        absorbs all writes."""
         from gigaevo.utils.trackers import init_composite
 
         return init_composite(*(t.build() for t in self.trackers))

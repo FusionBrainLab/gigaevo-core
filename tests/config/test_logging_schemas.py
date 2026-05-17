@@ -162,10 +162,11 @@ class TestTrackerUnion:
 
 
 class TestLoggingConfig:
-    def test_empty_composition_default(self) -> None:
-        cfg = LoggingConfig()
-        assert cfg.trackers == []
-        assert isinstance(cfg.settings, LoggingSettings)
+    def test_requires_at_least_one_tracker(self) -> None:
+        with pytest.raises(ValidationError):
+            LoggingConfig()  # type: ignore[call-arg]
+        with pytest.raises(ValidationError):
+            LoggingConfig(trackers=[])
 
     def test_with_tb_redis_composition_matches_yaml(self) -> None:
         """Mirror of config/logging/tensorboard.yaml: TBConfig +
@@ -216,6 +217,46 @@ class TestLoggingConfig:
         assert parsed.trackers[2].max_history_per_metric == 5000  # type: ignore[union-attr]
 
     def test_frozen(self) -> None:
-        cfg = LoggingConfig()
+        cfg = LoggingConfig(trackers=[RedisMetricsTrackerConfig()])
         with pytest.raises(ValidationError):
-            cfg.trackers = []  # type: ignore[misc]
+            cfg.trackers = [RedisMetricsTrackerConfig()]  # type: ignore[misc]
+
+
+class TestLoggingConfigBuildWriter:
+    """The build_writer() method is the schema's primary runtime
+    contract — it fans every tracker out through a CompositeLogger so
+    the engine writes once and every backend records. Tests pin the
+    contract: empty trackers list still returns a CompositeLogger (no
+    None, no exception), and a non-empty list produces a composite
+    whose inner loggers match the schema list 1:1 in declaration
+    order."""
+
+    def test_single_tracker_returns_composite_with_one_logger(
+        self, tmp_path: Path
+    ) -> None:
+        from gigaevo.utils.trackers.composite import CompositeLogger
+
+        cfg = LoggingConfig(trackers=[TBTrackerConfig(logdir=tmp_path / "tb")])
+        writer = cfg.build_writer()
+        assert isinstance(writer, CompositeLogger)
+
+
+class TestSuccessLevel:
+    def test_success_level_accepted(self) -> None:
+        """Loguru's SUCCESS level was missing from the original
+        Literal; the fix added it to match the full loguru
+        vocabulary."""
+        cfg = LoggingSettings(level="SUCCESS")
+        assert cfg.level == "SUCCESS"
+
+    def test_every_loguru_level_accepted(self) -> None:
+        for level in (
+            "TRACE",
+            "DEBUG",
+            "INFO",
+            "SUCCESS",
+            "WARNING",
+            "ERROR",
+            "CRITICAL",
+        ):
+            LoggingSettings(level=level)  # type: ignore[arg-type]
