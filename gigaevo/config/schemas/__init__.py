@@ -58,6 +58,13 @@ from gigaevo.config.schemas.logging import (
     TrackerConfig,
     WandBTrackerConfig,
 )
+from gigaevo.config.schemas.migration_bus import (
+    BusTopologyConfig,
+    MigrationBusConfig,
+    RedisStreamTransportConfig,
+    RingTopologyConfig,
+    TopologyConfig,
+)
 from gigaevo.config.schemas.problem import ProblemConfig
 from gigaevo.config.schemas.prompt import (
     FixedDirPromptFetcherConfig,
@@ -88,6 +95,7 @@ __all__ = [
     "AutoPipelineBuilderConfig",
     "BanditRouterConfig",
     "BehaviorSpaceConfig",
+    "BusTopologyConfig",
     "CMAOptPipelineBuilderConfig",
     "ChainFeatureExtractorConfig",
     "ChatOpenAIConfig",
@@ -113,6 +121,7 @@ __all__ = [
     "LoggingConfig",
     "LoggingSettings",
     "MigrantSelectorConfig",
+    "MigrationBusConfig",
     "MultiIslandConfig",
     "OptunaOptPipelineBuilderConfig",
     "ParentSelectorConfig",
@@ -124,7 +133,9 @@ __all__ = [
     "RandomParentSelectorConfig",
     "RedisConfig",
     "RedisMetricsTrackerConfig",
+    "RedisStreamTransportConfig",
     "RidgePredictorConfig",
+    "RingTopologyConfig",
     "SchedulingConfig",
     "SimpleHeuristicPredictorConfig",
     "SingleIslandConfig",
@@ -134,6 +145,7 @@ __all__ = [
     "SumArchiveSelectorConfig",
     "TBTrackerConfig",
     "TopFitnessMigrantSelectorConfig",
+    "TopologyConfig",
     "TrackerConfig",
     "WandBTrackerConfig",
     "WeightedEliteSelectorConfig",
