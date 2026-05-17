@@ -50,6 +50,14 @@ from gigaevo.config.schemas.llm import (
     EnsembleRouterConfig,
     LLMConfig,
 )
+from gigaevo.config.schemas.logging import (
+    LoggingConfig,
+    LoggingSettings,
+    RedisMetricsTrackerConfig,
+    TBTrackerConfig,
+    TrackerConfig,
+    WandBTrackerConfig,
+)
 from gigaevo.config.schemas.problem import ProblemConfig
 from gigaevo.config.schemas.prompt import (
     FixedDirPromptFetcherConfig,
@@ -102,6 +110,8 @@ __all__ = [
     "IslandConfig",
     "LLMConfig",
     "LPTConfig",
+    "LoggingConfig",
+    "LoggingSettings",
     "MigrantSelectorConfig",
     "MultiIslandConfig",
     "OptunaOptPipelineBuilderConfig",
@@ -113,6 +123,7 @@ __all__ = [
     "PromptFetcherConfig",
     "RandomParentSelectorConfig",
     "RedisConfig",
+    "RedisMetricsTrackerConfig",
     "RidgePredictorConfig",
     "SchedulingConfig",
     "SimpleHeuristicPredictorConfig",
@@ -121,6 +132,9 @@ __all__ = [
     "SteadyStateEngineConfig",
     "StructuralMetricsPipelineBuilderConfig",
     "SumArchiveSelectorConfig",
+    "TBTrackerConfig",
     "TopFitnessMigrantSelectorConfig",
+    "TrackerConfig",
+    "WandBTrackerConfig",
     "WeightedEliteSelectorConfig",
 ]
