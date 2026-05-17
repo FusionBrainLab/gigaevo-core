@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from langchain_openai import ChatOpenAI
 from pydantic import Field, model_validator
 
 from gigaevo.config.schemas._base import FrozenStrictModel
 from gigaevo.llm.strict_chat_openai import strict_chat_openai
+
+if TYPE_CHECKING:
+    from langchain_core.runnables import Runnable
+
+    from gigaevo.utils.trackers.base import LogWriter
 
 
 class ChatOpenAIConfig(FrozenStrictModel):
@@ -21,7 +26,7 @@ class ChatOpenAIConfig(FrozenStrictModel):
     """
 
     kind: Literal["chat_openai"] = "chat_openai"
-    model: str
+    model: str = Field(min_length=1)
     api_key: str | None = Field(
         default_factory=lambda: os.environ.get("OPENAI_API_KEY"),
         repr=False,
@@ -52,22 +57,58 @@ class ChatOpenAIConfig(FrozenStrictModel):
 
 
 class BanditRouterConfig(FrozenStrictModel):
-    """UCB1 bandit-driven router over a static model pool."""
+    """UCB1 bandit-driven router over a static model pool.
+
+    ``fitness_key`` and ``higher_is_better`` are typically supplied at
+    construction by the experiment's ``ProblemContext`` via the
+    cross-field validator on the root config; declared here as Optional
+    so the schema can validate in isolation but ``build()`` requires
+    them to be resolved to non-None values.
+    """
 
     kind: Literal["bandit"] = "bandit"
     models: list[ChatOpenAIConfig] = Field(min_length=1)
     skip_reward_on_acceptor_reject: bool = False
-    exploration_constant: float = Field(default=1.4, gt=0.0)
-    name: str = "default"
+    exploration_constant: float = Field(default=1.41, gt=0.0)
+    window_size: int = Field(default=100, ge=1)
+    name: str = Field(default="default", min_length=1)
+
+    def build(
+        self,
+        *,
+        fitness_key: str,
+        higher_is_better: bool = True,
+        writer: "LogWriter | None" = None,
+    ) -> "Runnable":
+        from gigaevo.llm.bandit import BanditModelRouter
+
+        endpoints = [m.build() for m in self.models]
+        uniform = [1.0 / len(endpoints)] * len(endpoints)
+        return BanditModelRouter(
+            endpoints,
+            uniform,
+            writer=writer,
+            name=self.name,
+            exploration_constant=self.exploration_constant,
+            window_size=self.window_size,
+            fitness_key=fitness_key,
+            higher_is_better=higher_is_better,
+        )
 
 
 class EnsembleRouterConfig(FrozenStrictModel):
-    """Probability-weighted router. ``probabilities`` length must match ``models``."""
+    """Probability-weighted router (the runtime ``MultiModelRouter``).
+
+    When ``probabilities`` is ``None`` the runtime applies a uniform
+    distribution over ``models``. When provided, the after-validator
+    enforces length parity and positivity; the runtime normalises the
+    weights to a probability distribution.
+    """
 
     kind: Literal["ensemble"] = "ensemble"
     models: list[ChatOpenAIConfig] = Field(min_length=1)
     probabilities: list[float] | None = None
-    name: str = "default"
+    name: str = Field(default="default", min_length=1)
 
     @model_validator(mode="after")
     def probabilities_aligned(self) -> "EnsembleRouterConfig":
@@ -81,6 +122,13 @@ class EnsembleRouterConfig(FrozenStrictModel):
         if any(p <= 0 for p in self.probabilities):
             raise ValueError("all probabilities must be positive")
         return self
+
+    def build(self, *, writer: "LogWriter | None" = None) -> "Runnable":
+        from gigaevo.llm.models import MultiModelRouter
+
+        endpoints = [m.build() for m in self.models]
+        weights = self.probabilities or [1.0 / len(endpoints)] * len(endpoints)
+        return MultiModelRouter(endpoints, weights, writer=writer, name=self.name)
 
 
 LLMConfig = Annotated[

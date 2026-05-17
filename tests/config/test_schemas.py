@@ -44,11 +44,22 @@ class TestRedisConfig:
         with pytest.raises(ValidationError):
             cfg.host = "x"  # type: ignore[misc]
 
+    def test_empty_host_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            RedisConfig(host="")
+
     def test_to_storage_config_round_trip(self) -> None:
         redis = RedisConfig(host="r", port=6379, db=5)
         storage = redis.to_storage_config(key_prefix="my_problem")
         assert storage.redis_url == "redis://r:6379/5"
         assert storage.key_prefix == "my_problem"
+
+    def test_json_round_trip_preserves_computed_url(self) -> None:
+        original = RedisConfig(host="r", port=6380, db=2)
+        as_json = original.model_dump_json()
+        parsed = RedisConfig.model_validate_json(as_json)
+        assert parsed == original
+        assert parsed.url == "redis://r:6380/2"
 
 
 class TestDataPlaneSettings:
@@ -67,6 +78,15 @@ class TestDataPlaneSettings:
                 key_prefix="p",
                 startup_timeout_s=0.0,
             )
+
+    def test_empty_key_prefix_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            DataPlaneSettings(redis=RedisConfig(), key_prefix="")
+
+    def test_nested_frozen_propagates(self) -> None:
+        cfg = DataPlaneSettings(redis=RedisConfig(), key_prefix="gigaevo:test")
+        with pytest.raises(ValidationError):
+            cfg.redis.host = "x"  # type: ignore[misc]
 
 
 class TestChatOpenAIConfig:
@@ -97,6 +117,10 @@ class TestChatOpenAIConfig:
     def test_kind_literal_pinned(self) -> None:
         cfg = ChatOpenAIConfig(model="x")
         assert cfg.kind == "chat_openai"
+
+    def test_empty_model_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ChatOpenAIConfig(model="")
 
 
 class TestBanditRouterConfig:
