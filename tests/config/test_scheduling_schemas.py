@@ -203,3 +203,46 @@ class TestSchedulingUnion:
         ]
         assert len(set(kinds)) == len(kinds)
         assert set(kinds) == {"fifo", "lpt"}
+
+    def test_predictor_union_each_variant_has_unique_kind(self) -> None:
+        """The nested PredictorConfig union also gets the defense-in-depth
+        check. A duplicate ``kind`` between SimpleHeuristic and Ridge
+        would silently mask one variant during YAML→Python migration."""
+        kinds = [
+            SimpleHeuristicPredictorConfig.model_fields["kind"].default,
+            RidgePredictorConfig.model_fields["kind"].default,
+        ]
+        assert len(set(kinds)) == len(kinds)
+        assert set(kinds) == {"simple_heuristic", "ridge"}
+
+    def test_feature_extractor_union_each_variant_has_unique_kind(self) -> None:
+        kinds = [
+            CodeFeatureExtractorConfig.model_fields["kind"].default,
+            ChainFeatureExtractorConfig.model_fields["kind"].default,
+        ]
+        assert len(set(kinds)) == len(kinds)
+        assert set(kinds) == {"code", "chain"}
+
+    def test_json_round_trip_preserves_every_ridge_parameter(self) -> None:
+        """Strict round trip — every parameter must survive serialization
+        and deserialization byte-equal. Catches Pydantic field-config
+        regressions that would silently drop or coerce values."""
+        ta: TypeAdapter[SchedulingConfig] = TypeAdapter(SchedulingConfig)
+        cfg = LPTConfig(
+            eval_predictor=RidgePredictorConfig(
+                feature_extractor=ChainFeatureExtractorConfig(),
+                buffer_size=750,
+                min_samples=25,
+                default_prediction=450.0,
+                alpha=2.5,
+            )
+        )
+        parsed = ta.validate_json(ta.dump_json(cfg))
+        assert isinstance(parsed, LPTConfig)
+        ep = parsed.eval_predictor
+        assert isinstance(ep, RidgePredictorConfig)
+        assert ep.buffer_size == 750
+        assert ep.min_samples == 25
+        assert ep.default_prediction == 450.0
+        assert ep.alpha == 2.5
+        assert isinstance(ep.feature_extractor, ChainFeatureExtractorConfig)
