@@ -118,3 +118,46 @@ class TestPipelineConfig:
         cfg = PipelineConfig(builder=DefaultPipelineBuilderConfig())
         with pytest.raises(ValidationError):
             cfg.prompts_dir = Path("/x")  # type: ignore[misc]
+
+    def test_empty_prompts_dir_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="prompts_dir"):
+            PipelineConfig(
+                builder=DefaultPipelineBuilderConfig(),
+                prompts_dir=Path(""),
+            )
+
+    def test_cwd_dot_prompts_dir_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="prompts_dir"):
+            PipelineConfig(
+                builder=DefaultPipelineBuilderConfig(),
+                prompts_dir=Path("."),
+            )
+
+
+class TestPipelineBuilderDiscriminator:
+    """Defense-in-depth: ensure each variant has a unique kind literal.
+    A duplicate-string typo would silently let one variant shadow
+    another in the union dispatch — Pydantic would round-trip to the
+    first match without warning."""
+
+    def test_each_variant_has_unique_kind(self) -> None:
+        variants = (
+            DefaultPipelineBuilderConfig,
+            ContextPipelineBuilderConfig,
+            AlgoTuneSpeedPipelineBuilderConfig,
+            CMAOptPipelineBuilderConfig,
+            OptunaOptPipelineBuilderConfig,
+            StructuralMetricsPipelineBuilderConfig,
+            AutoPipelineBuilderConfig,
+        )
+        kinds = [v.model_fields["kind"].default for v in variants]
+        assert len(set(kinds)) == len(kinds), f"duplicate kind literal in {kinds}"
+        assert sorted(kinds) == sorted({
+            "default",
+            "context",
+            "algotune_speed",
+            "cma_opt",
+            "optuna_opt",
+            "structural_metrics",
+            "auto",
+        })
