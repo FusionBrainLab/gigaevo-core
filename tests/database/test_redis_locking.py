@@ -339,3 +339,126 @@ class TestReleaseRobustness:
         ttl = await fake_redis.ttl(lock_key)
         assert ttl > 0  # TTL is positive (lock has expiry)
         await lock.release()
+
+
+# ---------------------------------------------------------------------------
+# Dataplane-routed path: LuaRegistry.evalsha + wrap_lease integration
+# ---------------------------------------------------------------------------
+
+
+async def _build_lock_with_dp(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    *,
+    key_prefix: str = "dptest",
+    lock_expiry_secs: int = 2,
+    lock_renewal_secs: int = 1,
+):
+    """Build a RedisInstanceLock backed by a started DataPlane.
+
+    Shares the fakeredis instance between the storage connection, the
+    dp's LuaRegistry, and the dp's pool so the lock writes the lock
+    key through the dp's LuaRegistry while reads (existence checks)
+    still resolve against the same fake server.
+    """
+    import gigaevo.dataplane as dp
+    from gigaevo.dataplane.scripts import LuaRegistry
+
+    conn_config = RedisConnectionConfig(
+        redis_url="redis://fake:6379/0",
+        max_retries=1,
+        retry_delay=0.0,
+    )
+    conn = RedisConnection(conn_config)
+    conn._redis = fake_redis
+    conn._closing = False
+
+    key_config = RedisKeyConfig(key_prefix=key_prefix)
+    keys = RedisProgramKeys(key_config)
+    lock_config = RedisLockConfig(
+        lock_expiry_secs=lock_expiry_secs,
+        lock_renewal_secs=lock_renewal_secs,
+    )
+
+    coord = dp.DataPlane("redis://fake:6379/0", key_prefix=key_prefix)
+    coord._connection._pool = fake_redis  # type: ignore[attr-defined]
+    lua = LuaRegistry(fake_redis)
+    coord._register_builtin_scripts(lua)  # type: ignore[attr-defined]
+    await lua.load_all()
+    coord._lua = lua  # type: ignore[attr-defined]
+    coord._started = True  # type: ignore[attr-defined]
+
+    lock = RedisInstanceLock(conn, keys, lock_config, dataplane=coord)
+    return lock, coord
+
+
+class TestDataplaneRoutedLocking:
+    """When the dataplane is wired, the 3 lock scripts dispatch through
+    :meth:`LuaRegistry.evalsha` and the acquired lock is wrapped in a
+    :class:`CrashWatchedHandle` for typed loss observability."""
+
+    async def test_acquire_routes_through_dataplane_lua_registry(
+        self, fake_redis
+    ) -> None:
+        lock, coord = await _build_lock_with_dp(fake_redis)
+        try:
+            assert await lock.acquire() is True
+            assert lock.is_held
+            # No local SHA cache when routed through the registry — the
+            # dp's LuaRegistry owns it.
+            assert lock._script_shas == {}
+            # The wrapped lease is populated and observable.
+            assert lock.wrapped_lease is not None
+            # No crash has been signalled yet.
+            assert await lock.observe_loss() is None
+        finally:
+            await lock.release()
+            coord._started = False  # type: ignore[attr-defined]
+
+    async def test_renewal_loss_signals_crash_event(self, fake_redis) -> None:
+        """Token-CAS mismatch on renewal signals the lease's flag; the
+        next ``observe_loss`` returns a typed :class:`CrashEvent`."""
+        lock, coord = await _build_lock_with_dp(fake_redis)
+        try:
+            await lock.acquire()
+            # Overwrite the lock value to simulate a takeover; the next
+            # renew sees a token-CAS mismatch and signals the flag.
+            lock_key = lock._keys.instance_lock()
+            await fake_redis.set(lock_key, "other-instance:99999:abcd1234")
+            ok = await lock.renew()
+            assert ok is False
+            evt = await lock.observe_loss()
+            assert evt is not None
+            assert evt.peer == lock_key
+            # The lease handle is consumed; a second observer sees nothing.
+            assert await lock.observe_loss() is None
+        finally:
+            lock._token = None
+            await lock.release()
+            coord._started = False  # type: ignore[attr-defined]
+
+    async def test_release_clears_wrapped_lease(self, fake_redis) -> None:
+        """``release`` clears the typed-control-flow handle so a
+        subsequent acquire mints a fresh wrapper."""
+        lock, coord = await _build_lock_with_dp(fake_redis)
+        try:
+            await lock.acquire()
+            assert lock.wrapped_lease is not None
+            await lock.release()
+            assert lock.wrapped_lease is None
+            # A second acquire mints a fresh wrapper.
+            await lock.acquire()
+            assert lock.wrapped_lease is not None
+        finally:
+            await lock.release()
+            coord._started = False  # type: ignore[attr-defined]
+
+    async def test_observe_loss_legacy_path_returns_none(self, fake_redis) -> None:
+        """The legacy direct-aioredis path has no shared lease vocabulary;
+        ``observe_loss`` returns ``None`` unconditionally there."""
+        lock = _make_lock(fake_redis)
+        await lock.acquire()
+        try:
+            assert lock.wrapped_lease is None
+            assert await lock.observe_loss() is None
+        finally:
+            await lock.release()
