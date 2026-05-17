@@ -9,7 +9,6 @@ from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig
 
-from gigaevo.config.resolvers import register_resolvers
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.problems.initial_loaders import InitialProgramLoader
@@ -162,5 +161,4 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    register_resolvers()
     main()

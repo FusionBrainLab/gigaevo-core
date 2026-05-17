@@ -77,59 +77,25 @@ def load_typed_path(experiment_py: Path) -> dict[str, Any]:
 def load_hydra_path(
     experiment_name: str, overrides: list[str]
 ) -> dict[str, Any]:
-    """Load the Hydra path: compose + recursive instantiate.
+    """Retired in hydra-3.2.
 
-    ``experiment_name`` is the bare YAML name under config/experiment/
-    (e.g. ``"steady_state"``); the overrides supply the missing
-    ``problem.name=...`` and any other parameters the typed experiment
-    pins at construction time.
+    The OmegaConf custom resolvers (``get_object``, ``ref``) that the
+    shipped YAMLs interpolated through were deleted along with
+    ``gigaevo/config/resolvers.py``. Composing any experiment YAML
+    now fails at the interpolation step. Typed-vs-typed parity
+    continues to flow through :func:`load_typed_path`; the full
+    parity harness removal lands in hydra-3.8 once every test that
+    consumed the cross-path comparison migrates.
 
-    The Hydra registry is initialised against the repo's config/
-    directory; the autouse register_resolvers fixture in tests/conftest.py
-    ensures the ``ref`` and ``get_object`` resolvers are installed
-    before composition.
-    """
-    from hydra import compose, initialize_config_dir
-    from hydra.core.global_hydra import GlobalHydra
-    from hydra.utils import instantiate
-
-    from gigaevo.config.resolvers import register_resolvers
-
-    register_resolvers()
-
-    config_dir = Path(__file__).resolve().parents[3] / "config"
-    if GlobalHydra.instance().is_initialized():
-        GlobalHydra.instance().clear()
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="config",
-            overrides=[f"experiment={experiment_name}", *overrides],
-        )
-        # ``instantiate`` runs inside the context manager so the
-        # GlobalHydra singleton is alive for any interpolation that
-        # touches it. The compose API never populates HydraConfig
-        # itself, so YAMLs that interpolate ``${hydra:runtime.cwd}``
-        # still raise InterpolationResolutionError. The harness records
-        # that as a load failure; the cross-path comparison activates
-        # when hydra-2.12 lands sibling YAMLs that avoid the
-        # runtime-dependent interpolation.
-        instantiated = instantiate(cfg, _recursive_=True)
-    graph: dict[str, Any] = {"_config": cfg, "_instantiated": instantiated}
-
-    for attr in (
-        "redis_storage",
-        "evolution_strategy",
-        "evolution_engine",
-        "dag_runner",
-        "writer",
-        "llm",
-        "problem_context",
-        "pipeline_builder",
-        "dag_blueprint",
-    ):
-        if hasattr(instantiated, attr):
-            graph[attr] = getattr(instantiated, attr)
-    return graph
+    The signature is preserved so existing tests still pass the
+    function reference around — calling it always raises a typed
+    error captured by :func:`run_parity`'s exception handler."""
+    del experiment_name, overrides
+    raise RuntimeError(
+        "Hydra-side load retired in hydra-3.2 (resolvers.py deleted). "
+        "Typed-vs-typed parity continues via load_typed_path; full "
+        "harness removal lands in hydra-3.8."
+    )
 
 
 def compare_redis_storage(
