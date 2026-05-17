@@ -96,8 +96,6 @@ select = ["E", "F", "I", "UP"]
 ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 
 [tool.ruff.lint.per-file-ignores]
-"run.py" = ["E402"]
-"run_hydra.py" = ["E402"]
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
 "problems/**/*.py" = ["E402", "E722", "E741", "F841"]
