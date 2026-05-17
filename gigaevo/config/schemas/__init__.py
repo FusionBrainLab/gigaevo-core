@@ -50,7 +50,9 @@ from gigaevo.config.schemas.llm import (
     EnsembleRouterConfig,
     LLMConfig,
 )
+from gigaevo.config.schemas.problem import ProblemConfig
 from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
+from gigaevo.config.schemas.experiment import ExperimentConfig
 
 __all__ = [
     "AcceptorConfig",
@@ -70,6 +72,7 @@ __all__ = [
     "EliteSelectorConfig",
     "EngineConfig",
     "EnsembleRouterConfig",
+    "ExperimentConfig",
     "FitnessArchiveRemoverConfig",
     "FitnessProportionalEliteSelectorConfig",
     "FrozenStrictModel",
@@ -82,6 +85,7 @@ __all__ = [
     "ParentSelectorConfig",
     "PipelineBuilderConfig",
     "PipelineConfig",
+    "ProblemConfig",
     "RandomParentSelectorConfig",
     "RedisConfig",
     "SingleIslandConfig",
