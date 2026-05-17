@@ -679,3 +679,37 @@ class TestMigrationIntegration:
         # Verify in destination archive
         dest_elites = await dest_island.get_elites()
         assert any(e.id == prog.id for e in dest_elites)
+
+
+# ---------------------------------------------------------------------------
+# Schema pinning
+# ---------------------------------------------------------------------------
+
+
+class TestIslandConfigSchema:
+    """Pin the IslandConfig field set to prevent silent kwarg drift."""
+
+    def test_no_migration_rate_field(self) -> None:
+        """`migration_rate` is not a model field. Cadence and volume are
+        owned by `MapElitesMultiIsland.migration_interval` and
+        `max_migrants_per_island`."""
+        assert "migration_rate" not in IslandConfig.model_fields
+
+    def test_migration_rate_kwarg_is_silently_dropped_or_rejected(self) -> None:
+        """Constructing with `migration_rate` either drops or rejects the
+        kwarg, but never stores the value."""
+        bs = _make_behavior_space()
+        try:
+            cfg = IslandConfig(
+                island_id="rate-pin",
+                behavior_space=bs,
+                max_size=None,
+                archive_selector=SumArchiveSelector(fitness_keys=["score"]),
+                elite_selector=RandomEliteSelector(),
+                migrant_selector=RandomMigrantSelector(),
+                archive_remover=None,
+                migration_rate=0.25,  # type: ignore[call-arg]
+            )
+        except Exception:
+            return
+        assert not hasattr(cfg, "migration_rate")

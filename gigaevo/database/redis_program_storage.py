@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Iterable
 import gc
 from itertools import islice
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from loguru import logger
 from redis import asyncio as aioredis
@@ -27,6 +27,9 @@ from gigaevo.utils.json import dumps as _dumps
 from gigaevo.utils.json import loads as _loads
 from gigaevo.utils.trackers.base import LogWriter
 
+if TYPE_CHECKING:
+    from gigaevo.dataplane import DataPlane, EngineRoot
+
 T = TypeVar("T")
 
 __all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
@@ -38,10 +41,26 @@ STREAM_MAX_LEN = 10_000
 
 
 class RedisProgramStorage(ProgramStorage):
-    """Redis-backed program storage with distributed locking and metrics."""
+    """Redis-backed program storage with distributed locking and metrics.
+
+    When a :class:`DataPlane` is supplied, :meth:`atomic_state_transition`,
+    :meth:`fast_state_transition`, :meth:`batch_transition_state`, and
+    :meth:`batch_transition_by_ids` route through a single-Lua-call
+    FSM-validated transition. Otherwise the WATCH/MULTI/EXEC path runs.
+
+    The coordinator's ``program_state`` FSM table is case-tolerant: rows
+    are written under both the dp enum's uppercase form and the
+    application-layer lowercase form so a persisted blob in either
+    vocabulary resolves the same row.
+    """
 
     def __init__(
-        self, config: RedisProgramStorageConfig, writer: LogWriter | None = None
+        self,
+        config: RedisProgramStorageConfig,
+        writer: LogWriter | None = None,
+        *,
+        dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ):
         super().__init__()
         self.config = config
@@ -54,6 +73,10 @@ class RedisProgramStorage(ProgramStorage):
         self._metrics = RedisMetricsCollector(
             self._conn, self._keys, writer, config.metrics_interval
         )
+        self._dataplane = dataplane
+        # Engine-root permission witness; when supplied, per-call FSM
+        # tokens are derived by linear split rather than ad-hoc minted.
+        self._engine_root = engine_root
 
     # --------------------- Context Manager ---------------------
 
@@ -99,15 +122,32 @@ class RedisProgramStorage(ProgramStorage):
         while batch := list(islice(it, n)):
             yield batch
 
-    @staticmethod
+    # ``Program`` Pydantic fields that must round-trip as ``dict`` even
+    # when empty. On fakeredis an empty Lua table emits as ``[]`` (its
+    # embedded VM does not expose ``cjson.encode_empty_table_as_object``);
+    # real Redis preserves ``{}`` directly. Coerced here so the read
+    # path is uniform across both.
+    _DICT_FIELDS: frozenset[str] = frozenset({"stage_results", "metrics", "metadata"})
+
+    @classmethod
     def _safe_deserialize(
+        cls,
         raw: str,
         ctx: str,
         *,
         exclude: frozenset[str] | None = None,
     ) -> Program | None:
         try:
-            return Program.from_dict(_loads(raw), exclude=exclude)
+            data = _loads(raw)
+            if isinstance(data, dict):
+                # ``transition_state.lua`` stamps both ``epoch`` and
+                # ``atomic_counter`` carrying the same value; Pydantic
+                # rejects unknown fields, so strip ``epoch`` here.
+                data.pop("epoch", None)
+                for fname in cls._DICT_FIELDS:
+                    if isinstance(data.get(fname), list) and not data[fname]:
+                        data[fname] = {}
+            return Program.from_dict(data, exclude=exclude)
         except Exception as e:
             logger.warning("[RedisProgramStorage] Corrupt data in {}: {}", ctx, e)
             return None
@@ -352,26 +392,6 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._conn.execute("transition_status", _tx)
 
-    async def publish_status_event(
-        self, status: str, program_id: str, extra: dict[str, Any] | None = None
-    ) -> None:
-        self._check_write_allowed("publish_status_event")
-
-        async def _event(r: aioredis.Redis) -> None:
-            data: dict[str, Any] = {
-                "id": program_id,
-                "status": status,
-                **(extra or {}),
-            }
-            await r.xadd(
-                self._keys.status_stream(),
-                data,  # type: ignore[arg-type]
-                maxlen=STREAM_MAX_LEN,
-                approximate=True,
-            )
-
-        await self._conn.execute("publish_status_event", _event)
-
     async def get_all_by_status(
         self, status: str, *, exclude: frozenset[str] | None = None
     ) -> list[Program]:
@@ -406,10 +426,87 @@ class RedisProgramStorage(ProgramStorage):
 
         return await self._conn.execute("_ids_for_status", _members)
 
+    async def _transition_via_dataplane(
+        self,
+        program: Program,
+        old_state: str | None,
+        new_state: str,
+        *,
+        method: str,
+    ) -> None:
+        """Route a single-program FSM transition through the coordinator.
+
+        Builds a :class:`ProgramPatch` from the in-memory :class:`Program`
+        (dropping reserved ``state`` / ``id`` / ``epoch`` /
+        ``atomic_counter`` fields the Lua script owns) and invokes
+        :meth:`DataPlane.transition_program_state`. The Lua script
+        performs FSM legality, idempotency dedup, blob merge,
+        status-set update, and audit-stream append atomically.
+
+        Mirrors the persisted counter into ``program.atomic_counter``
+        so merge tiebreakers observe a value consistent with the blob.
+        Raises :class:`StorageError` on any ``Err`` branch.
+        """
+        from gigaevo.dataplane.ids import ProgramId as _DpProgramId
+        from gigaevo.dataplane.models import Err
+        from gigaevo.dataplane.permissions import mint_root
+
+        dp = self._dataplane
+        assert dp is not None  # type narrowing
+
+        patch_fields = program.to_dict()
+        for reserved in ("state", "id", "epoch", "atomic_counter"):
+            patch_fields.pop(reserved, None)
+
+        from gigaevo.dataplane.coordinator import ProgramPatch as _ProgramPatch
+
+        program_id = _DpProgramId(program.id)
+        if self._engine_root is not None:
+            token = self._engine_root.split_program_token(program_id)
+        else:
+            token = mint_root(program_id)
+        expected_from = ProgramState(old_state) if old_state else None
+        target = ProgramState(new_state)
+
+        result = await dp.transition_program_state(
+            program_id,
+            token=token,  # type: ignore[arg-type]
+            expected_from=cast(Any, expected_from),
+            to=cast(Any, target),
+            patch=_ProgramPatch(fields=patch_fields),
+        )
+
+        if isinstance(result, Err):
+            err = result.error
+            kind = getattr(err, "kind", "unknown")
+            detail = getattr(err, "detail", repr(err))
+            raise StorageError(
+                f"{method}: dataplane transition rejected "
+                f"({kind}): {old_state!r} -> {new_state!r}: {detail}"
+            )
+
+        post_blob = result.value.value
+        if isinstance(post_blob, dict):
+            counter_val = post_blob.get("atomic_counter", post_blob.get("epoch"))
+            if isinstance(counter_val, int):
+                program.atomic_counter = counter_val
+            elif result.value.epoch:
+                program.atomic_counter = result.value.epoch
+        elif result.value.epoch:
+            program.atomic_counter = result.value.epoch
+        if program.state != target:
+            program.state = target
+
     async def atomic_state_transition(
         self, program: Program, old_state: str | None, new_state: str
     ) -> None:
         self._check_write_allowed("atomic_state_transition")
+
+        if self._dataplane is not None:
+            await self._transition_via_dataplane(
+                program, old_state, new_state, method="atomic_state_transition"
+            )
+            return
 
         async def _atomic(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -495,6 +592,12 @@ class RedisProgramStorage(ProgramStorage):
         """
         self._check_write_allowed("fast_state_transition")
 
+        if self._dataplane is not None:
+            await self._transition_via_dataplane(
+                program, old_state, new_state, method="fast_state_transition"
+            )
+            return
+
         async def _fast(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
             counter = await r.incr(self._keys.timestamp())
@@ -516,6 +619,83 @@ class RedisProgramStorage(ProgramStorage):
 
         await self._conn.execute("fast_state_transition", _fast)
 
+    async def _batch_transition_via_dataplane(
+        self,
+        programs: list[Program],
+        old_state: str | None,
+        new_state: str,
+        *,
+        method: str,
+    ) -> int:
+        """Route a batch of FSM transitions through the coordinator.
+
+        Per-item atomicity, no batch-level atomicity: a failure on item
+        *k* leaves items ``0 .. k-1`` committed and raises
+        :class:`StorageError`. Mirrors the persisted counter into each
+        ``program.atomic_counter`` to keep merge tiebreakers consistent
+        with the persisted blob.
+        """
+        from gigaevo.dataplane.coordinator import (
+            BatchTransitionItem as _BatchTransitionItem,
+        )
+        from gigaevo.dataplane.coordinator import ProgramPatch as _ProgramPatch
+        from gigaevo.dataplane.ids import ProgramId as _DpProgramId
+        from gigaevo.dataplane.models import Err
+        from gigaevo.dataplane.permissions import mint_root
+
+        dp = self._dataplane
+        assert dp is not None  # type narrowing
+        if not programs:
+            return 0
+
+        expected_from = ProgramState(old_state) if old_state else None
+        target = ProgramState(new_state)
+
+        items: list[_BatchTransitionItem] = []
+        for program in programs:
+            patch_fields = program.to_dict()
+            for reserved in ("state", "id", "epoch", "atomic_counter"):
+                patch_fields.pop(reserved, None)
+            program_id = _DpProgramId(program.id)
+            if self._engine_root is not None:
+                token = self._engine_root.split_program_token(program_id)
+            else:
+                token = mint_root(program_id)
+            items.append(
+                _BatchTransitionItem(
+                    program_id=program_id,
+                    token=token,  # type: ignore[arg-type]
+                    expected_from=cast(Any, expected_from),
+                    to=cast(Any, target),
+                    patch=_ProgramPatch(fields=patch_fields),
+                )
+            )
+
+        result = await dp.transition_program_state_batch(tuple(items))
+        if isinstance(result, Err):
+            err = result.error
+            kind = getattr(err, "kind", "unknown")
+            detail = getattr(err, "detail", repr(err))
+            raise StorageError(
+                f"{method}: dataplane batch transition rejected "
+                f"({kind}): {old_state!r} -> {new_state!r}: {detail}"
+            )
+
+        outcomes = result.value.items
+        for program, outcome in zip(programs, outcomes, strict=False):
+            post_blob = outcome.value
+            if isinstance(post_blob, dict):
+                counter_val = post_blob.get("atomic_counter", post_blob.get("epoch"))
+                if isinstance(counter_val, int):
+                    program.atomic_counter = counter_val
+                elif outcome.epoch:
+                    program.atomic_counter = outcome.epoch
+            elif outcome.epoch:
+                program.atomic_counter = outcome.epoch
+            if program.state != target:
+                program.state = target
+        return len(outcomes)
+
     async def batch_transition_state(
         self,
         programs: list[Program],
@@ -536,8 +716,12 @@ class RedisProgramStorage(ProgramStorage):
 
         old_enum = ProgramState(old_state)
         new_enum = ProgramState(new_state)
-        for prog in programs:
-            validate_transition(old_enum, new_enum)
+        validate_transition(old_enum, new_enum)
+
+        if self._dataplane is not None:
+            return await self._batch_transition_via_dataplane(
+                programs, old_state, new_state, method="batch_transition_state"
+            )
 
         async def _batch(r: aioredis.Redis) -> int:
             old_set_key = self._keys.status_set(old_state)
@@ -555,7 +739,11 @@ class RedisProgramStorage(ProgramStorage):
                 pipe = r.pipeline(transaction=False)
                 chunk_ids = []
                 for i, prog in enumerate(chunk):
-                    prog.state = ProgramState(new_state)
+                    # FSM check against each program's actual state;
+                    # diverged in-memory state raises here rather than
+                    # being silently persisted.
+                    validate_transition(prog.state, new_enum)
+                    prog.state = new_enum
                     data = prog.to_dict()
                     data["atomic_counter"] = int(start_counter + i)
 
@@ -598,6 +786,21 @@ class RedisProgramStorage(ProgramStorage):
             return 0
 
         validate_transition(ProgramState(old_state), ProgramState(new_state))
+
+        if self._dataplane is not None:
+            # Coordinator-routed: trades the raw-JSON fast-path for
+            # per-item FSM atomicity. Materialise full :class:`Program`
+            # instances via parallel :meth:`get`; filter out items whose
+            # current state already diverges from ``old_state``.
+            fetched = await asyncio.gather(*(self.get(pid) for pid in program_ids))
+            filtered = [
+                p for p in fetched if p is not None and p.state.value == old_state
+            ]
+            if not filtered:
+                return 0
+            return await self._batch_transition_via_dataplane(
+                filtered, old_state, new_state, method="batch_transition_by_ids"
+            )
 
         async def _batch_raw(r: aioredis.Redis) -> int:
             old_set_key = self._keys.status_set(old_state)
@@ -743,6 +946,13 @@ class RedisProgramStorage(ProgramStorage):
                 await self._conn.execute("recover_stranded_clean", _clean)
                 continue
 
+            # RUNNING → QUEUED bypasses the forward FSM, which has no
+            # such edge. Assert the precondition so misuse on any other
+            # state surfaces here rather than silently breaking the FSM.
+            assert prog.state == ProgramState.RUNNING, (
+                f"recover_stranded_programs: expected RUNNING, "
+                f"got {prog.state.value} for {prog.id}"
+            )
             prog.state = ProgramState.QUEUED
             await self.write_exclusive(prog)
 

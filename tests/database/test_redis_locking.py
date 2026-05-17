@@ -158,25 +158,26 @@ class TestRelease:
 
 
 class TestRenew:
-    async def test_renew_updates_value(self, lock, fake_redis):
-        """Renew updates the lock value in Redis with a new timestamp."""
+    async def test_renew_refreshes_ttl(self, lock, fake_redis):
+        """Renew refreshes the TTL; the stored value is the stable
+        instance id, so the freshness witness is PTTL alone."""
         await lock.acquire()
         lock_key = lock._keys.instance_lock()
         old_value = await fake_redis.get(lock_key)
         old_token = lock._token
 
-        # Small sleep so time.time() changes
         await asyncio.sleep(0.02)
+        pttl_before = await fake_redis.pttl(lock_key)
 
         result = await lock.renew()
         assert result is True
 
         new_value = await fake_redis.get(lock_key)
-        assert new_value != old_value, "Renew must change the value in Redis"
-        assert new_value.startswith(lock.instance_id)
-        # Also verify the internal _token was updated
-        assert lock._token != old_token
-        assert lock._token == new_value
+        assert new_value == old_value
+        assert new_value == lock.instance_id
+        assert lock._token == old_token
+        pttl_after = await fake_redis.pttl(lock_key)
+        assert pttl_after >= pttl_before
 
         await lock.release()
 
@@ -197,6 +198,18 @@ class TestRenew:
         assert result is False
 
         # Clean up: clear token so release doesn't fail
+        lock._token = None
+        await lock.release()
+
+    async def test_renew_deleted_key_returns_false(self, lock, fake_redis):
+        """If the lock key was DELETEd, the token-CAS renew fails closed."""
+        await lock.acquire()
+        lock_key = lock._keys.instance_lock()
+        await fake_redis.delete(lock_key)
+
+        result = await lock.renew()
+        assert result is False
+
         lock._token = None
         await lock.release()
 
@@ -283,23 +296,22 @@ class TestReleaseRobustness:
         assert remaining == other_value
 
     async def test_tolerates_connection_error(self, fake_redis):
-        """Release swallows connection errors without raising."""
+        """Release swallows connection errors and clears local holder
+        state so ``is_held`` reports False after a Redis-side failure."""
         lock = _make_lock(fake_redis)
         await lock.acquire()
         assert lock._token is not None
 
-        # Make the connection execute raise an error
         async def failing_execute(name, fn):
             raise ConnectionError("redis gone")
 
         lock._conn.execute = failing_execute
 
-        # Should not raise
         await lock.release()
 
-        # _token is set to None inside the callback, which never ran,
-        # so token may still be set. But renewal task should be cancelled.
         assert lock._renewal_task is None
+        assert lock._token is None
+        assert lock.is_held is False
 
     async def test_acquire_sets_expiry(self, lock, fake_redis):
         """Acquired lock has a TTL set in Redis."""
@@ -308,3 +320,113 @@ class TestReleaseRobustness:
         ttl = await fake_redis.ttl(lock_key)
         assert ttl > 0  # TTL is positive (lock has expiry)
         await lock.release()
+
+
+# ---------------------------------------------------------------------------
+# Dataplane-routed path: LuaRegistry.evalsha + wrap_lease integration
+# ---------------------------------------------------------------------------
+
+
+async def _build_lock_with_dp(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    *,
+    key_prefix: str = "dptest",
+    lock_expiry_secs: int = 2,
+    lock_renewal_secs: int = 1,
+):
+    """Build a RedisInstanceLock backed by a started DataPlane sharing
+    the supplied fakeredis instance with the lock's connection."""
+    import gigaevo.dataplane as dp
+    from gigaevo.dataplane.scripts import LuaRegistry
+
+    conn_config = RedisConnectionConfig(
+        redis_url="redis://fake:6379/0",
+        max_retries=1,
+        retry_delay=0.0,
+    )
+    conn = RedisConnection(conn_config)
+    conn._redis = fake_redis
+    conn._closing = False
+
+    key_config = RedisKeyConfig(key_prefix=key_prefix)
+    keys = RedisProgramKeys(key_config)
+    lock_config = RedisLockConfig(
+        lock_expiry_secs=lock_expiry_secs,
+        lock_renewal_secs=lock_renewal_secs,
+    )
+
+    coord = dp.DataPlane("redis://fake:6379/0", key_prefix=key_prefix)
+    coord._connection._pool = fake_redis  # type: ignore[attr-defined]
+    lua = LuaRegistry(fake_redis)
+    coord._register_builtin_scripts(lua)  # type: ignore[attr-defined]
+    await lua.load_all()
+    coord._lua = lua  # type: ignore[attr-defined]
+    coord._started = True  # type: ignore[attr-defined]
+
+    lock = RedisInstanceLock(conn, keys, lock_config, dataplane=coord)
+    return lock, coord
+
+
+class TestDataplaneRoutedLocking:
+    """Lock scripts dispatch through :meth:`LuaRegistry.evalsha` and the
+    acquired lock is wrapped in a :class:`CrashWatchedHandle`."""
+
+    async def test_acquire_routes_through_dataplane_lua_registry(
+        self, fake_redis
+    ) -> None:
+        lock, coord = await _build_lock_with_dp(fake_redis)
+        try:
+            assert await lock.acquire() is True
+            assert lock.is_held
+            # SHA cache lives on the dp's LuaRegistry, not the lock.
+            assert lock._script_shas == {}
+            assert lock.wrapped_lease is not None
+            assert await lock.observe_loss() is None
+        finally:
+            await lock.release()
+            coord._started = False  # type: ignore[attr-defined]
+
+    async def test_renewal_loss_signals_crash_event(self, fake_redis) -> None:
+        """Token-CAS mismatch on renewal yields a :class:`CrashEvent`
+        on the next ``observe_loss``."""
+        lock, coord = await _build_lock_with_dp(fake_redis)
+        try:
+            await lock.acquire()
+            lock_key = lock._keys.instance_lock()
+            await fake_redis.set(lock_key, "other-instance:99999:abcd1234")
+            ok = await lock.renew()
+            assert ok is False
+            evt = await lock.observe_loss()
+            assert evt is not None
+            assert evt.peer == lock_key
+            # Lease handle consumed: a second observer sees nothing.
+            assert await lock.observe_loss() is None
+        finally:
+            lock._token = None
+            await lock.release()
+            coord._started = False  # type: ignore[attr-defined]
+
+    async def test_release_clears_wrapped_lease(self, fake_redis) -> None:
+        """``release`` clears the handle; the next acquire mints a fresh one."""
+        lock, coord = await _build_lock_with_dp(fake_redis)
+        try:
+            await lock.acquire()
+            assert lock.wrapped_lease is not None
+            await lock.release()
+            assert lock.wrapped_lease is None
+            await lock.acquire()
+            assert lock.wrapped_lease is not None
+        finally:
+            await lock.release()
+            coord._started = False  # type: ignore[attr-defined]
+
+    async def test_observe_loss_legacy_path_returns_none(self, fake_redis) -> None:
+        """The legacy direct-aioredis path has no lease vocabulary;
+        ``observe_loss`` returns ``None`` unconditionally."""
+        lock = _make_lock(fake_redis)
+        await lock.acquire()
+        try:
+            assert lock.wrapped_lease is None
+            assert await lock.observe_loss() is None
+        finally:
+            await lock.release()

@@ -4,8 +4,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
-
 from tools.experiment.manifest import (
     VALID_STATUSES,
     VALID_TRANSITIONS,
@@ -19,6 +17,7 @@ from tools.experiment.manifest import (
     set_status,
     update_manifest,
 )
+import yaml
 
 # ---------------------------------------------------------------------------
 # Fixtures

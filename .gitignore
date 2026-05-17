@@ -599,6 +599,10 @@ problems/*/*.json
 # Runtime data directories (binary artifacts, not for VCS)
 data/
 outcmaes/
+wandb/
+runs/
+tb_logs/
+tensorboard/
 
 # Numpy compressed arrays
 *.npz

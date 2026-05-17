@@ -29,6 +29,8 @@ from gigaevo.utils.trackers.base import LogWriter
 if TYPE_CHECKING:
     from typing import Any
 
+    from gigaevo.dataplane import DataPlane, EngineRoot
+
 # Redis run-state field names (used for resume persistence)
 _RUN_STATE_TOTAL_GENERATIONS = "engine:total_generations"
 
@@ -54,12 +56,18 @@ class EvolutionEngine:
         metrics_tracker: MetricsTracker,
         pre_step_hook: Callable[[], Awaitable[None]] | None = None,
         post_run_hook: PostRunHook | None = None,
+        *,
+        dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
         self.mutation_operator = mutation_operator
         self.config = config
         self._writer = writer.bind(path=["evolution_engine"])
+        # Engine-scoped coordination handles; both default to ``None``.
+        self._dataplane = dataplane
+        self._engine_root = engine_root
 
         self._running = False
         self._paused = False
@@ -545,13 +553,14 @@ class EvolutionEngine:
                 )
                 reject_ids.append(prog.id)
 
-        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization).
-        # Also update in-memory state so any downstream code sees DISCARDED.
+        # Batch DONE → DISCARDED (raw JSON patch, no Pydantic).
+        # In-memory mirror goes through the state manager so the
+        # (current, target) pair is FSM-validated.
         if reject_ids:
             reject_set = set(reject_ids)
             for prog in completed:
                 if prog.id in reject_set:
-                    prog.state = ProgramState.DISCARDED
+                    await self.state.set_in_memory_state(prog, ProgramState.DISCARDED)
             try:
                 await self.storage.batch_transition_by_ids(
                     reject_ids,

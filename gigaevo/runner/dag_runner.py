@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import gc
 import os
 import time
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, computed_field, field_validator
@@ -21,6 +21,9 @@ from gigaevo.programs.program_state import ProgramState
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 from gigaevo.utils.metrics_collector import start_metrics_collector
 from gigaevo.utils.trackers.base import LogWriter
+
+if TYPE_CHECKING:
+    from gigaevo.dataplane import DataPlane, EngineRoot
 
 
 class TaskInfo(NamedTuple):
@@ -149,6 +152,8 @@ class DagRunner:
         writer: LogWriter,
         *,
         prioritizer: ProgramPrioritizer | None = None,
+        dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ) -> None:
         self._storage = storage
         self._dag_blueprint = dag_blueprint
@@ -172,6 +177,10 @@ class DagRunner:
 
         # async metrics collector task (no threads)
         self._metrics_collector_task: asyncio.Task | None = None
+
+        # Engine-scoped coordination handles; both default to None.
+        self._dataplane = dataplane
+        self._engine_root = engine_root
 
     @property
     def task(self) -> asyncio.Task | None:
@@ -226,6 +235,33 @@ class DagRunner:
     def active_count(self) -> int:
         return sum(1 for info in self._active.values() if not info.task.done())
 
+    async def _timeout_read_is_fresh(self, prog: Program) -> bool:
+        """Return True if ``prog`` clears the freshness floor.
+
+        Routes through :meth:`DataPlane.read_program` with a
+        :class:`FreshnessAtLeast` floor derived from the snapshot's own
+        ``atomic_counter``; returns ``True`` unconditionally when no
+        dataplane is wired. Used to gate the timeout-discard path
+        against a concurrent RUNNING → DONE transition that advanced
+        the persisted blob between ``storage.get`` and this call.
+        """
+        dp = self._dataplane
+        if dp is None:
+            return True
+        from gigaevo.dataplane import FreshnessAtLeast, Ok
+        from gigaevo.dataplane.ids import ProgramId
+
+        floor = max(0, int(getattr(prog, "atomic_counter", 0)))
+        result = await dp.read_program(
+            ProgramId(prog.id),
+            freshness=FreshnessAtLeast(epoch=floor, generation=floor),
+        )
+        if not isinstance(result, Ok):
+            # Floor not cleared: defer the discard to the next tick.
+            return False
+        # Ok(None) means the blob was deleted; defer rather than discard.
+        return result.value is not None
+
     async def _run(self) -> None:
         logger.info("[DagScheduler] start")
         try:
@@ -273,6 +309,17 @@ class DagRunner:
             try:
                 prog = await self._storage.get(info.program_id)
                 if prog:
+                    # Freshness-pinned re-read: guard the timeout-discard
+                    # against a RUNNING → DONE transition between the
+                    # ``get`` above and this decision. A no-op when no
+                    # dataplane is wired.
+                    if not await self._timeout_read_is_fresh(prog):
+                        logger.info(
+                            "[DagScheduler] program {} timeout-read failed "
+                            "freshness floor — deferring discard",
+                            info.program_id[:8],
+                        )
+                        continue
                     if prog.state == ProgramState.DONE:
                         # TOCTOU guard: the task completed successfully between the
                         # "timed out" classification and this point. Don't discard
@@ -440,10 +487,12 @@ class DagRunner:
                     ProgramState.QUEUED.value,
                     ProgramState.RUNNING.value,
                 )
-                # Update in-memory state to match Redis so _execute_dag
-                # sees RUNNING (not stale QUEUED) when transitioning to DONE.
+                # Mirror Redis into the in-memory state via the state
+                # manager so the (QUEUED, RUNNING) pair is FSM-validated.
                 for prog in launched:
-                    prog.state = ProgramState.RUNNING
+                    await self._state_manager.set_in_memory_state(
+                        prog, ProgramState.RUNNING
+                    )
                 self._metrics.dag_runs_started += count
                 logger.info("[DagScheduler] launched {} programs", count)
             except Exception as e:

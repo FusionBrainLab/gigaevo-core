@@ -15,6 +15,28 @@ from gigaevo.programs.program_state import ProgramState, validate_transition
 _TERMINAL_STATES = frozenset({ProgramState.DISCARDED, ProgramState.DONE})
 
 
+def register_external_terminal_state(program: Program, new_state: ProgramState) -> None:
+    """Pin a freshly-ingested program at a terminal state, in memory.
+
+    Cross-engine migration ingestion: the source engine's terminal
+    state has no causal predecessor in the local FSM, so
+    :func:`validate_transition` is deliberately bypassed. The program
+    must be freshly constructed (not yet observable to any other
+    coroutine) and ``new_state`` must be DONE or DISCARDED.
+
+    Raises:
+        ValueError: ``new_state`` is not a terminal state.
+    """
+    if new_state not in _TERMINAL_STATES:
+        raise ValueError(
+            f"register_external_terminal_state requires a terminal state; "
+            f"got {new_state!r}. Use ProgramStateManager.set_in_memory_state "
+            f"or ProgramStateManager.set_program_state for non-terminal "
+            f"transitions."
+        )
+    program.state = new_state
+
+
 class ProgramStateManager:
     """
     Serialize per-program updates (stage results & program state) and persist them.
@@ -123,5 +145,25 @@ class ProgramStateManager:
             )
 
         # Evict after releasing — terminal programs are never transitioned again.
+        if new_state in _TERMINAL_STATES:
+            self._locks.pop(program.id, None)
+
+    async def set_in_memory_state(
+        self, program: Program, new_state: ProgramState
+    ) -> None:
+        """Validate and mirror an FSM transition into ``program.state``.
+
+        For call sites that persist via a batch operation and only need
+        the in-memory instance brought in sync; holds the per-program
+        lock so the mirror cannot race the canonical transition.
+
+        Raises:
+            ValueError: (current, new) pair rejected by the FSM.
+        """
+        async with self._lock_for(program.id):
+            if program.state == new_state:
+                return
+            validate_transition(program.state, new_state)
+            program.state = new_state
         if new_state in _TERMINAL_STATES:
             self._locks.pop(program.id, None)

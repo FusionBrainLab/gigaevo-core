@@ -2,14 +2,68 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+import math
+from typing import TYPE_CHECKING, Final
 
 from loguru import logger
 from redis.exceptions import WatchError
 
 from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.dataplane import (
+    CellKey,
+    DataPlane,
+    EliteInserted,
+    EliteRejected,
+    EliteSwapped,
+    Err,
+    Freshness,
+    FreshnessEventual,
+    ProgramId,
+    Token,
+    mint_root,
+)
 from gigaevo.programs.program import Program
 
+if TYPE_CHECKING:
+    from gigaevo.dataplane.engine_startup import EngineRoot
+
 CellDescriptor = tuple[int, ...]
+
+
+# Retry budget for the optimistic CAS in
+# :meth:`RedisArchiveStorage.add_elite`; exhaustion surfaces as
+# ``False`` so a contended cell cannot hang a caller indefinitely.
+_WATCH_MAX_ATTEMPTS: Final[int] = 50
+
+# Stable-by-default tie-break: occupant wins equal-score comparisons,
+# matching :class:`SumArchiveSelector`'s strict ``>`` callback.
+_DEFAULT_TIEBREAK_BIT: Final[int] = 0
+
+
+# ------------------------------- Helpers ---------------------------------
+
+
+def _reduce_selector_score(
+    selector: Callable[[Program, Program], bool], program: Program
+) -> float | None:
+    """Probe a selector for its scalar score, if it exposes one.
+
+    Selectors that subclass :class:`ArchiveSelector` expose a scalar via
+    ``reduce_to_score``; bare callables and multi-criteria selectors
+    return ``None`` and the caller takes the WATCH path. NaN / inf
+    scores are also rejected here so the fallback handles a degenerate
+    metric without round-tripping to Lua.
+    """
+    reducer = getattr(selector, "reduce_to_score", None)
+    if reducer is None:
+        return None
+    score = reducer(program)
+    if score is None:
+        return None
+    score_f = float(score)
+    if math.isnan(score_f) or math.isinf(score_f):
+        return None
+    return score_f
 
 
 # ------------------------------- Interface -------------------------------
@@ -19,7 +73,12 @@ class ArchiveStorage(ABC):
     """Elite archive keyed by behavior-space cells."""
 
     @abstractmethod
-    async def get_elite(self, cell: CellDescriptor) -> Program | None: ...
+    async def get_elite(
+        self,
+        cell: CellDescriptor,
+        *,
+        freshness: Freshness | None = None,
+    ) -> Program | None: ...
 
     @abstractmethod
     async def add_elite(
@@ -66,35 +125,36 @@ class ArchiveStorage(ABC):
 
 
 class RedisArchiveStorage(ArchiveStorage):
-    """
-    Redis-backed archive with optimistic locking and reverse index.
+    """Redis-backed archive with bounded optimistic locking + reverse index.
 
     Data structures:
-      - `prefix:archive` (hash): cell -> program_id
-      - `prefix:archive:reverse` (hash): program_id -> cell (1:1 mapping)
+      - ``{prefix}:archive`` (hash): cell -> program_id
+      - ``{prefix}:archive:reverse`` (hash): program_id -> cell (1:1)
+      - ``{prefix}:archive:scores`` (hash): cell -> occupant score
+        (populated by the dataplane swap path only)
 
-    Note: Each program can only be elite in ONE cell at a time.
-
-    An in-memory write-through cache (``_elite_cache``) mirrors the Redis
-    archive hash.  Reads hit the cache first; writes update both cache and
-    Redis atomically.  This eliminates 4-5 Redis round-trips per
-    ``add_elite`` call for the vast majority of programs that don't improve
-    the current cell occupant.  Safe because a single engine instance holds
-    an exclusive Redis instance lock per prefix.
+    ``add_elite`` dispatches on the comparator's expressiveness: scalar-
+    reducible selectors take the dataplane path (one atomic Lua swap),
+    multi-criteria selectors fall back to a WATCH/MULTI/EXEC CAS
+    bounded by :data:`_WATCH_MAX_ATTEMPTS`.
     """
 
     def __init__(
-        self, program_storage: RedisProgramStorage, key_prefix: str | None = None
+        self,
+        program_storage: RedisProgramStorage,
+        key_prefix: str | None = None,
+        *,
+        dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ) -> None:
         self._storage = program_storage
         prefix = key_prefix or program_storage.config.key_prefix
         self._hash_key = f"{prefix}:archive"
         self._reverse_key = f"{prefix}:archive:reverse"
-        # In-memory write-through cache: cell_field -> elite Program
-        self._elite_cache: dict[str, Program] = {}
-        # Reverse: program_id -> cell_field (for remove_by_id)
-        self._elite_reverse: dict[str, str] = {}
-        self._cache_loaded: bool = False
+        self._dataplane = dataplane
+        # When supplied, per-call swap tokens are derived by linear
+        # split from this root rather than ad-hoc minted.
+        self._engine_root = engine_root
 
     # -------- small helpers --------
 
@@ -120,55 +180,46 @@ class RedisArchiveStorage(ArchiveStorage):
 
         return await self._storage.with_redis("archive:hlen", _op)
 
-    async def _hgetall(self) -> dict[str, str]:
-        async def _op(r):
-            return await r.hgetall(self._hash_key)
+    async def get_elite(
+        self,
+        cell: CellDescriptor,
+        *,
+        freshness: Freshness | None = None,
+    ) -> Program | None:
+        """Return the elite program occupying ``cell``, or ``None``.
 
-        return await self._storage.with_redis("archive:hgetall", _op) or {}
-
-    async def _ensure_cache(self) -> None:
-        """Lazily populate the in-memory elite cache from Redis."""
-        if self._cache_loaded:
-            return
-        mapping = await self._hgetall()  # field -> program_id
-        if mapping:
-            pids = list(mapping.values())
-            programs = await self._storage.mget(pids)
-            pid_to_prog = {p.id: p for p in programs}
-            for field, pid in mapping.items():
-                prog = pid_to_prog.get(pid)
-                if prog is not None:
-                    self._elite_cache[field] = prog
-                    self._elite_reverse[pid] = field
-        self._cache_loaded = True
-
-    def _cache_set(self, field: str, program: Program) -> None:
-        """Update cache for a cell, evicting old occupant if different."""
-        old = self._elite_cache.get(field)
-        if old is not None and old.id != program.id:
-            self._elite_reverse.pop(old.id, None)
-        self._elite_cache[field] = program
-        self._elite_reverse[program.id] = field
-
-    def _cache_remove_field(self, field: str) -> None:
-        old = self._elite_cache.pop(field, None)
-        if old is not None:
-            self._elite_reverse.pop(old.id, None)
-
-    def _cache_remove_id(self, program_id: str) -> str | None:
-        """Remove by program ID; returns cell field if found."""
-        field = self._elite_reverse.pop(program_id, None)
-        if field is not None:
-            self._elite_cache.pop(field, None)
-        return field
-
-    def _cache_clear(self) -> None:
-        self._elite_cache.clear()
-        self._elite_reverse.clear()
-
-    async def get_elite(self, cell: CellDescriptor) -> Program | None:
-        await self._ensure_cache()
-        return self._elite_cache.get(self._field(cell))
+        Default :class:`FreshnessEventual` reads admit whatever Redis
+        has now. A stricter floor (e.g. :class:`FreshnessAtLeast`)
+        routes through :meth:`DataPlane.read_program` and raises
+        :class:`StaleReadError` on epoch underflow; a wired dataplane
+        is required, otherwise :class:`RuntimeError` is raised so a
+        silent stale read is not possible.
+        """
+        field = self._field(cell)
+        pid = await self._hget(field)
+        if not pid:
+            return None
+        effective_freshness: Freshness = (
+            freshness if freshness is not None else FreshnessEventual()
+        )
+        if isinstance(effective_freshness, FreshnessEventual):
+            return await self._storage.get(pid)
+        if self._dataplane is None:
+            raise RuntimeError(
+                "RedisArchiveStorage.get_elite: non-eventual freshness "
+                "requires a wired DataPlane; none is attached"
+            )
+        result = await self._dataplane.read_program(
+            ProgramId(pid), freshness=effective_freshness
+        )
+        if isinstance(result, Err):
+            raise result.error
+        if result.value is None:
+            return None
+        # Freshness has cleared; defer Program decoding to a single
+        # owner so atomic_counter / dict-field / exclude semantics stay
+        # consistent with non-coordinator reads.
+        return await self._storage.get(pid)
 
     async def add_elite(
         self,
@@ -176,39 +227,44 @@ class RedisArchiveStorage(ArchiveStorage):
         program: Program,
         is_better: Callable[[Program, Program], bool],
     ) -> bool:
-        """Add elite, using in-memory cache to skip Redis reads for non-improving programs."""
-        await self._ensure_cache()
+        """Add ``program`` to ``cell``, dispatching on comparator shape.
+
+        Scalar-reducible comparators take the dataplane CAS path; the
+        rest fall back to bounded WATCH/MULTI/EXEC. Returns ``True``
+        when the candidate was installed (inserted or swapped).
+        """
         field = self._field(cell)
 
-        # Fast path: compare in-memory (0 Redis RT for rejected programs)
-        current_prog = self._elite_cache.get(field)
-        if current_prog is not None and not is_better(program, current_prog):
-            return False
-
-        # Program improves (or cell is empty).  Verify it exists in storage
-        # before committing to Redis.
+        # Candidate must already exist in program storage; both paths
+        # trust the caller to have persisted the blob.
         if not await self._storage.exists(program.id):
             logger.debug("[Archive] add ignored: program {} not in storage", program.id)
             return False
 
-        current_id = current_prog.id if current_prog else None
+        score = _reduce_selector_score(is_better, program)
+        if self._dataplane is not None and score is not None:
+            return await self._add_elite_via_dataplane(field, program, score)
 
         async def _op(r):
+            attempts = 0
             while True:
+                attempts += 1
+                if attempts > _WATCH_MAX_ATTEMPTS:
+                    logger.warning(
+                        "[Archive] add_elite gave up on cell {} after {} WATCH retries",
+                        field,
+                        _WATCH_MAX_ATTEMPTS,
+                    )
+                    return False
                 try:
                     async with r.pipeline() as pipe:
                         await pipe.watch(self._hash_key)
-
-                        # Re-check Redis state in case of concurrent modification
-                        # (defensive; single-engine makes this unlikely)
                         redis_id = await pipe.hget(self._hash_key, field)
-                        if redis_id and redis_id != (current_id or ""):
-                            # Cache was stale — reload current from Redis
+
+                        if redis_id:
                             redis_prog = await self._storage.get(redis_id)
                             if redis_prog and not is_better(program, redis_prog):
                                 await pipe.unwatch()
-                                # Fix cache to match Redis
-                                self._cache_set(field, redis_prog)
                                 return False
 
                         pipe.multi()
@@ -220,16 +276,62 @@ class RedisArchiveStorage(ArchiveStorage):
                         return True
 
                 except WatchError:
-                    # Invalidate cache for this cell — Redis state may
-                    # have changed under us.  Next iteration re-reads.
-                    self._cache_remove_field(field)
                     continue
 
         ok = await self._storage.with_redis("archive:add_elite", _op)
         if ok:
-            self._cache_set(field, program)
             logger.debug("[Archive] cell {} -> {}", field, program.id)
         return bool(ok)
+
+    async def _add_elite_via_dataplane(
+        self, field: str, program: Program, score: float
+    ) -> bool:
+        """Atomic CAS through :meth:`DataPlane.try_replace_elite`.
+
+        Per-call token: derived from the engine cell root when wired,
+        otherwise ad-hoc via :func:`mint_root`. Tiebreak bit pinned to
+        :data:`_DEFAULT_TIEBREAK_BIT` (occupant wins).
+        """
+        assert self._dataplane is not None  # type narrowing
+        cell_key = CellKey(field)
+        if self._engine_root is not None:
+            token: Token[CellKey] = self._engine_root.split_cell_token(cell_key)
+        else:
+            token = mint_root(cell_key)
+        result = await self._dataplane.try_replace_elite(
+            cell_key,
+            ProgramId(program.id),
+            token=token,
+            candidate_score=score,
+            tiebreak_bit=_DEFAULT_TIEBREAK_BIT,
+        )
+        if isinstance(result, Err):
+            logger.warning(
+                "[Archive] dataplane swap on cell {} failed: {}", field, result.error
+            )
+            return False
+        outcome = result.value
+        if isinstance(outcome, EliteInserted):
+            logger.debug("[Archive] cell {} -> {} (inserted)", field, program.id)
+            return True
+        if isinstance(outcome, EliteSwapped):
+            logger.debug(
+                "[Archive] cell {} -> {} (swapped {})",
+                field,
+                program.id,
+                outcome.displaced_id,
+            )
+            return True
+        if isinstance(outcome, EliteRejected):
+            return False
+        # Unknown variant: log so a coordinator API drift surfaces on
+        # the first call rather than masquerading as a no-op swap.
+        logger.warning(
+            "[Archive] dataplane swap on cell {} returned unknown outcome {!r}",
+            field,
+            outcome,
+        )
+        return False
 
     async def remove_elite(self, cell: CellDescriptor) -> bool:
         """Remove elite from cell and update reverse index."""
@@ -248,18 +350,16 @@ class RedisArchiveStorage(ArchiveStorage):
 
         removed = await self._storage.with_redis("archive:remove_elite", _op)
         if removed:
-            self._cache_remove_field(field)
             logger.debug("[Archive] removed cell {}", field)
         return bool(removed)
 
     async def get_all_elites(self) -> list[str]:
         """Return all elite program IDs (already unique due to 1:1 mapping)."""
-        await self._ensure_cache()
-        return sorted(p.id for p in self._elite_cache.values())
+        vals = await self._hvals()
+        return sorted(vals)
 
     async def size(self) -> int:
-        await self._ensure_cache()
-        return len(self._elite_cache)
+        return await self._hlen()
 
     async def remove_elite_by_id(self, program_id: str) -> bool:
         """Remove program using reverse index (O(1) lookup)."""
@@ -277,7 +377,6 @@ class RedisArchiveStorage(ArchiveStorage):
 
         removed = await self._storage.with_redis("archive:remove_elite_by_id", _op)
         if removed:
-            self._cache_remove_id(program_id)
             logger.debug("[Archive] removed id {}", program_id)
         return bool(removed)
 
@@ -305,15 +404,12 @@ class RedisArchiveStorage(ArchiveStorage):
 
         count = await self._storage.with_redis("archive:bulk_remove_elites_by_id", _op)
         if count:
-            for pid in program_ids:
-                self._cache_remove_id(pid)
             logger.debug("[Archive] bulk removed {} ids", count)
         return int(count)
 
     async def clear_all_elites(self) -> int:
-        """Clear all elites and reverse index."""
-        await self._ensure_cache()
-        count = len(self._elite_cache)
+        """Clear all elites and reverse index. Returns cells cleared."""
+        count = await self._hlen()
         if count == 0:
             return 0
 
@@ -324,8 +420,6 @@ class RedisArchiveStorage(ArchiveStorage):
             await pipe.execute()
 
         await self._storage.with_redis("archive:clear_all", _op)
-        self._cache_clear()
-
         logger.debug("[Archive] cleared {} elites", count)
         return count
 
@@ -334,12 +428,9 @@ class RedisArchiveStorage(ArchiveStorage):
         placements: list[tuple[CellDescriptor, Program]],
         is_better: Callable[[Program, Program], bool],
     ) -> int:
+        """Sequential :meth:`add_elite` over the placements list."""
         if not placements:
             return 0
-
-        # Note: This naive implementation processes items sequentially.
-        # A more optimized version would group by cell and select the best per cell first,
-        # but since this runs during re-indexing (rarely), correctness > raw speed for now.
 
         added_count = 0
         for cell, program in placements:

@@ -431,12 +431,14 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 )
                 reject_ids.append(prog.id)
 
-        # Batch DONE -> DISCARDED for rejects
+        # Batch DONE -> DISCARDED for rejects. In-memory mirror goes
+        # through the state manager so the (current, target) pair is
+        # FSM-validated; the persisted transition follows below.
         if reject_ids:
             reject_set = set(reject_ids)
             for prog in completed:
                 if prog.id in reject_set:
-                    prog.state = ProgramState.DISCARDED
+                    await self.state.set_in_memory_state(prog, ProgramState.DISCARDED)
             try:
                 await self.storage.batch_transition_by_ids(
                     reject_ids,

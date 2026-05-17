@@ -125,7 +125,8 @@ class TestGigaEvoArchivePromptFetcher:
         )
         assert result.prompt_id is None
 
-    def test_record_outcome_skips_rejected_acceptor(self, tmp_prompts_dir: Path):
+    @pytest.mark.asyncio
+    async def test_record_outcome_skips_rejected_acceptor(self, tmp_prompts_dir: Path):
         """record_outcome() skips REJECTED_ACCEPTOR outcomes."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
@@ -133,7 +134,7 @@ class TestGigaEvoArchivePromptFetcher:
             fallback_prompts_dir=tmp_prompts_dir,
         )
         # Should not raise when prompt_id is None or outcome is REJECTED_ACCEPTOR
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.5,
             parent_fitness=0.4,
@@ -142,14 +143,15 @@ class TestGigaEvoArchivePromptFetcher:
         )
         # No assertion needed — just verify no exception
 
-    def test_record_outcome_noop_when_prompt_id_none(self, tmp_prompts_dir: Path):
+    @pytest.mark.asyncio
+    async def test_record_outcome_noop_when_prompt_id_none(self, tmp_prompts_dir: Path):
         """record_outcome() is no-op when prompt_id is None."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="chains/hotpotqa",
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id=None,
             child_fitness=0.5,
             parent_fitness=0.4,
@@ -171,19 +173,20 @@ class TestGigaEvoArchivePromptFetcher:
         assert "has_champion" in stats
         assert "champion_has_user" in stats
 
-    def test_main_redis_db_none_leaves_stats_write_disabled(
+    @pytest.mark.asyncio
+    async def test_main_redis_db_none_leaves_stats_write_disabled(
         self, tmp_prompts_dir: Path
     ):
-        """Without main_redis_db, _redis_main_sync is None and record_outcome is a no-op."""
+        """Without main_redis_db and no injected DataPlane, record_outcome
+        is a silent no-op."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="prefix",
-            main_redis_db=None,  # explicit None
+            main_redis_db=None,
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        assert fetcher._redis_main_sync is None
-        # record_outcome must be silent no-op, not raise
-        fetcher.record_outcome(
+        assert fetcher._main_dp is None
+        await fetcher.record_outcome(
             prompt_id="abc123",
             child_fitness=0.7,
             parent_fitness=0.5,
@@ -191,16 +194,18 @@ class TestGigaEvoArchivePromptFetcher:
             outcome=MutationOutcome.ACCEPTED,
         )
 
-    def test_main_redis_db_provided_initializes_client(self, tmp_prompts_dir: Path):
-        """Providing main_redis_db initializes _redis_main_sync immediately in __init__."""
+    def test_main_redis_db_provided_defers_dataplane_construction(
+        self, tmp_prompts_dir: Path
+    ):
+        """Constructor records main_redis_db; DataPlane is built in start()."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
             main_redis_prefix="prefix",
-            main_redis_db=5,  # main run's DB
+            main_redis_db=5,
             fallback_prompts_dir=tmp_prompts_dir,
         )
-        # Client should be initialized (even if Redis is not actually running)
-        assert fetcher._redis_main_sync is not None
+        assert fetcher._main_redis_db == 5
+        assert fetcher._main_dp is None
 
     def test_fetch_user_returns_fallback_when_no_champion(self, tmp_prompts_dir: Path):
         """fetch('mutation', 'user') returns fallback when no champion."""
@@ -289,6 +294,162 @@ class TestGigaEvoArchivePromptFetcher:
         code = "def entrypoint():\n    return 42"
         pack = fetcher._execute_entrypoint(code)
         assert pack is None
+
+
+# ---------------------------------------------------------------------------
+# attach_dataplane Tests
+# ---------------------------------------------------------------------------
+
+
+class TestAttachDataplane:
+    """The rebind contract used by
+    :func:`gigaevo.dataplane.engine_startup.wire_prompt_fetcher`:
+    idempotent on identical input, rejects conflicting input, and
+    suppresses the lazy-build branch in :meth:`start` once attached."""
+
+    @staticmethod
+    def _fake_dataplane(prefix: str):
+        """Started fake-pool DataPlane for attach tests."""
+        import fakeredis
+        import fakeredis.aioredis
+
+        from gigaevo.dataplane import DataPlane
+        from gigaevo.dataplane.scripts import LuaRegistry
+
+        async def _build() -> DataPlane:
+            server = fakeredis.FakeServer()
+            dp = DataPlane("redis://embedded/0", key_prefix=prefix)
+            fake = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+            dp._connection._pool = fake  # type: ignore[attr-defined]
+            lua = LuaRegistry(fake)
+            dp._register_builtin_scripts(lua)  # type: ignore[attr-defined]
+            await lua.load_all()
+            dp._lua = lua  # type: ignore[attr-defined]
+            dp._started = True  # type: ignore[attr-defined]
+            return dp
+
+        return _build
+
+    @pytest.mark.asyncio
+    async def test_attach_populates_slots(self, tmp_prompts_dir: Path):
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            assert fetcher._main_dp is main_dp
+            assert fetcher._prompt_dp is prompt_dp
+            assert fetcher._actor == actor
+            # Engine owns the lifetime; fetcher.stop must not tear down
+            # the engine's shared pool.
+            assert fetcher._main_dp_owned is False
+            assert fetcher._prompt_dp_owned is False
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_attach_is_idempotent_on_identical_args(self, tmp_prompts_dir: Path):
+        """A second call with the SAME triple is a silent no-op."""
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            # Second call must not raise and must leave state untouched.
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            assert fetcher._main_dp is main_dp
+            assert fetcher._prompt_dp is prompt_dp
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_attach_raises_on_conflicting_main(self, tmp_prompts_dir: Path):
+        """A second call with a DIFFERENT main DP must raise rather than overwrite."""
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        other_dp = await self._fake_dataplane("other")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                fetcher.attach_dataplane(other_dp, prompt_dp, actor)
+            # Original attachment survives the rejected re-attach.
+            assert fetcher._main_dp is main_dp
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            other_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_attach_raises_on_conflicting_actor(self, tmp_prompts_dir: Path):
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor_a = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w-a"))
+        actor_b = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w-b"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor_a)
+            with pytest.raises(RuntimeError, match="different DataPlane"):
+                fetcher.attach_dataplane(main_dp, prompt_dp, actor_b)
+        finally:
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_start_skips_lazy_build_when_attached(self, tmp_prompts_dir: Path):
+        """After attach, :meth:`start` must not construct a second DataPlane."""
+        from gigaevo.dataplane import ActorIdentity, RunId, WorkerId
+
+        main_dp = await self._fake_dataplane("main")()
+        prompt_dp = await self._fake_dataplane("prompt")()
+        actor = ActorIdentity(run_id=RunId("r"), worker_id=WorkerId("w"))
+        fetcher = GigaEvoArchivePromptFetcher(
+            prompt_redis_db=6,
+            main_redis_prefix="main",
+            main_redis_db=5,
+            fallback_prompts_dir=tmp_prompts_dir,
+        )
+        try:
+            fetcher.attach_dataplane(main_dp, prompt_dp, actor)
+            # ``start`` must not rebind the injected handles.
+            await fetcher.start()
+            assert fetcher._main_dp is main_dp
+            assert fetcher._prompt_dp is prompt_dp
+            assert fetcher._main_dp_owned is False
+            assert fetcher._prompt_dp_owned is False
+        finally:
+            await fetcher.stop()
+            main_dp._started = False  # type: ignore[attr-defined]
+            prompt_dp._started = False  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -407,11 +568,12 @@ class TestPromptFetcherABC:
         with pytest.raises(TypeError):
             IncompleteFetcher()  # type: ignore
 
-    def test_record_outcome_default_noop(self):
+    @pytest.mark.asyncio
+    async def test_record_outcome_default_noop(self):
         """PromptFetcher.record_outcome() default is no-op."""
         fetcher = FixedDirPromptFetcher()
         # Should not raise
-        fetcher.record_outcome(
+        await fetcher.record_outcome(
             prompt_id="test",
             child_fitness=0.5,
             parent_fitness=0.4,

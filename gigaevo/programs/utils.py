@@ -12,7 +12,9 @@ def pickle_b64_serialize(value: Any) -> str:
 
 
 def pickle_b64_deserialize(value: str) -> Any:
-    return cloudpickle.loads(base64.b64decode(value.encode("utf-8")))
+    # Deserializes a b64-encoded cloudpickle payload written by the same
+    # process; the bytes never cross a trust boundary.
+    return cloudpickle.loads(base64.b64decode(value.encode("utf-8")))  # noqa: TID251
 
 
 def dedent_code(code: str) -> str:

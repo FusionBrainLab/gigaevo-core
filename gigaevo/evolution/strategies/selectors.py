@@ -25,6 +25,18 @@ class ArchiveSelector(ABC):
     def __call__(self, new: Program, current: Program) -> bool:
         """Determine if new program should replace current elite."""
 
+    def reduce_to_score(self, program: Program) -> float | None:
+        """Return a scalar score for ``program``, or ``None``.
+
+        Contract: ``__call__(a, b) is True`` iff
+        ``reduce_to_score(a) > reduce_to_score(b)`` for every pair on
+        which ``__call__`` returns a defined boolean. Selectors that
+        cannot satisfy this (multi-criteria dominance, etc.) MUST
+        return ``None`` so the archive falls back to its full-callback
+        path. Ties are resolved by a caller-supplied tiebreak bit.
+        """
+        return None
+
 
 class SumArchiveSelector(ArchiveSelector):
     def __init__(self, *args, weights: list[float] | None = None, **kwargs):
@@ -75,6 +87,10 @@ class SumArchiveSelector(ArchiveSelector):
                 )
             ]
         )
+
+    def reduce_to_score(self, program: Program) -> float | None:
+        """Weighted-sum fitness reduction; mirrors :meth:`__call__`."""
+        return self.score(program)
 
 
 class ParetoFrontSelector(ArchiveSelector):

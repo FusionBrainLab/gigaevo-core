@@ -602,6 +602,109 @@ class TestMutationOutcomeHandling:
 
 
 # ---------------------------------------------------------------------------
+# Acceptor-reject reward policy (skip_reward_on_acceptor_reject)
+# ---------------------------------------------------------------------------
+
+
+class TestSkipRewardOnAcceptorReject:
+    """The flag suppresses synthetic 0.0 rewards on REJECTED_ACCEPTOR.
+
+    Two distinct invariants are exercised here:
+
+    1. With the flag set, ``REJECTED_ACCEPTOR`` does not append to the
+       reward window — successive accepted rewards survive untouched
+       and the model's mean reward reflects only the real signal.
+    2. The selection-time ``record_pull`` is untouched: a separate
+       outcome stream that mixes acceptor-rejections with accepted
+       outcomes accumulates only one reward sample per accepted call,
+       confirming the trial-vs-reward decoupling described in the
+       module docstring.
+    """
+
+    def _make_router(self, **kwargs):
+        models = _make_mock_models(["llama", "qwen"])
+        defaults = dict(
+            fitness_key="fitness",
+            higher_is_better=True,
+            window_size=50,
+            skip_reward_on_acceptor_reject=True,
+        )
+        defaults.update(kwargs)
+        router = BanditModelRouter(models, [0.5, 0.5], **defaults)
+        router._bandit.record_pull("llama")
+        router._bandit.record_pull("qwen")
+        return router
+
+    def test_rejected_acceptor_does_not_record_reward(self):
+        router = self._make_router()
+        child = Program(code="x=CRASH")
+        child.set_metadata("mutation_model", "llama")
+        child.metrics["fitness"] = -1000  # sentinel for crashed
+        parent = Program(code="x=0")
+        parent.metrics["fitness"] = 0.025
+        router.on_mutation_outcome(
+            child, [parent], outcome=MutationOutcome.REJECTED_ACCEPTOR
+        )
+        stats = router.get_bandit_stats()
+        # Reward window untouched: no synthetic 0 was appended.
+        assert stats["llama"]["window_size"] == 0
+        # Pull counter remains as recorded at selection time.
+        assert stats["llama"]["total_pulls"] == 1
+
+    def test_accepted_then_rejected_acceptor_keeps_real_signal(self):
+        router = self._make_router()
+        # First, an ACCEPTED outcome with a strong improvement.
+        good = Program(code="good")
+        good.set_metadata("mutation_model", "llama")
+        good.metrics["fitness"] = 0.030
+        good_parent = Program(code="parent")
+        good_parent.metrics["fitness"] = 0.025
+        router.on_mutation_outcome(
+            good, [good_parent], outcome=MutationOutcome.ACCEPTED
+        )
+        accepted_stats = router.get_bandit_stats()["llama"]
+        assert accepted_stats["window_size"] == 1
+        # Then an acceptor reject: window stays at 1, mean unchanged.
+        crashed = Program(code="crashed")
+        crashed.set_metadata("mutation_model", "llama")
+        crashed.metrics["fitness"] = -1000
+        router.on_mutation_outcome(
+            crashed, [good_parent], outcome=MutationOutcome.REJECTED_ACCEPTOR
+        )
+        after_stats = router.get_bandit_stats()["llama"]
+        assert after_stats["window_size"] == 1
+        assert after_stats["mean_reward"] == accepted_stats["mean_reward"]
+
+    def test_strategy_reject_still_records_with_flag(self):
+        """REJECTED_STRATEGY is unaffected by the new flag — it still
+        produces a fitness-derived reward sample."""
+        router = self._make_router()
+        child = Program(code="weak")
+        child.set_metadata("mutation_model", "qwen")
+        child.metrics["fitness"] = 0.020
+        parent = Program(code="parent")
+        parent.metrics["fitness"] = 0.025
+        router.on_mutation_outcome(
+            child, [parent], outcome=MutationOutcome.REJECTED_STRATEGY
+        )
+        assert router.get_bandit_stats()["qwen"]["window_size"] == 1
+
+    def test_default_flag_preserves_legacy_zero_injection(self):
+        """The flag defaults to False — REJECTED_ACCEPTOR still appends 0.0."""
+        models = _make_mock_models(["llama"])
+        router = BanditModelRouter(
+            models, [1.0], fitness_key="fitness", higher_is_better=True
+        )
+        router._bandit.record_pull("llama")
+        child = Program(code="x=CRASH")
+        child.set_metadata("mutation_model", "llama")
+        child.metrics["fitness"] = -1000
+        router.on_mutation_outcome(child, [], outcome=MutationOutcome.REJECTED_ACCEPTOR)
+        # Default-flag behaviour: window grows by one.
+        assert router.get_bandit_stats()["llama"]["window_size"] == 1
+
+
+# ---------------------------------------------------------------------------
 # Realistic heilbron scenarios
 # ---------------------------------------------------------------------------
 
@@ -1307,3 +1410,592 @@ class TestOnProgramIngestedEdgeCases:
         await op.on_program_ingested(child, mock_storage)
 
         mock_storage.mget.assert_called_once_with(parent_ids)
+
+
+# ---------------------------------------------------------------------------
+# CRDT-backed bandit ledger
+# ---------------------------------------------------------------------------
+
+
+import fakeredis  # noqa: E402
+import fakeredis.aioredis  # noqa: E402
+
+import gigaevo.dataplane as dp  # noqa: E402
+from gigaevo.llm.bandit import (  # noqa: E402
+    _REWARD_FIXED_POINT_SCALE,
+    _reward_sum_key,
+    _reward_to_fixed_point,
+    _trials_key,
+)
+
+
+async def _make_coord(server: fakeredis.FakeServer) -> dp.DataPlane:
+    """Wire a DataPlane to an in-process fakeredis instance so the bandit
+    exercises real coordinator and Lua-script code paths."""
+    coord = dp.DataPlane("redis://embedded/0", key_prefix="test")
+    fake = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+    coord._connection._pool = fake  # type: ignore[attr-defined]
+    from gigaevo.dataplane.scripts import LuaRegistry
+
+    lua = LuaRegistry(fake)
+    coord._register_builtin_scripts(lua)  # type: ignore[attr-defined]
+    await lua.load_all()
+    coord._lua = lua  # type: ignore[attr-defined]
+    coord._started = True  # type: ignore[attr-defined]
+    return coord
+
+
+async def _close_coord(coord: dp.DataPlane) -> None:
+    coord._started = False  # type: ignore[attr-defined]
+    coord._lua = None  # type: ignore[attr-defined]
+    fake = coord._connection._pool  # type: ignore[attr-defined]
+    coord._connection._pool = None  # type: ignore[attr-defined]
+    if fake is not None:
+        await fake.aclose()
+
+
+def _actor(run: str, worker: str) -> dp.ActorIdentity:
+    return dp.ActorIdentity(run_id=dp.RunId(run), worker_id=dp.WorkerId(worker))
+
+
+class TestRewardFixedPoint:
+    """Round-trip and clamp behaviour of the reward fixed-point converter."""
+
+    def test_zero_round_trips(self) -> None:
+        assert _reward_to_fixed_point(0.0) == 0
+
+    def test_one_round_trips_to_scale(self) -> None:
+        assert _reward_to_fixed_point(1.0) == _REWARD_FIXED_POINT_SCALE
+
+    def test_half_round_trips(self) -> None:
+        assert _reward_to_fixed_point(0.5) == _REWARD_FIXED_POINT_SCALE // 2
+
+    def test_negative_clamped_to_zero(self) -> None:
+        assert _reward_to_fixed_point(-0.25) == 0
+
+    def test_above_one_clamped_to_scale(self) -> None:
+        assert _reward_to_fixed_point(7.5) == _REWARD_FIXED_POINT_SCALE
+
+
+class TestSlidingWindowUCB1ConfigValidation:
+    def test_asymmetric_dataplane_actor_rejected(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        class _DummyDp:
+            pass
+
+        with pytest.raises(ValueError, match="together or both omitted"):
+            SlidingWindowUCB1(arm_names=["a"], dataplane=_DummyDp(), actor=None)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="together or both omitted"):
+            SlidingWindowUCB1(arm_names=["a"], dataplane=None, actor=_actor("r", "w"))
+
+    def test_no_dataplane_is_not_redis_backed(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        ucb = SlidingWindowUCB1(arm_names=["a", "b"])
+        assert ucb.is_redis_backed is False
+
+
+class TestSlidingWindowUCB1RedisBacked:
+    """Redis-backed mode mirrors trial counts and reward sums via crdt_inc."""
+
+    async def test_record_pull_mirrors_to_redis(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a", "b"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.record_pull("a")
+            ucb.record_pull("b")
+            await ucb.drain_pending_writes()
+
+            trials_a = await coord.crdt_read(_trials_key("a"))
+            trials_b = await coord.crdt_read(_trials_key("b"))
+            assert isinstance(trials_a, dp.Ok) and trials_a.value.value == 2
+            assert isinstance(trials_b, dp.Ok) and trials_b.value.value == 1
+        finally:
+            await _close_coord(coord)
+
+    async def test_update_reward_mirrors_to_redis(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.25)
+            ucb.update_reward("a", 0.75)
+            await ucb.drain_pending_writes()
+
+            read = await coord.crdt_read(_reward_sum_key("a"))
+            assert isinstance(read, dp.Ok)
+            # 0.25 + 0.75 = 1.0 → 1000 in fixed-point.
+            assert read.value.value == _REWARD_FIXED_POINT_SCALE
+        finally:
+            await _close_coord(coord)
+
+    async def test_zero_reward_does_not_round_trip(self) -> None:
+        """A normalized reward of exactly 0 must not cost a Redis round-trip."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.0)
+            await ucb.drain_pending_writes()
+
+            read = await coord.crdt_read(_reward_sum_key("a"))
+            # Counter never written → epoch == 0 and sum == 0.
+            assert isinstance(read, dp.Ok)
+            assert read.value.value == 0
+        finally:
+            await _close_coord(coord)
+
+    async def test_get_mean_reward_uses_consensus(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.4)
+            ucb.update_reward("a", 0.6)
+            mean = await ucb.get_mean_reward("a")
+            # (0.4 + 0.6) / 2 = 0.5, fixed-point round-trip preserves it.
+            assert mean == pytest.approx(0.5)
+        finally:
+            await _close_coord(coord)
+
+    async def test_get_mean_reward_zero_when_no_pulls(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            assert (await ucb.get_mean_reward("a")) == 0.0
+        finally:
+            await _close_coord(coord)
+
+    async def test_refresh_lifts_local_to_consensus(self) -> None:
+        """A bandit that only knows about its own pulls catches up on refresh."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            # Peer A has done 5 pulls on arm "a".
+            peer_a = SlidingWindowUCB1(
+                arm_names=["a", "b"],
+                dataplane=coord,
+                actor=_actor("run-1", "peer-a"),
+            )
+            for _ in range(5):
+                peer_a.record_pull("a")
+            await peer_a.drain_pending_writes()
+
+            # Peer B starts fresh, performs no pulls, then refreshes.
+            peer_b = SlidingWindowUCB1(
+                arm_names=["a", "b"],
+                dataplane=coord,
+                actor=_actor("run-1", "peer-b"),
+            )
+            assert peer_b.arms["a"].total_pulls == 0
+            assert peer_b._total_pulls == 0
+            await peer_b.refresh_from_redis()
+            assert peer_b.arms["a"].total_pulls == 5
+            assert peer_b._total_pulls == 5
+        finally:
+            await _close_coord(coord)
+
+    async def test_two_peers_observe_shared_ledger(self) -> None:
+        """Two bandits at the same key prefix see each other's pulls."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            peer_a = SlidingWindowUCB1(
+                arm_names=["llama", "qwen"],
+                dataplane=coord,
+                actor=_actor("run-1", "peer-a"),
+            )
+            peer_b = SlidingWindowUCB1(
+                arm_names=["llama", "qwen"],
+                dataplane=coord,
+                actor=_actor("run-1", "peer-b"),
+            )
+            peer_a.record_pull("llama")
+            peer_a.update_reward("llama", 0.8)
+            peer_b.record_pull("llama")
+            peer_b.update_reward("llama", 0.2)
+            peer_b.record_pull("qwen")
+            peer_b.update_reward("qwen", 0.5)
+            await peer_a.drain_pending_writes()
+            await peer_b.drain_pending_writes()
+
+            mean_a = await peer_a.get_mean_reward("llama")
+            mean_b = await peer_b.get_mean_reward("llama")
+            # Both peers see the consensus (0.8 + 0.2) / 2 = 0.5
+            assert mean_a == pytest.approx(0.5)
+            assert mean_b == pytest.approx(0.5)
+        finally:
+            await _close_coord(coord)
+
+    async def test_refresh_keeps_local_when_above_consensus(self) -> None:
+        """Drift detection: local > consensus does not retroactively shrink."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.record_pull("a")
+            await ucb.drain_pending_writes()
+            # Simulate a lost write by manually nuking the per-arm counter.
+            fake = coord._connection._pool  # type: ignore[attr-defined]
+            await fake.delete("test:bandit:trials:a:counts")
+            await ucb.refresh_from_redis()
+            # Local count is preserved, total_pulls untouched.
+            assert ucb.arms["a"].total_pulls == 2
+            assert ucb._total_pulls == 2
+        finally:
+            await _close_coord(coord)
+
+
+class TestSlidingWindowUCB1FallbackParity:
+    """Without dataplane/actor, the bandit must behave identically to before."""
+
+    def test_sync_select_record_update_no_redis_dependency(self) -> None:
+        """Sync callers (no running loop) bypass Redis entirely."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        ucb = SlidingWindowUCB1(arm_names=["a", "b"], exploration_constant=0.0)
+        ucb.record_pull("a")
+        ucb.update_reward("a", 0.9)
+        ucb.record_pull("b")
+        ucb.update_reward("b", 0.1)
+        for _ in range(20):
+            sel = ucb.select()
+            ucb.record_pull(sel)
+            ucb.update_reward(sel, 0.5)
+        assert ucb._total_pulls == 22
+
+    async def test_no_pending_writes_when_unconfigured(self) -> None:
+        """The pending-writes set stays empty in in-process-only mode."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        ucb = SlidingWindowUCB1(arm_names=["a"])
+        ucb.record_pull("a")
+        ucb.update_reward("a", 0.5)
+        assert ucb._pending_writes == set()
+        # drain is a no-op in this mode.
+        await ucb.drain_pending_writes()
+
+    async def test_get_mean_reward_falls_back_to_window(self) -> None:
+        """In-process mode reports the windowed mean from get_mean_reward."""
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        ucb = SlidingWindowUCB1(arm_names=["a"])
+        ucb.record_pull("a")
+        ucb.update_reward("a", 0.4)
+        ucb.update_reward("a", 0.8)
+        mean = await ucb.get_mean_reward("a")
+        assert mean == pytest.approx(0.6)
+
+    async def test_refresh_is_noop_without_dataplane(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        ucb = SlidingWindowUCB1(arm_names=["a"])
+        ucb.record_pull("a")
+        await ucb.refresh_from_redis()
+        assert ucb.arms["a"].total_pulls == 1
+        assert ucb._total_pulls == 1
+
+
+class TestSelectionSequenceParity:
+    """UCB1 N-drift A/B pin: Redis mirror must not change the local sequence.
+
+    The doc §9.1 calls out: "Bandit ledger consistency model change breaks
+    UCB1 confidence intervals". Two bandits with identical seeds — one in
+    in-process mode, one in Redis-backed mode (without refresh) — must
+    produce the same selection sequence because the Redis writes never
+    feed back into ``_total_pulls`` until ``refresh_from_redis`` is called.
+    """
+
+    async def test_select_sequence_identical_without_refresh(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            actor = _actor("run-1", "w-1")
+            in_proc = SlidingWindowUCB1(
+                arm_names=["a", "b", "c"], exploration_constant=1.41
+            )
+            redis_bk = SlidingWindowUCB1(
+                arm_names=["a", "b", "c"],
+                exploration_constant=1.41,
+                dataplane=coord,
+                actor=actor,
+            )
+
+            # Deterministic reward schedule keyed by step parity so both
+            # bandits see identical reward streams.
+            for step in range(40):
+                sel_a = in_proc.select()
+                in_proc.record_pull(sel_a)
+                reward = 0.9 if step % 3 == 0 else 0.2
+                in_proc.update_reward(sel_a, reward)
+
+                sel_b = redis_bk.select()
+                redis_bk.record_pull(sel_b)
+                redis_bk.update_reward(sel_b, reward)
+                assert sel_b == sel_a, (
+                    f"divergence at step {step}: in_proc={sel_a} redis={sel_b}"
+                )
+            await redis_bk.drain_pending_writes()
+        finally:
+            await _close_coord(coord)
+
+
+class TestBanditModelRouterRedisBacked:
+    """Top-level BanditModelRouter accepts dataplane / actor and mirrors."""
+
+    async def test_router_mirrors_record_pull(self) -> None:
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            models = _make_mock_models(["model_a", "model_b"])
+            router = BanditModelRouter(
+                models,
+                [0.5, 0.5],
+                fitness_key="score",
+                higher_is_better=True,
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            # Two _select() calls go through warmup, hitting both arms.
+            router._select()
+            router._select()
+            await router._bandit.drain_pending_writes()
+
+            trials_a = await coord.crdt_read(_trials_key("model_a"))
+            trials_b = await coord.crdt_read(_trials_key("model_b"))
+            assert isinstance(trials_a, dp.Ok) and trials_a.value.value == 1
+            assert isinstance(trials_b, dp.Ok) and trials_b.value.value == 1
+        finally:
+            await _close_coord(coord)
+
+    async def test_router_mirrors_mutation_outcome(self) -> None:
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            models = _make_mock_models(["model_a"])
+            router = BanditModelRouter(
+                models,
+                [1.0],
+                fitness_key="score",
+                higher_is_better=True,
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            child = Program(code="x=1")
+            child.set_metadata("mutation_model", "model_a")
+            child.metrics["score"] = 10.0
+            parent = Program(code="x=0")
+            parent.metrics["score"] = 8.0
+
+            # Warmup pull then outcome.
+            router._bandit.record_pull("model_a")
+            router.on_mutation_outcome(child, [parent])
+            await router._bandit.drain_pending_writes()
+
+            sum_a = await coord.crdt_read(_reward_sum_key("model_a"))
+            # The exact value depends on the normalizer warmup (returns
+            # 0.5 below min_samples), which round-trips through fixed-point
+            # to exactly 500.
+            assert isinstance(sum_a, dp.Ok)
+            assert sum_a.value.value == _REWARD_FIXED_POINT_SCALE // 2
+        finally:
+            await _close_coord(coord)
+
+
+class TestSlidingWindowUCB1EngineRoot:
+    """Engine-root-backed mode threads per-call counter tokens.
+
+    Every background ``crdt_inc`` carries a token split from the engine
+    root, so the coordinator's linearity check fires and the ledger
+    write satisfies the single-writer-per-subspace invariant.
+    """
+
+    async def test_engine_root_threads_tokens_through(self) -> None:
+        from gigaevo.dataplane.engine_startup import build_engine_root
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            engine_root = build_engine_root()
+            ucb = SlidingWindowUCB1(
+                arm_names=["a", "b"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+                engine_root=engine_root,
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.3)
+            ucb.record_pull("b")
+            await ucb.drain_pending_writes()
+
+            # Tokens are minted off the engine root and consumed inside
+            # the coordinator; the ledger reflects the writes.
+            trials_a = await coord.crdt_read(_trials_key("a"))
+            trials_b = await coord.crdt_read(_trials_key("b"))
+            assert isinstance(trials_a, dp.Ok) and trials_a.value.value == 1
+            assert isinstance(trials_b, dp.Ok) and trials_b.value.value == 1
+            sum_a = await coord.crdt_read(_reward_sum_key("a"))
+            assert isinstance(sum_a, dp.Ok) and sum_a.value.value == 300
+        finally:
+            await _close_coord(coord)
+
+    def test_engine_root_without_dataplane_rejected(self) -> None:
+        from gigaevo.dataplane.engine_startup import build_engine_root
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        engine_root = build_engine_root()
+        with pytest.raises(ValueError, match="engine_root requires a dataplane"):
+            SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=None,
+                actor=None,
+                engine_root=engine_root,
+            )
+
+    async def test_engine_root_router_wiring(self) -> None:
+        from gigaevo.dataplane.engine_startup import build_engine_root
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            engine_root = build_engine_root()
+            models = _make_mock_models(["model_a"])
+            router = BanditModelRouter(
+                models,
+                [1.0],
+                fitness_key="score",
+                higher_is_better=True,
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+                engine_root=engine_root,
+            )
+            router._bandit.record_pull("model_a")
+            await router._bandit.drain_pending_writes()
+            trials_a = await coord.crdt_read(_trials_key("model_a"))
+            assert isinstance(trials_a, dp.Ok) and trials_a.value.value == 1
+        finally:
+            await _close_coord(coord)
+
+
+class TestGetMeanRewardFreshness:
+    """``get_mean_reward`` accepts a freshness contract: the default
+    :class:`FreshnessEventual` returns whatever is persisted, and
+    :class:`FreshnessAtLeast` raises :class:`StaleReadError` when the
+    persisted view does not clear the floor."""
+
+    async def test_default_freshness_is_eventual(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.5)
+            mean = await ucb.get_mean_reward("a")
+            assert mean == pytest.approx(0.5)
+        finally:
+            await _close_coord(coord)
+
+    async def test_explicit_eventual_admits_any_view(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.5)
+            mean = await ucb.get_mean_reward("a", freshness=dp.FreshnessEventual())
+            assert mean == pytest.approx(0.5)
+        finally:
+            await _close_coord(coord)
+
+    async def test_at_least_above_observed_raises_stale(self) -> None:
+        from gigaevo.dataplane.errors import StaleReadError
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.5)
+            await ucb.drain_pending_writes()
+
+            # Observe the current epoch via a baseline read so the floor
+            # we pin is strictly above it; the bandit's
+            # get_mean_reward must then propagate the stale error.
+            observed = await coord.crdt_read(_trials_key("a"))
+            assert isinstance(observed, dp.Ok)
+            with pytest.raises(StaleReadError):
+                await ucb.get_mean_reward(
+                    "a",
+                    freshness=dp.FreshnessAtLeast(epoch=observed.value.epoch + 5),
+                )
+        finally:
+            await _close_coord(coord)

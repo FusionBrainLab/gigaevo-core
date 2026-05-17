@@ -213,7 +213,7 @@ class LLMMutationOperator(MutationOperator):
                 best_parent_fitness = (
                     max(parent_fitness_values) if parent_fitness_values else 0.0
                 )
-                _fetcher.record_outcome(
+                await _fetcher.record_outcome(
                     prompt_id=prompt_id,
                     child_fitness=child_fitness,
                     parent_fitness=best_parent_fitness,

@@ -440,3 +440,39 @@ class TestConcurrentSameStageKey:
         assert final_value in values, (
             f"Final value {final_value} is not one of the expected values {values}"
         )
+
+
+# ===================================================================
+# Category I: register_external_terminal_state
+# ===================================================================
+
+
+class TestRegisterExternalTerminalState:
+    """Pin a terminal state without consulting the in-run FSM. The
+    bypass is restricted to terminal states so non-terminal progression
+    still routes through :func:`validate_transition`."""
+
+    def test_pins_state_to_done_without_validation(self, make_program) -> None:
+        from gigaevo.database.state_manager import register_external_terminal_state
+
+        # QUEUED -> DONE is not in PROGRAM_STATE_TRANSITIONS.
+        prog = make_program(state=ProgramState.QUEUED)
+        assert prog.state == ProgramState.QUEUED
+        register_external_terminal_state(prog, ProgramState.DONE)
+        assert prog.state == ProgramState.DONE
+
+    def test_pins_state_to_discarded(self, make_program) -> None:
+        from gigaevo.database.state_manager import register_external_terminal_state
+
+        prog = make_program()
+        register_external_terminal_state(prog, ProgramState.DISCARDED)
+        assert prog.state == ProgramState.DISCARDED
+
+    def test_rejects_non_terminal_state(self, make_program) -> None:
+        from gigaevo.database.state_manager import register_external_terminal_state
+
+        prog = make_program()
+        with pytest.raises(ValueError, match="terminal state"):
+            register_external_terminal_state(prog, ProgramState.RUNNING)
+        with pytest.raises(ValueError, match="terminal state"):
+            register_external_terminal_state(prog, ProgramState.QUEUED)

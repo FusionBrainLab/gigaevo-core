@@ -11,33 +11,33 @@ llm:
   _target_: gigaevo.llm.models.MultiModelRouter
   _convert_: all
   models:
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: google/gemini-2.5-flash
-      api_key: ${oc.env:OPENAI_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY,null}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
 
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: google/gemini-3-flash-preview
-      api_key: ${oc.env:OPENAI_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY,null}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
 
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: deepseek/deepseek-v3.2
-      api_key: ${oc.env:OPENAI_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY,null}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
 
-    - _target_: langchain_openai.ChatOpenAI
+    - _target_: gigaevo.llm.strict_chat_openai.strict_chat_openai
       model: openai/gpt-4.1-mini
-      api_key: ${oc.env:OPENAI_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY,null}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1

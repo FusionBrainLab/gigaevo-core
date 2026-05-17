@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
-from typing import Any
 
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState, validate_transition
@@ -164,14 +163,6 @@ class ProgramStorage(ABC):
     async def exists(self, program_id: str) -> bool: ...
 
     @abstractmethod
-    async def publish_status_event(
-        self,
-        status: str,
-        program_id: str,
-        extra: dict[str, Any] | None = None,
-    ) -> None: ...
-
-    @abstractmethod
     async def get_all(self, *, exclude: frozenset[str] | None = None) -> list[Program]:
         """Return all programs.
 
@@ -278,12 +269,17 @@ class ProgramStorage(ABC):
         Default implementation falls back to individual transitions.
         Subclasses may override with pipelined operations.
         Returns the number of programs transitioned.
+
+        Per-program FSM validation runs against each program's actual
+        current state so a diverged in-memory state surfaces as
+        :class:`ValueError` rather than being silently persisted.
         """
         old_enum = ProgramState(old_state)
         new_enum = ProgramState(new_state)
+        validate_transition(old_enum, new_enum)
         count = 0
         for prog in programs:
-            validate_transition(old_enum, new_enum)
+            validate_transition(prog.state, new_enum)
             prog.state = new_enum
             await self.atomic_state_transition(prog, old_state, new_state)
             count += 1

@@ -12,6 +12,7 @@ import uuid
 
 from loguru import logger
 
+from gigaevo.database.state_manager import register_external_terminal_state
 from gigaevo.evolution.bus.topology import Topology
 from gigaevo.evolution.bus.transport import MigrantEnvelope, Transport
 from gigaevo.programs.program import Lineage, Program
@@ -109,7 +110,10 @@ class MigrationNode:
         program.set_metadata("migration_source_id", envelope.program_id)
         program.set_metadata("migration_generation", envelope.generation)
         program.set_metadata("is_migrant", True)
-        program.state = ProgramState.DONE
+        # Inbound migrants are re-anchored at DONE: the local FSM has
+        # no causal predecessor for the source run's state, so the
+        # transition goes through the named cross-run terminal bypass.
+        register_external_terminal_state(program, ProgramState.DONE)
         return program
 
     async def _poll_loop(self) -> None:

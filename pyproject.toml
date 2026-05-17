@@ -89,17 +89,27 @@ target-version = "py312"
 exclude = [".claude/worktrees", "experiments/*/top_programs_*", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
 
 [tool.ruff.lint]
-# Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
-# See https://beta.ruff.rs/docs/rules/ for more possible rules
-select = ["E", "F", "I", "UP"]
+# pycodestyle (E), Pyflakes (F), isort (I), pyupgrade (UP),
+# flake8-tidy-imports (TID) for the banned-api policy below.
+select = ["E", "F", "I", "UP", "TID"]
 ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
+
+# Banned-import policy: redis imports must route through
+# ``gigaevo.dataplane``; pickle deserialization is banned across trust
+# boundaries. Local subprocess-IPC exemptions live in per-file-ignores.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"redis".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
+"redis.asyncio".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
+"redis.exceptions".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
+"pickle.loads".msg = "Pickle deserialization is unsafe across trust boundaries; use a typed wire format or restrict to the per-file-ignores allowlist."
+"cloudpickle.loads".msg = "Pickle deserialization is unsafe across trust boundaries; use a typed wire format or restrict to the per-file-ignores allowlist."
 
 [tool.ruff.lint.per-file-ignores]
 "run.py" = ["E402"]
 "run_hydra.py" = ["E402"]
-"tools/**/*.py" = ["E402"]
+"tools/**/*.py" = ["E402", "TID251"]
 "__init__.py" = ["F401"]
-"problems/**/*.py" = ["E402", "E722", "E741", "F841"]
+"problems/**/*.py" = ["E402", "E722", "E741", "F841", "TID251"]
 "gigaevo/memory/ideas_tracker/run_ideas_tracker_from_csv.py" = ["E402"]
 "gigaevo/memory/examples/a_mem_memory_creation.py" = ["E402"]
 "gigaevo/memory/shared_memory/amem_gam_retriever.py" = ["E402"]
@@ -107,6 +117,23 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "gigaevo/memory/examples/memory_usage_example.py" = ["E402"]
 "gigaevo/memory_platform/shared_memory/memory.py" = ["E402"]
 "gigaevo/memory_platform/shared_memory/remote_gam_retriever.py" = ["E402"]
+# Dataplane owns the Redis boundary.
+"gigaevo/dataplane/**/*.py" = ["TID251"]
+# Reference Lua-CAS implementation that predates the dataplane.
+"gigaevo/infra/endpoint_pool.py" = ["TID251"]
+# Redis call sites not yet routed through the dataplane.
+"gigaevo/database/redis/**/*.py" = ["TID251"]
+"gigaevo/database/redis_program_storage.py" = ["TID251"]
+"gigaevo/evolution/bus/transport.py" = ["TID251"]
+"gigaevo/evolution/storage/archive_storage.py" = ["TID251"]
+"gigaevo/utils/trackers/backends/redis.py" = ["TID251"]
+# Subprocess-IPC sites: cloudpickle.loads consumes a payload produced
+# by a child process this module itself spawned; the trust boundary is
+# local.
+"gigaevo/programs/stages/python_executors/wrapper.py" = ["TID251"]
+"gigaevo/programs/stages/python_executors/exec_runner.py" = ["TID251"]
+# Tests exercise legacy redis paths directly.
+"tests/**/*.py" = ["TID251"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["gigaevo"]

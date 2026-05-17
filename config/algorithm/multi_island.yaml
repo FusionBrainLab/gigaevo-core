@@ -2,6 +2,7 @@
 
 defaults:
   - _base
+  - _self_
 
 # Multi-island MAP-Elites with two islands:
 # 1. Fitness Island: Optimizes primary fitness + validity
@@ -12,7 +13,7 @@ defaults:
 
 complexity_bounds:
   _target_: gigaevo.config.helpers.get_bounds
-  metrics_context: ${metrics_context}
+  metrics_context: ${ref:metrics_context}
   key: complexity_score
 
 # Island 1: Fitness-focused (primary + validity)
@@ -72,7 +73,6 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-    migration_rate: ${migration_rate}
 
   # Island 2: Focus on simplicity
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
@@ -99,7 +99,6 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-    migration_rate: ${migration_rate}
 
 # Evolution strategy
 evolution_strategy:
