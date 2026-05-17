@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from gigaevo.config.defaults import DEFAULT_LLM_MAX_TOKENS
 from gigaevo.config.llm_presets import (
     OPENROUTER_BASE_URL,
     OPENROUTER_FOUR_MODELS,
     build_gemini_3_flash,
     build_gemini_25_pro,
     build_gemini_31_pro,
+    build_google,
     build_heterogeneous_bandit,
+    build_openai,
     build_openrouter_bandit,
     build_openrouter_ensemble,
     build_single,
@@ -122,13 +125,68 @@ class TestGeminiPresets:
         assert cfg.models[0].model == "google/gemini-3-flash-preview"
         assert cfg.models[0].base_url == OPENROUTER_BASE_URL
 
-    def test_gemini_31_pro(self) -> None:
+    def test_gemini_31_pro_includes_preview_suffix(self) -> None:
+        """The OpenRouter slug is gemini-3.1-pro-preview, not
+        gemini-3.1-pro. Without the suffix the route 404s."""
         cfg = build_gemini_31_pro()
-        assert cfg.models[0].model == "google/gemini-3.1-pro"
+        assert cfg.models[0].model == "google/gemini-3.1-pro-preview"
 
     def test_gemini_25_pro(self) -> None:
         cfg = build_gemini_25_pro()
         assert cfg.models[0].model == "google/gemini-2.5-pro"
+
+
+class TestOpenAIPreset:
+    def test_default_two_model_split(self) -> None:
+        cfg = build_openai()
+        assert len(cfg.models) == 2
+        assert cfg.models[0].model == "openai/gpt-5"
+        assert cfg.models[1].model == "openai/gpt-5-mini"
+        assert cfg.probabilities == [0.1, 0.9]
+
+    def test_custom_probabilities(self) -> None:
+        cfg = build_openai(probabilities=[0.5, 0.5])
+        assert cfg.probabilities == [0.5, 0.5]
+
+
+class TestGooglePreset:
+    def test_default_two_model_split(self) -> None:
+        cfg = build_google()
+        assert len(cfg.models) == 2
+        assert cfg.models[0].model == "google/gemini-2.5-flash"
+        assert cfg.models[1].model == "google/gemini-2.5-pro"
+        assert cfg.probabilities == [0.1, 0.9]
+
+
+class TestMaxTokensDefault:
+    """Audit catch: openrouter and gemini YAMLs reference ${max_tokens}
+    which resolves to constants/llm.yaml's 81920. Earlier preset
+    builders defaulted to 16_384, a 5x token drift between the
+    typed and YAML paths."""
+
+    def test_openrouter_bandit_uses_default_max_tokens(self) -> None:
+        cfg = build_openrouter_bandit()
+        for endpoint in cfg.models:
+            assert endpoint.max_tokens == DEFAULT_LLM_MAX_TOKENS
+
+    def test_openrouter_ensemble_uses_default_max_tokens(self) -> None:
+        cfg = build_openrouter_ensemble()
+        for endpoint in cfg.models:
+            assert endpoint.max_tokens == DEFAULT_LLM_MAX_TOKENS
+
+    def test_gemini_3_flash_uses_default_max_tokens(self) -> None:
+        cfg = build_gemini_3_flash()
+        assert cfg.models[0].max_tokens == DEFAULT_LLM_MAX_TOKENS
+
+    def test_openai_uses_default_max_tokens(self) -> None:
+        cfg = build_openai()
+        for endpoint in cfg.models:
+            assert endpoint.max_tokens == DEFAULT_LLM_MAX_TOKENS
+
+    def test_google_uses_default_max_tokens(self) -> None:
+        cfg = build_google()
+        for endpoint in cfg.models:
+            assert endpoint.max_tokens == DEFAULT_LLM_MAX_TOKENS
 
 
 class TestYAMLParity:

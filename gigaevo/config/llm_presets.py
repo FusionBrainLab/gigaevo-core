@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 
 from gigaevo.config.defaults import (
+    DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_LLM_REQUEST_TIMEOUT_S,
     DEFAULT_LLM_TEMPERATURE,
 )
@@ -45,7 +46,7 @@ def _chat_openai(
     *,
     base_url: str | None = OPENROUTER_BASE_URL,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     request_timeout: float = DEFAULT_LLM_REQUEST_TIMEOUT_S,
 ) -> ChatOpenAIConfig:
     """Single-endpoint helper; the presets below compose it."""
@@ -61,7 +62,7 @@ def _chat_openai(
 def build_openrouter_ensemble(
     *,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     request_timeout: float = DEFAULT_LLM_REQUEST_TIMEOUT_S,
     probabilities: list[float] | None = None,
 ) -> EnsembleRouterConfig:
@@ -86,7 +87,7 @@ def build_openrouter_ensemble(
 def build_openrouter_bandit(
     *,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     request_timeout: float = DEFAULT_LLM_REQUEST_TIMEOUT_S,
     exploration_constant: float = 1.41,
     window_size: int = 100,
@@ -115,7 +116,7 @@ def build_single(
     *,
     base_url: str | None = None,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     request_timeout: float = DEFAULT_LLM_REQUEST_TIMEOUT_S,
 ) -> EnsembleRouterConfig:
     """Single-endpoint preset matching ``config/llm/single.yaml``.
@@ -185,7 +186,7 @@ def build_heterogeneous_bandit(
 def build_gemini_3_flash(
     *,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
 ) -> EnsembleRouterConfig:
     """Single-model preset matching ``config/llm/gemini3_flash.yaml``."""
     return build_single(
@@ -199,11 +200,15 @@ def build_gemini_3_flash(
 def build_gemini_31_pro(
     *,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
 ) -> EnsembleRouterConfig:
-    """Single-model preset matching ``config/llm/gemini31_pro.yaml``."""
+    """Single-model preset matching ``config/llm/gemini31_pro.yaml``.
+
+    The OpenRouter slug is ``google/gemini-3.1-pro-preview`` — note the
+    ``-preview`` suffix the YAML pins. Omitting it would resolve to a
+    non-existent route and fail at the OpenRouter HTTP boundary."""
     return build_single(
-        "google/gemini-3.1-pro",
+        "google/gemini-3.1-pro-preview",
         base_url=OPENROUTER_BASE_URL,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -213,7 +218,7 @@ def build_gemini_31_pro(
 def build_gemini_25_pro(
     *,
     temperature: float = DEFAULT_LLM_TEMPERATURE,
-    max_tokens: int = 16_384,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
 ) -> EnsembleRouterConfig:
     """Single-model preset matching ``config/llm/gemini25_pro.yaml``."""
     return build_single(
@@ -221,4 +226,56 @@ def build_gemini_25_pro(
         base_url=OPENROUTER_BASE_URL,
         temperature=temperature,
         max_tokens=max_tokens,
+    )
+
+
+def build_openai(
+    *,
+    temperature: float = DEFAULT_LLM_TEMPERATURE,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
+    probabilities: list[float] | None = None,
+) -> EnsembleRouterConfig:
+    """Two-model OpenAI heterogeneous ensemble matching
+    ``config/llm/openai.yaml``: gpt-5 + gpt-5-mini at 10/90 default
+    split. Override probabilities to bias toward the larger model."""
+    return EnsembleRouterConfig(
+        models=[
+            _chat_openai(
+                "openai/gpt-5",
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+            _chat_openai(
+                "openai/gpt-5-mini",
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+        ],
+        probabilities=probabilities or [0.1, 0.9],
+    )
+
+
+def build_google(
+    *,
+    temperature: float = DEFAULT_LLM_TEMPERATURE,
+    max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
+    probabilities: list[float] | None = None,
+) -> EnsembleRouterConfig:
+    """Two-model Google heterogeneous ensemble matching
+    ``config/llm/google.yaml``: gemini-2.5-flash + gemini-2.5-pro at
+    10/90 default split."""
+    return EnsembleRouterConfig(
+        models=[
+            _chat_openai(
+                "google/gemini-2.5-flash",
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+            _chat_openai(
+                "google/gemini-2.5-pro",
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+        ],
+        probabilities=probabilities or [0.1, 0.9],
     )
