@@ -68,8 +68,10 @@ from .models import (
     FreshnessEventual,
     FreshnessStrict,
     HlcTimestamp,
+    LocalValue,
     Ok,
     Result,
+    Sourced,
     Versioned,
 )
 from .permissions import Token
@@ -687,7 +689,7 @@ class DataPlane:
         freshness: Freshness | None = None,
         min_epoch: int = 0,
         min_generation: int = 0,
-    ) -> Result[Versioned[ProgramSnapshot] | None, DataPlaneError]:
+    ) -> Result[LocalValue[Versioned[ProgramSnapshot]] | None, DataPlaneError]:
         """Versioned program read with an explicit freshness declaration.
 
         ``freshness`` is the structural admission contract every reader
@@ -714,10 +716,20 @@ class DataPlane:
         ``freshness`` and a non-zero ``min_*`` raises
         :class:`ValueError` so a typo cannot mask one with the other.
 
+        The successful return is wrapped in :data:`LocalValue` —
+        the :class:`Sourced` phantom-tag alias for a fresh local read
+        out of Redis. Cache-fronted readers, gossip-propagated readers,
+        and replay loops carry their own provenance tags so a single
+        ``rg "LocalValue\\|CachedValue\\|ReplayedValue"`` over the
+        dataplane consumers surfaces every read-source distinction at
+        the static-type level (bug class #13 — "stale cache returns
+        as fresh authoritative" — is now a phantom-type discrimination
+        at the function-signature boundary).
+
         Returns ``Ok(None)`` if the program is unknown (not yet
-        written); ``Ok(Versioned(...))`` if it exists and passes the
-        freshness contract; ``Err(...)`` for decoding failures or a
-        freshness-floor violation.
+        written); ``Ok(LocalValue(Versioned(...)))`` if it exists and
+        passes the freshness contract; ``Err(...)`` for decoding
+        failures or a freshness-floor violation.
         """
         self._validate_key_component(
             program_id, method="read_program", field_name="program_id"
@@ -803,7 +815,13 @@ class DataPlane:
                     min_generation=floor_generation,
                 )
             )
-        return Ok(versioned)
+        # Wrap in :data:`LocalValue` — the freshness check has cleared
+        # against the coordinator's own pool, so the provenance is
+        # structurally local-fresh-read. Cache layers in front of the
+        # coordinator (none today) would re-tag to ``CachedValue``;
+        # gossip / replay paths would carry their own discriminator.
+        local: LocalValue[Versioned[ProgramSnapshot]] = Sourced(value=versioned)
+        return Ok(local)
 
     @staticmethod
     def _resolve_freshness(
@@ -1187,6 +1205,7 @@ class DataPlane:
         *,
         actor: ActorIdentity,
         delta: int = 1,
+        token: Token[CounterKey] | None = None,
         deadline_monotonic: float | None = None,
     ) -> Result[int, DataPlaneError]:
         """Increment a per-actor G-counter; consensus value is sum across actors.
@@ -1198,6 +1217,16 @@ class DataPlane:
         G-counter merge invariant only requires that *each actor* writes
         monotonically — callers that decrement should hold a token for
         that actor's subspace.
+
+        ``token`` is the move-only permission witness for the
+        ``CounterKey`` subspace. When supplied, the wrapper consumes it
+        before the Lua call and verifies the tag matches ``key`` — the
+        same single-writer discipline that :meth:`transition_program_state`
+        and :meth:`try_replace_elite` apply to their subspaces. ``None``
+        preserves the legacy ledger-only contract used by callers that
+        have not yet been wired to the engine-root token bundle; new
+        production call sites SHOULD supply a token split from the
+        engine's counter root.
         """
         self._validate_key_component(
             key, method="crdt_inc", field_name="key", allow_colon=True
@@ -1207,6 +1236,14 @@ class DataPlane:
         except DeadlineExceeded as exc:
             return Err(exc)
         lua = self._require_started("crdt_inc")
+        if token is not None:
+            tag = token.consume()
+            if tag != key:
+                return Err(
+                    DataPlaneError(
+                        f"crdt_inc: token tag {tag!r} does not match key {key!r}"
+                    )
+                )
         counts_key, gen_key, epoch_key = self._counter_keys(key)
         try:
             raw = await lua.evalsha(

@@ -50,6 +50,7 @@ from gigaevo.dataplane.permissions import Token, mint_root, mint_split
 if TYPE_CHECKING:
     from gigaevo.database.redis_program_storage import RedisProgramStorage
     from gigaevo.evolution.engine.core import EvolutionEngine
+    from gigaevo.evolution.storage.archive_storage import RedisArchiveStorage
     from gigaevo.llm.models import MultiModelRouter
     from gigaevo.prompts.fetcher import PromptFetcher
     from gigaevo.runner.dag_runner import DagRunner
@@ -62,6 +63,7 @@ __all__ = [
     "build_engine_root",
     "build_actor_identity",
     "wire_storage",
+    "wire_archive_storage",
     "wire_bandit_router",
     "wire_prompt_fetcher",
     "wire_dag_runner",
@@ -306,12 +308,47 @@ def wire_storage(
         storage._engine_root = engine_root
 
 
+def wire_archive_storage(
+    archive: RedisArchiveStorage,
+    dataplane: DataPlane,
+    engine_root: EngineRoot,
+) -> bool:
+    """Attach coordinator + engine root to a :class:`RedisArchiveStorage`.
+
+    Returns ``True`` when the rebind happened, ``False`` for a non-
+    archive input (the entrypoint can call this unconditionally). The
+    archive's dataplane swap path then derives per-call cell tokens via
+    :meth:`EngineRoot.split_cell_token` instead of minting an ad-hoc
+    root, so every swap is structurally traceable to the engine's
+    single cell-subspace origin.
+
+    Idempotent within a run: re-attaching the same coordinator + engine
+    root is a silent no-op. A different coordinator or engine root is
+    not rejected because the archive does not track equality on either
+    handle internally — the post-startup engine flow only ever wires
+    once.
+    """
+    # Lazy import to keep the dataplane package self-contained.
+    from gigaevo.evolution.storage.archive_storage import RedisArchiveStorage
+
+    if not isinstance(archive, RedisArchiveStorage):
+        return False
+    archive._dataplane = dataplane
+    archive._engine_root = engine_root
+    logger.info(
+        "RedisArchiveStorage wired to DataPlane: hash_key={}",
+        archive._hash_key,
+    )
+    return True
+
+
 def wire_bandit_router(
     router: MultiModelRouter,
     dataplane: DataPlane,
     actor: ActorIdentity,
+    engine_root: EngineRoot | None = None,
 ) -> bool:
-    """Attach coordinator + actor to a bandit router, if present.
+    """Attach coordinator + actor (+ engine root) to a bandit router, if present.
 
     Returns ``True`` when the router is a
     :class:`~gigaevo.llm.bandit.BanditModelRouter` and the rebind
@@ -323,6 +360,12 @@ def wire_bandit_router(
     The bandit's internal :class:`SlidingWindowUCB1` validates that
     ``dataplane`` and ``actor`` are supplied together; this helper sets
     both atomically to keep that invariant intact.
+
+    ``engine_root`` is optional: when supplied, every ledger write
+    derives a per-call counter-token via
+    :meth:`EngineRoot.split_counter_token`, satisfying the single-writer
+    discipline the coordinator already enforces for FSM transitions and
+    archive swaps. ``None`` keeps the legacy token-less ledger contract.
     """
     # Lazy import to avoid the dataplane package importing the llm
     # tree at module load — keeps the dataplane self-contained.
@@ -338,11 +381,14 @@ def wire_bandit_router(
         return False
     bandit._dataplane = dataplane
     bandit._actor = actor
+    if engine_root is not None:
+        bandit._engine_root = engine_root
     logger.info(
-        "BanditModelRouter wired to DataPlane: name={} arms={} actor={}",
+        "BanditModelRouter wired to DataPlane: name={} arms={} actor={} engine_root={}",
         getattr(router, "_name", "<unnamed>"),
         bandit.arm_names,
         actor.pack(),
+        "yes" if engine_root is not None else "no",
     )
     return True
 

@@ -390,3 +390,71 @@ class TestFreshnessContract:
         assert isinstance(result.error, dp.DataPlaneError)
         # Error message names the method so the caller can localise it.
         assert "crdt_read" in str(result.error)
+
+
+# ── Counter-token single-writer discipline ───────────────────────────
+
+
+class TestCounterTokenDiscipline:
+    """``crdt_inc`` accepts an optional ``token`` witness for the subspace.
+
+    A token tagged with a different key is rejected; a token already
+    consumed by a prior call raises :class:`TokenAlreadyConsumed`. The
+    legacy token-less path remains correct for callers that have not yet
+    been threaded with the engine-root token bundle.
+    """
+
+    async def test_token_supplied_consumes_and_succeeds(
+        self, coord: dp.DataPlane
+    ) -> None:
+        key = dp.CounterKey("bandit:trials:arm-x")
+        token = dp.mint_root(key)
+        result = await coord.crdt_inc(key, actor=_actor("run", "w-1"), token=token)
+        assert isinstance(result, dp.Ok)
+        assert result.value == 1
+        # Token was consumed by ``crdt_inc``; the linearity flag flipped.
+        assert token.consumed is True
+
+    async def test_token_tag_mismatch_rejected(self, coord: dp.DataPlane) -> None:
+        key = dp.CounterKey("bandit:trials:arm-y")
+        wrong_token = dp.mint_root(dp.CounterKey("bandit:trials:arm-z"))
+        result = await coord.crdt_inc(
+            key, actor=_actor("run", "w-1"), token=wrong_token
+        )
+        assert isinstance(result, dp.Err)
+        assert isinstance(result.error, dp.DataPlaneError)
+        assert "token tag" in str(result.error)
+
+    async def test_token_reuse_raises_already_consumed(
+        self, coord: dp.DataPlane
+    ) -> None:
+        key = dp.CounterKey("bandit:trials:arm-r")
+        token = dp.mint_root(key)
+        first = await coord.crdt_inc(key, actor=_actor("run", "w-1"), token=token)
+        assert isinstance(first, dp.Ok)
+        # A second call with the same token must NOT silently succeed —
+        # linearity is the single-writer-per-subspace invariant.
+        with pytest.raises(dp.TokenAlreadyConsumed):
+            await coord.crdt_inc(key, actor=_actor("run", "w-1"), token=token)
+
+    async def test_no_token_legacy_path_still_works(self, coord: dp.DataPlane) -> None:
+        """Callers that have not been wired with the engine root still
+        write through the legacy token-less path verbatim."""
+        key = dp.CounterKey("bandit:trials:legacy-arm")
+        result = await coord.crdt_inc(key, actor=_actor("run", "w-1"))
+        assert isinstance(result, dp.Ok)
+        assert result.value == 1
+
+    async def test_split_from_engine_root_consumes_correctly(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """Tokens split off the engine root carry the correct cell tag
+        and consume cleanly on the coordinator's linearity check."""
+        from gigaevo.dataplane.engine_startup import build_engine_root
+
+        engine_root = build_engine_root()
+        key = dp.CounterKey("bandit:trials:engine-split")
+        token = engine_root.split_counter_token(key)
+        result = await coord.crdt_inc(key, actor=_actor("run", "w-1"), token=token)
+        assert isinstance(result, dp.Ok)
+        assert token.consumed is True

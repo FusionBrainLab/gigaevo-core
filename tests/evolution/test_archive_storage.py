@@ -464,3 +464,127 @@ class TestDataplaneSwapPath:
         selector = SumArchiveSelector(fitness_keys=["score"])
         added = await archive.add_elite((0,), p, selector)
         assert added is True
+
+
+class TestArchiveEngineRootWiring:
+    """Engine-root-backed archive derives per-call cell tokens by split.
+
+    The constructor accepts ``engine_root``; the swap path then mints
+    the per-call ``Token[CellKey]`` via :meth:`EngineRoot.split_cell_token`
+    instead of ad-hoc :func:`mint_root`. Backwards compat: an archive
+    constructed without an engine root keeps the legacy mint-per-call
+    behaviour exactly.
+    """
+
+    async def test_engine_root_wired_swap_succeeds(self, dp_storage, coord):
+        from gigaevo.dataplane.engine_startup import build_engine_root
+
+        engine_root = build_engine_root()
+        archive = RedisArchiveStorage(
+            dp_storage,
+            key_prefix="test",
+            dataplane=coord,
+            engine_root=engine_root,
+        )
+        first = _prog(metrics={"score": 1.0})
+        second = _prog(metrics={"score": 10.0})
+        await dp_storage.add(first)
+        await dp_storage.add(second)
+        selector = SumArchiveSelector(fitness_keys=["score"])
+        assert await archive.add_elite((0,), first, selector) is True
+        assert await archive.add_elite((0,), second, selector) is True
+        elite = await archive.get_elite((0,))
+        assert elite.id == second.id
+
+    async def test_wire_archive_storage_helper_attaches(self, dp_storage, coord):
+        from gigaevo.dataplane import wire_archive_storage
+        from gigaevo.dataplane.engine_startup import build_engine_root
+
+        engine_root = build_engine_root()
+        archive = RedisArchiveStorage(dp_storage, key_prefix="test")
+        # Before wiring: no dataplane, no engine root.
+        assert archive._dataplane is None
+        assert archive._engine_root is None
+        attached = wire_archive_storage(archive, coord, engine_root)
+        assert attached is True
+        assert archive._dataplane is coord
+        assert archive._engine_root is engine_root
+
+    def test_wire_archive_storage_non_archive_returns_false(self) -> None:
+        from gigaevo.dataplane import wire_archive_storage
+        from gigaevo.dataplane.engine_startup import build_engine_root
+
+        engine_root = build_engine_root()
+
+        class _NotAnArchive:
+            pass
+
+        attached = wire_archive_storage(_NotAnArchive(), object(), engine_root)  # type: ignore[arg-type]
+        assert attached is False
+
+
+class TestArchiveGetEliteFreshness:
+    """``get_elite`` accepts a freshness contract on the program-blob read.
+
+    Default :class:`FreshnessEventual` preserves the legacy two-step
+    (HGET cell + ``storage.get``) verbatim. A stricter floor routes the
+    underlying program read through :meth:`DataPlane.read_program` and
+    raises :class:`StaleReadError` when the persisted blob is below the
+    floor.
+    """
+
+    async def test_default_freshness_is_eventual(self, dp_storage, dp_archive):
+        p = _prog(metrics={"score": 5.0})
+        await dp_storage.add(p)
+        selector = SumArchiveSelector(fitness_keys=["score"])
+        await dp_archive.add_elite((0,), p, selector)
+        elite = await dp_archive.get_elite((0,))
+        assert elite is not None and elite.id == p.id
+
+    async def test_explicit_eventual_admits_any_view(self, dp_storage, dp_archive):
+        p = _prog(metrics={"score": 5.0})
+        await dp_storage.add(p)
+        selector = SumArchiveSelector(fitness_keys=["score"])
+        await dp_archive.add_elite((0,), p, selector)
+        elite = await dp_archive.get_elite((0,), freshness=dp.FreshnessEventual())
+        assert elite is not None and elite.id == p.id
+
+    async def test_at_least_above_observed_raises_stale(
+        self, dp_storage, dp_archive, coord
+    ):
+        p = _prog(metrics={"score": 5.0})
+        await dp_storage.add(p)
+        selector = SumArchiveSelector(fitness_keys=["score"])
+        await dp_archive.add_elite((0,), p, selector)
+
+        # Read the current epoch via the coordinator so we can pin a
+        # floor strictly above it; the archive must propagate the
+        # StaleReadError raised by the underlying ``read_program``.
+        # ``LocalValue`` wraps the freshness-checked ``Versioned``.
+        baseline = await coord.read_program(dp.ProgramId(p.id))
+        assert isinstance(baseline, dp.Ok)
+        assert baseline.value is not None
+        floor_epoch = baseline.value.value.epoch + 1000
+        with pytest.raises(dp.StaleReadError):
+            await dp_archive.get_elite(
+                (0,), freshness=dp.FreshnessAtLeast(epoch=floor_epoch)
+            )
+
+    async def test_non_eventual_without_dataplane_raises(self, storage, archive):
+        """A stricter freshness without a wired DataPlane is a structural
+        error: there is no admission-floor evaluator. Raise rather than
+        silently degrade to the legacy unbounded path."""
+        p = _prog(metrics={"score": 5.0})
+        await storage.add(p)
+        await archive.add_elite((0,), p, _always_better)
+        with pytest.raises(RuntimeError, match="requires a wired DataPlane"):
+            await archive.get_elite((0,), freshness=dp.FreshnessAtLeast(epoch=1))
+
+    async def test_empty_cell_returns_none_under_strict_freshness(self, dp_archive):
+        """An empty cell short-circuits to ``None`` before any freshness
+        check fires — the freshness contract is on the blob read, not on
+        the HGET; an empty cell has no blob to admit."""
+        elite = await dp_archive.get_elite(
+            (99,), freshness=dp.FreshnessAtLeast(epoch=1000)
+        )
+        assert elite is None

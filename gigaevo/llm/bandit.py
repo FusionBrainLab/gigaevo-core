@@ -83,12 +83,18 @@ from gigaevo.dataplane import (
     ActorIdentity,
     CounterKey,
     DataPlane,
+    Err,
+    Freshness,
+    FreshnessEventual,
     Ok,
+    StaleReadError,
+    Token,
 )
 from gigaevo.llm.models import MultiModelRouter, _StructuredOutputRouter
 from gigaevo.utils.trackers.base import LogWriter
 
 if TYPE_CHECKING:
+    from gigaevo.dataplane.engine_startup import EngineRoot
     from gigaevo.programs.program import Program
 
 
@@ -238,6 +244,13 @@ class SlidingWindowUCB1:
     the hot path. Call :meth:`refresh_from_redis` to fold the consensus
     sum back into the in-process counters.
 
+    When ``engine_root`` is additionally supplied, every background
+    ``crdt_inc`` carries a fresh per-call permission witness split from
+    the engine's counter-root token. The Redis-backed ledger then
+    satisfies the single-writer-per-subspace invariant the coordinator
+    asserts for FSM transitions and archive swaps; without the engine
+    root the legacy token-less ledger contract still applies.
+
     Args:
         arm_names: Names identifying each arm.
         exploration_constant: UCB1 exploration parameter *c*.
@@ -246,6 +259,9 @@ class SlidingWindowUCB1:
         actor: Optional :class:`ActorIdentity` for the per-actor G-counter
             sub-counts. Both ``dataplane`` and ``actor`` must be supplied
             together; otherwise the bandit operates in in-process-only mode.
+        engine_root: Optional :class:`EngineRoot`. When supplied alongside
+            ``dataplane`` and ``actor``, every ledger write derives a
+            per-call linear token from the engine's counter root.
     """
 
     arm_names: list[str]
@@ -262,6 +278,7 @@ class SlidingWindowUCB1:
         *,
         dataplane: DataPlane | None = None,
         actor: ActorIdentity | None = None,
+        engine_root: EngineRoot | None = None,
     ) -> None:
         self.arm_names = arm_names
         self.exploration_constant = exploration_constant
@@ -278,8 +295,16 @@ class SlidingWindowUCB1:
                 "SlidingWindowUCB1: dataplane and actor must be supplied together "
                 "or both omitted"
             )
+        # Engine-root without a dataplane is meaningless — the token's
+        # consumer lives on the coordinator. Reject the asymmetric case
+        # rather than silently degrading.
+        if engine_root is not None and dataplane is None:
+            raise ValueError(
+                "SlidingWindowUCB1: engine_root requires a dataplane (and actor)"
+            )
         self._dataplane: DataPlane | None = dataplane
         self._actor: ActorIdentity | None = actor
+        self._engine_root: EngineRoot | None = engine_root
         # Strong refs to in-flight background increments — without this set
         # asyncio.create_task results are GC-eligible immediately and the
         # write may be cancelled before it reaches Redis.
@@ -367,6 +392,12 @@ class SlidingWindowUCB1:
         only. Errors from the background write are logged and dropped —
         the in-process state remains correct; the consensus sum simply
         lags by one increment until the next successful write.
+
+        When an engine-root token bundle is wired, the per-call token is
+        minted synchronously on this thread (the engine root's internal
+        rotation is sync and must observe the same single-threaded
+        asyncio discipline as the consumer); the token then rides the
+        background task to the coordinator.
         """
         if not self.is_redis_backed:
             return
@@ -376,8 +407,14 @@ class SlidingWindowUCB1:
             return
         assert self._dataplane is not None
         assert self._actor is not None
+        # Mint the per-call counter token on the synchronous path so the
+        # engine root's rotation happens deterministically before the
+        # task is enqueued; the token is consumed inside ``crdt_inc``.
+        counter_token: Token[CounterKey] | None = None
+        if self._engine_root is not None:
+            counter_token = self._engine_root.split_counter_token(key)
         task = loop.create_task(
-            self._do_crdt_inc(self._dataplane, self._actor, key, delta)
+            self._do_crdt_inc(self._dataplane, self._actor, key, delta, counter_token)
         )
         self._pending_writes.add(task)
         task.add_done_callback(self._pending_writes.discard)
@@ -388,6 +425,7 @@ class SlidingWindowUCB1:
         actor: ActorIdentity,
         key: CounterKey,
         delta: int,
+        token: Token[CounterKey] | None,
     ) -> None:
         """Issue one ``crdt_inc`` and log any error without propagating.
 
@@ -395,9 +433,15 @@ class SlidingWindowUCB1:
         unreachable — UCB1 selection still works on the in-process state.
         Surfacing the error to the hot path would make every LLM call
         depend on Redis availability, which the design explicitly avoids.
+
+        ``token`` is the per-call permission witness when the bandit was
+        constructed with an engine root; ``None`` preserves the legacy
+        token-less ledger contract.
         """
         try:
-            result = await dataplane.crdt_inc(key, actor=actor, delta=delta)
+            result = await dataplane.crdt_inc(
+                key, actor=actor, delta=delta, token=token
+            )
         except Exception as exc:  # noqa: BLE001 — background-task safety net
             logger.warning(
                 "[SlidingWindowUCB1] crdt_inc({}, delta={}) raised: {}",
@@ -470,7 +514,12 @@ class SlidingWindowUCB1:
                 )
         self._total_pulls += delta_total
 
-    async def get_mean_reward(self, arm_name: str) -> float:
+    async def get_mean_reward(
+        self,
+        arm_name: str,
+        *,
+        freshness: Freshness | None = None,
+    ) -> float:
         """Return the consensus mean reward for *arm_name*.
 
         In Redis-backed mode this refreshes the trial counters first and
@@ -479,15 +528,39 @@ class SlidingWindowUCB1:
         mode it returns the mean of the local sliding window — the same
         value exposed by :meth:`get_stats`.
 
+        ``freshness`` is the structural admission contract on the two
+        underlying ``crdt_read`` calls (trials counter and reward-sum
+        counter). Defaults to :class:`FreshnessEventual` which matches
+        the legacy behaviour: any persisted view is acceptable. Callers
+        that need to observe their own writes pass
+        :class:`FreshnessAtLeast(epoch=...)`; on a floor violation the
+        underlying reads return :class:`StaleReadError` and this method
+        propagates it by raising — the caller has explicitly asked for a
+        consistency property the ledger does not satisfy.
+
         Returns ``0.0`` when no pulls have been observed for the arm.
         """
         if not self.is_redis_backed:
             window = self.arms[arm_name].rewards
             return sum(window) / len(window) if window else 0.0
         assert self._dataplane is not None
+        effective_freshness: Freshness = (
+            freshness if freshness is not None else FreshnessEventual()
+        )
         await self.refresh_from_redis()
-        trials_result = await self._dataplane.crdt_read(_trials_key(arm_name))
-        sum_result = await self._dataplane.crdt_read(_reward_sum_key(arm_name))
+        trials_result = await self._dataplane.crdt_read(
+            _trials_key(arm_name), freshness=effective_freshness
+        )
+        sum_result = await self._dataplane.crdt_read(
+            _reward_sum_key(arm_name), freshness=effective_freshness
+        )
+        # Honour the freshness contract: an explicit floor violation is
+        # control flow the caller has opted into. Default-eventual reads
+        # cannot raise :class:`StaleReadError` so the legacy path keeps
+        # its silent-fallback semantics.
+        for result in (trials_result, sum_result):
+            if isinstance(result, Err) and isinstance(result.error, StaleReadError):
+                raise result.error
         if not isinstance(trials_result, Ok) or not isinstance(sum_result, Ok):
             window = self.arms[arm_name].rewards
             return sum(window) / len(window) if window else 0.0
@@ -532,6 +605,10 @@ class BanditModelRouter(MultiModelRouter):
         actor: Optional :class:`ActorIdentity` for per-actor G-counter
             sub-counts. Both ``dataplane`` and ``actor`` must be supplied
             together; otherwise the bandit operates in in-process-only mode.
+        engine_root: Optional :class:`EngineRoot` for splitting per-call
+            counter tokens off the engine's counter-root permission. When
+            supplied alongside ``dataplane`` and ``actor``, every ledger
+            write carries a structurally-traceable permission witness.
     """
 
     def __init__(
@@ -548,6 +625,7 @@ class BanditModelRouter(MultiModelRouter):
         skip_reward_on_acceptor_reject: bool = False,
         dataplane: DataPlane | None = None,
         actor: ActorIdentity | None = None,
+        engine_root: EngineRoot | None = None,
     ):
         super().__init__(models, probabilities, writer=writer, name=name)
         self.fitness_key = fitness_key
@@ -559,6 +637,7 @@ class BanditModelRouter(MultiModelRouter):
             window_size=window_size,
             dataplane=dataplane,
             actor=actor,
+            engine_root=engine_root,
         )
         self._reward_normalizer = RunningPercentileNormalizer()
         logger.info(

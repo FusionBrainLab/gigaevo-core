@@ -1855,3 +1855,153 @@ class TestBanditModelRouterRedisBacked:
             assert sum_a.value.value == _REWARD_FIXED_POINT_SCALE // 2
         finally:
             await _close_coord(coord)
+
+
+class TestSlidingWindowUCB1EngineRoot:
+    """Engine-root-backed mode threads per-call counter tokens.
+
+    Every background ``crdt_inc`` carries a token split from the engine
+    root, so the coordinator's linearity check fires and the ledger
+    write satisfies the single-writer-per-subspace invariant.
+    """
+
+    async def test_engine_root_threads_tokens_through(self) -> None:
+        from gigaevo.dataplane.engine_startup import build_engine_root
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            engine_root = build_engine_root()
+            ucb = SlidingWindowUCB1(
+                arm_names=["a", "b"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+                engine_root=engine_root,
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.3)
+            ucb.record_pull("b")
+            await ucb.drain_pending_writes()
+
+            # Tokens are minted off the engine root and consumed inside
+            # the coordinator; the ledger reflects the writes.
+            trials_a = await coord.crdt_read(_trials_key("a"))
+            trials_b = await coord.crdt_read(_trials_key("b"))
+            assert isinstance(trials_a, dp.Ok) and trials_a.value.value == 1
+            assert isinstance(trials_b, dp.Ok) and trials_b.value.value == 1
+            sum_a = await coord.crdt_read(_reward_sum_key("a"))
+            assert isinstance(sum_a, dp.Ok) and sum_a.value.value == 300
+        finally:
+            await _close_coord(coord)
+
+    def test_engine_root_without_dataplane_rejected(self) -> None:
+        from gigaevo.dataplane.engine_startup import build_engine_root
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        engine_root = build_engine_root()
+        with pytest.raises(ValueError, match="engine_root requires a dataplane"):
+            SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=None,
+                actor=None,
+                engine_root=engine_root,
+            )
+
+    async def test_engine_root_router_wiring(self) -> None:
+        from gigaevo.dataplane.engine_startup import build_engine_root
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            engine_root = build_engine_root()
+            models = _make_mock_models(["model_a"])
+            router = BanditModelRouter(
+                models,
+                [1.0],
+                fitness_key="score",
+                higher_is_better=True,
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+                engine_root=engine_root,
+            )
+            router._bandit.record_pull("model_a")
+            await router._bandit.drain_pending_writes()
+            trials_a = await coord.crdt_read(_trials_key("model_a"))
+            assert isinstance(trials_a, dp.Ok) and trials_a.value.value == 1
+        finally:
+            await _close_coord(coord)
+
+
+class TestGetMeanRewardFreshness:
+    """``get_mean_reward`` accepts a freshness contract.
+
+    Default :class:`FreshnessEventual` preserves the legacy behaviour;
+    an explicit :class:`FreshnessAtLeast` raises :class:`StaleReadError`
+    when the persisted view does not clear the floor.
+    """
+
+    async def test_default_freshness_is_eventual(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.5)
+            mean = await ucb.get_mean_reward("a")
+            assert mean == pytest.approx(0.5)
+        finally:
+            await _close_coord(coord)
+
+    async def test_explicit_eventual_admits_any_view(self) -> None:
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.5)
+            mean = await ucb.get_mean_reward("a", freshness=dp.FreshnessEventual())
+            assert mean == pytest.approx(0.5)
+        finally:
+            await _close_coord(coord)
+
+    async def test_at_least_above_observed_raises_stale(self) -> None:
+        from gigaevo.dataplane.errors import StaleReadError
+        from gigaevo.llm.bandit import SlidingWindowUCB1
+
+        server = fakeredis.FakeServer()
+        coord = await _make_coord(server)
+        try:
+            ucb = SlidingWindowUCB1(
+                arm_names=["a"],
+                dataplane=coord,
+                actor=_actor("run-1", "w-1"),
+            )
+            ucb.record_pull("a")
+            ucb.update_reward("a", 0.5)
+            await ucb.drain_pending_writes()
+
+            # Observe the current epoch via a baseline read so the floor
+            # we pin is strictly above it; the bandit's
+            # get_mean_reward must then propagate the stale error.
+            observed = await coord.crdt_read(_trials_key("a"))
+            assert isinstance(observed, dp.Ok)
+            with pytest.raises(StaleReadError):
+                await ucb.get_mean_reward(
+                    "a",
+                    freshness=dp.FreshnessAtLeast(epoch=observed.value.epoch + 5),
+                )
+        finally:
+            await _close_coord(coord)

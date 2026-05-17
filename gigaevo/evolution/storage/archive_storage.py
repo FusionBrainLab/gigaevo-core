@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 import math
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from loguru import logger
 from redis.exceptions import WatchError
@@ -16,11 +16,17 @@ from gigaevo.dataplane import (
     EliteRejected,
     EliteSwapped,
     Err,
+    Freshness,
+    FreshnessEventual,
     ProgramId,
+    StaleReadError,
     Token,
     mint_root,
 )
 from gigaevo.programs.program import Program
+
+if TYPE_CHECKING:
+    from gigaevo.dataplane.engine_startup import EngineRoot
 
 CellDescriptor = tuple[int, ...]
 
@@ -77,7 +83,12 @@ class ArchiveStorage(ABC):
     """Elite archive keyed by behavior-space cells."""
 
     @abstractmethod
-    async def get_elite(self, cell: CellDescriptor) -> Program | None: ...
+    async def get_elite(
+        self,
+        cell: CellDescriptor,
+        *,
+        freshness: Freshness | None = None,
+    ) -> Program | None: ...
 
     @abstractmethod
     async def add_elite(
@@ -159,12 +170,19 @@ class RedisArchiveStorage(ArchiveStorage):
         key_prefix: str | None = None,
         *,
         dataplane: DataPlane | None = None,
+        engine_root: EngineRoot | None = None,
     ) -> None:
         self._storage = program_storage
         prefix = key_prefix or program_storage.config.key_prefix
         self._hash_key = f"{prefix}:archive"
         self._reverse_key = f"{prefix}:archive:reverse"
         self._dataplane = dataplane
+        # Optional: when wired by :func:`gigaevo.dataplane.wire_archive_storage`,
+        # every dataplane-path swap derives its per-call cell token via
+        # linear split from this engine root. When ``None`` the swap path
+        # still works via :func:`mint_root` and the structural traceability
+        # to a single engine origin degrades to a per-call ad-hoc root.
+        self._engine_root = engine_root
 
     # -------- small helpers --------
 
@@ -190,11 +208,62 @@ class RedisArchiveStorage(ArchiveStorage):
 
         return await self._storage.with_redis("archive:hlen", _op)
 
-    async def get_elite(self, cell: CellDescriptor) -> Program | None:
+    async def get_elite(
+        self,
+        cell: CellDescriptor,
+        *,
+        freshness: Freshness | None = None,
+    ) -> Program | None:
+        """Return the elite program occupying ``cell``, or ``None``.
+
+        ``freshness`` is the structural admission contract on the
+        underlying program-blob read. Default :class:`FreshnessEventual`
+        keeps the legacy two-step (HGET cell + storage.get) verbatim:
+        whatever Redis has now is admitted. A stricter floor — e.g.
+        :class:`FreshnessAtLeast(epoch=N)` — routes the program read
+        through :meth:`DataPlane.read_program` and raises
+        :class:`StaleReadError` when the persisted blob's epoch is
+        below the floor. A stricter freshness requires a dataplane: if
+        none is wired, :class:`StaleReadError` cannot be evaluated and
+        the call raises :class:`RuntimeError` so a silent stale read is
+        not possible.
+        """
         field = self._field(cell)
         pid = await self._hget(field)
         if not pid:
             return None
+        effective_freshness: Freshness = (
+            freshness if freshness is not None else FreshnessEventual()
+        )
+        if isinstance(effective_freshness, FreshnessEventual):
+            return await self._storage.get(pid)
+        # Stricter freshness contracts route through the coordinator's
+        # epoch-aware program read so a floor violation surfaces as a
+        # typed error rather than a silently-stale blob.
+        if self._dataplane is None:
+            raise RuntimeError(
+                "RedisArchiveStorage.get_elite: non-eventual freshness "
+                "requires a wired DataPlane; none is attached"
+            )
+        result = await self._dataplane.read_program(
+            ProgramId(pid), freshness=effective_freshness
+        )
+        if isinstance(result, Err):
+            if isinstance(result.error, StaleReadError):
+                raise result.error
+            # Non-staleness coordinator errors (decode, key shape) bubble
+            # up as a runtime fault — the archive cannot recover from
+            # them on the read path.
+            raise result.error
+        # ``Ok(None)`` means the program blob is gone (deleted out from
+        # under us). The archive has no policy for that beyond surfacing
+        # the absence; keep the legacy ``None`` return.
+        if result.value is None:
+            return None
+        # The dataplane's freshness check has already cleared; defer
+        # rehydration to the legacy ``storage.get`` so a single code
+        # path owns Program decoding (atomic_counter retention, dict
+        # field fallback, exclude semantics).
         return await self._storage.get(pid)
 
     async def add_elite(
@@ -286,10 +355,21 @@ class RedisArchiveStorage(ArchiveStorage):
         without an extra round-trip. The tiebreak bit stays at
         :data:`_DEFAULT_TIEBREAK_BIT` (occupant wins ties) — strict ``>``,
         identical to the legacy callback for :class:`SumArchiveSelector`.
+
+        When an :class:`EngineRoot` is wired (via
+        :func:`gigaevo.dataplane.wire_archive_storage`), the per-call
+        token is derived by linear split from the engine's cell-root
+        witness so every swap is structurally traceable to the engine's
+        single cell-subspace origin. Without an engine root the token is
+        minted ad-hoc via :func:`mint_root` — correct, but the
+        provenance to the engine root is lost.
         """
         assert self._dataplane is not None  # gate at the call site
         cell_key = CellKey(field)
-        token: Token[CellKey] = mint_root(cell_key)
+        if self._engine_root is not None:
+            token: Token[CellKey] = self._engine_root.split_cell_token(cell_key)
+        else:
+            token = mint_root(cell_key)
         result = await self._dataplane.try_replace_elite(
             cell_key,
             ProgramId(program.id),

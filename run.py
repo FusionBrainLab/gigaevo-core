@@ -16,6 +16,7 @@ from gigaevo.dataplane import (
     build_actor_identity,
     build_dataplane,
     build_engine_root,
+    wire_archive_storage,
     wire_bandit_router,
     wire_dag_runner,
     wire_evolution_engine,
@@ -105,10 +106,21 @@ async def run_experiment(cfg: DictConfig) -> None:
         # programming error, not a silent overwrite.
         wire_dag_runner(dag_runner, dataplane, engine_root)
         wire_evolution_engine(evolution_engine, dataplane, engine_root)
+        # Archive cells live across every island under the strategy; the
+        # wire helper is idempotent on a non-archive input so the loop is
+        # safe to run regardless of the strategy's concrete shape. Future
+        # strategies that don't expose ``.islands`` skip the loop cleanly.
+        strategy = getattr(evolution_engine, "strategy", None)
+        islands = getattr(strategy, "islands", None) if strategy is not None else None
+        if islands is not None:
+            for island in islands.values():
+                archive = getattr(island, "archive_storage", None)
+                if archive is not None:
+                    wire_archive_storage(archive, dataplane, engine_root)
         actor = build_actor_identity(run_id=cfg.get("run_id"))
         llm_wrapper = getattr(evolution_engine.mutation_operator, "llm_wrapper", None)
         if llm_wrapper is not None:
-            wire_bandit_router(llm_wrapper, dataplane, actor)
+            wire_bandit_router(llm_wrapper, dataplane, actor, engine_root)
 
         # Share the engine's main DataPlane with the prompt fetcher (so
         # prompt-outcome G-counters live under the same connection pool
