@@ -229,8 +229,8 @@ class TestBuildRingEngine:
             )
 
     def test_single_run_id_ring_rejected(self) -> None:
-        """Ring topology requires at least two run_ids; the schema
-        validator from hydra-2.5 enforces this."""
+        """Ring topology requires at least two ``run_ids``; the
+        ``RingTopologyConfig`` schema validator enforces this."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):

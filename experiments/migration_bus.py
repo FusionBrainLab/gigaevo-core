@@ -1,12 +1,11 @@
-"""Migration bus experiment matching ``config/experiment/migration_bus.yaml``.
+"""Migration-bus experiment.
 
 Single-island generational engine on each run, with the
 fully-connected cross-run migration bus letting peers share
 rejected-but-valid programs through a Redis stream on DB 15.
 
-The shipped YAML uses ``${problem.name}@db${redis.db}`` as the run
-identifier; the preset hardcodes ``heilbron@db0`` as the canonical
-default. Override via tyro to run a second peer:
+``run_id`` defaults to ``heilbron@db0``; override via tyro to run a
+second peer:
 
     python run.py experiments/migration_bus.py \\
         --engine.migration_bus.run_id heilbron@db1 \\

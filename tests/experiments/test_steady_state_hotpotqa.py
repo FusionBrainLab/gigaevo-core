@@ -1,9 +1,8 @@
 """Validation tests for the reference experiment.
 
-This file is the template every Phase 2 experiment migration follows:
-load the experiment module via the loader, assert build() returns a
-fully-validated ExperimentConfig, and pin the observable shape of the
-key fields.
+Loads the experiment module via the loader, asserts ``build()``
+returns a fully-validated ``ExperimentConfig``, and pins the
+observable shape of the key fields.
 """
 
 from __future__ import annotations

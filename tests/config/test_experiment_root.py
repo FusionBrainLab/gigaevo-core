@@ -215,9 +215,8 @@ class TestExperimentId:
 
 
 class TestBusInvariant:
-    """The bus engine variant landed in hydra-2.5; the cross-field
-    validator now actively enforces 'bus engine requires bandit
-    router' against real bus configs."""
+    """The cross-field validator on :class:`ExperimentConfig` enforces
+    ``bus engine requires bandit router`` against real bus configs."""
 
     def _bus_engine(self) -> "BusedEngineConfig":
         from gigaevo.config.schemas import (

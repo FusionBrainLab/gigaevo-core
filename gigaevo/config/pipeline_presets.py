@@ -1,16 +1,10 @@
-"""Preset builders for the shipped pipeline YAMLs.
+"""One-liner builders for the shipped pipeline variants.
 
-Each builder returns a fully-validated :class:`PipelineConfig`
-matching one ``config/pipeline/*.yaml`` shape. Seven builders cover
-the standard variants (matching the discriminated union from
-hydra-1.6); four cover the problem-specific Python builders that the
-hotpotqa / hover YAMLs target.
-
-The declarative ``custom.yaml`` (25 ``_target_`` references
-constructing a DAGBlueprint directly) is intentionally not migrated
-here — it's a one-off Hydra-only escape hatch and the architectural
-direction is to express any new pipeline as a Python builder
-function rather than a YAML DAG.
+Each function returns a fully-validated :class:`PipelineConfig`
+wrapping one of the discriminated-union variants in
+:mod:`gigaevo.config.schemas.pipeline`. Seven cover the
+language-level builders; four wrap problem-specific Python builders
+shipped under ``problems/chains/{hotpotqa,hover}/``.
 """
 
 from __future__ import annotations
@@ -32,7 +26,7 @@ from gigaevo.config.schemas.pipeline import ProblemSpecificPipelineBuilderConfig
 
 
 # ---------------------------------------------------------------------------
-# Standard pipeline presets — wrap the seven shipped schema variants
+# Standard pipeline presets
 # ---------------------------------------------------------------------------
 
 
@@ -42,8 +36,7 @@ def build_standard(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """Vanilla validate / call / fetch / merge pipeline matching
-    ``config/pipeline/standard.yaml``."""
+    """Vanilla validate / call / fetch / merge pipeline."""
     return PipelineConfig(
         builder=DefaultPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -58,9 +51,8 @@ def build_with_context(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """Default pipeline + AddContext stage matching
-    ``config/pipeline/with_context.yaml`` — used when the problem
-    ships a ``context.py`` providing build_context(problem)."""
+    """Default pipeline + ``AddContext`` stage. Used when the problem
+    ships a ``context.py`` providing ``build_context(problem)``."""
     return PipelineConfig(
         builder=ContextPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -75,9 +67,9 @@ def build_auto(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """Runtime-dispatch pipeline matching ``config/pipeline/auto.yaml``.
-    Picks ContextPipelineBuilder when the problem declares
-    is_contextual, DefaultPipelineBuilder otherwise."""
+    """Runtime-dispatch pipeline. Picks ``ContextPipelineBuilder`` when
+    the problem declares ``is_contextual``, ``DefaultPipelineBuilder``
+    otherwise."""
     return PipelineConfig(
         builder=AutoPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -92,8 +84,7 @@ def build_algotune_speed(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """ContextPipelineBuilder + RuntimeFitnessStage matching
-    ``config/pipeline/algotune_speed.yaml``."""
+    """``ContextPipelineBuilder`` + ``RuntimeFitnessStage``."""
     return PipelineConfig(
         builder=AlgoTuneSpeedPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -108,8 +99,8 @@ def build_cma_opt(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """DefaultPipelineBuilder + CMA-ES numerical constant optimisation
-    matching ``config/pipeline/cma_opt.yaml``."""
+    """``DefaultPipelineBuilder`` + CMA-ES numerical constant
+    optimisation stage."""
     return PipelineConfig(
         builder=CMAOptPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -124,8 +115,8 @@ def build_optuna_opt(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """DefaultPipelineBuilder + Optuna constant optimisation matching
-    ``config/pipeline/optuna_opt.yaml``."""
+    """``DefaultPipelineBuilder`` + Optuna constant optimisation
+    stage."""
     return PipelineConfig(
         builder=OptunaOptPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -140,10 +131,9 @@ def build_structural_metrics(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """DefaultPipelineBuilder + StructuralMetricsStage matching
-    ``config/pipeline/structural_metrics.yaml``. The stage emits AST
-    structural features used as behavior-space coordinates by the
-    topology_3d algorithm variants."""
+    """``DefaultPipelineBuilder`` + ``StructuralMetricsStage`` emitting
+    AST structural features used as behavior-space coordinates by the
+    topology-3d algorithm variants."""
     return PipelineConfig(
         builder=StructuralMetricsPipelineBuilderConfig(
             dag_timeout=dag_timeout, stage_timeout=stage_timeout
@@ -163,9 +153,8 @@ def build_hotpotqa_reflective(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """HotpotQA reflective pipeline (problem-specific builder under
-    ``problems.chains.hotpotqa.static.pipeline``) matching
-    ``config/pipeline/hotpotqa_reflective.yaml``."""
+    """HotpotQA reflective pipeline; lazy-imports the builder under
+    :mod:`problems.chains.hotpotqa.static.pipeline`."""
     return PipelineConfig(
         builder=ProblemSpecificPipelineBuilderConfig(
             builder_path=(
@@ -185,8 +174,8 @@ def build_hotpotqa_asi(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """HotpotQA ASI pipeline matching
-    ``config/pipeline/hotpotqa_asi.yaml``."""
+    """HotpotQA ASI pipeline; lazy-imports the builder under
+    :mod:`problems.chains.hotpotqa.static_a.pipeline`."""
     return PipelineConfig(
         builder=ProblemSpecificPipelineBuilderConfig(
             builder_path=(
@@ -206,8 +195,8 @@ def build_hotpotqa_colbert(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """HotpotQA ColBERT pipeline matching
-    ``config/pipeline/hotpotqa_colbert.yaml``."""
+    """HotpotQA ColBERT pipeline; lazy-imports the builder under
+    :mod:`problems.chains.hotpotqa.static_colbert_f1_600.pipeline`."""
     return PipelineConfig(
         builder=ProblemSpecificPipelineBuilderConfig(
             builder_path=(
@@ -227,9 +216,8 @@ def build_hover_feedback(
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT_S,
     prompts_dir: Path | None = None,
 ) -> PipelineConfig:
-    """HoVer feedback pipeline (problem-specific builder under
-    ``problems.chains.hover.static.pipeline``) matching
-    ``config/pipeline/hover_feedback.yaml``."""
+    """HoVer feedback pipeline; lazy-imports the builder under
+    :mod:`problems.chains.hover.static.pipeline`."""
     return PipelineConfig(
         builder=ProblemSpecificPipelineBuilderConfig(
             builder_path=(

@@ -87,13 +87,11 @@ class ExperimentConfig(FrozenStrictModel):
 
     @model_validator(mode="after")
     def _bus_engine_requires_bandit_router(self) -> "ExperimentConfig":
-        """The bus-flavor engine is only useful with a bandit router
-        because the bus migrates programs across engines and rewards
-        the LLM that produced the winner. With a static ensemble there
-        is no learning signal to propagate.
-
-        Bus engine schemas land in hydra-2.5; this validator runs as a
-        no-op until that variant joins the EngineConfig union."""
+        """The bus-flavor engine is only useful with a bandit router:
+        the bus migrates programs across engines and rewards the LLM
+        that produced the winner, and a static ensemble has no
+        learning signal to propagate. The validator no-ops when the
+        engine variant does not declare ``kind == "bus"``."""
         engine_kind = getattr(self.engine, "kind", None)
         if engine_kind == "bus" and not isinstance(self.llm, BanditRouterConfig):
             raise ValueError(

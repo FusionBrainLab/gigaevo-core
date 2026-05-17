@@ -195,8 +195,8 @@ class TestSchedulingUnion:
             ta.validate_python({"kind": "no_such_scheduler"})
 
     def test_each_variant_has_unique_kind(self) -> None:
-        """Discriminator-uniqueness regression — same defense-in-depth
-        check applied to PipelineBuilderConfig in hydra-1.6."""
+        """Each scheduling variant carries a distinct ``kind``
+        discriminator so the union resolves unambiguously."""
         kinds = [
             FIFOConfig.model_fields["kind"].default,
             LPTConfig.model_fields["kind"].default,

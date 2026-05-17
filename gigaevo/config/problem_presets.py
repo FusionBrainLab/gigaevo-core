@@ -43,8 +43,8 @@ def build_hotpotqa_static_f1(
     primary_metric: str | None = None,
     higher_is_better: bool | None = None,
 ) -> ProblemConfig:
-    """HotpotQA chain with static-F1 reward. Reference experiment
-    target from hydra-1.11; primary metric is token-level F1."""
+    """HotpotQA chain with static-F1 reward; primary metric is
+    token-level F1."""
     return ProblemConfig(
         name=name,
         problem_dir=_under("chains", "hotpotqa", "static_f1"),

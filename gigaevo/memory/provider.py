@@ -47,14 +47,13 @@ class NullMemoryProvider(MemoryProvider):
 
 
 class SelectorMemoryProvider(MemoryProvider):
-    """Delegates to ``MemorySelectorAgent``. Supports all backends (API, local, GAM).
+    """Delegates to ``MemorySelectorAgent``. Supports all backends
+    (API, local, GAM).
 
-    The selector agent is created lazily on first use to avoid heavy initialization
-    at Hydra config resolution time.
-
-    Optional ``checkpoint_dir`` and ``namespace`` override the corresponding
-    values in ``config/memory_backend.yaml`` at runtime, passed directly
-    to ``MemorySelectorAgent`` — no environment variable hacks needed.
+    The selector agent is created lazily on first use to keep
+    construction cheap. Optional ``checkpoint_dir`` and ``namespace``
+    are passed straight through to ``MemorySelectorAgent`` -- no
+    environment-variable indirection needed.
     """
 
     def __init__(

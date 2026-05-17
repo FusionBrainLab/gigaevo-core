@@ -84,14 +84,14 @@ class TestBuildDefaultRunner:
         assert cfg.max_concurrent_dags == DEFAULT_MAX_CONCURRENT_DAGS
         assert cfg.dag_timeout == DEFAULT_DAG_TIMEOUT_S
 
-    def test_yaml_parity(self) -> None:
-        """config/runner/default.yaml uses ${runner_poll_interval},
-        ${max_concurrent_dags}, ${dag_timeout} which resolve to the
-        same DEFAULT_* constants. The preset matches byte-equal."""
+    def test_defaults_pin_known_values(self) -> None:
+        """The default runner preset carries the documented constants
+        (``poll_interval=5.0``, ``max_concurrent_dags=10``,
+        ``dag_timeout=7200``)."""
         cfg = build_default_runner()
-        assert cfg.poll_interval == 5.0  # constants/runner.yaml value
-        assert cfg.max_concurrent_dags == 10  # constants/runner.yaml value
-        assert cfg.dag_timeout == 7200  # constants/pipeline.yaml value
+        assert cfg.poll_interval == 5.0
+        assert cfg.max_concurrent_dags == 10
+        assert cfg.dag_timeout == 7200
 
     def test_custom_overrides_propagate(self) -> None:
         cfg = build_default_runner(

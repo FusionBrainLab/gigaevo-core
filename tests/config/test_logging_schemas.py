@@ -168,9 +168,9 @@ class TestLoggingConfig:
         with pytest.raises(ValidationError):
             LoggingConfig(trackers=[])
 
-    def test_with_tb_redis_composition_matches_yaml(self) -> None:
-        """Mirror of config/logging/tensorboard.yaml: TBConfig +
-        RedisMetricsConfig as a composite."""
+    def test_tb_plus_redis_metrics_compose(self) -> None:
+        """Tensorboard tracker plus a Redis metrics tracker compose
+        into a single ``LoggingConfig`` with two entries."""
         cfg = LoggingConfig(
             settings=LoggingSettings(level="DEBUG"),
             trackers=[
@@ -186,8 +186,9 @@ class TestLoggingConfig:
         assert cfg.trackers[1].kind == "redis"
         assert cfg.settings.level == "DEBUG"
 
-    def test_with_wandb_redis_composition_matches_yaml(self) -> None:
-        """Mirror of config/logging/wandb.yaml: WBConfig + Redis."""
+    def test_wandb_plus_redis_metrics_compose(self) -> None:
+        """W&B tracker plus a Redis metrics tracker compose into a
+        single ``LoggingConfig`` with two entries."""
         cfg = LoggingConfig(
             trackers=[
                 WandBTrackerConfig(project="evo", name="experiment"),

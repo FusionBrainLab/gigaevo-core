@@ -1,10 +1,9 @@
-"""Multi-LLM exploration experiment matching
-``config/experiment/multi_llm_exploration.yaml``.
+"""Multi-LLM exploration experiment.
 
-Single island with the heterogeneous OpenRouter bandit — bias toward
-mutation diversity over MAP-Elites diversity. The bandit learns
-which model produces the best mutations and concentrates the
-sampling budget there over time.
+Single island with the heterogeneous OpenRouter bandit -- bias toward
+mutation diversity over MAP-Elites diversity. The bandit learns which
+model produces the best mutations and concentrates the sampling
+budget there over time.
 """
 
 from __future__ import annotations

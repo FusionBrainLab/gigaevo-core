@@ -1,19 +1,16 @@
-"""One-liner factory functions matching the shipped config/llm/*.yaml.
+"""One-liner factory functions for the shipped LLM endpoint presets.
 
-Phase 1 (:mod:`gigaevo.config.schemas.llm`) covered the core typed
-shape; this module exports the deployment-specific endpoint presets
-the YAMLs hardcode. Each builder returns a fully-validated
-:class:`BanditRouterConfig` or :class:`EnsembleRouterConfig` that
-experiment files compose with::
+Each builder returns a fully-validated :class:`BanditRouterConfig` or
+:class:`EnsembleRouterConfig`. Experiment files compose them::
 
     from gigaevo.config.llm_presets import build_openrouter_bandit
 
     def build() -> ExperimentConfig:
         return ExperimentConfig(..., llm=build_openrouter_bandit())
 
-Endpoints, model names, and timeouts default to the YAMLs' values;
-overrides flow through keyword arguments so a sweep can pin a
-specific model with ``build_openrouter_bandit(temperature=0.3)``.
+Endpoints, model names, and timeouts have sensible defaults; overrides
+flow through keyword arguments, so a sweep can pin a specific
+parameter with ``build_openrouter_bandit(temperature=0.3)``.
 """
 
 from __future__ import annotations
@@ -66,8 +63,7 @@ def build_openrouter_ensemble(
     request_timeout: float = DEFAULT_LLM_REQUEST_TIMEOUT_S,
     probabilities: list[float] | None = None,
 ) -> EnsembleRouterConfig:
-    """Static 4-way OpenRouter ensemble matching
-    ``config/llm/openrouter_ensemble.yaml``. Equal probabilities by
+    """Static 4-way OpenRouter ensemble. Equal probabilities by
     default; override to bias one provider."""
     endpoints = [
         _chat_openai(
@@ -92,9 +88,8 @@ def build_openrouter_bandit(
     exploration_constant: float = 1.41,
     window_size: int = 100,
 ) -> BanditRouterConfig:
-    """UCB1 bandit over the same 4 OpenRouter models matching
-    ``config/llm/openrouter_bandit.yaml``. The bandit learns which
-    model produces the best fitness improvements."""
+    """UCB1 bandit over the same 4 OpenRouter models. The bandit
+    learns which model produces the best fitness improvements."""
     endpoints = [
         _chat_openai(
             m,
@@ -119,7 +114,7 @@ def build_single(
     max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     request_timeout: float = DEFAULT_LLM_REQUEST_TIMEOUT_S,
 ) -> EnsembleRouterConfig:
-    """Single-endpoint preset matching ``config/llm/single.yaml``.
+    """Single-endpoint preset.
 
     Returned as an EnsembleRouterConfig with one model rather than a
     bandit; the runtime MultiModelRouter handles single-arm pools
@@ -148,12 +143,11 @@ def build_heterogeneous_bandit(
     exploration_constant: float = 1.41,
     window_size: int = 100,
 ) -> BanditRouterConfig:
-    """Two-model bandit matching ``config/llm/heterogeneous_bandit.yaml``.
-    Defaults read ``LLM_MODEL_1`` and ``LLM_MODEL_2`` from the
-    environment, falling back to the YAML's hardcoded Llama / Qwen
-    pair. ``base_url`` is required because heterogeneous endpoints
-    typically point at self-hosted inference servers; deferred to the
-    caller rather than defaulted."""
+    """Two-model bandit. Defaults read ``LLM_MODEL_1`` and
+    ``LLM_MODEL_2`` from the environment, falling back to a hardcoded
+    Llama / Qwen pair. ``base_url`` is required because heterogeneous
+    endpoints typically point at self-hosted inference servers, so it
+    is deferred to the caller rather than defaulted."""
     if base_url is None:
         raise ValueError(
             "build_heterogeneous_bandit requires base_url; the "
@@ -188,7 +182,8 @@ def build_gemini_3_flash(
     temperature: float = DEFAULT_LLM_TEMPERATURE,
     max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
 ) -> EnsembleRouterConfig:
-    """Single-model preset matching ``config/llm/gemini3_flash.yaml``."""
+    """Single-model preset: ``google/gemini-3-flash-preview`` on
+    OpenRouter."""
     return build_single(
         "google/gemini-3-flash-preview",
         base_url=OPENROUTER_BASE_URL,
@@ -202,11 +197,10 @@ def build_gemini_31_pro(
     temperature: float = DEFAULT_LLM_TEMPERATURE,
     max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
 ) -> EnsembleRouterConfig:
-    """Single-model preset matching ``config/llm/gemini31_pro.yaml``.
-
-    The OpenRouter slug is ``google/gemini-3.1-pro-preview`` — note the
-    ``-preview`` suffix the YAML pins. Omitting it would resolve to a
-    non-existent route and fail at the OpenRouter HTTP boundary."""
+    """Single-model preset: ``google/gemini-3.1-pro-preview`` on
+    OpenRouter. The ``-preview`` suffix is required; without it the
+    slug resolves to a non-existent route and fails at the OpenRouter
+    HTTP boundary."""
     return build_single(
         "google/gemini-3.1-pro-preview",
         base_url=OPENROUTER_BASE_URL,
@@ -220,7 +214,7 @@ def build_gemini_25_pro(
     temperature: float = DEFAULT_LLM_TEMPERATURE,
     max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
 ) -> EnsembleRouterConfig:
-    """Single-model preset matching ``config/llm/gemini25_pro.yaml``."""
+    """Single-model preset: ``google/gemini-2.5-pro`` on OpenRouter."""
     return build_single(
         "google/gemini-2.5-pro",
         base_url=OPENROUTER_BASE_URL,
@@ -235,9 +229,9 @@ def build_openai(
     max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     probabilities: list[float] | None = None,
 ) -> EnsembleRouterConfig:
-    """Two-model OpenAI heterogeneous ensemble matching
-    ``config/llm/openai.yaml``: gpt-5 + gpt-5-mini at 10/90 default
-    split. Override probabilities to bias toward the larger model."""
+    """Two-model OpenAI heterogeneous ensemble: ``openai/gpt-5`` plus
+    ``openai/gpt-5-mini`` at a 10/90 default split. Override
+    ``probabilities`` to bias toward the larger model."""
     return EnsembleRouterConfig(
         models=[
             _chat_openai(
@@ -261,9 +255,8 @@ def build_google(
     max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
     probabilities: list[float] | None = None,
 ) -> EnsembleRouterConfig:
-    """Two-model Google heterogeneous ensemble matching
-    ``config/llm/google.yaml``: gemini-2.5-flash + gemini-2.5-pro at
-    10/90 default split."""
+    """Two-model Google heterogeneous ensemble: ``gemini-2.5-flash``
+    plus ``gemini-2.5-pro`` at a 10/90 default split."""
     return EnsembleRouterConfig(
         models=[
             _chat_openai(

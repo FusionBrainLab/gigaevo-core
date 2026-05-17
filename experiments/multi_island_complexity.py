@@ -1,9 +1,8 @@
-"""Multi-island complexity experiment matching
-``config/experiment/multi_island_complexity.yaml``.
+"""Multi-island complexity experiment.
 
-Two islands (fitness + simplicity) with a single LLM endpoint —
-narrower exploration than full_featured but with the complexity-axis
-diversity preserved.
+Two islands (fitness + simplicity) with a single LLM endpoint --
+narrower exploration than ``full_featured`` but with the
+complexity-axis diversity preserved.
 """
 
 from __future__ import annotations

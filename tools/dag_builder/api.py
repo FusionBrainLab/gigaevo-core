@@ -685,7 +685,7 @@ def generate_pipeline_builder_code(dag_request: DAGRequest) -> str:
 
 
 def generate_yaml_config(dag_request: DAGRequest) -> str:
-    """Generate YAML configuration matching config/pipeline/custom.yaml structure."""
+    """Generate a YAML representation of the assembled pipeline."""
     # Get all stages from registry
     all_stages = StageRegistry.get_all_stages()
 

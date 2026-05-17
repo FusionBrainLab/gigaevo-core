@@ -1,10 +1,10 @@
-"""Full-featured experiment matching ``config/experiment/full_featured.yaml``.
+"""Full-featured experiment.
 
-Multi-island MAP-Elites with the fitness × validity / fitness ×
+Multi-island MAP-Elites with the fitness x validity / fitness x
 complexity split, plus the four-way heterogeneous OpenRouter
-ensemble. The shipped YAML requires the ``complexity_score`` metric;
-the algorithm preset constructs the multi-island shape that consumes
-it on the simplicity island.
+ensemble. Requires the ``complexity_score`` metric; the algorithm
+preset constructs the multi-island shape that consumes it on the
+simplicity island.
 """
 
 from __future__ import annotations

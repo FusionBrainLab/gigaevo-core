@@ -1,11 +1,8 @@
-"""Preset builder for the shipped DAG-runner YAML.
+"""Preset builder for the DAG runner.
 
-A single builder covers ``config/runner/default.yaml`` — the only
-runner variant in the repo. Defaults flow from
-:mod:`gigaevo.config.defaults`: ``poll_interval`` from
-``DEFAULT_RUNNER_POLL_INTERVAL_S``, ``max_concurrent_dags`` from
-``DEFAULT_MAX_CONCURRENT_DAGS``, ``dag_timeout`` from
-``DEFAULT_DAG_TIMEOUT_S``.
+A single builder ships; defaults flow from
+:mod:`gigaevo.config.defaults` (``DEFAULT_RUNNER_POLL_INTERVAL_S``,
+``DEFAULT_MAX_CONCURRENT_DAGS``, ``DEFAULT_DAG_TIMEOUT_S``).
 """
 
 from __future__ import annotations
@@ -26,12 +23,7 @@ def build_default_runner(
     prefetch_factor: int = 8,
     metrics_collection_interval: float = 1.0,
 ) -> DAGRunnerConfig:
-    """Default DAG runner matching ``config/runner/default.yaml``.
-
-    Every parameter routes through a ``DEFAULT_*`` constant where the
-    YAML carries a ``${...}`` interpolation; the two values the YAML
-    omits (``prefetch_factor`` and ``metrics_collection_interval``)
-    default to the runtime ``DagRunnerConfig`` field defaults."""
+    """Default DAG runner."""
     return DAGRunnerConfig(
         poll_interval=poll_interval,
         max_concurrent_dags=max_concurrent_dags,

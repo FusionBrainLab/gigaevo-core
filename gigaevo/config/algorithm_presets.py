@@ -1,19 +1,16 @@
-"""Preset builders for the shipped algorithm YAMLs.
+"""Preset builders for the algorithm schemas.
 
 Each builder returns a fully-validated :class:`SingleIslandConfig`
-or :class:`MultiIslandConfig` matching the corresponding YAML
-shape byte-equal in selector parameters, behavior-space bounds /
-resolutions, and migration knobs.
+or :class:`MultiIslandConfig`.
 
-The fitness key + direction default to ``"fitness"`` / ``True`` —
-the canonical shape for most experiments — but every builder
+The fitness key and direction default to ``"fitness"`` / ``True`` --
+the canonical shape for most experiments -- but every builder
 accepts ``fitness_key`` and ``higher_is_better`` overrides so a
 problem whose primary metric differs gets the right wiring.
 
-Defaults flow from :mod:`gigaevo.config.defaults`: the island id
-("fitness_island"), the per-island archive cap (75), the primary
-binning resolution (150), and the migration knobs all come from
-the constants module rather than literal magic numbers.
+Defaults for the island id, per-island archive cap, binning
+resolutions, and migration knobs come from
+:mod:`gigaevo.config.defaults`.
 """
 
 from __future__ import annotations
@@ -120,12 +117,10 @@ def build_single_island(
     primary_resolution: int = DEFAULT_PRIMARY_RESOLUTION,
     temperature: float | None = None,
 ) -> SingleIslandConfig:
-    """1-D MAP-Elites with FitnessProportionalEliteSelector matching
-    ``config/algorithm/single_island.yaml``. The default
-    ``temperature=None`` enables the runtime selector's
-    auto-temperature heuristic; pass a float for the fixed-temp
-    variant (matches ``single_island_fitness_prop_fixed_temp.yaml``
-    when ``temperature=0.14``)."""
+    """1-D MAP-Elites with ``FitnessProportionalEliteSelector``. The
+    default ``temperature=None`` enables the runtime selector's
+    auto-temperature heuristic; pass a float (e.g. ``0.14``) for the
+    fixed-temperature variant."""
     return SingleIslandConfig(
         island=_island_with_default_selectors(
             fitness_key=fitness_key,

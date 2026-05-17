@@ -1,9 +1,7 @@
-"""Base experiment — single-island MAP-Elites on Heilbron's triangle problem.
+"""Base experiment -- single-island MAP-Elites on Heilbron's triangle problem.
 
-Matches ``config/experiment/base.yaml`` with the canonical defaults
-composition: single island, single LLM, auto pipeline, default
-runner / engine / scheduling. Heilbron is the example problem the
-shipped YAML documents in its usage comments.
+Canonical composition: single island, single LLM, auto pipeline,
+default runner / engine / scheduling. Heilbron is the example problem.
 
 Override at the CLI to retarget:
 

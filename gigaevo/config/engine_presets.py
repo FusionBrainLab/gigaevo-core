@@ -1,16 +1,14 @@
-"""Preset builders for the shipped evolution-engine YAMLs.
+"""Preset builders for the evolution-engine schemas.
 
-Two builders cover ``config/evolution/{default,steady_state}.yaml``,
+Two builders cover the generational and steady-state variants,
 returning fully-validated :class:`GenerationalEngineConfig` or
-:class:`SteadyStateEngineConfig` instances with parent-selector and
-acceptor wiring resolved.
+:class:`SteadyStateEngineConfig`. Two more wrap the
+:class:`BusedEngineConfig` variant for fully-connected and ring
+migration topologies.
 
-Both YAMLs use the same parent selector / acceptor pair:
-``AllCombinationsParentSelector`` for crossover-shaped mutation and
-``StandardEvolutionAcceptor`` for the canonical accept policy. The
-preset reuses those defaults across both engine variants so a future
-engine YAML changing one constructor parameter only adjusts the
-specific preset, not the shared scaffolding.
+The default parent selector (``AllCombinationsParentSelectorConfig``)
+and acceptor (``StandardAcceptorConfig``) are shared across the
+non-bus variants; a private helper keeps that wiring in one place.
 """
 
 from __future__ import annotations
@@ -37,20 +35,19 @@ from gigaevo.config.schemas import (
 )
 
 
-# steady_state.yaml hardcodes max_in_flight=8 directly rather than
-# routing through a ${max_in_flight} constant; pin that value here so
-# build_steady_state's default matches the YAML byte-equal.
-_STEADY_STATE_YAML_MAX_IN_FLIGHT: int = 8
+# Steady-state engine: in-flight DAG queue cap, tuned for ~3-4 GPU
+# servers with 4 concurrent runs.
+_STEADY_STATE_MAX_IN_FLIGHT: int = 8
 
-# migration_bus/{bus,ring}.yaml literals — the YAML hardcodes these
-# rather than reading from constants.
-_BUS_YAML_MAX_IMPORTS_PER_GENERATION: int = 10
-_BUS_YAML_MIGRATION_BUS_DB: int = 15
-_BUS_YAML_MAX_BUFFER_SIZE: int = 30
-_BUS_YAML_CONSUME_INTERVAL_S: float = 3.0
-_BUS_YAML_MAX_CONSUME_PER_POLL: int = 20
-_BUS_YAML_MAX_STREAM_LEN: int = 1000
-_BUS_YAML_CLAIM_TTL_S: int = 120
+# Migration-bus literals shared across the bus and ring topology
+# variants.
+_BUS_MAX_IMPORTS_PER_GENERATION: int = 10
+_BUS_MIGRATION_BUS_DB: int = 15
+_BUS_MAX_BUFFER_SIZE: int = 30
+_BUS_CONSUME_INTERVAL_S: float = 3.0
+_BUS_MAX_CONSUME_PER_POLL: int = 20
+_BUS_MAX_STREAM_LEN: int = 1000
+_BUS_CLAIM_TTL_S: int = 120
 
 
 def _default_parent_selector(
@@ -75,9 +72,8 @@ def build_generational(
     max_generations: int | None = DEFAULT_MAX_GENERATIONS,
     num_parents: int = DEFAULT_NUM_PARENTS,
 ) -> GenerationalEngineConfig:
-    """Step-wise generational engine matching
-    ``config/evolution/default.yaml``. One mutation/evaluation
-    barrier per generation; the engine waits for every program in a
+    """Step-wise generational engine. One mutation/evaluation barrier
+    per generation; the engine waits for every program in a
     generation to complete before advancing. Use the steady-state
     variant for ~8-9x throughput when the workload tolerates
     interleaved completion."""
@@ -97,15 +93,14 @@ def build_steady_state(
     max_elites_per_generation: int = DEFAULT_MAX_ELITES_PER_GENERATION,
     max_mutations_per_generation: int = DEFAULT_MAX_MUTATIONS_PER_GENERATION,
     max_generations: int | None = DEFAULT_MAX_GENERATIONS,
-    max_in_flight: int = _STEADY_STATE_YAML_MAX_IN_FLIGHT,
+    max_in_flight: int = _STEADY_STATE_MAX_IN_FLIGHT,
     num_parents: int = DEFAULT_NUM_PARENTS,
 ) -> SteadyStateEngineConfig:
-    """Continuous mutation/evaluation interleaving matching
-    ``config/evolution/steady_state.yaml``. Programs are evaluated and
-    ingested immediately as they complete — no generational barrier.
-    ``max_in_flight`` bounds the in-flight DAG queue (backpressure on
-    the mutation loop); the YAML pins 8, tuned for ~3-4 GPU servers
-    with 4 concurrent runs."""
+    """Continuous mutation/evaluation interleaving. Programs are
+    evaluated and ingested immediately as they complete -- no
+    generational barrier. ``max_in_flight`` bounds the in-flight DAG
+    queue (backpressure on the mutation loop) and defaults to 8,
+    tuned for ~3-4 GPU servers with 4 concurrent runs."""
     return SteadyStateEngineConfig(
         loop_interval=loop_interval,
         max_elites_per_generation=max_elites_per_generation,
@@ -159,35 +154,31 @@ def build_bus_engine(
     problem_name: str,
     host: str = "localhost",
     port: int = 6379,
-    bus_db: int = _BUS_YAML_MIGRATION_BUS_DB,
-    max_imports_per_generation: int = _BUS_YAML_MAX_IMPORTS_PER_GENERATION,
-    max_buffer_size: int = _BUS_YAML_MAX_BUFFER_SIZE,
-    consume_interval: float = _BUS_YAML_CONSUME_INTERVAL_S,
-    max_consume_per_poll: int = _BUS_YAML_MAX_CONSUME_PER_POLL,
-    max_stream_len: int = _BUS_YAML_MAX_STREAM_LEN,
-    claim_ttl: int = _BUS_YAML_CLAIM_TTL_S,
+    bus_db: int = _BUS_MIGRATION_BUS_DB,
+    max_imports_per_generation: int = _BUS_MAX_IMPORTS_PER_GENERATION,
+    max_buffer_size: int = _BUS_MAX_BUFFER_SIZE,
+    consume_interval: float = _BUS_CONSUME_INTERVAL_S,
+    max_consume_per_poll: int = _BUS_MAX_CONSUME_PER_POLL,
+    max_stream_len: int = _BUS_MAX_STREAM_LEN,
+    claim_ttl: int = _BUS_CLAIM_TTL_S,
     loop_interval: float = DEFAULT_LOOP_INTERVAL_S,
     max_elites_per_generation: int = DEFAULT_MAX_ELITES_PER_GENERATION,
     max_mutations_per_generation: int = DEFAULT_MAX_MUTATIONS_PER_GENERATION,
     max_generations: int | None = DEFAULT_MAX_GENERATIONS,
     num_parents: int = DEFAULT_NUM_PARENTS,
 ) -> BusedEngineConfig:
-    """Fully-connected migration bus matching
-    ``config/migration_bus/bus.yaml``.
+    """Fully-connected migration bus.
 
     Each run publishes rejected-but-valid programs to a shared Redis
     Stream; any other run can claim them exclusively via SETNX. The
     ``BusTopology`` accepts envelopes from any run except the local
     one. ``run_id`` is the local identity (canonical form
     ``f"{problem_name}@db{redis_db}"``); ``problem_name`` shapes the
-    stream key as ``f"gigaevo:{problem_name}:migration_bus"`` matching
-    the YAML.
+    stream key as ``f"gigaevo:{problem_name}:migration_bus"``.
 
-    All YAML-hardcoded literals (max_stream_len=1000, claim_ttl=120,
-    max_buffer_size=30, etc.) are pinned as preset defaults; the
-    cross-field validator on MigrationBusConfig enforces the run_id /
-    transport.run_id agreement that the YAML expresses through shared
-    ``${problem.name}@db${redis.db}`` interpolation."""
+    The cross-field validator on ``MigrationBusConfig`` enforces that
+    the local ``run_id`` agrees with ``transport.run_id``, so the
+    builder threads the same value through both fields."""
     return BusedEngineConfig(
         migration_bus=_bus_migration_config(
             run_id=run_id,
@@ -219,26 +210,25 @@ def build_ring_engine(
     ring_run_ids: list[str],
     host: str = "localhost",
     port: int = 6379,
-    bus_db: int = _BUS_YAML_MIGRATION_BUS_DB,
-    max_imports_per_generation: int = _BUS_YAML_MAX_IMPORTS_PER_GENERATION,
-    max_buffer_size: int = _BUS_YAML_MAX_BUFFER_SIZE,
-    consume_interval: float = _BUS_YAML_CONSUME_INTERVAL_S,
-    max_consume_per_poll: int = _BUS_YAML_MAX_CONSUME_PER_POLL,
-    max_stream_len: int = _BUS_YAML_MAX_STREAM_LEN,
-    claim_ttl: int = _BUS_YAML_CLAIM_TTL_S,
+    bus_db: int = _BUS_MIGRATION_BUS_DB,
+    max_imports_per_generation: int = _BUS_MAX_IMPORTS_PER_GENERATION,
+    max_buffer_size: int = _BUS_MAX_BUFFER_SIZE,
+    consume_interval: float = _BUS_CONSUME_INTERVAL_S,
+    max_consume_per_poll: int = _BUS_MAX_CONSUME_PER_POLL,
+    max_stream_len: int = _BUS_MAX_STREAM_LEN,
+    claim_ttl: int = _BUS_CLAIM_TTL_S,
     loop_interval: float = DEFAULT_LOOP_INTERVAL_S,
     max_elites_per_generation: int = DEFAULT_MAX_ELITES_PER_GENERATION,
     max_mutations_per_generation: int = DEFAULT_MAX_MUTATIONS_PER_GENERATION,
     max_generations: int | None = DEFAULT_MAX_GENERATIONS,
     num_parents: int = DEFAULT_NUM_PARENTS,
 ) -> BusedEngineConfig:
-    """Directed-ring migration matching
-    ``config/migration_bus/ring.yaml``. ``ring_run_ids`` defines the
-    ring order; each run accepts migrants only from its predecessor.
+    """Directed-ring migration. ``ring_run_ids`` defines the ring
+    order; each run accepts migrants only from its predecessor.
 
-    The local ``run_id`` must appear in ``ring_run_ids`` — the
-    MigrationBusConfig cross-field validator catches missing-from-ring
-    misconfigurations at load time rather than letting the bus
+    The local ``run_id`` must appear in ``ring_run_ids`` -- the
+    ``MigrationBusConfig`` cross-field validator catches missing-from-
+    ring misconfigurations at load time rather than letting the bus
     silently reject every envelope."""
     return BusedEngineConfig(
         migration_bus=_bus_migration_config(

@@ -1,12 +1,11 @@
-"""Steady-state + bus experiment matching
-``config/experiment/steady_state_bus.yaml``.
+"""Steady-state + bus experiment.
 
-Combines continuous mutation/evaluation interleaving with the
-cross-run migration bus. The shipped YAML documents this as the
-canonical production shape for multi-GPU multi-run setups.
+Combines continuous mutation / evaluation interleaving with the
+cross-run migration bus. This is the canonical production shape for
+multi-GPU, multi-run setups.
 
-The bus engine variant carries the steady-state max_in_flight value
-from the YAML — 8 hardcoded for the steady-state path.
+The bus engine variant carries the steady-state ``max_in_flight``
+value (hardcoded to 8 for the steady-state path).
 """
 
 from __future__ import annotations
@@ -39,9 +38,9 @@ def build() -> ExperimentConfig:
     # build_bus_engine returns the generational-flavored bus config;
     # the steady-state YAML inherits engine knobs but pins
     # max_in_flight=8 (steady-state only). Construct the bus engine
-    # manually here to mix the migration_bus with steady-state
-    # semantics — once Phase 2 grows a build_steady_state_bus_engine
-    # preset this experiment imports that one-liner instead.
+    # manually here to mix the migration bus with steady-state
+    # semantics; a future ``build_steady_state_bus_engine`` preset
+    # would let this experiment import a one-liner instead.
     bus = MigrationBusConfig(
         run_id=_DEFAULT_RUN_ID,
         transport=RedisStreamTransportConfig(

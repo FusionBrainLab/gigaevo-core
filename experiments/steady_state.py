@@ -1,8 +1,8 @@
-"""Steady-state experiment matching ``config/experiment/steady_state.yaml``.
+"""Steady-state experiment.
 
-Single island + steady-state engine for continuous mutation/evaluation
-interleaving. The shipped YAML documents ~8-9x throughput vs the
-generational variant.
+Single island + steady-state engine for continuous mutation /
+evaluation interleaving (~8-9x throughput vs the generational
+variant).
 """
 
 from __future__ import annotations

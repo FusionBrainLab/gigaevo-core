@@ -19,7 +19,7 @@ from typing import Final
 from gigaevo.programs.metrics.context import VALIDITY_KEY as _VALIDITY_KEY
 
 # ---------------------------------------------------------------------------
-# Pipeline execution — config/constants/pipeline.yaml
+# Pipeline execution
 # ---------------------------------------------------------------------------
 
 DEFAULT_STAGE_TIMEOUT_S: Final[int] = 2400
@@ -31,7 +31,7 @@ DEFAULT_MAX_INSIGHTS: Final[int] = 8
 
 
 # ---------------------------------------------------------------------------
-# Redis connection — config/constants/redis.yaml
+# Redis connection
 # ---------------------------------------------------------------------------
 
 DEFAULT_REDIS_MAX_CONNECTIONS: Final[int] = 150
@@ -42,7 +42,7 @@ DEFAULT_REDIS_RETRY_DELAY_S: Final[float] = 0.5
 
 
 # ---------------------------------------------------------------------------
-# Evolution engine — config/constants/evolution.yaml
+# Evolution engine
 # ---------------------------------------------------------------------------
 
 DEFAULT_LOOP_INTERVAL_S: Final[float] = 1.0
@@ -55,7 +55,7 @@ DEFAULT_STRIP_COMMENTS_AND_DOCSTRINGS: Final[bool] = False
 
 
 # ---------------------------------------------------------------------------
-# MAP-Elites islands — config/constants/islands.yaml
+# MAP-Elites islands
 # ---------------------------------------------------------------------------
 
 DEFAULT_MIGRATION_INTERVAL: Final[int] = 25
@@ -74,7 +74,7 @@ DEFAULT_VALIDITY_KEY: Final[str] = _VALIDITY_KEY
 
 
 # ---------------------------------------------------------------------------
-# DAG runner — config/constants/runner.yaml
+# DAG runner
 # ---------------------------------------------------------------------------
 
 DEFAULT_RUNNER_POLL_INTERVAL_S: Final[float] = 5.0
@@ -82,7 +82,7 @@ DEFAULT_MAX_CONCURRENT_DAGS: Final[int] = 10
 
 
 # ---------------------------------------------------------------------------
-# LLM defaults — config/constants/llm.yaml
+# LLM defaults
 # ---------------------------------------------------------------------------
 
 DEFAULT_LLM_TEMPERATURE: Final[float] = 0.6
@@ -93,21 +93,19 @@ DEFAULT_LLM_REQUEST_TIMEOUT_S: Final[int] = 600
 
 
 # ---------------------------------------------------------------------------
-# Logging — config/constants/logging.yaml
+# Logging
 # ---------------------------------------------------------------------------
 
 DEFAULT_LOG_ROTATION: Final[str] = "50 MB"
 DEFAULT_LOG_RETENTION: Final[str] = "30 days"
 DEFAULT_LOG_TAG: Final[str] = "experiment"
-# ``log_dir`` had no module-level scalar in the YAML — it was a
-# ``${hydra:runtime.output_dir}`` interpolation resolved at run time.
-# In the typed CLI the resolved output directory comes from
-# ``ExperimentConfig.output_dir / experiment_id`` and is set by
-# the LoggingConfig schema's build() method when hydra-2.4 lands.
+# ``log_dir`` has no module-level scalar -- the resolved output
+# directory comes from ``ExperimentConfig.output_dir / experiment_id``
+# at run time and is threaded into ``LoggingConfig.build()``.
 
 
 # ---------------------------------------------------------------------------
-# Endpoint defaults — config/constants/endpoints.yaml
+# Endpoint defaults
 # ---------------------------------------------------------------------------
 
 # These two values are deployment-specific and routinely overridden in

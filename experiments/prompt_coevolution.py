@@ -1,14 +1,13 @@
-"""Prompt co-evolution experiment matching
-``config/experiment/prompt_coevolution.yaml``.
+"""Prompt co-evolution -- main-run side.
 
-The main run uses a GigaEvoArchivePromptFetcher that pulls system
-prompts from a paired prompt-evolution run. The shipped YAML
-documents the two-run dance: this is the main run; the paired
-prompt run separately optimises mutation prompts.
+The main run uses a ``GigaEvoArchivePromptFetcher`` that pulls system
+prompts from a paired prompt-evolution run. This file describes the
+main run; the paired prompt run separately optimises mutation prompts
+and lives in its own experiment file.
 
-Required: ``prompt_redis_db`` of the paired prompt run (default 6
-matching the YAML example), and the main_redis_db (this run's DB)
-for the prompt run to read outcome stats from.
+Required: ``prompt_redis_db`` of the paired prompt run (default 6),
+and the main-run Redis DB so the prompt run can read outcome stats
+back.
 """
 
 from __future__ import annotations

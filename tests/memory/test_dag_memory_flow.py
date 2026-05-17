@@ -700,12 +700,12 @@ class TestHydraConfigContracts:
         assert isinstance(provider, NullMemoryProvider)
 
     def test_selector_provider_target_with_max_cards(self) -> None:
-        """SelectorMemoryProvider accepts max_cards kwarg (from config/memory/local.yaml)."""
+        """SelectorMemoryProvider accepts the ``max_cards`` kwarg."""
         provider = SelectorMemoryProvider(max_cards=5)
         assert provider._max_cards == 5
 
     def test_selector_provider_target_with_all_params(self) -> None:
-        """SelectorMemoryProvider accepts all Hydra-injectable params."""
+        """SelectorMemoryProvider accepts all constructor params."""
         provider = SelectorMemoryProvider(
             max_cards=3,
             checkpoint_dir="/tmp/test",

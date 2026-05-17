@@ -16,9 +16,7 @@ class ProblemConfig(FrozenStrictModel):
 
     The experiment-root layer builds the runtime ``ProblemContext`` via
     :meth:`build`, which materialises the ``MetricsContext`` from the
-    directory's ``metrics.yaml``. Per-problem typed variants with full
-    field coverage (task description, behavior space defaults,
-    evaluation budget) land in hydra-2.7 as a discriminated union.
+    directory's ``metrics.yaml``.
 
     ``primary_metric`` and ``higher_is_better`` are optional overrides
     for the values that ``MetricsContext`` derives from ``metrics.yaml``;

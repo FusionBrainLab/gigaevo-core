@@ -108,14 +108,3 @@ def test_other_experiments_have_no_prompt_fetcher() -> None:
         )
 
 
-def test_eight_experiment_yamls_have_python_counterparts() -> None:
-    """The plan §5.14 requires one experiments/X.py for every
-    config/experiment/X.yaml. Eight YAMLs shipped today + the
-    reference experiment from hydra-1.11 + the new task migrations."""
-    yaml_dir = EXPERIMENTS_DIR.parent / "config" / "experiment"
-    yaml_stems = {p.stem for p in yaml_dir.glob("*.yaml")}
-    python_stems = {p.stem for p in EXPERIMENT_FILES}
-    missing = yaml_stems - python_stems
-    assert not missing, (
-        f"YAMLs without Python counterparts: {sorted(missing)}"
-    )

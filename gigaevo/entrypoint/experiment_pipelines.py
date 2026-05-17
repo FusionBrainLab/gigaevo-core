@@ -1,8 +1,8 @@
 """Experiment-specific pipeline builders.
 
-Each builder extends :class:`DefaultPipelineBuilder` with additional stages
-needed for a particular experiment.  Referenced via Hydra pipeline YAML configs
-(e.g. ``config/pipeline/structural_metrics.yaml``).
+Each builder extends :class:`DefaultPipelineBuilder` with additional
+stages needed for a particular experiment. Selected by typed pipeline
+schema variants such as :class:`StructuralMetricsPipelineBuilderConfig`.
 """
 
 from __future__ import annotations

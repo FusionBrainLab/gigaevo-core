@@ -1,7 +1,11 @@
 """Configuration constants for the memory write pipeline.
 
-Loaded at import time from config/memory.yaml and environment variables.
-Used by write_pipeline.py and the IdeaTracker memory write pipeline.
+Settings are resolved at import time through
+:func:`gigaevo.memory.runtime_config.load_settings`, which reads the
+optional ``EVO_MEMORY_CONFIG_PATH`` (or its fallback locations) and
+overlays environment-variable overrides. Consumed by
+:mod:`gigaevo.memory.write_pipeline` and the IdeaTracker memory write
+pipeline.
 """
 
 from __future__ import annotations
