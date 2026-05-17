@@ -67,6 +67,7 @@ from gigaevo.config.schemas.migration_bus import (
     TopologyConfig,
 )
 from gigaevo.config.schemas.problem import ProblemConfig
+from gigaevo.config.schemas.runner import DAGRunnerConfig
 from gigaevo.config.schemas.prompt import (
     FixedDirPromptFetcherConfig,
     GigaEvoArchivePromptFetcherConfig,
@@ -103,6 +104,7 @@ __all__ = [
     "ChatOpenAIConfig",
     "CodeFeatureExtractorConfig",
     "ContextPipelineBuilderConfig",
+    "DAGRunnerConfig",
     "DataPlaneSettings",
     "DefaultPipelineBuilderConfig",
     "EliteSelectorConfig",
