@@ -51,22 +51,33 @@ class StandardAcceptorConfig(FrozenStrictModel):
 
     The behavior keys arrive from the algorithm subtree at build time —
     the schema declares ``required_behavior_keys`` as None to defer to
-    the cross-field resolution in the experiment root."""
+    the cross-field resolution in the experiment root. The runtime
+    acceptor stores the keys as a ``set`` and performs set subtraction
+    in its accept hot path; the schema accepts ``list[str]`` for YAML
+    ergonomics and converts at build time. ``validity_key`` defaults to
+    the canonical ``VALIDITY_KEY`` constant in the acceptor module."""
 
     kind: Literal["standard"] = "standard"
     required_behavior_keys: list[str] | None = None
+    validity_key: str | None = Field(default=None, min_length=1)
 
     def build(
         self, *, required_behavior_keys: list[str]
     ) -> "ProgramEvolutionAcceptor":
-        from gigaevo.evolution.engine.acceptor import StandardEvolutionAcceptor
+        from gigaevo.evolution.engine.acceptor import (
+            VALIDITY_KEY,
+            StandardEvolutionAcceptor,
+        )
 
-        keys = (
+        keys_list = (
             self.required_behavior_keys
             if self.required_behavior_keys is not None
             else required_behavior_keys
         )
-        return StandardEvolutionAcceptor(required_behavior_keys=keys)
+        return StandardEvolutionAcceptor(
+            required_behavior_keys=set(keys_list),
+            validity_key=self.validity_key or VALIDITY_KEY,
+        )
 
 
 AcceptorConfig = Annotated[

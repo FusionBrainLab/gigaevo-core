@@ -65,19 +65,52 @@ class TestStandardAcceptorConfig:
         assert cfg.kind == "standard"
         assert cfg.required_behavior_keys is None
 
-    def test_explicit_keys_override(self) -> None:
-        cfg = StandardAcceptorConfig(required_behavior_keys=["fitness"])
-        from gigaevo.evolution.engine.acceptor import StandardEvolutionAcceptor
+    def _find_required_keys_subacceptor(self, composite):  # type: ignore[no-untyped-def]
+        """Locate the RequiredBehaviorKeysAcceptor inside the composite
+        and return its required_behavior_keys set."""
+        from gigaevo.evolution.engine.acceptor import RequiredBehaviorKeysAcceptor
 
+        for sub in composite.acceptors:
+            if isinstance(sub, RequiredBehaviorKeysAcceptor):
+                return sub.required_behavior_keys
+        raise AssertionError("no RequiredBehaviorKeysAcceptor in composite")
+
+    def test_explicit_keys_override(self) -> None:
+        cfg = StandardAcceptorConfig(required_behavior_keys=["fitness", "validity"])
         acceptor = cfg.build(required_behavior_keys=["ignored"])
-        assert isinstance(acceptor, StandardEvolutionAcceptor)
+        keys = self._find_required_keys_subacceptor(acceptor)
+        assert keys == {"fitness", "validity"}
 
     def test_keys_resolved_from_caller_when_unset(self) -> None:
-        from gigaevo.evolution.engine.acceptor import StandardEvolutionAcceptor
+        cfg = StandardAcceptorConfig()
+        acceptor = cfg.build(required_behavior_keys=["fitness", "complexity"])
+        keys = self._find_required_keys_subacceptor(acceptor)
+        assert keys == {"fitness", "complexity"}
 
+    def test_keys_stored_as_set_for_subtraction_hot_path(self) -> None:
+        """RequiredBehaviorKeysAcceptor does ``self.required_behavior_keys
+        - present_keys`` on every program. Storing a list would crash
+        with TypeError on the first accept call."""
         cfg = StandardAcceptorConfig()
         acceptor = cfg.build(required_behavior_keys=["fitness"])
-        assert isinstance(acceptor, StandardEvolutionAcceptor)
+        keys = self._find_required_keys_subacceptor(acceptor)
+        assert isinstance(keys, set)
+        assert keys - {"fitness", "extra"} == set()
+
+    def test_custom_validity_key(self) -> None:
+        from gigaevo.evolution.engine.acceptor import ValidityMetricAcceptor
+
+        cfg = StandardAcceptorConfig(validity_key="custom_valid")
+        acceptor = cfg.build(required_behavior_keys=["fitness"])
+        validity_subacceptors = [
+            s for s in acceptor.acceptors if isinstance(s, ValidityMetricAcceptor)
+        ]
+        assert len(validity_subacceptors) == 1
+        assert validity_subacceptors[0].validity_key == "custom_valid"
+
+    def test_empty_validity_key_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            StandardAcceptorConfig(validity_key="")
 
     def test_union_round_trip(self) -> None:
         ta: TypeAdapter[AcceptorConfig] = TypeAdapter(AcceptorConfig)
