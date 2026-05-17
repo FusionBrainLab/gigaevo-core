@@ -23,6 +23,16 @@ from gigaevo.config.schemas.algorithm import (
     TopFitnessMigrantSelectorConfig,
     WeightedEliteSelectorConfig,
 )
+from gigaevo.config.schemas.engine import (
+    AcceptorConfig,
+    AllCombinationsParentSelectorConfig,
+    EngineConfig,
+    GenerationalEngineConfig,
+    ParentSelectorConfig,
+    RandomParentSelectorConfig,
+    StandardAcceptorConfig,
+    SteadyStateEngineConfig,
+)
 from gigaevo.config.schemas.llm import (
     BanditRouterConfig,
     ChatOpenAIConfig,
@@ -32,7 +42,9 @@ from gigaevo.config.schemas.llm import (
 from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
 
 __all__ = [
+    "AcceptorConfig",
     "AlgorithmConfig",
+    "AllCombinationsParentSelectorConfig",
     "ArchiveRemoverConfig",
     "ArchiveSelectorConfig",
     "BanditRouterConfig",
@@ -40,16 +52,22 @@ __all__ = [
     "ChatOpenAIConfig",
     "DataPlaneSettings",
     "EliteSelectorConfig",
+    "EngineConfig",
     "EnsembleRouterConfig",
     "FitnessArchiveRemoverConfig",
     "FitnessProportionalEliteSelectorConfig",
     "FrozenStrictModel",
+    "GenerationalEngineConfig",
     "IslandConfig",
     "LLMConfig",
     "MigrantSelectorConfig",
     "MultiIslandConfig",
+    "ParentSelectorConfig",
+    "RandomParentSelectorConfig",
     "RedisConfig",
     "SingleIslandConfig",
+    "StandardAcceptorConfig",
+    "SteadyStateEngineConfig",
     "SumArchiveSelectorConfig",
     "TopFitnessMigrantSelectorConfig",
     "WeightedEliteSelectorConfig",

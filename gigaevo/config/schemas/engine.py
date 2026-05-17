@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated, Literal
+
+from pydantic import Field
+
+from gigaevo.config.schemas._base import FrozenStrictModel
+
+if TYPE_CHECKING:
+    from gigaevo.evolution.engine.acceptor import ProgramEvolutionAcceptor
+    from gigaevo.evolution.engine.config import EngineConfig as RuntimeEngineConfig
+    from gigaevo.evolution.mutation.parent_selector import ParentSelector
+
+
+class RandomParentSelectorConfig(FrozenStrictModel):
+    """Picks ``num_parents`` programs uniformly at random for mutation."""
+
+    kind: Literal["random"] = "random"
+    num_parents: int = Field(default=1, ge=1)
+
+    def build(self) -> "ParentSelector":
+        from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+
+        return RandomParentSelector(num_parents=self.num_parents)
+
+
+class AllCombinationsParentSelectorConfig(FrozenStrictModel):
+    """Yields every ``num_parents``-sized combination of the selected
+    elites; used for crossover-shaped mutation operators."""
+
+    kind: Literal["all_combinations"] = "all_combinations"
+    num_parents: int = Field(default=1, ge=1)
+
+    def build(self) -> "ParentSelector":
+        from gigaevo.evolution.mutation.parent_selector import (
+            AllCombinationsParentSelector,
+        )
+
+        return AllCombinationsParentSelector(num_parents=self.num_parents)
+
+
+ParentSelectorConfig = Annotated[
+    RandomParentSelectorConfig | AllCombinationsParentSelectorConfig,
+    Field(discriminator="kind"),
+]
+
+
+class StandardAcceptorConfig(FrozenStrictModel):
+    """The shipped composite acceptor: state + metrics existence +
+    validity + required behavior keys + mutation context.
+
+    The behavior keys arrive from the algorithm subtree at build time —
+    the schema declares ``required_behavior_keys`` as None to defer to
+    the cross-field resolution in the experiment root."""
+
+    kind: Literal["standard"] = "standard"
+    required_behavior_keys: list[str] | None = None
+
+    def build(
+        self, *, required_behavior_keys: list[str]
+    ) -> "ProgramEvolutionAcceptor":
+        from gigaevo.evolution.engine.acceptor import StandardEvolutionAcceptor
+
+        keys = (
+            self.required_behavior_keys
+            if self.required_behavior_keys is not None
+            else required_behavior_keys
+        )
+        return StandardEvolutionAcceptor(required_behavior_keys=keys)
+
+
+AcceptorConfig = Annotated[
+    StandardAcceptorConfig,
+    Field(discriminator="kind"),
+]
+
+
+class _EngineConfigBase(FrozenStrictModel):
+    """Common engine knobs shared by the generational and steady-state
+    variants. Mirrors :class:`gigaevo.evolution.engine.config.EngineConfig`."""
+
+    loop_interval: float = Field(default=1.0, gt=0.0)
+    max_elites_per_generation: int = Field(default=20, gt=0)
+    max_mutations_per_generation: int = Field(default=50, gt=0)
+    metrics_collection_interval: float = Field(default=1.0, gt=0.0)
+    max_generations: int | None = Field(default=None, ge=1)
+    parent_selector: ParentSelectorConfig = Field(
+        default_factory=lambda: RandomParentSelectorConfig(num_parents=1)
+    )
+    program_acceptor: AcceptorConfig = Field(
+        default_factory=lambda: StandardAcceptorConfig()
+    )
+
+
+class GenerationalEngineConfig(_EngineConfigBase):
+    """Step-wise generational engine. One mutation/evaluation barrier
+    per generation; the engine waits for all programs in a generation
+    to complete before advancing. Use steady-state for ~8-9x throughput."""
+
+    kind: Literal["generational"] = "generational"
+
+    def build_runtime_config(
+        self, *, required_behavior_keys: list[str]
+    ) -> "RuntimeEngineConfig":
+        from gigaevo.evolution.engine.config import EngineConfig as RuntimeEngineConfig
+
+        return RuntimeEngineConfig(
+            loop_interval=self.loop_interval,
+            max_elites_per_generation=self.max_elites_per_generation,
+            max_mutations_per_generation=self.max_mutations_per_generation,
+            metrics_collection_interval=self.metrics_collection_interval,
+            max_generations=self.max_generations,
+            parent_selector=self.parent_selector.build(),
+            program_acceptor=self.program_acceptor.build(
+                required_behavior_keys=required_behavior_keys
+            ),
+        )
+
+
+class SteadyStateEngineConfig(_EngineConfigBase):
+    """Continuous mutation/evaluation interleaving — no generational
+    barrier. Programs are evaluated and ingested immediately as they
+    complete."""
+
+    kind: Literal["steady_state"] = "steady_state"
+    max_in_flight: int = Field(default=5, gt=0)
+
+    def build_runtime_config(
+        self, *, required_behavior_keys: list[str]
+    ) -> "RuntimeEngineConfig":
+        from gigaevo.evolution.engine.config import SteadyStateEngineConfig as Runtime
+
+        return Runtime(
+            loop_interval=self.loop_interval,
+            max_elites_per_generation=self.max_elites_per_generation,
+            max_mutations_per_generation=self.max_mutations_per_generation,
+            metrics_collection_interval=self.metrics_collection_interval,
+            max_generations=self.max_generations,
+            parent_selector=self.parent_selector.build(),
+            program_acceptor=self.program_acceptor.build(
+                required_behavior_keys=required_behavior_keys
+            ),
+            max_in_flight=self.max_in_flight,
+        )
+
+
+EngineConfig = Annotated[
+    GenerationalEngineConfig | SteadyStateEngineConfig,
+    Field(discriminator="kind"),
+]

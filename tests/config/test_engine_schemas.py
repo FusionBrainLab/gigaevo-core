@@ -1,0 +1,164 @@
+"""Unit tests for the engine-side typed schemas."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import TypeAdapter, ValidationError
+
+from gigaevo.config.schemas import (
+    AcceptorConfig,
+    AllCombinationsParentSelectorConfig,
+    EngineConfig,
+    GenerationalEngineConfig,
+    ParentSelectorConfig,
+    RandomParentSelectorConfig,
+    StandardAcceptorConfig,
+    SteadyStateEngineConfig,
+)
+
+
+class TestParentSelectorConfig:
+    def test_random_selector_default(self) -> None:
+        cfg = RandomParentSelectorConfig()
+        assert cfg.kind == "random"
+        assert cfg.num_parents == 1
+
+    def test_num_parents_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            RandomParentSelectorConfig(num_parents=0)
+
+    def test_all_combinations_selector(self) -> None:
+        cfg = AllCombinationsParentSelectorConfig(num_parents=3)
+        assert cfg.kind == "all_combinations"
+        assert cfg.num_parents == 3
+
+    def test_union_round_trip(self) -> None:
+        ta: TypeAdapter[ParentSelectorConfig] = TypeAdapter(ParentSelectorConfig)
+        for cfg in (
+            RandomParentSelectorConfig(num_parents=2),
+            AllCombinationsParentSelectorConfig(num_parents=4),
+        ):
+            parsed = ta.validate_python(cfg.model_dump())
+            assert type(parsed) is type(cfg)
+            assert parsed.num_parents == cfg.num_parents
+
+    def test_random_builds_runtime(self) -> None:
+        from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+
+        sel = RandomParentSelectorConfig(num_parents=2).build()
+        assert isinstance(sel, RandomParentSelector)
+        assert sel.num_parents == 2
+
+    def test_all_combinations_builds_runtime(self) -> None:
+        from gigaevo.evolution.mutation.parent_selector import (
+            AllCombinationsParentSelector,
+        )
+
+        sel = AllCombinationsParentSelectorConfig(num_parents=3).build()
+        assert isinstance(sel, AllCombinationsParentSelector)
+        assert sel.num_parents == 3
+
+
+class TestStandardAcceptorConfig:
+    def test_default_construct(self) -> None:
+        cfg = StandardAcceptorConfig()
+        assert cfg.kind == "standard"
+        assert cfg.required_behavior_keys is None
+
+    def test_explicit_keys_override(self) -> None:
+        cfg = StandardAcceptorConfig(required_behavior_keys=["fitness"])
+        from gigaevo.evolution.engine.acceptor import StandardEvolutionAcceptor
+
+        acceptor = cfg.build(required_behavior_keys=["ignored"])
+        assert isinstance(acceptor, StandardEvolutionAcceptor)
+
+    def test_keys_resolved_from_caller_when_unset(self) -> None:
+        from gigaevo.evolution.engine.acceptor import StandardEvolutionAcceptor
+
+        cfg = StandardAcceptorConfig()
+        acceptor = cfg.build(required_behavior_keys=["fitness"])
+        assert isinstance(acceptor, StandardEvolutionAcceptor)
+
+    def test_union_round_trip(self) -> None:
+        ta: TypeAdapter[AcceptorConfig] = TypeAdapter(AcceptorConfig)
+        parsed = ta.validate_python({"kind": "standard"})
+        assert isinstance(parsed, StandardAcceptorConfig)
+
+
+class TestEngineConfig:
+    def test_generational_defaults(self) -> None:
+        cfg = GenerationalEngineConfig()
+        assert cfg.kind == "generational"
+        assert cfg.loop_interval == 1.0
+        assert cfg.max_generations is None
+
+    def test_steady_state_carries_max_in_flight(self) -> None:
+        cfg = SteadyStateEngineConfig(max_in_flight=8)
+        assert cfg.kind == "steady_state"
+        assert cfg.max_in_flight == 8
+
+    def test_loop_interval_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            SteadyStateEngineConfig(loop_interval=0.0)
+
+    def test_max_in_flight_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            SteadyStateEngineConfig(max_in_flight=0)
+
+    def test_max_generations_optional(self) -> None:
+        cfg = GenerationalEngineConfig(max_generations=200)
+        assert cfg.max_generations == 200
+        with pytest.raises(ValidationError):
+            GenerationalEngineConfig(max_generations=0)
+
+    def test_extra_forbidden(self) -> None:
+        with pytest.raises(ValidationError):
+            SteadyStateEngineConfig(max_in_flit=8)  # type: ignore[call-arg]
+
+    def test_build_runtime_generational(self) -> None:
+        from gigaevo.evolution.engine.config import (
+            EngineConfig as RuntimeEngineConfig,
+        )
+
+        runtime = GenerationalEngineConfig().build_runtime_config(
+            required_behavior_keys=["fitness"]
+        )
+        assert isinstance(runtime, RuntimeEngineConfig)
+        assert runtime.loop_interval == 1.0
+
+    def test_build_runtime_steady_state(self) -> None:
+        from gigaevo.evolution.engine.config import (
+            SteadyStateEngineConfig as RuntimeSS,
+        )
+
+        runtime = SteadyStateEngineConfig(max_in_flight=4).build_runtime_config(
+            required_behavior_keys=["fitness"]
+        )
+        assert isinstance(runtime, RuntimeSS)
+        assert runtime.max_in_flight == 4
+
+    def test_engine_union_round_trip(self) -> None:
+        ta: TypeAdapter[EngineConfig] = TypeAdapter(EngineConfig)
+        for cfg in (
+            GenerationalEngineConfig(max_elites_per_generation=10),
+            SteadyStateEngineConfig(max_in_flight=12),
+        ):
+            parsed = ta.validate_python(cfg.model_dump())
+            assert type(parsed) is type(cfg)
+
+    def test_engine_union_json_round_trip(self) -> None:
+        ta: TypeAdapter[EngineConfig] = TypeAdapter(EngineConfig)
+        cfg = SteadyStateEngineConfig(
+            max_in_flight=8,
+            parent_selector=AllCombinationsParentSelectorConfig(num_parents=2),
+        )
+        as_json = ta.dump_json(cfg)
+        parsed = ta.validate_json(as_json)
+        assert isinstance(parsed, SteadyStateEngineConfig)
+        assert parsed.max_in_flight == 8
+        assert isinstance(parsed.parent_selector, AllCombinationsParentSelectorConfig)
+
+    def test_engine_union_unknown_kind_rejected(self) -> None:
+        ta: TypeAdapter[EngineConfig] = TypeAdapter(EngineConfig)
+        with pytest.raises(ValidationError):
+            ta.validate_python({"kind": "no_such_engine"})
