@@ -51,6 +51,11 @@ from gigaevo.config.schemas.llm import (
     LLMConfig,
 )
 from gigaevo.config.schemas.problem import ProblemConfig
+from gigaevo.config.schemas.prompt import (
+    FixedDirPromptFetcherConfig,
+    GigaEvoArchivePromptFetcherConfig,
+    PromptFetcherConfig,
+)
 from gigaevo.config.schemas.scheduling import (
     ChainFeatureExtractorConfig,
     CodeFeatureExtractorConfig,
@@ -88,10 +93,12 @@ __all__ = [
     "ExperimentConfig",
     "FIFOConfig",
     "FeatureExtractorConfig",
+    "FixedDirPromptFetcherConfig",
     "FitnessArchiveRemoverConfig",
     "FitnessProportionalEliteSelectorConfig",
     "FrozenStrictModel",
     "GenerationalEngineConfig",
+    "GigaEvoArchivePromptFetcherConfig",
     "IslandConfig",
     "LLMConfig",
     "LPTConfig",
@@ -103,6 +110,7 @@ __all__ = [
     "PipelineConfig",
     "PredictorConfig",
     "ProblemConfig",
+    "PromptFetcherConfig",
     "RandomParentSelectorConfig",
     "RedisConfig",
     "RidgePredictorConfig",
