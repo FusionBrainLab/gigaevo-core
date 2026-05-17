@@ -8,13 +8,6 @@ test tree) and forbids:
   when the source line carries an explicit ``# noqa: BLE001`` marker
   acknowledging the breadth. Every such site must therefore declare
   itself a reviewer-visible boundary.
-
-The dataplane is the layer that converts internal failures into typed
-``Result[T, E]`` returns. A broad ``except`` without an annotation is
-the shape of a bug that re-emerges as soon as the next contributor
-copies the surrounding function without noticing it. This test makes
-the discipline mechanical: a new broad ``except`` lands red, gets a
-marker (or gets narrowed), then lands green.
 """
 
 from __future__ import annotations
@@ -30,8 +23,6 @@ def _python_files() -> list[Path]:
     """Every ``.py`` under the dataplane package except the test tree."""
     out: list[Path] = []
     for path in _DATAPLANE_ROOT.rglob("*.py"):
-        # Skip this file and its siblings — the discipline applies to
-        # production code only.
         if "tests" in path.parts:
             continue
         out.append(path)
@@ -116,11 +107,7 @@ def test_broad_except_requires_noqa_marker() -> None:
 
 
 def _scan_source(source: str) -> list[tuple[int, str]]:
-    """Run the same checks against an in-memory source; return offenders.
-
-    Used by the self-tests to verify the discipline fires on known-bad
-    constructs without writing temporary files to the dataplane tree.
-    """
+    """Run the same checks against an in-memory source; return offenders."""
     out: list[tuple[int, str]] = []
     lines = source.splitlines()
     tree = ast.parse(source)

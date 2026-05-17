@@ -63,15 +63,12 @@ async def test_dataplane_startup_against_invalid_url_raises_typed() -> None:
     assert not coord.started
 
 
-def test_method_stubs_raise_notimplemented() -> None:
-    """Method bodies are stubs awaiting follow-up work; verify they fail loudly."""
+def test_public_methods_callable() -> None:
+    """Smoke-check: every public DataPlane method resolves to a callable.
+
+    Bodies are exercised by their dedicated test_*.py modules against fakeredis.
+    """
     coord = dp.DataPlane("redis://localhost:6379/0", key_prefix="smoke")
-    # Each method raises NotImplementedError when called; we don't await
-    # the coroutines (they raise as soon as they're called because the
-    # raise lives in the function body, not after an await).
-    # Every public DataPlane method is now implemented. Verify the
-    # surface is callable as a smoke check — bodies are exercised by
-    # their dedicated test_*.py modules against fakeredis.
     public_methods = [
         "transition_program_state",
         "transition_program_state_batch",

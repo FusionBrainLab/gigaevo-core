@@ -32,10 +32,7 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-__all__ = [
-    "RedisProgramStorage",
-    "RedisProgramStorageConfig",
-]
+__all__ = ["RedisProgramStorageConfig", "RedisProgramStorage"]
 
 # Constants
 MGET_CHUNK_SIZE = 1024

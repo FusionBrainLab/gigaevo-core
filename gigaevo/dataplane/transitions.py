@@ -52,7 +52,7 @@ PROGRAM_STATE_TRANSITIONS: dict[ProgramState, set[ProgramState]] = {
 
 
 class ClaimState(StrEnum):
-    """Migration-bus / task-claim lifecycle."""
+    """Task-claim lifecycle."""
 
     UNCLAIMED = "UNCLAIMED"
     CLAIMED = "CLAIMED"

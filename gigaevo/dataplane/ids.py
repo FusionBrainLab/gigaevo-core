@@ -50,9 +50,8 @@ _FORBIDDEN_UNICODE_DIRECTIONALS: Final[frozenset[str]] = frozenset(
 def _validate_identity_part(field_name: str, value: str) -> None:
     """Reject control bytes, separators, and bidirectional overrides.
 
-    Used by :class:`ActorIdentity` so a wire value carrying a hostile
-    payload (NUL, CR/LF, ANSI ESC, RLO) cannot pass type-check and reach
-    a log line, Redis key, or Postgres column verbatim.
+    Hostile payloads (NUL, CR/LF, ANSI ESC, RLO) must not pass type-check
+    and reach a log line, Redis key, or Postgres column verbatim.
     """
     if not value:
         raise ValueError(f"ActorIdentity.{field_name} is empty")
@@ -157,9 +156,7 @@ class ActorIdentity:
 
 
 def make_actor_id(run_id: RunId, worker_id: WorkerId) -> ActorId:
-    """Compose an :data:`ActorId` from its parts (wrapper over
-    :meth:`ActorIdentity.pack`; new code should prefer the dataclass).
-    """
+    """Compose an :data:`ActorId` from its parts via :meth:`ActorIdentity.pack`."""
     return ActorIdentity(run_id=run_id, worker_id=worker_id).pack()
 
 

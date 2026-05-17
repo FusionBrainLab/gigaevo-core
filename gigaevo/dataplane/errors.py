@@ -341,7 +341,7 @@ class CanonicalEncodingError(_StructuredError):
 
 
 def all_error_types() -> tuple[type[DataPlaneError], ...]:
-    """Tuple of every concrete error class. Used for exhaustive matching tests."""
+    """Tuple of every concrete error class, for exhaustive-match checks."""
     return (
         StartupError,
         ShutdownError,

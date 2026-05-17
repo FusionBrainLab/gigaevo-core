@@ -214,10 +214,10 @@ class LLMMutationOperator(MutationOperator):
                     max(parent_fitness_values) if parent_fitness_values else 0.0
                 )
                 await _fetcher.record_outcome(
-                    prompt_id,
-                    child_fitness,
-                    best_parent_fitness,
-                    higher_is_better,
-                    outcome,
-                    dict(program.metrics),
+                    prompt_id=prompt_id,
+                    child_fitness=child_fitness,
+                    parent_fitness=best_parent_fitness,
+                    higher_is_better=higher_is_better,
+                    outcome=outcome,
+                    child_metrics=dict(program.metrics),
                 )

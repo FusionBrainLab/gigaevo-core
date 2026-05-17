@@ -62,11 +62,11 @@ class RedisInstanceLock:
         self._config = config
         self._dataplane = dataplane
 
+        self._token: str | None = None
+        self._renewal_task: asyncio.Task[None] | None = None
         self._instance_id = (
             f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         )
-        self._token: str | None = None
-        self._renewal_task: asyncio.Task[None] | None = None
 
         # SHA cache for the dataplane-less path; ignored when a
         # dataplane is wired (its LuaRegistry owns the cache).

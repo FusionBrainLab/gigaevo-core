@@ -3,8 +3,7 @@
 NewType aliases are compile-time only — indistinguishable from their
 base types at runtime. The meaningful runtime tests are for the
 :class:`ActorIdentity` round-trip and the :func:`make_script_name`
-validator; :func:`make_actor_id` is kept as a thin wrapper for
-existing call sites.
+validator.
 """
 
 from __future__ import annotations

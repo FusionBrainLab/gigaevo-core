@@ -101,12 +101,7 @@ class TestVersioned:
 
 
 class TestFreshnessShape:
-    """The discriminated freshness type is structurally pinned.
-
-    These tests document the shape contract so a contributor cannot
-    silently rename a variant or add a fourth alternative without
-    breaking them — the union is the load-bearing thing.
-    """
+    """The discriminated freshness type is structurally pinned."""
 
     def test_eventual_constructs(self) -> None:
         f = FreshnessEventual()

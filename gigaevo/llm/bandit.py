@@ -1,10 +1,9 @@
 """Bandit-based adaptive model selection for LLM ensembles.
 
-Implements UCB1 with sliding window and running-percentile reward
-normalization, inspired by ShinkaEvolve (arxiv 2509.19349). The
-``BanditModelRouter`` subclass of ``MultiModelRouter`` replaces static
-probability-based selection with an adaptive strategy that learns which
-LLM produces the best fitness improvements.
+Implements UCB1 with sliding window and running-percentile reward normalization,
+inspired by ShinkaEvolve (arxiv 2509.19349).  The ``BanditModelRouter`` subclass
+of ``MultiModelRouter`` replaces static probability-based selection with an
+adaptive strategy that learns which LLM produces the best fitness improvements.
 
 Reward policy
 -------------

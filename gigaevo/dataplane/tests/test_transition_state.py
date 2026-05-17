@@ -248,13 +248,10 @@ class TestSideEffects:
         events = await pool.xrange("test:status_events")  # type: ignore[misc]
         assert len(events) >= 1
         _, last_fields = events[-1]
-        # dp-native fields.
         assert last_fields["pid"] == "p-12"
         assert last_fields["from"] == "QUEUED"
         assert last_fields["to"] == "RUNNING"
-        # Legacy fields, emitted alongside so pre-coordinator readers
-        # observe the same wire shape they did on the WATCH/MULTI/EXEC
-        # path.
+        # Compat fields for non-coordinator readers.
         assert last_fields["id"] == "p-12"
         assert last_fields["status"] == "RUNNING"
         assert last_fields["event"] == "transition"

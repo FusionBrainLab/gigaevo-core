@@ -23,17 +23,17 @@ def init_wandb(
 def init_redis(
     cfg: RedisMetricsConfig, *, queue_size: int = 8192, flush_secs: float = 3.0
 ) -> GenericLogger:
-    """Build a Redis metrics logger.
+    """Initialize Redis metrics logger.
 
-    Returns a GenericLogger wrapping RedisMetricsBackend. The backend is
-    available via ``logger.backend`` for direct query methods.
+    Returns a GenericLogger wrapping RedisMetricsBackend.
+    Access the backend directly via logger.backend for query methods.
     """
     backend = RedisMetricsBackend(cfg)
     return GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
 
 
 def init_composite(*loggers: GenericLogger) -> CompositeLogger:
-    """Create a composite logger that fans out writes to every backend.
+    """Create a composite logger that writes to multiple backends.
 
     Example:
         >>> tb = init_tb(tb_config)
@@ -51,7 +51,7 @@ def init_tb_redis(
     queue_size: int = 8192,
     flush_secs: float = 3.0,
 ) -> CompositeLogger:
-    """Composite logger with TensorBoard + Redis backends.
+    """Initialize composite logger with TensorBoard + Redis backends.
 
     Hydra usage:
         writer:
@@ -71,7 +71,7 @@ def init_wandb_redis(
     queue_size: int = 8192,
     flush_secs: float = 3.0,
 ) -> CompositeLogger:
-    """Composite logger with WandB + Redis backends.
+    """Initialize composite logger with WandB + Redis backends.
 
     Hydra usage:
         writer:
