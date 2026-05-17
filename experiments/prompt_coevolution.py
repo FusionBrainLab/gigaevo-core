@@ -36,18 +36,11 @@ def build() -> ExperimentConfig:
     # run on Redis DB 6 (YAML example). main_redis_prefix matches
     # the YAML's ${problem.name} substitution so the prompt run can
     # write outcome stats back to a stable key namespace.
-    _prompt_fetcher = GigaEvoArchivePromptFetcherConfig(
+    prompt_fetcher = GigaEvoArchivePromptFetcherConfig(
         prompt_redis_db=6,
         main_redis_prefix="heilbron",
         main_redis_db=0,
     )
-    # PromptFetcherConfig is consumed by build_object_graph for the
-    # EvolutionContext wiring but does not appear directly in
-    # ExperimentConfig today. Keep the schema instance constructed
-    # so the experiment file documents the configuration without
-    # threading through a field that doesn't exist on the root yet.
-    _ = _prompt_fetcher
-
     return ExperimentConfig(
         name=_NAME,
         seed=42,
@@ -62,4 +55,5 @@ def build() -> ExperimentConfig:
             base_url="https://openrouter.ai/api/v1",
         ),
         runner=build_default_runner(),
+        prompt_fetcher=prompt_fetcher,
     )

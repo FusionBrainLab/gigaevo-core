@@ -74,6 +74,40 @@ def test_experiment_serializes_to_json(experiment_path: Path) -> None:
     assert parsed.name == cfg.name
 
 
+def test_prompt_coevolution_carries_fetcher_through_to_evolution_context() -> None:
+    """prompt_coevolution.py constructs a GigaEvoArchivePromptFetcherConfig
+    and threads it through the ExperimentConfig root. The
+    build_object_graph adapter consumes that field; without it the
+    EvolutionContext would be wired with prompt_fetcher=None and
+    the coevolved pattern would silently degrade to fixed-dir
+    fetching."""
+    from gigaevo.config.schemas import GigaEvoArchivePromptFetcherConfig
+
+    cfg = build_experiment(EXPERIMENTS_DIR / "prompt_coevolution.py")
+    assert isinstance(cfg.prompt_fetcher, GigaEvoArchivePromptFetcherConfig)
+    assert cfg.prompt_fetcher.prompt_redis_db == 6
+
+
+def test_other_experiments_have_no_prompt_fetcher() -> None:
+    """The seven non-coevolved experiments must leave prompt_fetcher
+    as None — the YAML's /prompt_fetcher: fixed default falls back to
+    the package prompts directory inside the runtime fetcher, no
+    schema-level wiring required."""
+    for stem in (
+        "base",
+        "steady_state",
+        "full_featured",
+        "multi_island_complexity",
+        "multi_llm_exploration",
+        "migration_bus",
+        "steady_state_bus",
+    ):
+        cfg = build_experiment(EXPERIMENTS_DIR / f"{stem}.py")
+        assert cfg.prompt_fetcher is None, (
+            f"experiment {stem} unexpectedly carries a prompt_fetcher"
+        )
+
+
 def test_eight_experiment_yamls_have_python_counterparts() -> None:
     """The plan §5.14 requires one experiments/X.py for every
     config/experiment/X.yaml. Eight YAMLs shipped today + the

@@ -126,12 +126,15 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
         required_behavior_keys=behavior_keys
     )
 
+    prompt_fetcher_runtime = (
+        cfg.prompt_fetcher.build() if cfg.prompt_fetcher is not None else None
+    )
     evolution_context = EvolutionContext(
         problem_ctx=problem_context,
         llm_wrapper=llm,
         storage=redis_storage,
         prompts_dir=cfg.pipeline.prompts_dir,
-        prompt_fetcher=None,
+        prompt_fetcher=prompt_fetcher_runtime,
         memory_provider=NullMemoryProvider(),
     )
 

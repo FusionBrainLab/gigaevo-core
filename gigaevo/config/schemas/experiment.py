@@ -11,6 +11,7 @@ from gigaevo.config.schemas.engine import EngineConfig, SteadyStateEngineConfig
 from gigaevo.config.schemas.llm import BanditRouterConfig, LLMConfig
 from gigaevo.config.schemas.pipeline import PipelineConfig
 from gigaevo.config.schemas.problem import ProblemConfig
+from gigaevo.config.schemas.prompt import PromptFetcherConfig
 from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
 from gigaevo.config.schemas.runner import DAGRunnerConfig
 
@@ -53,6 +54,7 @@ class ExperimentConfig(FrozenStrictModel):
     pipeline: PipelineConfig
     llm: LLMConfig
     runner: DAGRunnerConfig = Field(default_factory=DAGRunnerConfig)
+    prompt_fetcher: PromptFetcherConfig | None = None
 
     @model_validator(mode="after")
     def _key_prefix_follows_convention(self) -> "ExperimentConfig":
