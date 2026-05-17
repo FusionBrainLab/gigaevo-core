@@ -106,6 +106,14 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "redis".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
 "redis.asyncio".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
 "redis.exceptions".msg = "Import from gigaevo.dataplane instead — see gigaevo/dataplane/__init__.py"
+# Pickle deserialization across a trust boundary is a remote-code-execution
+# primitive. The two python_executors subprocess-IPC sites listed in
+# per-file-ignores below feed pickle.loads / cloudpickle.loads from a local
+# child process they themselves spawned, so the trust boundary is local and
+# the call is allowed there. Every other call site must route opaque payloads
+# through a typed, validated wire format.
+"pickle.loads".msg = "Pickle deserialization is unsafe across trust boundaries; use a typed wire format or restrict to the per-file-ignores allowlist."
+"cloudpickle.loads".msg = "Pickle deserialization is unsafe across trust boundaries; use a typed wire format or restrict to the per-file-ignores allowlist."
 
 [tool.ruff.lint.per-file-ignores]
 "run.py" = ["E402"]
@@ -134,6 +142,11 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "gigaevo/evolution/bus/transport.py" = ["TID251"]
 "gigaevo/evolution/storage/archive_storage.py" = ["TID251"]
 "gigaevo/utils/trackers/backends/redis.py" = ["TID251"]
+# Subprocess-IPC sites: the cloudpickle.loads consumes a payload produced
+# by a child process this module itself spawned, so the trust boundary is
+# local. Cross-trust-boundary deserialization is banned globally above.
+"gigaevo/programs/stages/python_executors/wrapper.py" = ["TID251"]
+"gigaevo/programs/stages/python_executors/exec_runner.py" = ["TID251"]
 # Tests that exercise legacy paths directly. Once those paths are
 # migrated their test files inherit the ban naturally; until then they
 # may import redis / fakeredis.aioredis as needed.
