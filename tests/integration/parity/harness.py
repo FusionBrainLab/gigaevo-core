@@ -105,7 +105,15 @@ def load_hydra_path(
             config_name="config",
             overrides=[f"experiment={experiment_name}", *overrides],
         )
-    instantiated = instantiate(cfg, _recursive_=True)
+        # ``instantiate`` runs inside the context manager so the
+        # GlobalHydra singleton is alive for any interpolation that
+        # touches it. The compose API never populates HydraConfig
+        # itself, so YAMLs that interpolate ``${hydra:runtime.cwd}``
+        # still raise InterpolationResolutionError. The harness records
+        # that as a load failure; the cross-path comparison activates
+        # when hydra-2.12 lands sibling YAMLs that avoid the
+        # runtime-dependent interpolation.
+        instantiated = instantiate(cfg, _recursive_=True)
     graph: dict[str, Any] = {"_config": cfg, "_instantiated": instantiated}
 
     for attr in (

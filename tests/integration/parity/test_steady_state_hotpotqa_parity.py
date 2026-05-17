@@ -66,6 +66,37 @@ def test_typed_path_loads_without_error() -> None:
     assert graph["required_behavior_keys"] == ["fitness"]
 
 
+def test_compare_helpers_green_against_typed_self() -> None:
+    """Self-parity: build the typed graph twice and run every
+    compare_* helper against the two copies. All comparisons must
+    pass — divergence here would indicate non-determinism in
+    build_object_graph itself, which would invalidate parity testing
+    against the Hydra path too."""
+    from tests.integration.parity.harness import (
+        ParityReport,
+        compare_blueprint,
+        compare_problem_context,
+        compare_redis_storage,
+        compare_strategy,
+        load_typed_path,
+    )
+
+    graph_a = load_typed_path(EXPERIMENT_PY)
+    graph_b = load_typed_path(EXPERIMENT_PY)
+
+    report = ParityReport()
+    compare_redis_storage(graph_a["redis_storage"], graph_b["redis_storage"], report)
+    compare_problem_context(
+        graph_a["problem_context"], graph_b["problem_context"], report
+    )
+    compare_strategy(graph_a["strategy"], graph_b["strategy"], report)
+    compare_blueprint(graph_a["dag_blueprint"], graph_b["dag_blueprint"], report)
+
+    assert report.is_green, report.render()
+    # Every active comparison registered a pass.
+    assert len(report.passes) >= 5  # redis url + key_prefix + problem + strategy class + island_ids + blueprint
+
+
 def test_hydra_path_load_documented_when_unreachable() -> None:
     """The Hydra composition for the typed experiment's exact shape
     may not be reachable today — the typed reference hardcodes
