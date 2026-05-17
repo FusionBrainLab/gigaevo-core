@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import time
+from typing import Any
 
 from dotenv import load_dotenv
 import hydra
@@ -21,7 +22,12 @@ from gigaevo.dataplane import (
 )
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.problems.initial_loaders import InitialProgramLoader
-from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
+from gigaevo.programs.stages.python_executors.wrapper import (
+    WorkerPool,
+    default_exec_runner_pool,
+    reset_ambient_exec_runner_pool,
+    set_ambient_exec_runner_pool,
+)
 from gigaevo.runner.dag_runner import DagRunner
 from gigaevo.utils.logger_setup import setup_logger
 from gigaevo.utils.serve import serve_until_signal
@@ -36,13 +42,29 @@ async def run_experiment(cfg: DictConfig) -> None:
     writer: LogWriter | None = None
     dataplane: DataPlane | None = None
     prompt_dataplane: DataPlane | None = None
+    dag_runner: DagRunner | None = None
+    evolution_engine: EvolutionEngine | None = None
+    program_loader: InitialProgramLoader | None = None
+    config_with_instances: Any | None = None
+
+    # One pool per experiment. Bound as the ambient pool so every
+    # ``run_exec_runner(pool=None)`` call site inside this asyncio.run
+    # amortizes subprocess startup across the run instead of spinning a
+    # fresh ``WorkerPool`` per call.
+    exec_runner_pool: WorkerPool = default_exec_runner_pool()
+    pool_token = set_ambient_exec_runner_pool(exec_runner_pool)
     try:
-        config_with_instances = instantiate(cfg, recursive=True)
-        redis_storage: RedisProgramStorage = config_with_instances.redis_storage
-        program_loader: InitialProgramLoader = config_with_instances.program_loader
-        dag_runner: DagRunner = config_with_instances.dag_runner
-        evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
-        writer: LogWriter = config_with_instances.writer
+        try:
+            config_with_instances = instantiate(cfg, recursive=True)
+        except Exception:
+            logger.exception("Hydra instantiation failed")
+            raise
+
+        redis_storage = config_with_instances.redis_storage
+        program_loader = config_with_instances.program_loader
+        dag_runner = config_with_instances.dag_runner
+        evolution_engine = config_with_instances.evolution_engine
+        writer = config_with_instances.writer
 
         logger.info(
             "Redis DB {db} at {host}:{port} | pipeline={pipeline}",
@@ -137,16 +159,33 @@ async def run_experiment(cfg: DictConfig) -> None:
             programs = await program_loader.load(redis_storage)
             logger.info("Loaded {} initial programs", len(programs))
 
-        dag_runner.start()
-        evolution_engine.start()
-        logger.info(
-            "Evolution running (max_gen={})", cfg.max_generations or "unlimited"
-        )
+        try:
+            dag_runner.start()
+            evolution_engine.start()
+            logger.info(
+                "Evolution running (max_gen={})", cfg.max_generations or "unlimited"
+            )
 
-        await serve_until_signal(
-            stop_coros=(evolution_engine.stop(), dag_runner.stop()),
-            on_stop=(evolution_engine.task, dag_runner.task),
-        )
+            await serve_until_signal(
+                stop_coros=(evolution_engine.stop(), dag_runner.stop()),
+                on_stop=(evolution_engine.task, dag_runner.task),
+            )
+        finally:
+            # ``serve_until_signal`` already calls the two ``stop`` coros on
+            # the happy path. If anything between ``start()`` and the
+            # ``await serve_until_signal`` raises, the tasks are still alive
+            # and would leak past the ``except`` block. ``stop()`` on both
+            # components is idempotent: cancelling an already-cancelled task
+            # and closing an already-closed storage / connection are no-ops,
+            # so calling them twice on the happy path is safe.
+            try:
+                await evolution_engine.stop()
+            except Exception:
+                logger.exception("EvolutionEngine.stop failed")
+            try:
+                await dag_runner.stop()
+            except Exception:
+                logger.exception("DagRunner.stop failed")
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
@@ -154,9 +193,19 @@ async def run_experiment(cfg: DictConfig) -> None:
         logger.exception("Experiment failed")
         raise
     finally:
-        await default_exec_runner_pool().shutdown()
+        # Drain pool workers before unbinding the contextvar so any
+        # late ``run_exec_runner`` calls during shutdown still amortize
+        # through the shared pool.
+        try:
+            await exec_runner_pool.shutdown()
+        except Exception:
+            logger.exception("WorkerPool shutdown failed")
+        reset_ambient_exec_runner_pool(pool_token)
         if redis_storage is not None:
-            await redis_storage.close()
+            try:
+                await redis_storage.close()
+            except Exception:
+                logger.exception("RedisProgramStorage close failed")
         # Shutdown the coordinator after the storage so any tail
         # writes the storage performs during ``close()`` still go
         # through a live connection pool. The dataplane's own
@@ -177,7 +226,10 @@ async def run_experiment(cfg: DictConfig) -> None:
             except Exception:
                 logger.exception("Prompt DataPlane shutdown failed")
         if writer is not None:
-            writer.close()
+            try:
+                writer.close()
+            except Exception:
+                logger.exception("LogWriter close failed")
         duration = time.time() - start_time
         logger.info("Duration: {:.1f}s ({:.2f}h)", duration, duration / 3600)
 
