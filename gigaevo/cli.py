@@ -36,10 +36,12 @@ from gigaevo.config.schemas.experiment import ExperimentConfig
 # never triggers Hydra registration.
 
 _RUN_OBJECT_GRAPH_PENDING = (
-    "build_object_graph(cfg) ships in hydra-1.10; until then the CLI "
-    "validates configuration and writes the resolved tree to disk but "
-    "does not invoke the engine. Use python run.py for end-to-end "
-    "execution against the legacy Hydra path."
+    "Engine invocation against the typed object graph is partial: "
+    "build_object_graph constructs the leaf runtime objects (storage, "
+    "problem context, LLM router, strategy, engine config, pipeline "
+    "blueprint), but the full DAG runner and mutation operator wiring "
+    "depend on schemas not yet landed. The CLI delegates to "
+    "object_graph.run_with_config which surfaces the remaining gaps."
 )
 
 
@@ -123,16 +125,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    logger.warning(_RUN_OBJECT_GRAPH_PENDING)
+    logger.info(_RUN_OBJECT_GRAPH_PENDING)
 
-    try:
-        from gigaevo.config.object_graph import run_with_config
-    except ImportError:
-        logger.warning(
-            "object_graph not yet available (hydra-1.10 deliverable); "
-            "skipping engine invocation. Config validation succeeded."
-        )
-        return 0
+    from gigaevo.config.object_graph import run_with_config
 
     return asyncio.run(run_with_config(cfg))
 
