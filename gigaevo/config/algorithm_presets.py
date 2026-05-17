@@ -1,0 +1,369 @@
+"""Preset builders for the shipped algorithm YAMLs.
+
+Each builder returns a fully-validated :class:`SingleIslandConfig`
+or :class:`MultiIslandConfig` matching the corresponding YAML
+shape byte-equal in selector parameters, behavior-space bounds /
+resolutions, and migration knobs.
+
+The fitness key + direction default to ``"fitness"`` / ``True`` —
+the canonical shape for most experiments — but every builder
+accepts ``fitness_key`` and ``higher_is_better`` overrides so a
+problem whose primary metric differs gets the right wiring.
+
+Defaults flow from :mod:`gigaevo.config.defaults`: the island id
+("fitness_island"), the per-island archive cap (75), the primary
+binning resolution (150), and the migration knobs all come from
+the constants module rather than literal magic numbers.
+"""
+
+from __future__ import annotations
+
+from gigaevo.config.defaults import (
+    DEFAULT_BINNING_TYPE,
+    DEFAULT_ENABLE_MIGRATION,
+    DEFAULT_ISLAND_ID,
+    DEFAULT_ISLAND_MAX_SIZE,
+    DEFAULT_MAX_MIGRANTS_PER_ISLAND,
+    DEFAULT_MIGRATION_INTERVAL,
+    DEFAULT_PRIMARY_RESOLUTION,
+)
+from gigaevo.config.schemas import (
+    AlgorithmConfig,
+    BehaviorSpaceConfig,
+    FitnessArchiveRemoverConfig,
+    FitnessProportionalEliteSelectorConfig,
+    IslandConfig,
+    MultiIslandConfig,
+    SingleIslandConfig,
+    SumArchiveSelectorConfig,
+    TopFitnessMigrantSelectorConfig,
+    WeightedEliteSelectorConfig,
+)
+
+
+def _fitness_archive_selector(
+    fitness_key: str, higher_is_better: bool
+) -> SumArchiveSelectorConfig:
+    return SumArchiveSelectorConfig(
+        fitness_keys=[fitness_key],
+        fitness_key_higher_is_better=[higher_is_better],
+    )
+
+
+def _fitness_archive_remover(
+    fitness_key: str, higher_is_better: bool
+) -> FitnessArchiveRemoverConfig:
+    return FitnessArchiveRemoverConfig(
+        fitness_key=fitness_key,
+        fitness_key_higher_is_better=higher_is_better,
+    )
+
+
+def _top_fitness_migrant_selector(
+    fitness_key: str, higher_is_better: bool
+) -> TopFitnessMigrantSelectorConfig:
+    return TopFitnessMigrantSelectorConfig(
+        fitness_key=fitness_key,
+        fitness_key_higher_is_better=higher_is_better,
+    )
+
+
+def _fitness_behavior_space(
+    *,
+    fitness_bounds: tuple[float, float] = (0.0, 1.0),
+    primary_resolution: int = DEFAULT_PRIMARY_RESOLUTION,
+) -> BehaviorSpaceConfig:
+    """1-D behavior space on the canonical ``fitness`` axis."""
+    return BehaviorSpaceConfig(
+        keys=["fitness"],
+        bounds=[fitness_bounds],
+        resolutions=[primary_resolution],
+        binning_types=[DEFAULT_BINNING_TYPE],
+    )
+
+
+def _island_with_default_selectors(
+    *,
+    fitness_key: str,
+    higher_is_better: bool,
+    behavior_space: BehaviorSpaceConfig,
+    elite_selector: FitnessProportionalEliteSelectorConfig
+    | WeightedEliteSelectorConfig,
+    island_id: str = DEFAULT_ISLAND_ID,
+    max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
+) -> IslandConfig:
+    return IslandConfig(
+        island_id=island_id,
+        max_size=max_size,
+        behavior_space=behavior_space,
+        archive_selector=_fitness_archive_selector(fitness_key, higher_is_better),
+        elite_selector=elite_selector,
+        archive_remover=(
+            _fitness_archive_remover(fitness_key, higher_is_better)
+            if max_size is not None
+            else None
+        ),
+        migrant_selector=_top_fitness_migrant_selector(
+            fitness_key, higher_is_better
+        ),
+    )
+
+
+def build_single_island(
+    *,
+    fitness_key: str = "fitness",
+    higher_is_better: bool = True,
+    island_id: str = DEFAULT_ISLAND_ID,
+    max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
+    fitness_bounds: tuple[float, float] = (0.0, 1.0),
+    primary_resolution: int = DEFAULT_PRIMARY_RESOLUTION,
+    temperature: float | None = None,
+) -> SingleIslandConfig:
+    """1-D MAP-Elites with FitnessProportionalEliteSelector matching
+    ``config/algorithm/single_island.yaml``. The default
+    ``temperature=None`` enables the runtime selector's
+    auto-temperature heuristic; pass a float for the fixed-temp
+    variant (matches ``single_island_fitness_prop_fixed_temp.yaml``
+    when ``temperature=0.14``)."""
+    return SingleIslandConfig(
+        island=_island_with_default_selectors(
+            fitness_key=fitness_key,
+            higher_is_better=higher_is_better,
+            behavior_space=_fitness_behavior_space(
+                fitness_bounds=fitness_bounds,
+                primary_resolution=primary_resolution,
+            ),
+            elite_selector=FitnessProportionalEliteSelectorConfig(
+                fitness_key=fitness_key,
+                fitness_key_higher_is_better=higher_is_better,
+                temperature=temperature,
+            ),
+            island_id=island_id,
+            max_size=max_size,
+        )
+    )
+
+
+def build_single_island_fitness_prop_fixed_temp(
+    *,
+    fitness_key: str = "fitness",
+    higher_is_better: bool = True,
+    temperature: float = 0.14,
+    **kwargs,  # type: ignore[no-untyped-def]
+) -> SingleIslandConfig:
+    """Fixed-temperature softmax variant matching
+    ``single_island_fitness_prop_fixed_temp.yaml``. ``temperature``
+    operates in normalised [0, 1] fitness space — 0.14 gives a ~7×
+    weight ratio per unit of normalised fitness (moderate
+    differentiation)."""
+    return build_single_island(
+        fitness_key=fitness_key,
+        higher_is_better=higher_is_better,
+        temperature=temperature,
+        **kwargs,
+    )
+
+
+def build_single_island_weighted(
+    *,
+    fitness_key: str = "fitness",
+    higher_is_better: bool = True,
+    lambda_: float = 10.0,
+    epsilon: float = 1e-8,
+    island_id: str = DEFAULT_ISLAND_ID,
+    max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
+    fitness_bounds: tuple[float, float] = (0.0, 1.0),
+    primary_resolution: int = DEFAULT_PRIMARY_RESOLUTION,
+) -> SingleIslandConfig:
+    """1-D MAP-Elites with WeightedEliteSelector (ShinkaEvolve-style
+    sigmoid × child-count penalty). Matches
+    ``single_island_weighted.yaml``."""
+    return SingleIslandConfig(
+        island=_island_with_default_selectors(
+            fitness_key=fitness_key,
+            higher_is_better=higher_is_better,
+            behavior_space=_fitness_behavior_space(
+                fitness_bounds=fitness_bounds,
+                primary_resolution=primary_resolution,
+            ),
+            elite_selector=WeightedEliteSelectorConfig(
+                fitness_key=fitness_key,
+                fitness_key_higher_is_better=higher_is_better,
+                lambda_=lambda_,
+                epsilon=epsilon,
+            ),
+            island_id=island_id,
+            max_size=max_size,
+        )
+    )
+
+
+def build_single_island_2d(
+    *,
+    fitness_key: str = "fitness",
+    higher_is_better: bool = True,
+    runtime_bounds: tuple[float, float] = (0.0, 3600.0),
+    runtime_resolution: int = 5,
+    fitness_resolution: int = 30,
+    fitness_bounds: tuple[float, float] = (0.0, 1.0),
+    island_id: str = DEFAULT_ISLAND_ID,
+    max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
+) -> SingleIslandConfig:
+    """2-D MAP-Elites (fitness × runtime) matching
+    ``single_island_2d.yaml``. 30 × 5 = 150 cells by default,
+    matching the 1-D budget but distributing across a runtime axis."""
+    behavior_space = BehaviorSpaceConfig(
+        keys=["fitness", "runtime"],
+        bounds=[fitness_bounds, runtime_bounds],
+        resolutions=[fitness_resolution, runtime_resolution],
+        binning_types=[DEFAULT_BINNING_TYPE, "linear"],
+    )
+    return SingleIslandConfig(
+        island=_island_with_default_selectors(
+            fitness_key=fitness_key,
+            higher_is_better=higher_is_better,
+            behavior_space=behavior_space,
+            elite_selector=FitnessProportionalEliteSelectorConfig(
+                fitness_key=fitness_key,
+                fitness_key_higher_is_better=higher_is_better,
+            ),
+            island_id=island_id,
+            max_size=max_size,
+        )
+    )
+
+
+def build_topology_3d(
+    *,
+    fitness_key: str = "fitness",
+    higher_is_better: bool = True,
+    third_axis: str = "n_deep_retrieval",
+    bounds: tuple[
+        tuple[float, float], tuple[float, float], tuple[float, float]
+    ] = ((1.0, 11.0), (1.0, 9.0), (0.0, 5.0)),
+    resolutions: tuple[int, int, int] = (5, 5, 6),
+    island_id: str = DEFAULT_ISLAND_ID,
+    max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
+) -> SingleIslandConfig:
+    """3-D MAP-Elites on (dag_depth × max_dependency_fan_in ×
+    third_axis) matching ``topology_3d.yaml`` (third_axis=
+    "n_deep_retrieval", 5×5×6=150 cells) or ``topology_3d_ret.yaml``
+    (third_axis="n_retrievals", same shape with bounds shifted to
+    (0, 6))."""
+    behavior_space = BehaviorSpaceConfig(
+        keys=["dag_depth", "max_dependency_fan_in", third_axis],
+        bounds=list(bounds),
+        resolutions=list(resolutions),
+        binning_types=[DEFAULT_BINNING_TYPE] * 3,
+    )
+    return SingleIslandConfig(
+        island=_island_with_default_selectors(
+            fitness_key=fitness_key,
+            higher_is_better=higher_is_better,
+            behavior_space=behavior_space,
+            elite_selector=FitnessProportionalEliteSelectorConfig(
+                fitness_key=fitness_key,
+                fitness_key_higher_is_better=higher_is_better,
+            ),
+            island_id=island_id,
+            max_size=max_size,
+        )
+    )
+
+
+def build_topology_3d_ret(
+    *, fitness_key: str = "fitness", higher_is_better: bool = True
+) -> SingleIslandConfig:
+    """``topology_3d_ret.yaml`` shape: third axis is the combined
+    n_retrievals (retrieve + retrieve_deep), bounds (0, 6)."""
+    return build_topology_3d(
+        fitness_key=fitness_key,
+        higher_is_better=higher_is_better,
+        third_axis="n_retrievals",
+        bounds=((1.0, 11.0), (1.0, 9.0), (0.0, 6.0)),
+        resolutions=(5, 5, 6),
+    )
+
+
+def build_topology_3d_7step(
+    *, fitness_key: str = "fitness", higher_is_better: bool = True
+) -> SingleIslandConfig:
+    """``topology_3d_7step.yaml`` shape: 4 × 3 × 5 = 60 cells, bounds
+    tightened for 7-step max chains."""
+    return build_topology_3d(
+        fitness_key=fitness_key,
+        higher_is_better=higher_is_better,
+        third_axis="n_deep_retrieval",
+        bounds=((1.0, 7.0), (1.0, 6.0), (0.0, 4.0)),
+        resolutions=(4, 3, 5),
+    )
+
+
+def build_multi_island_fitness_complexity(
+    *,
+    fitness_key: str = "fitness",
+    higher_is_better: bool = True,
+    validity_key: str = "is_valid",
+    fitness_bounds: tuple[float, float] = (0.0, 1.0),
+    validity_bounds: tuple[float, float] = (0.0, 1.0),
+    complexity_bounds: tuple[float, float] = (0.0, 100.0),
+    island_max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
+    migration_interval: int = DEFAULT_MIGRATION_INTERVAL,
+    max_migrants_per_island: int = DEFAULT_MAX_MIGRANTS_PER_ISLAND,
+    enable_migration: bool = DEFAULT_ENABLE_MIGRATION,
+) -> MultiIslandConfig:
+    """Two-island shape from ``multi_island.yaml``: fitness × validity
+    on one island, fitness × complexity on the other. Migrants cross
+    over every ``migration_interval`` generations, and the bandit
+    selects between islands by recent improvement rate."""
+    fitness_island = _island_with_default_selectors(
+        fitness_key=fitness_key,
+        higher_is_better=higher_is_better,
+        behavior_space=BehaviorSpaceConfig(
+            keys=[fitness_key, validity_key],
+            bounds=[fitness_bounds, validity_bounds],
+            resolutions=[20, 2],
+            binning_types=[DEFAULT_BINNING_TYPE, DEFAULT_BINNING_TYPE],
+        ),
+        elite_selector=FitnessProportionalEliteSelectorConfig(
+            fitness_key=fitness_key,
+            fitness_key_higher_is_better=higher_is_better,
+        ),
+        island_id="fitness_island",
+        max_size=island_max_size,
+    )
+    simplicity_island = _island_with_default_selectors(
+        fitness_key=fitness_key,
+        higher_is_better=higher_is_better,
+        behavior_space=BehaviorSpaceConfig(
+            keys=[fitness_key, "complexity_score"],
+            bounds=[fitness_bounds, complexity_bounds],
+            resolutions=[20, 10],
+            binning_types=[DEFAULT_BINNING_TYPE, DEFAULT_BINNING_TYPE],
+        ),
+        elite_selector=FitnessProportionalEliteSelectorConfig(
+            fitness_key=fitness_key,
+            fitness_key_higher_is_better=higher_is_better,
+        ),
+        island_id="simplicity_island",
+        max_size=island_max_size,
+    )
+    return MultiIslandConfig(
+        islands=[fitness_island, simplicity_island],
+        migration_interval=migration_interval,
+        max_migrants_per_island=max_migrants_per_island,
+        enable_migration=enable_migration,
+    )
+
+
+__all__: list[str] = [
+    "AlgorithmConfig",
+    "build_multi_island_fitness_complexity",
+    "build_single_island",
+    "build_single_island_2d",
+    "build_single_island_fitness_prop_fixed_temp",
+    "build_single_island_weighted",
+    "build_topology_3d",
+    "build_topology_3d_7step",
+    "build_topology_3d_ret",
+]
