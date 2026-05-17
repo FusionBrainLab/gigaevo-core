@@ -283,8 +283,13 @@ class DagRunner:
             return False
         # ``Ok(None)`` means the blob is gone (someone deleted it).
         # That is not the freshness contract we wanted to assert; treat
-        # as "not fresh enough to act on" and defer.
-        return result.value is not None
+        # as "not fresh enough to act on" and defer. Otherwise the
+        # coordinator returns a :data:`LocalValue` (the phantom-tag
+        # alias for a fresh local read) wrapping the
+        # :class:`Versioned` admission record; we only need its
+        # presence here, not the inner value.
+        local_value = result.value
+        return local_value is not None
 
     async def _run(self) -> None:
         logger.info("[DagScheduler] start")

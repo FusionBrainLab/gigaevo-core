@@ -337,8 +337,10 @@ class TestReadProgram:
         result = await coord.read_program(dp.ProgramId("p-13"))
         assert isinstance(result, dp.Ok)
         assert result.value is not None
-        assert result.value.value["state"] == "RUNNING"
-        assert result.value.epoch >= 1
+        # ``LocalValue`` wraps the freshness-checked ``Versioned``.
+        versioned = result.value.value
+        assert versioned.value["state"] == "RUNNING"
+        assert versioned.epoch >= 1
 
     async def test_stale_floor_raises(self, coord: dp.DataPlane) -> None:
         await _put_program(coord, "p-14", dp.ProgramState.QUEUED)
@@ -351,10 +353,28 @@ class TestReadProgram:
         current = await coord.read_program(dp.ProgramId("p-14"))
         assert isinstance(current, dp.Ok) and current.value is not None
         future = await coord.read_program(
-            dp.ProgramId("p-14"), min_epoch=current.value.epoch + 10
+            dp.ProgramId("p-14"), min_epoch=current.value.value.epoch + 10
         )
         assert isinstance(future, dp.Err)
         assert isinstance(future.error, dp.StaleReadError)
+
+    async def test_returns_localvalue_phantom_wrapper(
+        self, coord: dp.DataPlane
+    ) -> None:
+        """The successful return is wrapped in :data:`LocalValue` — the
+        :class:`Sourced` phantom-tag alias for a fresh local read. This
+        is the structural discriminator for bug class #13 (stale cache
+        returns as authoritative)."""
+        await _put_program(coord, "p-localvalue", dp.ProgramState.QUEUED)
+        result = await coord.read_program(dp.ProgramId("p-localvalue"))
+        assert isinstance(result, dp.Ok)
+        assert result.value is not None
+        # The outer wrapper is a Sourced instance (the LocalValue alias).
+        assert isinstance(result.value, dp.Sourced)
+        # The inner ``Versioned`` is reachable via ``.value`` and carries
+        # the freshness witness.
+        versioned = result.value.value
+        assert isinstance(versioned, dp.Versioned)
 
 
 # ── token discipline ─────────────────────────────────────────────────
@@ -547,4 +567,4 @@ class TestBatch:
         # The first item's commit survived.
         read = await coord.read_program(dp.ProgramId("b-good"))
         assert isinstance(read, dp.Ok) and read.value is not None
-        assert read.value.value["state"] == "RUNNING"
+        assert read.value.value.value["state"] == "RUNNING"

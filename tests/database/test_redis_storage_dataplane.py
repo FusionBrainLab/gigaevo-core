@@ -652,7 +652,8 @@ class TestReadProgramFreshness:
         )
         assert isinstance(result, Ok)
         assert result.value is not None
-        assert result.value.value["state"] == ProgramState.RUNNING.value
+        # ``LocalValue`` wraps the freshness-checked ``Versioned``.
+        assert result.value.value.value["state"] == ProgramState.RUNNING.value
 
     async def test_at_least_below_floor_returns_stale_read_error(
         self,
@@ -684,7 +685,7 @@ class TestReadProgramFreshness:
         )
         assert isinstance(eventual, Ok)
         assert eventual.value is not None
-        observed_epoch = eventual.value.epoch
+        observed_epoch = eventual.value.value.epoch
 
         # Asking for one beyond the observed epoch fires the stale
         # branch. The same call at FreshnessEventual succeeded above —
@@ -741,7 +742,7 @@ class TestReadProgramFreshness:
         # First read picks up the current epoch.
         result = await coord.read_program(ProgramId(prog.id))
         assert isinstance(result, Ok)
-        observed_epoch = result.value.epoch  # type: ignore[union-attr]
+        observed_epoch = result.value.value.epoch  # type: ignore[union-attr]
         stale = await coord.read_program(
             ProgramId(prog.id), min_epoch=observed_epoch + 1
         )
