@@ -229,3 +229,54 @@ class TestBuildObjectGraph:
         assert graph["primary_metric"] == "fitness"
         assert graph["higher_is_better"] is True
         assert graph["required_behavior_keys"] == ["fitness"]
+
+
+class TestBuildObjectGraphBandit:
+    """The bandit-router build path resolves fitness_key and
+    higher_is_better from the problem's MetricsContext at graph-build
+    time. This path is structurally distinct from the ensemble path —
+    a separate test pins the resolution contract."""
+
+    def test_bandit_router_receives_metrics_resolved_fitness_key(
+        self, problem_dir: Path
+    ) -> None:
+        from gigaevo.config.schemas import BanditRouterConfig
+        from gigaevo.llm.bandit import BanditModelRouter
+
+        cfg = _config(
+            problem_dir,
+            llm=BanditRouterConfig(
+                models=[
+                    ChatOpenAIConfig(model="gpt-4o-mini"),
+                    ChatOpenAIConfig(model="deepseek-chat"),
+                ],
+                exploration_constant=2.0,
+                window_size=50,
+            ),
+        )
+        graph = build_object_graph(cfg)
+        router = graph["llm"]
+        assert isinstance(router, BanditModelRouter)
+        assert router.fitness_key == "fitness"
+        assert router.higher_is_better is True
+        assert len(router.models) == 2
+
+    def test_bandit_honors_problem_override_for_higher_is_better(
+        self, problem_dir: Path
+    ) -> None:
+        from gigaevo.config.schemas import BanditRouterConfig
+
+        cfg = _config(
+            problem_dir,
+            problem=ProblemConfig(
+                name="graph_test",
+                problem_dir=problem_dir,
+                primary_metric="is_valid",
+                higher_is_better=False,
+            ),
+            llm=BanditRouterConfig(models=[ChatOpenAIConfig(model="x")]),
+        )
+        graph = build_object_graph(cfg)
+        router = graph["llm"]
+        assert router.fitness_key == "is_valid"
+        assert router.higher_is_better is False

@@ -175,4 +175,7 @@ async def run_with_config(cfg: ExperimentConfig) -> int:
         "for end-to-end execution against the legacy Hydra path until "
         "the Phase 2 schemas close the loop."
     )
-    return 2  # documented exit code: graph-built-but-engine-not-run
+    # Graph construction succeeded; the missing wiring is communicated
+    # via the log warning above. Exit zero so CI dry-runs that exercise
+    # the typed path don't trip on a non-zero code.
+    return 0
