@@ -50,6 +50,15 @@ jobs:
         run: pip install -e ".[test]"
       - name: Run tests with coverage
         run: python -m pytest -m "not benchmark" --timeout=60 --cov=gigaevo --cov-report=term-missing --cov-report=xml:coverage.xml tests/
+      - name: Smoke-test typed CLI on every shipped experiment
+        env:
+          OPENAI_API_KEY: test-key-for-ci-dry-run
+        run: |
+          set -e
+          for exp in experiments/*.py; do
+            echo "--- $exp"
+            python -m gigaevo.cli "$exp" --dry-run
+          done
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
