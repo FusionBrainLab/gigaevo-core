@@ -108,8 +108,7 @@ class StructuralMetricsPipelineBuilderConfig(_PipelineBuilderBase):
 
 class AutoPipelineBuilderConfig(_PipelineBuilderBase):
     """Picks ContextPipelineBuilder when the problem declares
-    is_contextual, DefaultPipelineBuilder otherwise. Mirrors the runtime
-    select_pipeline_builder dispatch."""
+    is_contextual, DefaultPipelineBuilder otherwise."""
 
     kind: Literal["auto"] = "auto"
 
