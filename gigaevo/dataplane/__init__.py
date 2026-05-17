@@ -10,9 +10,15 @@ move-only permission token (:class:`Token`).
 
 Some primitives in this package ship without an in-tree consumer and
 are kept as typed substrate for follow-up work (event-streams,
-consumer groups, distributed HLC, bandit-router admission); the
-keep-list is documented in ``_phase2_substrate.md`` co-located with
-this package.
+consumer groups, distributed HLC, bandit-router admission). The
+deliberately-kept-but-unused names cover ``lwwr_set`` / ``lwwr_get``
+and ``scripts/lwwr_set.lua``, ``HlcTimestamp``, the lattice classes
+(``BoolLattice``, ``EpochLattice``, ``GenerationLattice``,
+``ProductLattice``, ``MonotoneLattice``), and the NewType identifiers
+``AggregateId``, ``BanditArm``, ``CausationId``, ``CorrelationId``,
+``StreamName``, ``ConsumerGroup``, ``ConsumerName``, ``NodeId``,
+``IdempotencyToken``, ``EventId``, ``EpochId``, ``GenerationId``,
+``StepId``.
 """
 
 from __future__ import annotations
