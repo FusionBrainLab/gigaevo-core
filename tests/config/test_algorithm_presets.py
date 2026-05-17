@@ -126,17 +126,44 @@ class TestMultiIslandFitnessComplexity:
         assert cfg.islands[0].island_id == "fitness_island"
         assert cfg.islands[1].island_id == "simplicity_island"
 
-    def test_first_island_carries_validity_axis(self) -> None:
+    def test_first_island_carries_validity_axis_at_primary_resolution(
+        self,
+    ) -> None:
         cfg = build_multi_island_fitness_complexity()
         bs = cfg.islands[0].behavior_space
         assert bs.keys == ["fitness", "is_valid"]
-        assert bs.resolutions == [20, 2]
+        # multi_island.yaml uses ${primary_resolution}=150 and
+        # ${validity_resolution}=2 — not the [20, 2] grid the simplicity
+        # island carries.
+        assert bs.resolutions == [150, 2]
 
     def test_second_island_carries_complexity_axis(self) -> None:
         cfg = build_multi_island_fitness_complexity()
         bs = cfg.islands[1].behavior_space
         assert bs.keys == ["fitness", "complexity_score"]
         assert bs.resolutions == [20, 10]
+
+    def test_simplicity_island_archive_subtracts_complexity(self) -> None:
+        """multi_island.yaml pins archive_selector.fitness_keys=[primary,
+        complexity_score] with higher_is_better=[True, False] on the
+        simplicity island so the sum subtracts complexity from fitness.
+        Without the second key the archive ignores complexity entirely
+        and the island degenerates to a duplicate fitness island."""
+        cfg = build_multi_island_fitness_complexity()
+        sel = cfg.islands[1].archive_selector
+        assert sel.fitness_keys == ["fitness", "complexity_score"]  # type: ignore[union-attr]
+        assert sel.fitness_key_higher_is_better == [True, False]  # type: ignore[union-attr]
+
+    def test_simplicity_island_remover_evicts_most_complex(self) -> None:
+        """multi_island.yaml pins archive_remover.fitness_key=
+        complexity_score with higher_is_better=False so the simplicity
+        island sheds its most-complex programs first (not its
+        lowest-fitness)."""
+        cfg = build_multi_island_fitness_complexity()
+        remover = cfg.islands[1].archive_remover
+        assert remover is not None
+        assert remover.fitness_key == "complexity_score"  # type: ignore[union-attr]
+        assert remover.fitness_key_higher_is_better is False  # type: ignore[union-attr]
 
     def test_migration_knobs_from_defaults(self) -> None:
         cfg = build_multi_island_fitness_complexity()

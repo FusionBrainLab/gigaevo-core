@@ -26,6 +26,7 @@ from gigaevo.config.defaults import (
     DEFAULT_MAX_MIGRANTS_PER_ISLAND,
     DEFAULT_MIGRATION_INTERVAL,
     DEFAULT_PRIMARY_RESOLUTION,
+    DEFAULT_VALIDITY_RESOLUTION,
 )
 from gigaevo.config.schemas import (
     AlgorithmConfig,
@@ -307,46 +308,93 @@ def build_multi_island_fitness_complexity(
     fitness_bounds: tuple[float, float] = (0.0, 1.0),
     validity_bounds: tuple[float, float] = (0.0, 1.0),
     complexity_bounds: tuple[float, float] = (0.0, 100.0),
+    fitness_island_primary_resolution: int = DEFAULT_PRIMARY_RESOLUTION,
+    fitness_island_validity_resolution: int = DEFAULT_VALIDITY_RESOLUTION,
+    simplicity_island_fitness_resolution: int = 20,
+    simplicity_island_complexity_resolution: int = 10,
     island_max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
     migration_interval: int = DEFAULT_MIGRATION_INTERVAL,
     max_migrants_per_island: int = DEFAULT_MAX_MIGRANTS_PER_ISLAND,
     enable_migration: bool = DEFAULT_ENABLE_MIGRATION,
 ) -> MultiIslandConfig:
-    """Two-island shape from ``multi_island.yaml``: fitness × validity
-    on one island, fitness × complexity on the other. Migrants cross
-    over every ``migration_interval`` generations, and the bandit
-    selects between islands by recent improvement rate."""
-    fitness_island = _island_with_default_selectors(
-        fitness_key=fitness_key,
-        higher_is_better=higher_is_better,
+    """Two-island shape from ``multi_island.yaml``.
+
+    Fitness island (``primary_resolution × validity_resolution`` cells,
+    150 × 2 by default): archive scores by primary fitness only;
+    archive remover drops lowest-fitness elites.
+
+    Simplicity island (``20 × 10`` cells matching the YAML's hardcoded
+    coarser fitness grid plus a complexity axis): archive scores by
+    sum of primary fitness MINUS complexity (the YAML pins
+    ``fitness_keys=[primary, complexity_score]`` with
+    ``higher_is_better=[True, False]`` so the sum subtracts complexity
+    from fitness, biasing the archive toward simpler high-fitness
+    programs). Archive remover drops most-complex programs first
+    rather than lowest-fitness — the goal on this island is
+    code simplicity, so the eviction policy mirrors that.
+
+    Migration knobs flow from defaults; the bandit selects between
+    islands by recent improvement rate every
+    ``migration_interval`` generations."""
+    fitness_island = IslandConfig(
+        island_id="fitness_island",
+        max_size=island_max_size,
         behavior_space=BehaviorSpaceConfig(
             keys=[fitness_key, validity_key],
             bounds=[fitness_bounds, validity_bounds],
-            resolutions=[20, 2],
+            resolutions=[
+                fitness_island_primary_resolution,
+                fitness_island_validity_resolution,
+            ],
             binning_types=[DEFAULT_BINNING_TYPE, DEFAULT_BINNING_TYPE],
+        ),
+        archive_selector=_fitness_archive_selector(
+            fitness_key, higher_is_better
         ),
         elite_selector=FitnessProportionalEliteSelectorConfig(
             fitness_key=fitness_key,
             fitness_key_higher_is_better=higher_is_better,
         ),
-        island_id="fitness_island",
-        max_size=island_max_size,
+        archive_remover=(
+            _fitness_archive_remover(fitness_key, higher_is_better)
+            if island_max_size is not None
+            else None
+        ),
+        migrant_selector=_top_fitness_migrant_selector(
+            fitness_key, higher_is_better
+        ),
     )
-    simplicity_island = _island_with_default_selectors(
-        fitness_key=fitness_key,
-        higher_is_better=higher_is_better,
+    simplicity_island = IslandConfig(
+        island_id="simplicity_island",
+        max_size=island_max_size,
         behavior_space=BehaviorSpaceConfig(
             keys=[fitness_key, "complexity_score"],
             bounds=[fitness_bounds, complexity_bounds],
-            resolutions=[20, 10],
+            resolutions=[
+                simplicity_island_fitness_resolution,
+                simplicity_island_complexity_resolution,
+            ],
             binning_types=[DEFAULT_BINNING_TYPE, DEFAULT_BINNING_TYPE],
+        ),
+        archive_selector=SumArchiveSelectorConfig(
+            fitness_keys=[fitness_key, "complexity_score"],
+            fitness_key_higher_is_better=[higher_is_better, False],
         ),
         elite_selector=FitnessProportionalEliteSelectorConfig(
             fitness_key=fitness_key,
             fitness_key_higher_is_better=higher_is_better,
         ),
-        island_id="simplicity_island",
-        max_size=island_max_size,
+        archive_remover=(
+            FitnessArchiveRemoverConfig(
+                fitness_key="complexity_score",
+                fitness_key_higher_is_better=False,
+            )
+            if island_max_size is not None
+            else None
+        ),
+        migrant_selector=_top_fitness_migrant_selector(
+            fitness_key, higher_is_better
+        ),
     )
     return MultiIslandConfig(
         islands=[fitness_island, simplicity_island],
