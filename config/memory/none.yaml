@@ -1,3 +1,0 @@
-# @package _global_
-memory_provider:
-  _target_: gigaevo.memory.provider.NullMemoryProvider
