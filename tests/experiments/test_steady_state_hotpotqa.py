@@ -101,6 +101,36 @@ class TestReferenceExperimentShape:
         assert cfg.algorithm.island.behavior_space.behavior_keys == ["fitness"]
 
 
+class TestReferenceExperimentObjectGraph:
+    """Integration test: the reference experiment must successfully
+    construct the full runtime object graph via build_object_graph.
+    Verifies the schema layer composes coherently against a real
+    problem directory with a real metrics.yaml."""
+
+    def test_build_object_graph_succeeds_on_reference_experiment(self) -> None:
+        from gigaevo.config.experiment_loader import build_experiment
+        from gigaevo.config.object_graph import build_object_graph
+
+        cfg = build_experiment(EXPERIMENT_PATH)
+        graph = build_object_graph(cfg)
+
+        assert graph["primary_metric"] == "fitness"
+        assert graph["higher_is_better"] is True
+        assert graph["required_behavior_keys"] == ["fitness"]
+
+    def test_constructed_bandit_router_carries_resolved_keys(self) -> None:
+        from gigaevo.config.experiment_loader import build_experiment
+        from gigaevo.config.object_graph import build_object_graph
+        from gigaevo.llm.bandit import BanditModelRouter
+
+        cfg = build_experiment(EXPERIMENT_PATH)
+        graph = build_object_graph(cfg)
+        router = graph["llm"]
+        assert isinstance(router, BanditModelRouter)
+        assert router.fitness_key == "fitness"
+        assert router.higher_is_better is True
+
+
 class TestReferenceExperimentDeterminism:
     """The experiment_id is the canonical reproducibility token. Two
     loads of the same file must produce identical IDs."""

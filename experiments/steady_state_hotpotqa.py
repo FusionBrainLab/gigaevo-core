@@ -6,6 +6,16 @@ returns a fully-validated, frozen configuration tree. No Hydra
 defaults composition, no YAML interpolation, no ``_target_`` strings —
 just Python composition with typed schemas. The parity harness in
 hydra-1.12 takes this file as its first green target.
+
+Variants compose via Pydantic's ``model_copy(update=...)``:
+
+    from experiments.steady_state_hotpotqa import build as base
+    seven_seed = base().model_copy(update={"seed": 7})
+
+That replaces Hydra's ``+seed=7`` override with explicit Python
+composition. The override re-runs every cross-field validator on the
+new tree, so a malformed update raises ``ValidationError`` at the
+composition site rather than at engine startup.
 """
 
 from __future__ import annotations
