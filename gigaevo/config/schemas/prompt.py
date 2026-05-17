@@ -3,9 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from gigaevo.config.schemas._base import FrozenStrictModel
+
+
+def _reject_empty_or_cwd(value: Path | None) -> Path | None:
+    if value is None:
+        return value
+    if str(value) in ("", "."):
+        raise ValueError(
+            f"path must be real or None; got {value!r} which resolves "
+            "to the current working directory"
+        )
+    return value
 
 if TYPE_CHECKING:
     from gigaevo.prompts.fetcher import PromptFetcher
@@ -22,6 +33,11 @@ class FixedDirPromptFetcherConfig(FrozenStrictModel):
 
     kind: Literal["fixed"] = "fixed"
     prompts_dir: Path | None = None
+
+    @field_validator("prompts_dir")
+    @classmethod
+    def _prompts_dir_not_empty(cls, value: Path | None) -> Path | None:
+        return _reject_empty_or_cwd(value)
 
     def build(self) -> "PromptFetcher":
         from gigaevo.prompts.fetcher import FixedDirPromptFetcher
@@ -56,6 +72,11 @@ class GigaEvoArchivePromptFetcherConfig(FrozenStrictModel):
     cache_ttl_seconds: float = Field(default=30.0, gt=0.0)
     fallback_prompts_dir: Path | None = None
     fitness_key: str = Field(default="fitness", min_length=1)
+
+    @field_validator("fallback_prompts_dir")
+    @classmethod
+    def _fallback_dir_not_empty(cls, value: Path | None) -> Path | None:
+        return _reject_empty_or_cwd(value)
 
     def build(self) -> "PromptFetcher":
         from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher

@@ -41,6 +41,14 @@ class TestFixedDirPromptFetcherConfig:
         fetcher = FixedDirPromptFetcherConfig().build()
         assert isinstance(fetcher, FixedDirPromptFetcher)
 
+    def test_empty_prompts_dir_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="path must be real"):
+            FixedDirPromptFetcherConfig(prompts_dir=Path(""))
+
+    def test_cwd_dot_prompts_dir_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="path must be real"):
+            FixedDirPromptFetcherConfig(prompts_dir=Path("."))
+
 
 class TestGigaEvoArchivePromptFetcherConfig:
     def _minimal_kwargs(self) -> dict:  # type: ignore[no-untyped-def]
@@ -106,6 +114,39 @@ class TestGigaEvoArchivePromptFetcherConfig:
             GigaEvoArchivePromptFetcherConfig(
                 prompt_redis_db=3, main_redis_prefix="p", fitness_key=""
             )
+
+    def test_empty_fallback_dir_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="path must be real"):
+            GigaEvoArchivePromptFetcherConfig(
+                prompt_redis_db=3,
+                main_redis_prefix="p",
+                fallback_prompts_dir=Path(""),
+            )
+
+    def test_build_propagates_parameters_to_runtime(self) -> None:
+        from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
+
+        cfg = GigaEvoArchivePromptFetcherConfig(
+            prompt_redis_db=9,
+            main_redis_prefix="gigaevo:exp",
+            main_redis_db=0,
+            prompt_prefix="custom_prefix",
+            archive_prefix="island_main",
+            host="redis.internal",
+            port=6380,
+            cache_ttl_seconds=15.0,
+            fitness_key="custom_fit",
+        )
+        fetcher = cfg.build()
+        assert isinstance(fetcher, GigaEvoArchivePromptFetcher)
+        assert fetcher._prompt_redis_db == 9
+        assert fetcher._main_redis_prefix == "gigaevo:exp"
+        assert fetcher._prompt_prefix == "custom_prefix"
+        assert fetcher._archive_prefix == "island_main"
+        assert fetcher._host == "redis.internal"
+        assert fetcher._port == 6380
+        assert fetcher._cache_ttl == 15.0
+        assert fetcher._fitness_key == "custom_fit"
 
 
 class TestPromptFetcherUnion:
