@@ -9,6 +9,8 @@ import pytest
 from gigaevo.config.problem_presets import (
     build_aime,
     build_algotune,
+    build_alphaevolve,
+    build_dashboard,
     build_heilbron,
     build_hexagon_improver,
     build_hexagon_pack,
@@ -18,6 +20,7 @@ from gigaevo.config.problem_presets import (
     build_ifbench,
     build_kissing_number,
     build_musique,
+    build_optimization,
     build_papillon,
     build_prompt_evolution,
     build_prompt_evolution_hover,
@@ -148,3 +151,36 @@ class TestRealProblemDirsExist:
         repo_root = Path(__file__).resolve().parents[2]
         cfg = build_algotune("battery_scheduling")
         assert (repo_root / cfg.problem_dir).exists()
+
+    def test_optimization_dashboard_alphaevolve_paths_exist(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        for builder in (build_optimization, build_dashboard):
+            cfg = builder()
+            assert (repo_root / cfg.problem_dir).exists()
+
+    def test_alphaevolve_erdos_minimum_overlap_exists(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        cfg = build_alphaevolve("erdos_minimum_overlap")
+        assert (repo_root / cfg.problem_dir).exists()
+
+
+class TestAlphaEvolvePreset:
+    def test_bare_name(self) -> None:
+        cfg = build_alphaevolve("first_autocorr_ineq")
+        assert cfg.problem_dir == Path("problems/alphaevolve/first_autocorr_ineq")
+        assert cfg.name == "alphaevolve_first_autocorr_ineq"
+
+    def test_prefixed_name_stripped(self) -> None:
+        """Symmetry with build_algotune — accept either bare or
+        prefixed input so the user can copy-paste either form."""
+        cfg = build_alphaevolve("alphaevolve_uncertainty_inequality")
+        assert cfg.problem_dir == Path(
+            "problems/alphaevolve/uncertainty_inequality"
+        )
+
+    def test_explicit_name_override(self) -> None:
+        cfg = build_alphaevolve("third_autocorr_ineq", name="custom")
+        assert cfg.name == "custom"
+        assert cfg.problem_dir == Path(
+            "problems/alphaevolve/third_autocorr_ineq"
+        )

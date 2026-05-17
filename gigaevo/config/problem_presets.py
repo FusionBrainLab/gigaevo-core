@@ -181,6 +181,37 @@ def build_toy_kadane(*, name: str = "toy_kadane") -> ProblemConfig:
 # ---------------------------------------------------------------------------
 
 
+def build_optimization(*, name: str = "optimization") -> ProblemConfig:
+    """Generic numerical optimization problem under
+    ``problems/optimization/``."""
+    return ProblemConfig(name=name, problem_dir=_under("optimization"))
+
+
+def build_dashboard(*, name: str = "dashboard") -> ProblemConfig:
+    """Dashboard problem under ``problems/dashboard/`` — internal
+    smoke / demo target."""
+    return ProblemConfig(name=name, problem_dir=_under("dashboard"))
+
+
+def build_alphaevolve(
+    subproblem: str,
+    *,
+    name: str | None = None,
+) -> ProblemConfig:
+    """Parametrised builder for the AlphaEvolve subproblem family
+    under ``problems/alphaevolve/``. Pass the bare subproblem name
+    (e.g. ``"erdos_minimum_overlap"``); the prefix is added if missing
+    so callers can also pass ``"alphaevolve_erdos_minimum_overlap"``
+    for symmetry with the AlgoTune naming convention."""
+    if subproblem.startswith("alphaevolve_"):
+        subproblem = subproblem[len("alphaevolve_") :]
+    problem_dir = _under("alphaevolve", subproblem)
+    return ProblemConfig(
+        name=name or f"alphaevolve_{subproblem}",
+        problem_dir=problem_dir,
+    )
+
+
 def build_prompt_evolution(*, name: str = "prompt_evolution") -> ProblemConfig:
     """Prompt evolution problem — used by the coevolved-prompt
     fetcher topology where prompts themselves are evolved as
