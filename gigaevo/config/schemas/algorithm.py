@@ -7,9 +7,11 @@ from pydantic import Field, model_validator
 from gigaevo.config.schemas._base import FrozenStrictModel
 
 if TYPE_CHECKING:
+    from gigaevo.database.redis_program_storage import RedisProgramStorage
     from gigaevo.evolution.strategies.elite_selectors import EliteSelector
     from gigaevo.evolution.strategies.migrant_selectors import MigrantSelector
     from gigaevo.evolution.strategies.models import BehaviorSpace
+    from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
     from gigaevo.evolution.strategies.removers import ArchiveRemover
     from gigaevo.evolution.strategies.selectors import ArchiveSelector
 
@@ -62,6 +64,13 @@ class BehaviorSpaceConfig(FrozenStrictModel):
         """The first behavior key is treated as the primary metric for
         fitness-aware selectors that need a scalar to optimise."""
         return self.keys[0]
+
+    @property
+    def behavior_keys(self) -> list[str]:
+        """Mirror of the runtime ``BehaviorSpace.behavior_keys`` for
+        consumers that need the ordered key list without materialising
+        the runtime object."""
+        return list(self.keys)
 
     def build(self) -> "BehaviorSpace":
         from gigaevo.evolution.strategies.models import (
@@ -261,10 +270,23 @@ class IslandConfig(FrozenStrictModel):
 class SingleIslandConfig(FrozenStrictModel):
     """One island, no migration. Covers single_island*.yaml and the
     topology_3d*.yaml variants which are single-island with a
-    three-dimensional behavior space."""
+    three-dimensional behavior space. The runtime backing is
+    ``MapElitesMultiIsland`` with a one-element islands list and
+    ``enable_migration=False`` — a single class serves both shapes."""
 
     kind: Literal["single_island"] = "single_island"
     island: IslandConfig
+
+    def build(
+        self, *, program_storage: "RedisProgramStorage"
+    ) -> "MapElitesMultiIsland":
+        from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
+
+        return MapElitesMultiIsland(
+            island_configs=[self.island.build()],
+            program_storage=program_storage,
+            enable_migration=False,
+        )
 
 
 class MultiIslandConfig(FrozenStrictModel):
@@ -283,6 +305,19 @@ class MultiIslandConfig(FrozenStrictModel):
         if len(set(ids)) != len(ids):
             raise ValueError(f"duplicate island_id in islands list: {ids}")
         return self
+
+    def build(
+        self, *, program_storage: "RedisProgramStorage"
+    ) -> "MapElitesMultiIsland":
+        from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
+
+        return MapElitesMultiIsland(
+            island_configs=[i.build() for i in self.islands],
+            program_storage=program_storage,
+            migration_interval=self.migration_interval,
+            enable_migration=self.enable_migration,
+            max_migrants_per_island=self.max_migrants_per_island,
+        )
 
 
 AlgorithmConfig = Annotated[

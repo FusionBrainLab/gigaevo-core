@@ -151,6 +151,18 @@ class TestSelectorConfigs:
         assert isinstance(sel, FitnessProportionalEliteSelector)
         assert sel.fitness_key == "f"
 
+    def test_weighted_selector_builds(self) -> None:
+        sel = WeightedEliteSelectorConfig(
+            fitness_key="f", lambda_=5.0, epsilon=1e-6
+        ).build()
+        from gigaevo.evolution.strategies.elite_selectors import (
+            WeightedEliteSelector,
+        )
+
+        assert isinstance(sel, WeightedEliteSelector)
+        assert sel.lambda_ == 5.0
+        assert sel.epsilon == 1e-6
+
 
 class TestIslandConfig:
     def test_minimal_island(self) -> None:
@@ -226,3 +238,22 @@ class TestSingleAndMultiIsland:
         ta: TypeAdapter[AlgorithmConfig] = TypeAdapter(AlgorithmConfig)
         with pytest.raises(ValidationError):
             ta.validate_python({"kind": "no_such_algo", "island": {}})
+
+    def test_algorithm_union_json_round_trip(self) -> None:
+        cfg = MultiIslandConfig(islands=[_island("a"), _island("b")])
+        ta: TypeAdapter[AlgorithmConfig] = TypeAdapter(AlgorithmConfig)
+        as_json = ta.dump_json(cfg)
+        parsed = ta.validate_json(as_json)
+        assert isinstance(parsed, MultiIslandConfig)
+        assert [i.island_id for i in parsed.islands] == ["a", "b"]
+
+    def test_behavior_keys_property(self) -> None:
+        bs = BehaviorSpaceConfig(
+            keys=["a", "b"],
+            bounds=[(0.0, 1.0), (0.0, 1.0)],
+            resolutions=[10, 10],
+            binning_types=["linear", "linear"],
+        )
+        assert bs.behavior_keys == ["a", "b"]
+        bs.behavior_keys.append("c")
+        assert bs.keys == ["a", "b"]
