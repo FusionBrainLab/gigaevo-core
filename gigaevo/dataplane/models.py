@@ -8,8 +8,6 @@ signatures into invariant declarations:
     Result[T, E]      — discriminated return; no exception crosses the
                          dataplane boundary except KeyboardInterrupt /
                          CancelledError.
-    Monotonic[T]      — counter that rejects retrograde writes at runtime.
-    MonotonicCounter  — integer specialisation of Monotonic with ``bump()``.
     HlcTimestamp      — hybrid logical clock pair (physical_ns, counter).
 
 :class:`Token` (move-only permission) lives in :mod:`permissions` to
@@ -19,15 +17,9 @@ avoid a circular import.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Final, Literal, NoReturn, Protocol
+from typing import Any, Final, Literal, NoReturn
 
 from .errors import StaleReadError
-
-
-class _Comparable(Protocol):
-    def __lt__(self, other: Any, /) -> bool: ...
-    def __le__(self, other: Any, /) -> bool: ...
-
 
 # ── Versioned ─────────────────────────────────────────────────────────
 
@@ -292,58 +284,6 @@ callers know which exception classes ``match Err(e)`` can yield.
 """
 
 
-# ── Monotonic ─────────────────────────────────────────────────────────
-
-
-class Monotonic[CT: _Comparable]:
-    """A value (counter / step / version) that only advances.
-
-    ``advance(new)`` requires ``current <= new``; a retrograde
-    assignment raises :class:`ValueError` immediately. Equality counts
-    as a valid advance (idempotent re-emit).
-
-    The base class supports any ``_Comparable`` type. For integer
-    counters with a ``bump()`` helper, use :class:`MonotonicCounter`.
-    """
-
-    __slots__ = ("_value",)
-
-    def __init__(self, initial: CT) -> None:
-        self._value: CT = initial
-
-    def peek(self) -> CT:
-        return self._value
-
-    def advance(self, new_value: CT) -> None:
-        if new_value < self._value:
-            raise ValueError(
-                f"Monotonic violation: {new_value!r} < current {self._value!r}"
-            )
-        self._value = new_value
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}({self._value!r})"
-
-
-class MonotonicCounter(Monotonic[int]):
-    """Integer specialisation of :class:`Monotonic` with ``bump()``.
-
-    The base ``Monotonic`` class is typed against ``_Comparable`` so it
-    works for any ordered type (e.g. ``HlcTimestamp``, ``str``).
-    Incrementing by one is only meaningful for numerics; isolating it
-    here lets mypy reject ``Monotonic("v1").bump()`` at type-check time
-    without a runtime ``+ 1`` failure mode hiding behind a stringly-typed
-    counter.
-    """
-
-    __slots__ = ()
-
-    def bump(self) -> int:
-        """Increment by one and return the new value."""
-        self._value = self._value + 1
-        return self._value
-
-
 # ── HlcTimestamp ──────────────────────────────────────────────────────
 
 
@@ -442,8 +382,6 @@ __all__ = [
     "GossipedValue",
     "HlcTimestamp",
     "LocalValue",
-    "Monotonic",
-    "MonotonicCounter",
     "Ok",
     "ReplayedValue",
     "Result",

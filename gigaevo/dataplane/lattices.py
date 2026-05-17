@@ -181,9 +181,11 @@ class ProductLattice[A, B]:
 class MonotoneLattice[C: _Comparable]:
     """Total order under ``<=``; join = max, meet = min.
 
-    Generic over any totally-ordered element type. Backs
-    :class:`gigaevo.dataplane.models.Monotonic` to reject retrograde
-    assignments at runtime.
+    Generic over any totally-ordered element type. The lattice
+    vocabulary backs every monotonic-counter shape the dataplane
+    persists (epoch counters, generation counters, HLC physical_ns
+    component) — join is the natural admission operation for a
+    retrograde-rejecting field.
     """
 
     @staticmethod

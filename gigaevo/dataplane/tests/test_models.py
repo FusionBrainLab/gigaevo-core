@@ -15,8 +15,6 @@ from gigaevo.dataplane.models import (
     FreshnessEventual,
     FreshnessStrict,
     HlcTimestamp,
-    Monotonic,
-    MonotonicCounter,
     Ok,
     Sourced,
     Versioned,
@@ -233,51 +231,6 @@ class TestResult:
 
         hints = get_type_hints(ErrCls.unwrap)
         assert hints["return"] is NoReturn
-
-
-# ── Monotonic ─────────────────────────────────────────────────────────
-
-
-class TestMonotonic:
-    def test_initial_value(self) -> None:
-        m = Monotonic(0)
-        assert m.peek() == 0
-
-    def test_advance_to_equal_ok(self) -> None:
-        m = Monotonic(5)
-        m.advance(5)
-        assert m.peek() == 5
-
-    def test_advance_forward(self) -> None:
-        m = Monotonic(5)
-        m.advance(10)
-        assert m.peek() == 10
-
-    def test_retrograde_raises(self) -> None:
-        m = Monotonic(5)
-        with pytest.raises(ValueError, match="Monotonic violation"):
-            m.advance(3)
-
-    def test_bump_increments(self) -> None:
-        m = MonotonicCounter(0)
-        assert m.bump() == 1
-        assert m.bump() == 2
-        assert m.peek() == 2
-
-    def test_monotonic_base_has_no_bump(self) -> None:
-        # The base ``Monotonic`` accepts any ``_Comparable`` type, so
-        # ``bump()`` (which is integer-only) lives on the subclass. A
-        # caller that has only the base type cannot accidentally invoke
-        # ``+1`` on a stringly-typed counter.
-        m = Monotonic("v1")
-        assert not hasattr(m, "bump")
-
-    def test_monotonic_counter_inherits_advance(self) -> None:
-        m = MonotonicCounter(5)
-        m.advance(7)
-        assert m.peek() == 7
-        with pytest.raises(ValueError, match="Monotonic violation"):
-            m.advance(6)
 
 
 # ── HlcTimestamp ──────────────────────────────────────────────────────
