@@ -24,8 +24,8 @@ Why a custom canonicaliser instead of orjson directly:
       2^53 (number) or 2^63 (integer) silently. Refusing the value is
       better than producing a hash that any consumer can disagree with.
 
-``compute_content_hash`` is also mirrored on the Redis side inside the
-``emit_event`` Lua script; a debug-only Python-side recomputation
+``compute_content_hash_hex`` is also mirrored on the Redis side inside
+the ``emit_event`` Lua script; a debug-only Python-side recomputation
 cross-checks that both sides agree.
 """
 
@@ -242,16 +242,13 @@ def decode_canonical(raw: bytes | str) -> Any:
 _HASH_VERSION_SEP: Final[bytes] = b"|"
 
 
-def compute_content_hash(payload: Any, *, schema_version: int) -> bytes:
-    """Stable 32-byte sha256 of ``(schema_version, canonical(payload))``.
+def compute_content_hash_hex(payload: Any, *, schema_version: int) -> str:
+    """Stable 64-char hex sha256 of ``(schema_version, canonical(payload))``.
 
     The schema_version is prefixed inside the hash input so two
     structurally-identical payloads at different schema versions hash
     differently — replay across a schema upgrade still distinguishes
     them.
-
-    Returns 32 raw bytes (sha256 digest). Use ``.hex()`` for storage in
-    Redis hash fields or :func:`compute_content_hash_hex` directly.
     """
     if schema_version < 1:
         raise ValueError(f"schema_version must be >= 1, got {schema_version}")
@@ -259,16 +256,10 @@ def compute_content_hash(payload: Any, *, schema_version: int) -> bytes:
     h.update(f"v{schema_version}".encode("ascii"))
     h.update(_HASH_VERSION_SEP)
     h.update(encode_canonical(payload))
-    return h.digest()
-
-
-def compute_content_hash_hex(payload: Any, *, schema_version: int) -> str:
-    """Convenience: 64-char hex of :func:`compute_content_hash`."""
-    return compute_content_hash(payload, schema_version=schema_version).hex()
+    return h.hexdigest()
 
 
 __all__ = [
-    "compute_content_hash",
     "compute_content_hash_hex",
     "decode_canonical",
     "encode_canonical",

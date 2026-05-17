@@ -16,6 +16,12 @@ The reference for the Lua-CAS pattern used here is
 :mod:`gigaevo.infra.endpoint_pool`; the :class:`LuaRegistry` mechanism
 generalises that module's script-load / SHA-cache / NOSCRIPT-reload
 behaviour.
+
+Some primitives in this package ship today with no production consumer
+and are kept as typed substrate for scheduled Phase 2 work
+(event-streams, consumer groups, distributed HLC, bandit-router
+admission). The keep-list and the Phase 2 destination of each item are
+documented in ``_phase2_substrate.md`` co-located with this package.
 """
 
 from __future__ import annotations
@@ -24,7 +30,6 @@ __version__ = "0.1.0"
 
 
 from .codec import (
-    compute_content_hash,
     compute_content_hash_hex,
     decode_canonical,
     encode_canonical,
@@ -126,8 +131,6 @@ from .models import (
     GossipedValue,
     HlcTimestamp,
     LocalValue,
-    Monotonic,
-    MonotonicCounter,
     Ok,
     ReplayedValue,
     Result,
@@ -135,7 +138,7 @@ from .models import (
     Sourced,
     Versioned,
 )
-from .permissions import Token, mint_combine, mint_root, mint_split, mint_split_n
+from .permissions import Token, mint_root, mint_split, mint_split_n
 from .transitions import (
     CLAIM_STATE_TRANSITIONS,
     LOCK_STATE_TRANSITIONS,
@@ -163,7 +166,6 @@ __all__ = [
     "LwwrValue",
     "ProgramPatch",
     # Codec
-    "compute_content_hash",
     "compute_content_hash_hex",
     "decode_canonical",
     "encode_canonical",
@@ -234,8 +236,6 @@ __all__ = [
     "GossipedValue",
     "HlcTimestamp",
     "LocalValue",
-    "Monotonic",
-    "MonotonicCounter",
     "Ok",
     "ReplayedValue",
     "Result",
@@ -244,7 +244,6 @@ __all__ = [
     "Versioned",
     # Permissions
     "Token",
-    "mint_combine",
     "mint_root",
     "mint_split",
     "mint_split_n",

@@ -26,7 +26,6 @@ from pydantic import BaseModel
 import pytest
 
 from gigaevo.dataplane.codec import (
-    compute_content_hash,
     compute_content_hash_hex,
     decode_canonical,
     encode_canonical,
@@ -300,37 +299,33 @@ class TestDecodeCanonical:
         assert sorted(out["s"]) == [3, 4]  # type: ignore[type-var]
 
 
-# ── compute_content_hash ──────────────────────────────────────────────
+# ── compute_content_hash_hex ──────────────────────────────────────────
 
 
-class TestComputeContentHash:
-    def test_returns_32_bytes(self) -> None:
-        h = compute_content_hash({"a": 1}, schema_version=1)
-        assert len(h) == 32
-
+class TestComputeContentHashHex:
     def test_hex_returns_64_chars(self) -> None:
         h = compute_content_hash_hex({"a": 1}, schema_version=1)
         assert len(h) == 64
         int(h, 16)  # well-formed hex
 
     def test_determinism_across_key_order(self) -> None:
-        a = compute_content_hash({"a": 1, "b": 2}, schema_version=1)
-        b = compute_content_hash({"b": 2, "a": 1}, schema_version=1)
+        a = compute_content_hash_hex({"a": 1, "b": 2}, schema_version=1)
+        b = compute_content_hash_hex({"b": 2, "a": 1}, schema_version=1)
         assert a == b
 
     def test_distinct_for_different_payloads(self) -> None:
-        a = compute_content_hash({"a": 1}, schema_version=1)
-        b = compute_content_hash({"a": 2}, schema_version=1)
+        a = compute_content_hash_hex({"a": 1}, schema_version=1)
+        b = compute_content_hash_hex({"a": 2}, schema_version=1)
         assert a != b
 
     def test_distinct_for_different_schema_versions(self) -> None:
-        a = compute_content_hash({"a": 1}, schema_version=1)
-        b = compute_content_hash({"a": 1}, schema_version=2)
+        a = compute_content_hash_hex({"a": 1}, schema_version=1)
+        b = compute_content_hash_hex({"a": 1}, schema_version=2)
         assert a != b
 
     def test_schema_version_must_be_positive(self) -> None:
         with pytest.raises(ValueError, match=">= 1"):
-            compute_content_hash({"a": 1}, schema_version=0)
+            compute_content_hash_hex({"a": 1}, schema_version=0)
 
     def test_golden_known_payload(self) -> None:
         """Pin one known hash so encoder drift surfaces in CI.
