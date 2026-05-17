@@ -140,6 +140,55 @@ class TestPipelineConfigRoundTrip:
         assert parsed.builder.dag_timeout == 1500.0
 
 
+class TestProblemSpecificPathsImportCleanly:
+    """Defense-in-depth: every problem-specific preset must point at
+    a path that resolves to a real class on disk. Catches renames or
+    moves of the problem-directory pipeline modules that would only
+    otherwise fail at experiment startup."""
+
+    @pytest.mark.parametrize(
+        "builder_func",
+        [
+            build_hotpotqa_reflective,
+            build_hotpotqa_asi,
+            build_hotpotqa_colbert,
+            build_hover_feedback,
+        ],
+    )
+    def test_builder_path_resolves_in_subprocess(self, builder_func) -> None:
+        """The ``problems`` namespace package and its descendants are
+        implicit PEP-420 packages without ``__init__.py``. pytest's
+        sys.path manipulation interferes with namespace package
+        discovery — a fresh subprocess with the repo root on sys.path
+        is the clean way to verify each preset's ``builder_path``
+        resolves to a real class on disk. Catches preset rot from
+        renames or moves of the problem-directory pipeline modules."""
+        import subprocess
+        import sys
+
+        cfg = builder_func()
+        builder = cfg.builder
+        assert isinstance(builder, ProblemSpecificPipelineBuilderConfig)
+        module_name, _, class_name = builder.builder_path.rpartition(".")
+        repo_root = Path(__file__).resolve().parents[2]
+        script = (
+            "import sys, importlib;"
+            f"sys.path.insert(0, {str(repo_root)!r});"
+            f"m = importlib.import_module({module_name!r});"
+            f"cls = getattr(m, {class_name!r}, None);"
+            "sys.exit(0 if cls is not None else 1)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            timeout=15,
+        )
+        assert result.returncode == 0, (
+            f"{builder.builder_path} did not resolve. "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+
 class TestUniqueDiscriminators:
     def test_problem_specific_kind_distinct_from_built_in_variants(self) -> None:
         """``problem_specific`` must not collide with the seven
