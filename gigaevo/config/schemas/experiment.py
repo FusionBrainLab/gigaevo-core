@@ -12,6 +12,7 @@ from gigaevo.config.schemas.llm import BanditRouterConfig, LLMConfig
 from gigaevo.config.schemas.pipeline import PipelineConfig
 from gigaevo.config.schemas.problem import ProblemConfig
 from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
+from gigaevo.config.schemas.runner import DAGRunnerConfig
 
 
 _KEY_PREFIX_TEMPLATE = "gigaevo:{name}"
@@ -51,6 +52,7 @@ class ExperimentConfig(FrozenStrictModel):
     engine: EngineConfig
     pipeline: PipelineConfig
     llm: LLMConfig
+    runner: DAGRunnerConfig = Field(default_factory=DAGRunnerConfig)
 
     @model_validator(mode="after")
     def _key_prefix_follows_convention(self) -> "ExperimentConfig":

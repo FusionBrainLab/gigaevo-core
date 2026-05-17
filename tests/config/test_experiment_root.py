@@ -87,6 +87,29 @@ class TestExperimentRoot:
         assert cfg.name == "hotpot_test"
         assert cfg.seed == 42
 
+    def test_runner_defaults_when_omitted(self) -> None:
+        """The DAGRunnerConfig default_factory means experiment files
+        that don't pin runner knobs still get a fully-validated
+        runner subtree."""
+        from gigaevo.config.schemas import DAGRunnerConfig
+
+        cfg = ExperimentConfig(**_kwargs())
+        assert isinstance(cfg.runner, DAGRunnerConfig)
+        assert cfg.runner.poll_interval == 0.5
+
+    def test_runner_override_propagates(self) -> None:
+        from gigaevo.config.schemas import DAGRunnerConfig
+
+        cfg = ExperimentConfig(
+            **_kwargs(
+                runner=DAGRunnerConfig(
+                    poll_interval=2.0, max_concurrent_dags=16
+                )
+            )
+        )
+        assert cfg.runner.poll_interval == 2.0
+        assert cfg.runner.max_concurrent_dags == 16
+
     def test_name_pattern_enforced(self) -> None:
         with pytest.raises(ValidationError):
             ExperimentConfig(**_kwargs(name="bad name!"))

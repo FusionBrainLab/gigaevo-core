@@ -138,6 +138,8 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
     pipeline_builder = cfg.pipeline.builder.build(ctx=evolution_context)
     dag_blueprint = pipeline_builder.build_blueprint()
 
+    runtime_runner_config = cfg.runner.build()
+
     return {
         "redis_storage": redis_storage,
         "problem_context": problem_context,
@@ -147,6 +149,7 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
         "evolution_context": evolution_context,
         "pipeline_builder": pipeline_builder,
         "dag_blueprint": dag_blueprint,
+        "runtime_runner_config": runtime_runner_config,
         "primary_metric": primary_metric,
         "higher_is_better": higher_is_better,
         "required_behavior_keys": behavior_keys,

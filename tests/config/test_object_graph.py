@@ -171,11 +171,27 @@ class TestBuildObjectGraph:
             "evolution_context",
             "pipeline_builder",
             "dag_blueprint",
+            "runtime_runner_config",
             "primary_metric",
             "higher_is_better",
             "required_behavior_keys",
         }
         assert set(graph.keys()) == expected
+
+    def test_runtime_runner_config_built_from_schema(
+        self, problem_dir: Path
+    ) -> None:
+        from gigaevo.runner.dag_runner import (
+            DagRunnerConfig as RuntimeDagRunnerConfig,
+        )
+
+        cfg = _config(problem_dir)
+        graph = build_object_graph(cfg)
+        runner_cfg = graph["runtime_runner_config"]
+        assert isinstance(runner_cfg, RuntimeDagRunnerConfig)
+        # Default schema values must propagate.
+        assert runner_cfg.poll_interval == 0.5
+        assert runner_cfg.max_concurrent_dags == 8
 
     def test_redis_storage_uses_key_prefix_from_dataplane(
         self, problem_dir: Path
