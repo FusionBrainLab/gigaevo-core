@@ -47,6 +47,7 @@ dependencies = [
     "tensorboardX",
     "python-dotenv",
     "click",
+    "tyro>=0.8",
     "jinja2",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
