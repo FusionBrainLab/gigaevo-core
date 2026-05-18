@@ -36,7 +36,19 @@ class SweepLoadError(Exception):
 def _run_one(args: tuple[Path, list[str]]) -> int:
     experiment, overrides = args
     cmd = [sys.executable, str(REPO_ROOT / "run.py"), str(experiment), *overrides]
-    return subprocess.run(cmd).returncode
+    try:
+        return subprocess.run(cmd).returncode
+    except OSError as exc:
+        # A single failed spawn (E2BIG, EMFILE, ENOMEM, ...) must not
+        # abort sibling runs in the parallel path: ProcessPoolExecutor
+        # re-raises the worker exception out of pool.map and tears the
+        # whole executor down. Convert to a non-zero return code so the
+        # outer loop counts it as a failure and continues.
+        print(
+            f"Sweep: failed to spawn run for {experiment} {overrides}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def _load_sweep(path: Path) -> list[list[str]]:
