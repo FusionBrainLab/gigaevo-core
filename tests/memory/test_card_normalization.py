@@ -336,13 +336,13 @@ class TestNormalizeEdgeCases:
         assert isinstance(result, MemoryCard)
 
     def test_zero_program_id_triggers_program_path(self):
-        """FIXED: program_id=0 → _str_or_empty(0) → "0" → truthy → program card."""
+        """program_id=0 string-coerces to '0' and yields a ProgramCard."""
         result = normalize_memory_card({"program_id": 0})
         assert isinstance(result, ProgramCard)
         assert result.program_id == "0"
 
     def test_false_program_id_triggers_program_path(self):
-        """FIXED: program_id=False → _str_or_empty(False) → "False" → truthy."""
+        """program_id=False string-coerces to 'False' and yields a ProgramCard."""
         result = normalize_memory_card({"program_id": False})
         assert isinstance(result, ProgramCard)
 

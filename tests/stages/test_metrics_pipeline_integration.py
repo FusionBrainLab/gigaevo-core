@@ -213,7 +213,7 @@ class TestFullMetricsPipelineDAG:
 
 # ---------------------------------------------------------------------------
 # 2. NormalizeMetrics WITHOUT EnsureMetrics (DAG misconfiguration)
-#    Fixed: missing metrics are silently skipped (no KeyError crash)
+#    Missing metrics are silently skipped instead of raising KeyError.
 # ---------------------------------------------------------------------------
 
 
@@ -221,11 +221,7 @@ class TestNormalizeWithoutEnsure:
     async def test_normalize_alone_skips_missing_metrics(
         self, state_manager, fakeredis_storage, make_program
     ) -> None:
-        """NormalizeMetrics without EnsureMetrics: missing keys are skipped, not KeyError.
-
-        This is a regression test for the bug fix: program.metrics.get(key) with
-        continue replaces the bare program.metrics[key] that raised KeyError.
-        """
+        """NormalizeMetrics on a program with no metrics skips silently."""
         ctx = _make_ctx()
         normalize = _normalize(ctx)
 

@@ -692,9 +692,7 @@ class TestSearchFallbackPaths:
         # dedupe_keep_order, so existing is safe here too.
 
     def test_parse_llm_card_decision_returns_none_for_garbage(self):
-        """FIXED: parse_llm_card_decision returns None for garbage input,
-        enabling the retry loop in _decide_card_action to work correctly.
-        """
+        """parse_llm_card_decision returns None for unparseable LLM output."""
         from gigaevo.memory.shared_memory.card_update_dedup import (
             parse_llm_card_decision,
         )
@@ -727,8 +725,10 @@ class TestSearchFallbackPaths:
         assert isinstance(result, dict)
         assert result["action"] == "add"
 
-    def test_http_200_non_json_raises(self):
-        """_ConceptApiClient._request crashes on 200 with non-JSON body."""
+    def test_http_200_non_json_body_raises_json_decode_error(self):
+        """_request on a 200 OK with non-JSON body raises JSONDecodeError."""
+        import json as _json
+
         import httpx
 
         from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
@@ -740,6 +740,5 @@ class TestSearchFallbackPaths:
         client = _ConceptApiClient.__new__(_ConceptApiClient)
         client._http = httpx.Client(base_url="http://test:8000", transport=transport)
 
-        # BUG: raises json.JSONDecodeError, not RuntimeError
-        with pytest.raises(Exception):  # JSONDecodeError or RuntimeError
+        with pytest.raises(_json.JSONDecodeError):
             client.get_concept("eid-1")

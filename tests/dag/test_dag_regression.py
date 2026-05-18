@@ -1,10 +1,4 @@
-"""Regression tests for DAG construction bugs.
-
-DAG(nodes={}) crash (fixed):
-    DAG.__init__ called max() on an empty generator when nodes={}, producing
-    "ValueError: max() arg is an empty sequence" with no useful context.
-    Fix: explicit guard raises ValueError("DAG requires at least one stage...").
-"""
+"""DAG construction guard tests."""
 
 from __future__ import annotations
 
@@ -15,11 +9,7 @@ from tests.conftest import NullWriter
 
 
 async def test_dag_constructor_raises_clear_error_on_empty_nodes(state_manager) -> None:
-    """DAG(nodes={}) raises ValueError with a descriptive message.
-
-    Previously: max() on empty generator → "max() arg is an empty sequence".
-    Fixed: explicit guard → ValueError("DAG requires at least one stage...").
-    """
+    """DAG(nodes={}) raises ValueError naming the empty-nodes invariant."""
     with pytest.raises(ValueError, match="at least one stage"):
         DAG(
             nodes={},
