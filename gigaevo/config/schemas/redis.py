@@ -48,7 +48,7 @@ class DataPlaneSettings(FrozenStrictModel):
     """Tunables for the DataPlane coordinator.
 
     ``RedisConfig`` is referenced by composition so the dataplane and the
-    legacy storage share the same Redis backing without a second URL
+    program storage share a single Redis backing without a second URL
     declaration in the experiment file.
     """
 

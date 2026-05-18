@@ -242,11 +242,11 @@ class TestLoggingConfigBuildWriter:
         assert isinstance(writer, CompositeLogger)
 
 
-class TestSuccessLevel:
+class TestLogLevelVocabulary:
     def test_success_level_accepted(self) -> None:
-        """Loguru's SUCCESS level was missing from the original
-        Literal; the fix added it to match the full loguru
-        vocabulary."""
+        """The ``LoggingSettings.level`` Literal carries every loguru
+        log level, including ``SUCCESS`` which sits between ``INFO``
+        and ``WARNING``."""
         cfg = LoggingSettings(level="SUCCESS")
         assert cfg.level == "SUCCESS"
 

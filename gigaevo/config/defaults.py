@@ -104,13 +104,3 @@ DEFAULT_LOG_TAG: Final[str] = "experiment"
 # at run time and is threaded into ``LoggingConfig.build()``.
 
 
-# ---------------------------------------------------------------------------
-# Endpoint defaults
-# ---------------------------------------------------------------------------
-
-# These two values are deployment-specific and routinely overridden in
-# experiment files. The defaults below match the YAML for byte-equality
-# but production deployments substitute their own (e.g. an internal
-# Qwen3 endpoint or a different OpenRouter slug).
-DEFAULT_LLM_BASE_URL: Final[str] = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL_NAME: Final[str] = "google/gemini-3-flash-preview"

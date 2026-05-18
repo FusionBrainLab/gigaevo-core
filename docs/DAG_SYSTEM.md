@@ -51,7 +51,7 @@ The **DAG (Directed Acyclic Graph) System** is GigaEvo's core execution engine f
 - **Parallelism**: Concurrent execution of independent stages
 - **Cacheability**: Automatic result reuse across runs
 - **Fault Tolerance**: Graceful handling of stage failures with detailed diagnostics
-- **Flexibility**: Declarative pipeline definition via Hydra configs
+- **Flexibility**: Declarative pipeline definition via typed `PipelineBuilderConfig` schemas
 
 ### Why DAGs?
 
@@ -291,49 +291,28 @@ program.stage_results["MyStage"] = result
 
 ## Building DAGs
 
-### Method 1: Hydra Configuration (Recommended)
+### Method 1: Pipeline Builder Preset (Recommended)
 
-Define stages and edges declaratively:
+The shipped builders in ``gigaevo/config/pipeline_presets.py`` cover
+every supported topology (default, context, structural metrics, the
+optimization variants, problem-specific chains). Select one in your
+experiment file's ``build()`` and let ``build_blueprint`` wire the
+stages:
 
-```yaml
-# config/pipeline/my_pipeline.yaml
-dag_blueprint:
-  _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
+```python
+# experiments/my_run.py
+from gigaevo.config.pipeline_presets import build_auto
+from gigaevo.config.schemas import PipelineConfig
 
-  # Stage factories
-  nodes:
-    ValidateCode:
-      _target_: gigaevo.programs.stages.validation.ValidateCodeStage
-      _partial_: true
-      timeout: 30.0
-
-    Execute:
-      _target_: gigaevo.programs.stages.python_executors.execution.CallProgramFunction
-      _partial_: true
-      function_name: entrypoint
-      timeout: 60.0
-
-    CollectMetrics:
-      _target_: gigaevo.programs.stages.metrics.EnsureMetricsStage
-      _partial_: true
-      metrics_context: ${metrics_context}
-      timeout: 10.0
-
-  # Data flow: stage outputs → stage inputs
-  data_flow_edges:
-    - source_stage: Execute
-      destination_stage: CollectMetrics
-      input_name: candidate
-
-  # Execution ordering: validate before execute
-  exec_order_deps:
-    Execute:
-      - stage_name: ValidateCode
-        condition: success
-
-  max_parallel_stages: 4
-  dag_timeout: 300.0
+pipeline = PipelineConfig(builder=build_auto())
 ```
+
+To author a brand-new pipeline, subclass ``PipelineBuilder`` (see
+``gigaevo/entrypoint/default_pipelines.py``); ``build_blueprint``
+returns a ``DAGBlueprint`` populated with the stage factories, data
+flow edges, and execution-order dependencies. Visual prototyping via
+``bash tools/dag_builder/start.sh`` emits a builder config you can
+import.
 
 ### Method 2: Programmatic (Advanced)
 
