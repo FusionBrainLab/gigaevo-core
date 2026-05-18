@@ -118,7 +118,16 @@ class ExperimentConfig(FrozenStrictModel):
         """Stable 12-character hash of the resolved config tree. Used
         as the leaf directory under ``output_dir`` so two runs with
         identical configs share an output namespace and two runs with
-        any field differing land in different directories."""
+        any field differing land in different directories.
+
+        ``Path`` fields contribute their string form to the hash
+        verbatim, so two configs that point at the same on-disk
+        directory via different string representations (relative vs
+        absolute, with or without a ``./`` prefix) produce different
+        ids. Callers that need a logical-path identity should
+        normalise ``output_dir`` (e.g. ``Path(...).resolve()``) before
+        passing it to :class:`ExperimentConfig`.
+        """
         payload = self.model_dump_json()
         return hashlib.sha256(payload.encode()).hexdigest()[:12]
 

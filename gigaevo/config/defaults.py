@@ -69,5 +69,7 @@ DEFAULT_MAX_CONCURRENT_DAGS: Final[int] = 10
 # ---------------------------------------------------------------------------
 
 DEFAULT_LLM_TEMPERATURE: Final[float] = 0.6
+# 80 * 1024 — accommodates the long-context output ceilings on the
+# Gemini 2.5/3 family without truncating multi-step reasoning traces.
 DEFAULT_LLM_MAX_TOKENS: Final[int] = 81_920
 DEFAULT_LLM_REQUEST_TIMEOUT_S: Final[int] = 600

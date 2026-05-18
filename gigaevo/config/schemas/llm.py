@@ -78,6 +78,8 @@ class BanditRouterConfig(FrozenStrictModel):
         default_factory=list, min_length=1, validate_default=True
     )
     skip_reward_on_acceptor_reject: bool = False
+    # ``1.41`` ~= sqrt(2), the canonical UCB1 exploration constant
+    # balancing exploration vs exploitation for bounded reward signals.
     exploration_constant: float = Field(default=1.41, gt=0.0)
     window_size: int = Field(default=100, ge=1)
     name: str = Field(default="default", min_length=1)
