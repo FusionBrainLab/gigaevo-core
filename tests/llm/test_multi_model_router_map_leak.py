@@ -56,7 +56,7 @@ def _router_with_model(name: str = "model_a") -> tuple[MultiModelRouter, MagicMo
 
 
 # ---------------------------------------------------------------------------
-# TestTaskModelMapLeak — Finding 2
+# TestTaskModelMapLeak
 # ---------------------------------------------------------------------------
 
 

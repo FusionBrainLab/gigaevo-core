@@ -408,7 +408,7 @@ class TestMapElitesIslandMigrants:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 4: Island add — displaced program verification
+# Island.add — displaced program verification
 # ---------------------------------------------------------------------------
 
 
@@ -479,7 +479,7 @@ class TestDisplacedProgramVerification:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 5: enforce_size_limit survivor identity
+# enforce_size_limit survivor identity
 # ---------------------------------------------------------------------------
 
 
@@ -545,7 +545,7 @@ class TestEnforceSizeLimitSurvivorIdentity:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 6: Migration integration
+# Migration integration
 # ---------------------------------------------------------------------------
 
 

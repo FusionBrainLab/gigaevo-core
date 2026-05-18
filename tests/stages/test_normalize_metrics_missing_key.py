@@ -1,23 +1,11 @@
-"""Tests for Finding 3: NormalizeMetricsStage raises KeyError on missing metric key.
+"""Coverage for ``NormalizeMetricsStage`` missing-key handling.
 
-gigaevo/programs/stages/metrics.py — NormalizeMetricsStage.compute, line 157:
-
-    v = program.metrics[key]
-
-If the metric key is present in the MetricsContext but absent from program.metrics,
-this raises a bare `KeyError`. The error message gives no context about which stage
-raised it or which program/metric was involved.
-
-These tests verify:
-1. The current behavior (KeyError raised) — so we know the contract.
-2. That a program with all required metrics passes correctly.
-3. Boundary: metrics present but None value.
-4. Multiple metrics, some missing.
-
-Finding 4 note: get_primary_key() / get_primary_spec() implicit None return is
-NOT a real runtime risk because MetricsContext's @model_validator enforces exactly
-one primary metric at construction time. We include one test confirming this contract
-and that the methods always return non-None for valid contexts.
+A metric key may live in ``MetricsContext`` but be absent from a
+program's ``metrics`` dict. The stage skips such keys silently rather
+than raising a bare ``KeyError``. The companion tests pin the
+``MetricsContext`` invariant that ``get_primary_key`` /
+``get_primary_spec`` always return a non-None value, enforced at
+construction time by a ``@model_validator``.
 """
 
 from __future__ import annotations
@@ -79,17 +67,16 @@ def _prog_empty() -> Program:
 
 
 # ---------------------------------------------------------------------------
-# TestNormalizeMetricsMissingKey — Finding 3
+# TestNormalizeMetricsMissingKey
 # ---------------------------------------------------------------------------
 
 
 class TestNormalizeMetricsMissingKey:
     async def test_missing_metric_silently_skipped(self) -> None:
-        """Metrics absent from program.metrics are silently skipped, not KeyError.
+        """Metrics absent from ``program.metrics`` are silently skipped.
 
-        Fixed behavior: program.metrics.get(key) returns None → continue.
-        This matches the existing "skip if no bounds" behavior and prevents
-        bare KeyErrors when NormalizeMetricsStage runs without EnsureMetricsStage.
+        Mirrors the existing skip-when-no-bounds branch so the stage stays
+        usable without an upstream ``EnsureMetricsStage``.
         """
         ctx = _make_ctx_with_bounds()
         stage = NormalizeMetricsStage(
@@ -229,7 +216,7 @@ class TestNormalizeMetricsMissingKey:
 
 
 # ---------------------------------------------------------------------------
-# TestGetPrimaryKeyNeverNone — Finding 4 (model_validator enforces this)
+# TestGetPrimaryKeyNeverNone (model_validator enforces this)
 # ---------------------------------------------------------------------------
 
 

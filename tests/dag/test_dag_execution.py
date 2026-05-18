@@ -550,7 +550,7 @@ class TestExecutionOrder:
 
 
 # ===================================================================
-# Category H: CancelledError Path (Audit Finding #4)
+# Category H: CancelledError path
 # ===================================================================
 
 
@@ -635,7 +635,7 @@ class TestCancelledErrorPath:
 
 
 # ===================================================================
-# Category I: Strengthened Semaphore Tests (Audit Finding #5)
+# Category I: Strengthened semaphore tests
 # ===================================================================
 
 
@@ -698,7 +698,7 @@ class TestSemaphoreStrengthened:
 
 
 # ===================================================================
-# Category J: input_hash Correctness End-to-End (Audit Finding #6)
+# Category J: input_hash correctness end-to-end
 # ===================================================================
 
 

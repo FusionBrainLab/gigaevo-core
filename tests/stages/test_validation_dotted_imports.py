@@ -1,21 +1,9 @@
-"""Tests for Finding 1: AST import checker doesn't split dotted module names.
+"""AST import-checker coverage for dotted module names.
 
-gigaevo/programs/stages/validation.py — _validate_ast_imports, line 155-158:
-
-    elif isinstance(node, ast.ImportFrom):
-        if node.module in self._BLOCKED_MODULES:
-            raise SecurityViolationError(...)
-
-For `from os.path import join`, the AST gives node.module = "os.path".
-The blocked set contains "os" (not "os.path"), so "os.path" not in {"os", ...}
-and the import slips through.
-
-FIX NEEDED: The check should be:
-    root = node.module.split(".")[0] if node.module else ""
-    if root in self._BLOCKED_MODULES: ...
-
-This file also covers `from subprocess.run import ...` and similar dotted forms
-for all blocked modules.
+``ValidateCodeStage`` must reject ``from os.path import join`` and similar
+dotted submodule imports for every entry in ``_BLOCKED_MODULES``: the
+checker splits ``node.module`` on ``"."`` and compares the root against the
+blocked set rather than the full dotted name.
 """
 
 from __future__ import annotations

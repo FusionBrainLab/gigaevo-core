@@ -778,7 +778,7 @@ class TestStreamOperations:
 
 
 class TestFullProgramRoundTrip:
-    """Audit finding 1: round-trip test must check ALL Program fields, not just id and code."""
+    """Round-trip serialization must preserve every Program field, not just id and code."""
 
     async def test_all_fields_survive_redis_roundtrip(
         self, fakeredis_storage, make_program

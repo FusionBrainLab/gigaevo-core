@@ -795,7 +795,7 @@ class TestGenerateMutations:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 1: Phase ordering in step()
+# Phase ordering in step()
 # ---------------------------------------------------------------------------
 
 
@@ -943,7 +943,7 @@ class TestStepPhaseOrdering:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 2: Child lineage verification
+# Child lineage verification
 # ---------------------------------------------------------------------------
 
 

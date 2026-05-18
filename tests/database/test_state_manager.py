@@ -313,7 +313,7 @@ class TestMergeStates:
 
 
 class TestStateTransitionRedisRoundTrip:
-    """Audit finding 3: after set_program_state, re-fetch from Redis must show new state."""
+    """After ``set_program_state``, a re-fetch from Redis must show the new state."""
 
     async def test_queued_to_running_persisted(
         self, state_manager, make_program, fakeredis_storage
@@ -409,7 +409,7 @@ class TestStateTransitionRedisRoundTrip:
 
 
 class TestConcurrentSameStageKey:
-    """Audit finding 2: multiple concurrent writers on the SAME stage_result key."""
+    """Multiple concurrent writers must not corrupt a single ``stage_result`` key."""
 
     async def test_concurrent_update_stage_result_same_key(
         self, state_manager, make_program, fakeredis_storage

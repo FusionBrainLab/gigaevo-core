@@ -371,8 +371,10 @@ class _SpyTimeoutStage(Stage):
 
 
 class TestOnCompleteAllCallSites:
-    """Audit finding #1: on_complete() is called in 4 places in Stage.execute().
-    Verify that EACH path calls on_complete with the correct arguments."""
+    """``on_complete`` is invoked from every exit path in ``Stage.execute``.
+
+    Each path must hand the correct arguments to the cache handler.
+    """
 
     async def test_on_complete_called_on_normal_output_return(self):
         """Call site ~294: compute() returns an OutputModel instance."""
@@ -485,8 +487,7 @@ class TestOnCompleteAllCallSites:
 
 
 class TestFailurePathOnComplete:
-    """Audit finding #2: Verify that when a stage raises an exception,
-    on_complete() is called and the result has correct error information."""
+    """When a stage raises, ``on_complete`` still fires with an error result."""
 
     async def test_failure_on_complete_result_has_error_type(self):
         """Failed stage result passed to on_complete has error.type set."""
@@ -579,8 +580,7 @@ class TestFailurePathOnComplete:
 
 
 class TestTimeoutMechanismVerification:
-    """Audit finding #3: Verify the timeout mechanism fires correctly
-    and produces the right error type in the result."""
+    """The timeout path fires and surfaces the correct error type."""
 
     async def test_timeout_produces_timeout_error_type(self):
         """Timeout error type should be TimeoutError or asyncio.TimeoutError."""
@@ -638,8 +638,7 @@ class TestTimeoutMechanismVerification:
 
 
 class TestErrorStageFieldAssertion:
-    """Audit finding #4: When a stage fails, StageError.stage should contain
-    the stage class name for all failure modes."""
+    """``StageError.stage`` always carries the stage class name on failure."""
 
     async def test_error_stage_on_runtime_error(self):
         """RuntimeError in compute() produces error.stage == stage_name."""
@@ -703,8 +702,7 @@ class TestErrorStageFieldAssertion:
 
 
 class TestHashBeforeComputeOrdering:
-    """Audit finding #5: The input hash must be computed BEFORE compute() runs,
-    not after, since compute() could have side effects that modify state."""
+    """Input hash is computed before ``compute`` so side effects can't taint it."""
 
     async def test_hash_computed_before_compute_executes(self):
         """Verify input hash is computed before compute() is called
@@ -793,8 +791,7 @@ class TestHashBeforeComputeOrdering:
 
 
 class TestProgramStageResultTimestampBranches:
-    """Audit finding #6: ProgramStageResult has correct started_at and duration
-    for both success and failure cases."""
+    """``ProgramStageResult.started_at`` and ``duration`` are set on both paths."""
 
     async def test_success_has_positive_duration(self):
         """Successful stage execution records a non-negative finite duration."""

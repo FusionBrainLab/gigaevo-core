@@ -525,7 +525,7 @@ class TestParetoTournamentEliteSelector:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 1: ParetoFrontSelector — missing reverse direction
+# ParetoFrontSelector — reverse direction coverage
 # ---------------------------------------------------------------------------
 
 
@@ -581,7 +581,7 @@ class TestParetoFrontSelectorReverseDirection:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 2: Tournament size never varied
+# Tournament size variation coverage
 # ---------------------------------------------------------------------------
 
 
@@ -659,7 +659,7 @@ class TestTournamentSizeVariation:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 3: dominates() asymmetry
+# dominates() asymmetry
 # ---------------------------------------------------------------------------
 
 
@@ -710,7 +710,7 @@ class TestDominatesAsymmetry:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 4: weighted_sample multi-draw distribution
+# weighted_sample multi-draw distribution
 # ---------------------------------------------------------------------------
 
 
@@ -766,7 +766,7 @@ class TestWeightedSampleMultiDraw:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 5: Fixed random seeds for determinism
+# Fixed random seeds for determinism
 # ---------------------------------------------------------------------------
 
 
@@ -835,7 +835,7 @@ class TestFixedRandomSeeds:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 6: Negative fitness values
+# Negative fitness values
 # ---------------------------------------------------------------------------
 
 
@@ -942,7 +942,7 @@ class TestNegativeFitnessValues:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 7: Single-element population
+# Single-element population
 # ---------------------------------------------------------------------------
 
 

@@ -469,7 +469,7 @@ class TestMultiRunEdgeCases:
 
 
 # ===================================================================
-# Category E: Metrics Verified in Redis (Audit Finding #1)
+# Category E: Metrics verified in Redis
 # ===================================================================
 
 
@@ -490,8 +490,7 @@ class MetricComputingStage(Stage):
 
 
 class TestMetricsVerifiedInRedis:
-    """Audit Finding #1: Integration tests run stages but never check that
-    computed metrics are actually stored in Redis."""
+    """Stage-computed metrics must round-trip through Redis."""
 
     async def test_metric_computing_stage_metrics_persisted_to_redis(
         self, state_manager, fakeredis_storage, make_program
@@ -553,13 +552,12 @@ class TestMetricsVerifiedInRedis:
 
 
 # ===================================================================
-# Category F: Skip Results Verified Persisted (Audit Finding #2)
+# Category F: Skip results persisted to Redis
 # ===================================================================
 
 
 class TestSkipResultsPersistedInRedis:
-    """Audit Finding #2: When stages are skipped via caching, the test never
-    checks that the skip result is correctly stored in Redis."""
+    """Skip results from cached stages must be readable back from Redis."""
 
     async def test_skipped_stage_result_persisted_to_redis(
         self, state_manager, fakeredis_storage, make_program
