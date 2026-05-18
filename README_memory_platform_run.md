@@ -2,10 +2,10 @@
 
 This is the current end-to-end flow for using `gigaevo-memory` as the backend for:
 
-- runtime retrieval with `memory_enabled=true`
-- final ideas-tracker memory write with `ideas_tracker=true`
+- runtime retrieval (experiment wires `SelectorMemoryProvider` into `EvolutionContext`).
+- final ideas-tracker memory write (experiment attaches an `IdeaTracker` to `EvolutionEngine.post_run_hook`).
 
-When `api.use_api: true`, `gigaevo-core-internal` automatically uses `gigaevo.memory_platform`.
+When `api.use_api: true` in `config/memory.yaml`, `gigaevo-core-internal` automatically uses `gigaevo.memory_platform`.
 
 ## What is used now
 
@@ -35,13 +35,21 @@ docker run -d --name gigaevo-memory-redis \
 
 ## 2. Start `gigaevo-memory`
 
+The snippets below assume two environment variables pointing at your
+checkouts:
+
+```bash
+export GIGAEVO_MEMORY_ROOT=/path/to/gigaevo-memory
+export GIGAEVO_CORE_ROOT=/path/to/gigaevo-core-internal
+```
+
 Use a Python 3.12 env for `gigaevo-memory`.
 
 ```bash
 conda create -n gigaevo-memory python=3.12 -y
 conda activate gigaevo-memory
 
-cd /home/petranokhin/projects/gigaevo_memory/gigaevo-memory
+cd $GIGAEVO_MEMORY_ROOT
 python -m pip install --upgrade pip
 python -m pip install -e ./api
 python -m pip install sentence-transformers
@@ -60,7 +68,7 @@ export EMBEDDING_MODEL=all-MiniLM-L6-v2
 Run migrations and start the API:
 
 ```bash
-cd /home/petranokhin/projects/gigaevo_memory/gigaevo-memory/api
+cd $GIGAEVO_MEMORY_ROOT/api
 alembic -c app/db/alembic.ini upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
@@ -73,7 +81,8 @@ curl http://localhost:8000/health
 
 ## 3. Configure `gigaevo-core-internal`
 
-In [config/memory.yaml](/home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal/config/memory.yaml), set:
+In `config/memory.yaml` at the project root (the backend config loaded
+by `gigaevo/memory/runtime_config.py`), set:
 
 ```yaml
 api:
@@ -98,25 +107,25 @@ Use your normal `gigaevo-core-internal` env.
 If `gigaevo_memory` is not installed in that env, install the lightweight client:
 
 ```bash
-python -m pip install -e /home/petranokhin/projects/gigaevo_memory/gigaevo-memory/client/python
+python -m pip install -e $GIGAEVO_MEMORY_ROOT/client/python
 ```
 
 Then run:
 
 ```bash
 conda activate <your-gigaevo-core-env>
-cd /home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal
+cd $GIGAEVO_CORE_ROOT
 
 export MEMORY_API_URL=http://localhost:8000
-python run.py experiments/<heilbron_memory>.py --memory.namespace exp9 --redis.db 1
+python run.py experiments/<heilbron_memory>.py --redis.db 1
 ```
 
-The memory provider, ideas-tracker setting, and namespace are
-selected on the ``ExperimentConfig`` in the chosen experiment file
-(start from ``experiments/base.py`` and add the memory + ideas-tracker
-schemas). ``namespace`` picks the remote memory bank to read and
-write; ``checkpoint_dir`` is optional in API mode and only affects
-local runtime artifacts.
+The memory provider, ideas-tracker hook, and namespace are constructed
+in the chosen experiment file (start from ``experiments/base.py`` and
+add `SelectorMemoryProvider(..., namespace="exp9")` plus an
+`IdeaTracker(...)` PostRunHook). The namespace picks the remote memory
+bank to read and write; ``checkpoint_dir`` is optional in API mode and
+only affects local runtime artifacts.
 
 ## 5. What success looks like
 
@@ -183,9 +192,10 @@ Core says `No module named 'gigaevo_memory'`
 Install the client package in the core env:
 
 ```bash
-python -m pip install -e /home/petranokhin/projects/gigaevo_memory/gigaevo-memory/client/python
+python -m pip install -e $GIGAEVO_MEMORY_ROOT/client/python
 ```
 
 Selector uses `namespace=default`
 
-Pass `namespace=...` on `run.py`, or set `api.namespace` in [config/memory.yaml](/home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal/config/memory.yaml).
+Set `namespace="..."` when constructing `SelectorMemoryProvider` in the
+experiment file, or set `api.namespace` in `config/memory.yaml`.
