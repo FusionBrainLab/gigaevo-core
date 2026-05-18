@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pydantic import TypeAdapter
 
 from gigaevo.config.defaults import (
@@ -61,11 +62,13 @@ class TestBuildGenerational:
 
 
 class TestBuildSteadyState:
-    def test_defaults_match_yaml(self) -> None:
+    def test_defaults(self) -> None:
         cfg = build_steady_state()
         assert isinstance(cfg, SteadyStateEngineConfig)
         assert cfg.kind == "steady_state"
-        # steady_state.yaml hardcodes max_in_flight=8
+        # max_in_flight defaults to 8 — preset-side constant
+        # ``_STEADY_STATE_MAX_IN_FLIGHT`` documents the GPU-server
+        # tuning origin.
         assert cfg.max_in_flight == 8
 
     def test_uses_all_combinations_parent_selector(self) -> None:
@@ -121,15 +124,12 @@ class TestBuildRuntimeConfig:
         assert runtime.max_in_flight == 12
 
 
-class TestYAMLParity:
-    """The two presets exist to match config/evolution/{default,
-    steady_state}.yaml byte-equal on every observable field. Tests
-    pin each YAML default to the corresponding preset default."""
+class TestDefaultParity:
+    """The generational and steady-state presets share their wiring;
+    only the steady-state knob ``max_in_flight`` differentiates them."""
 
-    def test_generational_matches_default_yaml(self) -> None:
+    def test_generational_defaults(self) -> None:
         cfg = build_generational()
-        # default.yaml uses interpolations resolving to constants/llm.yaml
-        # values which are picked up via DEFAULT_*.
         assert cfg.loop_interval == DEFAULT_LOOP_INTERVAL_S
         assert cfg.max_elites_per_generation == DEFAULT_MAX_ELITES_PER_GENERATION
         assert cfg.max_mutations_per_generation == DEFAULT_MAX_MUTATIONS_PER_GENERATION
@@ -138,16 +138,14 @@ class TestYAMLParity:
         assert cfg.parent_selector.kind == "all_combinations"  # type: ignore[union-attr]
         assert cfg.parent_selector.num_parents == 2  # type: ignore[union-attr]
 
-    def test_steady_state_matches_yaml_max_in_flight(self) -> None:
+    def test_steady_state_max_in_flight(self) -> None:
         cfg = build_steady_state()
-        # steady_state.yaml hardcodes max_in_flight: 8 (not a constant)
         assert cfg.max_in_flight == 8
 
-    def test_steady_state_inherits_default_yaml_overrides(self) -> None:
-        """steady_state.yaml has `defaults: - default - _self_` so it
-        inherits the parent_selector + program_acceptor wiring from
-        default.yaml. The preset must therefore produce the same
-        selectors as build_generational does."""
+    def test_steady_state_inherits_generational_selectors(self) -> None:
+        """Steady-state shares the parent_selector and program_acceptor
+        wiring with the generational preset; only the in-flight knob
+        differs."""
         gen = build_generational()
         ss = build_steady_state()
         assert type(ss.parent_selector) is type(gen.parent_selector)
@@ -177,11 +175,10 @@ class TestBuildBusEngine:
         )
         assert isinstance(cfg.migration_bus.topology, BusTopologyConfig)
 
-    def test_yaml_hardcoded_literals_preserved(self) -> None:
-        """bus.yaml hardcodes max_buffer_size=30, consume_interval=3.0,
-        max_consume_per_poll=20, max_stream_len=1000, claim_ttl=120,
-        migration_bus_db=15, max_imports_per_generation=10. The preset
-        defaults pin every one byte-equal to the YAML."""
+    def test_bus_literals_match_preset_constants(self) -> None:
+        """Pin the bus-engine literals so a future edit to the
+        ``_BUS_*`` module-level constants surfaces here rather than at
+        a live deployment."""
         cfg = build_bus_engine(
             run_id="hotpot@db0", problem_name="hotpotqa"
         )
@@ -239,6 +236,3 @@ class TestBuildRingEngine:
                 problem_name="hotpotqa",
                 ring_run_ids=["solo@db0"],
             )
-
-
-import pytest  # noqa: E402 — keep at bottom to avoid moving the import block

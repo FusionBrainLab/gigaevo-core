@@ -114,7 +114,7 @@ class TestTopology3D:
         bs = cfg.island.behavior_space
         assert bs.bounds == [(1.0, 7.0), (1.0, 6.0), (0.0, 4.0)]
         assert bs.resolutions == [4, 3, 5]
-        # 4 * 3 * 5 = 60 cells matching the YAML
+        # 4 * 3 * 5 = 60 cells
         assert bs.resolutions[0] * bs.resolutions[1] * bs.resolutions[2] == 60
 
 
@@ -132,9 +132,8 @@ class TestMultiIslandFitnessComplexity:
         cfg = build_multi_island_fitness_complexity()
         bs = cfg.islands[0].behavior_space
         assert bs.keys == ["fitness", "is_valid"]
-        # multi_island.yaml uses ${primary_resolution}=150 and
-        # ${validity_resolution}=2 — not the [20, 2] grid the simplicity
-        # island carries.
+        # Fitness island uses the [150, 2] grid (primary x validity);
+        # not the [20, 2] grid the simplicity island carries.
         assert bs.resolutions == [150, 2]
 
     def test_second_island_carries_complexity_axis(self) -> None:
@@ -144,21 +143,22 @@ class TestMultiIslandFitnessComplexity:
         assert bs.resolutions == [20, 10]
 
     def test_simplicity_island_archive_subtracts_complexity(self) -> None:
-        """multi_island.yaml pins archive_selector.fitness_keys=[primary,
-        complexity_score] with higher_is_better=[True, False] on the
-        simplicity island so the sum subtracts complexity from fitness.
-        Without the second key the archive ignores complexity entirely
-        and the island degenerates to a duplicate fitness island."""
+        """The simplicity island archive selector pins
+        ``fitness_keys=[primary, complexity_score]`` with
+        ``higher_is_better=[True, False]`` so the sum subtracts
+        complexity from fitness. Without the second key the archive
+        ignores complexity entirely and the island degenerates to a
+        duplicate fitness island."""
         cfg = build_multi_island_fitness_complexity()
         sel = cfg.islands[1].archive_selector
         assert sel.fitness_keys == ["fitness", "complexity_score"]  # type: ignore[union-attr]
         assert sel.fitness_key_higher_is_better == [True, False]  # type: ignore[union-attr]
 
     def test_simplicity_island_remover_evicts_most_complex(self) -> None:
-        """multi_island.yaml pins archive_remover.fitness_key=
-        complexity_score with higher_is_better=False so the simplicity
-        island sheds its most-complex programs first (not its
-        lowest-fitness)."""
+        """The simplicity island archive remover pins
+        ``fitness_key="complexity_score"`` with
+        ``higher_is_better=False`` so the island sheds its
+        most-complex programs first (not its lowest-fitness)."""
         cfg = build_multi_island_fitness_complexity()
         remover = cfg.islands[1].archive_remover
         assert remover is not None

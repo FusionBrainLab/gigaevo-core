@@ -113,7 +113,7 @@ class TestHeterogeneousBandit:
         assert cfg.models[0].model == "explicit/m1"
         assert cfg.models[1].model == "explicit/m2"
 
-    def test_temperature_defaults_to_yaml_value(self) -> None:
+    def test_temperature_defaults_to_preset_value(self) -> None:
         cfg = build_heterogeneous_bandit(base_url="http://server:8080/v1")
         for endpoint in cfg.models:
             assert endpoint.temperature == 0.8
@@ -159,10 +159,11 @@ class TestGooglePreset:
 
 
 class TestMaxTokensDefault:
-    """Audit catch: openrouter and gemini YAMLs reference ${max_tokens}
-    which resolves to constants/llm.yaml's 81920. Earlier preset
-    builders defaulted to 16_384, a 5x token drift between the
-    typed and YAML paths."""
+    """Every shipped preset (other than the heterogeneous-bandit
+    self-hosted preset, which intentionally caps at 16_384 for small
+    on-prem endpoints) defaults its ``max_tokens`` to
+    ``DEFAULT_LLM_MAX_TOKENS``. The tests pin that contract so a
+    future caller can rely on it."""
 
     def test_openrouter_bandit_uses_default_max_tokens(self) -> None:
         cfg = build_openrouter_bandit()
@@ -189,34 +190,28 @@ class TestMaxTokensDefault:
             assert endpoint.max_tokens == DEFAULT_LLM_MAX_TOKENS
 
 
-class TestYAMLParity:
-    """The presets exist to replace deployment-specific YAMLs with
-    typed Python. Each preset must match the model set + endpoint
-    coordinates from the corresponding YAML byte-equal."""
+class TestCanonicalOpenRouterSet:
+    """The two OpenRouter presets share a single 4-model set. The
+    tests below pin the set and the bandit hyperparameters so an
+    accidental edit to ``OPENROUTER_FOUR_MODELS`` or to the bandit
+    defaults surfaces at test time."""
 
-    def test_openrouter_bandit_matches_yaml_model_set(self) -> None:
+    _EXPECTED_MODELS = {
+        "google/gemini-2.5-flash",
+        "google/gemini-3-flash-preview",
+        "deepseek/deepseek-v3.2",
+        "openai/gpt-4.1-mini",
+    }
+
+    def test_openrouter_bandit_uses_canonical_model_set(self) -> None:
         cfg = build_openrouter_bandit()
-        yaml_models = {
-            "google/gemini-2.5-flash",
-            "google/gemini-3-flash-preview",
-            "deepseek/deepseek-v3.2",
-            "openai/gpt-4.1-mini",
-        }
-        assert {m.model for m in cfg.models} == yaml_models
+        assert {m.model for m in cfg.models} == self._EXPECTED_MODELS
 
-    def test_openrouter_ensemble_matches_yaml_model_set(self) -> None:
+    def test_openrouter_ensemble_uses_canonical_model_set(self) -> None:
         cfg = build_openrouter_ensemble()
-        yaml_models = {
-            "google/gemini-2.5-flash",
-            "google/gemini-3-flash-preview",
-            "deepseek/deepseek-v3.2",
-            "openai/gpt-4.1-mini",
-        }
-        assert {m.model for m in cfg.models} == yaml_models
+        assert {m.model for m in cfg.models} == self._EXPECTED_MODELS
 
-    def test_openrouter_bandit_exploration_matches_yaml(self) -> None:
-        """openrouter_bandit.yaml pins exploration_constant: 1.41 and
-        window_size: 100; both default values must match."""
+    def test_openrouter_bandit_default_hyperparameters(self) -> None:
         cfg = build_openrouter_bandit()
         assert cfg.exploration_constant == 1.41
         assert cfg.window_size == 100
