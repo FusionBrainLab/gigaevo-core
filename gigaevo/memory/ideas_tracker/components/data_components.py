@@ -51,7 +51,7 @@ def _stringify_improvement_value(value: Any) -> str:
 
 
 def normalize_improvement_item(idea: Any) -> dict[str, str]:
-    """Coerce mutation change payloads into the tracker's legacy shape."""
+    """Coerce a mutation-change payload to ``{"description": str, "explanation": str}``."""
     if isinstance(idea, str):
         description = idea.strip()
         return {"description": description, "explanation": ""}

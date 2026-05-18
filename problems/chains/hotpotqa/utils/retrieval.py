@@ -6,8 +6,8 @@ Provides a Retriever protocol and three implementations:
   - ColBERTServerRetriever: proxies to a dedicated ColBERT server process.
 
 BM25 supports two on-disk index layouts:
-- Single index directory (legacy)
-- Sharded index directory with a manifest (memory-safe for large corpora)
+- Single index directory.
+- Sharded index directory with a manifest (memory-safe for large corpora).
 
 All retrievers lazy-load their index on first call and cache as module-level singletons.
 """
@@ -154,9 +154,9 @@ def build_bm25s_index(
 ) -> None:
     """Build bm25s index from corpus and save to disk.
 
-    Supports both the legacy single-directory load path and a sharded layout
-    for large corpora. JSONL(.gz) inputs stream from disk; pickle inputs fall
-    back to loading the full passage list.
+    Supports both the single-directory layout and the sharded layout with a
+    manifest (for large corpora). JSONL(.gz) inputs stream from disk; pickle
+    inputs fall back to loading the full passage list.
     """
     corpus_path = Path(corpus_path)
     index_dir = Path(index_dir)
@@ -613,7 +613,7 @@ def retrieve(
     k: int = 7,
     corpus_path: str | Path | None = None,
 ) -> str:
-    """Retrieve top-k passages using BM25 (legacy single-query API)."""
+    """Retrieve top-k passages using BM25 (single-query convenience wrapper)."""
     return batch_retrieve([query], index_dir, k=k, corpus_path=corpus_path)[0]
 
 
@@ -623,7 +623,7 @@ def batch_retrieve(
     k: int = 7,
     corpus_path: str | Path | None = None,
 ) -> list[str]:
-    """Batch-retrieve top-k passages using BM25 (legacy API)."""
+    """Batch-retrieve top-k passages using BM25."""
     import bm25s
 
     _ensure_bm25_initialized(index_dir, corpus_path)
@@ -650,7 +650,7 @@ def make_retrieve_fn(
     k: int = 7,
     corpus_path: str | Path | None = None,
 ) -> Callable[[list[dict]], list[str]]:
-    """Create a batched BM25 retrieve function for the tool registry (legacy API)."""
+    """Create a batched BM25 retrieve function for the tool registry."""
 
     def retrieve_fn(items: list[dict]) -> list[str]:
         queries = [item["query"] for item in items]

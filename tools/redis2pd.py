@@ -60,32 +60,30 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  # New format (preferred)
+  # Single-argument run spec
   PYTHONPATH=. python tools/redis2pd.py --run chains/hotpotqa/static@4:O --output-file /tmp/o.csv
 
   # Frontier-only CSV (gen,best_val) for 05_results.md tables
   PYTHONPATH=. python tools/redis2pd.py --run chains/hotpotqa/static@4:O \\
       --frontier-csv --output-file /tmp/frontier_o.csv
 
-  # Legacy format (still works, used by archive_run.sh)
+  # Split prefix/db form (used by archive_run.sh)
   PYTHONPATH=. python tools/redis2pd.py --redis-db 4 --redis-prefix chains/hotpotqa/static \\
       --output-file /tmp/o.csv
 """,
     )
-    # New unified format
+    # Combined run-spec argument
     parser.add_argument(
         "--run",
         metavar="PREFIX@DB[:LABEL]",
         help="Run spec: prefix@db or prefix@db:label (takes precedence over --redis-db/--redis-prefix)",
     )
-    # Legacy args (still supported for archive_run.sh compatibility)
+    # Split-form run arguments (consumed when --run is not provided)
     parser.add_argument("--redis-host", default="localhost", help="Redis host")
     parser.add_argument("--redis-port", type=int, default=6379, help="Redis port")
+    parser.add_argument("--redis-db", type=int, help="Redis database (paired with --redis-prefix)")
     parser.add_argument(
-        "--redis-db", type=int, help="Redis database [legacy; prefer --run]"
-    )
-    parser.add_argument(
-        "--redis-prefix", type=str, help="Redis prefix [legacy; prefer --run]"
+        "--redis-prefix", type=str, help="Redis prefix (paired with --redis-db)"
     )
     parser.add_argument(
         "--output-file", type=str, required=True, help="Output CSV file path"
@@ -100,7 +98,7 @@ Examples:
     )
     args = parser.parse_args()
 
-    # Resolve run config: --run takes precedence over legacy --redis-db / --redis-prefix
+    # Resolve run config: --run takes precedence over the split --redis-db / --redis-prefix pair
     if args.run:
         prefix, db, label = parse_run_arg(args.run)
         config = RedisRunConfig(
