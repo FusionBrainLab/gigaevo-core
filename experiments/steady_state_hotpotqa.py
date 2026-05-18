@@ -4,14 +4,16 @@ Demonstrates the canonical pattern every shipped experiment follows:
 a single ``build() -> ExperimentConfig`` returning a fully-validated,
 frozen configuration tree.
 
-Variants compose via Pydantic's ``model_copy(update=...)``:
+Variants that touch a single scalar can use ``model_copy(update=...)``::
 
     from experiments.steady_state_hotpotqa import build as base
     seven_seed = base().model_copy(update={"seed": 7})
 
-The override re-runs every cross-field validator on the new tree, so
-a malformed update raises ``ValidationError`` at the composition site
-rather than at engine startup.
+``model_copy`` shallow-copies without re-validating, so updates that
+would violate a cross-field invariant (for example renaming the
+experiment without rewriting ``dataplane.key_prefix``) must round-trip
+through ``ExperimentConfig.model_validate({**base().model_dump(),
+**update})`` to trigger the validators.
 """
 
 from __future__ import annotations
