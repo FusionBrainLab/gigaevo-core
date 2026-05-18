@@ -1,11 +1,8 @@
 import random
-from typing import TypeVar
 
 from loguru import logger
 
 from gigaevo.programs.program import Program
-
-_T = TypeVar("_T")
 
 
 def weighted_sample_without_replacement[T](
@@ -29,7 +26,7 @@ def weighted_sample_without_replacement[T](
 
     Returns
     -------
-    list[_T]
+    list[T]
         Selected items in order of selection.
     """
     k = min(k, len(items))

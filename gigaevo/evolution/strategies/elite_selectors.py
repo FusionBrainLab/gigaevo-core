@@ -256,7 +256,6 @@ class ScalarTournamentEliteSelector(EliteSelector):
             )
             return programs
 
-        # FIXED: Proper sampling without replacement
         selected: list[Program] = []
         remaining_programs = list(programs)
 
@@ -269,8 +268,6 @@ class ScalarTournamentEliteSelector(EliteSelector):
             ranked.sort(key=lambda x: x[1])
             winner = ranked[0][0]
             selected.append(winner)
-
-            # Remove winner from remaining programs
             remaining_programs.remove(winner)
 
         return selected
@@ -313,7 +310,6 @@ class ParetoTournamentEliteSelector(EliteSelector):
             )
             return programs
 
-        # FIXED: Proper sampling without replacement
         selected: list[Program] = []
         remaining_programs = list(programs)
 
@@ -326,13 +322,10 @@ class ParetoTournamentEliteSelector(EliteSelector):
                 (p, self._pareto_rank(p, candidates), self.tie_breaker(p))
                 for p in candidates
             ]
-            ranked.sort(
-                key=lambda x: (x[1], x[2])
-            )  # by dominated count, then tie-breaker
+            # Sort by dominated count ascending, then tie-breaker ascending.
+            ranked.sort(key=lambda x: (x[1], x[2]))
             winner = ranked[0][0]
             selected.append(winner)
-
-            # Remove winner from remaining programs
             remaining_programs.remove(winner)
 
         return selected

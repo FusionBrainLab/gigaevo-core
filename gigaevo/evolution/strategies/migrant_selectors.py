@@ -33,22 +33,14 @@ class TopFitnessMigrantSelector(MigrantSelector):
         if not programs:
             return []
 
-        fitness_values = [
-            extract_fitness_values(
+        scored_programs: list[tuple[Program, float]] = []
+        for program in programs:
+            values = extract_fitness_values(
                 program,
                 [self.fitness_key],
                 {self.fitness_key: self.fitness_key_higher_is_better},
             )
-            for program in programs
-        ]
-        scored_programs = [
-            (prog, fitness_values[i])
-            for i, prog in enumerate(programs)
-            if fitness_values[i] is not None
-        ]
-
-        if not scored_programs:
-            return random.sample(programs, min(count, len(programs)))
+            scored_programs.append((program, values[0]))
 
         sorted_programs = sorted(scored_programs, key=lambda x: x[1], reverse=True)
         return [p for p, _ in sorted_programs[:count]]
