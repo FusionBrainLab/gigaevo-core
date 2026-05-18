@@ -16,6 +16,7 @@ from gigaevo.config.schemas import (
     OptunaOptPipelineBuilderConfig,
     PipelineBuilderConfig,
     PipelineConfig,
+    ProblemSpecificPipelineBuilderConfig,
     StructuralMetricsPipelineBuilderConfig,
 )
 
@@ -76,6 +77,9 @@ class TestPipelineBuilderUnion:
             OptunaOptPipelineBuilderConfig(),
             StructuralMetricsPipelineBuilderConfig(),
             AutoPipelineBuilderConfig(),
+            ProblemSpecificPipelineBuilderConfig(
+                builder_path="some.module.Builder"
+            ),
         ):
             parsed = ta.validate_python(cfg.model_dump())
             assert type(parsed) is type(cfg)
@@ -149,6 +153,7 @@ class TestPipelineBuilderDiscriminator:
             OptunaOptPipelineBuilderConfig,
             StructuralMetricsPipelineBuilderConfig,
             AutoPipelineBuilderConfig,
+            ProblemSpecificPipelineBuilderConfig,
         )
         kinds = [v.model_fields["kind"].default for v in variants]
         assert len(set(kinds)) == len(kinds), f"duplicate kind literal in {kinds}"
@@ -160,4 +165,5 @@ class TestPipelineBuilderDiscriminator:
             "optuna_opt",
             "structural_metrics",
             "auto",
+            "problem_specific",
         })

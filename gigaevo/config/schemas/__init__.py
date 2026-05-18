@@ -65,6 +65,7 @@ from gigaevo.config.schemas.pipeline import (
     OptunaOptPipelineBuilderConfig,
     PipelineBuilderConfig,
     PipelineConfig,
+    ProblemSpecificPipelineBuilderConfig,
     StructuralMetricsPipelineBuilderConfig,
 )
 from gigaevo.config.schemas.problem import ProblemConfig
@@ -133,6 +134,7 @@ __all__ = [
     "PipelineConfig",
     "PredictorConfig",
     "ProblemConfig",
+    "ProblemSpecificPipelineBuilderConfig",
     "PromptFetcherConfig",
     "RandomParentSelectorConfig",
     "RedisConfig",
