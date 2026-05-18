@@ -389,17 +389,17 @@ class TestNormalizeMetricsStage:
 
 
 # ---------------------------------------------------------------------------
-# TestNormalizeMetricsSentinel  (H1 regression)
+# NormalizeMetricsStage behavior on sentinel inputs
 # ---------------------------------------------------------------------------
 
 
 class TestNormalizeMetricsSentinel:
-    """Regression: sentinel values must survive NormalizeMetricsStage intact.
+    """Sentinel metric values pass through NormalizeMetricsStage untouched.
 
-    Prior to the fix, a sentinel value (-1e5 for higher_is_better metrics) was
-    normalised via clamp((v - lo) / (hi - lo), 0, 1) which mapped it to 0.0.
-    This made a failed-run program indistinguishable from a zero-score run in
-    the archive's behavior-space lookup, corrupting MAP-Elites selection.
+    Sentinels mark failed runs (e.g., -1e5 for higher_is_better metrics).
+    Normalising them via clamp((v - lo) / (hi - lo), 0, 1) would map them
+    onto the valid [0, 1] range and conflate failures with zero-score runs
+    in archive lookup, so the stage emits no *_norm key for sentinels.
     """
 
     def _make_ctx_with_sentinel(self, sentinel: float = -1e5) -> MetricsContext:

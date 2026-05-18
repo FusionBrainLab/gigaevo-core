@@ -358,11 +358,11 @@ class TestNormalizeEdgeCases:
         assert "extra" not in MemoryCardExplanation.model_fields
 
     def test_aliases_with_ideas_tracker_dict_format(self):
-        """Ideas tracker stores aliases as list[dict] version history, not list[str].
+        """Ideas tracker stores aliases as list[dict] version history.
 
-        RecordCardExtended.aliases appends dicts like:
-            {"exp1-prog1": {"description": "old", "programs": ["p1"], "explanations": ["e"]}}
-        This must pass through normalize_memory_card without crashing (Bug #2, PR #161).
+        RecordCardExtended.aliases entries look like
+        {"exp1-prog1": {"description": "old", "programs": ["p1"], "explanations": ["e"]}}.
+        normalize_memory_card accepts that shape unchanged.
         """
         aliases = [
             {

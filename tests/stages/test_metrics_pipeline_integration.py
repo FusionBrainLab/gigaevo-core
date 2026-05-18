@@ -12,7 +12,7 @@ Key scenarios tested:
   2. Missing upstream metrics → EnsureMetrics fills sentinels → NormalizeMetrics skips
      sentinel values that are outside bounds (or handles them via clamp)
   3. NormalizeMetrics running WITHOUT EnsureMetrics (DAG misconfiguration):
-     verifies the fixed skip behavior (no KeyError crash)
+     missing metric keys are skipped silently rather than raising KeyError
   4. Boundary values (at/beyond bounds) are correctly clamped in normalized space
   5. Multi-metric pipeline: primary + secondary metrics flow through together
 """
@@ -308,12 +308,11 @@ class TestSentinelValueHandling:
     async def test_pipeline_with_sentinel_input(
         self, state_manager, fakeredis_storage, make_program
     ) -> None:
-        """Sentinel → EnsureMetrics preserves it → NormalizeMetrics skips it.
+        """Sentinel metric values pass through EnsureMetrics and are skipped by NormalizeMetrics.
 
-        Regression (H1 fix): NormalizeMetricsStage must NOT normalize sentinel
-        values.  Prior to the fix, score=-1.0 (sentinel) would be normalized
-        to 0.0 via clamp((-1-0)/100, 0, 1), making a failed run
-        indistinguishable from a zero-score run in MAP-Elites selection.
+        Failed runs (score=-1.0 sentinel) must stay distinguishable from
+        zero-score runs in downstream selection, so NormalizeMetricsStage
+        emits no *_norm key for sentinel inputs.
         """
         ctx = _make_ctx()
         # score sentinel = -1.0 → EnsureMetrics preserves it

@@ -1,9 +1,8 @@
-"""Tests for state consistency in concurrent scenarios.
+"""State-consistency tests for concurrent program updates.
 
-Covers:
-- atomic_state_transition uses merged state for status sets (Bug #8 fix)
-- ProgramStateManager._locks eviction for DONE programs
-- Race between concurrent DONE and DISCARDED transitions
+Covers atomic_state_transition merging behavior on the status set,
+ProgramStateManager._locks eviction for DONE programs, and races
+between concurrent DONE and DISCARDED transitions.
 """
 
 from __future__ import annotations

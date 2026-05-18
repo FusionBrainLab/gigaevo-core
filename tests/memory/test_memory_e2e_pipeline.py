@@ -1,12 +1,10 @@
-"""End-to-end pipeline test: ideas_tracker → normalize_memory_card → load_memory_cards.
+"""End-to-end pipeline test: ideas_tracker -> normalize_memory_card -> load_memory_cards.
 
-This test covers the integration boundary that was broken by Bug #2 (PR #161):
-- ideas_tracker produces RecordCardExtended with aliases: list[dict[...]]
-- normalize_memory_card must pass through dict aliases without crashing
-- load_memory_cards must preserve the full card metadata
-
-Without this E2E test, bugs in the type conversions at the boundary crash
-silently during memory write, wasting API credits.
+Covers the integration boundary where typed Pydantic memory cards meet
+the ideas_tracker output shape. ideas_tracker produces
+RecordCardExtended with aliases as list[dict[...]]; normalize_memory_card
+passes that through without crashing and load_memory_cards preserves
+the full metadata.
 """
 
 import json

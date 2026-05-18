@@ -731,7 +731,7 @@ class TestFailedStagesInLongChains:
         assert _tracker.counts.get("B") == 1
         assert _tracker.counts.get("C", 0) == 0
 
-        # Verify B stored its input_hash (the fix)
+        # Failed stages still store an input_hash so they cache on re-run.
         assert program.stage_results["B"].input_hash is not None
 
         # Run 2: A cached, B cached (failed with matching hash), C still skipped
@@ -930,14 +930,10 @@ class TestAllFailedCachedTermination:
 
 
 class TestOnCompleteCalledOnFailure:
-    """Verify that Stage.execute() calls on_complete for FAILED stages,
-    not just successful ones. This is the core of the bug fix."""
+    """Stage.execute() calls cache_handler.on_complete for FAILED stages."""
 
     async def test_failed_stage_has_input_hash_set(self, state_manager, null_writer):
-        """A single failing stage must have input_hash stored after execute().
-
-        This directly verifies the fix in base.py lines 312-317: the exception
-        handler calls cache_handler.on_complete(fail_result, inputs_hash)."""
+        """A failing stage stores its input_hash so subsequent runs can cache."""
         stage = ControllableStage(name="A", should_fail=True)
         nodes = {"A": stage}
         edges: list[DataFlowEdge] = []
