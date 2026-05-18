@@ -120,8 +120,11 @@ class TestDagRunnerMetrics:
 
     def test_uptime_seconds(self):
         m = DagRunnerMetrics()
-        # Should be at least 0 (just created)
-        assert m.uptime_seconds >= 0
+        # Freshly constructed: started_at is now-ish, so uptime stays below
+        # a generous ceiling but is non-negative.
+        uptime = m.uptime_seconds
+        assert isinstance(uptime, int)
+        assert 0 <= uptime <= 5
 
 
 class TestDagRunnerLifecycle:

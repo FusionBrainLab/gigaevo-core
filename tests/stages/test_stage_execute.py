@@ -797,7 +797,7 @@ class TestProgramStageResultTimestampBranches:
     for both success and failure cases."""
 
     async def test_success_has_positive_duration(self):
-        """Successful stage execution should have duration > 0."""
+        """Successful stage execution records a non-negative finite duration."""
         stage = ReturnOutputStage(timeout=5.0)
         stage.attach_inputs({})
         result = await stage.execute(_prog())
@@ -808,9 +808,10 @@ class TestProgramStageResultTimestampBranches:
         duration = result.duration_seconds()
         assert duration is not None
         assert duration >= 0
+        assert result.finished_at >= result.started_at
 
     async def test_failure_has_positive_duration(self):
-        """Failed stage execution should have duration > 0."""
+        """Failed stage execution records a non-negative finite duration."""
         stage = RaiseStage(timeout=5.0)
         stage.attach_inputs({})
         result = await stage.execute(_prog())
@@ -821,6 +822,7 @@ class TestProgramStageResultTimestampBranches:
         duration = result.duration_seconds()
         assert duration is not None
         assert duration >= 0
+        assert result.finished_at >= result.started_at
 
     async def test_timeout_has_bounded_duration(self):
         """Timed-out stage should have duration roughly matching the timeout."""
