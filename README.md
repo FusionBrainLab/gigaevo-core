@@ -26,7 +26,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 | [Evolution Strategies](docs/EVOLUTION_STRATEGIES.md) | MAP-Elites, multi-island, migration |
 | [Prompt Co-Evolution](docs/COEVOLUTION.md) | Co-evolve mutation prompts alongside programs |
 | [Tools](tools/README.md) | Analysis, debugging, and problem scaffolding utilities |
-| [Usage Guide](docs/USAGE.md) | Detailed usage and Hydra configuration |
+| [Usage Guide](docs/USAGE.md) | Typed CLI overrides and experiment-file authoring |
 | [Contributing](docs/CONTRIBUTING.md) | Guidelines for contributors |
 | [Changelog](CHANGELOG.md) | Version history |
 

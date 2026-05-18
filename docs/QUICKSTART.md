@@ -169,6 +169,20 @@ cp -r problems/heilbron problems/my_problem
 # - problems/my_problem/task_description.txt (LLM instructions)
 ```
 
+Then create an experiment file that points at the new problem directory:
+
+```bash
+# Copy the base experiment and edit its build() function
+cp experiments/base.py experiments/my_problem.py
+# Set ProblemConfig.problem_dir to problems/my_problem inside build().
+```
+
+Run it:
+
+```bash
+python run.py experiments/my_problem.py
+```
+
 ### 2. Customize Evolution
 
 ```bash
