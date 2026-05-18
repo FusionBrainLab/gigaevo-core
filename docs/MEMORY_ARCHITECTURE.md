@@ -429,27 +429,26 @@ Collaborators share the same `CardStore` instance by reference. Single-threaded 
 
 ## External Consumers
 
-### Hydra Integration
+### Provider Integration
 
 Train scripts never touch `AmemGamMemory` directly. The path is:
 
 ```
-config/memory/local.yaml
-  → memory_provider._target_ = gigaevo.memory.provider.SelectorMemoryProvider
-      → lazy creates MemorySelectorAgent
-          → reads config/memory_backend.yaml (runtime settings)
-          → constructs MemoryConfig + AmemGamMemory(config=...) for local mode
-          → or constructs platform backend with legacy kwargs for API mode
+SelectorMemoryProvider (from gigaevo.memory.provider)
+  → lazy creates MemorySelectorAgent
+      → reads config/memory_backend.yaml (runtime settings) via
+        gigaevo/memory/runtime_config.py
+      → constructs MemoryConfig + AmemGamMemory(config=...) for local mode
+      → or constructs platform backend for API mode
 ```
 
-Config files:
-- `config/memory/none.yaml` → `NullMemoryProvider` (no-op, default)
-- `config/memory/local.yaml` → `SelectorMemoryProvider` (local backend)
-- `config/memory/api.yaml` → `SelectorMemoryProvider` (API backend)
+Provider classes:
+- `NullMemoryProvider` — no-op, returned by default.
+- `SelectorMemoryProvider` — backed by local `AmemGamMemory` or remote API depending on `memory_backend.yaml` → `api.use_api`.
 
 ### MemorySelectorAgent (`gigaevo/llm/agents/memory_selector.py`)
 
-The bridge between Hydra config and the memory backend. For local mode (the common case):
+The bridge between the provider layer and the memory backend. For local mode (the common case):
 
 ```python
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -472,11 +471,11 @@ mem_config = MemoryConfig(
 memory = AmemGamMemory(config=mem_config)
 ```
 
-For API mode, the platform backend (`gigaevo.memory_platform.AmemGamMemory`) still uses legacy kwargs — it has its own constructor.
+For API mode, the platform backend (`gigaevo.memory_platform.AmemGamMemory`) has its own constructor.
 
 ### SelectorMemoryProvider (`gigaevo/memory/provider.py`)
 
-Strategy object injected into the DAG pipeline via Hydra:
+Strategy object passed into the DAG pipeline through `EvolutionContext`:
 - `NullMemoryProvider`: no-op, returns empty selection
 - `SelectorMemoryProvider`: delegates to `MemorySelectorAgent` (lazy init)
   - `select_cards(program, ...)` → `MemorySelection(cards, card_ids)`
@@ -572,9 +571,9 @@ Each init step is wrapped in try/except with `logger.warning` — the system alw
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Hydra Config Layer                        │
-│  config/memory/{none,local,api}.yaml                        │
-│     → NullMemoryProvider | SelectorMemoryProvider           │
+│                  Provider Selection                          │
+│     NullMemoryProvider | SelectorMemoryProvider              │
+│     (constructed in the experiment / object_graph wiring)    │
 └────────────────┬────────────────────────────────────────────┘
                  │ lazy creates
 ┌────────────────▼────────────────────────────────────────────┐
