@@ -36,6 +36,16 @@ class TestDAGRunnerConfig:
         with pytest.raises(ValidationError):
             DAGRunnerConfig(poll_interval=0.0)
 
+    def test_poll_interval_lower_bound_matches_runtime(self) -> None:
+        """The runtime ``DagRunnerConfig._validate_poll_interval``
+        rejects values below 0.01s; the schema mirrors that floor so
+        a stale experiment file fails at load time rather than at
+        ``build()`` time."""
+        with pytest.raises(ValidationError):
+            DAGRunnerConfig(poll_interval=0.001)
+        # Boundary value accepted.
+        DAGRunnerConfig(poll_interval=0.01)
+
     def test_poll_interval_upper_bound(self) -> None:
         with pytest.raises(ValidationError):
             DAGRunnerConfig(poll_interval=120.0)

@@ -25,7 +25,7 @@ class DAGRunnerConfig(FrozenStrictModel):
     under 0.01s would saturate CPU, and over 60s starve the queue;
     values over 30s emit a runtime warning about responsiveness."""
 
-    poll_interval: float = Field(default=0.5, gt=0.0, le=60.0)
+    poll_interval: float = Field(default=0.5, ge=0.01, le=60.0)
     max_concurrent_dags: int = Field(default=8, gt=0, le=1000)
     prefetch_factor: int = Field(default=8, ge=1, le=64)
     metrics_collection_interval: float = Field(default=1.0, gt=0.0)
