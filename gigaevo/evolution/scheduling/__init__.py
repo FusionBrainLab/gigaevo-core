@@ -1,9 +1,9 @@
 """Scheduling abstractions for controlling DAG evaluation order.
 
 Provides pluggable feature extractors, eval-time predictors, and
-program prioritizers.  The default (FIFO) preserves existing behavior;
-LPT (Longest Processing Time first) scheduling reduces tail idle time
-by starting predicted-longest jobs first.
+program prioritizers.  FIFO is the default (insertion order); LPT
+(Longest Processing Time first) reduces tail idle time by starting
+predicted-longest jobs first.
 
 Quick start::
 
