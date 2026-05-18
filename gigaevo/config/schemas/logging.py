@@ -58,8 +58,8 @@ class TBTrackerConfig(FrozenStrictModel):
 
 class WandBTrackerConfig(FrozenStrictModel):
     """Weights & Biases tracker. ``project`` is required for non-local
-    runs; ``name`` becomes the run label (matches the YAML's ${tag}
-    substitution today). ``entity`` and ``tags`` are optional."""
+    runs; ``name`` becomes the run label. ``entity`` and ``tags`` are
+    optional."""
 
     kind: Literal["wandb"] = "wandb"
     project: str = Field(min_length=1)

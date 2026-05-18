@@ -35,12 +35,12 @@ _DEFAULT_RUN_ID = f"{_PROBLEM_SHORT}@db0"
 
 def build() -> ExperimentConfig:
     redis = RedisConfig()
-    # build_bus_engine returns the generational-flavored bus config;
-    # the steady-state YAML inherits engine knobs but pins
-    # max_in_flight=8 (steady-state only). Construct the bus engine
-    # manually here to mix the migration bus with steady-state
-    # semantics; a future ``build_steady_state_bus_engine`` preset
-    # would let this experiment import a one-liner instead.
+    # build_bus_engine returns the generational-flavored bus config.
+    # The bus engine variant on the schema does not carry a
+    # steady-state max_in_flight knob; the migration bus is composed
+    # here against the generational engine backbone. A dedicated
+    # steady-state-bus preset would let this experiment import a
+    # one-liner instead.
     bus = MigrationBusConfig(
         run_id=_DEFAULT_RUN_ID,
         transport=RedisStreamTransportConfig(
@@ -58,11 +58,10 @@ def build() -> ExperimentConfig:
     engine = BusedEngineConfig(
         migration_bus=bus,
         max_imports_per_generation=10,
-        # BusedEngineConfig.max_in_flight does not exist on the
-        # schema today — steady-state max_in_flight is a separate
-        # variant. This experiment uses the bus's generational engine
-        # backbone; if the steady-state variant of the bus engine
-        # ships, the field migrates here.
+        # BusedEngineConfig has no max_in_flight knob — steady-state
+        # in-flight queueing lives on SteadyStateEngineConfig, which
+        # is not composable with the migration bus on the schema as
+        # it stands. The generational backbone is selected here.
         max_mutations_per_generation=DEFAULT_MAX_MUTATIONS_PER_GENERATION,
     )
     llm = BanditRouterConfig(

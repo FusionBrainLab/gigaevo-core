@@ -98,8 +98,8 @@ class BehaviorSpaceConfig(FrozenStrictModel):
 
 
 class SumArchiveSelectorConfig(FrozenStrictModel):
-    """Sum-of-fitnesses archive selector. Used by every algorithm YAML
-    currently shipped under config/algorithm/."""
+    """Sum-of-fitnesses archive selector. Default archive scoring
+    across every shipped algorithm preset."""
 
     kind: Literal["sum"] = "sum"
     fitness_keys: list[str] = Field(min_length=1)
@@ -227,9 +227,9 @@ MigrantSelectorConfig = Annotated[
 class IslandConfig(FrozenStrictModel):
     """Schema-side island descriptor. Builds the runtime
     ``gigaevo.evolution.strategies.island.IslandConfig`` via
-    :meth:`build`. Selectors are typed by their schema discriminator
-    rather than by ``_target_`` strings, so a typo in a fitness key or
-    a wrong selector class name is caught at load time."""
+    :meth:`build`. Selectors are typed by their schema discriminator,
+    so a typo in a fitness key or a wrong selector class name is
+    caught at load time."""
 
     island_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
     max_size: int | None = Field(default=None, ge=1)
@@ -268,9 +268,8 @@ class IslandConfig(FrozenStrictModel):
 
 
 class SingleIslandConfig(FrozenStrictModel):
-    """One island, no migration. Covers single_island*.yaml and the
-    topology_3d*.yaml variants which are single-island with a
-    three-dimensional behavior space. The runtime backing is
+    """One island, no migration. Covers the single-island and
+    three-dimensional behavior-space presets. The runtime backing is
     ``MapElitesMultiIsland`` with a one-element islands list and
     ``enable_migration=False`` — a single class serves both shapes."""
 

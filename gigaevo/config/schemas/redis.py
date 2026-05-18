@@ -14,8 +14,8 @@ class RedisConfig(FrozenStrictModel):
     """Connection coordinates that resolve to a single Redis logical DB.
 
     The runtime construction site (``RedisProgramStorage``) accepts a
-    pre-formed ``redis_url``; this schema exposes the host/port/db tuple
-    used in the experiment YAMLs and derives the URL via a computed field.
+    pre-formed ``redis_url``; this schema exposes the host/port/db
+    tuple and derives the URL via a computed field.
     """
 
     host: str = Field(default="localhost", min_length=1)

@@ -54,9 +54,10 @@ class StandardAcceptorConfig(FrozenStrictModel):
     the schema declares ``required_behavior_keys`` as None to defer to
     the cross-field resolution in the experiment root. The runtime
     acceptor stores the keys as a ``set`` and performs set subtraction
-    in its accept hot path; the schema accepts ``list[str]`` for YAML
-    ergonomics and converts at build time. ``validity_key`` defaults to
-    the canonical ``VALIDITY_KEY`` constant in the acceptor module."""
+    in its accept hot path; the schema accepts ``list[str]`` for
+    serialisation friendliness and converts at build time.
+    ``validity_key`` defaults to the canonical ``VALIDITY_KEY``
+    constant in the acceptor module."""
 
     kind: Literal["standard"] = "standard"
     required_behavior_keys: list[str] | None = None

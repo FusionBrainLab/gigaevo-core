@@ -32,9 +32,9 @@ _NAME = "heilbron_prompt_coevolution"
 def build() -> ExperimentConfig:
     redis = RedisConfig()
     # The coevolved prompt fetcher targets a paired prompt-evolution
-    # run on Redis DB 6 (YAML example). main_redis_prefix matches
-    # the YAML's ${problem.name} substitution so the prompt run can
-    # write outcome stats back to a stable key namespace.
+    # run on Redis DB 6. ``main_redis_prefix`` matches the problem
+    # name so the prompt run writes outcome stats back to a stable
+    # key namespace.
     prompt_fetcher = GigaEvoArchivePromptFetcherConfig(
         prompt_redis_db=6,
         main_redis_prefix="heilbron",

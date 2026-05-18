@@ -1,9 +1,9 @@
 """Typed configuration schemas.
 
-Pydantic-v2 models with ``extra='forbid'`` and ``frozen=True`` for every
-shape currently expressed as YAML. Each module owns one concern; the
-``experiment`` module assembles them into ``ExperimentConfig`` — the
-single root the CLI loads and validates.
+Pydantic-v2 models with ``extra='forbid'`` and ``frozen=True``. Each
+module owns one concern; the ``experiment`` module assembles them
+into ``ExperimentConfig`` — the single root the CLI loads and
+validates.
 """
 
 from gigaevo.config.schemas._base import FrozenStrictModel

@@ -146,8 +146,8 @@ class AutoPipelineBuilderConfig(_PipelineBuilderBase):
 class ProblemSpecificPipelineBuilderConfig(_PipelineBuilderBase):
     """Builder dispatched by a fully-qualified dotted import path.
 
-    Used by problem-specific pipelines that ship builders inside their
-    problem directories rather than under
+    Used when a problem ships its pipeline builder inside its own
+    directory rather than under
     :mod:`gigaevo.entrypoint.default_pipelines`. The
     ``builder_path`` is the dotted import path of the builder class;
     :meth:`build` imports the module lazily and invokes the class
