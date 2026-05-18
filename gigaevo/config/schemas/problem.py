@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import Field, field_validator
 
-from gigaevo.config.schemas._base import FrozenStrictModel
+from gigaevo.config.schemas._base import FrozenStrictModel, reject_empty_or_cwd_path
 
 if TYPE_CHECKING:
     from gigaevo.problems.context import ProblemContext
@@ -33,12 +33,9 @@ class ProblemConfig(FrozenStrictModel):
     @field_validator("problem_dir")
     @classmethod
     def _problem_dir_not_empty(cls, value: Path) -> Path:
-        if str(value) in ("", "."):
-            raise ValueError(
-                "problem_dir must be a real path; "
-                f"got {value!r} which resolves to the current working directory"
-            )
-        return value
+        # ``problem_dir`` is non-Optional so the helper's None branch is
+        # never reached; the cast keeps the type system honest.
+        return reject_empty_or_cwd_path("problem_dir", value)  # type: ignore[return-value]
 
     def build(self) -> "ProblemContext":
         from gigaevo.problems.context import ProblemContext

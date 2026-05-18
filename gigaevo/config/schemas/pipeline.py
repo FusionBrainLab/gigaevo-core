@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field, field_validator
 
-from gigaevo.config.schemas._base import FrozenStrictModel
+from gigaevo.config.schemas._base import FrozenStrictModel, reject_empty_or_cwd_path
 
 if TYPE_CHECKING:
     from gigaevo.entrypoint.default_pipelines import PipelineBuilder
@@ -186,11 +186,4 @@ class PipelineConfig(FrozenStrictModel):
     @field_validator("prompts_dir")
     @classmethod
     def _prompts_dir_not_empty(cls, value: Path | None) -> Path | None:
-        if value is None:
-            return value
-        if str(value) in ("", "."):
-            raise ValueError(
-                "prompts_dir must be a real path or None; "
-                f"got {value!r} which resolves to the current working directory"
-            )
-        return value
+        return reject_empty_or_cwd_path("prompts_dir", value)

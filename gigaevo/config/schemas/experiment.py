@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
 
-from gigaevo.config.schemas._base import FrozenStrictModel
+from gigaevo.config.schemas._base import FrozenStrictModel, reject_empty_or_cwd_path
 from gigaevo.config.schemas.algorithm import AlgorithmConfig, MultiIslandConfig
 from gigaevo.config.schemas.engine import EngineConfig, SteadyStateEngineConfig
 from gigaevo.config.schemas.llm import BanditRouterConfig, LLMConfig
@@ -39,12 +39,7 @@ class ExperimentConfig(FrozenStrictModel):
     @field_validator("output_dir")
     @classmethod
     def _output_dir_not_empty_or_cwd(cls, value: Path) -> Path:
-        if str(value) in ("", "."):
-            raise ValueError(
-                "output_dir must be a real path; "
-                f"got {value!r} which resolves to the current working directory"
-            )
-        return value
+        return reject_empty_or_cwd_path("output_dir", value)  # type: ignore[return-value]
 
     redis: RedisConfig
     dataplane: DataPlaneSettings

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field, field_validator
 
-from gigaevo.config.schemas._base import FrozenStrictModel
+from gigaevo.config.schemas._base import FrozenStrictModel, reject_empty_or_cwd_path
 
 if TYPE_CHECKING:
     from gigaevo.utils.trackers.core import GenericLogger
@@ -32,14 +32,7 @@ class LoggingSettings(FrozenStrictModel):
     @field_validator("log_dir")
     @classmethod
     def _log_dir_not_empty(cls, value: Path | None) -> Path | None:
-        if value is None:
-            return value
-        if str(value) in ("", "."):
-            raise ValueError(
-                f"log_dir must be a real path or None; got {value!r} "
-                "which resolves to the current working directory"
-            )
-        return value
+        return reject_empty_or_cwd_path("log_dir", value)
 
 
 class TBTrackerConfig(FrozenStrictModel):
