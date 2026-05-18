@@ -55,17 +55,29 @@ python run.py experiments/base.py --engine.max_generations 50
 
 # Change Redis database
 python run.py experiments/base.py --redis.db 5
+```
 
-# Tune LLM kwargs (single-router experiments)
+For fields nested under a discriminated union (`algorithm`, `engine`,
+`llm`, `pipeline.builder`, `prompt_fetcher`) the active variant must be
+named as a subcommand before the override:
+
+```bash
+# Tune the temperature of the first model in an ensemble router
 python run.py experiments/base.py \
+    llm:ensemble-router-config \
     --llm.models.0.temperature 0.7 \
     --llm.models.0.max_tokens 4096
 
-# Stack overrides
+# Stack overrides; subcommands are positional and apply to the
+# preceding union field
 python run.py experiments/full_featured.py \
     --engine.max_generations 50 \
+    pipeline.builder:default-pipeline-builder-config \
     --pipeline.builder.stage_timeout 300
 ```
+
+`python run.py experiments/base.py --help` lists every available
+subcommand and the field paths each one exposes.
 
 Every override is re-validated against the Pydantic schema, including any
 cross-field invariants declared on `ExperimentConfig`. Invalid overrides
