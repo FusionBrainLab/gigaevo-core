@@ -23,10 +23,15 @@ from gigaevo.config.schemas import (
 
 class TestPipelineBuilderConfigs:
     def test_default_construct(self) -> None:
+        from gigaevo.config.defaults import (
+            DEFAULT_DAG_TIMEOUT_S,
+            DEFAULT_STAGE_TIMEOUT_S,
+        )
+
         cfg = DefaultPipelineBuilderConfig()
         assert cfg.kind == "default"
-        assert cfg.dag_timeout == 3600.0
-        assert cfg.stage_timeout == 300.0
+        assert cfg.dag_timeout == DEFAULT_DAG_TIMEOUT_S
+        assert cfg.stage_timeout == DEFAULT_STAGE_TIMEOUT_S
 
     def test_context_construct(self) -> None:
         cfg = ContextPipelineBuilderConfig(dag_timeout=1800.0)

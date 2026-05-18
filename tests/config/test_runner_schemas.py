@@ -17,11 +17,11 @@ from gigaevo.config.schemas import DAGRunnerConfig
 class TestDAGRunnerConfig:
     def test_defaults(self) -> None:
         cfg = DAGRunnerConfig()
-        assert cfg.poll_interval == 0.5
-        assert cfg.max_concurrent_dags == 8
+        assert cfg.poll_interval == DEFAULT_RUNNER_POLL_INTERVAL_S
+        assert cfg.max_concurrent_dags == DEFAULT_MAX_CONCURRENT_DAGS
         assert cfg.prefetch_factor == 8
         assert cfg.metrics_collection_interval == 1.0
-        assert cfg.dag_timeout == 3600.0
+        assert cfg.dag_timeout == DEFAULT_DAG_TIMEOUT_S
 
     def test_extra_forbidden(self) -> None:
         with pytest.raises(ValidationError):

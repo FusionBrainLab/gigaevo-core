@@ -298,7 +298,11 @@ class MultiIslandConfig(FrozenStrictModel):
     # is selected; ``min_length=2`` still rejects an empty list at
     # validation time, so the default is unreachable in a real run.
     islands: list[IslandConfig] = Field(default_factory=list, min_length=2)
-    migration_interval: int = Field(default=50, ge=1)
+    # ``migration_interval=25`` matches the shipped preset value in
+    # ``gigaevo.config.defaults.DEFAULT_MIGRATION_INTERVAL`` so callers
+    # that instantiate :class:`MultiIslandConfig` directly observe the
+    # same cadence the preset builder would have produced.
+    migration_interval: int = Field(default=25, ge=1)
     max_migrants_per_island: int = Field(default=5, ge=1)
     enable_migration: bool = True
 

@@ -75,8 +75,8 @@ class TestProblemSpecificPipelineBuilder:
             builder_path="problems.chains.hotpotqa.static.pipeline.ReflectivePipelineBuilder"
         )
         assert cfg.kind == "problem_specific"
-        assert cfg.dag_timeout == 3600.0
-        assert cfg.stage_timeout == 300.0
+        assert cfg.dag_timeout == DEFAULT_DAG_TIMEOUT_S
+        assert cfg.stage_timeout == DEFAULT_STAGE_TIMEOUT_S
 
     def test_empty_builder_path_rejected(self) -> None:
         with pytest.raises(ValidationError):

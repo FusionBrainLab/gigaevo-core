@@ -181,6 +181,10 @@ class TestBuildObjectGraph:
     def test_runtime_runner_config_built_from_schema(
         self, problem_dir: Path
     ) -> None:
+        from gigaevo.config.defaults import (
+            DEFAULT_MAX_CONCURRENT_DAGS,
+            DEFAULT_RUNNER_POLL_INTERVAL_S,
+        )
         from gigaevo.runner.dag_runner import (
             DagRunnerConfig as RuntimeDagRunnerConfig,
         )
@@ -190,8 +194,8 @@ class TestBuildObjectGraph:
         runner_cfg = graph["runtime_runner_config"]
         assert isinstance(runner_cfg, RuntimeDagRunnerConfig)
         # Default schema values must propagate.
-        assert runner_cfg.poll_interval == 0.5
-        assert runner_cfg.max_concurrent_dags == 8
+        assert runner_cfg.poll_interval == DEFAULT_RUNNER_POLL_INTERVAL_S
+        assert runner_cfg.max_concurrent_dags == DEFAULT_MAX_CONCURRENT_DAGS
 
     def test_redis_storage_uses_key_prefix_from_dataplane(
         self, problem_dir: Path

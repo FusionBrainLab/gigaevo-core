@@ -89,11 +89,18 @@ AcceptorConfig = Annotated[
 
 class _EngineConfigBase(FrozenStrictModel):
     """Common engine knobs shared by the generational and steady-state
-    variants. Mirrors :class:`gigaevo.evolution.engine.config.EngineConfig`."""
+    variants. Mirrors :class:`gigaevo.evolution.engine.config.EngineConfig`.
+
+    The ``max_elites_per_generation`` and ``max_mutations_per_generation``
+    defaults agree with the preset constants
+    :data:`gigaevo.config.defaults.DEFAULT_MAX_ELITES_PER_GENERATION` and
+    :data:`gigaevo.config.defaults.DEFAULT_MAX_MUTATIONS_PER_GENERATION`
+    so direct schema construction yields the same shape as
+    :func:`gigaevo.config.engine_presets.build_generational`."""
 
     loop_interval: float = Field(default=1.0, gt=0.0)
-    max_elites_per_generation: int = Field(default=20, gt=0)
-    max_mutations_per_generation: int = Field(default=50, gt=0)
+    max_elites_per_generation: int = Field(default=5, gt=0)
+    max_mutations_per_generation: int = Field(default=8, gt=0)
     metrics_collection_interval: float = Field(default=1.0, gt=0.0)
     max_generations: int | None = Field(default=None, ge=1)
     parent_selector: ParentSelectorConfig = Field(
@@ -135,7 +142,10 @@ class SteadyStateEngineConfig(_EngineConfigBase):
     complete."""
 
     kind: Literal["steady_state"] = "steady_state"
-    max_in_flight: int = Field(default=5, gt=0)
+    # ``max_in_flight=8`` mirrors the
+    # ``gigaevo.config.engine_presets._STEADY_STATE_MAX_IN_FLIGHT``
+    # preset constant tuned for ~3-4 GPU servers with 4 concurrent runs.
+    max_in_flight: int = Field(default=8, gt=0)
 
     def build_runtime_config(
         self, *, required_behavior_keys: list[str]

@@ -23,13 +23,20 @@ class DAGRunnerConfig(FrozenStrictModel):
 
     The poll-interval bounds match the runtime validator: values
     under 0.01s would saturate CPU, and over 60s starve the queue;
-    values over 30s emit a runtime warning about responsiveness."""
+    values over 30s emit a runtime warning about responsiveness.
 
-    poll_interval: float = Field(default=0.5, ge=0.01, le=60.0)
-    max_concurrent_dags: int = Field(default=8, gt=0, le=1000)
+    The ``poll_interval``, ``max_concurrent_dags`` and ``dag_timeout``
+    defaults agree with
+    :data:`gigaevo.config.defaults.DEFAULT_RUNNER_POLL_INTERVAL_S`,
+    :data:`gigaevo.config.defaults.DEFAULT_MAX_CONCURRENT_DAGS` and
+    :data:`gigaevo.config.defaults.DEFAULT_DAG_TIMEOUT_S` so direct
+    schema construction matches :func:`build_default_runner`."""
+
+    poll_interval: float = Field(default=5.0, ge=0.01, le=60.0)
+    max_concurrent_dags: int = Field(default=10, gt=0, le=1000)
     prefetch_factor: int = Field(default=8, ge=1, le=64)
     metrics_collection_interval: float = Field(default=1.0, gt=0.0)
-    dag_timeout: float = Field(default=3600.0, gt=0.0)
+    dag_timeout: float = Field(default=7200.0, gt=0.0)
 
     def build(self) -> RuntimeDagRunnerConfig:
         from gigaevo.runner.dag_runner import DagRunnerConfig

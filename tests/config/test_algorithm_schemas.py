@@ -223,9 +223,11 @@ class TestSingleAndMultiIsland:
             )
 
     def test_multi_island_construct(self) -> None:
+        from gigaevo.config.defaults import DEFAULT_MIGRATION_INTERVAL
+
         cfg = MultiIslandConfig(islands=[_island("a"), _island("b")])
         assert cfg.kind == "multi_island"
-        assert cfg.migration_interval == 50
+        assert cfg.migration_interval == DEFAULT_MIGRATION_INTERVAL
 
     def test_algorithm_union_round_trip(self) -> None:
         cfg = SingleIslandConfig(island=_island())

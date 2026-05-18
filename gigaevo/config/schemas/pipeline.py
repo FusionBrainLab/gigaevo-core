@@ -16,10 +16,15 @@ class _PipelineBuilderBase(FrozenStrictModel):
     """Common pipeline-builder knobs. ``dag_timeout`` caps the entire
     program-evaluation DAG; per-stage timeouts are owned by individual
     stages or default to the builder's ``stage_timeout`` when the
-    runtime builder consults it."""
+    runtime builder consults it.
 
-    dag_timeout: float = Field(default=3600.0, gt=0.0)
-    stage_timeout: float = Field(default=300.0, gt=0.0)
+    The ``dag_timeout`` and ``stage_timeout`` defaults agree with
+    :data:`gigaevo.config.defaults.DEFAULT_DAG_TIMEOUT_S` and
+    :data:`gigaevo.config.defaults.DEFAULT_STAGE_TIMEOUT_S` so direct
+    schema construction matches the pipeline preset builders."""
+
+    dag_timeout: float = Field(default=7200.0, gt=0.0)
+    stage_timeout: float = Field(default=2400.0, gt=0.0)
 
 
 class DefaultPipelineBuilderConfig(_PipelineBuilderBase):

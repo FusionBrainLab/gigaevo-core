@@ -91,11 +91,12 @@ class TestExperimentRoot:
         """The DAGRunnerConfig default_factory means experiment files
         that don't pin runner knobs still get a fully-validated
         runner subtree."""
+        from gigaevo.config.defaults import DEFAULT_RUNNER_POLL_INTERVAL_S
         from gigaevo.config.schemas import DAGRunnerConfig
 
         cfg = ExperimentConfig(**_kwargs())
         assert isinstance(cfg.runner, DAGRunnerConfig)
-        assert cfg.runner.poll_interval == 0.5
+        assert cfg.runner.poll_interval == DEFAULT_RUNNER_POLL_INTERVAL_S
 
     def test_runner_override_propagates(self) -> None:
         from gigaevo.config.schemas import DAGRunnerConfig
