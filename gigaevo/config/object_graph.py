@@ -30,16 +30,23 @@ from gigaevo.config.schemas.experiment import ExperimentConfig
 from gigaevo.config.schemas.llm import BanditRouterConfig
 
 if TYPE_CHECKING:
-    pass
+    from gigaevo.problems.context import ProblemContext
 
 
 def _resolve_bandit_keys(
     cfg: ExperimentConfig,
+    problem_ctx: "ProblemContext | None" = None,
 ) -> tuple[str, bool]:
     """The bandit router needs a fitness key + direction; we resolve
     them from the problem's MetricsContext, falling back to the
-    problem-side overrides on :class:`ProblemConfig` when set."""
-    problem_ctx = cfg.problem.build()
+    problem-side overrides on :class:`ProblemConfig` when set.
+
+    ``problem_ctx`` may be passed by callers that already constructed
+    one so the underlying ``metrics.yaml`` is read at most once per
+    graph build.
+    """
+    if problem_ctx is None:
+        problem_ctx = cfg.problem.build()
     metrics_ctx = problem_ctx.metrics_context
     primary_key = cfg.problem.primary_metric or metrics_ctx.get_primary_key()
     if cfg.problem.higher_is_better is not None:
@@ -102,7 +109,9 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
     redis_storage = RedisProgramStorage(redis_storage_config)
 
     problem_context = cfg.problem.build()
-    primary_metric, higher_is_better = _resolve_bandit_keys(cfg)
+    primary_metric, higher_is_better = _resolve_bandit_keys(
+        cfg, problem_ctx=problem_context
+    )
     behavior_keys = _required_behavior_keys(cfg)
 
     if isinstance(cfg.llm, BanditRouterConfig):

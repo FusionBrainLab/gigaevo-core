@@ -76,7 +76,7 @@ class TestProblemSpecificPipelineBuilder:
         )
         assert cfg.kind == "problem_specific"
         assert cfg.dag_timeout == DEFAULT_DAG_TIMEOUT_S
-        assert cfg.stage_timeout == DEFAULT_STAGE_TIMEOUT_S
+        assert "stage_timeout" not in ProblemSpecificPipelineBuilderConfig.model_fields
 
     def test_empty_builder_path_rejected(self) -> None:
         with pytest.raises(ValidationError):

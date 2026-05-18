@@ -66,6 +66,33 @@ class TestPipelineBuilderConfigs:
         with pytest.raises(ValidationError):
             DefaultPipelineBuilderConfig(stage_timeout=0.0)
 
+    def test_stage_timeout_only_on_default_and_auto(self) -> None:
+        """The runtime ContextPipelineBuilder / AlgoTune / CMA / Optuna
+        / structural-metrics / problem-specific builders do not accept
+        a ``stage_timeout`` argument. The schema mirrors that contract:
+        ``stage_timeout`` lives on Default and Auto only so a typo
+        cannot silently accept a value that the runtime would drop."""
+        assert "stage_timeout" in DefaultPipelineBuilderConfig.model_fields
+        assert "stage_timeout" in AutoPipelineBuilderConfig.model_fields
+        for variant in (
+            ContextPipelineBuilderConfig,
+            AlgoTuneSpeedPipelineBuilderConfig,
+            CMAOptPipelineBuilderConfig,
+            OptunaOptPipelineBuilderConfig,
+            StructuralMetricsPipelineBuilderConfig,
+            ProblemSpecificPipelineBuilderConfig,
+        ):
+            assert "stage_timeout" not in variant.model_fields, (
+                f"{variant.__name__} must not declare stage_timeout; "
+                "the runtime backing ignores it"
+            )
+
+    def test_stage_timeout_rejected_on_context_variant(self) -> None:
+        """Defense-in-depth: ``extra='forbid'`` must reject the field
+        even when callers try to pass it explicitly."""
+        with pytest.raises(ValidationError):
+            ContextPipelineBuilderConfig(stage_timeout=300.0)  # type: ignore[call-arg]
+
     def test_extra_forbidden(self) -> None:
         with pytest.raises(ValidationError):
             DefaultPipelineBuilderConfig(da_timeout=10.0)  # type: ignore[call-arg]

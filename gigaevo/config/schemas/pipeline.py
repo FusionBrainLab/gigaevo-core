@@ -13,26 +13,33 @@ if TYPE_CHECKING:
 
 
 class _PipelineBuilderBase(FrozenStrictModel):
-    """Common pipeline-builder knobs. ``dag_timeout`` caps the entire
-    program-evaluation DAG; per-stage timeouts are owned by individual
-    stages or default to the builder's ``stage_timeout`` when the
-    runtime builder consults it.
+    """Common pipeline-builder knob. ``dag_timeout`` caps the entire
+    program-evaluation DAG; per-stage timeouts are owned either by
+    the individual stages or by the variants whose runtime builder
+    accepts a separate ``stage_timeout`` argument.
 
-    The ``dag_timeout`` and ``stage_timeout`` defaults agree with
-    :data:`gigaevo.config.defaults.DEFAULT_DAG_TIMEOUT_S` and
-    :data:`gigaevo.config.defaults.DEFAULT_STAGE_TIMEOUT_S` so direct
+    The ``dag_timeout`` default agrees with
+    :data:`gigaevo.config.defaults.DEFAULT_DAG_TIMEOUT_S` so direct
     schema construction matches the pipeline preset builders."""
 
     dag_timeout: float = Field(default=7200.0, gt=0.0)
-    stage_timeout: float = Field(default=2400.0, gt=0.0)
 
 
 class DefaultPipelineBuilderConfig(_PipelineBuilderBase):
     """Vanilla pipeline: validate, call program function, call validator,
     fetch metrics, merge. No problem-context stage. Used by problems
-    whose evaluator does not need an injected context dict."""
+    whose evaluator does not need an injected context dict.
+
+    ``stage_timeout`` lives on this variant (and on
+    :class:`AutoPipelineBuilderConfig`) because the runtime
+    ``DefaultPipelineBuilder`` is the only builder whose constructor
+    accepts a ``stage_timeout`` argument; the other variants delegate
+    to their own per-stage budgets and would silently drop the value
+    if it appeared on the base. The default matches
+    :data:`gigaevo.config.defaults.DEFAULT_STAGE_TIMEOUT_S`."""
 
     kind: Literal["default"] = "default"
+    stage_timeout: float = Field(default=2400.0, gt=0.0)
 
     def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
@@ -113,9 +120,15 @@ class StructuralMetricsPipelineBuilderConfig(_PipelineBuilderBase):
 
 class AutoPipelineBuilderConfig(_PipelineBuilderBase):
     """Picks ContextPipelineBuilder when the problem declares
-    is_contextual, DefaultPipelineBuilder otherwise."""
+    is_contextual, DefaultPipelineBuilder otherwise.
+
+    ``stage_timeout`` is consulted only on the Default branch — the
+    runtime ContextPipelineBuilder constructor does not accept a
+    ``stage_timeout`` argument and reuses the default. The default
+    matches :data:`gigaevo.config.defaults.DEFAULT_STAGE_TIMEOUT_S`."""
 
     kind: Literal["auto"] = "auto"
+    stage_timeout: float = Field(default=2400.0, gt=0.0)
 
     def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import (
@@ -133,9 +146,9 @@ class AutoPipelineBuilderConfig(_PipelineBuilderBase):
 class ProblemSpecificPipelineBuilderConfig(_PipelineBuilderBase):
     """Builder dispatched by a fully-qualified dotted import path.
 
-    Used by the hotpotqa_* and hover_* pipeline YAMLs that ship
-    pipeline builders inside their problem directories rather than
-    under :mod:`gigaevo.entrypoint.default_pipelines`. The
+    Used by problem-specific pipelines that ship builders inside their
+    problem directories rather than under
+    :mod:`gigaevo.entrypoint.default_pipelines`. The
     ``builder_path`` is the dotted import path of the builder class;
     :meth:`build` imports the module lazily and invokes the class
     with ``(ctx, dag_timeout=...)``.

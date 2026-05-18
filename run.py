@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 import sys
@@ -102,19 +103,29 @@ def _dump_resolved_config(cfg: ExperimentConfig) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     config_path = out_dir / "config.json"
     payload = cfg.model_dump_json(indent=2)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=out_dir,
-        prefix=".config.",
-        suffix=".json.tmp",
-        delete=False,
-    ) as tmp:
-        tmp.write(payload)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp_path = Path(tmp.name)
-    os.replace(tmp_path, config_path)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=out_dir,
+            prefix=".config.",
+            suffix=".json.tmp",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, config_path)
+        tmp_path = None
+    finally:
+        # On any failure between tempfile creation and replace, the
+        # ``.config.*.tmp`` entry would otherwise accumulate in the
+        # output directory across retries.
+        if tmp_path is not None:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
     logger.info(
         "Resolved config dumped to {} (experiment_id={})",
         config_path,
