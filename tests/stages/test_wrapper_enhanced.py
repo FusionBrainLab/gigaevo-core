@@ -471,8 +471,7 @@ def _make_mock_pool(worker_proc: MagicMock | None = None) -> MagicMock:
 
 class TestRunExecRunnerFallback:
     """wrapper.py L333-399: When the worker pool path fails (timeout, broken pipe),
-    run_exec_runner falls back to a one-shot subprocess. This entire fallback
-    path previously had zero tests.
+    ``run_exec_runner`` falls back to a one-shot subprocess.
 
     All tests use a fully mocked WorkerPool — no real subprocesses are spawned."""
 

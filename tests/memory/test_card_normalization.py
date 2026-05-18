@@ -389,7 +389,7 @@ class TestNormalizeEdgeCases:
         assert isinstance(result.aliases[0], dict)
 
     def test_aliases_mixed_types(self):
-        """Aliases can mix strings and dicts (legacy + ideas_tracker)."""
+        """Aliases accept a mixed list of strings and dict entries."""
         aliases = ["simple-alias", {"exp1-prog1": {"description": "old"}}]
         result = normalize_memory_card({"id": "idea-2", "aliases": aliases})
         assert result.aliases == aliases

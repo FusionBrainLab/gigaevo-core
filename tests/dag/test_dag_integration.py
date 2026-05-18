@@ -626,22 +626,18 @@ class TestSkipResultsPersistedInRedis:
 
 
 # ===================================================================
-# Category G: Bare Expression Fix (Audit Finding #3)
+# Category G: Stage-output value assertion after rerun
 # ===================================================================
-# The bare expression `prog.stage_results["b"].output.value` on line 135
-# of the original file is addressed by adding a proper assertion test below.
-# The original code is left untouched per the "only ADD" rule, but this test
-# explicitly asserts the value that was previously an unchecked bare expression.
 
 
 class TestBareExpressionRegression:
-    """Audit Finding #3: Bare expression that should be an assertion."""
+    """Assert ``stage_results["b"].output.value`` after an input-driven rerun."""
 
     async def test_second_run_after_input_change_b_output_value_verified(
         self, state_manager, fakeredis_storage, make_program
     ):
-        """Replicate the scenario from test_second_run_after_input_change_reruns_affected_stages
-        but with an explicit assertion on the value that was a bare expression."""
+        """Asserts the explicit ``b`` output value when an upstream input change
+        forces ``b`` and ``c`` to rerun."""
         edges = [
             DataFlowEdge.create("a", "b", "data"),
             DataFlowEdge.create("b", "c", "data"),

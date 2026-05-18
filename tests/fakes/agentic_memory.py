@@ -435,10 +435,9 @@ def make_test_memory(
     tmp_path: Any,
     **overrides: Any,
 ) -> Any:
-    """Create an AmemGamMemory with MemoryConfig for tests.
+    """Create an AmemGamMemory backed by a populated MemoryConfig for tests.
 
-    Accepts the same overrides as legacy kwargs but builds a proper
-    MemoryConfig internally.
+    Keyword overrides are folded into the MemoryConfig built internally.
 
     Common overrides:
         search_limit, rebuild_interval, enable_llm_synthesis,

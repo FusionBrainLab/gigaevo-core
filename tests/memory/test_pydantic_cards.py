@@ -48,7 +48,7 @@ class TestProgramCard:
 
 
 class TestMemoryCardStrategyFlexible:
-    """Strategy was previously Literal — now str for flexibility."""
+    """``MemoryCard.strategy`` accepts any string, including empty."""
 
     def test_any_string_strategy(self):
         card = MemoryCard(id="c1", strategy="exploration")
