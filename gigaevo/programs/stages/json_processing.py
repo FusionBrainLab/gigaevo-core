@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import types
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from loguru import logger
 
@@ -11,9 +11,6 @@ from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.common import AnyContainer, Box, StringContainer
 from gigaevo.programs.stages.stage_registry import StageRegistry
-
-K = TypeVar("K")
-V = TypeVar("V")
 
 
 class MergeDictInputs[K, V](StageIO):

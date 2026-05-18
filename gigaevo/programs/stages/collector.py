@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, TypeVar
+from typing import Any
 
 from loguru import logger
 from pydantic import Field
@@ -20,8 +20,6 @@ from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import StringList
 from gigaevo.programs.stages.stage_registry import StageRegistry
-
-T = TypeVar("T")
 
 
 class RelatedCollectorBase(Stage):
