@@ -19,12 +19,27 @@ Example usage:
 """
 
 import argparse
+import re
 import subprocess
 import sys
 import textwrap
 import time
 
 import redis as redis_lib
+
+# Matches a Redis DB override on a ``run.py`` command line in both forms
+# emitted by the tyro override layer: ``--redis.db=N`` and the
+# space-separated ``--redis.db N``. Capture group 1 is the integer DB
+# index as a string.
+_REDIS_DB_RE = re.compile(r"--redis\.db(?:=|\s+)(\d+)")
+
+
+def _line_mentions_db(line: str, db: int) -> bool:
+    return any(int(m) == db for m in _REDIS_DB_RE.findall(line))
+
+
+def _line_mentions_any_db(line: str) -> bool:
+    return _REDIS_DB_RE.search(line) is not None
 
 
 def _find_run_pids_for_dbs(target_dbs: list[int]) -> set[int]:
@@ -35,15 +50,14 @@ def _find_run_pids_for_dbs(target_dbs: list[int]) -> set[int]:
         for line in result.stdout.splitlines():
             if "run.py" not in line or "grep" in line:
                 continue
-            for db in target_dbs:
-                if f"redis.db={db}" in line:
-                    parts = line.split()
-                    if len(parts) > 1:
-                        try:
-                            pids.add(int(parts[1]))
-                        except ValueError:
-                            pass
-                    break
+            if not any(_line_mentions_db(line, db) for db in target_dbs):
+                continue
+            parts = line.split()
+            if len(parts) > 1:
+                try:
+                    pids.add(int(parts[1]))
+                except ValueError:
+                    pass
         return pids
     except Exception:
         return set()
@@ -55,13 +69,16 @@ def _find_all_run_pids() -> set[int]:
         result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
         pids: set[int] = set()
         for line in result.stdout.splitlines():
-            if "run.py" in line and "redis.db=" in line and "grep" not in line:
-                parts = line.split()
-                if len(parts) > 1:
-                    try:
-                        pids.add(int(parts[1]))
-                    except ValueError:
-                        pass
+            if "run.py" not in line or "grep" in line:
+                continue
+            if not _line_mentions_any_db(line):
+                continue
+            parts = line.split()
+            if len(parts) > 1:
+                try:
+                    pids.add(int(parts[1]))
+                except ValueError:
+                    pass
         return pids
     except Exception:
         return set()
