@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Final
 
 from pydantic import Field, field_validator, model_validator
 
@@ -15,8 +16,7 @@ from gigaevo.config.schemas.prompt import PromptFetcherConfig
 from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
 from gigaevo.config.schemas.runner import DAGRunnerConfig
 
-
-_KEY_PREFIX_TEMPLATE = "gigaevo:{name}"
+_KEY_PREFIX_TEMPLATE: Final[str] = "gigaevo:{name}"
 
 
 class ExperimentConfig(FrozenStrictModel):
