@@ -117,6 +117,26 @@ class TestLoadExperimentModule:
         # the None return, but load_experiment_module is signature-only
         load_experiment_module(exp)
 
+    def test_malformed_experiment_wrapped_in_module_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A SyntaxError or ImportError raised by the experiment file
+        must surface as ``ExperimentModuleError`` so the CLI surfaces
+        a single typed exception type instead of leaking the raw
+        traceback."""
+        exp = tmp_path / "syntax_error.py"
+        exp.write_text("def build(:\n")
+        with pytest.raises(ExperimentModuleError, match="raised during import"):
+            load_experiment_module(exp)
+
+    def test_top_level_exception_wrapped_in_module_error(
+        self, tmp_path: Path
+    ) -> None:
+        exp = tmp_path / "runtime_error.py"
+        exp.write_text("raise ValueError('boom at import')\n")
+        with pytest.raises(ExperimentModuleError, match="ValueError"):
+            load_experiment_module(exp)
+
     def test_two_experiments_load_under_distinct_names(
         self, tmp_path: Path
     ) -> None:

@@ -37,9 +37,10 @@ def load_experiment_module(path: Path | str) -> ModuleType:
 
     Raises:
         FileNotFoundError: when ``path`` does not exist.
-        ExperimentModuleError: when the spec / loader resolution fails
-            or when ``build`` is missing, not callable, or has the wrong
-            signature.
+        ExperimentModuleError: when the spec / loader resolution
+            fails, when the experiment module raises during top-level
+            execution, or when ``build`` is missing, not callable, or
+            has the wrong signature.
     """
     resolved = Path(path).resolve()
     if not resolved.exists():
@@ -58,7 +59,13 @@ def load_experiment_module(path: Path | str) -> ModuleType:
         )
 
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise ExperimentModuleError(
+            f"experiment module {resolved} raised during import: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
     build = getattr(module, "build", None)
     if build is None or not callable(build):
