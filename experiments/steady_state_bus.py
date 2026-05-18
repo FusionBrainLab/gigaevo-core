@@ -1,11 +1,10 @@
-"""Steady-state + bus experiment.
+"""Bus migration experiment.
 
-Combines continuous mutation / evaluation interleaving with the
-cross-run migration bus. This is the canonical production shape for
-multi-GPU, multi-run setups.
-
-The bus engine variant carries the steady-state ``max_in_flight``
-value (hardcoded to 8 for the steady-state path).
+Composes the cross-run migration bus with a generational engine
+backbone. The bus engine schema variant does not carry a
+``max_in_flight`` knob — steady-state in-flight queueing is owned
+by ``SteadyStateEngineConfig`` and is not composable with the bus
+variant on the schema as it stands.
 """
 
 from __future__ import annotations
