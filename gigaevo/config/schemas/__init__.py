@@ -34,17 +34,7 @@ from gigaevo.config.schemas.engine import (
     StandardAcceptorConfig,
     SteadyStateEngineConfig,
 )
-from gigaevo.config.schemas.pipeline import (
-    AlgoTuneSpeedPipelineBuilderConfig,
-    AutoPipelineBuilderConfig,
-    CMAOptPipelineBuilderConfig,
-    ContextPipelineBuilderConfig,
-    DefaultPipelineBuilderConfig,
-    OptunaOptPipelineBuilderConfig,
-    PipelineBuilderConfig,
-    PipelineConfig,
-    StructuralMetricsPipelineBuilderConfig,
-)
+from gigaevo.config.schemas.experiment import ExperimentConfig
 from gigaevo.config.schemas.llm import (
     BanditRouterConfig,
     ChatOpenAIConfig,
@@ -66,26 +56,36 @@ from gigaevo.config.schemas.migration_bus import (
     RingTopologyConfig,
     TopologyConfig,
 )
+from gigaevo.config.schemas.pipeline import (
+    AlgoTuneSpeedPipelineBuilderConfig,
+    AutoPipelineBuilderConfig,
+    CMAOptPipelineBuilderConfig,
+    ContextPipelineBuilderConfig,
+    DefaultPipelineBuilderConfig,
+    OptunaOptPipelineBuilderConfig,
+    PipelineBuilderConfig,
+    PipelineConfig,
+    StructuralMetricsPipelineBuilderConfig,
+)
 from gigaevo.config.schemas.problem import ProblemConfig
-from gigaevo.config.schemas.runner import DAGRunnerConfig
 from gigaevo.config.schemas.prompt import (
     FixedDirPromptFetcherConfig,
     GigaEvoArchivePromptFetcherConfig,
     PromptFetcherConfig,
 )
+from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
+from gigaevo.config.schemas.runner import DAGRunnerConfig
 from gigaevo.config.schemas.scheduling import (
     ChainFeatureExtractorConfig,
     CodeFeatureExtractorConfig,
-    FIFOConfig,
     FeatureExtractorConfig,
+    FIFOConfig,
     LPTConfig,
     PredictorConfig,
     RidgePredictorConfig,
     SchedulingConfig,
     SimpleHeuristicPredictorConfig,
 )
-from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
-from gigaevo.config.schemas.experiment import ExperimentConfig
 
 __all__ = [
     "AcceptorConfig",

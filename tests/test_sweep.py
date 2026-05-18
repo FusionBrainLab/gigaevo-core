@@ -15,9 +15,10 @@ sweep. The tests below pin the structural promises:
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 from textwrap import dedent
 
 import pytest
@@ -222,3 +223,100 @@ class TestSweepShape:
 
         assert result.returncode != 0
         assert "list[list[str]]" in result.stderr
+
+    def test_empty_sweep_succeeds(self, tmp_path: Path) -> None:
+        """An empty sweep is a no-op success: nothing to fail, nothing
+        to do, exit code zero."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = _write_sweep(tmp_path / "sweep.py", [])
+
+        result = _invoke_sweep(experiment, sweep)
+
+        assert result.returncode == 0, result.stderr
+        assert "0/0" in result.stdout
+        assert not list(out_dir.iterdir())
+
+    def test_missing_experiment_file_fails_fast(self, tmp_path: Path) -> None:
+        """A non-existent experiment path is rejected before any
+        subprocess is spawned. No output dirs are created."""
+        sweep = _write_sweep(
+            tmp_path / "sweep.py", [["--dry-run", "--seed", "1"]]
+        )
+        missing = tmp_path / "does_not_exist.py"
+
+        result = _invoke_sweep(missing, sweep)
+
+        assert result.returncode == 2
+        assert "experiment file not found" in result.stderr
+
+    def test_missing_sweep_file_fails_fast(self, tmp_path: Path) -> None:
+        """A non-existent sweep path is rejected with a typed message."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        missing = tmp_path / "no_sweep_here.py"
+
+        result = _invoke_sweep(experiment, missing)
+
+        assert result.returncode == 2
+        assert "sweep file not found" in result.stderr
+
+    def test_non_py_sweep_file_fails_fast(self, tmp_path: Path) -> None:
+        """The sweep loader rejects non-``.py`` paths before executing
+        arbitrary user code."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        wrong_ext = tmp_path / "sweep.txt"
+        wrong_ext.write_text(
+            "def define_sweep():\n    return [['--seed', '1']]\n"
+        )
+
+        result = _invoke_sweep(experiment, wrong_ext)
+
+        assert result.returncode == 2
+        assert ".py extension" in result.stderr
+
+
+class TestSweepFailureSurface:
+    def test_all_failing_runs_report_non_zero(self, tmp_path: Path) -> None:
+        """Every run is invalid; the aggregate exit code is 1 and the
+        stderr summary spells out the failure count."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = _write_sweep(
+            tmp_path / "sweep.py",
+            [
+                ["--dry-run", "--seed", "not-an-int"],
+                ["--dry-run", "--seed", "also-not-int"],
+            ],
+        )
+
+        result = _invoke_sweep(experiment, sweep)
+
+        assert result.returncode == 1, result.stdout
+        assert "2/2 runs failed" in result.stderr
+
+    def test_parallel_exceeding_cpu_count_still_runs(
+        self, tmp_path: Path
+    ) -> None:
+        """``--parallel`` larger than the available CPU count is not an
+        error; ``ProcessPoolExecutor`` caps the active workers itself
+        and the sweep still completes."""
+        out_dir = tmp_path / "outputs"
+        out_dir.mkdir()
+        experiment = _write_experiment(tmp_path / "exp.py", out_dir)
+        sweep = _write_sweep(
+            tmp_path / "sweep.py",
+            [["--dry-run", "--seed", str(seed)] for seed in range(2)],
+        )
+
+        oversized = max(64, (os.cpu_count() or 1) * 8)
+        result = _invoke_sweep(experiment, sweep, parallel=oversized)
+
+        assert result.returncode == 0, result.stderr
+        run_dirs = sorted(p for p in out_dir.iterdir() if p.is_dir())
+        assert len(run_dirs) == 2

@@ -28,7 +28,7 @@ class FixedDirPromptFetcherConfig(FrozenStrictModel):
     def _prompts_dir_not_empty(cls, value: Path | None) -> Path | None:
         return reject_empty_or_cwd_path("prompts_dir", value)
 
-    def build(self) -> "PromptFetcher":
+    def build(self) -> PromptFetcher:
         from gigaevo.prompts.fetcher import FixedDirPromptFetcher
 
         return FixedDirPromptFetcher(prompts_dir=self.prompts_dir)
@@ -67,7 +67,7 @@ class GigaEvoArchivePromptFetcherConfig(FrozenStrictModel):
     def _fallback_dir_not_empty(cls, value: Path | None) -> Path | None:
         return reject_empty_or_cwd_path("fallback_prompts_dir", value)
 
-    def build(self) -> "PromptFetcher":
+    def build(self) -> PromptFetcher:
         from gigaevo.prompts.fetcher import GigaEvoArchivePromptFetcher
 
         return GigaEvoArchivePromptFetcher(

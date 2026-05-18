@@ -31,7 +31,7 @@ class DAGRunnerConfig(FrozenStrictModel):
     metrics_collection_interval: float = Field(default=1.0, gt=0.0)
     dag_timeout: float = Field(default=3600.0, gt=0.0)
 
-    def build(self) -> "RuntimeDagRunnerConfig":
+    def build(self) -> RuntimeDagRunnerConfig:
         from gigaevo.runner.dag_runner import DagRunnerConfig
 
         return DagRunnerConfig(

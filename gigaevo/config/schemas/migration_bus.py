@@ -20,7 +20,7 @@ class BusTopologyConfig(FrozenStrictModel):
 
     kind: Literal["bus"] = "bus"
 
-    def build(self) -> "Topology":
+    def build(self) -> Topology:
         from gigaevo.evolution.bus.topology import BusTopology
 
         return BusTopology()
@@ -35,14 +35,14 @@ class RingTopologyConfig(FrozenStrictModel):
     run_ids: list[str] = Field(min_length=2)
 
     @model_validator(mode="after")
-    def _run_ids_unique(self) -> "RingTopologyConfig":
+    def _run_ids_unique(self) -> RingTopologyConfig:
         if len(set(self.run_ids)) != len(self.run_ids):
             raise ValueError(
                 f"RingTopologyConfig.run_ids must be unique; got {self.run_ids}"
             )
         return self
 
-    def build(self) -> "Topology":
+    def build(self) -> Topology:
         from gigaevo.evolution.bus.topology import RingTopology
 
         return RingTopology(run_ids=list(self.run_ids))
@@ -69,7 +69,7 @@ class RedisStreamTransportConfig(FrozenStrictModel):
     claim_ttl: int = Field(default=120, ge=1)
     block_ms: int = Field(default=5000, ge=0)
 
-    def build(self) -> "Transport":
+    def build(self) -> Transport:
         from gigaevo.evolution.bus.transport import RedisStreamTransport
 
         return RedisStreamTransport(
@@ -108,7 +108,7 @@ class MigrationBusConfig(FrozenStrictModel):
     max_consume_per_poll: int = Field(default=20, ge=1)
 
     @model_validator(mode="after")
-    def _run_id_matches_transport(self) -> "MigrationBusConfig":
+    def _run_id_matches_transport(self) -> MigrationBusConfig:
         if self.transport.run_id != self.run_id:
             raise ValueError(
                 f"MigrationBusConfig.run_id ({self.run_id!r}) must equal "
@@ -118,7 +118,7 @@ class MigrationBusConfig(FrozenStrictModel):
         return self
 
     @model_validator(mode="after")
-    def _local_run_in_ring(self) -> "MigrationBusConfig":
+    def _local_run_in_ring(self) -> MigrationBusConfig:
         topology = self.topology
         if isinstance(topology, RingTopologyConfig):
             if self.run_id not in topology.run_ids:
@@ -128,7 +128,7 @@ class MigrationBusConfig(FrozenStrictModel):
                 )
         return self
 
-    def build(self) -> "MigrationNode":
+    def build(self) -> MigrationNode:
         from gigaevo.evolution.bus.node import MigrationNode
 
         return MigrationNode(

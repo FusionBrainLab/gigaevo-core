@@ -19,7 +19,7 @@ class RandomParentSelectorConfig(FrozenStrictModel):
     kind: Literal["random"] = "random"
     num_parents: int = Field(default=1, ge=1)
 
-    def build(self) -> "ParentSelector":
+    def build(self) -> ParentSelector:
         from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
 
         return RandomParentSelector(num_parents=self.num_parents)
@@ -32,7 +32,7 @@ class AllCombinationsParentSelectorConfig(FrozenStrictModel):
     kind: Literal["all_combinations"] = "all_combinations"
     num_parents: int = Field(default=1, ge=1)
 
-    def build(self) -> "ParentSelector":
+    def build(self) -> ParentSelector:
         from gigaevo.evolution.mutation.parent_selector import (
             AllCombinationsParentSelector,
         )
@@ -64,7 +64,7 @@ class StandardAcceptorConfig(FrozenStrictModel):
 
     def build(
         self, *, required_behavior_keys: list[str]
-    ) -> "ProgramEvolutionAcceptor":
+    ) -> ProgramEvolutionAcceptor:
         from gigaevo.evolution.engine.acceptor import (
             VALIDITY_KEY,
             StandardEvolutionAcceptor,
@@ -113,7 +113,7 @@ class GenerationalEngineConfig(_EngineConfigBase):
 
     def build_runtime_config(
         self, *, required_behavior_keys: list[str]
-    ) -> "RuntimeEngineConfig":
+    ) -> RuntimeEngineConfig:
         from gigaevo.evolution.engine.config import EngineConfig as RuntimeEngineConfig
 
         return RuntimeEngineConfig(
@@ -139,7 +139,7 @@ class SteadyStateEngineConfig(_EngineConfigBase):
 
     def build_runtime_config(
         self, *, required_behavior_keys: list[str]
-    ) -> "RuntimeEngineConfig":
+    ) -> RuntimeEngineConfig:
         from gigaevo.evolution.engine.config import SteadyStateEngineConfig as Runtime
 
         return Runtime(
@@ -178,7 +178,7 @@ class BusedEngineConfig(_EngineConfigBase):
 
     def build_runtime_config(
         self, *, required_behavior_keys: list[str]
-    ) -> "RuntimeEngineConfig":
+    ) -> RuntimeEngineConfig:
         from gigaevo.evolution.engine.config import EngineConfig as RuntimeEngineConfig
 
         return RuntimeEngineConfig(

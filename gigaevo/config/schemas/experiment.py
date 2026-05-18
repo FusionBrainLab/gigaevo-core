@@ -52,7 +52,7 @@ class ExperimentConfig(FrozenStrictModel):
     prompt_fetcher: PromptFetcherConfig | None = None
 
     @model_validator(mode="after")
-    def _key_prefix_follows_convention(self) -> "ExperimentConfig":
+    def _key_prefix_follows_convention(self) -> ExperimentConfig:
         expected = _KEY_PREFIX_TEMPLATE.format(name=self.name)
         if self.dataplane.key_prefix != expected:
             raise ValueError(
@@ -64,7 +64,7 @@ class ExperimentConfig(FrozenStrictModel):
         return self
 
     @model_validator(mode="after")
-    def _multi_island_min_size_matches_remover(self) -> "ExperimentConfig":
+    def _multi_island_min_size_matches_remover(self) -> ExperimentConfig:
         """If the algorithm is multi-island and any island carries a
         ``max_size`` cap, that island must also declare an
         ``archive_remover`` — the IslandConfig validator already enforces
@@ -81,7 +81,7 @@ class ExperimentConfig(FrozenStrictModel):
         return self
 
     @model_validator(mode="after")
-    def _bus_engine_requires_bandit_router(self) -> "ExperimentConfig":
+    def _bus_engine_requires_bandit_router(self) -> ExperimentConfig:
         """The bus-flavor engine is only useful with a bandit router:
         the bus migrates programs across engines and rewards the LLM
         that produced the winner, and a static ensemble has no
@@ -97,7 +97,7 @@ class ExperimentConfig(FrozenStrictModel):
         return self
 
     @model_validator(mode="after")
-    def _steady_state_in_flight_below_engine_count(self) -> "ExperimentConfig":
+    def _steady_state_in_flight_below_engine_count(self) -> ExperimentConfig:
         """SteadyStateEngineConfig.max_in_flight bounds the in-flight
         DAG queue. Setting it above max_mutations_per_generation is a
         cargo-cult configuration that wastes memory without raising

@@ -36,7 +36,7 @@ class ChatOpenAIConfig(FrozenStrictModel):
     request_timeout: float = Field(default=60.0, gt=0.0)
 
     @model_validator(mode="after")
-    def require_api_key(self) -> "ChatOpenAIConfig":
+    def require_api_key(self) -> ChatOpenAIConfig:
         if not self.api_key:
             raise ValueError(
                 "OPENAI_API_KEY environment variable must be set, or "
@@ -79,8 +79,8 @@ class BanditRouterConfig(FrozenStrictModel):
         *,
         fitness_key: str,
         higher_is_better: bool = True,
-        writer: "LogWriter | None" = None,
-    ) -> "Runnable":
+        writer: LogWriter | None = None,
+    ) -> Runnable:
         from gigaevo.llm.bandit import BanditModelRouter
 
         endpoints = [m.build() for m in self.models]
@@ -112,7 +112,7 @@ class EnsembleRouterConfig(FrozenStrictModel):
     name: str = Field(default="default", min_length=1)
 
     @model_validator(mode="after")
-    def probabilities_aligned(self) -> "EnsembleRouterConfig":
+    def probabilities_aligned(self) -> EnsembleRouterConfig:
         if self.probabilities is None:
             return self
         if len(self.probabilities) != len(self.models):
@@ -124,7 +124,7 @@ class EnsembleRouterConfig(FrozenStrictModel):
             raise ValueError("all probabilities must be positive")
         return self
 
-    def build(self, *, writer: "LogWriter | None" = None) -> "Runnable":
+    def build(self, *, writer: LogWriter | None = None) -> Runnable:
         from gigaevo.llm.models import MultiModelRouter
 
         endpoints = [m.build() for m in self.models]

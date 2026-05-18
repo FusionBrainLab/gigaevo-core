@@ -45,7 +45,7 @@ class TBTrackerConfig(FrozenStrictModel):
     queue_size: int = Field(default=8192, ge=1)
     flush_secs: float = Field(default=3.0, gt=0.0)
 
-    def build(self) -> "GenericLogger":
+    def build(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_tb
         from gigaevo.utils.trackers.configs import TBConfig
 
@@ -71,7 +71,7 @@ class WandBTrackerConfig(FrozenStrictModel):
     queue_size: int = Field(default=8192, ge=1)
     flush_secs: float = Field(default=3.0, gt=0.0)
 
-    def build(self) -> "GenericLogger":
+    def build(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_wandb
         from gigaevo.utils.trackers.configs import WBConfig
 
@@ -105,7 +105,7 @@ class RedisMetricsTrackerConfig(FrozenStrictModel):
     queue_size: int = Field(default=8192, ge=1)
     flush_secs: float = Field(default=3.0, gt=0.0)
 
-    def build(self) -> "GenericLogger":
+    def build(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_redis
         from gigaevo.utils.trackers.configs import RedisMetricsConfig
 
@@ -145,7 +145,7 @@ class LoggingConfig(FrozenStrictModel):
     settings: LoggingSettings = Field(default_factory=lambda: LoggingSettings())
     trackers: list[TrackerConfig] = Field(min_length=1)
 
-    def build_writer(self) -> "GenericLogger":
+    def build_writer(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_composite
 
         return init_composite(*(t.build() for t in self.trackers))

@@ -29,7 +29,7 @@ class DefaultPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["default"] = "default"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
 
         return DefaultPipelineBuilder(
@@ -44,7 +44,7 @@ class ContextPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["context"] = "context"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import ContextPipelineBuilder
 
         return ContextPipelineBuilder(ctx, dag_timeout=self.dag_timeout)
@@ -57,7 +57,7 @@ class AlgoTuneSpeedPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["algotune_speed"] = "algotune_speed"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import (
             AlgoTuneSpeedPipelineBuilder,
         )
@@ -73,7 +73,7 @@ class CMAOptPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["cma_opt"] = "cma_opt"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import CMAOptPipelineBuilder
 
         return CMAOptPipelineBuilder(ctx, dag_timeout=self.dag_timeout)
@@ -85,7 +85,7 @@ class OptunaOptPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["optuna_opt"] = "optuna_opt"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import OptunaOptPipelineBuilder
 
         return OptunaOptPipelineBuilder(ctx, dag_timeout=self.dag_timeout)
@@ -98,7 +98,7 @@ class StructuralMetricsPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["structural_metrics"] = "structural_metrics"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.experiment_pipelines import (
             StructuralMetricsPipelineBuilder,
         )
@@ -112,7 +112,7 @@ class AutoPipelineBuilderConfig(_PipelineBuilderBase):
 
     kind: Literal["auto"] = "auto"
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import (
             ContextPipelineBuilder,
             DefaultPipelineBuilder,
@@ -142,7 +142,7 @@ class ProblemSpecificPipelineBuilderConfig(_PipelineBuilderBase):
     kind: Literal["problem_specific"] = "problem_specific"
     builder_path: str = Field(min_length=1)
 
-    def build(self, ctx: "EvolutionContext") -> "PipelineBuilder":
+    def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         import importlib
 
         module_name, _, class_name = self.builder_path.rpartition(".")

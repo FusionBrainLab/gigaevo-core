@@ -19,7 +19,7 @@ class CodeFeatureExtractorConfig(FrozenStrictModel):
 
     kind: Literal["code"] = "code"
 
-    def build(self) -> "FeatureExtractor":
+    def build(self) -> FeatureExtractor:
         from gigaevo.evolution.scheduling.feature_extractor import (
             CodeFeatureExtractor,
         )
@@ -36,7 +36,7 @@ class ChainFeatureExtractorConfig(FrozenStrictModel):
 
     kind: Literal["chain"] = "chain"
 
-    def build(self) -> "FeatureExtractor":
+    def build(self) -> FeatureExtractor:
         from gigaevo.evolution.scheduling.feature_extractor import (
             ChainFeatureExtractor,
         )
@@ -59,7 +59,7 @@ class SimpleHeuristicPredictorConfig(FrozenStrictModel):
     default_rate: float = Field(default=0.1, gt=0.0)
     window_size: int = Field(default=50, ge=1)
 
-    def build(self) -> "EvalTimePredictor":
+    def build(self) -> EvalTimePredictor:
         from gigaevo.evolution.scheduling.predictor import (
             SimpleHeuristicPredictor,
         )
@@ -84,7 +84,7 @@ class RidgePredictorConfig(FrozenStrictModel):
     default_prediction: float = Field(default=300.0, gt=0.0)
     alpha: float = Field(default=1.0, gt=0.0)
 
-    def build(self) -> "EvalTimePredictor":
+    def build(self) -> EvalTimePredictor:
         from gigaevo.evolution.scheduling.predictor import RidgePredictor
 
         return RidgePredictor(
@@ -109,7 +109,7 @@ class FIFOConfig(FrozenStrictModel):
 
     kind: Literal["fifo"] = "fifo"
 
-    def build(self) -> "ProgramPrioritizer":
+    def build(self) -> ProgramPrioritizer:
         from gigaevo.evolution.scheduling.prioritizer import FIFOPrioritizer
 
         return FIFOPrioritizer()
@@ -127,7 +127,7 @@ class LPTConfig(FrozenStrictModel):
         default_factory=lambda: SimpleHeuristicPredictorConfig()
     )
 
-    def build(self) -> "ProgramPrioritizer":
+    def build(self) -> ProgramPrioritizer:
         from gigaevo.evolution.scheduling.prioritizer import LPTPrioritizer
 
         return LPTPrioritizer(eval_predictor=self.eval_predictor.build())

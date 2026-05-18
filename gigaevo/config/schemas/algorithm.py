@@ -36,7 +36,7 @@ class BehaviorSpaceConfig(FrozenStrictModel):
     expansion_buffer_ratio: float = Field(default=0.1, ge=0.0)
 
     @model_validator(mode="after")
-    def lists_aligned(self) -> "BehaviorSpaceConfig":
+    def lists_aligned(self) -> BehaviorSpaceConfig:
         n = len(self.keys)
         for name, value in (
             ("bounds", self.bounds),
@@ -72,7 +72,7 @@ class BehaviorSpaceConfig(FrozenStrictModel):
         the runtime object."""
         return list(self.keys)
 
-    def build(self) -> "BehaviorSpace":
+    def build(self) -> BehaviorSpace:
         from gigaevo.evolution.strategies.models import (
             BehaviorSpace,
             DynamicBehaviorSpace,
@@ -106,14 +106,14 @@ class SumArchiveSelectorConfig(FrozenStrictModel):
     fitness_key_higher_is_better: list[bool] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def keys_aligned(self) -> "SumArchiveSelectorConfig":
+    def keys_aligned(self) -> SumArchiveSelectorConfig:
         if len(self.fitness_keys) != len(self.fitness_key_higher_is_better):
             raise ValueError(
                 "fitness_keys and fitness_key_higher_is_better lengths must match"
             )
         return self
 
-    def build(self) -> "ArchiveSelector":
+    def build(self) -> ArchiveSelector:
         from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 
         return SumArchiveSelector(
@@ -137,7 +137,7 @@ class FitnessProportionalEliteSelectorConfig(FrozenStrictModel):
     fitness_key_higher_is_better: bool = True
     temperature: float | None = Field(default=None, gt=0.0)
 
-    def build(self) -> "EliteSelector":
+    def build(self) -> EliteSelector:
         from gigaevo.evolution.strategies.elite_selectors import (
             FitnessProportionalEliteSelector,
         )
@@ -158,7 +158,7 @@ class WeightedEliteSelectorConfig(FrozenStrictModel):
     lambda_: float = Field(default=10.0, gt=0.0)
     epsilon: float = Field(default=1e-8, gt=0.0)
 
-    def build(self) -> "EliteSelector":
+    def build(self) -> EliteSelector:
         from gigaevo.evolution.strategies.elite_selectors import (
             WeightedEliteSelector,
         )
@@ -185,7 +185,7 @@ class FitnessArchiveRemoverConfig(FrozenStrictModel):
     fitness_key: str = Field(min_length=1)
     fitness_key_higher_is_better: bool = True
 
-    def build(self) -> "ArchiveRemover":
+    def build(self) -> ArchiveRemover:
         from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 
         return FitnessArchiveRemover(
@@ -207,7 +207,7 @@ class TopFitnessMigrantSelectorConfig(FrozenStrictModel):
     fitness_key: str = Field(min_length=1)
     fitness_key_higher_is_better: bool = True
 
-    def build(self) -> "MigrantSelector":
+    def build(self) -> MigrantSelector:
         from gigaevo.evolution.strategies.migrant_selectors import (
             TopFitnessMigrantSelector,
         )
@@ -240,7 +240,7 @@ class IslandConfig(FrozenStrictModel):
     migrant_selector: MigrantSelectorConfig
 
     @model_validator(mode="after")
-    def remover_required_when_capped(self) -> "IslandConfig":
+    def remover_required_when_capped(self) -> IslandConfig:
         if self.max_size is not None and self.archive_remover is None:
             raise ValueError(
                 f"island {self.island_id!r}: max_size is set but archive_remover is None"
@@ -278,8 +278,8 @@ class SingleIslandConfig(FrozenStrictModel):
     island: IslandConfig
 
     def build(
-        self, *, program_storage: "RedisProgramStorage"
-    ) -> "MapElitesMultiIsland":
+        self, *, program_storage: RedisProgramStorage
+    ) -> MapElitesMultiIsland:
         from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 
         return MapElitesMultiIsland(
@@ -300,15 +300,15 @@ class MultiIslandConfig(FrozenStrictModel):
     enable_migration: bool = True
 
     @model_validator(mode="after")
-    def unique_island_ids(self) -> "MultiIslandConfig":
+    def unique_island_ids(self) -> MultiIslandConfig:
         ids = [i.island_id for i in self.islands]
         if len(set(ids)) != len(ids):
             raise ValueError(f"duplicate island_id in islands list: {ids}")
         return self
 
     def build(
-        self, *, program_storage: "RedisProgramStorage"
-    ) -> "MapElitesMultiIsland":
+        self, *, program_storage: RedisProgramStorage
+    ) -> MapElitesMultiIsland:
         from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 
         return MapElitesMultiIsland(

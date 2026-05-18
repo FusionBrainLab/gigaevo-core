@@ -37,7 +37,7 @@ class ProblemConfig(FrozenStrictModel):
         # never reached; the cast keeps the type system honest.
         return reject_empty_or_cwd_path("problem_dir", value)  # type: ignore[return-value]
 
-    def build(self) -> "ProblemContext":
+    def build(self) -> ProblemContext:
         from gigaevo.problems.context import ProblemContext
 
         return ProblemContext(self.problem_dir)
