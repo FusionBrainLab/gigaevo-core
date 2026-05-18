@@ -48,7 +48,7 @@ def _make_mock_proc(
         proc.kill.return_value = None
 
     # proc.wait() — async
-    wait_future: asyncio.Future = asyncio.get_event_loop().create_future()
+    wait_future: asyncio.Future = asyncio.get_running_loop().create_future()
     wait_future.set_result(0)
     proc.wait.return_value = wait_future
 
