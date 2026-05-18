@@ -331,22 +331,15 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
 
 
 # ===========================================================================
-# Regression: the exact bug from PR #161
+# Aliases list[dict] from ideas_tracker output
 # ===========================================================================
 
 
-class TestRegression_BugPR161:
-    """Regression test for Bug #2: Pydantic aliases type mismatch.
+class TestAliasesListOfDicts:
+    """ideas_tracker emits aliases as list[dict]; normalize accepts it."""
 
-    Before fix: normalize_memory_card would crash when ideas_tracker output
-    had aliases: list[dict[...]] because MemoryCard.aliases was typed list[str].
-
-    This test verifies the fix (aliases: list[Any]) handles this correctly.
-    """
-
-    def test_bug_pr161_aliases_type_mismatch(self):
-        """Original bug: aliases list[dict] crashed when expected list[str]."""
-        # This exact shape crashed before the fix
+    def test_aliases_list_of_dicts_round_trip(self):
+        """A list-of-dicts aliases value survives normalization unchanged."""
         card_input = {
             "id": "idea-1",
             "description": "Idea",
@@ -361,7 +354,6 @@ class TestRegression_BugPR161:
             ],
         }
 
-        # This used to crash with Pydantic validation error
         result = normalize_memory_card(card_input)
 
         assert isinstance(result, MemoryCard)
@@ -371,19 +363,19 @@ class TestRegression_BugPR161:
 
 
 # ===========================================================================
-# Full main() loop simulation — Bug #3 (PR #161)
+# Full load_memory_cards + _card_type flow
 # ===========================================================================
 
 
 class TestMainLoopSimulation:
-    """Simulate the main() loop: load_memory_cards → _card_type for each card.
+    """load_memory_cards -> _card_type works for every returned card.
 
-    Bug #3: _card_type called .get() on Pydantic models returned by load_memory_cards.
-    These tests verify the full flow works without AttributeError.
+    _card_type must read attributes (not .get()) because load_memory_cards
+    returns typed Pydantic models, not dicts.
     """
 
     def test_full_loop_ideas_only(self, tmp_path):
-        """Simulate main() loop with idea cards from ideas_tracker."""
+        """Simulate the main() loop over idea cards from ideas_tracker."""
         banks_path = tmp_path / "banks.json"
         _write_json(
             banks_path,
@@ -407,7 +399,6 @@ class TestMainLoopSimulation:
         )
 
         cards = load_memory_cards(banks_path, best_ideas_path)
-        # Simulate main() loop — this crashed before the fix
         for card in cards:
             card_type = _card_type(card)
             assert card_type == "ideas"

@@ -297,8 +297,8 @@ class TestFitnessProportionalTemperature:
             counts[id(result[0])] += 1
 
         # No single program should dominate with >60% selection probability.
-        # (Before the fix, the best program got ~100% due to greedy collapse;
-        # after normalization, the best gets ~49% weight.)
+        # Auto-temperature normalises near-identical fitnesses so the best
+        # program lands at roughly 49% weight rather than collapsing to 1.0.
         for p in progs:
             frac = counts[id(p)] / n_trials
             assert frac < 0.60, (

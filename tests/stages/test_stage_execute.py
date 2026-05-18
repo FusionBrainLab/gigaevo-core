@@ -922,15 +922,13 @@ class TestProgramStageResultTimestampBranches:
 
 
 # ---------------------------------------------------------------------------
-# TestComputeInputsHashFailure (P0 bug fix)
+# compute_inputs_hash() error handling
 # ---------------------------------------------------------------------------
 
 
 class TestComputeInputsHashFailure:
-    """Bug fix: compute_inputs_hash() raising must be caught by execute(),
-    not propagate as an unhandled exception. Before the fix, the call was
-    outside the try/except block, so a bad compute_hash override would crash
-    the entire DAG runner."""
+    """compute_inputs_hash() raising is caught by execute() and surfaces as
+    a FAILED stage result rather than an unhandled crash."""
 
     async def test_hash_raises_returns_failure(self):
         """compute_inputs_hash() raises -> FAILED result, not unhandled crash."""

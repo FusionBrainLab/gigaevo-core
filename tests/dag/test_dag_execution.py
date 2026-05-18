@@ -846,16 +846,12 @@ class TestInputHashCorrectness:
 
 
 class TestStaleResultSkip:
-    """Regression tests for the stale-result DEADLOCK (dag.py skip guard).
+    """Skip-guard semantics for stages with stale prior-run results.
 
-    Before the fix, a stage with a stale COMPLETED result from a previous run
-    could not be overwritten with SKIPPED when its upstream failed in the current
-    run, because the skip guard refused to overwrite any non-PENDING status.
-    This caused:
-      skip_progress=False + running={} → DEADLOCK RuntimeError.
-
-    After the fix the guard is gated on `stage_name in finished_this_run`, so
-    stale results from prior runs are correctly replaced with SKIPPED.
+    A stage carrying a COMPLETED result from a previous run must still be
+    replaceable with SKIPPED when an upstream stage fails in the current
+    run. The skip guard is gated on ``stage_name in finished_this_run`` so
+    only this-run results block overwrites.
     """
 
     async def test_stale_completed_downstream_skipped_when_dep_fails(

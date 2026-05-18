@@ -92,17 +92,11 @@ def _make_engine(storage: RedisProgramStorage) -> EvolutionEngine:
 
 
 async def test_ingest_continues_after_strategy_add_exception() -> None:
-    """_ingest_completed_programs must not abort when strategy.add() raises.
+    """_ingest_completed_programs survives strategy.add() raising mid-batch.
 
-    Sequence:
-      1. Three programs in DONE state with minimal metrics (pass default acceptor).
-      2. strategy.add() is monkeypatched to raise RuntimeError for the first call,
-         then succeed for subsequent calls.
-      3. _ingest_completed_programs() is called.
-      4. Before the fix: the RuntimeError propagates out of the for-loop;
-         programs[1] and [2] remain in DONE state (never processed).
-      5. After the fix: the exception is caught per-item; programs[1] and [2]
-         are processed and leave DONE state (DISCARDED or archived).
+    Three programs reach DONE. strategy.add() raises RuntimeError on the
+    first call and succeeds on the rest. The ingest loop catches the
+    exception per-item, so all three programs leave DONE state.
     """
     storage, _ = _make_storage()
     try:
