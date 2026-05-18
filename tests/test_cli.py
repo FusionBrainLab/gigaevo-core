@@ -116,6 +116,30 @@ class TestCliDryRun:
         )
 
 
+class TestCliConfigDumpSafety:
+    def test_dumped_config_does_not_leak_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The on-disk ``config.json`` is the reproducibility record;
+        it lives under ``output_dir/experiment_id/`` and is the natural
+        artefact for users to share, attach to bug reports, or commit
+        to a sweep manifest. The resolved ``OPENAI_API_KEY`` must not
+        appear in it."""
+        from run import main
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-do-not-leak-from-cli")
+        exp = _make_experiment(tmp_path)
+        exit_code = main([str(exp), "--dry-run"])
+        assert exit_code == 0
+
+        out_root = tmp_path / "outputs"
+        config_paths = list(out_root.glob("*/config.json"))
+        assert len(config_paths) == 1
+        text = config_paths[0].read_text()
+        assert "sk-do-not-leak-from-cli" not in text
+        assert '"api_key"' not in text
+
+
 class TestCliErrors:
     def test_missing_experiment_file_propagates(self, tmp_path: Path) -> None:
         from run import main

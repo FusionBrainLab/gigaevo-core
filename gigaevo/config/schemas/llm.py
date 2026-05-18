@@ -22,6 +22,13 @@ class ChatOpenAIConfig(FrozenStrictModel):
     ``OPENAI_API_KEY`` environment variable; the after-validator refuses
     a ``None`` resolution with a typed error rather than letting the
     request reach the OpenAI HTTP boundary.
+
+    ``api_key`` is excluded from ``__repr__`` and from ``model_dump``
+    so the secret never lands in the dumped ``config.json``, in
+    experiment-id hashes, or in log lines. The default factory re-reads
+    ``OPENAI_API_KEY`` on every load, so a round trip through JSON
+    pulls the current ambient key rather than the one captured at the
+    time of the original construction.
     """
 
     kind: Literal["chat_openai"] = "chat_openai"
@@ -29,6 +36,7 @@ class ChatOpenAIConfig(FrozenStrictModel):
     api_key: str | None = Field(
         default_factory=lambda: os.environ.get("OPENAI_API_KEY"),
         repr=False,
+        exclude=True,
     )
     base_url: str | None = None
     temperature: float = Field(default=0.5, ge=0.0, le=2.0)

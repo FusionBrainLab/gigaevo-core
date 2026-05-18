@@ -122,6 +122,37 @@ class TestChatOpenAIConfig:
         with pytest.raises(ValidationError):
             ChatOpenAIConfig(model="")
 
+    def test_api_key_excluded_from_dump_and_repr(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The resolved API key must not leak through serialization
+        surfaces: model_dump, model_dump_json, and __repr__. The CLI
+        writes the dumped JSON to disk as ``config.json`` and the repr
+        is used in log lines; an api_key in either is a credential
+        leak."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-DO-NOT-LEAK")
+        cfg = ChatOpenAIConfig(model="x")
+        assert cfg.api_key == "sk-secret-DO-NOT-LEAK"
+        dumped = cfg.model_dump()
+        assert "api_key" not in dumped
+        dumped_json = cfg.model_dump_json()
+        assert "api_key" not in dumped_json
+        assert "sk-secret" not in dumped_json
+        assert "sk-secret" not in repr(cfg)
+
+    def test_api_key_round_trip_resolves_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A round trip through JSON drops the api_key on dump and
+        re-resolves it from the environment on load. The reloaded
+        config is functionally equivalent to the original even though
+        the on-disk JSON carries no credential."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-round-trip-key")
+        cfg = ChatOpenAIConfig(model="x")
+        parsed = ChatOpenAIConfig.model_validate_json(cfg.model_dump_json())
+        assert parsed.api_key == "sk-round-trip-key"
+        assert parsed.model == cfg.model
+
 
 class TestBanditRouterConfig:
     def test_minimal(self) -> None:
