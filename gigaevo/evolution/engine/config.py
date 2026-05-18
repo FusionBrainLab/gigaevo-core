@@ -20,8 +20,8 @@ class EngineConfig(BaseModel):
     max_mutations_per_generation: int = Field(default=50, gt=0)
     generation_timeout: float | None = Field(
         default=None,
-        description="Deprecated — no longer used. Individual program timeouts are "
-        "handled by dag_timeout / stage_timeout.",
+        description="Unused field accepted for config compatibility. Per-program "
+        "timeouts are governed by dag_timeout / stage_timeout.",
     )
     metrics_collection_interval: float = Field(
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
