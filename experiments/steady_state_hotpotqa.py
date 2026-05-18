@@ -73,7 +73,7 @@ def build() -> ExperimentConfig:
     )
     return ExperimentConfig(
         name=_NAME,
-        seed=42,
+        seed=50,
         redis=redis,
         dataplane=DataPlaneSettings(redis=redis, key_prefix=f"gigaevo:{_NAME}"),
         problem=ProblemConfig(name=_NAME, problem_dir=_PROBLEM_DIR),

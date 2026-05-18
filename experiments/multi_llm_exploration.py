@@ -28,7 +28,7 @@ def build() -> ExperimentConfig:
     redis = RedisConfig()
     return ExperimentConfig(
         name=_NAME,
-        seed=42,
+        seed=46,
         redis=redis,
         dataplane=DataPlaneSettings(redis=redis, key_prefix=f"gigaevo:{_NAME}"),
         problem=build_heilbron(name=_NAME),

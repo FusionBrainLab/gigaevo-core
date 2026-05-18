@@ -499,125 +499,66 @@ class ComplexityStage(Stage):
 
 ### Pipeline Configuration Structure
 
-```yaml
-# Complete pipeline specification
-dag_blueprint:
-  _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
+A ``PipelineBuilder`` populates a ``DAGBlueprint`` with four pieces:
 
-  # 1. Stage Definitions
-  nodes:
-    StageName:
-      _target_: module.path.StageClass
-      _partial_: true        # Create factory, not instance
-      timeout: 60.0          # Stage-specific timeout
-      custom_param: value    # Stage constructor args
+| Element | Type | Role |
+|---------|------|------|
+| ``nodes`` | ``dict[str, StageFactory]`` | Stage factories keyed by stage name; the factory is called with the program context to instantiate the stage. |
+| ``data_flow_edges`` | ``list[DataFlowEdge]`` | Wires a producer stage output into a named input on a consumer stage. |
+| ``exec_order_deps`` | ``dict[str, list[ExecutionOrderDependency]]`` | Optional execution-order constraints (``on_success``, ``on_failure``, ``always``). |
+| Top-level fields | ``max_parallel_stages``, ``dag_timeout`` | DAG-level concurrency and total timeout. |
 
-  # 2. Data Flow (Required)
-  data_flow_edges:
-    - source_stage: ProducerStage
-      destination_stage: ConsumerStage
-      input_name: field_name_in_consumer
-
-  # 3. Execution Order (Optional)
-  exec_order_deps:
-    DependentStage:
-      - stage_name: PrerequisiteStage
-        condition: success  # or failure, always
-
-  # 4. DAG-level Settings
-  max_parallel_stages: 8   # Concurrent stage limit
-  dag_timeout: 3600.0      # Total DAG execution timeout
-```
-
-### Common Stage Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `timeout` | float | Max execution time (seconds) |
-| `_partial_` | bool | Create factory instead of instance (Hydra) |
-| `cacheable` | bool | Enable result caching (class-level) |
+Stage-level parameters (per-stage ``timeout``, custom kwargs) come from
+the builder config schema. ``cacheable`` is declared on the stage class.
 
 ### Example: Multi-Stage Pipeline
 
-```yaml
-dag_blueprint:
-  _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
+```python
+from gigaevo.entrypoint.default_pipelines import PipelineBuilder
+from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
+from gigaevo.programs.stages.complexity import ComputeComplexityStage
+from gigaevo.programs.stages.insights import InsightsStage
+from gigaevo.programs.stages.json_processing import MergeDictStage
+from gigaevo.programs.stages.python_executors.execution import (
+    CallProgramFunction,
+    CallValidatorFunction,
+)
+from gigaevo.programs.stages.validation import ValidateCodeStage
+from gigaevo.runner.dag_blueprint import DAGBlueprint
 
-  nodes:
-    # 1. Validate code syntax
-    ValidateCode:
-      _target_: gigaevo.programs.stages.validation.ValidateCodeStage
-      _partial_: true
-      timeout: 10.0
-      safe_mode: true
 
-    # 2. Execute user function
-    ExecuteProgram:
-      _target_: gigaevo.programs.stages.python_executors.execution.CallProgramFunction
-      _partial_: true
-      function_name: entrypoint
-      timeout: 120.0
-
-    # 3. Validate output
-    ValidateOutput:
-      _target_: gigaevo.programs.stages.python_executors.execution.CallValidatorFunction
-      _partial_: true
-      path: ${problem.dir}/validate.py
-      timeout: 30.0
-
-    # 4. Compute complexity
-    Complexity:
-      _target_: gigaevo.programs.stages.complexity.ComputeComplexityStage
-      _partial_: true
-      timeout: 15.0
-
-    # 5. Merge metrics
-    MergeMetrics:
-      _target_: gigaevo.programs.stages.json_processing.MergeDictStage
-      _partial_: true
-      timeout: 5.0
-
-    # 6. Generate insights (LLM-powered)
-    Insights:
-      _target_: gigaevo.programs.stages.insights.InsightsStage
-      _partial_: true
-      llm: ${ref:llm}
-      timeout: 60.0
-
-  data_flow_edges:
-    # ExecuteProgram → ValidateOutput
-    - source_stage: ExecuteProgram
-      destination_stage: ValidateOutput
-      input_name: payload
-
-    # ValidateOutput metrics → MergeMetrics
-    - source_stage: ValidateOutput
-      destination_stage: MergeMetrics
-      input_name: first
-
-    # Complexity metrics → MergeMetrics
-    - source_stage: Complexity
-      destination_stage: MergeMetrics
-      input_name: second
-
-    # Merged metrics → Insights
-    - source_stage: MergeMetrics
-      destination_stage: Insights
-      input_name: metrics
-
-  exec_order_deps:
-    # Execute only after validation succeeds
-    ExecuteProgram:
-      - stage_name: ValidateCode
-        condition: success
-
-    # Generate insights after execution completes (even if failed)
-    Insights:
-      - stage_name: ExecuteProgram
-        condition: always
-
-  max_parallel_stages: 4
-  dag_timeout: 600.0
+class MyPipelineBuilder(PipelineBuilder):
+    def build_blueprint(self) -> DAGBlueprint:
+        return DAGBlueprint(
+            nodes={
+                "ValidateCode": lambda: ValidateCodeStage(timeout=10.0, safe_mode=True),
+                "ExecuteProgram": lambda: CallProgramFunction(
+                    function_name="entrypoint", timeout=120.0
+                ),
+                "ValidateOutput": lambda: CallValidatorFunction(
+                    path=self.ctx.problem_ctx.dir / "validate.py", timeout=30.0
+                ),
+                "Complexity": lambda: ComputeComplexityStage(timeout=15.0),
+                "MergeMetrics": lambda: MergeDictStage(timeout=5.0),
+                "Insights": lambda: InsightsStage(llm=self.ctx.llm_wrapper, timeout=60.0),
+            },
+            data_flow_edges=[
+                DataFlowEdge(source_stage="ExecuteProgram",
+                             destination_stage="ValidateOutput", input_name="payload"),
+                DataFlowEdge(source_stage="ValidateOutput",
+                             destination_stage="MergeMetrics", input_name="first"),
+                DataFlowEdge(source_stage="Complexity",
+                             destination_stage="MergeMetrics", input_name="second"),
+                DataFlowEdge(source_stage="MergeMetrics",
+                             destination_stage="Insights", input_name="metrics"),
+            ],
+            execution_order_deps={
+                "ExecuteProgram": [ExecutionOrderDependency.on_success("ValidateCode")],
+                "Insights": [ExecutionOrderDependency.always("ExecuteProgram")],
+            },
+            max_parallel_stages=4,
+            dag_timeout=600.0,
+        )
 ```
 
 **Execution Order** (with parallelism):
@@ -906,7 +847,7 @@ The GigaEvo DAG System provides:
 - ✅ **Flexible** dependency management (data + execution order)
 - ✅ **Robust** error handling with detailed diagnostics
 - ✅ **Cacheable** stage results for efficiency
-- ✅ **Declarative** configuration via Hydra
+- ✅ **Declarative** configuration via typed pipeline builders
 - ✅ **Extensible** stage system for custom logic
 
 It powers GigaEvo's evolutionary computation by orchestrating complex, multi-stage program evaluations at scale.
@@ -914,7 +855,7 @@ It powers GigaEvo's evolutionary computation by orchestrating complex, multi-sta
 ---
 
 **For more information:**
-- Example pipelines: `config/pipeline/`
+- Pipeline builders: `gigaevo/entrypoint/default_pipelines.py` and `gigaevo/config/pipeline_presets.py`
 - Stage implementations: `gigaevo/programs/stages/`
 - DAG internals: `gigaevo/programs/dag/`
 - DagRunner: `gigaevo/runner/dag_runner.py`
