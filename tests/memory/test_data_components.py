@@ -331,25 +331,41 @@ class TestRecordBank:
         assert len(bank.uuids) == 2
         assert bank.uuids[1] != existing_id
 
-    def test_import_idea_non_forced_crashes_on_asdict(self):
-        """Pins behaviour: ``RecordCardExtended.__init__`` only sets the kwargs
-        it receives, so optional dataclass fields stay unbound and
-        ``dataclasses.asdict()`` raises ``AttributeError`` under the
-        non-forced import path.
+    def test_import_idea_non_forced_uses_dataclass_defaults(self):
+        """Optional fields default to empty containers and ``asdict`` succeeds.
+
+        The non-forced path serializes the card via ``dataclasses.asdict`` and
+        appends a dict to the record list, so every declared field must be
+        bound to a sensible default.
         """
         bank = RecordBank(list_max_ideas=5)
         card = RecordCardExtended(**_make_idea_dict())
-        # Verify the missing attributes directly
-        for attr in (
-            "keywords",
-            "evolution_statistics",
-            "works_with",
-            "links",
-            "usage",
+        for attr, expected in (
+            ("keywords", []),
+            ("evolution_statistics", {}),
+            ("works_with", []),
+            ("links", []),
+            ("usage", {}),
         ):
-            assert not hasattr(card, attr), f"Expected {attr} to be missing"
-        with pytest.raises(AttributeError):
-            bank.import_idea_extended(card, is_forced=False)
+            assert getattr(card, attr) == expected
+        bank.import_idea_extended(card, is_forced=False)
+        assert card.id in bank.uuids
+
+    def test_optional_fields_isolated_per_instance(self):
+        """Default factories must produce fresh containers per instance."""
+        a = RecordCardExtended(**_make_idea_dict(id="a"))
+        b = RecordCardExtended(**_make_idea_dict(id="b"))
+        a.keywords.append("shared?")
+        a.usage["x"] = 1
+        assert b.keywords == []
+        assert b.usage == {}
+
+    def test_missing_change_motivation_raises(self):
+        """``change_motivation`` is read unconditionally and must be required."""
+        payload = _make_idea_dict()
+        del payload["change_motivation"]
+        with pytest.raises(ValueError, match="change_motivation"):
+            RecordCardExtended(**payload)
 
 
 # ===========================================================================

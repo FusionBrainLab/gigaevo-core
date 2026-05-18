@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import copy
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any
 from uuid import uuid4
 
@@ -251,12 +251,21 @@ class RecordCardExtended:
             "task_description",
             "strategy",
             "programs",
+            "change_motivation",
         ]
-        if not all(field in kwargs for field in required_fields):
-            missing_fields = [field for field in required_fields if field not in kwargs]
+        missing_fields = [name for name in required_fields if name not in kwargs]
+        if missing_fields:
             raise ValueError(f"Missing required fields: {missing_fields}")
 
-        names = set([f.name for f in fields(self)])
+        # Seed every declared field with its default (scalar or default_factory) so
+        # callers can safely access optional metadata without AttributeError.
+        for f in fields(self):
+            if f.default is not MISSING:
+                setattr(self, f.name, f.default)
+            elif f.default_factory is not MISSING:  # type: ignore[misc]
+                setattr(self, f.name, f.default_factory())
+
+        names = {f.name for f in fields(self)}
         for arg, value in kwargs.items():
             if arg in names:
                 setattr(self, arg, value)
@@ -622,6 +631,11 @@ class RecordBank:
         else:
             idea_dict = asdict(new_idea)
             idea_dict["programs"] = list(idea_dict["programs"])
+            # ``change_motivation`` is consumed by ``RecordCardExtended.__init__``
+            # but not stored as a field, so the round-trip rebuild needs it
+            # supplied from the explanation history.
+            explanations = (new_idea.explanation or {}).get("explanations") or []
+            idea_dict["change_motivation"] = explanations[0] if explanations else ""
             self._append_record_list(idea_dict, is_forced=is_forced)
 
     def get_idea(self, idea_id: str) -> RecordCardExtended:
