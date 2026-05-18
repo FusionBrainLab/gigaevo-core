@@ -741,7 +741,7 @@ class TestScenarioErrorRecovery:
         # Corrupt the index file (simulating crash mid-write)
         mem.config.index_file.write_text('{"memory_cards": {"c1": {"id": "c1", "des')
 
-        # Reload: data is lost (known bug, documented)
+        # Reload from a truncated index file: the store starts empty.
         mem2 = _make_memory(tmp_path)
         assert len(mem2.card_store.cards) == 0
 

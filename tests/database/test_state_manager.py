@@ -308,7 +308,7 @@ class TestMergeStates:
 
 
 # ===================================================================
-# Category G: Audit Finding 3 — State transitions persist to Redis
+# Category G: State transitions persist to Redis
 # ===================================================================
 
 
@@ -404,7 +404,7 @@ class TestStateTransitionRedisRoundTrip:
 
 
 # ===================================================================
-# Category H: Audit Finding 2 — Concurrent writes to same stage key
+# Category H: Concurrent writes to same stage key
 # ===================================================================
 
 

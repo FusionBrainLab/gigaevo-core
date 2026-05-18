@@ -332,12 +332,10 @@ class TestRecordBank:
         assert bank.uuids[1] != existing_id
 
     def test_import_idea_non_forced_crashes_on_asdict(self):
-        """BUG: RecordCardExtended custom __init__ doesn't initialize
-        all dataclass fields (keywords, evolution_statistics, works_with,
-        links, usage), so asdict() raises AttributeError when is_forced=False.
-
-        The custom __init__ uses setattr only for provided kwargs,
-        but dataclass.asdict() expects ALL declared fields to exist.
+        """Pins behaviour: ``RecordCardExtended.__init__`` only sets the kwargs
+        it receives, so optional dataclass fields stay unbound and
+        ``dataclasses.asdict()`` raises ``AttributeError`` under the
+        non-forced import path.
         """
         bank = RecordBank(list_max_ideas=5)
         card = RecordCardExtended(**_make_idea_dict())

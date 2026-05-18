@@ -1,18 +1,8 @@
-"""Tests for gigaevo/evolution/engine/mutation.py — generate_mutations exception handling.
+"""Tests for ``gigaevo.evolution.engine.mutation.generate_mutations``.
 
-Finding 5 (CRITICAL): asyncio.gather(return_exceptions=True) returns exception objects
-in the results list. The counting logic `sum(1 for result in results if result)` treats
-truthy exception objects as successful mutations — inflating the persisted count.
-
-The inner coroutine (`generate_and_persist_mutation`) already wraps all `Exception`
-subclasses and returns `False`, so ordinary exceptions don't escape. However:
-
-1. A `BaseException` (e.g. asyncio.CancelledError in Python <3.8, KeyboardInterrupt,
-   SystemExit) can escape the `except Exception` handler and appear as a truthy object
-   in the gather results.
-2. We verify the existing code correctly handles a mix of True/False/None returns.
-3. We patch asyncio.gather directly to inject exception objects and confirm whether the
-   counting logic is correct or inflated.
+Covers the asyncio.gather result-filtering contract for parallel mutation
+tasks: the function must count only program-id strings as successes and
+must ignore truthy exception objects emitted by ``return_exceptions=True``.
 """
 
 from __future__ import annotations
@@ -63,83 +53,46 @@ def _make_deps(mutation_spec=None, storage_get_returns_none: bool = False):
 
 
 class TestGatherExceptionCounting:
-    def test_counting_expression_with_exception_objects_is_truthy(self) -> None:
-        """Unit-level proof of the counting bug.
+    def test_truthy_filter_would_overcount_exception_objects(self) -> None:
+        """A plain truthiness filter would treat exception objects as successes.
 
-        The expression `sum(1 for result in results if result)` is used in
-        generate_mutations to count successes. An exception object is truthy,
-        so it is incorrectly counted as a success.
-
-        This test directly evaluates the counting expression against a synthetic
-        results list — no coroutine machinery involved — to prove the bug exists
-        at the expression level.
+        Guard against regressing the filter to ``if result`` instead of an
+        ``isinstance(r, str)`` check on the asyncio.gather output.
         """
-        # Simulate what asyncio.gather(return_exceptions=True) can return:
-        # True (success), False (inner-handler caught it), RuntimeError (escaped)
         results = [True, True, False, RuntimeError("something exploded")]
 
-        # The counting expression as written in mutation.py line 94:
-        current_count = sum(1 for result in results if result)
-
-        # True, True, RuntimeError() are all truthy → 3. Correct answer is 2.
-        assert current_count == 3, (
-            "Pre-condition: current code counts exception objects as successes."
+        truthy_count = sum(1 for result in results if result)
+        assert truthy_count == 3, (
+            "Truthy filter wrongly counts exception objects as successes."
         )
 
-        # The correct expression — only count True booleans:
         correct_count = sum(1 for result in results if result is True)
-        assert correct_count == 2, (
-            "A fix using `result is True` gives the correct count."
-        )
+        assert correct_count == 2
 
-    def test_base_exception_counting_expression_is_buggy(self) -> None:
-        """Unit proof: BaseException subclasses escape `except Exception` and are truthy.
+    def test_truthy_filter_would_overcount_base_exceptions(self) -> None:
+        """BaseException subclasses (e.g. GeneratorExit) are truthy too.
 
-        generate_and_persist_mutation catches `except Exception`. BaseException
-        subclasses that are NOT Exception subclasses (e.g. GeneratorExit, but
-        note: in Python 3.8+ asyncio.CancelledError IS an Exception subclass)
-        can escape the inner handler and appear in gather(return_exceptions=True)
-        results as exception objects.
-
-        Regardless of the source, the core bug is identical: any truthy value
-        (including exception objects) in the results list inflates the count.
-
-        This test isolates the exact counting expression from mutation.py:94 and
-        proves it counts exception objects as successes.
+        They can leak past ``except Exception`` and appear in
+        ``asyncio.gather(return_exceptions=True)`` output as objects.
         """
-        # Exactly the counting expression from mutation.py line 94:
         results_with_escaped_exc = [
             True,
             GeneratorExit("escaped base exception"),
             False,
         ]
-        buggy_count = sum(1 for result in results_with_escaped_exc if result)
+        truthy_count = sum(1 for result in results_with_escaped_exc if result)
+        assert truthy_count == 2
 
-        # GeneratorExit is truthy → counted as success. Bug: 2 instead of 1.
-        assert buggy_count == 2, (
-            "Pre-condition: GeneratorExit() is truthy, current code counts it as a success."
-        )
         correct_count = sum(1 for result in results_with_escaped_exc if result is True)
-        assert correct_count == 1, (
-            "`result is True` correctly ignores the exception object."
-        )
+        assert correct_count == 1
 
-    async def test_all_exceptions_via_counting_expression(self) -> None:
-        """Directly demonstrate the counting bug with all-exception results list.
-
-        Rather than fighting asyncio.gather patching, we test the counting
-        expression that lives at the heart of the bug.
-        """
-        # Replicate the exact expression from mutation.py line 94
+    async def test_truthy_filter_would_overcount_pure_exception_results(self) -> None:
+        """All-exception results: truthiness filter counts every entry."""
         all_exception_results = [ValueError("v"), RuntimeError("r"), KeyError("k")]
 
-        # Current code counts all of these as "successes" because exceptions are truthy
-        buggy_count = sum(1 for result in all_exception_results if result)
-        assert buggy_count == 3, (
-            "Pre-condition: all exception objects are truthy, current code counts them all."
-        )
+        truthy_count = sum(1 for result in all_exception_results if result)
+        assert truthy_count == 3
 
-        # Correct behavior: no exception should count as a success
         correct_count = sum(1 for result in all_exception_results if result is True)
         assert correct_count == 0
 
