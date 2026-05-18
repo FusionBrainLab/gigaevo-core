@@ -59,12 +59,14 @@ every `max_mutations_per_generation` processed programs.
 
 ## Configuration
 
-The only new config knob is `max_in_flight`:
+The only new config knob is `max_in_flight`, exposed on
+``SteadyStateEngineConfig`` in ``gigaevo/config/schemas/engine.py``:
 
-```yaml
-# config/evolution/steady_state.yaml
-engine_config:
-  max_in_flight: 8       # max programs in the mutation→evaluation pipeline
+```python
+# experiments/steady_state.py (excerpt)
+from gigaevo.config.engine_presets import build_steady_state
+
+engine = build_steady_state(max_in_flight=8)
 ```
 
 All other fields are inherited from the base `EngineConfig`:
@@ -157,7 +159,7 @@ The mutation gate uses try/finally to always reopen, even on errors.
 
 ## Compatibility
 
-- **Hydra config**: Drop-in replacement — just add `evolution=steady_state`
+- **Typed config**: Drop-in replacement — use `build_steady_state()` in place of `build_generational()` on `EngineConfig`.
 - **Status tools**: `tools/status.py`, watchdog, `tools/comparison.py` all work unchanged
 - **DagRunner**: No changes — communicates via Redis state transitions
 - **Strategies**: All strategies (MAP-Elites, islands, etc.) work unchanged

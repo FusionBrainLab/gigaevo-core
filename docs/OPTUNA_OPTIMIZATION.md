@@ -217,42 +217,39 @@ total_trials = n_startup + n_trials
 
 ## Configuration Reference
 
-### Pipeline YAML (`config/pipeline/optuna_opt.yaml`)
+### Pipeline Builder Wiring
 
-```yaml
-# @package _global_
-evolution_context:
-  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
-  problem_ctx: ${problem_context}
-  llm_wrapper: ${ref:llm}
-  storage: ${redis_storage}
+``build_optuna_opt()`` returns an ``OptunaOptPipelineBuilderConfig``
+whose ``build()`` constructs the ``OptunaOptPipelineBuilder`` at
+runtime. The builder owns ``dag_timeout`` and forwards
+``optimization_time_budget`` from the engine config, so the same field
+values flow into both stage timeout and per-trial budgeting:
 
-pipeline_builder:
-  _target_: gigaevo.entrypoint.default_pipelines.OptunaOptPipelineBuilder
-  ctx: ${evolution_context}
-  dag_timeout: ${dag_timeout}
-  optimization_time_budget: ${optimization_time_budget}
+```python
+from gigaevo.config.pipeline_presets import build_optuna_opt
+from gigaevo.config.schemas import PipelineConfig
 
-dag_blueprint:
-  _target_: gigaevo.config.helpers.build_dag_from_builder
-  builder: ${pipeline_builder}
+pipeline = PipelineConfig(
+    builder=build_optuna_opt(
+        dag_timeout=3600,
+        n_trials=80,
+        eval_timeout=60,
+        max_parallel=4,
+    ),
+)
 ```
 
-### Constants YAML (`config/constants/pipeline.yaml`)
+### Defaults
 
-```yaml
-# @package _global_
-stage_timeout: 600               # lightweight stages only
-dag_timeout: 3600
-optimization_time_budget: null   # null = 0.75 * dag_timeout
-dag_concurrency: 16
-max_code_length: 30000
-max_insights: 8
-```
+``stage_timeout`` (600s for lightweight stages), ``dag_timeout``
+(3600s), and ``optimization_time_budget`` (``None`` → ``0.75 *
+dag_timeout``) live as ``Final`` scalars on
+``gigaevo/config/defaults.py``. ``dag_concurrency``, ``max_code_length``,
+and ``max_insights`` come from the same module.
 
 ### OptunaOptimizationConfig Fields
 
-These are set via the `config` parameter of `OptunaOptimizationStage`. Override them through `_optuna_stage_kwargs` in a pipeline builder subclass or via Hydra structured configs.
+These are set via the `config` parameter of `OptunaOptimizationStage`. Override them by passing an `OptunaOptimizationConfig` instance into the pipeline builder factory or by subclassing the stage in your experiment file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -454,5 +451,5 @@ Key log messages to look for:
 | `gigaevo/programs/stages/optimization/optuna/routing.py` | `OptunaPayloadBridge`, `PayloadResolver` (bypass stages) |
 | `gigaevo/programs/stages/optimization/optuna/desubstitution.py` | Parameter desubstitution (clean code generation) |
 | `gigaevo/entrypoint/default_pipelines.py` | `OptunaOptPipelineBuilder` (pipeline wiring) |
-| `config/constants/pipeline.yaml` | `dag_timeout`, `optimization_time_budget` defaults |
-| `config/pipeline/optuna_opt.yaml` | Pipeline YAML config |
+| `gigaevo/config/defaults.py` | `dag_timeout`, `optimization_time_budget`, `stage_timeout` defaults |
+| `gigaevo/config/pipeline_presets.py` | `build_optuna_opt()` preset returning `OptunaOptPipelineBuilderConfig` |
