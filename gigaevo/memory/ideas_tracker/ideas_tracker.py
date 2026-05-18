@@ -55,7 +55,6 @@ if TYPE_CHECKING:
 class IdeaTracker(PostRunHook):
     """PostRunHook that analyses programs and classifies improvement ideas.
 
-    Instantiated via Hydra (``ideas_tracker=default`` or ``fast``).
     Accepts ``list[Program]`` directly — no DataFrame conversion.
     """
 

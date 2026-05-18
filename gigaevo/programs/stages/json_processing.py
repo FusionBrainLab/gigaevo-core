@@ -69,20 +69,17 @@ class MergeDictStage[K, V](Stage):
 
     @classmethod
     def create_typed(cls, key_type: type, value_type: type):
-        """Factory for Hydra configs: returns MergeDictStage[K, V] class.
+        """Return a specialized ``MergeDictStage[key_type, value_type]`` class.
+
+        Equivalent to writing ``MergeDictStage[K, V]`` directly; provided as
+        a named factory for callers that build stages from typed config.
 
         Args:
-            key_type: Type for dictionary keys
-            value_type: Type for dictionary values
+            key_type: Type for dictionary keys.
+            value_type: Type for dictionary values.
 
         Returns:
-            Specialized MergeDictStage class
-
-        Usage in Hydra:
-            _target_: gigaevo.programs.stages.json_processing.MergeDictStage.create_typed_factory
-            _partial_: true
-            key_type: ${get_object:builtins.str}
-            value_type: ${get_object:builtins.float}
+            Specialized ``MergeDictStage`` subclass.
         """
         return cls[key_type, value_type]  # type: ignore[index]  # dynamic generic specialization via __class_getitem__
 

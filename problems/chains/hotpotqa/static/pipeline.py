@@ -1,12 +1,8 @@
 """Reflective pipeline builder for HotpotQA static chain evolution.
 
-Extends DefaultPipelineBuilder by swapping in HotpotQAFailureFormatter
-so that per-sample failure cases from validate.py are injected into the
-mutation LLM's context.
-
-Usage (Hydra config):
-    pipeline_builder:
-      _target_: problems.chains.hotpotqa.static.pipeline.ReflectivePipelineBuilder
+Extends ``DefaultPipelineBuilder`` by swapping in
+``HotpotQAFailureFormatter`` so that per-sample failure cases from
+``validate.py`` are injected into the mutation LLM's context.
 """
 
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT

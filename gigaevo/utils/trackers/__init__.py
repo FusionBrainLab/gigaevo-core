@@ -51,14 +51,7 @@ def init_tb_redis(
     queue_size: int = 8192,
     flush_secs: float = 3.0,
 ) -> CompositeLogger:
-    """Composite logger with TensorBoard + Redis backends.
-
-    Hydra usage:
-        writer:
-          _target_: gigaevo.utils.trackers.init_tb_redis
-          tb_cfg: ${tb_config}
-          redis_cfg: ${redis_metrics_config}
-    """
+    """Composite logger that fans writes to TensorBoard and Redis."""
     tb = init_tb(tb_cfg, queue_size=queue_size, flush_secs=flush_secs)
     redis_logger = init_redis(redis_cfg, queue_size=queue_size, flush_secs=flush_secs)
     return CompositeLogger([tb, redis_logger])
@@ -71,14 +64,7 @@ def init_wandb_redis(
     queue_size: int = 8192,
     flush_secs: float = 3.0,
 ) -> CompositeLogger:
-    """Composite logger with WandB + Redis backends.
-
-    Hydra usage:
-        writer:
-          _target_: gigaevo.utils.trackers.init_wandb_redis
-          wandb_cfg: ${wandb_config}
-          redis_cfg: ${redis_metrics_config}
-    """
+    """Composite logger that fans writes to WandB and Redis."""
     wb = init_wandb(wandb_cfg, queue_size=queue_size, flush_secs=flush_secs)
     redis_logger = init_redis(redis_cfg, queue_size=queue_size, flush_secs=flush_secs)
     return CompositeLogger([wb, redis_logger])

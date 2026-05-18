@@ -29,18 +29,17 @@ _DEFAULT_REDIS_URL = "redis://localhost:6379/15"
 class BalancedChatOpenAI(ChatOpenAI):
     """ChatOpenAI that load-balances across multiple endpoints via Redis.
 
-    Holds one ``ChatOpenAI`` instance per endpoint.  On each call, acquires
-    the least-loaded endpoint from the shared ``EndpointPool``, delegates to
-    the corresponding client, and releases on completion.
+    Holds one ``ChatOpenAI`` instance per endpoint. On each call, acquires
+    the least-loaded endpoint from the shared ``EndpointPool``, delegates
+    to the corresponding client, and releases on completion.
 
-    Usage in Hydra config::
-
-        _target_: gigaevo.infra.balanced_chat.BalancedChatOpenAI
-        model: ${model_name}
-        endpoints:
-          - "http://server-a:8777/v1"
-          - "http://server-b:8777/v1"
-        pool_name: "mutation"
+    Constructor arguments:
+        endpoints: List of base URLs (one per backend server).
+        pool_name: Logical pool key shared across processes via Redis.
+        redis_url: Redis URL used by ``EndpointPool`` for coordination.
+        cooldown_secs: Seconds an endpoint stays out of rotation after
+            being marked unhealthy.
+        writer: Optional metrics writer for per-endpoint latency/success.
     """
 
     def __init__(

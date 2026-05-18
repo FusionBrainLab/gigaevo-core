@@ -145,8 +145,8 @@ class GigaEvoArchivePromptFetcher(PromptFetcher):
         prompt_redis_db: Redis DB of the prompt GigaEvo run
         main_redis_prefix: Key prefix of the main run (for stats keys)
         main_redis_db: Redis DB of the main run (required for stats writes).
-            Set to the same value as redis.db of the main run — in Hydra config
-            use ``main_redis_db: ${redis.db}``.
+            Must match the main run's ``redis.db`` so prompt-fitness stats
+            are visible to ``PromptFitnessStage`` on the read side.
         prompt_prefix: Key prefix of the prompt run (default: "prompt_evolution")
         host: Redis host (default: localhost)
         port: Redis port (default: 6379)

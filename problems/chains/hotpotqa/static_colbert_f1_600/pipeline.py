@@ -1,11 +1,8 @@
 """Pipeline builder for HotpotQA static_colbert_f1_600 variant.
 
-Uses HotpotQAColBERTFormatter which shows full passage text for missing gold
-documents (richer signal than titles-only in HotpotQAASIFormatter).
-
-Usage (Hydra config):
-    pipeline_builder:
-      _target_: problems.chains.hotpotqa.static_colbert_f1_600.pipeline.ColBERTPipelineBuilder
+Uses ``HotpotQAColBERTFormatter``, which shows full passage text for
+missing gold documents (richer signal than titles-only in
+``HotpotQAASIFormatter``).
 """
 
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT

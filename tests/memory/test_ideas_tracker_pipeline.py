@@ -2,15 +2,17 @@
 
 Three layers, from fastest to slowest:
 
-1. **Unit tests** — records_converter, helpers, program filtering
-2. **OOP contract tests** — PostRunHook ABC, NullPostRunHook, Hydra composability
-3. **Integration tests** — EvolutionEngine → PostRunHook → IdeaTracker pipeline,
-   including engine fault isolation and the full evolution → idea extraction flow
+1. **Unit tests** — records_converter, helpers, program filtering.
+2. **OOP contract tests** — PostRunHook ABC, NullPostRunHook, and the
+   ``_target_`` import-path mapping for hook construction.
+3. **Integration tests** — EvolutionEngine → PostRunHook → IdeaTracker
+   pipeline, including engine fault isolation and the full evolution →
+   idea extraction flow.
 
 Design principles:
-- Tests work with ``Program`` objects directly (no DataFrames)
-- All LLM calls are mocked with realistic behavior
-- OOP and Hydra composability are first-class concerns
+- Tests work with ``Program`` objects directly (no DataFrames).
+- All LLM calls are mocked with realistic behavior.
+- Constructor wiring and OOP contracts are first-class concerns.
 """
 
 from __future__ import annotations
@@ -524,11 +526,11 @@ class TestIdeaTrackerOnRunComplete:
 
 
 # ===========================================================================
-# 6. IdeaTracker legacy CLI run()
+# 6. IdeaTracker CLI run()
 # ===========================================================================
 
 
-class TestIdeaTrackerLegacyRun:
+class TestIdeaTrackerCliRun:
     """run() is the CLI entry point: accepts list[Program] directly."""
 
     @patch(
@@ -677,54 +679,50 @@ class TestEnginePostRunHookWiring:
 
 
 # ===========================================================================
-# 8. Hydra composability — config instantiation
+# 8. Hook construction contracts
 # ===========================================================================
 
 
-class TestHydraComposability:
-    """Verify that Hydra config YAML files resolve to the correct classes.
+class TestPostRunHookConstruction:
+    """Pin down the public construction surface of every PostRunHook.
 
-    These tests validate the _target_ → class mapping, ensuring that Hydra's
-    instantiate() will produce the right object type. We don't call Hydra's
-    instantiate() directly (it needs a full config context), but we verify
-    the import paths are valid.
+    Constructor wiring is the contract callers depend on when they
+    instantiate hooks from typed configuration. These tests verify that
+    the import paths resolve, that the classes are subclasses of the
+    shared ABC, and that ``EvolutionEngine`` accepts both the null hook
+    and any custom subclass.
     """
 
-    def test_none_yaml_target_is_null_hook(self) -> None:
-        """ideas_tracker=none → NullPostRunHook (no-op)."""
-        # Verify the _target_ class path resolves
+    def test_null_hook_resolves_to_postrunhook(self) -> None:
+        """``NullPostRunHook`` is a no-op PostRunHook subclass."""
         from gigaevo.evolution.engine.hooks import NullPostRunHook as Target
 
         hook = Target()
         assert isinstance(hook, PostRunHook)
 
-    def test_default_yaml_target_is_idea_tracker(self) -> None:
-        """ideas_tracker=default → IdeaTracker."""
+    def test_idea_tracker_is_postrunhook_subclass(self) -> None:
+        """``IdeaTracker`` is a PostRunHook subclass."""
         from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker as Target
 
         assert issubclass(Target, PostRunHook)
 
     def test_engine_accepts_both_hook_types(self) -> None:
-        """EvolutionEngine constructor works with NullPostRunHook and IdeaTracker."""
-        # NullPostRunHook
+        """``EvolutionEngine`` constructor accepts NullPostRunHook and any subclass."""
         engine1 = _make_engine(post_run_hook=NullPostRunHook())
         assert isinstance(engine1._post_run_hook, NullPostRunHook)
 
-        # Any PostRunHook subclass
         custom_hook = AsyncMock(spec=PostRunHook)
         engine2 = _make_engine(post_run_hook=custom_hook)
         assert engine2._post_run_hook is custom_hook
 
-    def test_post_run_hook_wired_through_evolution_engine_config(self) -> None:
-        """post_run_hook is a constructor parameter on EvolutionEngine (Hydra injects it)."""
+    def test_post_run_hook_is_optional_engine_kwarg(self) -> None:
+        """``post_run_hook`` is an optional EvolutionEngine constructor parameter."""
         import inspect
 
         sig = inspect.signature(EvolutionEngine.__init__)
         assert "post_run_hook" in sig.parameters
         param = sig.parameters["post_run_hook"]
-        assert (
-            param.default is None
-        )  # Optional — Hydra provides NullPostRunHook or IdeaTracker
+        assert param.default is None
 
 
 # ===========================================================================
