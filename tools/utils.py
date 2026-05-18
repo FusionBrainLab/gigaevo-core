@@ -388,6 +388,7 @@ def fetch_frontier_from_redis(
     """
     import json
 
+    r: redis.Redis | None = None
     try:
         r = redis.Redis(
             host=redis_host, port=redis_port, db=redis_db, decode_responses=True
@@ -418,6 +419,12 @@ def fetch_frontier_from_redis(
             f"Failed to fetch frontier from Redis {redis_prefix}@{redis_db}:{metric_key}: {e}"
         )
         return None
+    finally:
+        if r is not None:
+            try:
+                r.close()
+            except Exception:
+                pass
 
 
 def add_frontier_from_redis_to_dataframe(
@@ -458,7 +465,7 @@ def add_frontier_from_redis_to_dataframe(
     df_copy["frontier_fitness"] = df_copy[iteration_col].map(frontier_series)
 
     # Forward-fill any missing iterations (should not happen if frontier is complete)
-    df_copy["frontier_fitness"] = df_copy["frontier_fitness"].fillna(method="ffill")
+    df_copy["frontier_fitness"] = df_copy["frontier_fitness"].ffill()
 
     logger.info(
         f"Loaded frontier from Redis for {redis_prefix}: {len(frontier_series)} iterations"

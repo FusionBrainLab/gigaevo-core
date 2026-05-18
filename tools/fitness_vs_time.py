@@ -37,8 +37,14 @@ def fetch_fitness_history(
     Returns list of (unix_timestamp, fitness_value) sorted by time.
     """
     r = redis.Redis(host=host, port=port, db=db, decode_responses=True)
-    key = f"{prefix}:metrics:history:program_metrics:{metric}"
-    entries = r.lrange(key, 0, -1)
+    try:
+        key = f"{prefix}:metrics:history:program_metrics:{metric}"
+        entries = r.lrange(key, 0, -1)
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
     if not entries:
         return []
 
@@ -136,25 +142,31 @@ def plot_fitness_vs_time(
 def fetch_pool_stats(host: str, port: int, pool_name: str) -> dict[str, dict]:
     """Fetch current endpoint pool stats from Redis DB 15."""
     r = redis.Redis(host=host, port=port, db=15, decode_responses=True)
-    inflight = r.hgetall(f"llm_pool:{pool_name}:inflight")
-    # Find all stats keys for this pool
-    stats_keys = r.keys(f"llm_pool:{pool_name}:stats:*")
-    endpoint_stats = {}
-    for sk in stats_keys:
-        data = r.hgetall(sk)
-        # Match stats key back to endpoint via inflight hash
-        for ep in inflight:
-            from hashlib import sha256
+    try:
+        inflight = r.hgetall(f"llm_pool:{pool_name}:inflight")
+        # Find all stats keys for this pool
+        stats_keys = r.keys(f"llm_pool:{pool_name}:stats:*")
+        endpoint_stats = {}
+        for sk in stats_keys:
+            data = r.hgetall(sk)
+            # Match stats key back to endpoint via inflight hash
+            for ep in inflight:
+                from hashlib import sha256
 
-            if sha256(ep.encode()).hexdigest()[:12] in sk:
-                endpoint_stats[ep] = {
-                    "inflight": int(inflight.get(ep, 0)),
-                    "requests": int(data.get("requests", 0)),
-                    "errors": int(data.get("errors", 0)),
-                    "total_latency_ms": float(data.get("total_latency_ms", 0)),
-                }
-                break
-    return endpoint_stats
+                if sha256(ep.encode()).hexdigest()[:12] in sk:
+                    endpoint_stats[ep] = {
+                        "inflight": int(inflight.get(ep, 0)),
+                        "requests": int(data.get("requests", 0)),
+                        "errors": int(data.get("errors", 0)),
+                        "total_latency_ms": float(data.get("total_latency_ms", 0)),
+                    }
+                    break
+        return endpoint_stats
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
 
 
 def print_pool_summary(host: str, port: int):

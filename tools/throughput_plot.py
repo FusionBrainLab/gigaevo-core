@@ -74,22 +74,29 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load event-driven metrics from Redis ──
-    # First pass: find global t0 across ALL runs (BUG-01 fix)
+    # First pass picks the earliest timestamp across every run so the
+    # per-run time axes share a common origin.
     all_series = {}
     for run in m.runs:
         r = redis.Redis(db=run.db)
-        total_count = get_time_series(
-            r, run.prefix, "program_metrics:programs_total_count"
-        )
-        valid_count = get_time_series(
-            r, run.prefix, "program_metrics:programs_valid_count"
-        )
-        frontier = get_time_series(
-            r, run.prefix, "program_metrics:valid_frontier_fitness"
-        )
-        per_program = get_time_series(
-            r, run.prefix, "program_metrics:valid_iter_fitness_mean"
-        )
+        try:
+            total_count = get_time_series(
+                r, run.prefix, "program_metrics:programs_total_count"
+            )
+            valid_count = get_time_series(
+                r, run.prefix, "program_metrics:programs_valid_count"
+            )
+            frontier = get_time_series(
+                r, run.prefix, "program_metrics:valid_frontier_fitness"
+            )
+            per_program = get_time_series(
+                r, run.prefix, "program_metrics:valid_iter_fitness_mean"
+            )
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
         all_series[run.label] = (
             total_count,
             valid_count,

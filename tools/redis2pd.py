@@ -1,10 +1,12 @@
-import sys
-
-sys.path.append("../gigaevo-core-internal")
 import argparse
 import asyncio
 import json
+import os
+import sys
+import tempfile
 from pathlib import Path
+
+sys.path.append("../gigaevo-core-internal")
 
 import pandas as pd
 
@@ -14,6 +16,26 @@ from tools.utils import (
     fetch_evolution_dataframe,
     prepare_iteration_dataframe,
 )
+
+
+def _atomic_write_csv(df: pd.DataFrame, path: Path) -> None:
+    """Write ``df`` to ``path`` via tmpfile + os.replace.
+
+    Avoids leaving a half-written CSV when two writers target the same
+    output or when the process is interrupted mid-flush.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    )
+    os.close(fd)
+    tmp_path = Path(tmp)
+    try:
+        df.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,13 +66,12 @@ async def export_redis_run_to_csv(
     add_stage_results: bool = False,
 ) -> Path:
     output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     df: pd.DataFrame = await fetch_evolution_dataframe(
         config, add_stage_results=add_stage_results
     )
     df = _serialize_complex_columns(df)
-    df.to_csv(output_path, index=False)
+    _atomic_write_csv(df, output_path)
     return output_path
 
 
@@ -127,6 +148,7 @@ Examples:
         print(f"No data found for {config.display_label()}")
         return
 
+    output_path = Path(args.output_file)
     if args.frontier_csv:
         prepared = prepare_iteration_dataframe(df)
         if prepared.empty:
@@ -141,12 +163,12 @@ Examples:
             .sort_values(iteration_col)
             .rename(columns={iteration_col: "gen", frontier_col: "best_val"})
         )
-        frontier_df.to_csv(args.output_file, index=False)
-        print(f"Frontier CSV: {len(frontier_df)} gens → {args.output_file}")
+        _atomic_write_csv(frontier_df, output_path)
+        print(f"Frontier CSV: {len(frontier_df)} gens → {output_path}")
     else:
         df = _serialize_complex_columns(df)
-        df.to_csv(args.output_file, index=False)
-        print(f"Full history: {len(df)} programs → {args.output_file}")
+        _atomic_write_csv(df, output_path)
+        print(f"Full history: {len(df)} programs → {output_path}")
 
 
 if __name__ == "__main__":
