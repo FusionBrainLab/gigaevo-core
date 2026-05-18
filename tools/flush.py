@@ -207,7 +207,7 @@ def main():
               # Execute flush
               %(prog)s --db 0 1 2 3 --confirm
 
-              # Flush specific DBs for P3 experiment
+              # Flush specific DBs
               %(prog)s --db 14 15 --confirm
         """),
     )

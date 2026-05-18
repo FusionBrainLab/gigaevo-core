@@ -3,8 +3,8 @@
 Trace evolutionary ancestry of a program back to its root seed.
 
 Reads all programs from Redis and walks the parent chain for the
-requested program(s). Useful for Phase 5 "Lessons Learned" — which
-mutations drove the best result?
+requested program(s). Useful for post-run analysis — which mutations
+drove the best result?
 
 Example usage:
     # Trace best program by fitness

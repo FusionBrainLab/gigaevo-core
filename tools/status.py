@@ -152,7 +152,6 @@ def get_run_status(
         return {
             "gen": gen,
             "metrics": metrics,
-            # Keep best_val_fitness for backward compat
             "best_val_fitness": metrics.get("fitness"),
             "total_keys": total_keys,
             "total_programs": total_programs,

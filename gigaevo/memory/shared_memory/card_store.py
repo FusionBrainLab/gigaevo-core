@@ -94,7 +94,8 @@ class CardStore:
         if old and old != entity_id:
             self.card_id_by_entity.pop(old, None)
             self.entity_version.pop(old, None)
-        # Clean up old card that previously owned this entity
+        # Detach any other card already pointing at this entity so the mapping
+        # stays one-to-one in both directions.
         prev_card = self.card_id_by_entity.get(entity_id)
         if prev_card and prev_card != card_id:
             self.entity_by_card_id.pop(prev_card, None)

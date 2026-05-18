@@ -3,7 +3,7 @@
 Gen-by-gen trajectory dump for a GigaEvo evolution run.
 
 Reads Redis metrics keys directly — lightweight, no full program fetch.
-Use at checkpoints during a run or for Phase 5 analysis.
+Use at checkpoints during a run or for post-run analysis.
 
 Example usage:
     PYTHONPATH=. python tools/trajectory.py --run chains/hotpotqa/static@4:O
