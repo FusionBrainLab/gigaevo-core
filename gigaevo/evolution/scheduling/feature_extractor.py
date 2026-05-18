@@ -85,26 +85,20 @@ class ChainFeatureExtractor:
             '"system_prompt": ""' not in code and '"system_prompt"' in code
         )
 
-        # Max dependency fan-in: steps with more dependencies receive
-        # more context from prior steps -> more tokens -> longer inference
+        # Per-step parsed dependency lists in order of appearance. Steps are
+        # numbered 1..N in source code; the list index is the 0-based step.
+        dep_lists: list[list[int]] = []
         max_deps = 0.0
         for m in self._DEP_RE.finditer(code):
             deps_str = m.group(1).strip()
-            if deps_str:
-                n_deps = len([d for d in deps_str.split(",") if d.strip()])
-                max_deps = max(max_deps, float(n_deps))
-
-        # DAG depth: longest path from any root to any leaf.
-        # Steps are numbered 1..N in the code; deps_list is in order of appearance.
-        dep_lists: list[list[int]] = []
-        for m in self._DEP_RE.finditer(code):
-            deps_str = m.group(1).strip()
-            if deps_str:
-                dep_lists.append(
-                    [int(d.strip()) for d in deps_str.split(",") if d.strip()]
-                )
-            else:
+            if not deps_str:
                 dep_lists.append([])
+                continue
+            parsed = [int(d.strip()) for d in deps_str.split(",") if d.strip()]
+            dep_lists.append(parsed)
+            # Max dependency fan-in: more deps -> more context tokens per step
+            if len(parsed) > max_deps:
+                max_deps = float(len(parsed))
 
         dag_depth = 0.0
         if dep_lists:
