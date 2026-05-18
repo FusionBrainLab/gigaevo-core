@@ -290,11 +290,14 @@ class SingleIslandConfig(FrozenStrictModel):
 
 
 class MultiIslandConfig(FrozenStrictModel):
-    """Multiple islands with periodic migrant exchange. Covers
-    multi_island.yaml."""
+    """Multiple islands with periodic migrant exchange."""
 
     kind: Literal["multi_island"] = "multi_island"
-    islands: list[IslandConfig] = Field(min_length=2)
+    # ``default_factory=list`` lets tyro construct a CLI parser for the
+    # inactive branch of ``AlgorithmConfig`` when ``SingleIslandConfig``
+    # is selected; ``min_length=2`` still rejects an empty list at
+    # validation time, so the default is unreachable in a real run.
+    islands: list[IslandConfig] = Field(default_factory=list, min_length=2)
     migration_interval: int = Field(default=50, ge=1)
     max_migrants_per_island: int = Field(default=5, ge=1)
     enable_migration: bool = True

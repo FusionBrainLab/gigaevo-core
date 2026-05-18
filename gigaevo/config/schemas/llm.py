@@ -68,7 +68,11 @@ class BanditRouterConfig(FrozenStrictModel):
     """
 
     kind: Literal["bandit"] = "bandit"
-    models: list[ChatOpenAIConfig] = Field(min_length=1)
+    # ``default_factory=list`` lets tyro construct a CLI parser for the
+    # inactive ``LLMConfig`` union branch; ``min_length=1`` still
+    # rejects an empty list at validation time so the default never
+    # reaches a real run.
+    models: list[ChatOpenAIConfig] = Field(default_factory=list, min_length=1)
     skip_reward_on_acceptor_reject: bool = False
     exploration_constant: float = Field(default=1.41, gt=0.0)
     window_size: int = Field(default=100, ge=1)
@@ -107,7 +111,11 @@ class EnsembleRouterConfig(FrozenStrictModel):
     """
 
     kind: Literal["ensemble"] = "ensemble"
-    models: list[ChatOpenAIConfig] = Field(min_length=1)
+    # ``default_factory=list`` lets tyro construct a CLI parser for the
+    # inactive ``LLMConfig`` union branch; ``min_length=1`` still
+    # rejects an empty list at validation time so the default never
+    # reaches a real run.
+    models: list[ChatOpenAIConfig] = Field(default_factory=list, min_length=1)
     probabilities: list[float] | None = None
     name: str = Field(default="default", min_length=1)
 
