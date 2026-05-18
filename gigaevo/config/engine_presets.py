@@ -13,6 +13,8 @@ non-bus variants; a private helper keeps that wiring in one place.
 
 from __future__ import annotations
 
+from typing import Final
+
 from gigaevo.config.defaults import (
     DEFAULT_LOOP_INTERVAL_S,
     DEFAULT_MAX_ELITES_PER_GENERATION,
@@ -37,17 +39,17 @@ from gigaevo.config.schemas import (
 
 # Steady-state engine: in-flight DAG queue cap, tuned for ~3-4 GPU
 # servers with 4 concurrent runs.
-_STEADY_STATE_MAX_IN_FLIGHT: int = 8
+_STEADY_STATE_MAX_IN_FLIGHT: Final[int] = 8
 
 # Migration-bus literals shared across the bus and ring topology
 # variants.
-_BUS_MAX_IMPORTS_PER_GENERATION: int = 10
-_BUS_MIGRATION_BUS_DB: int = 15
-_BUS_MAX_BUFFER_SIZE: int = 30
-_BUS_CONSUME_INTERVAL_S: float = 3.0
-_BUS_MAX_CONSUME_PER_POLL: int = 20
-_BUS_MAX_STREAM_LEN: int = 1000
-_BUS_CLAIM_TTL_S: int = 120
+_BUS_MAX_IMPORTS_PER_GENERATION: Final[int] = 10
+_BUS_MIGRATION_BUS_DB: Final[int] = 15
+_BUS_MAX_BUFFER_SIZE: Final[int] = 30
+_BUS_CONSUME_INTERVAL_S: Final[float] = 3.0
+_BUS_MAX_CONSUME_PER_POLL: Final[int] = 20
+_BUS_MAX_STREAM_LEN: Final[int] = 1000
+_BUS_CLAIM_TTL_S: Final[int] = 120
 
 
 def _default_parent_selector(

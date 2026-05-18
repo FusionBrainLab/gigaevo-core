@@ -6,16 +6,14 @@ problem context, the LLM router with bandit parameters resolved from
 the metrics context, the evolution strategy with the storage threaded
 through, the runtime engine config with required behavior keys
 resolved, the evolution context composing those, the pipeline builder,
-and the DAG blueprint.
+the DAG blueprint, and the runtime DAG-runner config.
 
 The function is intentionally explicit: every construction is a direct
-class call with kwargs derived from typed schema fields.
-
-Several runtime components -- mutation operator, DAG runner, evolution
-engine, program loader, writer, metrics tracker -- are not yet
-schematised. :func:`build_object_graph` returns the partial graph and
-:func:`run_with_config` surfaces the remaining gaps via a log warning
-before returning.
+class call with kwargs derived from typed schema fields. The mutation
+operator, DAG runner instance, program loader, writer, metrics tracker
+and evolution-engine compositor are left to the caller —
+:func:`run_with_config` surfaces those gaps via a log warning before
+returning.
 """
 
 from __future__ import annotations
@@ -75,7 +73,7 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
     canonical surface that consumers (CLI, parity harness, sweep
     utility) read against.
 
-    Currently constructed:
+    Top-level keys:
         - ``redis_storage``: RedisProgramStorage
         - ``problem_context``: ProblemContext (lazy MetricsContext)
         - ``llm``: MultiModelRouter or BanditModelRouter
@@ -84,17 +82,14 @@ def build_object_graph(cfg: ExperimentConfig) -> dict[str, Any]:
         - ``evolution_context``: EvolutionContext
         - ``pipeline_builder``: PipelineBuilder subclass
         - ``dag_blueprint``: DAGBlueprint
+        - ``runtime_runner_config``: DagRunnerConfig
         - ``primary_metric``: str (resolved from problem)
         - ``higher_is_better``: bool (resolved from problem)
         - ``required_behavior_keys``: list[str]
 
-    Not yet constructed:
-        - ``mutation_operator``
-        - ``dag_runner``
-        - ``writer``
-        - ``metrics_tracker``
-        - ``program_loader``
-        - ``evolution_engine`` (composes the above)
+    The mutation operator, DAG-runner instance, writer, metrics
+    tracker, program loader and the evolution-engine compositor are
+    out of scope — :func:`run_with_config` surfaces the gap.
     """
     from gigaevo.database.redis_program_storage import RedisProgramStorage
     from gigaevo.entrypoint.evolution_context import EvolutionContext

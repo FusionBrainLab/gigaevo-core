@@ -147,11 +147,9 @@ def build_single_island_fitness_prop_fixed_temp(
     temperature: float = 0.14,
     **kwargs,  # type: ignore[no-untyped-def]
 ) -> SingleIslandConfig:
-    """Fixed-temperature softmax variant matching
-    ``single_island_fitness_prop_fixed_temp.yaml``. ``temperature``
-    operates in normalised [0, 1] fitness space — 0.14 gives a ~7×
-    weight ratio per unit of normalised fitness (moderate
-    differentiation)."""
+    """Fixed-temperature softmax variant. ``temperature`` operates in
+    normalised [0, 1] fitness space — 0.14 gives a ~7x weight ratio
+    per unit of normalised fitness (moderate differentiation)."""
     return build_single_island(
         fitness_key=fitness_key,
         higher_is_better=higher_is_better,
@@ -171,9 +169,8 @@ def build_single_island_weighted(
     fitness_bounds: tuple[float, float] = (0.0, 1.0),
     primary_resolution: int = DEFAULT_PRIMARY_RESOLUTION,
 ) -> SingleIslandConfig:
-    """1-D MAP-Elites with WeightedEliteSelector (ShinkaEvolve-style
-    sigmoid × child-count penalty). Matches
-    ``single_island_weighted.yaml``."""
+    """1-D MAP-Elites with ``WeightedEliteSelector`` — sigmoid x
+    child-count penalty (ShinkaEvolve-style)."""
     return SingleIslandConfig(
         island=_island_with_default_selectors(
             fitness_key=fitness_key,
@@ -205,9 +202,9 @@ def build_single_island_2d(
     island_id: str = DEFAULT_ISLAND_ID,
     max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
 ) -> SingleIslandConfig:
-    """2-D MAP-Elites (fitness × runtime) matching
-    ``single_island_2d.yaml``. 30 × 5 = 150 cells by default,
-    matching the 1-D budget but distributing across a runtime axis."""
+    """2-D MAP-Elites (fitness x runtime). 30 x 5 = 150 cells by
+    default, matching the 1-D budget but distributing across a
+    runtime axis."""
     behavior_space = BehaviorSpaceConfig(
         keys=["fitness", "runtime"],
         bounds=[fitness_bounds, runtime_bounds],
@@ -241,11 +238,10 @@ def build_topology_3d(
     island_id: str = DEFAULT_ISLAND_ID,
     max_size: int | None = DEFAULT_ISLAND_MAX_SIZE,
 ) -> SingleIslandConfig:
-    """3-D MAP-Elites on (dag_depth × max_dependency_fan_in ×
-    third_axis) matching ``topology_3d.yaml`` (third_axis=
-    "n_deep_retrieval", 5×5×6=150 cells) or ``topology_3d_ret.yaml``
-    (third_axis="n_retrievals", same shape with bounds shifted to
-    (0, 6))."""
+    """3-D MAP-Elites on (dag_depth x max_dependency_fan_in x
+    third_axis). Default shape is ``third_axis="n_deep_retrieval"``,
+    5x5x6=150 cells; the ``_ret`` and ``_7step`` siblings reshape the
+    third axis or tighten the bounds."""
     behavior_space = BehaviorSpaceConfig(
         keys=["dag_depth", "max_dependency_fan_in", third_axis],
         bounds=list(bounds),
@@ -270,8 +266,8 @@ def build_topology_3d(
 def build_topology_3d_ret(
     *, fitness_key: str = "fitness", higher_is_better: bool = True
 ) -> SingleIslandConfig:
-    """``topology_3d_ret.yaml`` shape: third axis is the combined
-    n_retrievals (retrieve + retrieve_deep), bounds (0, 6)."""
+    """Topology-3D variant: third axis is the combined
+    ``n_retrievals`` (retrieve + retrieve_deep), bounds (0, 6)."""
     return build_topology_3d(
         fitness_key=fitness_key,
         higher_is_better=higher_is_better,
@@ -284,8 +280,8 @@ def build_topology_3d_ret(
 def build_topology_3d_7step(
     *, fitness_key: str = "fitness", higher_is_better: bool = True
 ) -> SingleIslandConfig:
-    """``topology_3d_7step.yaml`` shape: 4 × 3 × 5 = 60 cells, bounds
-    tightened for 7-step max chains."""
+    """Topology-3D variant for 7-step max chains: 4 x 3 x 5 = 60
+    cells with tightened bounds."""
     return build_topology_3d(
         fitness_key=fitness_key,
         higher_is_better=higher_is_better,
@@ -312,21 +308,19 @@ def build_multi_island_fitness_complexity(
     max_migrants_per_island: int = DEFAULT_MAX_MIGRANTS_PER_ISLAND,
     enable_migration: bool = DEFAULT_ENABLE_MIGRATION,
 ) -> MultiIslandConfig:
-    """Two-island shape from ``multi_island.yaml``.
+    """Two-island fitness/complexity shape.
 
-    Fitness island (``primary_resolution × validity_resolution`` cells,
-    150 × 2 by default): archive scores by primary fitness only;
-    archive remover drops lowest-fitness elites.
+    Fitness island (``primary_resolution x validity_resolution``
+    cells, 150 x 2 by default): archive scores by primary fitness
+    only; archive remover drops lowest-fitness elites.
 
-    Simplicity island (``20 × 10`` cells matching the YAML's hardcoded
-    coarser fitness grid plus a complexity axis): archive scores by
-    sum of primary fitness MINUS complexity (the YAML pins
-    ``fitness_keys=[primary, complexity_score]`` with
-    ``higher_is_better=[True, False]`` so the sum subtracts complexity
-    from fitness, biasing the archive toward simpler high-fitness
-    programs). Archive remover drops most-complex programs first
-    rather than lowest-fitness — the goal on this island is
-    code simplicity, so the eviction policy mirrors that.
+    Simplicity island (20 x 10 cells, a coarser fitness grid plus a
+    complexity axis): archive scores by the sum of primary fitness
+    MINUS complexity (``fitness_keys=[primary, complexity_score]``
+    with ``higher_is_better=[True, False]``), biasing the archive
+    toward simpler high-fitness programs. Archive remover drops the
+    most-complex programs first — the goal on this island is code
+    simplicity, so the eviction policy mirrors that.
 
     Migration knobs flow from defaults; the bandit selects between
     islands by recent improvement rate every

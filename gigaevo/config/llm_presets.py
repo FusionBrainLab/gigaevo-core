@@ -16,6 +16,7 @@ parameter with ``build_openrouter_bandit(temperature=0.3)``.
 from __future__ import annotations
 
 import os
+from typing import Final
 
 from gigaevo.config.defaults import (
     DEFAULT_LLM_MAX_TOKENS,
@@ -28,9 +29,9 @@ from gigaevo.config.schemas import (
     EnsembleRouterConfig,
 )
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_BASE_URL: Final[str] = "https://openrouter.ai/api/v1"
 
-OPENROUTER_FOUR_MODELS = (
+OPENROUTER_FOUR_MODELS: Final[tuple[str, ...]] = (
     "google/gemini-2.5-flash",
     "google/gemini-3-flash-preview",
     "deepseek/deepseek-v3.2",

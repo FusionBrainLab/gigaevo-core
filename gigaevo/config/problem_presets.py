@@ -1,21 +1,19 @@
 """Convenience builders for the shipped problem directories.
 
-The Phase 1 :class:`ProblemConfig` from
-:mod:`gigaevo.config.schemas.problem` already takes an arbitrary
-``problem_dir`` path and resolves the metrics + task description
-lazily at build time. This module pins the canonical paths for the
-shipped problem layouts under ``problems/`` so experiment files
-compose with one line:
+:class:`ProblemConfig` from :mod:`gigaevo.config.schemas.problem`
+accepts an arbitrary ``problem_dir`` path and resolves the metrics +
+task description lazily at build time. This module pins the canonical
+paths for the problem layouts under ``problems/`` so experiment files
+compose with one line::
 
     from gigaevo.config.problem_presets import build_hotpotqa_static_f1
     cfg = ExperimentConfig(..., problem=build_hotpotqa_static_f1())
 
-The presets correspond to the directories that actually ship with
-runtime assets (metrics.yaml + task_description.txt). Experimental
-variants under the same family — for example, the dozens of
-algotune subproblems — get a parametrised helper rather than one
-preset each; that keeps this module small while still covering every
-shipped path.
+The presets correspond to the directories that ship with runtime
+assets (metrics.yaml + task_description.txt). Experimental variants
+under the same family — for example, the dozens of algotune
+subproblems — get a parametrised helper rather than one preset each,
+keeping this module small while still covering every shipped path.
 """
 
 from __future__ import annotations
