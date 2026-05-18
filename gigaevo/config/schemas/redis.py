@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import Field
 
 from gigaevo.config.schemas._base import FrozenStrictModel
-from gigaevo.database.redis.config import RedisProgramStorageConfig
+
+if TYPE_CHECKING:
+    from gigaevo.database.redis.config import RedisProgramStorageConfig
 
 
 class RedisConfig(FrozenStrictModel):
@@ -33,6 +37,8 @@ class RedisConfig(FrozenStrictModel):
         max_retries: int = 5,
         retry_delay: float = 0.2,
     ) -> RedisProgramStorageConfig:
+        from gigaevo.database.redis.config import RedisProgramStorageConfig
+
         return RedisProgramStorageConfig(
             redis_url=self.url,
             key_prefix=key_prefix,

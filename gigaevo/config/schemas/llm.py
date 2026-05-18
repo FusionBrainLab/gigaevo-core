@@ -3,14 +3,13 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Annotated, Literal
 
-from langchain_openai import ChatOpenAI
 from pydantic import Field, model_validator
 
 from gigaevo.config.schemas._base import FrozenStrictModel
-from gigaevo.llm.strict_chat_openai import strict_chat_openai
 
 if TYPE_CHECKING:
     from langchain_core.runnables import Runnable
+    from langchain_openai import ChatOpenAI
 
     from gigaevo.utils.trackers.base import LogWriter
 
@@ -46,6 +45,8 @@ class ChatOpenAIConfig(FrozenStrictModel):
         return self
 
     def build(self) -> ChatOpenAI:
+        from gigaevo.llm.strict_chat_openai import strict_chat_openai
+
         return strict_chat_openai(
             model=self.model,
             api_key=self.api_key,
