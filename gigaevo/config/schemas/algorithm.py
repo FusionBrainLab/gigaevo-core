@@ -293,11 +293,15 @@ class MultiIslandConfig(FrozenStrictModel):
     """Multiple islands with periodic migrant exchange."""
 
     kind: Literal["multi_island"] = "multi_island"
-    # ``default_factory=list`` lets tyro construct a CLI parser for the
+    # ``default_factory=list`` lets tyro render help text for the
     # inactive branch of ``AlgorithmConfig`` when ``SingleIslandConfig``
-    # is selected; ``min_length=2`` still rejects an empty list at
-    # validation time, so the default is unreachable in a real run.
-    islands: list[IslandConfig] = Field(default_factory=list, min_length=2)
+    # is selected. ``validate_default=True`` makes ``min_length=2`` fire
+    # when a caller constructs ``MultiIslandConfig()`` directly without
+    # an ``islands`` argument; the constructor exits with a typed error
+    # instead of accepting an empty list silently.
+    islands: list[IslandConfig] = Field(
+        default_factory=list, min_length=2, validate_default=True
+    )
     # ``migration_interval=25`` matches the shipped preset value in
     # ``gigaevo.config.defaults.DEFAULT_MIGRATION_INTERVAL`` so callers
     # that instantiate :class:`MultiIslandConfig` directly observe the
