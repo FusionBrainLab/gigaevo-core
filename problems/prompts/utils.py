@@ -125,6 +125,31 @@ def validate_prompt_template(
         )
 
 
+def _aggregate_call_logs(logs: list[CallLog]) -> CallLog:
+    """Aggregate a sample's per-attempt CallLogs into a single CallLog.
+
+    The client's retry decorator may push multiple entries before the call
+    that yielded the returned response (for example when an earlier attempt
+    succeeded at the HTTP layer but tripped the cost-budget check). Summing
+    the entries preserves the full budget consumed for this sample; the
+    empty-list branch guards against the theoretical case where no log was
+    appended (zero-cost CallLog so downstream aggregation stays well-defined).
+    """
+    if not logs:
+        return CallLog(
+            prompt_tokens=0,
+            completion_tokens=0,
+            cost=0.0,
+            cost_utilization=0.0,
+        )
+    return CallLog(
+        prompt_tokens=sum(log.prompt_tokens for log in logs),
+        completion_tokens=sum(log.completion_tokens for log in logs),
+        cost=sum(log.cost for log in logs),
+        cost_utilization=sum(log.cost_utilization for log in logs),
+    )
+
+
 async def _process_sample(
     client: LLMClient,
     prompt_template: str,
@@ -151,11 +176,11 @@ async def _process_sample(
         # Format prompt with sample
         prompt = prompt_template.format(**sample)
 
-        # Call LLM (single call per sample for prompts)
+        # Call LLM. The retry decorator may push multiple entries; aggregate
+        # them so retried-attempt cost is not silently dropped.
         raw_response = await client(prompt)
 
-        # Extract the single call log
-        call_log = client.call_logs[0]
+        call_log = _aggregate_call_logs(client.call_logs)
 
         return index, raw_response, call_log
 
