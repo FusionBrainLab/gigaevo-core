@@ -91,8 +91,13 @@ def _walk_lineage(
     depth: int | None,
     metric: str,
 ) -> list[Program]:
-    """Walk ancestor chain from start to root. Returns chain [start, parent, grandparent, ...]."""
+    """Walk ancestor chain from start to root. Returns chain [start, parent, grandparent, ...].
+
+    Stops on the first repeated program ID — a corrupted parent chain (cycle)
+    would otherwise loop indefinitely when no explicit depth is given.
+    """
     chain: list[Program] = [start]
+    seen: set[str] = {start.id}
     current = start
     hops = 0
     while True:
@@ -103,10 +108,13 @@ def _walk_lineage(
             break  # root reached
         # Handle multi-parent case: follow first parent, note merge
         parent_id = parents[0]
+        if parent_id in seen:
+            break  # cycle in parent chain — stop walking
         parent = id_map.get(parent_id)
         if parent is None:
             break  # parent not in Redis (e.g. external seed)
         chain.append(parent)
+        seen.add(parent_id)
         current = parent
         hops += 1
     return chain
