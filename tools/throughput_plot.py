@@ -107,7 +107,7 @@ def main():
 
     # Global t0: earliest timestamp across ALL runs and ALL metrics
     global_starts = []
-    for label, (tc, vc, fr, pp, _) in all_series.items():
+    for _label, (tc, vc, fr, pp, _) in all_series.items():
         for s in [tc, vc, fr, pp]:
             if s:
                 global_starts.append(s[0][0])

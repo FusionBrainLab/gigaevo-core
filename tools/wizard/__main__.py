@@ -30,7 +30,7 @@ def load_problem_config_class(problem_type: str) -> type:
             f"gigaevo.problems.types.{problem_type}.config"
         )
 
-        for name, obj in inspect.getmembers(module, inspect.isclass):
+        for _name, obj in inspect.getmembers(module, inspect.isclass):
             if issubclass(obj, ProblemConfig) and obj is not ProblemConfig:
                 return obj
 
