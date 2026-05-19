@@ -34,11 +34,12 @@ def build() -> ExperimentConfig:
     # The coevolved prompt fetcher targets a paired prompt-evolution
     # run on Redis DB 6. ``main_redis_prefix`` matches the problem
     # name so the prompt run writes outcome stats back to a stable
-    # key namespace.
+    # key namespace; ``main_redis_db`` mirrors the main run's DB so
+    # an override flows through both sides of the pairing.
     prompt_fetcher = GigaEvoArchivePromptFetcherConfig(
         prompt_redis_db=6,
         main_redis_prefix="heilbron",
-        main_redis_db=0,
+        main_redis_db=redis.db,
     )
     return ExperimentConfig(
         name=_NAME,
