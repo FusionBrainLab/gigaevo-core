@@ -65,7 +65,7 @@ def parse_retrieved_titles(step_output: str) -> list[str]:
     return re.findall(r"\[(?:\d+)\]\s+(.+?)\s+\|", step_output)
 
 
-def validate(chain_spec: dict) -> dict:
+def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     """Validate chain specification and compute fitness metrics.
 
     P1 (Rotation) + P2 (ASI) combined:
