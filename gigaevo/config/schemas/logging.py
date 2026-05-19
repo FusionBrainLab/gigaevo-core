@@ -8,6 +8,7 @@ from pydantic import Field, field_validator
 from gigaevo.config.schemas._base import FrozenStrictModel, reject_empty_or_cwd_path
 
 if TYPE_CHECKING:
+    from gigaevo.utils.trackers.composite import CompositeLogger
     from gigaevo.utils.trackers.core import GenericLogger
 
 
@@ -229,7 +230,7 @@ class LoggingConfig(FrozenStrictModel):
         description="One or more metric tracker backends; the writer fans events out to each.",
     )
 
-    def build_writer(self) -> GenericLogger:
+    def build_writer(self) -> CompositeLogger:
         from gigaevo.utils.trackers import init_composite
 
         return init_composite(*(t.build() for t in self.trackers))
