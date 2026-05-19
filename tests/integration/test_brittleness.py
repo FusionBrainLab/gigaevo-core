@@ -145,10 +145,12 @@ SEED_CODE = _make_code(fitness=1.0, x=0.0)
 class TestLineageRace:
     """Parallel mutations from the same parent can lose child references.
 
-    Root cause: generate_mutations() does a non-atomic read-modify-write
-    on parent.lineage.children (mutation.py:74-78).  Two concurrent tasks
-    each fetch a fresh parent, add their own child, and persist — the last
-    writer wins, losing the other's child reference.
+    ``generate_mutations`` performs a non-atomic read-modify-write on
+    ``parent.lineage.children``: two concurrent tasks each fetch a fresh
+    parent, append their own child, and persist, so the last writer wins.
+    The test pins the lower-bound invariant (at least one child is
+    recorded) and skips on the rare interleaving where fewer than all
+    children survive under fakeredis.
     """
 
     async def test_parallel_mutations_from_same_parent_can_lose_children(self) -> None:
@@ -215,11 +217,12 @@ class TestLineageRace:
 
 
 class TestIngestionAtomicity:
-    """When strategy.add() succeeds but on_program_ingested() raises,
-    the program ends up in the archive AND discarded.
+    """Behaviour when ``on_program_ingested`` raises after ``strategy.add``
+    has already accepted the program.
 
-    Root cause: core.py:291-315 catches the exception and discards the
-    program, but strategy.add() already added it to the archive. No rollback.
+    The acceptance path commits to the archive before invoking the hook,
+    so the hook failure is treated as non-fatal: the program stays in the
+    archive and remains DONE; no ghost or discarded duplicate appears.
     """
 
     async def test_on_program_ingested_failure_does_not_ghost_archive(self) -> None:
