@@ -97,7 +97,7 @@ def plot_fitness_vs_time(
     output: str,
     title: str = "Fitness vs Wall-Clock Time",
     metric_label: str = "Soft Fractional Retrieval Coverage",
-):
+) -> None:
     """Plot fitness trajectories against wall-clock time.
 
     Args:
@@ -169,7 +169,7 @@ def fetch_pool_stats(host: str, port: int, pool_name: str) -> dict[str, dict]:
             pass
 
 
-def print_pool_summary(host: str, port: int):
+def print_pool_summary(host: str, port: int) -> None:
     """Print current mutation and chain server load."""
     for pool_name, label in [
         ("mutation", "Mutation LLM"),
@@ -191,7 +191,7 @@ def print_pool_summary(host: str, port: int):
         print(f"    Total: {total_req} requests, {total_err} errors")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Plot fitness vs wall-clock time")
     parser.add_argument("--experiment", help="Load runs from experiment.yaml")
     parser.add_argument(

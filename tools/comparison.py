@@ -59,7 +59,7 @@ MATPLOTLIB_COLORS = [
 ]
 
 
-def _configure_plotting_style(use_latex: bool = False):
+def _configure_plotting_style(use_latex: bool = False) -> None:
     """Configure matplotlib for publication-quality plots.
 
     Args:
@@ -342,7 +342,9 @@ def _aggregate_per_iteration(
     )
 
 
-def _select_frontier_improvements(df, iteration_col: str, minimize: bool):
+def _select_frontier_improvements(
+    df: pd.DataFrame, iteration_col: str, minimize: bool
+) -> pd.DataFrame:
     fp = (
         df[[iteration_col, "frontier_fitness"]]
         .dropna()

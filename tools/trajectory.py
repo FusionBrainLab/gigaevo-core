@@ -19,7 +19,7 @@ import redis as redis_lib
 from tools.status import parse_run_arg
 
 
-def _read_list(r, key: str) -> list[dict]:
+def _read_list(r: redis_lib.Redis, key: str) -> list[dict]:
     """Read all entries from a Redis list key as parsed JSON dicts."""
     raw_entries = r.lrange(key, 0, -1)
     result = []
@@ -31,7 +31,7 @@ def _read_list(r, key: str) -> list[dict]:
     return result
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Print gen-by-gen trajectory for a GigaEvo evolution run",
         formatter_class=argparse.RawDescriptionHelpFormatter,

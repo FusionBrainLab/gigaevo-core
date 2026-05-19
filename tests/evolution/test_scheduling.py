@@ -353,6 +353,65 @@ class TestRidgePredictor:
         p.update(_prog(), -10.0)
         assert not p.is_warm()
 
+    def test_predict_does_not_hold_lock_across_extract(self) -> None:
+        """Feature extraction must run outside the model lock.
+
+        The extractor is an arbitrary user-supplied object that may be
+        expensive. Holding the predictor lock across the extract call
+        serializes every concurrent prediction. The fix snapshots the
+        model under the lock and releases it before calling extract.
+        """
+        import threading
+        import time
+
+        class ProbeExtractor:
+            def __init__(self) -> None:
+                self.lock_state_at_extract: list[bool] = []
+
+            def extract(
+                self, program: Program
+            ) -> dict[str, float]:  # noqa: ARG002
+                # The predictor's lock must be free while extract runs.
+                acquired = predictor._lock.acquire(blocking=False)
+                self.lock_state_at_extract.append(acquired)
+                if acquired:
+                    predictor._lock.release()
+                # Tiny sleep so concurrent threads have a chance to overlap.
+                time.sleep(0.001)
+                return {"code_length": float(len(program.code))}
+
+        ext = ProbeExtractor()
+        predictor = RidgePredictor(feature_extractor=ext, min_samples=3)
+        # Train so predict takes the model path (not the no-model fallback).
+        for length in (100, 200, 300, 400, 500):
+            predictor.update(_prog("x" * length), float(length))
+        assert predictor.is_warm()
+
+        results: list[float] = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(4)
+
+        def call() -> None:
+            barrier.wait()
+            pred = predictor.predict(_prog("x" * 250))
+            with results_lock:
+                results.append(pred)
+
+        threads = [threading.Thread(target=call) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 4
+        # Every observed lock state during extract must be 'free'. A regression
+        # that holds the lock across extract would surface as at least one
+        # False here.
+        assert all(ext.lock_state_at_extract), (
+            f"predictor._lock was held across extract: "
+            f"states={ext.lock_state_at_extract}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Prioritizer tests
