@@ -26,12 +26,12 @@ import sys
 PROJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJ))
 
-from gigaevo.database.redis_program_storage import (  # noqa: E402
+from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from gigaevo.programs.program import Program  # noqa: E402
-from tools.status import parse_run_arg  # noqa: E402
+from gigaevo.programs.program import Program
+from tools.status import parse_run_arg
 
 
 async def _fetch_programs(url: str, prefix: str) -> list[Program]:

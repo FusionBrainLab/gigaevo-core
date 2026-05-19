@@ -100,7 +100,7 @@ def _flatten_numbers(d: Any, prefix: str = "") -> dict[str, float]:
     def _walk(x: Any, p: str) -> None:
         if isinstance(x, dict):
             for k, v in x.items():
-                key = f"{p}{k}" if not p.endswith("/") else f"{p}{k}"
+                key = f"{p}{k}"
                 if isinstance(v, (int, float)):
                     out[key] = float(v)
                 elif isinstance(v, dict):
