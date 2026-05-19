@@ -169,7 +169,7 @@ Summary lines:
 
     if len(improvement_points) >= 2:
         last_s, last_v = improvement_points[-1]
-        prev_s, prev_v = improvement_points[-2]
+        _prev_s, prev_v = improvement_points[-2]
         delta = (last_v - prev_v) * 100
         print(
             f"  Last improvement: gen {last_s}"
