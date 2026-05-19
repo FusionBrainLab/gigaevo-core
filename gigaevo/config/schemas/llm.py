@@ -32,16 +32,36 @@ class ChatOpenAIConfig(FrozenStrictModel):
     """
 
     kind: Literal["chat_openai"] = "chat_openai"
-    model: str = Field(min_length=1)
+    model: str = Field(
+        min_length=1,
+        description="Model identifier accepted by the OpenAI-compatible endpoint.",
+    )
     api_key: str | None = Field(
         default_factory=lambda: os.environ.get("OPENAI_API_KEY"),
         repr=False,
         exclude=True,
+        description="API token; defaults to OPENAI_API_KEY at construction time, omitted from dumps.",
     )
-    base_url: str | None = None
-    temperature: float = Field(default=0.5, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=2048, ge=1)
-    request_timeout: float = Field(default=60.0, gt=0.0)
+    base_url: str | None = Field(
+        default=None,
+        description="Override the OpenAI HTTP base URL; required for self-hosted or proxy endpoints.",
+    )
+    temperature: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature passed to the chat completion call.",
+    )
+    max_tokens: int = Field(
+        default=2048,
+        ge=1,
+        description="Upper bound on generated tokens per completion.",
+    )
+    request_timeout: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="HTTP request timeout in seconds.",
+    )
 
     @model_validator(mode="after")
     def require_api_key(self) -> ChatOpenAIConfig:
@@ -83,14 +103,32 @@ class BanditRouterConfig(FrozenStrictModel):
     # the constructor exits with a typed error instead of silently
     # accepting a zero-arm bandit.
     models: list[ChatOpenAIConfig] = Field(
-        default_factory=list, min_length=1, validate_default=True
+        default_factory=list,
+        min_length=1,
+        validate_default=True,
+        description="Pool of endpoints the bandit picks among.",
     )
-    skip_reward_on_acceptor_reject: bool = False
+    skip_reward_on_acceptor_reject: bool = Field(
+        default=False,
+        description="When true, programs the acceptor rejects do not contribute reward updates.",
+    )
     # ``1.41`` ~= sqrt(2), the canonical UCB1 exploration constant
     # balancing exploration vs exploitation for bounded reward signals.
-    exploration_constant: float = Field(default=1.41, gt=0.0)
-    window_size: int = Field(default=100, ge=1)
-    name: str = Field(default="default", min_length=1)
+    exploration_constant: float = Field(
+        default=1.41,
+        gt=0.0,
+        description="UCB1 exploration coefficient; sqrt(2) is the canonical default.",
+    )
+    window_size: int = Field(
+        default=100,
+        ge=1,
+        description="Length of the sliding reward window per arm.",
+    )
+    name: str = Field(
+        default="default",
+        min_length=1,
+        description="Router label used in tracker metric paths.",
+    )
 
     def build(
         self,
@@ -132,10 +170,20 @@ class EnsembleRouterConfig(FrozenStrictModel):
     # argument; the constructor exits with a typed error instead of
     # silently accepting a zero-model ensemble.
     models: list[ChatOpenAIConfig] = Field(
-        default_factory=list, min_length=1, validate_default=True
+        default_factory=list,
+        min_length=1,
+        validate_default=True,
+        description="Endpoints the router samples from.",
     )
-    probabilities: list[float] | None = None
-    name: str = Field(default="default", min_length=1)
+    probabilities: list[float] | None = Field(
+        default=None,
+        description="Per-endpoint weights parallel to models; None applies a uniform distribution.",
+    )
+    name: str = Field(
+        default="default",
+        min_length=1,
+        description="Router label used in tracker metric paths.",
+    )
 
     @model_validator(mode="after")
     def probabilities_aligned(self) -> EnsembleRouterConfig:

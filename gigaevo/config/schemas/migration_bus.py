@@ -32,7 +32,10 @@ class RingTopologyConfig(FrozenStrictModel):
     wraps around so the first run accepts from the last."""
 
     kind: Literal["ring"] = "ring"
-    run_ids: list[str] = Field(min_length=2)
+    run_ids: list[str] = Field(
+        min_length=2,
+        description="Ring order; each run accepts migrants only from its predecessor, wrapping around.",
+    )
 
     @model_validator(mode="after")
     def _run_ids_unique(self) -> RingTopologyConfig:
@@ -60,14 +63,45 @@ class RedisStreamTransportConfig(FrozenStrictModel):
     surface; ``run_id`` and ``stream_key`` are required because they
     encode the experiment identity and the cross-run namespace."""
 
-    run_id: str = Field(min_length=1)
-    stream_key: str = Field(min_length=1)
-    host: str = Field(default="localhost", min_length=1)
-    port: int = Field(default=6379, ge=1, le=65535)
-    db: int = Field(default=15, ge=0)
-    max_stream_len: int = Field(default=1000, ge=1)
-    claim_ttl: int = Field(default=120, ge=1)
-    block_ms: int = Field(default=5000, ge=0)
+    run_id: str = Field(
+        min_length=1,
+        description="Local run identity stamped on every published envelope.",
+    )
+    stream_key: str = Field(
+        min_length=1,
+        description="Redis Stream name carrying the cross-run migration traffic.",
+    )
+    host: str = Field(
+        default="localhost",
+        min_length=1,
+        description="Redis hostname for the migration-bus DB.",
+    )
+    port: int = Field(
+        default=6379,
+        ge=1,
+        le=65535,
+        description="Redis TCP port for the migration-bus DB.",
+    )
+    db: int = Field(
+        default=15,
+        ge=0,
+        description="Redis DB index reserved for the migration stream.",
+    )
+    max_stream_len: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum entries retained on the Redis Stream before trimming.",
+    )
+    claim_ttl: int = Field(
+        default=120,
+        ge=1,
+        description="SETNX claim lease in seconds before an unconsumed envelope becomes available again.",
+    )
+    block_ms: int = Field(
+        default=5000,
+        ge=0,
+        description="XREAD BLOCK timeout in milliseconds when polling the stream.",
+    )
 
     def build(self) -> Transport:
         from gigaevo.evolution.bus.transport import RedisStreamTransport
@@ -100,12 +134,27 @@ class MigrationBusConfig(FrozenStrictModel):
     parameter of ``BusedEvolutionEngine`` (not ``MigrationNode``) and
     lives on :class:`BusedEngineConfig`."""
 
-    run_id: str = Field(min_length=1)
+    run_id: str = Field(
+        min_length=1,
+        description="Local run identity; must match transport.run_id.",
+    )
     transport: RedisStreamTransportConfig
     topology: TopologyConfig
-    max_buffer_size: int = Field(default=50, ge=1)
-    consume_interval: float = Field(default=5.0, gt=0.0)
-    max_consume_per_poll: int = Field(default=20, ge=1)
+    max_buffer_size: int = Field(
+        default=50,
+        ge=1,
+        description="Capacity of the in-process buffer holding consumed but not yet ingested migrants.",
+    )
+    consume_interval: float = Field(
+        default=5.0,
+        gt=0.0,
+        description="Seconds between background polls of the migration stream.",
+    )
+    max_consume_per_poll: int = Field(
+        default=20,
+        ge=1,
+        description="Upper bound on envelopes claimed per poll.",
+    )
 
     @model_validator(mode="after")
     def _run_id_matches_transport(self) -> MigrationBusConfig:

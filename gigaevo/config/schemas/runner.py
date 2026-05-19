@@ -32,11 +32,34 @@ class DAGRunnerConfig(FrozenStrictModel):
     :data:`gigaevo.config.defaults.DEFAULT_DAG_TIMEOUT_S` so direct
     schema construction matches :func:`build_default_runner`."""
 
-    poll_interval: float = Field(default=5.0, ge=0.01, le=60.0)
-    max_concurrent_dags: int = Field(default=10, gt=0, le=1000)
-    prefetch_factor: int = Field(default=8, ge=1, le=64)
-    metrics_collection_interval: float = Field(default=1.0, gt=0.0)
-    dag_timeout: float = Field(default=7200.0, gt=0.0)
+    poll_interval: float = Field(
+        default=5.0,
+        ge=0.01,
+        le=60.0,
+        description="Seconds between scans of the launch queue for ready programs.",
+    )
+    max_concurrent_dags: int = Field(
+        default=10,
+        gt=0,
+        le=1000,
+        description="Hard cap on concurrent DAG executions, gated by the runner's semaphore.",
+    )
+    prefetch_factor: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="Number of DAG tasks pre-created and parked on the semaphore so a slot can start immediately.",
+    )
+    metrics_collection_interval: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Seconds between runner-side metric snapshots.",
+    )
+    dag_timeout: float = Field(
+        default=7200.0,
+        gt=0.0,
+        description="Per-DAG wall-clock timeout in seconds.",
+    )
 
     def build(self) -> RuntimeDagRunnerConfig:
         from gigaevo.runner.dag_runner import DagRunnerConfig

@@ -22,7 +22,11 @@ class _PipelineBuilderBase(FrozenStrictModel):
     :data:`gigaevo.config.defaults.DEFAULT_DAG_TIMEOUT_S` so direct
     schema construction matches the pipeline preset builders."""
 
-    dag_timeout: float = Field(default=7200.0, gt=0.0)
+    dag_timeout: float = Field(
+        default=7200.0,
+        gt=0.0,
+        description="Wall-clock cap in seconds for the full program-evaluation DAG.",
+    )
 
 
 class DefaultPipelineBuilderConfig(_PipelineBuilderBase):
@@ -39,7 +43,11 @@ class DefaultPipelineBuilderConfig(_PipelineBuilderBase):
     :data:`gigaevo.config.defaults.DEFAULT_STAGE_TIMEOUT_S`."""
 
     kind: Literal["default"] = "default"
-    stage_timeout: float = Field(default=2400.0, gt=0.0)
+    stage_timeout: float = Field(
+        default=2400.0,
+        gt=0.0,
+        description="Wall-clock cap in seconds applied to each individual stage.",
+    )
 
     def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
@@ -128,7 +136,11 @@ class AutoPipelineBuilderConfig(_PipelineBuilderBase):
     matches :data:`gigaevo.config.defaults.DEFAULT_STAGE_TIMEOUT_S`."""
 
     kind: Literal["auto"] = "auto"
-    stage_timeout: float = Field(default=2400.0, gt=0.0)
+    stage_timeout: float = Field(
+        default=2400.0,
+        gt=0.0,
+        description="Per-stage timeout consulted only when the default branch is chosen.",
+    )
 
     def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         from gigaevo.entrypoint.default_pipelines import (
@@ -158,7 +170,10 @@ class ProblemSpecificPipelineBuilderConfig(_PipelineBuilderBase):
     the experiment selects this variant."""
 
     kind: Literal["problem_specific"] = "problem_specific"
-    builder_path: str = Field(min_length=1)
+    builder_path: str = Field(
+        min_length=1,
+        description="Fully-qualified dotted import path of the PipelineBuilder class to instantiate.",
+    )
 
     def build(self, ctx: EvolutionContext) -> PipelineBuilder:
         import importlib
@@ -199,7 +214,10 @@ class PipelineConfig(FrozenStrictModel):
     other resolved subtrees and passed to ``builder.build()``."""
 
     builder: PipelineBuilderConfig
-    prompts_dir: Path | None = None
+    prompts_dir: Path | None = Field(
+        default=None,
+        description="Override the prompts directory; None uses the package defaults under gigaevo/prompts/.",
+    )
 
     @field_validator("prompts_dir")
     @classmethod

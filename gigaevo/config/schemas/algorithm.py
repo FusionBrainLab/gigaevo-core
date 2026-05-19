@@ -28,12 +28,31 @@ class BehaviorSpaceConfig(FrozenStrictModel):
     counterpart; the initial bounds act as hard limits in either case.
     """
 
-    keys: list[str] = Field(min_length=1)
-    bounds: list[tuple[float, float]] = Field(min_length=1)
-    resolutions: list[int] = Field(min_length=1)
-    binning_types: list[BinningType] = Field(min_length=1)
-    dynamic: bool = True
-    expansion_buffer_ratio: float = Field(default=0.1, ge=0.0)
+    keys: list[str] = Field(
+        min_length=1,
+        description="Ordered behavior-space axis names; the first key is treated as the primary metric.",
+    )
+    bounds: list[tuple[float, float]] = Field(
+        min_length=1,
+        description="Per-axis (min, max) bounds parallel to keys.",
+    )
+    resolutions: list[int] = Field(
+        min_length=1,
+        description="Per-axis bin count parallel to keys.",
+    )
+    binning_types: list[BinningType] = Field(
+        min_length=1,
+        description="Per-axis binning strategy; linear is the only shipped option.",
+    )
+    dynamic: bool = Field(
+        default=True,
+        description="When true the runtime expands bounds adaptively past the declared limits.",
+    )
+    expansion_buffer_ratio: float = Field(
+        default=0.1,
+        ge=0.0,
+        description="Fractional headroom applied to dynamic bound expansion on each grow event.",
+    )
 
     @model_validator(mode="after")
     def lists_aligned(self) -> BehaviorSpaceConfig:
@@ -102,8 +121,14 @@ class SumArchiveSelectorConfig(FrozenStrictModel):
     across every shipped algorithm preset."""
 
     kind: Literal["sum"] = "sum"
-    fitness_keys: list[str] = Field(min_length=1)
-    fitness_key_higher_is_better: list[bool] = Field(min_length=1)
+    fitness_keys: list[str] = Field(
+        min_length=1,
+        description="Metric keys whose values are summed (with sign) to rank archive entries.",
+    )
+    fitness_key_higher_is_better: list[bool] = Field(
+        min_length=1,
+        description="Direction flag parallel to fitness_keys; false flips the sign before summation.",
+    )
 
     @model_validator(mode="after")
     def keys_aligned(self) -> SumArchiveSelectorConfig:
@@ -133,9 +158,19 @@ class FitnessProportionalEliteSelectorConfig(FrozenStrictModel):
     auto-temperature heuristic from the runtime selector."""
 
     kind: Literal["fitness_proportional"] = "fitness_proportional"
-    fitness_key: str = Field(min_length=1)
-    fitness_key_higher_is_better: bool = True
-    temperature: float | None = Field(default=None, gt=0.0)
+    fitness_key: str = Field(
+        min_length=1,
+        description="Metric key whose value drives the softmax sampling weight.",
+    )
+    fitness_key_higher_is_better: bool = Field(
+        default=True,
+        description="When true, larger fitness gets larger sampling probability.",
+    )
+    temperature: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="Softmax temperature; None enables the runtime's auto-temperature heuristic.",
+    )
 
     def build(self) -> EliteSelector:
         from gigaevo.evolution.strategies.elite_selectors import (
@@ -153,10 +188,24 @@ class WeightedEliteSelectorConfig(FrozenStrictModel):
     """ShinkaEvolve-style sigmoid + child-count weighted sampling."""
 
     kind: Literal["weighted"] = "weighted"
-    fitness_key: str = Field(min_length=1)
-    fitness_key_higher_is_better: bool = True
-    lambda_: float = Field(default=10.0, gt=0.0)
-    epsilon: float = Field(default=1e-8, gt=0.0)
+    fitness_key: str = Field(
+        min_length=1,
+        description="Metric key whose value feeds the sigmoid weighting.",
+    )
+    fitness_key_higher_is_better: bool = Field(
+        default=True,
+        description="When true, larger fitness gets larger sampling probability.",
+    )
+    lambda_: float = Field(
+        default=10.0,
+        gt=0.0,
+        description="Sigmoid steepness; larger values concentrate sampling on top elites.",
+    )
+    epsilon: float = Field(
+        default=1e-8,
+        gt=0.0,
+        description="Small constant added to the child-count penalty to avoid division by zero.",
+    )
 
     def build(self) -> EliteSelector:
         from gigaevo.evolution.strategies.elite_selectors import (
@@ -182,8 +231,14 @@ class FitnessArchiveRemoverConfig(FrozenStrictModel):
     its ``max_size``."""
 
     kind: Literal["fitness"] = "fitness"
-    fitness_key: str = Field(min_length=1)
-    fitness_key_higher_is_better: bool = True
+    fitness_key: str = Field(
+        min_length=1,
+        description="Metric key whose value picks the eviction victim.",
+    )
+    fitness_key_higher_is_better: bool = Field(
+        default=True,
+        description="When true, lowest-fitness entries are evicted first.",
+    )
 
     def build(self) -> ArchiveRemover:
         from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
@@ -204,8 +259,14 @@ class TopFitnessMigrantSelectorConfig(FrozenStrictModel):
     """Picks the top-fitness programs as migrants."""
 
     kind: Literal["top_fitness"] = "top_fitness"
-    fitness_key: str = Field(min_length=1)
-    fitness_key_higher_is_better: bool = True
+    fitness_key: str = Field(
+        min_length=1,
+        description="Metric key used to rank candidate migrants.",
+    )
+    fitness_key_higher_is_better: bool = Field(
+        default=True,
+        description="When true, the highest-fitness programs are exported as migrants.",
+    )
 
     def build(self) -> MigrantSelector:
         from gigaevo.evolution.strategies.migrant_selectors import (
@@ -231,12 +292,24 @@ class IslandConfig(FrozenStrictModel):
     so a typo in a fitness key or a wrong selector class name is
     caught at load time."""
 
-    island_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
-    max_size: int | None = Field(default=None, ge=1)
+    island_id: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        description="Island identifier unique within the algorithm.",
+    )
+    max_size: int | None = Field(
+        default=None,
+        ge=1,
+        description="Archive capacity in entries; when set, archive_remover must also be configured.",
+    )
     behavior_space: BehaviorSpaceConfig
     archive_selector: ArchiveSelectorConfig
     elite_selector: EliteSelectorConfig
-    archive_remover: ArchiveRemoverConfig | None = None
+    archive_remover: ArchiveRemoverConfig | None = Field(
+        default=None,
+        description="Policy that picks the eviction victim when max_size is reached.",
+    )
     migrant_selector: MigrantSelectorConfig
 
     @model_validator(mode="after")
@@ -299,15 +372,29 @@ class MultiIslandConfig(FrozenStrictModel):
     # an ``islands`` argument; the constructor exits with a typed error
     # instead of accepting an empty list silently.
     islands: list[IslandConfig] = Field(
-        default_factory=list, min_length=2, validate_default=True
+        default_factory=list,
+        min_length=2,
+        validate_default=True,
+        description="Island configurations; at least two are required for migration.",
     )
     # ``migration_interval=25`` matches the shipped preset value in
     # ``gigaevo.config.defaults.DEFAULT_MIGRATION_INTERVAL`` so callers
     # that instantiate :class:`MultiIslandConfig` directly observe the
     # same cadence the preset builder would have produced.
-    migration_interval: int = Field(default=25, ge=1)
-    max_migrants_per_island: int = Field(default=5, ge=1)
-    enable_migration: bool = True
+    migration_interval: int = Field(
+        default=25,
+        ge=1,
+        description="Generations between migration rounds.",
+    )
+    max_migrants_per_island: int = Field(
+        default=5,
+        ge=1,
+        description="Upper bound on migrants exchanged per island per round.",
+    )
+    enable_migration: bool = Field(
+        default=True,
+        description="When false the islands evolve independently with no migration step.",
+    )
 
     @model_validator(mode="after")
     def unique_island_ids(self) -> MultiIslandConfig:

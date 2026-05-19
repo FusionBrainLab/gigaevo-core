@@ -56,8 +56,16 @@ class SimpleHeuristicPredictorConfig(FrozenStrictModel):
     ``default_rate``."""
 
     kind: Literal["simple_heuristic"] = "simple_heuristic"
-    default_rate: float = Field(default=0.1, gt=0.0)
-    window_size: int = Field(default=50, ge=1)
+    default_rate: float = Field(
+        default=0.1,
+        gt=0.0,
+        description="Cold-start tokens-per-second rate used before any observations land.",
+    )
+    window_size: int = Field(
+        default=50,
+        ge=1,
+        description="Number of recent samples averaged into the running rate.",
+    )
 
     def build(self) -> EvalTimePredictor:
         from gigaevo.evolution.scheduling.predictor import (
@@ -79,10 +87,26 @@ class RidgePredictorConfig(FrozenStrictModel):
     feature_extractor: FeatureExtractorConfig = Field(
         default_factory=lambda: CodeFeatureExtractorConfig()
     )
-    buffer_size: int = Field(default=500, ge=1)
-    min_samples: int = Field(default=10, ge=1)
-    default_prediction: float = Field(default=300.0, gt=0.0)
-    alpha: float = Field(default=1.0, gt=0.0)
+    buffer_size: int = Field(
+        default=500,
+        ge=1,
+        description="Replay buffer size; older samples are dropped FIFO when full.",
+    )
+    min_samples: int = Field(
+        default=10,
+        ge=1,
+        description="Minimum samples required before the ridge model replaces the cold-start prediction.",
+    )
+    default_prediction: float = Field(
+        default=300.0,
+        gt=0.0,
+        description="Cold-start eval-time estimate in seconds before min_samples is reached.",
+    )
+    alpha: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="L2 regularisation strength passed to sklearn Ridge.",
+    )
 
     def build(self) -> EvalTimePredictor:
         from gigaevo.evolution.scheduling.predictor import RidgePredictor

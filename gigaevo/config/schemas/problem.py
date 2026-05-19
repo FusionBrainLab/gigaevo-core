@@ -25,10 +25,23 @@ class ProblemConfig(FrozenStrictModel):
     secondary metric without editing the shared ``metrics.yaml``.
     """
 
-    name: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_\-]+$")
-    problem_dir: Path
-    primary_metric: str | None = Field(default=None, min_length=1)
-    higher_is_better: bool | None = None
+    name: str = Field(
+        min_length=1,
+        pattern=r"^[a-zA-Z0-9_\-]+$",
+        description="Logical problem name used in metric paths and log lines.",
+    )
+    problem_dir: Path = Field(
+        description="Directory containing the problem's metrics.yaml, task description, and evaluator.",
+    )
+    primary_metric: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Override the on-disk primary metric; leave None to use metrics.yaml.",
+    )
+    higher_is_better: bool | None = Field(
+        default=None,
+        description="Override the on-disk fitness direction; leave None to use metrics.yaml.",
+    )
 
     @field_validator("problem_dir")
     @classmethod

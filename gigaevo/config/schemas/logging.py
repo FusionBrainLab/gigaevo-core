@@ -24,10 +24,24 @@ class LoggingSettings(FrozenStrictModel):
     setting it explicitly pins logs to a fixed location regardless of
     output_dir."""
 
-    level: _LOG_LEVELS = "INFO"
-    log_dir: Path | None = None
-    rotation: str = Field(default="50 MB", min_length=1)
-    retention: str = Field(default="30 days", min_length=1)
+    level: _LOG_LEVELS = Field(
+        default="INFO",
+        description="Minimum loguru log level captured to file.",
+    )
+    log_dir: Path | None = Field(
+        default=None,
+        description="Directory for log files; None defers to output_dir/experiment_id/.",
+    )
+    rotation: str = Field(
+        default="50 MB",
+        min_length=1,
+        description="Loguru rotation specifier; size or time string accepted by loguru.add.",
+    )
+    retention: str = Field(
+        default="30 days",
+        min_length=1,
+        description="Loguru retention specifier controlling how long rotated logs are kept.",
+    )
 
     @field_validator("log_dir")
     @classmethod
@@ -41,9 +55,19 @@ class TBTrackerConfig(FrozenStrictModel):
     experiment's ``output_dir`` and named ``tb_logs``."""
 
     kind: Literal["tensorboard"] = "tensorboard"
-    logdir: Path
-    queue_size: int = Field(default=8192, ge=1)
-    flush_secs: float = Field(default=3.0, gt=0.0)
+    logdir: Path = Field(
+        description="Directory the TensorBoard SummaryWriter writes event files into.",
+    )
+    queue_size: int = Field(
+        default=8192,
+        ge=1,
+        description="Async write queue capacity; the writer drops events when full.",
+    )
+    flush_secs: float = Field(
+        default=3.0,
+        gt=0.0,
+        description="Background flush interval in seconds.",
+    )
 
     def build(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_tb
@@ -62,14 +86,40 @@ class WandBTrackerConfig(FrozenStrictModel):
     optional."""
 
     kind: Literal["wandb"] = "wandb"
-    project: str = Field(min_length=1)
-    name: str | None = None
-    entity: str | None = None
-    notes: str | None = None
-    tags: list[str] | None = None
-    resume: bool = False
-    queue_size: int = Field(default=8192, ge=1)
-    flush_secs: float = Field(default=3.0, gt=0.0)
+    project: str = Field(
+        min_length=1,
+        description="Weights & Biases project name.",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Run display name shown in the W&B UI.",
+    )
+    entity: str | None = Field(
+        default=None,
+        description="W&B entity (team or username) owning the project.",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Free-form notes attached to the run.",
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="Tag list attached to the run for filtering.",
+    )
+    resume: bool = Field(
+        default=False,
+        description="When true, resume an existing W&B run instead of creating a new one.",
+    )
+    queue_size: int = Field(
+        default=8192,
+        ge=1,
+        description="Async write queue capacity; the writer drops events when full.",
+    )
+    flush_secs: float = Field(
+        default=3.0,
+        gt=0.0,
+        description="Background flush interval in seconds.",
+    )
 
     def build(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_wandb
@@ -96,14 +146,45 @@ class RedisMetricsTrackerConfig(FrozenStrictModel):
     FIFO history."""
 
     kind: Literal["redis"] = "redis"
-    redis_url: str = Field(default="redis://localhost:6379/0", min_length=1)
-    key_prefix: str = Field(default="gigaevo:metrics", min_length=1)
-    store_history: bool = True
-    max_history_per_metric: int = Field(default=10_000, ge=1)
-    max_connections: int = Field(default=10, ge=1)
-    socket_timeout: float = Field(default=5.0, ge=0.1)
-    queue_size: int = Field(default=8192, ge=1)
-    flush_secs: float = Field(default=3.0, gt=0.0)
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        min_length=1,
+        description="Full redis:// URL the tracker writes metrics to.",
+    )
+    key_prefix: str = Field(
+        default="gigaevo:metrics",
+        min_length=1,
+        description="Redis key prefix under which metric streams are stored.",
+    )
+    store_history: bool = Field(
+        default=True,
+        description="When true the tracker retains a per-metric FIFO history.",
+    )
+    max_history_per_metric: int = Field(
+        default=10_000,
+        ge=1,
+        description="Maximum samples retained per metric when history is enabled.",
+    )
+    max_connections: int = Field(
+        default=10,
+        ge=1,
+        description="Upper bound on the tracker's Redis connection pool.",
+    )
+    socket_timeout: float = Field(
+        default=5.0,
+        ge=0.1,
+        description="Per-operation socket timeout in seconds.",
+    )
+    queue_size: int = Field(
+        default=8192,
+        ge=1,
+        description="Async write queue capacity; the writer drops events when full.",
+    )
+    flush_secs: float = Field(
+        default=3.0,
+        gt=0.0,
+        description="Background flush interval in seconds.",
+    )
 
     def build(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_redis
@@ -143,7 +224,10 @@ class LoggingConfig(FrozenStrictModel):
     the canonical write-and-discard path."""
 
     settings: LoggingSettings = Field(default_factory=lambda: LoggingSettings())
-    trackers: list[TrackerConfig] = Field(min_length=1)
+    trackers: list[TrackerConfig] = Field(
+        min_length=1,
+        description="One or more metric tracker backends; the writer fans events out to each.",
+    )
 
     def build_writer(self) -> GenericLogger:
         from gigaevo.utils.trackers import init_composite

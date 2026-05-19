@@ -21,7 +21,10 @@ class FixedDirPromptFetcherConfig(FrozenStrictModel):
     """
 
     kind: Literal["fixed"] = "fixed"
-    prompts_dir: Path | None = None
+    prompts_dir: Path | None = Field(
+        default=None,
+        description="Directory the fetcher reads template files from; None uses the package defaults.",
+    )
 
     @field_validator("prompts_dir")
     @classmethod
@@ -51,16 +54,54 @@ class GigaEvoArchivePromptFetcherConfig(FrozenStrictModel):
     """
 
     kind: Literal["coevolved"] = "coevolved"
-    prompt_redis_db: int = Field(ge=0)
-    main_redis_prefix: str = Field(min_length=1)
-    main_redis_db: int | None = Field(default=None, ge=0)
-    prompt_prefix: str = Field(default="prompt_evolution", min_length=1)
-    archive_prefix: str = Field(default="island_fitness_island", min_length=1)
-    host: str = Field(default="localhost", min_length=1)
-    port: int = Field(default=6379, ge=1, le=65535)
-    cache_ttl_seconds: float = Field(default=30.0, gt=0.0)
-    fallback_prompts_dir: Path | None = None
-    fitness_key: str = Field(default="fitness", min_length=1)
+    prompt_redis_db: int = Field(
+        ge=0,
+        description="Redis DB index of the paired prompt-evolution run the fetcher reads from.",
+    )
+    main_redis_prefix: str = Field(
+        min_length=1,
+        description="Key prefix under which this run writes outcome stats for the prompt run to score.",
+    )
+    main_redis_db: int | None = Field(
+        default=None,
+        ge=0,
+        description="Redis DB index of this run; None disables outcome-stat writeback.",
+    )
+    prompt_prefix: str = Field(
+        default="prompt_evolution",
+        min_length=1,
+        description="Key prefix the prompt-evolution run uses on its side.",
+    )
+    archive_prefix: str = Field(
+        default="island_fitness_island",
+        min_length=1,
+        description="Sub-key under prompt_prefix where the current champion lives.",
+    )
+    host: str = Field(
+        default="localhost",
+        min_length=1,
+        description="Hostname of the Redis server that backs both runs.",
+    )
+    port: int = Field(
+        default=6379,
+        ge=1,
+        le=65535,
+        description="TCP port of the Redis server.",
+    )
+    cache_ttl_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Seconds the fetcher caches the champion before re-reading.",
+    )
+    fallback_prompts_dir: Path | None = Field(
+        default=None,
+        description="Directory of static prompts used until the first champion is available.",
+    )
+    fitness_key: str = Field(
+        default="fitness",
+        min_length=1,
+        description="Metric the prompt-run archive ranks champions by.",
+    )
 
     @field_validator("fallback_prompts_dir")
     @classmethod

@@ -32,9 +32,19 @@ class ExperimentConfig(FrozenStrictModel):
     composes its parts.
     """
 
-    name: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_\-]+$")
-    seed: int = Field(default=42)
-    output_dir: Path = Field(default_factory=lambda: Path("outputs"))
+    name: str = Field(
+        min_length=1,
+        pattern=r"^[a-zA-Z0-9_\-]+$",
+        description="Short experiment identifier; ASCII letters, digits, underscores, and hyphens only.",
+    )
+    seed: int = Field(
+        default=42,
+        description="Master RNG seed propagated to mutation and evaluation.",
+    )
+    output_dir: Path = Field(
+        default_factory=lambda: Path("outputs"),
+        description="Root directory under which a per-experiment_id subdirectory holds config and logs.",
+    )
 
     @field_validator("output_dir")
     @classmethod

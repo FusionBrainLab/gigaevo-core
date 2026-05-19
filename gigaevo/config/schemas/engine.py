@@ -17,7 +17,11 @@ class RandomParentSelectorConfig(FrozenStrictModel):
     """Picks ``num_parents`` programs uniformly at random for mutation."""
 
     kind: Literal["random"] = "random"
-    num_parents: int = Field(default=1, ge=1)
+    num_parents: int = Field(
+        default=1,
+        ge=1,
+        description="Number of parents sampled uniformly per mutation.",
+    )
 
     def build(self) -> ParentSelector:
         from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
@@ -30,7 +34,11 @@ class AllCombinationsParentSelectorConfig(FrozenStrictModel):
     elites; used for crossover-shaped mutation operators."""
 
     kind: Literal["all_combinations"] = "all_combinations"
-    num_parents: int = Field(default=1, ge=1)
+    num_parents: int = Field(
+        default=1,
+        ge=1,
+        description="Combination size; the selector emits every k-subset of the elite pool.",
+    )
 
     def build(self) -> ParentSelector:
         from gigaevo.evolution.mutation.parent_selector import (
@@ -60,8 +68,15 @@ class StandardAcceptorConfig(FrozenStrictModel):
     constant in the acceptor module."""
 
     kind: Literal["standard"] = "standard"
-    required_behavior_keys: list[str] | None = None
-    validity_key: str | None = Field(default=None, min_length=1)
+    required_behavior_keys: list[str] | None = Field(
+        default=None,
+        description="Override the keys an accepted program must declare; None defers to the algorithm subtree.",
+    )
+    validity_key: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Metric name signaling program validity; None uses the canonical VALIDITY_KEY constant.",
+    )
 
     def build(
         self, *, required_behavior_keys: list[str]
@@ -99,11 +114,31 @@ class _EngineConfigBase(FrozenStrictModel):
     so direct schema construction yields the same shape as
     :func:`gigaevo.config.engine_presets.build_generational`."""
 
-    loop_interval: float = Field(default=1.0, gt=0.0)
-    max_elites_per_generation: int = Field(default=5, gt=0)
-    max_mutations_per_generation: int = Field(default=8, gt=0)
-    metrics_collection_interval: float = Field(default=1.0, gt=0.0)
-    max_generations: int | None = Field(default=None, ge=1)
+    loop_interval: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Seconds between engine loop ticks.",
+    )
+    max_elites_per_generation: int = Field(
+        default=5,
+        gt=0,
+        description="Maximum elites drawn from the archive per generation.",
+    )
+    max_mutations_per_generation: int = Field(
+        default=8,
+        gt=0,
+        description="Hard cap on mutations enqueued per generation.",
+    )
+    metrics_collection_interval: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Seconds between engine-side metric snapshots.",
+    )
+    max_generations: int | None = Field(
+        default=None,
+        ge=1,
+        description="Stop after this many generations; None runs indefinitely.",
+    )
     parent_selector: ParentSelectorConfig = Field(
         default_factory=lambda: RandomParentSelectorConfig(num_parents=1)
     )
@@ -146,7 +181,11 @@ class SteadyStateEngineConfig(_EngineConfigBase):
     # ``max_in_flight=8`` mirrors the
     # ``gigaevo.config.engine_presets._STEADY_STATE_MAX_IN_FLIGHT``
     # preset constant tuned for ~3-4 GPU servers with 4 concurrent runs.
-    max_in_flight: int = Field(default=8, gt=0)
+    max_in_flight: int = Field(
+        default=8,
+        gt=0,
+        description="Upper bound on in-flight DAG executions; applies backpressure to the mutation loop.",
+    )
 
     def build_runtime_config(
         self, *, required_behavior_keys: list[str]
@@ -185,7 +224,11 @@ class BusedEngineConfig(_EngineConfigBase):
 
     kind: Literal["bus"] = "bus"
     migration_bus: MigrationBusConfig
-    max_imports_per_generation: int = Field(default=10, ge=1)
+    max_imports_per_generation: int = Field(
+        default=10,
+        ge=1,
+        description="Upper bound on migrants drained from the bus per generation step.",
+    )
 
     def build_runtime_config(
         self, *, required_behavior_keys: list[str]
