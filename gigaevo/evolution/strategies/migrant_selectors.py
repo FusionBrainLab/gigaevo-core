@@ -82,21 +82,18 @@ class ParetoFrontMigrantSelector(MigrantSelector):
         fitness_keys: list[str],
         fitness_key_higher_is_better: dict[str, bool],
     ) -> list[Program]:
-        pareto_front = []
+        fitness_vectors = [
+            extract_fitness_values(p, fitness_keys, fitness_key_higher_is_better)
+            for p in programs
+        ]
 
-        for p in programs:
-            if all(
-                not dominates(
-                    extract_fitness_values(
-                        other, fitness_keys, fitness_key_higher_is_better
-                    ),
-                    extract_fitness_values(
-                        p, fitness_keys, fitness_key_higher_is_better
-                    ),
-                )
-                for other in programs
-                if other != p
+        n = len(programs)
+        pareto_front: list[Program] = []
+        for i in range(n):
+            p_i = fitness_vectors[i]
+            if not any(
+                dominates(fitness_vectors[j], p_i) for j in range(n) if j != i
             ):
-                pareto_front.append(p)
+                pareto_front.append(programs[i])
 
         return pareto_front
