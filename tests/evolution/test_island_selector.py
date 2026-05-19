@@ -58,10 +58,13 @@ def _make_island(
     if is_dynamic:
         from gigaevo.evolution.strategies.models import DynamicBehaviorSpace
 
-        behavior_space.__class__ = DynamicBehaviorSpace
+        # MagicMock spoofs isinstance checks by rebinding __class__; the type
+        # checker rejects this as unsafe but the runtime behaviour is the
+        # documented way to make MagicMock pass instance guards.
+        behavior_space.__class__ = DynamicBehaviorSpace  # type: ignore[misc]
         behavior_space.check_and_expand = MagicMock()
     else:
-        behavior_space.__class__ = object  # not DynamicBehaviorSpace
+        behavior_space.__class__ = object  # type: ignore[misc]  # not DynamicBehaviorSpace
 
     island.config.behavior_space = behavior_space
     # When accepts=False we need a non-None elite so archive_selector is reached
