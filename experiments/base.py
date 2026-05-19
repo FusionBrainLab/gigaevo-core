@@ -1,9 +1,10 @@
-"""Base experiment -- single-island MAP-Elites on Heilbron's triangle problem.
+"""Single-island MAP-Elites on the Heilbron triangle problem.
 
-Canonical composition: single island, single LLM, auto pipeline,
-default runner / engine / scheduling. Heilbron is the example problem.
+Canonical baseline composition: single island, OpenRouter ensemble
+LLM, auto pipeline, generational engine, default runner. Used as the
+reference starting point most other experiments diverge from.
 
-Override at the CLI to retarget:
+Override at the CLI to retarget another problem:
 
     python run.py experiments/base.py --problem.problem_dir=/path/to/other
 """

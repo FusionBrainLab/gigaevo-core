@@ -1,8 +1,18 @@
 """Preset builder for the DAG runner.
 
-A single builder ships; defaults flow from
-:mod:`gigaevo.config.defaults` (``DEFAULT_RUNNER_POLL_INTERVAL_S``,
-``DEFAULT_MAX_CONCURRENT_DAGS``, ``DEFAULT_DAG_TIMEOUT_S``).
+Exposes a single :func:`build_default_runner` factory returning a
+fully-validated :class:`DAGRunnerConfig`. Experiment files compose it
+into the experiment root::
+
+    from gigaevo.config.runner_presets import build_default_runner
+
+    def build() -> ExperimentConfig:
+        return ExperimentConfig(..., runner=build_default_runner())
+
+Defaults flow from :mod:`gigaevo.config.defaults`
+(``DEFAULT_RUNNER_POLL_INTERVAL_S``, ``DEFAULT_MAX_CONCURRENT_DAGS``,
+``DEFAULT_DAG_TIMEOUT_S``); every knob has a keyword override so a
+sweep can pin a single parameter without reaching into the schema.
 """
 
 from __future__ import annotations

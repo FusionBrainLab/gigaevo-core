@@ -1,9 +1,10 @@
-"""Multi-LLM exploration experiment.
+"""Single-island MAP-Elites driven by a 4-way LLM bandit on the Heilbron problem.
 
-Single island with the heterogeneous OpenRouter bandit -- bias toward
-mutation diversity over MAP-Elites diversity. The bandit learns which
-model produces the best mutations and concentrates the sampling
-budget there over time.
+Showcases the UCB1 bandit router over a heterogeneous OpenRouter
+pool, biasing toward mutation-source diversity instead of
+behavior-space diversity. The bandit concentrates the sampling budget
+on the model producing the largest fitness improvements over a
+sliding window.
 """
 
 from __future__ import annotations

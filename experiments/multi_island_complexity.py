@@ -1,8 +1,9 @@
-"""Multi-island complexity experiment.
+"""Two-island MAP-Elites with a complexity axis on the Heilbron problem.
 
-Two islands (fitness + simplicity) with a single LLM endpoint --
-narrower exploration than ``full_featured`` but with the
-complexity-axis diversity preserved.
+Composes the fitness/simplicity multi-island shape against a single
+LLM endpoint, preserving complexity-axis diversity while keeping the
+mutation pool narrower than the bandit-backed full_featured variant.
+Requires the ``complexity_score`` metric on the problem's evaluator.
 """
 
 from __future__ import annotations

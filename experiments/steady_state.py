@@ -1,8 +1,9 @@
-"""Steady-state experiment.
+"""Steady-state experiment on the Heilbron triangle problem.
 
-Single island + steady-state engine for continuous mutation /
-evaluation interleaving (~8-9x throughput vs the generational
-variant).
+Single island combined with the steady-state engine variant for
+continuous mutation / evaluation interleaving without a generational
+barrier (~8-9x throughput vs the generational engine). LLM is a
+single OpenRouter endpoint.
 """
 
 from __future__ import annotations

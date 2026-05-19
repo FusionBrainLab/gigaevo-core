@@ -1,10 +1,9 @@
-"""Full-featured experiment.
+"""Multi-island MAP-Elites + LLM bandit on the Heilbron triangle problem.
 
-Multi-island MAP-Elites with the fitness x validity / fitness x
-complexity split, plus the four-way heterogeneous OpenRouter
-ensemble. Requires the ``complexity_score`` metric; the algorithm
-preset constructs the multi-island shape that consumes it on the
-simplicity island.
+Combines the fitness x validity / fitness x complexity two-island
+split with the 4-way OpenRouter bandit router, exercising both the
+behavior-space and mutation-source diversity dimensions in one run.
+Requires the ``complexity_score`` metric on the problem's evaluator.
 """
 
 from __future__ import annotations
