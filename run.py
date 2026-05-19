@@ -166,13 +166,14 @@ def main(argv: list[str] | None = None) -> int:
         print()
         import tyro
 
+        # ``tyro.cli(..., args=["--help"])`` raises ``SystemExit(0)`` via
+        # argparse before returning, so control never falls through.
         tyro.cli(
             ExperimentConfig,
             default=baseline,
             args=["--help"],
             prog="gigaevo overrides",
         )
-        return 0
 
     cfg = _apply_tyro_overrides(baseline, override_args)
 
