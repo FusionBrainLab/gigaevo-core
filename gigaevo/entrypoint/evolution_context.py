@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,9 +9,6 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.provider import MemoryProvider, NullMemoryProvider
 from gigaevo.problems.context import ProblemContext
-
-if TYPE_CHECKING:
-    pass
 
 
 class EvolutionContext(BaseModel):
