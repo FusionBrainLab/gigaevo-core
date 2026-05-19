@@ -5,7 +5,9 @@ This is the current end-to-end flow for using `gigaevo-memory` as the backend fo
 - runtime retrieval (experiment wires `SelectorMemoryProvider` into `EvolutionContext`).
 - final ideas-tracker memory write (experiment attaches an `IdeaTracker` to `EvolutionEngine.post_run_hook`).
 
-When `api.use_api: true` in `config/memory.yaml`, `gigaevo-core-internal` automatically uses `gigaevo.memory_platform`.
+When `api.use_api: true` in the runtime memory YAML (default
+`gigaevo/memory/config.yaml`, overridable via `EVO_MEMORY_CONFIG_PATH`),
+`gigaevo-core-internal` automatically uses `gigaevo.memory_platform`.
 
 ## What is used now
 
@@ -81,8 +83,10 @@ curl http://localhost:8000/health
 
 ## 3. Configure `gigaevo-core-internal`
 
-In `config/memory.yaml` at the project root (the backend config loaded
-by `gigaevo/memory/runtime_config.py`), set:
+In the runtime memory YAML loaded by
+`gigaevo/memory/runtime_config.py` (default path
+`gigaevo/memory/config.yaml`, or any path you point
+`EVO_MEMORY_CONFIG_PATH` at), set:
 
 ```yaml
 api:
@@ -198,4 +202,5 @@ python -m pip install -e $GIGAEVO_MEMORY_ROOT/client/python
 Selector uses `namespace=default`
 
 Set `namespace="..."` when constructing `SelectorMemoryProvider` in the
-experiment file, or set `api.namespace` in `config/memory.yaml`.
+experiment file, or set `api.namespace` in the runtime memory YAML
+(default `gigaevo/memory/config.yaml`).

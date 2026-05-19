@@ -15,8 +15,10 @@ This is the recommended order:
 1. Run without memory, but with the ideas tracker, to write memory cards.
 2. Run with memory enabled, using the same checkpoint folder as source.
 
-Before step 1, ensure this is enabled in `config/memory.yaml` (the
-backend config loaded by `gigaevo/memory/runtime_config.py`):
+Before step 1, ensure this is enabled in the runtime YAML loaded by
+`gigaevo/memory/runtime_config.py` (default location:
+`gigaevo/memory/config.yaml`; override via the `EVO_MEMORY_CONFIG_PATH`
+environment variable):
 
 ```yaml
 ideas_tracker:

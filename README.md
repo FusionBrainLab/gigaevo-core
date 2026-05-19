@@ -235,7 +235,6 @@ Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
 | `tools/comparison.py` | Compare runs with fitness curve plots |
 | `tools/top_programs.py` | Extract best programs from archive |
 | `tools/flush.py` | Safely flush Redis DBs (kills workers first) |
-| `tools/experiment/archive_run.sh` | Archive run data before flush |
 | `tools/dag_builder/` | Visual DAG pipeline designer |
 | `tools/wizard/` | Interactive problem scaffolding |
 
