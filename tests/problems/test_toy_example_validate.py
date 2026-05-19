@@ -11,6 +11,9 @@ def _load_validate():
     """Load validate.py directly — problems/toy_example is not an importable package."""
     path = Path(__file__).resolve().parents[2] / "problems" / "toy_example" / "validate.py"
     spec = importlib.util.spec_from_file_location("toy_example_validate", path)
+    assert spec is not None and spec.loader is not None, (
+        f"Could not build module spec for {path}"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
