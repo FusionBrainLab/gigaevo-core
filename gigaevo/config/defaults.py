@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from gigaevo.config.schemas.algorithm import BinningType as _BinningType
 from gigaevo.programs.metrics.context import VALIDITY_KEY as _VALIDITY_KEY
 
 # ---------------------------------------------------------------------------
@@ -48,7 +49,7 @@ DEFAULT_ISLAND_ID: Final[str] = "fitness_island"
 DEFAULT_ISLAND_MAX_SIZE: Final[int] = 75
 DEFAULT_PRIMARY_RESOLUTION: Final[int] = 150
 DEFAULT_VALIDITY_RESOLUTION: Final[int] = 2
-DEFAULT_BINNING_TYPE: Final[str] = "linear"
+DEFAULT_BINNING_TYPE: Final[_BinningType] = "linear"
 # The validity-metric key lives next to the rest of the metrics-context
 # vocabulary; re-export it under the canonical constant name so the
 # preset layer can import a single value instead of crossing into the
