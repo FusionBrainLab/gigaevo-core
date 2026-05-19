@@ -1,12 +1,10 @@
-"""Regression tests for EvolutionEngine._ingest_completed_programs exception safety.
+"""Regression tests for ``EvolutionEngine._ingest_completed_programs`` exception safety.
 
-Bug: the for-loop in _ingest_completed_programs has no per-item exception handling.
-If strategy.add() raises for program[0], the exception propagates out of the loop
-and programs[1..N] are never processed — they stay in DONE state permanently.
-On the next generation the engine picks them up again, potentially looping forever.
-
-Fix: wrap each loop iteration in try/except; on exception log the error, DISCARD
-the offending program, and continue processing the remaining items.
+The ingest loop processes completed programs one at a time. Each iteration
+is wrapped in its own try/except: a failure on one program logs the error,
+DISCARDs the offending program, and continues with the rest. Without that
+per-item guard a single exception would leave the remaining DONE programs
+stuck and re-picked on every subsequent generation.
 """
 
 from __future__ import annotations
@@ -144,18 +142,18 @@ async def test_ingest_continues_after_strategy_add_exception() -> None:
             final = await storage.get(p.id)
             assert final is not None
             assert final.state != ProgramState.DONE, (
-                f"Program[{i}] is still DONE after _ingest_completed_programs().  "
-                "Fix: wrap each loop iteration in try/except so a failure on one "
-                "program does not abort processing of the remaining ones."
+                f"Program[{i}] is still DONE after _ingest_completed_programs(); "
+                "a failure on one program must not abort processing of the remaining ones."
             )
     finally:
         await storage.close()
 
 
 async def test_ingest_does_not_raise_on_acceptor_exception() -> None:
-    """_ingest_completed_programs must survive if is_accepted() raises.
+    """``_ingest_completed_programs`` must survive when ``is_accepted()`` raises.
 
-    Same class of bug as the strategy.add() case — no per-item guard.
+    Mirrors the ``strategy.add()`` case: the per-item guard isolates failures
+    to a single program.
     """
     storage, _ = _make_storage()
     try:

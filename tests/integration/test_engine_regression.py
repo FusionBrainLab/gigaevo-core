@@ -1,16 +1,20 @@
-"""Regression tests for EvolutionEngine and MapElitesMultiIsland bugs.
+"""Regression tests for EvolutionEngine and MapElitesMultiIsland.
 
-Ghost IDs stalling _await_idle (fixed):
-    _has_active_dags() uses count_by_status() (SCARD, O(1)) for the fast path.
-    Ghost IDs — Redis set members with no backing program hash — are counted by
-    SCARD, so _has_active_dags() returns True for them.  The ghost safety is in
-    _await_idle(): after 30s of waiting, it falls back to get_all_by_status()
-    which filters ghosts via MGET → Nones dropped → breaks the loop.
+Two invariants exercised here:
 
-Island migration KeyError when current_island is None (fixed):
-    _perform_migration() raised KeyError: None when a migrant's current_island
-    metadata was None (set by remove_program_by_id after eviction).  Fix: guard
-    skips the remove-from-source step when source_island_id is None.
+Ghost-ID handling in ``_await_idle``:
+    ``_has_active_dags()`` uses ``count_by_status()`` (SCARD, O(1)) for the
+    fast path. Ghost IDs — Redis set members with no backing program hash —
+    are counted by SCARD, so the predicate stays truthy for them.
+    ``_await_idle`` falls back to ``get_all_by_status()`` after a bounded
+    wait; that path filters ghosts via MGET (Nones drop out) so the loop
+    terminates.
+
+Migration with a missing ``current_island`` tag:
+    ``_perform_migration`` skips the remove-from-source step when the
+    migrant's ``current_island`` metadata is ``None`` (the state set by
+    ``remove_program_by_id`` after eviction). This avoids a KeyError on a
+    ``None`` key lookup against the island map.
 """
 
 from __future__ import annotations

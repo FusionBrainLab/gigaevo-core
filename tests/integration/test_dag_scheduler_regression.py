@@ -1,10 +1,11 @@
-"""Regression tests for DagRunner scheduler bugs.
+"""Regression tests for the DagRunner scheduler.
 
-TOCTOU in DagRunner._maintain (fixed):
-    _maintain classifies a task as timed-out based on elapsed time, but between
-    that classification and the DISCARD write, _execute_dag may have already set
-    the program to DONE.  Fix: fetch the program from Redis before discarding;
-    skip discard if state is already DONE, record the timeout metric regardless.
+TOCTOU invariant in ``DagRunner._maintain``:
+    The scheduler classifies a task as timed-out based on elapsed time, but
+    between that classification and the DISCARD write, ``_execute_dag`` may
+    have already promoted the program to DONE. The runtime fetches the
+    program from Redis before discarding, skips the discard when the state
+    is already DONE, and records the timeout metric in both branches.
 """
 
 from __future__ import annotations
