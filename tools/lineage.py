@@ -19,6 +19,7 @@ Example usage:
 
 import argparse
 import asyncio
+import math
 from pathlib import Path
 import sys
 
@@ -89,7 +90,6 @@ def _walk_lineage(
     start: Program,
     id_map: dict[str, Program],
     depth: int | None,
-    metric: str,
 ) -> list[Program]:
     """Walk ancestor chain from start to root. Returns chain [start, parent, grandparent, ...].
 
@@ -221,9 +221,16 @@ if memory is constrained.
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        # Top-N by metric
+        # Top-N by metric. The filter above guarantees fitness is not None,
+        # but the lambda still falls back to -inf so a None slipping through
+        # cannot raise TypeError mid-sort.
         scored = [p for p in programs if _get_fitness(p, args.metric) is not None]
-        scored.sort(key=lambda p: _get_fitness(p, args.metric), reverse=True)
+
+        def _fitness_key(p: Program) -> float:
+            v = _get_fitness(p, args.metric)
+            return v if v is not None else -math.inf
+
+        scored.sort(key=_fitness_key, reverse=True)
         start_programs = scored[: args.top_n]
 
     if not start_programs:
@@ -233,7 +240,7 @@ if memory is constrained.
     for i, start in enumerate(start_programs):
         if i > 0:
             print("---")
-        chain = _walk_lineage(start, id_map, args.depth, args.metric)
+        chain = _walk_lineage(start, id_map, args.depth)
         _print_lineage(chain, label, args.metric)
         if args.depth is not None and len(chain) > args.depth:
             print(f"  ... (truncated at depth {args.depth})")

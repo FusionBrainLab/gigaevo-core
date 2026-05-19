@@ -26,7 +26,7 @@ def test_walk_lineage_returns_chain_to_root() -> None:
     tip = _prog("tip", "mid")
     id_map = {p.id: p for p in (root, mid, tip)}
 
-    chain = _walk_lineage(tip, id_map, depth=None, metric="fitness")
+    chain = _walk_lineage(tip, id_map, depth=None)
     assert [p.id for p in chain] == [_uid("tip"), _uid("mid"), _uid("root")]
 
 
@@ -35,7 +35,7 @@ def test_walk_lineage_stops_when_parent_missing() -> None:
     tip = _prog("tip", "ghost")
     id_map = {tip.id: tip}
 
-    chain = _walk_lineage(tip, id_map, depth=None, metric="fitness")
+    chain = _walk_lineage(tip, id_map, depth=None)
     assert [p.id for p in chain] == [_uid("tip")]
 
 
@@ -45,7 +45,7 @@ def test_walk_lineage_respects_depth_limit() -> None:
     ]
     id_map = {p.id: p for p in chain_programs}
 
-    chain = _walk_lineage(chain_programs[-1], id_map, depth=2, metric="fitness")
+    chain = _walk_lineage(chain_programs[-1], id_map, depth=2)
     assert [p.id for p in chain] == [_uid("p4"), _uid("p3"), _uid("p2")]
 
 
@@ -56,7 +56,7 @@ def test_walk_lineage_breaks_on_cycle_without_depth() -> None:
     b = _prog("b", "a")
     id_map = {a.id: a, b.id: b}
 
-    chain = _walk_lineage(a, id_map, depth=None, metric="fitness")
+    chain = _walk_lineage(a, id_map, depth=None)
     # Walk must terminate; visited IDs must stay unique.
     ids = [p.id for p in chain]
     assert ids[0] == _uid("a")
@@ -74,5 +74,5 @@ def test_walk_lineage_breaks_on_self_loop() -> None:
     )
     id_map = {a.id: a}
 
-    chain = _walk_lineage(a, id_map, depth=None, metric="fitness")
+    chain = _walk_lineage(a, id_map, depth=None)
     assert [p.id for p in chain] == [self_id]
