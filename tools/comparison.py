@@ -301,7 +301,10 @@ def _smooth_series(
     else:
         smoothed = values_interp
 
-    # Restore NaN positions
+    # Restore NaN positions. ``smoothed`` is a numpy array in every branch
+    # above (some via ``Series.values``); the cast pins the type so the
+    # boolean-indexed assignment satisfies the numpy stub for ``__setitem__``.
+    smoothed = np.asarray(smoothed)
     if nan_mask.any():
         smoothed[nan_mask] = np.nan
 
