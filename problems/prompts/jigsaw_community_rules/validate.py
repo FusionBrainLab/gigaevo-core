@@ -34,7 +34,14 @@ def calculate_fitness(
     data: pd.DataFrame,
     preds: list[float | int | None],
     target_field: str = "rule_violation",
-):
+) -> float:
+    """Compute mean ROC-AUC across rules that have both classes present.
+
+    Returns ``0.0`` when no rule satisfies the two-class precondition.
+    The framework's selectors/Pareto utilities require numeric fitness
+    (``extract_fitness_values`` negates ``-value`` for minimization),
+    so a ``None`` sentinel would crash downstream consumers.
+    """
     rule_metrics = []
     for _, group in data.groupby("rule"):
         if len(group[target_field].unique()) > 1:
@@ -43,7 +50,7 @@ def calculate_fitness(
             ]
             metric = roc_auc_score(group[target_field], group_preds)
             rule_metrics.append(metric)
-    return np.mean(rule_metrics) if rule_metrics else None
+    return float(np.mean(rule_metrics)) if rule_metrics else 0.0
 
 
 def validate(prompt_template: str):
