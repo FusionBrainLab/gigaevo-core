@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
 import random
+import threading
 
 from gigaevo.evolution.strategies.island import MapElitesIsland
 from gigaevo.evolution.strategies.models import DynamicBehaviorSpace
@@ -74,10 +75,17 @@ class WeightedIslandSelector(IslandSelector, IslandCompatibilityMixin):
 
 
 class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
-    """Round-robin among compatible islands."""
+    """Round-robin among compatible islands.
+
+    Thread-safe: ``_idx`` is a shared counter that may be advanced from
+    multiple OS threads (e.g. when this selector is shared across event
+    loops). A :class:`threading.Lock` guards the read-modify-write so
+    concurrent callers never double-skip or repeat the same island.
+    """
 
     def __init__(self) -> None:
         self._idx = -1
+        self._idx_lock = threading.Lock()
 
     async def select_island(
         self, program: Program, islands: list[MapElitesIsland]
@@ -89,8 +97,10 @@ class RoundRobinIslandSelector(IslandSelector, IslandCompatibilityMixin):
         if not accepting:
             return None
 
-        self._idx = (self._idx + 1) % len(accepting)
-        return accepting[self._idx]
+        with self._idx_lock:
+            self._idx = (self._idx + 1) % len(accepting)
+            idx = self._idx
+        return accepting[idx]
 
 
 class RandomIslandSelector(IslandSelector, IslandCompatibilityMixin):

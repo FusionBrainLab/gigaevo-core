@@ -6,6 +6,8 @@ and the _filter_accepting_islands helper.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 from gigaevo.evolution.strategies.island_selector import (
@@ -275,6 +277,67 @@ class TestRoundRobinIslandSelector:
             seen.add(r.config.island_id)
 
         assert seen == {"i0", "i1", "i2"}
+
+    def test_concurrent_threads_do_not_corrupt_counter(self):
+        """Counter RMW under threading.Lock yields N unique advancements over N calls.
+
+        Each select_island call must advance the shared counter by exactly one.
+        Without synchronization, two threads can read the same _idx, write the
+        same successor, and both return the same island (or skip one). With
+        the lock, the number of distinct (call_number, island_id) pairs is
+        bounded only by the round-robin cycle length.
+        """
+        islands = [
+            _make_island(f"i{i}", behavior_keys=["score"], accepts=True)
+            for i in range(4)
+        ]
+        prog = _make_program(metrics={"score": 0.5})
+        selector = RoundRobinIslandSelector()
+
+        per_thread_results: list[list[str]] = []
+        per_thread_lock = threading.Lock()
+        barrier = threading.Barrier(8)
+        calls_per_thread = 25
+
+        def worker() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                local: list[str] = []
+                barrier.wait()
+                for _ in range(calls_per_thread):
+                    res = loop.run_until_complete(
+                        selector.select_island(prog, islands)
+                    )
+                    local.append(res.config.island_id)
+                with per_thread_lock:
+                    per_thread_results.append(local)
+            finally:
+                loop.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        all_results = [r for batch in per_thread_results for r in batch]
+        # Total advances == total calls (no dropped writes, no duplicate writes
+        # to the same successor would only ever be detectable indirectly, but
+        # the histogram must be perfectly uniform modulo 4 if every advance
+        # incremented exactly once).
+        assert len(all_results) == 8 * calls_per_thread
+        counts: dict[str, int] = {f"i{i}": 0 for i in range(4)}
+        for island_id in all_results:
+            counts[island_id] += 1
+        # 200 calls, 4 islands -> exactly 50 each under a perfectly serialized
+        # counter. Any race would skew this.
+        expected = (8 * calls_per_thread) // 4
+        for island_id, c in counts.items():
+            assert c == expected, (
+                f"Round-robin counter race detected: "
+                f"island {island_id} hit {c} times, expected {expected}. "
+                f"Full counts: {counts}"
+            )
 
 
 # ---------------------------------------------------------------------------
