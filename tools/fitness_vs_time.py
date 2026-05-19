@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import cast
 
 import matplotlib
 
@@ -39,7 +40,10 @@ def fetch_fitness_history(
     r = redis.Redis(host=host, port=port, db=db, decode_responses=True)
     try:
         key = f"{prefix}:metrics:history:program_metrics:{metric}"
-        entries = r.lrange(key, 0, -1)
+        # redis-py shares type stubs between sync and async clients, so the
+        # return annotation widens to ``Union[Awaitable[list], list]``; the
+        # concrete return at runtime on the sync client is always ``list``.
+        entries = cast(list[str], r.lrange(key, 0, -1))
     finally:
         try:
             r.close()
@@ -143,12 +147,16 @@ def fetch_pool_stats(host: str, port: int, pool_name: str) -> dict[str, dict]:
     """Fetch current endpoint pool stats from Redis DB 15."""
     r = redis.Redis(host=host, port=port, db=15, decode_responses=True)
     try:
-        inflight = r.hgetall(f"llm_pool:{pool_name}:inflight")
+        # See ``fetch_fitness_history``: the shared sync/async stubs annotate
+        # these returns as ``Union[Awaitable[...], ...]``; the sync client
+        # always returns the concrete value, so the casts below narrow the
+        # stub-shape false positive without hiding a real bug.
+        inflight = cast(dict[str, str], r.hgetall(f"llm_pool:{pool_name}:inflight"))
         # Find all stats keys for this pool
-        stats_keys = r.keys(f"llm_pool:{pool_name}:stats:*")
+        stats_keys = cast(list[str], r.keys(f"llm_pool:{pool_name}:stats:*"))
         endpoint_stats = {}
         for sk in stats_keys:
-            data = r.hgetall(sk)
+            data = cast(dict[str, str], r.hgetall(sk))
             # Match stats key back to endpoint via inflight hash
             for ep in inflight:
                 from hashlib import sha256
