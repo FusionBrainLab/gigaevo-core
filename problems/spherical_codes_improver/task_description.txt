@@ -1,0 +1,117 @@
+**TASK DEFINITION – D-DIMENSIONAL SPHERICAL CODE**
+
+**Challenge:** Implement a Python class that generates a set of $n$ points on the surface of a unit hypersphere in $\mathbb{R}^d$ ($S^{d-1}$) such that the **maximum cosine similarity** (inner product) between any pair of distinct points is minimized.
+
+**Specific Benchmark:** $n=600, d=11$.
+**General Requirement:** The code must be valid for any natural number $n \ge 2$ and dimension $d \ge 2$.
+
+**GEOMETRIC SPECIFICATIONS**
+1.  **Points (Items):**
+    *   A collection of $n$ points: $X = \{x_1, x_2, \dots, x_n\}$.
+    *   Each point $x_i \in \mathbb{R}^d$.
+2.  **Constraint Surface:**
+    *   Unit $(d-1)$-sphere: $\|x_i\|_2 = 1$ for all $i=1 \dots n$.
+    *   Points must lie strictly on the surface of the hypersphere.
+3.  **Objective:**
+    *   Minimize the maximum pairwise inner product.
+
+**OBJECTIVE FUNCTION**
+Minimize the coherence (maximum cosine similarity): $\mu(X)$.
+$$ \mu(X) := \max_{1 \leq i < j \leq n} (x_i \cdot x_j) $$
+*Goal:* Produce a spherical code with the smallest possible maximum inner product (i.e., points should be as spread out/orthogonal as possible).
+
+**CONSTRAINTS**
+1.  **Spherical Constraint:** Every returned point must satisfy $\|x_i\| \approx 1.0$ (within floating point tolerance).
+2.  **Count:** Exactly $n$ points must be returned.
+3.  **Dimensions:** Points must have exactly $d$ coordinates.
+4.  **Real Values:** No `NaN` or `Inf` values allowed.
+
+**TARGETED PERTURBATION & LANDSCAPE TRAVERSAL (CRITICAL)**
+A highly competitive `perturb` method must navigate a notoriously difficult, non-convex energy landscape filled with shallow local minima and saddle points. However, high-quality spherical codes are extremely delicate: applying naive, global random noise will destroy the carefully packed sub-structures. Your perturbation must be **surgical, structure-preserving, and highly non-trivial.**
+
+To achieve State-of-the-Art (SOTA) performance, your `perturb` method should act as an orchestrator for a portfolio of advanced heuristics. To inspire your design, consider combining approaches such as:
+*   **Active-Set Targeting:** Identifying the specific subset of points acting as the "bottleneck" (the pairs realizing the maximum cosine) and applying localized, repelling vector fields or geometric reflections exclusively to them, leaving the well-packed majority intact.
+*   **Surrogate Relaxations:** Temporarily morphing the objective function (e.g., evaluating the configuration under LogSumExp, Riesz $s$-energy, or $p$-norms with varying temperatures) to dissolve the current local minimum and allow the points to smoothly slide into a deeper basin.
+*   **Manifold & Subspace Moves:** Exploiting the geometry of $S^{d-1}$ via localized topological twists, tangent-space momentum, or subset rotations that alter the configuration's state without blowing up the existing invariants.
+*   **Intensity Orchestration:** Using the `intensity` parameter to intelligently scale from the micro-adjustments of bottleneck points to meso-scale structural shifts.
+
+**IMPLEMENTATION REQUIREMENTS**
+
+**Libraries:**
+Use `numpy`, `scipy`, `sklearn`, `jax`, `optax`, `jaxopt`, `optuna` or standard Python libraries.
+
+**Class Interface:**
+You must implement the following class structure exactly:
+
+```python
+import numpy as np
+# other imports
+
+class Improver:
+    def __init__(self, n, d, seed: int = 0):
+        """
+        Args:
+            n: Number of points.
+            d: Dimension of the space (points lie on S^{d-1} in R^d).
+            seed: Random seed.
+        """
+        self.n = n
+        self.d = d
+        self.seed = seed
+        # Initialize RNG, optimizers, or hyperparameters here
+
+    def improve(self, points: np.ndarray, seed=None) -> np.ndarray:
+        """
+        Refines an existing configuration to minimize the maximum inner product.
+        Must strictly enforce the spherical constraint (||x|| = 1) in the output.
+
+        Args:
+            points: np.ndarray of shape (n, d).
+            seed: Optional seed for stochastic elements.
+
+        Returns:
+            points: np.ndarray of shape (n, d) - the optimized configuration.
+        """
+        pass
+
+    def perturb(self, points: np.ndarray, intensity: float, seed=None) -> np.ndarray:
+        """
+        Applies a highly non-trivial orchestration of surgical structural or 
+        stochastic modifications to escape local minima while preserving essence.
+        
+        This method MUST aggregate multiple different perturbation heuristics 
+        and decide how to apply them (e.g., targeting active sets, applying 
+        surrogate relaxations, or scaling aggressiveness based on 'intensity').
+        
+        Args:
+            points: np.ndarray of shape (n, d).
+            intensity: Float (0.0 to 1.0). Higher intensity = larger mesoscale shifts.
+            seed: Optional seed.
+
+        Returns:
+             points: np.ndarray of shape (n, d) - the perturbed configuration.
+        """
+        pass
+
+    def generate_config(self, seed=None) -> np.ndarray:
+        """
+        Generates a valid initial configuration of n points on the unit sphere.
+        Returns:
+            points: np.ndarray of shape (n, d)
+        """
+        pass
+
+def entrypoint():
+    return Improver
+```
+
+**Optimization Context:**
+The `perturb()` and `improve()` functions will be called in an iterative loop (e.g., 50 iterations). Aim for efficiency, but assume a generous 5-second time limit per `improve()` call. 
+
+**CRITICAL FAILURE MODES**
+*   **Wrong Shapes:** Returning arrays of shape `(n, 3)` when `d=4`.
+*   **Constraint Violation:** Returning points where $\|x_i\| \neq 1$.
+*   **Dimension Hardcoding:** Assuming specific dimensions (like $d=3$) instead of handling general $d \ge 2$.
+
+**DOCUMENTATION**
+Supply your code with a brief explanation of the algorithms used—specifically detailing your `improve` optimization method and your orchestrating `perturb` logic—using LaTeX in the introductory comment.
