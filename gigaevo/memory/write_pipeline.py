@@ -468,9 +468,22 @@ def main(
     programs_path: Path | None = None,
     usage_updates_path: Path | None = None,
     config_path: Path | None = None,
+    checkpoint_dir: str | Path | None = None,
+    namespace: str | None = None,
 ) -> dict[str, Any] | None:
-    """Load cards from banks, write to memory backend, report stats."""
+    """Load cards from banks, write to memory backend, report stats.
+
+    ``checkpoint_dir`` and ``namespace`` override the values loaded from
+    ``config_path`` so the engine can pin per-run memory artefacts under the
+    Hydra output directory regardless of the static fallback in
+    ``config/memory_backend.yaml``.
+    """
     cfg: PipelineConfig = load_config(config_path)
+
+    if checkpoint_dir is not None:
+        cfg.memory_dir = Path(checkpoint_dir)
+    if namespace is not None:
+        cfg.namespace = namespace
 
     _banks_path = banks_path or cfg.banks_path
     _best_ideas_path = best_ideas_path or cfg.best_ideas_path

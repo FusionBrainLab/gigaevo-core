@@ -162,6 +162,75 @@ class FitnessProportionalEliteSelector(EliteSelector):
         return selected
 
 
+class FitnessProportionalTournamentEliteSelector(FitnessProportionalEliteSelector):
+    """Two-pass selector: fitness-proportional pool, then uniform tournament.
+
+    Stage 1 — softmax fitness-proportional sample of a candidate pool of size
+    ``pool_multiplier * total`` (clamped to the population size). Reuses the
+    weighting / temperature logic from :class:`FitnessProportionalEliteSelector`.
+
+    Stage 2 — uniform random sample of ``total`` programs from the pool, without
+    replacement. The uniform second pass widens exploration relative to plain
+    FP without dropping fitness pressure entirely: fitness controls which
+    programs reach the pool, then chance decides which ones win.
+    """
+
+    def __init__(
+        self,
+        fitness_key: str,
+        fitness_key_higher_is_better: bool = True,
+        temperature: float | None = None,
+        pool_multiplier: int = 5,
+    ):
+        super().__init__(
+            fitness_key=fitness_key,
+            fitness_key_higher_is_better=fitness_key_higher_is_better,
+            temperature=temperature,
+        )
+        self.pool_multiplier = max(1, int(pool_multiplier))
+
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
+        logger.debug(
+            "FitnessProportionalTournamentEliteSelector: selecting {} from {} "
+            "programs (key='{}', higher_is_better={}, temperature={}, "
+            "pool_multiplier={})",
+            total,
+            len(programs),
+            self.fitness_key,
+            self.higher_is_better,
+            self.temperature,
+            self.pool_multiplier,
+        )
+
+        if len(programs) <= total:
+            return programs
+
+        pool_size = min(total * self.pool_multiplier, len(programs))
+
+        fitnesses = []
+        for p in programs:
+            if self.fitness_key not in p.metrics:
+                raise ValueError(
+                    f"Missing fitness key '{self.fitness_key}' in program {p.id}"
+                )
+            val = p.metrics[self.fitness_key]
+            fitnesses.append(val if self.higher_is_better else -val)
+
+        if not all(np.isfinite(f) for f in fitnesses):
+            logger.warning(
+                "FitnessProportionalTournamentEliteSelector: non-finite "
+                "fitnesses detected; falling back to uniform sampling"
+            )
+            return random.sample(programs, total)
+
+        weights = self._compute_weights(fitnesses)
+        pool = weighted_sample_without_replacement(programs, weights, pool_size)
+
+        if len(pool) <= total:
+            return pool
+        return random.sample(pool, total)
+
+
 class WeightedEliteSelector(EliteSelector):
     """ShinkaEvolve-inspired weighted sampling combining sigmoid-scaled fitness
     with a children-count novelty penalty.

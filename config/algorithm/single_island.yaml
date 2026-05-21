@@ -32,7 +32,7 @@ islands:
       fitness_key_higher_is_better:
         - ${higher_is_better}
     elite_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalEliteSelector
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalTournamentEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
     archive_remover:

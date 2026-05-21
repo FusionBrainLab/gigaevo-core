@@ -8,6 +8,7 @@ import pytest
 
 from gigaevo.evolution.strategies.elite_selectors import (
     FitnessProportionalEliteSelector,
+    FitnessProportionalTournamentEliteSelector,
     ParetoTournamentEliteSelector,
     RandomEliteSelector,
     ScalarTournamentEliteSelector,
@@ -1008,3 +1009,185 @@ class TestSingleElementPopulation:
         progs = [_make_program(5.0)]
         result = sel(progs, total=5)
         assert result == progs
+
+
+# ---------------------------------------------------------------------------
+# FitnessProportionalTournamentEliteSelector — two-pass FP + uniform pick
+# ---------------------------------------------------------------------------
+
+
+class TestFitnessProportionalTournamentEliteSelector:
+    def test_returns_all_when_fewer_than_total(self):
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(3)]
+        result = sel(progs, total=5)
+        assert result == progs
+
+    def test_correct_count_returned(self):
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(20)]
+        result = sel(progs, total=4)
+        assert len(result) == 4
+
+    def test_no_duplicates(self):
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(20)]
+        result = sel(progs, total=5)
+        assert len(set(id(p) for p in result)) == 5
+
+    def test_higher_fitness_preferred(self):
+        """Pool draws are FP-weighted, so the best program should still appear
+        in the final selection more often than the worst."""
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", temperature=0.1
+        )
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        counts: Counter = Counter()
+        n_trials = 1500
+        for _ in range(n_trials):
+            result = sel(progs, total=1)
+            counts[id(result[0])] += 1
+
+        # With temp=0.1 + pool_multiplier=3, top tier gets most of the mass.
+        top_three = sum(counts[id(p)] for p in progs[-3:])
+        bottom_three = sum(counts[id(p)] for p in progs[:3])
+        assert top_three > bottom_three * 3
+
+    def test_higher_is_better_false_prefers_low(self):
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score",
+            fitness_key_higher_is_better=False,
+            temperature=0.1,
+        )
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        counts: Counter = Counter()
+        for _ in range(1500):
+            result = sel(progs, total=1)
+            counts[id(result[0])] += 1
+
+        bottom_three = sum(counts[id(p)] for p in progs[:3])
+        top_three = sum(counts[id(p)] for p in progs[-3:])
+        assert bottom_three > top_three * 3
+
+    def test_uniform_pick_widens_distribution_vs_plain_fp(self):
+        """At low temperature, plain FP collapses to greedy; the tournament
+        pass spreads selections across the FP-sampled pool so the very best
+        program does NOT dominate as completely."""
+        random.seed(0)
+        plain = FitnessProportionalEliteSelector(fitness_key="score", temperature=0.001)
+        twostage = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", temperature=0.001, pool_multiplier=5
+        )
+        progs = [_make_program(float(i)) for i in range(10)]
+        best = progs[-1]
+
+        plain_best = 0
+        twostage_best = 0
+        n_trials = 500
+        for trial in range(n_trials):
+            random.seed(trial + 1)
+            if plain(progs, total=1)[0] is best:
+                plain_best += 1
+            random.seed(trial + 1)
+            if twostage(progs, total=1)[0] is best:
+                twostage_best += 1
+
+        assert plain_best > twostage_best
+
+    def test_pool_multiplier_one_equals_plain_fp_count_only(self):
+        """With pool_multiplier=1, pool_size == total, so the uniform pass
+        is a no-op and we just return the FP-sampled pool."""
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", temperature=0.5, pool_multiplier=1
+        )
+        progs = [_make_program(float(i)) for i in range(10)]
+        result = sel(progs, total=4)
+        assert len(result) == 4
+        assert len(set(id(p) for p in result)) == 4
+
+    def test_pool_clamped_to_population(self):
+        """When pool_multiplier * total > population, pool is the full population
+        and the uniform pass picks total from there."""
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", pool_multiplier=100
+        )
+        progs = [_make_program(float(i)) for i in range(8)]
+        result = sel(progs, total=3)
+        assert len(result) == 3
+        assert len(set(id(p) for p in result)) == 3
+
+    def test_missing_fitness_key_raises(self):
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="nonexistent")
+        progs = [_make_program(1.0, fitness_key="score") for _ in range(5)]
+        with pytest.raises(ValueError, match="Missing fitness key"):
+            sel(progs, total=2)
+
+    def test_nan_fitness_falls_back_to_uniform(self):
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(5)]
+        progs[1] = _make_program(float("nan"))
+        result = sel(progs, total=2)
+        assert len(result) == 2
+        assert len(set(id(p) for p in result)) == 2
+
+    def test_inf_fitness_falls_back_to_uniform(self):
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(5)]
+        progs[2] = _make_program(float("inf"))
+        result = sel(progs, total=3)
+        assert len(result) == 3
+        assert len(set(id(p) for p in result)) == 3
+
+    def test_all_identical_fitness_uniform_selection(self):
+        """All-identical fitnesses → pool weights uniform → uniform pool →
+        uniform final pick. Distribution should be roughly flat."""
+        sel = FitnessProportionalTournamentEliteSelector(fitness_key="score")
+        progs = [_make_program(5.0) for _ in range(5)]
+
+        counts: Counter = Counter()
+        n_trials = 2000
+        for _ in range(n_trials):
+            result = sel(progs, total=1)
+            counts[id(result[0])] += 1
+
+        for p in progs:
+            frac = counts[id(p)] / n_trials
+            assert 0.10 < frac < 0.30, f"Expected ~uniform, got {frac:.2%}"
+
+    def test_deterministic_with_seed(self):
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", temperature=0.5
+        )
+        progs = [_make_program(float(i)) for i in range(10)]
+
+        random.seed(12345)
+        result1 = sel(progs, total=3)
+        ids1 = [id(p) for p in result1]
+
+        random.seed(12345)
+        result2 = sel(progs, total=3)
+        ids2 = [id(p) for p in result2]
+
+        assert ids1 == ids2
+
+    def test_pool_multiplier_floor(self):
+        """pool_multiplier=0 or negative is clamped to 1."""
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", pool_multiplier=0
+        )
+        assert sel.pool_multiplier == 1
+        sel = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", pool_multiplier=-5
+        )
+        assert sel.pool_multiplier == 1
+
+    def test_resolves_via_map_elites_reexport(self):
+        """The class must be importable via the map_elites re-export so the
+        Hydra _target_ in single_island.yaml resolves."""
+        from gigaevo.evolution.strategies.map_elites import (
+            FitnessProportionalTournamentEliteSelector as Reexported,
+        )
+
+        assert Reexported is FitnessProportionalTournamentEliteSelector

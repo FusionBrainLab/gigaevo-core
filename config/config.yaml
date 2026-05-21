@@ -13,9 +13,10 @@ problem:
   name: ???  # Required
   dir: ${hydra:runtime.cwd}/problems/${problem.name}
 
-# Optional override for memory checkpoint directory.
-# Used by memory GAM agent and ideas tracker memory write pipeline.
-checkpoint_dir: null
+# Memory checkpoint directory. Per-run by default — lands under the Hydra
+# run dir for isolation across concurrent runs. Override on the CLI
+# (`checkpoint_dir=/abs/path`) to share a card bank across runs.
+checkpoint_dir: ${hydra:runtime.output_dir}/memory
 
 # Optional override for api.namespace in memory config.
 namespace: null

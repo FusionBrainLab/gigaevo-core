@@ -232,8 +232,15 @@ def _run_write_pipeline(
     usage_updates_path: Path | None,
     memory_usage_tracking_enabled: bool,
     config_path: Path | None = None,
+    checkpoint_dir: str | Path | None = None,
+    namespace: str | None = None,
 ) -> None:
-    """Optionally trigger the downstream memory write pipeline."""
+    """Optionally trigger the downstream memory write pipeline.
+
+    ``checkpoint_dir`` and ``namespace`` (when set) override the values from
+    ``config_path`` so per-run artefacts land under the Hydra output dir
+    instead of the static fallback in ``config/memory_backend.yaml``.
+    """
     if not enabled:
         return
     if banks_path is None or best_ideas_path is None:
@@ -277,6 +284,8 @@ def _run_write_pipeline(
         programs_path=effective_programs_path,
         usage_updates_path=effective_usage_updates_path,
         config_path=config_path,
+        checkpoint_dir=checkpoint_dir,
+        namespace=namespace,
     )
     if isinstance(snapshot, dict):
         stats = snapshot.get("stats", {})
@@ -518,8 +527,14 @@ class IdeaTracker(PostRunHook):
         analyzer_model / analyzer_base_url / analyzer_reasoning: Passed to the analyser.
         analyzer_fast_settings: Extra kwargs for ClusteringAnalyzer when ``fast``.
         list_max_ideas, postprocessing_type, record_conversion_type,
-        memory_write_best_programs_percent, checkpoint_dir, namespace: Accepted for
-            YAML compatibility; the refactored pipeline does not use all of them yet.
+        memory_write_best_programs_percent: Accepted for YAML compatibility;
+            the refactored pipeline does not use all of them yet.
+        checkpoint_dir: Overrides the ``paths.checkpoint_dir`` value loaded
+            from ``config/memory_backend.yaml`` so per-run cards land under
+            the Hydra output dir. When ``None``, the YAML default is used.
+        namespace: Overrides the ``api.namespace`` value loaded from
+            ``config/memory_backend.yaml``. When ``None``, the YAML default
+            is used.
         task_description: Human-readable description of the current task. If empty,
             loaded from the matching problems/ directory using redis_prefix.
         redis_prefix: Redis key prefix (e.g. "chains/hotpotqa/static") used to
@@ -581,6 +596,8 @@ class IdeaTracker(PostRunHook):
         self._memory_write_enabled = memory_write_enabled
         self._memory_usage_tracking_enabled = memory_usage_tracking_enabled
         self._config_path = config_path
+        self._checkpoint_dir = checkpoint_dir
+        self._namespace = namespace
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
 
@@ -678,6 +695,8 @@ class IdeaTracker(PostRunHook):
             self._log.usage_updates_file,
             self._memory_usage_tracking_enabled,
             config_path=self._config_path,
+            checkpoint_dir=self._checkpoint_dir,
+            namespace=self._namespace,
         )
 
     def _eligible_records(self, programs: list[Program]) -> list[ProgramRecord]:
