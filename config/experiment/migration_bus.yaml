@@ -9,8 +9,9 @@
 #   python run.py experiment=migration_bus problem.name=heilbron redis.db=1
 #   python run.py experiment=migration_bus problem.name=heilbron redis.db=2
 #
-# All runs share a migration stream on Redis DB 15.
-# See docs/migration_bus.md for architecture and monitoring.
+# All runs share a migration stream on Redis DB 15. See the migration_node /
+# evolution_engine blocks below for stream key, max length, claim TTL, and
+# import/consume cadence. `tools/migration_dashboard/` plots throughput.
 
 defaults:
   - /constants: base

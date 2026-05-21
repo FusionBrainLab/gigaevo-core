@@ -4,9 +4,9 @@
 loop_interval: 1.0
 max_elites_per_generation: 5
 sync_min_delta: 8
-num_parents: 2
+num_parents: 1
 mutation_mode: rewrite
-max_mutants: 800
+max_mutants: 250
 strip_comments_and_docstrings: false
 pre_step_hook: null
 post_step_hook: null

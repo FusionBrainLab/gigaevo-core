@@ -526,7 +526,7 @@ def test_no_llm_call_when_no_eligible_programs(tmp_path):
 
         # All programs are invalid — should be filtered out completely
         programs = [_make_invalid_program(f"p{i}") for i in range(3)]
-        asyncio.run(tracker._run(programs))
+        asyncio.run(tracker.run_increment(programs))
 
         assert task_summary_accessed == [], (
             "_task_summary (LLM) must not be called when no eligible/valid programs exist"

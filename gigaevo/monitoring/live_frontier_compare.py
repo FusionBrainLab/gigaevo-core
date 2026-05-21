@@ -45,6 +45,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import threading
 import time
 
@@ -195,6 +196,96 @@ def format_snapshot(snap: FrontierCompareSnapshot, *, decimals: int = 5) -> str:
 
 
 # ---------------------------------------------------------------------------
+# File renderer — refreshes a frontier trajectory PNG in the run's output dir.
+# ---------------------------------------------------------------------------
+
+
+def _safe_metric_filename(metric: str) -> str:
+    return metric.replace("/", "_").replace(" ", "_").replace("\\", "_")
+
+
+def _running_frontier(
+    points: Sequence[tuple[int, float]], higher_is_better: bool
+) -> tuple[list[int], list[float]]:
+    """Best-so-far over the (iteration, value) series, monotonic by orientation."""
+    if not points:
+        return [], []
+    ordered = sorted(points, key=lambda x: x[0])
+    iters: list[int] = []
+    bests: list[float] = []
+    running: float | None = None
+    for it, v in ordered:
+        if (
+            running is None
+            or (higher_is_better and v > running)
+            or (not higher_is_better and v < running)
+        ):
+            running = v
+        iters.append(it)
+        bests.append(running)
+    return iters, bests
+
+
+def _render_frontier_plot(
+    *,
+    output_dir: Path,
+    metric: str,
+    frontier_history: Sequence[tuple[int, float]],
+    iter_mean_history: Sequence[tuple[int, float]],
+    higher_is_better: bool,
+) -> Path | None:
+    """Refresh ``<output_dir>/frontier_<metric>.png`` with current trajectory.
+
+    Returns the written path, or ``None`` if there was nothing to plot.
+    No-op when ``frontier_history`` is empty.
+    """
+    if not frontier_history:
+        return None
+    # Lazy matplotlib import: optional dep, keeps test/import time cheap.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    front_iters, front_best = _running_frontier(frontier_history, higher_is_better)
+    mean_sorted = sorted(iter_mean_history, key=lambda x: x[0])
+    mean_iters = [it for it, _ in mean_sorted]
+    mean_vals = [v for _, v in mean_sorted]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(
+        front_iters,
+        front_best,
+        linewidth=2.0,
+        color="#1f77b4",
+        label=f"Frontier (best-so-far) {metric}",
+        zorder=3,
+    )
+    if mean_iters:
+        ax.plot(
+            mean_iters,
+            mean_vals,
+            linewidth=1.5,
+            color="#ff7f0e",
+            linestyle="--",
+            label=f"Per-iter mean {metric}",
+            zorder=2,
+        )
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel(metric.replace("_", " ").title())
+    ax.set_title(f"{metric} — frontier vs. per-iter mean")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"frontier_{_safe_metric_filename(metric)}.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # Redis adapter — fetches the three series the snapshot needs.
 # ---------------------------------------------------------------------------
 
@@ -287,6 +378,8 @@ def _loop(
     interval_s: float,
     emit_log: bool,
     emit_telegram: bool,
+    emit_file: bool,
+    output_dir: Path | None,
     label: str,
     stop: threading.Event,
 ) -> None:
@@ -315,6 +408,22 @@ def _loop(
                 emit_telegram=emit_telegram,
                 label=label,
             )
+            if emit_file and output_dir is not None:
+                for m in metrics:
+                    try:
+                        _render_frontier_plot(
+                            output_dir=output_dir,
+                            metric=m,
+                            frontier_history=frontier.get(m, []),
+                            iter_mean_history=iter_mean.get(m, []),
+                            higher_is_better=higher_is_better.get(m, True),
+                        )
+                    except Exception:
+                        logger.opt(exception=True).warning(
+                            "[live_frontier_compare] file emit failed for "
+                            "metric={} (will retry next tick)",
+                            m,
+                        )
             logger.debug(
                 "[live_frontier_compare] tick in {:.2f}s ({} metrics with data)",
                 time.monotonic() - t0,
@@ -344,6 +453,7 @@ def start_live_frontier_compare(
     higher_is_better: dict[str, bool],
     interval_s: float = 60.0,
     emit_targets: Sequence[str] = ("log",),
+    output_dir: Path | None = None,
     label: str = "live_frontier_compare",
     enabled: bool = True,
 ) -> threading.Event:
@@ -361,9 +471,15 @@ def start_live_frontier_compare(
             the problem's ``metrics.yaml`` ``MetricSpec`` at wiring time.
         interval_s: seconds between snapshots. 60 s is a reasonable
             default; the read is two ``LRANGE`` calls per metric.
-        emit_targets: subset of ``("log", "telegram")``. ``log`` writes
-            via loguru at INFO; ``telegram`` calls
-            :func:`tools.telegram_notify.notify`.
+        emit_targets: subset of ``("log", "telegram", "file")``. ``log``
+            writes via loguru at INFO; ``telegram`` calls
+            :func:`tools.telegram_notify.notify`; ``file`` re-renders
+            ``frontier_<metric>.png`` in *output_dir* each tick.
+        output_dir: directory where the ``file`` emit target writes
+            PNGs. Required when ``"file"`` is in *emit_targets*; ignored
+            otherwise. The daemon does not crash if the target is in
+            ``emit_targets`` but ``output_dir`` is ``None`` — it logs a
+            warning and silently drops file emission.
         label: short identifier used in log lines (and as the thread
             name).
         enabled: when ``False``, returns a set ``Event`` without starting
@@ -381,6 +497,14 @@ def start_live_frontier_compare(
     emit_set = {t.lower() for t in emit_targets}
     emit_log = "log" in emit_set
     emit_telegram = "telegram" in emit_set
+    emit_file = "file" in emit_set
+
+    if emit_file and output_dir is None:
+        logger.warning(
+            "[live_frontier_compare] emit_targets contains 'file' but no "
+            "output_dir was provided — file emission is disabled for this run."
+        )
+        emit_file = False
 
     thread = threading.Thread(
         target=_loop,
@@ -392,6 +516,8 @@ def start_live_frontier_compare(
             interval_s=float(interval_s),
             emit_log=emit_log,
             emit_telegram=emit_telegram,
+            emit_file=emit_file,
+            output_dir=output_dir,
             label=label,
             stop=stop,
         ),

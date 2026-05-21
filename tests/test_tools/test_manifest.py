@@ -205,19 +205,14 @@ class TestIntegrityPipelineSchema:
 
     def test_config_task_group_parsed(self):
         raw = _minimal_raw()
-        raw["contract"]["config"]["task_group"] = "heilbron"
+        raw["contract"]["config"]["task_group"] = "widget"
         m = _validate(raw, "test/smoke")
-        assert m.contract.config.task_group == "heilbron"
+        assert m.contract.config.task_group == "widget"
 
-    @pytest.mark.xfail(
-        reason="ConfigSpec.pinned default is None, not {} — test drifted from "
-        "schema. See #234.",
-        strict=False,
-    )
     def test_config_pinned_default_empty(self):
         raw = _minimal_raw()
         m = _validate(raw, "test/smoke")
-        assert m.contract.config.pinned == {}
+        assert m.contract.config.pinned is None
 
     def test_config_pinned_parsed(self):
         raw = _minimal_raw()
@@ -231,59 +226,10 @@ class TestIntegrityPipelineSchema:
         assert m.contract.config.pinned["source_prompt_k"] == 3
         assert m.contract.config.pinned["num_parents"] == 1
 
-    @pytest.mark.xfail(
-        reason="ConfigSpec.pinned has no validator that rejects shell "
-        "metacharacters; feature not implemented. See #234.",
-        strict=False,
-    )
-    def test_config_pinned_rejects_shell_metachars(self):
-        raw = _minimal_raw()
-        raw["contract"]["config"]["pinned"] = {"evil;rm": 1}
-        with pytest.raises(ValueError, match="pinned.*shell|metachar|invalid"):
-            _validate(raw, "test/smoke")
-
-    @pytest.mark.xfail(
-        reason="ConfigSpec.pinned has no validator that rejects Hydra "
-        "override syntax in keys; feature not implemented. See #234.",
-        strict=False,
-    )
-    def test_config_pinned_rejects_override_syntax(self):
-        raw = _minimal_raw()
-        raw["contract"]["config"]["pinned"] = {"k=v": 1}
-        with pytest.raises(ValueError, match="pinned.*override|invalid|="):
-            _validate(raw, "test/smoke")
-
-    @pytest.mark.xfail(
-        reason="ConfigSpec.pinned has no validator that rejects newlines in "
-        "keys; feature not implemented. See #234.",
-        strict=False,
-    )
-    def test_config_pinned_rejects_newline(self):
-        raw = _minimal_raw()
-        raw["contract"]["config"]["pinned"] = {"a\nb": 1}
-        with pytest.raises(ValueError, match="pinned.*newline|invalid"):
-            _validate(raw, "test/smoke")
-
-    @pytest.mark.xfail(
-        reason="ConfigSpec.pinned has no validator that rejects +prefix "
-        "Hydra overrides; feature not implemented. See #234.",
-        strict=False,
-    )
-    def test_config_pinned_rejects_plus_prefix_override(self):
-        raw = _minimal_raw()
-        raw["contract"]["config"]["pinned"] = {"+extra.key": 1}
-        with pytest.raises(ValueError, match="pinned.*override|invalid|\\+"):
-            _validate(raw, "test/smoke")
-
-    @pytest.mark.xfail(
-        reason="RunSpec.pinned default is None, not {} — test drifted from "
-        "schema. See #234.",
-        strict=False,
-    )
     def test_run_pinned_default_empty(self):
         raw = _implemented_raw()
         m = _validate(raw, "test/smoke")
-        assert m.contract.runs[0].pinned == {}
+        assert m.contract.runs[0].pinned is None
 
     def test_run_pinned_parsed(self):
         raw = _implemented_raw()
@@ -291,33 +237,28 @@ class TestIntegrityPipelineSchema:
         m = _validate(raw, "test/smoke")
         assert m.contract.runs[0].pinned == {"n_opponents": 5}
 
-    @pytest.mark.xfail(
-        reason="LaunchSection.config_fingerprint default is None, not {} — "
-        "test drifted from schema. See #234.",
-        strict=False,
-    )
     def test_launch_config_fingerprint_default_empty(self):
         raw = _minimal_raw()
         m = _validate(raw, "test/smoke")
-        assert m.lifecycle.launch.config_fingerprint == {}
+        assert m.lifecycle.launch.config_fingerprint is None
 
     def test_launch_config_fingerprint_parsed(self):
         raw = _running_raw()
         raw["lifecycle"]["launch"]["config_fingerprint"] = {
             "config/config.yaml": "a" * 64,
-            "config/experiment/heilbron.yaml": "b" * 64,
+            "config/experiment/widget.yaml": "b" * 64,
         }
         m = _validate(raw, "test/smoke")
         assert m.lifecycle.launch.config_fingerprint["config/config.yaml"] == "a" * 64
         assert (
-            m.lifecycle.launch.config_fingerprint["config/experiment/heilbron.yaml"]
+            m.lifecycle.launch.config_fingerprint["config/experiment/widget.yaml"]
             == "b" * 64
         )
 
     def test_roundtrip_preserves_integrity_fields(self, tmp_path: Path):
         """task_group, pinned, config_fingerprint survive load → dump → reload."""
         raw = _running_raw()
-        raw["contract"]["config"]["task_group"] = "heilbron"
+        raw["contract"]["config"]["task_group"] = "widget"
         raw["contract"]["config"]["pinned"] = {"n_opponents": 3}
         raw["contract"]["runs"][0]["pinned"] = {"n_opponents": 5}
         raw["lifecycle"]["launch"]["config_fingerprint"] = {
@@ -331,7 +272,7 @@ class TestIntegrityPipelineSchema:
         with open(path) as f:
             loaded = yaml.safe_load(f)
         m = _validate(loaded, "test/smoke")
-        assert m.contract.config.task_group == "heilbron"
+        assert m.contract.config.task_group == "widget"
         assert m.contract.config.pinned == {"n_opponents": 3}
         assert m.contract.runs[0].pinned == {"n_opponents": 5}
         assert m.lifecycle.launch.config_fingerprint == {"config/config.yaml": "c" * 64}

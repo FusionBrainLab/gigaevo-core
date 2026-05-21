@@ -20,6 +20,7 @@ _SUBMODULES = {
     "json_processing",
     "llm_score",
     "metrics",
+    "mutation_suggestions",
     "optimization",
     "python_executors",
     "runtime_metrics",
@@ -71,6 +72,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "NormalizeMetricsStage": (
         "gigaevo.programs.stages.metrics",
         "NormalizeMetricsStage",
+    ),
+    "MutationSuggestionInputs": (
+        "gigaevo.programs.stages.mutation_suggestions",
+        "MutationSuggestionInputs",
+    ),
+    "MutationSuggestionStage": (
+        "gigaevo.programs.stages.mutation_suggestions",
+        "MutationSuggestionStage",
     ),
     "CMANumericalOptimizationStage": (
         "gigaevo.programs.stages.optimization",

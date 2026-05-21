@@ -138,7 +138,6 @@ class TestProgramToRecord:
         assert record.id == "prog-uuid-001"
         assert record.fitness == 7.5
         assert record.generation == 4
-        assert record.insights == ["Use BFS"]
         assert record.strategy == "exploration"
         assert record.task_description == "Solve TSP"
         assert record.task_description_summary == "TSP optimisation"
@@ -146,7 +145,6 @@ class TestProgramToRecord:
     def test_missing_mutation_output_defaults_to_empty(self) -> None:
         prog = self._make_program()
         record = program_to_record(prog, "task", "summary")
-        assert record.insights == []
         assert record.strategy == ""
         assert record.improvements == []
 
@@ -154,7 +152,7 @@ class TestProgramToRecord:
         prog = self._make_program()
         prog.metadata["mutation_output"] = "not a dict"
         record = program_to_record(prog, "task", "summary")
-        assert record.insights == []
+        assert record.strategy == ""
 
     def test_custom_fitness_key(self) -> None:
         prog = self._make_program(fitness_key="accuracy", fitness=0.95)

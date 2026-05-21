@@ -20,36 +20,17 @@ from gigaevo.prompts import (
 
 
 class TestLoadPrompt:
-    def test_loads_default_mutation_system(self):
-        template = load_prompt("mutation", "system")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_mutation_user(self):
-        template = load_prompt("mutation", "user")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_insights_system(self):
-        template = load_prompt("insights", "system")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_insights_user(self):
-        template = load_prompt("insights", "user")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_lineage_system(self):
-        template = load_prompt("lineage", "system")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_lineage_user(self):
-        template = load_prompt("lineage", "user")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_scoring_system(self):
-        template = load_prompt("scoring", "system")
-        assert isinstance(template, str) and len(template) > 0
-
-    def test_loads_default_scoring_user(self):
-        template = load_prompt("scoring", "user")
+    @pytest.mark.parametrize(
+        "agent,prompt_type",
+        [
+            (agent, ptype)
+            for agent in ("mutation", "insights", "lineage", "scoring")
+            for ptype in ("system", "user")
+        ],
+    )
+    def test_default_prompts_load_non_empty(self, agent: str, prompt_type: str):
+        """Every shipped default prompt file loads as a non-empty string."""
+        template = load_prompt(agent, prompt_type)
         assert isinstance(template, str) and len(template) > 0
 
     def test_result_is_stripped(self):

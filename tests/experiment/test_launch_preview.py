@@ -27,7 +27,7 @@ def manifest_for_preview(tmp_path: Path, monkeypatch):
     # Minimal task-group file so the writer can report it as a source.
     cfg = tmp_path / "config" / "experiment"
     cfg.mkdir(parents=True)
-    (cfg / "heilbron.yaml").write_text("num_parents: 1\nstage_timeout: 2400\n")
+    (cfg / "widget.yaml").write_text("num_parents: 1\nstage_timeout: 2400\n")
 
     yaml_content = textwrap.dedent("""\
         schema_version: 2
@@ -41,7 +41,7 @@ def manifest_for_preview(tmp_path: Path, monkeypatch):
             fitness_type: fractional
             metric_name: fitness
           config:
-            task_group: heilbron
+            task_group: widget
             shared_overrides:
               n_opponents: 3
               source_prompt_k: 3
@@ -109,11 +109,11 @@ def result_for_preview():
         },
         fingerprint={
             "config/config.yaml": "a" * 64,
-            "config/experiment/heilbron.yaml": "b" * 64,
+            "config/experiment/widget.yaml": "b" * 64,
         },
         cli_args={
             "A1": [
-                "experiment=heilbron",
+                "experiment=widget",
                 "n_opponents=3",
                 "source_prompt_k=3",
                 "pipeline_builder.archive_reeval=true",
@@ -139,7 +139,7 @@ class TestWriteLaunchPreview:
         exp, _ = manifest_for_preview
         out = write_launch_preview(exp, result_for_preview)
         text = out.read_text()
-        assert "heilbron" in text
+        assert "widget" in text
         assert "Launch Preview" in text
 
     def test_reports_pass_when_all_pins_satisfied(
@@ -212,7 +212,7 @@ class TestWriteLaunchPreview:
         out = write_launch_preview(exp, result_for_preview)
         text = out.read_text()
         assert "config/config.yaml" in text
-        assert "config/experiment/heilbron.yaml" in text
+        assert "config/experiment/widget.yaml" in text
         # sha prefix (first 8 chars) should be visible so reviewers can diff
         assert "aaaaaaaa" in text or "a" * 8 in text
 

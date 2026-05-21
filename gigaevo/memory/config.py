@@ -71,12 +71,6 @@ def _load() -> tuple[dict[str, Any], dict[str, Any]]:
 
 _models, _reasoning = _load()
 
-OPENAI_API_KEY = _normalize_env(
-    os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-)
-OPENROUTER_API_KEY = _normalize_env(
-    os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-)
 OPENROUTER_MODEL_NAME: str = os.getenv("OPENROUTER_MODEL_NAME") or str(
     _models["openrouter_model_name"]
 )
@@ -86,6 +80,21 @@ LLM_BASE_URL = _normalize_env(
     or os.getenv("BASE_URL")
     or str(_models["openai_base_url"] or "")
     or str(_models["llm_base_url"] or "")
+)
+
+# When LLM_BASE_URL targets OpenRouter, OPENROUTER_API_KEY is the correct
+# credential; OPENAI_API_KEY (often set to a LiteLLM proxy key) would 401.
+_targets_openrouter = bool(LLM_BASE_URL and "openrouter.ai" in LLM_BASE_URL)
+if _targets_openrouter:
+    OPENAI_API_KEY = _normalize_env(
+        os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+    )
+else:
+    OPENAI_API_KEY = _normalize_env(
+        os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    )
+OPENROUTER_API_KEY = _normalize_env(
+    os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
 )
 OPENROUTER_REASONING: dict[str, object] = _reasoning
 AMEM_EMBEDDING_MODEL_NAME: str = str(_models["amem_embedding_model_name"])

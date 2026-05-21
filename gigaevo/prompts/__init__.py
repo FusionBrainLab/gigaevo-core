@@ -129,6 +129,20 @@ class ScoringPrompts:
         return load_prompt("scoring", "user", prompts_dir=prompts_dir)
 
 
+class MutationSuggestionsPrompts:
+    """Mutation-suggestion analyst prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for mutation-suggestion analysis."""
+        return load_prompt("mutation_suggestions", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for mutation-suggestion analysis."""
+        return load_prompt("mutation_suggestions", "user", prompts_dir=prompts_dir)
+
+
 class MemorySelectorPrompts:
     """Memory selector agent prompt templates."""
 

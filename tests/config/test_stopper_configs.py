@@ -32,10 +32,16 @@ def test_max_mutants_stopper_config_resolves():
     assert stopper.max_mutants == 42
 
 
-def test_max_mutants_default_value_is_800():
-    """Default ``max_mutants`` preserves prior ~800-mutant effective run length."""
+def test_max_mutants_default_value_matches_canonical_budget():
+    """Default ``max_mutants`` matches the canonical regression-benchmark budget.
+
+    Tied to ``tools/canonical_benchmark`` — a fresh user typing ``python
+    run.py problem.name=heilbron`` must run the same budget the benchmark
+    rows report, so the default lives in ``config/constants/evolution.yaml``
+    and the benchmark spawns it implicitly.
+    """
     cfg = _compose()
-    assert cfg.max_mutants == 800
+    assert cfg.max_mutants == 250
     assert cfg.stopper._target_.endswith("MaxMutantsStopper")
 
 

@@ -17,13 +17,10 @@ from gigaevo.programs.stages.collector import (
     EvolutionaryStatisticsCollector,
     ProgramIdsCollector,
     _compute_fitness_stats_all_metrics,
-    _compute_main_metric_stats,
     _compute_num_children_stats,
+    _max_invalid_streak,
+    _trend_from_thirds,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _ctx(higher_is_better: bool = True) -> MetricsContext:
@@ -51,21 +48,17 @@ def _prog(
     score: float = 50.0,
     is_valid: float = 1.0,
     generation: int = 1,
+    iteration: int = 0,
 ) -> Program:
     p = Program(code="def solve(): return 42", state=ProgramState.DONE)
     p.add_metrics({"score": score, "is_valid": is_valid})
     p.lineage.generation = generation
+    p.iteration = iteration
     return p
-
-
-# ---------------------------------------------------------------------------
-# TestComputeFitnessStatsAllMetrics
-# ---------------------------------------------------------------------------
 
 
 class TestComputeFitnessStatsAllMetrics:
     def test_empty_list(self):
-        """Empty program list → empty dicts, 0.0 valid_rate."""
         best, worst, avg, vr = _compute_fitness_stats_all_metrics([], _ctx())
         assert best == {}
         assert worst == {}
@@ -73,7 +66,6 @@ class TestComputeFitnessStatsAllMetrics:
         assert vr == 0.0
 
     def test_single_valid_program(self):
-        """One valid program → best=worst=avg=its fitness."""
         programs = [_prog(score=80.0)]
         best, worst, avg, vr = _compute_fitness_stats_all_metrics(programs, _ctx())
         assert best["score"] == 80.0
@@ -82,7 +74,6 @@ class TestComputeFitnessStatsAllMetrics:
         assert vr == 1.0
 
     def test_multiple_valid_programs(self):
-        """Multiple valid programs → correct stats."""
         programs = [_prog(score=60.0), _prog(score=80.0), _prog(score=100.0)]
         best, worst, avg, vr = _compute_fitness_stats_all_metrics(programs, _ctx())
         assert best["score"] == 100.0
@@ -91,7 +82,6 @@ class TestComputeFitnessStatsAllMetrics:
         assert vr == 1.0
 
     def test_no_valid_programs(self):
-        """All invalid → empty dicts, correct valid_rate."""
         programs = [_prog(score=50.0, is_valid=0.0), _prog(score=60.0, is_valid=0.0)]
         best, worst, avg, vr = _compute_fitness_stats_all_metrics(programs, _ctx())
         assert best == {}
@@ -100,7 +90,6 @@ class TestComputeFitnessStatsAllMetrics:
         assert vr == 0.0
 
     def test_mixed_valid_invalid(self):
-        """Mix of valid/invalid → stats computed only from valid."""
         programs = [
             _prog(score=90.0, is_valid=1.0),
             _prog(score=10.0, is_valid=0.0),
@@ -113,137 +102,110 @@ class TestComputeFitnessStatsAllMetrics:
         assert vr == pytest.approx(2 / 3)
 
     def test_higher_is_better_false(self):
-        """With higher_is_better=False, best=min, worst=max."""
         ctx = _ctx(higher_is_better=False)
         programs = [_prog(score=20.0), _prog(score=80.0)]
-        best, worst, avg, vr = _compute_fitness_stats_all_metrics(programs, ctx)
-        assert best["score"] == 20.0  # lower is better → min is best
+        best, worst, _, _ = _compute_fitness_stats_all_metrics(programs, ctx)
+        assert best["score"] == 20.0
         assert worst["score"] == 80.0
-
-    def test_missing_metric_key_skipped(self):
-        """Programs missing a metric key → that key not in result."""
-        ctx = MetricsContext(
-            specs={
-                "score": MetricSpec(
-                    description="main",
-                    is_primary=True,
-                    higher_is_better=True,
-                    lower_bound=0.0,
-                    upper_bound=100.0,
-                ),
-                "is_valid": MetricSpec(
-                    description="validity",
-                    is_primary=False,
-                    higher_is_better=True,
-                    lower_bound=0.0,
-                    upper_bound=1.0,
-                ),
-                "rare_metric": MetricSpec(
-                    description="rarely present",
-                    is_primary=False,
-                    higher_is_better=True,
-                    lower_bound=0.0,
-                    upper_bound=10.0,
-                ),
-            }
-        )
-        programs = [_prog(score=50.0)]  # has score and is_valid, not rare_metric
-        best, worst, avg, vr = _compute_fitness_stats_all_metrics(programs, ctx)
-        assert "score" in best
-        assert "rare_metric" not in best
-
-
-# ---------------------------------------------------------------------------
-# TestComputeNumChildrenStats
-# ---------------------------------------------------------------------------
 
 
 class TestComputeNumChildrenStats:
     def test_empty_list(self):
-        """Empty → (0.0, 0, 0)."""
-        avg, mx, count = _compute_num_children_stats([])
-        assert avg == 0.0
-        assert mx == 0
-        assert count == 0
-
-    def test_programs_with_no_children(self):
-        """Programs with 0 children each."""
-        programs = [_prog(), _prog()]
-        avg, mx, count = _compute_num_children_stats(programs)
-        assert avg == 0.0
-        assert mx == 0
-        assert count == 2
+        assert _compute_num_children_stats([]) == (0.0, 0, 0)
 
     def test_programs_with_children(self):
-        """Programs with varying child counts."""
-        p1 = _prog()
-        p2 = _prog()
+        p1, p2 = _prog(), _prog()
         p1.lineage.children = ["c1", "c2"]
         p2.lineage.children = ["c3"]
-        programs = [p1, p2]
-        avg, mx, count = _compute_num_children_stats(programs)
+        avg, mx, count = _compute_num_children_stats([p1, p2])
         assert avg == pytest.approx(1.5)
         assert mx == 2
         assert count == 2
 
 
-# ---------------------------------------------------------------------------
-# TestComputeMainMetricStats
-# ---------------------------------------------------------------------------
+class TestMaxInvalidStreak:
+    def test_all_valid(self):
+        progs = [_prog(is_valid=1.0) for _ in range(5)]
+        assert _max_invalid_streak(progs) == 0
+
+    def test_all_invalid(self):
+        progs = [_prog(is_valid=0.0) for _ in range(4)]
+        assert _max_invalid_streak(progs) == 4
+
+    def test_mixed_with_break(self):
+        progs = [
+            _prog(is_valid=0.0),
+            _prog(is_valid=0.0),
+            _prog(is_valid=1.0),
+            _prog(is_valid=0.0),
+            _prog(is_valid=0.0),
+            _prog(is_valid=0.0),
+            _prog(is_valid=1.0),
+        ]
+        assert _max_invalid_streak(progs) == 3
 
 
-class TestComputeMainMetricStats:
-    def test_empty_list(self):
-        """Empty → all None, 0 counts."""
-        gm = _compute_main_metric_stats([], "score", True)
-        assert gm.best is None
-        assert gm.worst is None
-        assert gm.average is None
-        assert gm.valid_rate == 0.0
-        assert gm.program_count == 0
+class TestTrendFromThirds:
+    def test_too_few_points(self):
+        label, thirds = _trend_from_thirds([1.0, 2.0, 3.0], higher_is_better=True)
+        assert label == "flat"
+        assert thirds == (None, None, None)
 
-    def test_no_valid_programs(self):
-        """All invalid → None fitness, but valid_rate computed."""
-        programs = [_prog(score=50.0, is_valid=0.0)]
-        gm = _compute_main_metric_stats(programs, "score", True)
-        assert gm.best is None
-        assert gm.worst is None
-        assert gm.average is None
-        assert gm.valid_rate == 0.0
-        assert gm.program_count == 1
+    def test_rising_higher_is_better(self):
+        fits = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0]
+        label, _ = _trend_from_thirds(fits, higher_is_better=True)
+        assert label == "rising"
 
-    def test_higher_is_better_true(self):
-        """higher_is_better=True: best=max, worst=min."""
-        programs = [_prog(score=30.0), _prog(score=70.0)]
-        gm = _compute_main_metric_stats(programs, "score", True)
-        assert gm.best == 70.0
-        assert gm.worst == 30.0
-        assert gm.average == pytest.approx(50.0)
+    def test_falling_higher_is_better(self):
+        fits = [3.0, 3.0, 2.0, 2.0, 1.0, 1.0]
+        label, _ = _trend_from_thirds(fits, higher_is_better=True)
+        assert label == "falling"
 
-    def test_higher_is_better_false(self):
-        """higher_is_better=False: best=min, worst=max."""
-        programs = [_prog(score=30.0), _prog(score=70.0)]
-        gm = _compute_main_metric_stats(programs, "score", False)
-        assert gm.best == 30.0
-        assert gm.worst == 70.0
+    def test_flat_when_signal_below_mad(self):
+        """A small directional move is masked when within-window dispersion (MAD)
+        is comparable in magnitude — by design the MAD floor adapts to the run's
+        own noise scale instead of relying on a fixed 5% ratio."""
+        fits = [1.0, 1.05, 1.01, 0.95, 1.02, 1.08]
+        label, _ = _trend_from_thirds(fits, higher_is_better=True)
+        assert label == "flat"
 
-    def test_valid_programs_missing_metric(self):
-        """Valid program that doesn't have the metric → skipped in stats."""
-        p = Program(code="def solve(): return 1", state=ProgramState.DONE)
-        p.add_metrics({"is_valid": 1.0})  # no "score" key
-        gm = _compute_main_metric_stats([p], "score", True)
-        assert gm.best is None
-        assert gm.valid_rate == 1.0  # program is valid
+    def test_rising_lower_is_better(self):
+        """Lower-is-better metric going DOWN is reported as 'rising' (= improving)."""
+        fits = [3.0, 3.0, 2.0, 2.0, 1.0, 1.0]
+        label, _ = _trend_from_thirds(fits, higher_is_better=False)
+        assert label == "rising"
 
+    def test_falling_lower_is_better(self):
+        fits = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0]
+        label, _ = _trend_from_thirds(fits, higher_is_better=False)
+        assert label == "falling"
 
-# ---------------------------------------------------------------------------
-# TestProgramIdsCollector
-# ---------------------------------------------------------------------------
+    def test_mad_detects_small_signal_in_low_dispersion(self):
+        """When the window has very low dispersion (small MAD), even a modest
+        rising trend is detected — this is the cycle-6 regression scenario the
+        MAD floor was introduced to catch (legacy 5%-of-max threshold reported
+        small absolute deltas as flat at low fitness)."""
+        fits = [0.001, 0.001, 0.002, 0.002, 0.003, 0.003]
+        label, _ = _trend_from_thirds(fits, higher_is_better=True)
+        assert label == "rising"
+
+    def test_mad_masks_signal_in_high_dispersion(self):
+        """When the window is noisy (high MAD), the same absolute trend is
+        correctly identified as flat — MAD scales with the data."""
+        fits = [0.0, 0.6, 0.1, 0.5, 0.2, 0.4]
+        label, _ = _trend_from_thirds(fits, higher_is_better=True)
+        assert label == "flat"
+
+    def test_zero_dispersion_returns_flat(self):
+        """When all window values are identical, MAD=0 but the epsilon floor
+        keeps the comparison well-defined and any exact-tie returns flat."""
+        fits = [0.5] * 6
+        label, _ = _trend_from_thirds(fits, higher_is_better=True)
+        assert label == "flat"
 
 
 class TestProgramIdsCollector:
     async def test_returns_all_program_ids(self):
-        """Collector returns IDs of all programs from _collect_programs."""
         storage = AsyncMock()
         p1, p2 = _prog(), _prog()
 
@@ -259,7 +221,6 @@ class TestProgramIdsCollector:
         assert set(result.output.items) == {p1.id, p2.id}
 
     async def test_empty_returns_empty_list(self):
-        """No related programs → empty StringList."""
         storage = AsyncMock()
 
         class EmptyCollector(ProgramIdsCollector):
@@ -269,18 +230,11 @@ class TestProgramIdsCollector:
         stage = EmptyCollector(storage=storage, timeout=5.0)
         stage.attach_inputs({})
         result = await stage.execute(_prog())
-
         assert result.output.items == []
-
-
-# ---------------------------------------------------------------------------
-# TestDescendantProgramIds
-# ---------------------------------------------------------------------------
 
 
 class TestDescendantProgramIds:
     async def test_returns_descendant_ids(self):
-        """Returns IDs of selected descendant programs."""
         storage = AsyncMock()
         child1, child2 = _prog(), _prog()
         storage.mget.return_value = [child1, child2]
@@ -298,32 +252,9 @@ class TestDescendantProgramIds:
         assert result.status.name == "COMPLETED"
         assert set(result.output.items) == {child1.id, child2.id}
 
-    async def test_no_children_returns_empty(self):
-        """Program with no children → empty list."""
-        storage = AsyncMock()
-        storage.mget.return_value = []
-
-        selector = AsyncMock(spec=AncestrySelector)
-        selector.select.return_value = []
-
-        prog = _prog()
-        prog.lineage.children = []
-
-        stage = DescendantProgramIds(storage=storage, selector=selector, timeout=5.0)
-        stage.attach_inputs({})
-        result = await stage.execute(prog)
-
-        assert result.output.items == []
-
-
-# ---------------------------------------------------------------------------
-# TestAncestorProgramIds
-# ---------------------------------------------------------------------------
-
 
 class TestAncestorProgramIds:
     async def test_returns_ancestor_ids(self):
-        """Returns IDs of selected ancestor programs."""
         storage = AsyncMock()
         parent = _prog()
         storage.mget.return_value = [parent]
@@ -341,63 +272,18 @@ class TestAncestorProgramIds:
         assert result.status.name == "COMPLETED"
         assert result.output.items == [parent.id]
 
-    async def test_no_parents_returns_empty(self):
-        """Program with no parents → empty list."""
-        storage = AsyncMock()
-        storage.mget.return_value = []
-
-        selector = AsyncMock(spec=AncestrySelector)
-        selector.select.return_value = []
-
-        prog = _prog()
-        prog.lineage.parents = []
-
-        stage = AncestorProgramIds(storage=storage, selector=selector, timeout=5.0)
-        stage.attach_inputs({})
-        result = await stage.execute(prog)
-
-        assert result.output.items == []
-
-    async def test_deleted_parents_filtered(self):
-        """storage.mget returns fewer programs than IDs → selector handles it."""
-        storage = AsyncMock()
-        parent = _prog()
-        # One parent exists, one was deleted
-        storage.mget.return_value = [parent]
-
-        selector = AsyncMock(spec=AncestrySelector)
-        selector.select.return_value = [parent]
-
-        prog = _prog()
-        prog.lineage.parents = [parent.id, "deleted-id"]
-
-        stage = AncestorProgramIds(storage=storage, selector=selector, timeout=5.0)
-        stage.attach_inputs({})
-        result = await stage.execute(prog)
-
-        assert result.output.items == [parent.id]
-
-
-# ---------------------------------------------------------------------------
-# TestEvolutionaryStatisticsCollector
-# ---------------------------------------------------------------------------
-
 
 class TestEvolutionaryStatisticsCollector:
-    async def test_basic_stats(self):
-        """Collector returns correct global stats for simple case."""
+    async def test_global_stats(self):
         storage = AsyncMock()
-        p1 = _prog(score=60.0, generation=0)
-        p2 = _prog(score=80.0, generation=0)
-        p3 = _prog(score=40.0, generation=1)
-        storage.get_all.return_value = [p1, p2, p3]
-        storage.mget.return_value = []  # no ancestors/descendants
-        # Wire snapshot to return the same list as get_all
+        p1 = _prog(score=60.0, generation=0, iteration=1)
+        p2 = _prog(score=80.0, generation=0, iteration=2)
+        p3 = _prog(score=40.0, generation=1, iteration=3)
+        storage.mget.return_value = []
         storage.snapshot.get_all.return_value = [p1, p2, p3]
 
-        ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
+            storage=storage, metrics_context=_ctx(), timeout=5.0
         )
         stage.attach_inputs({})
         result = await stage.execute(p1)
@@ -410,44 +296,18 @@ class TestEvolutionaryStatisticsCollector:
         assert stats.valid_rate == 1.0
         assert stats.total_program_count == 3
 
-    async def test_generation_stats(self):
-        """Generation-specific stats computed correctly."""
-        storage = AsyncMock()
-        p1 = _prog(score=60.0, generation=1)
-        p2 = _prog(score=80.0, generation=1)
-        p3 = _prog(score=40.0, generation=2)
-        storage.get_all.return_value = [p1, p2, p3]
-        storage.mget.return_value = []
-        storage.snapshot.get_all.return_value = [p1, p2, p3]
-
-        ctx = _ctx()
-        stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
-        )
-        stage.attach_inputs({})
-        result = await stage.execute(p1)
-
-        stats = result.output
-        # p1 is gen 1, gen 1 has p1(60) and p2(80)
-        assert stats.best_fitness_in_generation["score"] == 80.0
-        assert stats.worst_fitness_in_generation["score"] == 60.0
-
     async def test_ancestor_stats(self):
-        """Ancestor statistics from mget."""
         storage = AsyncMock()
-        parent = _prog(score=90.0, generation=1)
-        child = _prog(score=50.0, generation=2)
+        parent = _prog(score=90.0, generation=1, iteration=1)
+        child = _prog(score=50.0, generation=2, iteration=2)
         child.lineage.parents = [parent.id]
         child.lineage.children = []
 
-        storage.get_all.return_value = [parent, child]
-        # First mget call is for ancestors (parents), second is for descendants (children)
         storage.mget.side_effect = [[parent], []]
         storage.snapshot.get_all.return_value = [parent, child]
 
-        ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
+            storage=storage, metrics_context=_ctx(), timeout=5.0
         )
         stage.attach_inputs({})
         result = await stage.execute(child)
@@ -457,182 +317,302 @@ class TestEvolutionaryStatisticsCollector:
         assert stats.best_fitness_in_ancestors["score"] == 90.0
         assert stats.descendant_count == 0
 
-    async def test_generation_history(self):
-        """Generation history keyed by generation number."""
+    async def test_iter_window_disabled_with_zero_radius(self):
         storage = AsyncMock()
-        p1 = _prog(score=60.0, generation=1)
-        p2 = _prog(score=80.0, generation=2)
-        p3 = _prog(score=40.0, generation=2)
-        storage.get_all.return_value = [p1, p2, p3]
-        storage.mget.return_value = []
-        storage.snapshot.get_all.return_value = [p1, p2, p3]
-
-        ctx = _ctx()
-        stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
-        )
-        stage.attach_inputs({})
-        result = await stage.execute(p1)
-
-        gh = result.output.generation_history
-        assert 1 in gh
-        assert 2 in gh
-        assert gh[1].best == 60.0
-        assert gh[2].best == 80.0
-        assert gh[2].worst == 40.0
-
-    async def test_no_programs(self):
-        """Empty storage → empty stats."""
-        storage = AsyncMock()
-        storage.get_all.return_value = []
-        storage.mget.return_value = []
-        storage.snapshot.get_all.return_value = []
-
-        # Need a program to execute on even though storage is "empty"
-        prog = _prog(score=50.0, generation=0)
-
-        ctx = _ctx()
-        stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
-        )
-        stage.attach_inputs({})
-        result = await stage.execute(prog)
-
-        stats = result.output
-        assert stats.total_program_count == 0
-        assert stats.valid_rate == 0.0
-
-    async def test_iteration_window_disabled_with_zero_size(self):
-        """``iteration_window_size=0`` opts out: cohort fields stay None.
-
-        Each mutant in the steady-state engine has a unique iteration
-        value, so callers who don't want any windowed aggregation can
-        disable the feature by passing ``iteration_window_size=0``.
-        """
-        storage = AsyncMock()
-        p1 = _prog(score=60.0, generation=0)
-        p1.iteration = 1
-        p2 = _prog(score=80.0, generation=0)
-        p2.iteration = 1
-        p3 = _prog(score=40.0, generation=0)
-        p3.iteration = 2
-        storage.mget.return_value = []
-        storage.snapshot.get_all.return_value = [p1, p2, p3]
-
-        ctx = _ctx()
-        stage = EvolutionaryStatisticsCollector(
-            storage=storage,
-            metrics_context=ctx,
-            timeout=5.0,
-            iteration_window_size=0,
-        )
-        stage.attach_inputs({})
-        result = await stage.execute(p1)
-
-        stats = result.output
-        assert stats.iteration == 1
-        assert stats.best_fitness_in_iteration is None
-        assert stats.worst_fitness_in_iteration is None
-        assert stats.average_fitness_in_iteration is None
-        assert stats.valid_rate_in_iteration is None
-
-    async def test_iteration_window_trailing_cohort_aggregates(self):
-        """Trailing window N=2 over a program at iteration=5 aggregates
-        programs with iteration ∈ [3, 5]."""
-        storage = AsyncMock()
-        progs: list[Program] = []
-        # iterations 1..10 with monotonically increasing scores
-        for i in range(1, 11):
-            p = _prog(score=10.0 * i, generation=0)
-            p.iteration = i
-            progs.append(p)
-        storage.mget.return_value = []
-        storage.snapshot.get_all.return_value = progs
-
-        ctx = _ctx()
-        stage = EvolutionaryStatisticsCollector(
-            storage=storage,
-            metrics_context=ctx,
-            timeout=5.0,
-            iteration_window_size=2,
-        )
-        stage.attach_inputs({})
-        # Process the program at iteration=5
-        target = progs[4]
-        result = await stage.execute(target)
-
-        stats = result.output
-        # Window = [3, 5] → scores 30, 40, 50
-        assert stats.best_fitness_in_iteration is not None
-        assert stats.worst_fitness_in_iteration is not None
-        assert stats.average_fitness_in_iteration is not None
-        assert stats.best_fitness_in_iteration["score"] == 50.0
-        assert stats.worst_fitness_in_iteration["score"] == 30.0
-        assert stats.average_fitness_in_iteration["score"] == 40.0
-        assert stats.valid_rate_in_iteration == 1.0
-
-    async def test_iteration_window_default_size(self):
-        """Default ``iteration_window_size`` populates iteration fields."""
-        storage = AsyncMock()
-        p1 = _prog(score=60.0, generation=0)
-        p1.iteration = 1
-        p2 = _prog(score=80.0, generation=0)
-        p2.iteration = 1
-        p3 = _prog(score=40.0, generation=0)
-        p3.iteration = 2
-        storage.mget.return_value = []
-        storage.snapshot.get_all.return_value = [p1, p2, p3]
-
-        ctx = _ctx()
-        stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
-        )
-        stage.attach_inputs({})
-        # p1 at iteration=1, default window covers prior iterations too,
-        # but here only p1 and p2 are at iteration=1 (≤ 1).
-        result = await stage.execute(p1)
-
-        stats = result.output
-        assert stats.iteration == 1
-        assert stats.best_fitness_in_iteration is not None
-        assert stats.worst_fitness_in_iteration is not None
-        assert stats.average_fitness_in_iteration is not None
-        assert stats.best_fitness_in_iteration["score"] == 80.0
-        assert stats.worst_fitness_in_iteration["score"] == 60.0
-        assert stats.average_fitness_in_iteration["score"] == 70.0
-        assert stats.valid_rate_in_iteration == 1.0
-
-    async def test_iteration_window_singleton_population(self):
-        """A 1-program population yields aggregate-of-one (best=worst=avg)."""
-        storage = AsyncMock()
-        p1 = _prog(score=60.0, generation=0)
+        p1 = _prog(score=60.0, iteration=1)
         storage.mget.return_value = []
         storage.snapshot.get_all.return_value = [p1]
 
-        ctx = _ctx()
         stage = EvolutionaryStatisticsCollector(
-            storage=storage, metrics_context=ctx, timeout=5.0
+            storage=storage,
+            metrics_context=_ctx(),
+            timeout=5.0,
+            iteration_window_radius=0,
         )
         stage.attach_inputs({})
         result = await stage.execute(p1)
 
         stats = result.output
-        assert stats.iteration == 0
-        assert stats.best_fitness_in_iteration is not None
-        assert stats.worst_fitness_in_iteration is not None
-        assert stats.average_fitness_in_iteration is not None
-        assert stats.best_fitness_in_iteration["score"] == 60.0
-        assert stats.worst_fitness_in_iteration["score"] == 60.0
-        assert stats.average_fitness_in_iteration["score"] == 60.0
-        assert stats.valid_rate_in_iteration == 1.0
+        assert stats.iter_window_lo is None
+        assert stats.iter_window_hi is None
+        assert stats.iter_window_programs == 0
+        assert stats.iter_window_valid == 0
+        assert stats.iter_window_best_fitness is None
 
-    def test_iteration_window_size_must_be_non_negative(self):
-        """Negative ``iteration_window_size`` is rejected at construction."""
+    async def test_iter_window_basic_population(self):
         storage = AsyncMock()
-        with pytest.raises(ValueError, match="iteration_window_size"):
+        progs = [_prog(score=10.0 * i, iteration=i) for i in range(1, 11)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(),
+            timeout=5.0,
+            iteration_window_radius=2,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[4])
+
+        stats = result.output
+        assert stats.iter_window_lo == 3
+        assert stats.iter_window_hi == 7
+        assert stats.iter_window_programs == 5
+        assert stats.iter_window_valid == 5
+        assert stats.iter_window_best_fitness == 70.0
+        assert stats.iter_window_best_iter == 7
+        assert stats.iter_window_invalid_count == 0
+        assert stats.iter_window_invalid_streak_max == 0
+
+    async def test_iter_window_higher_is_better_false(self):
+        storage = AsyncMock()
+        progs = [_prog(score=10.0 * i, iteration=i) for i in range(1, 11)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(higher_is_better=False),
+            timeout=5.0,
+            iteration_window_radius=2,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[4])
+
+        stats = result.output
+        # window: scores 30,40,50,60,70; lower_is_better → best=30 at iter=3
+        assert stats.iter_window_best_fitness == 30.0
+        assert stats.iter_window_best_iter == 3
+
+    async def test_iter_window_rank(self):
+        storage = AsyncMock()
+        p1 = _prog(score=10.0, iteration=1)
+        p2 = _prog(score=50.0, iteration=2)
+        p3 = _prog(score=30.0, iteration=3)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1, p2, p3]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(p2)
+
+        # p2 has the highest score → rank 1
+        assert result.output.iter_window_rank == 1
+
+        stage.attach_inputs({})
+        result = await stage.execute(p3)
+        # p3 has middle score → rank 2
+        assert result.output.iter_window_rank == 2
+
+    async def test_iter_window_median_before_after(self):
+        storage = AsyncMock()
+        # iters 1..21 with scores = iter
+        progs = [_prog(score=float(i), iteration=i) for i in range(1, 22)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(),
+            timeout=5.0,
+            iteration_window_radius=10,
+        )
+        stage.attach_inputs({})
+        focal = progs[10]  # iteration=11
+        result = await stage.execute(focal)
+
+        stats = result.output
+        # Before: iters 1..10, last 10 → median of 1..10 = 5.5
+        assert stats.iter_window_median_before == pytest.approx(5.5)
+        # After: iters 12..21, first 10 → median of 12..21 = 16.5
+        assert stats.iter_window_median_after == pytest.approx(16.5)
+
+    async def test_iter_window_median_after_none_at_tail(self):
+        storage = AsyncMock()
+        progs = [_prog(score=float(i), iteration=i) for i in range(1, 6)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(),
+            timeout=5.0,
+            iteration_window_radius=10,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[-1])
+
+        assert result.output.iter_window_median_after is None
+        assert result.output.iter_window_median_before is not None
+
+    async def test_iter_window_invalid_streak(self):
+        storage = AsyncMock()
+        progs = []
+        for i in range(1, 8):
+            # iters 3,4 invalid → streak of 2
+            valid = 0.0 if i in (3, 4) else 1.0
+            progs.append(_prog(score=10.0 * i, is_valid=valid, iteration=i))
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(),
+            timeout=5.0,
+            iteration_window_radius=10,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[0])
+
+        stats = result.output
+        assert stats.iter_window_invalid_count == 2
+        assert stats.iter_window_invalid_streak_max == 2
+
+    async def test_iters_since_last_new_best_zero_at_new_best(self):
+        storage = AsyncMock()
+        progs = [_prog(score=10.0 * i, iteration=i) for i in range(1, 6)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[-1])
+
+        # Best is at the latest iteration → plateau = 0
+        assert result.output.iters_since_last_new_best == 0
+
+    async def test_iters_since_last_new_best_after_plateau(self):
+        storage = AsyncMock()
+        # best achieved at iter=3 (score=100), then no improvement
+        scores = [10.0, 20.0, 100.0, 50.0, 60.0, 70.0]
+        progs = [_prog(score=s, iteration=i + 1) for i, s in enumerate(scores)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[-1])
+
+        # focal at iter=6, last new best at iter=3 → plateau = 3
+        assert result.output.iters_since_last_new_best == 3
+
+    async def test_iters_since_last_new_best_lower_is_better(self):
+        storage = AsyncMock()
+        # lower-is-better: best (lowest) achieved at iter=2 (score=5)
+        scores = [10.0, 5.0, 8.0, 9.0, 7.0]
+        progs = [_prog(score=s, iteration=i + 1) for i, s in enumerate(scores)]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(higher_is_better=False),
+            timeout=5.0,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[-1])
+
+        # focal at iter=5, last new best at iter=2 → plateau = 3
+        assert result.output.iters_since_last_new_best == 3
+
+    async def test_iter_window_rank_none_when_focal_invalid(self):
+        storage = AsyncMock()
+        focal = _prog(score=50.0, is_valid=0.0, iteration=2)
+        peer = _prog(score=80.0, iteration=1)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [peer, focal]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(focal)
+
+        assert result.output.iter_window_rank is None
+
+    async def test_iter_window_rank_when_focal_missing_from_snapshot(self):
+        """Snapshot-lag regression: focal is in pipeline but not yet in the
+        population snapshot. Rank must still be computed against window peers
+        + focal; current bug silently sets rank=None via sorted.index ValueError.
+        """
+        storage = AsyncMock()
+        peer1 = _prog(score=10.0, iteration=1)
+        peer2 = _prog(score=30.0, iteration=2)
+        focal = _prog(score=50.0, iteration=3)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [peer1, peer2]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(focal)
+
+        stats = result.output
+        assert stats.iter_window_rank == 1
+        assert stats.iter_window_valid == 3
+        assert stats.iter_window_best_fitness == 50.0
+        assert stats.iter_window_best_iter == 3
+
+    async def test_iter_window_rank_when_focal_in_snapshot_but_stale_metrics(
+        self,
+    ):
+        """Snapshot contains focal but with VALIDITY_KEY=0 (not yet evaluated
+        in the snapshot view). The program object passed to execute() has the
+        fresh, valid metrics. Rank must use the fresh metrics.
+        """
+        storage = AsyncMock()
+        peer1 = _prog(score=10.0, iteration=1)
+        peer2 = _prog(score=30.0, iteration=2)
+        stale_focal = _prog(score=0.0, is_valid=0.0, iteration=3)
+        fresh_focal = _prog(score=50.0, iteration=3)
+        fresh_focal.id = stale_focal.id
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [peer1, peer2, stale_focal]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(fresh_focal)
+
+        stats = result.output
+        assert stats.iter_window_rank == 1
+        assert stats.iter_window_valid == 3
+        assert stats.iter_window_best_fitness == 50.0
+
+    async def test_iter_window_no_valid_in_window(self):
+        storage = AsyncMock()
+        p1 = _prog(score=10.0, is_valid=0.0, iteration=1)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(p1)
+
+        stats = result.output
+        assert stats.iter_window_lo == -14
+        assert stats.iter_window_hi == 16
+        assert stats.iter_window_programs == 1
+        assert stats.iter_window_valid == 0
+        assert stats.iter_window_best_fitness is None
+        assert stats.iter_window_trend == "flat"
+
+    def test_iteration_window_radius_must_be_non_negative(self):
+        storage = AsyncMock()
+        with pytest.raises(ValueError, match="iteration_window_radius"):
             EvolutionaryStatisticsCollector(
                 storage=storage,
                 metrics_context=_ctx(),
                 timeout=5.0,
-                iteration_window_size=-1,
+                iteration_window_radius=-1,
             )

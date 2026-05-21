@@ -183,22 +183,28 @@ def test_evolution_constants_default_values():
     """Evolution engine constants must match their documented defaults.
 
     These are the values that determine experiment throughput and reproducibility.
-    An accidental change here (e.g. max_mutations drifting to 16) would silently
-    alter experimental conditions without a config-review gate catching it.
+    An accidental change here would silently alter experimental conditions without
+    a config-review gate catching it.
+
+    v2.0.0 baseline: one-parent archetype mutation (num_parents=1) is the canonical
+    operator; max_mutants=250 sizes a one-workday-at-parallelism-5 sweep.
     """
     cfg = _compose()
     assert cfg.max_elites_per_generation == 5, (
         "max_elites_per_generation changed from 5 — update CONTEXT.md for active experiments"
     )
-    assert cfg.num_parents == 2, (
-        "num_parents changed from 2 — crossover experiments use this default"
+    assert cfg.num_parents == 1, (
+        "num_parents changed from 1 — one-parent archetype mutation is the v2 canonical "
+        "operator. If you intentionally bump to 2 (or more), update this assertion and "
+        "the canonical-benchmark contract together."
     )
     assert cfg.loop_interval == pytest.approx(1.0), (
         "loop_interval changed from 1.0 — affects engine polling frequency"
     )
-    assert cfg.max_mutants == 800, (
-        "max_mutants changed from 800 — the default stopper "
-        "(config/stopper/max_mutants.yaml) resolves this top-level value."
+    assert cfg.max_mutants == 250, (
+        "max_mutants changed from 250 — the default stopper "
+        "(config/stopper/max_mutants.yaml) resolves this top-level value. "
+        "Bumping this voids comparability with prior BENCHMARK_HISTORY.md rows."
     )
 
 

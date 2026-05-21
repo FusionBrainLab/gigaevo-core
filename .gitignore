@@ -222,6 +222,21 @@ plots/
 snapshots/
 benchmark
 
+# Loop / Hydra run outputs (top-level)
+output/
+runs/
+
+# Local experiment forks (not for VCS)
+problems/heilbron_pro/
+
+# Rotated / sampler logs not covered by *.log (already above)
+tools/.litellm_sampler.log*
+
+# Throwaway exploration tooling
+tools/benchmark_gemini_ab/
+tools/insights_ablation/
+tools/lineage_card_scaffold/
+
 # ---------------------------------------------------------------------------
 # LLM / memory stores (local caches, not for VCS)
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import pytest
 from gigaevo.monitoring.live_frontier_compare import (
     FrontierCompareSnapshot,
     MetricComparison,
+    _render_frontier_plot,
     compute_snapshot,
     format_snapshot,
     start_live_frontier_compare,
@@ -115,6 +116,43 @@ class TestFormatSnapshot:
         assert "(no frontier data yet)" in line
 
 
+class TestRenderFrontierPlot:
+    def test_writes_png_when_frontier_data_present(self, tmp_path) -> None:
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="fitness",
+            frontier_history=[(0, 0.3), (1, 0.5), (2, 0.7)],
+            iter_mean_history=[(0, 0.2), (1, 0.4), (2, 0.6)],
+            higher_is_better=True,
+        )
+        out = tmp_path / "frontier_fitness.png"
+        assert out.exists()
+        assert out.stat().st_size > 0
+
+    def test_no_file_when_frontier_empty(self, tmp_path) -> None:
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="fitness",
+            frontier_history=[],
+            iter_mean_history=[(0, 0.1)],
+            higher_is_better=True,
+        )
+        assert not (tmp_path / "frontier_fitness.png").exists()
+
+    def test_metric_with_slash_is_safe_in_filename(self, tmp_path) -> None:
+        # MetricsTracker tags can contain '/'; renderer must sanitise it.
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="loss/train",
+            frontier_history=[(0, 1.0), (1, 0.5)],
+            iter_mean_history=[],
+            higher_is_better=False,
+        )
+        # No `/` in the produced filename — sanitised to '_'.
+        out = tmp_path / "frontier_loss_train.png"
+        assert out.exists()
+
+
 class TestStartLiveFrontierCompare:
     def test_returns_event_and_starts_daemon_thread(self) -> None:
         # Bogus Redis URL — the thread will fail to connect, log a warning,
@@ -131,6 +169,40 @@ class TestStartLiveFrontierCompare:
             threads = {t.name: t for t in threading.enumerate()}
             assert "live-frontier-compare" in threads
             assert threads["live-frontier-compare"].daemon is True
+        finally:
+            stop.set()
+
+    def test_file_target_accepts_output_dir(self, tmp_path) -> None:
+        stop = start_live_frontier_compare(
+            redis_url="redis://127.0.0.1:1/0",
+            key_prefix="test:metrics",
+            metrics=["fitness"],
+            higher_is_better={"fitness": True},
+            interval_s=3600.0,
+            emit_targets=("file",),
+            output_dir=tmp_path,
+        )
+        try:
+            assert isinstance(stop, threading.Event)
+            threads = {t.name: t for t in threading.enumerate()}
+            assert "live-frontier-compare" in threads
+        finally:
+            stop.set()
+
+    def test_file_target_without_output_dir_still_starts(self) -> None:
+        # Resilient: file emit silently drops if no output_dir was wired.
+        # The daemon must still start so log/telegram targets work.
+        stop = start_live_frontier_compare(
+            redis_url="redis://127.0.0.1:1/0",
+            key_prefix="test:metrics",
+            metrics=["fitness"],
+            higher_is_better={"fitness": True},
+            interval_s=3600.0,
+            emit_targets=("file",),
+            output_dir=None,
+        )
+        try:
+            assert isinstance(stop, threading.Event)
         finally:
             stop.set()
 

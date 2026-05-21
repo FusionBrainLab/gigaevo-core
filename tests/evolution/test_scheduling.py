@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pathlib
-
 import pytest
 
 from gigaevo.evolution.scheduling.feature_extractor import (
@@ -109,81 +107,171 @@ class TestCompositeFeatureExtractor:
 
 
 # ---------------------------------------------------------------------------
-# ChainFeatureExtractor tests (real chain programs)
+# ChainFeatureExtractor tests (synthetic chain programs)
 # ---------------------------------------------------------------------------
+#
+# Hand-written synthetic chain programs that exercise every field the
+# extractor parses (step_type, tool_name, dependencies, system_prompt,
+# example_reasoning, stage_action string content).  Kept here verbatim
+# so the test does not depend on any file under `problems/` — and so a
+# future rename of a problem dir does not silently break this suite.
 
-# Real HoVer baseline (7 steps: 3 tool + 4 LLM, empty system_prompt)
-_HOVER_BASELINE = pathlib.Path(
-    "problems/chains/hover/static_soft/initial_programs/baseline.py"
-).read_text()
+_COMPLEX_CHAIN = """def entrypoint():
+    return {
+        "system_prompt": "",
+        "steps": [
+            {
+                "number": 1,
+                "step_type": "tool",
+                "step_config": {"tool_name": "retrieve"},
+                "dependencies": [],
+            },
+            {
+                "number": 2,
+                "step_type": "llm",
+                "stage_action": "REPLACE_ME_BASELINE_ACTION",
+                "example_reasoning": "<none>",
+                "dependencies": [1],
+            },
+            {
+                "number": 3,
+                "step_type": "llm",
+                "stage_action": "Generate a follow-up search query.",
+                "example_reasoning": "<none>",
+                "dependencies": [2],
+            },
+            {
+                "number": 4,
+                "step_type": "tool",
+                "step_config": {"tool_name": "retrieve"},
+                "dependencies": [3],
+            },
+            {
+                "number": 5,
+                "step_type": "llm",
+                "stage_action": "Combine prior summaries with new evidence.",
+                "example_reasoning": "<none>",
+                "dependencies": [2, 4],
+            },
+            {
+                "number": 6,
+                "step_type": "llm",
+                "stage_action": "Generate the final verification query.",
+                "example_reasoning": "<none>",
+                "dependencies": [5],
+            },
+            {
+                "number": 7,
+                "step_type": "tool",
+                "step_config": {"tool_name": "retrieve_deep"},
+                "dependencies": [6],
+            },
+        ],
+    }
+"""
 
-# Real HotpotQA baseline (6 steps: 2 tool + 4 LLM, empty system_prompt)
-_HOTPOTQA_BASELINE = pathlib.Path(
-    "problems/chains/hotpotqa/static/initial_programs/baseline.py"
-).read_text()
+_SIMPLE_CHAIN = """def entrypoint():
+    return {
+        "system_prompt": "",
+        "steps": [
+            {
+                "number": 1,
+                "step_type": "tool",
+                "step_config": {"tool_name": "retrieve"},
+                "dependencies": [],
+            },
+            {
+                "number": 2,
+                "step_type": "llm",
+                "stage_action": "Summarize retrieved passages.",
+                "example_reasoning": "<none>",
+                "dependencies": [1],
+            },
+            {
+                "number": 3,
+                "step_type": "llm",
+                "stage_action": "Decide whether another hop is needed.",
+                "example_reasoning": "<none>",
+                "dependencies": [2],
+            },
+            {
+                "number": 4,
+                "step_type": "tool",
+                "step_config": {"tool_name": "retrieve"},
+                "dependencies": [3],
+            },
+            {
+                "number": 5,
+                "step_type": "llm",
+                "stage_action": "Integrate the second hop with prior evidence.",
+                "example_reasoning": "<none>",
+                "dependencies": [4],
+            },
+            {
+                "number": 6,
+                "step_type": "llm",
+                "stage_action": "Produce the final answer.",
+                "example_reasoning": "<none>",
+                "dependencies": [5],
+            },
+        ],
+    }
+"""
 
 
 class TestChainFeatureExtractor:
-    def test_hover_baseline_step_counts(self) -> None:
-        """HoVer baseline has 3 tool steps and 4 LLM steps."""
+    def test_complex_chain_step_counts(self) -> None:
+        """Complex chain: 3 tool + 4 LLM steps."""
         ext = ChainFeatureExtractor()
-        features = ext.extract(_prog(_HOVER_BASELINE))
+        features = ext.extract(_prog(_COMPLEX_CHAIN))
         assert features["n_tool_steps"] == 3.0
         assert features["n_llm_steps"] == 4.0
         assert features["n_total_steps"] == 7.0
 
-    def test_hotpotqa_baseline_step_counts(self) -> None:
-        """HotpotQA baseline has 2 tool steps and 4 LLM steps."""
+    def test_simple_chain_step_counts(self) -> None:
+        """Simple chain: 2 tool + 4 LLM steps."""
         ext = ChainFeatureExtractor()
-        features = ext.extract(_prog(_HOTPOTQA_BASELINE))
+        features = ext.extract(_prog(_SIMPLE_CHAIN))
         assert features["n_tool_steps"] == 2.0
         assert features["n_llm_steps"] == 4.0
         assert features["n_total_steps"] == 6.0
 
-    def test_hover_baseline_no_system_prompt(self) -> None:
-        """HoVer baseline has empty system_prompt."""
+    def test_empty_system_prompt_detected(self) -> None:
         ext = ChainFeatureExtractor()
-        features = ext.extract(_prog(_HOVER_BASELINE))
+        features = ext.extract(_prog(_COMPLEX_CHAIN))
         assert features["has_system_prompt"] == 0.0
 
-    def test_hover_baseline_deep_retrieval(self) -> None:
-        """HoVer baseline uses retrieve_deep for the third hop."""
+    def test_deep_retrieval_counted(self) -> None:
+        """Complex chain has one retrieve_deep step."""
         ext = ChainFeatureExtractor()
-        features = ext.extract(_prog(_HOVER_BASELINE))
+        features = ext.extract(_prog(_COMPLEX_CHAIN))
         assert features["n_deep_retrieval"] == 1.0
 
-    def test_hotpotqa_no_deep_retrieval(self) -> None:
-        """HotpotQA baseline has no retrieve_deep."""
+    def test_simple_chain_no_deep_retrieval(self) -> None:
         ext = ChainFeatureExtractor()
-        features = ext.extract(_prog(_HOTPOTQA_BASELINE))
+        features = ext.extract(_prog(_SIMPLE_CHAIN))
         assert features["n_deep_retrieval"] == 0.0
 
-    def test_hover_baseline_no_examples(self) -> None:
-        """HoVer baseline has no few-shot examples."""
+    def test_no_examples_when_placeholder(self) -> None:
+        """`<none>` example_reasoning yields zero examples."""
         ext = ChainFeatureExtractor()
-        features = ext.extract(_prog(_HOVER_BASELINE))
+        features = ext.extract(_prog(_COMPLEX_CHAIN))
         assert features["n_examples"] == 0.0
 
     def test_evolved_program_has_more_string_content(self) -> None:
-        """An evolved program with long prompts should have higher string content."""
+        """Replacing a short stage_action with a longer one bumps total_string_content."""
         ext = ChainFeatureExtractor()
-        baseline_feat = ext.extract(_prog(_HOVER_BASELINE))
+        baseline_feat = ext.extract(_prog(_COMPLEX_CHAIN))
 
-        # Simulate evolved program: add verbose stage_action + examples
-        evolved = _HOVER_BASELINE.replace(
-            '"stage_action": (\n'
-            '                    "Read all retrieved passages and identify facts '
-            'that are relevant "\n'
-            '                    "to verifying the claim. Summarize the most '
-            'important evidence found."\n'
-            "                )",
-            '"stage_action": (\n'
-            '                    "Read all retrieved passages carefully. For each passage, '
-            "extract specific entities, dates, numerical values, and key relationships. "
-            "Cross-reference facts across passages. Identify contradictions. "
-            "Format as structured bullet points. Include passage numbers as citations. "
-            'Omit general background not relevant to the claim."\n'
-            "                )",
+        evolved = _COMPLEX_CHAIN.replace(
+            '"REPLACE_ME_BASELINE_ACTION"',
+            (
+                '"Read every retrieved passage carefully. Extract entities, '
+                "dates, numerical values, and key relationships. Cross-reference "
+                "facts across passages, identify contradictions, format as "
+                "structured bullet points with passage citations, and omit any "
+                'background not directly relevant to the claim."'
+            ),
         )
         evolved_feat = ext.extract(_prog(evolved))
 
@@ -192,9 +280,9 @@ class TestChainFeatureExtractor:
         )
 
     def test_evolved_with_system_prompt(self) -> None:
-        """Evolved program with non-empty system_prompt detected."""
+        """Replacing the empty system_prompt with content flips has_system_prompt."""
         ext = ChainFeatureExtractor()
-        evolved = _HOVER_BASELINE.replace(
+        evolved = _COMPLEX_CHAIN.replace(
             '"system_prompt": ""',
             '"system_prompt": "You are an evidence retrieval assistant."',
         )
@@ -202,9 +290,9 @@ class TestChainFeatureExtractor:
         assert features["has_system_prompt"] == 1.0
 
     def test_evolved_with_examples(self) -> None:
-        """Evolved program with few-shot examples detected."""
+        """Adding `Example 1:` / `Example 2:` markers bumps n_examples."""
         ext = ChainFeatureExtractor()
-        evolved = _HOVER_BASELINE.replace(
+        evolved = _COMPLEX_CHAIN.replace(
             '"example_reasoning": "<none>"',
             '"example_reasoning": "Example 1:\\nClaim: ...\\nExample 2:\\nClaim: ..."',
             1,  # replace only first occurrence
@@ -213,21 +301,20 @@ class TestChainFeatureExtractor:
         assert features["n_examples"] == 2.0
 
     def test_dependency_fan_in(self) -> None:
-        """Max dependency fan-in detected from dependencies lists."""
+        """Step 5 of the complex chain has dependencies=[2, 4] — fan-in of 2."""
         ext = ChainFeatureExtractor()
-        # HoVer step 5 depends on [2, 4] — fan-in of 2
-        features = ext.extract(_prog(_HOVER_BASELINE))
+        features = ext.extract(_prog(_COMPLEX_CHAIN))
         assert features["max_dependency_fan_in"] == 2.0
 
-    def test_hover_more_complex_than_hotpotqa(self) -> None:
-        """HoVer has more steps and deep retrieval => higher predicted complexity."""
+    def test_complex_chain_dominates_simple_chain(self) -> None:
+        """More steps + deep retrieval -> higher predicted complexity."""
         ext = ChainFeatureExtractor()
-        hover = ext.extract(_prog(_HOVER_BASELINE))
-        hotpotqa = ext.extract(_prog(_HOTPOTQA_BASELINE))
+        complex_feat = ext.extract(_prog(_COMPLEX_CHAIN))
+        simple_feat = ext.extract(_prog(_SIMPLE_CHAIN))
 
-        assert hover["n_total_steps"] > hotpotqa["n_total_steps"]
-        assert hover["n_deep_retrieval"] > hotpotqa["n_deep_retrieval"]
-        assert hover["code_length"] > hotpotqa["code_length"]
+        assert complex_feat["n_total_steps"] > simple_feat["n_total_steps"]
+        assert complex_feat["n_deep_retrieval"] > simple_feat["n_deep_retrieval"]
+        assert complex_feat["code_length"] > simple_feat["code_length"]
 
     def test_non_chain_code_graceful(self) -> None:
         """ChainFeatureExtractor handles non-chain code without crashing."""

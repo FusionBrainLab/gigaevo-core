@@ -36,13 +36,13 @@ class TestMainRunSyncHookInit:
             host="redis.example.com",
             port=6380,
             db=3,
-            prefix="chains/hotpotqa",
+            prefix="chains/synthetic",
             timeout=1000.0,
             poll_interval=2.0,
         )
         assert hook._host == "redis.example.com"
         assert hook._port == 6380
-        assert hook._sources == [(3, "chains/hotpotqa")]
+        assert hook._sources == [(3, "chains/synthetic")]
         assert hook._timeout == 1000.0
         assert hook._poll_interval == 2.0
         assert hook._last_main_progress == -1
@@ -52,15 +52,15 @@ class TestMainRunSyncHookInit:
             host="localhost",
             port=6379,
             sources=[
-                {"db": 4, "prefix": "chains/hotpotqa"},
-                {"db": 5, "prefix": "chains/hotpotqa"},
-                {"db": 8, "prefix": "chains/hotpotqa"},
+                {"db": 4, "prefix": "chains/synthetic"},
+                {"db": 5, "prefix": "chains/synthetic"},
+                {"db": 8, "prefix": "chains/synthetic"},
             ],
         )
         assert hook._sources == [
-            (4, "chains/hotpotqa"),
-            (5, "chains/hotpotqa"),
-            (8, "chains/hotpotqa"),
+            (4, "chains/synthetic"),
+            (5, "chains/synthetic"),
+            (8, "chains/synthetic"),
         ]
 
     def test_defaults(self):
@@ -183,7 +183,7 @@ class TestMainRunSyncHookCall:
             host="localhost",
             port=6379,
             db=0,
-            prefix="chains/hotpotqa",
+            prefix="chains/synthetic",
             poll_interval=0.01,
         )
         mock_redis = AsyncMock()
@@ -193,7 +193,7 @@ class TestMainRunSyncHookCall:
         await hook()
 
         mock_redis.hget.assert_called_with(
-            "chains/hotpotqa:run_state", "engine:snapshot"
+            "chains/synthetic:run_state", "engine:snapshot"
         )
 
     @pytest.mark.asyncio
@@ -203,8 +203,8 @@ class TestMainRunSyncHookCall:
             host="localhost",
             port=6379,
             sources=[
-                {"db": 4, "prefix": "chains/hotpotqa"},
-                {"db": 5, "prefix": "chains/hotpotqa"},
+                {"db": 4, "prefix": "chains/synthetic"},
+                {"db": 5, "prefix": "chains/synthetic"},
             ],
             poll_interval=0.01,
         )

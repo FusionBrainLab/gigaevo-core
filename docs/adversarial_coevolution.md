@@ -18,7 +18,7 @@ Two MAP-Elites populations evolve in parallel. Each population's fitness depends
 
 ### Pipeline: `pipeline=adversarial_coevo`
 
-Extends the standard pipeline with one new stage and a sync hook:
+Extends the standard pipeline with two new stages and a sync hook:
 
 ```
 Standard Pipeline                    Adversarial Pipeline
@@ -26,7 +26,8 @@ Standard Pipeline                    Adversarial Pipeline
 MutationStage                        MutationStage
 ValidateCodeStage                    ValidateCodeStage
 CallProgramFunction                  CallProgramFunction
-                                     FetchOpponentResultsStage  ← NEW
+                                     FetchOpponentIdsStage      ← NEW (NO_CACHE)
+                                     FetchOpponentResultsStage  ← NEW (InputHashCache)
 CallValidatorFunction(validate.py)   CallValidatorFunction(evaluate.py)  ← MODIFIED
 FetchMetrics                         FetchMetrics
 EnsureMetricsStage                   EnsureMetricsStage
@@ -34,12 +35,18 @@ CollectorStage                       CollectorStage
                                      MainRunSyncHook  ← NEW (pre-step hook)
 ```
 
+`FetchOpponentIdsStage` samples opponent ids fresh on every mutation (stochastic
+fitness-proportional draw) and is intentionally uncached. `FetchOpponentResultsStage`
+executes the picked opponents and is keyed on the id list, so identical id sets
+reuse cached subprocess outputs.
+
 ### Key Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `AdversarialPipelineBuilder` | `gigaevo/adversarial/pipeline.py` | Extends `DefaultPipelineBuilder`: replaces `validate.py` with `evaluate.py`, adds `FetchOpponentResultsStage`, wires opponent results as `context` to `CallValidatorFunction` |
-| `FetchOpponentResultsStage` | `gigaevo/adversarial/stages.py` | Reads N opponent codes from archive via `OpponentArchiveProvider`, executes each `entrypoint()` in parallel subprocesses (via `run_exec_runner`), returns results as context |
+| `AdversarialPipelineBuilder` | `gigaevo/adversarial/pipeline.py` | Extends `DefaultPipelineBuilder`: replaces `validate.py` with `evaluate.py`, adds `FetchOpponentIdsStage` + `FetchOpponentResultsStage`, wires opponent results as `context` to `CallValidatorFunction` |
+| `FetchOpponentIdsStage` | `gigaevo/adversarial/stages.py` | Samples N opponent ids from the other population's archive via `OpponentArchiveProvider` on every call. Marked `NO_CACHE` because sampling is stochastic |
+| `FetchOpponentResultsStage` | `gigaevo/adversarial/stages.py` | Reads opponent codes for the sampled ids, executes each `entrypoint()` in parallel subprocesses (via `run_exec_runner`), returns results as context. Cached by id-set hash |
 | `RedisOpponentArchiveProvider` | `gigaevo/adversarial/opponent_provider.py` | Reads opponent programs from the other population's MAP-Elites archive in Redis. Fitness-proportional sampling. Cached (30s TTL) |
 | `MainRunSyncHook` | `gigaevo/prompts/coevolution/sync.py` | Pre-step hook: blocks engine after each generation until the opponent population has also advanced by >= 1 generation. Polls `{prefix}:run_state engine:total_generations` |
 | `config/pipeline/adversarial_coevo.yaml` | Config | Hydra config tying it all together |
@@ -313,7 +320,7 @@ Only metrics declared in `metrics.yaml` pass through `EnsureMetricsStage`. If `e
 | What | Where |
 |------|-------|
 | Pipeline builder | `gigaevo/adversarial/pipeline.py` |
-| FetchOpponentResultsStage | `gigaevo/adversarial/stages.py` |
+| FetchOpponentIdsStage / FetchOpponentResultsStage | `gigaevo/adversarial/stages.py` |
 | OpponentArchiveProvider | `gigaevo/adversarial/opponent_provider.py` |
 | Sync hook | `gigaevo/prompts/coevolution/sync.py` |
 | Pipeline config | `config/pipeline/adversarial_coevo.yaml` |

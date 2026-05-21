@@ -91,7 +91,7 @@ python run.py problem.name=toy_example \
 | `experiment` | `base`, `full_featured`, `heilbron`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state`, `steady_state_adversarial`, `steady_state_bus` |
 | `algorithm` | `single_island`, `single_island_2d` (+ `_d`, `_g` variants), `multi_island`, `topology_3d` (+ `_ret`, `_7step` variants), `single_island_fitness_prop_fixed_temp`, `single_island_weighted` |
 | `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini25_pro`, `gemini31_pro`, `gemini3_flash` |
-| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `algotune_speed`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `prompt_evolution`, `optuna_opt`, `cma_opt` |
+| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `algotune_speed`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt`, `cma_opt` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
@@ -125,6 +125,22 @@ python run.py experiment=multi_llm_exploration \
 python run.py problem.name=my_task pipeline=my_pipeline \
     prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
 ```
+
+### Intra/Extra Memory (per-parent lineage card + live global ideas)
+```bash
+# See docs/INTRA_EXTRA_MEMORY.md for the full mode guide
+python run.py problem.name=heilbron \
+    pipeline=intra_extra_memory ideas_tracker=default memory=local \
+    num_parents=4 max_mutants=500
+```
+
+> **Required overrides:** `pipeline=intra_extra_memory` silently falls
+> back to `NullMemoryProvider` + `NullPostRunHook` unless launched with
+> **both** `ideas_tracker=default memory=local`. The extra-memory (GAM)
+> agents also call OpenRouter directly, so `OPENROUTER_API_KEY` must be
+> exported — without it every GAM call 401s and the extra channel ships
+> zero cards silently. Verify the resolved config does not contain
+> `Null*` targets before trusting results.
 
 ## Viewing Configuration
 

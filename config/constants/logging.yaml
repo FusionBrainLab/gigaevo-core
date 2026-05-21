@@ -30,6 +30,7 @@ live_frontier_compare:
   # run's hall-of-fame as written by MetricsTracker to Redis). Other
   # values are reserved for future implementations.
   frontier_source: "hof"
-  # Emit targets: subset of ["log", "telegram"]. "log" writes via loguru
-  # at INFO; "telegram" calls tools.telegram_notify.notify.
-  emit_targets: ["log"]
+  # Emit targets: subset of ["log", "telegram", "file"]. "log" writes via
+  # loguru at INFO; "telegram" calls tools.telegram_notify.notify; "file"
+  # re-renders frontier_<metric>.png in the Hydra run output dir each tick.
+  emit_targets: ["log", "file"]

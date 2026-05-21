@@ -1,0 +1,298 @@
+# Intra/Extra Memory Pipeline (`pipeline=intra_extra_memory`)
+
+> Live, dual-track LLM memory for MAP-Elites: a **per-parent lineage card** (intra) and a **live global idea bank** (extra), both refreshed mid-run and consumed by the mutator on every iteration.
+
+This mode replaces the legacy lineage / insights stages with a single strong-LLM analyst stage that reads the framework's existing per-program ancestry and the global memory bank, and emits a compact card that goes straight into the mutation prompt.
+
+- **Pipeline config:** [`config/pipeline/intra_extra_memory.yaml`](../config/pipeline/intra_extra_memory.yaml)
+- **Builder:** [`gigaevo/entrypoint/lineage_memory_pipeline.py`](../gigaevo/entrypoint/lineage_memory_pipeline.py)
+- **Stages:** [`gigaevo/programs/stages/lineage_memory.py`](../gigaevo/programs/stages/lineage_memory.py)
+- **Live refresh hook:** [`gigaevo/memory/live_memory_hook.py`](../gigaevo/memory/live_memory_hook.py)
+- **Related:** [MEMORY_ARCHITECTURE.md](MEMORY_ARCHITECTURE.md), [DAG_SYSTEM.md](DAG_SYSTEM.md), [memory.md](memory.md)
+
+---
+
+## 1. Why this mode exists
+
+Default GigaEvo passes the mutator a flat list of "insights" derived from a parent's ancestors and descendants. In practice the mutator either drowns in noise or re-tries strategies that have already been logged as regressed. Two known failure modes:
+
+1. **No deduplication of strategies across siblings.** The same idea (e.g. "increase search radius") is re-tried because each sibling's diff looks novel under raw text inspection.
+2. **No global cross-pollination.** Successful patterns discovered in one lineage stay confined to that lineage; nothing pulls them into a parent's prompt unless the operator manually wires it.
+
+`intra_extra_memory` addresses both with **one stage and one hook**:
+
+| Track | Scope | Stage | Trigger |
+|-------|-------|-------|---------|
+| **Intra** (per-parent lineage card) | One parent's evaluated children | `IntraMemoryStage` | Cache-invalidated when a new child completes or the global cards change |
+| **Extra** (live global ideas) | All evaluated programs across runs | `LiveMemoryRefreshHook` → `IdeaTracker.run_increment` | Every `refresh_every` ingestor sweeps that landed ≥ 1 program (default `10`) |
+
+The mutator sees both, concatenated, on every call.
+
+---
+
+## 2. Pipeline architecture
+
+The builder inherits from `DefaultPipelineBuilder`, **rewires four edges**, and **strips five legacy stages**:
+
+```
+                            ┌───────────────────────┐
+                            │  EnsureMetricsStage   │
+                            └──────────┬────────────┘
+                                       │ (exec dep)
+                                       ▼
+ ┌────────────────────────┐   ┌──────────────────────┐
+ │ DescendantProgramIds   │   │  MemoryContextStage  │  ← reload-on-read selector,
+ │ (max_selected=24,      │   │  (live global cards) │    refreshed by hook
+ │  strategy=best_fitness)│   └──────────┬───────────┘
+ └──────────┬─────────────┘              │
+            │ "children_ids"             │ "memory_cards"
+            ▼                            ▼
+ ┌────────────────────────────────────────────────────┐
+ │             IntraMemoryStage (strong LLM)          │
+ │   structured output → IntraCardStructuredOutput    │
+ │   InputHashCache: skips LLM if neither input moved │
+ └─────────────────────────┬──────────────────────────┘
+                           │ "intra"
+                           ▼               ┌──────────────────────┐
+                ┌────────────────────┐    │  MemoryContextStage  │
+                │ ConcatMemoryStage  │◀───┤  (same node, "cards" │
+                │ joins intra+cards  │    │   port)              │
+                └──────────┬─────────┘    └──────────────────────┘
+                           │ "memory"
+                           ▼
+                ┌────────────────────────┐
+                │ MutationContextStage   │  ← gets one flat "memory" string
+                └────────────────────────┘
+```
+
+**Stages stripped** (superseded by `IntraMemoryStage` + live global cards):
+
+- `AncestorProgramIds`, `LineageStage`, `LineagesToDescendants`, `LineagesFromAncestors`, `InsightsStage`
+
+**Stages kept and reconfigured:**
+
+- `DescendantProgramIds` — widened from `max_selected=1` (the default builder's LineageStage-tuned setting) to `intra_max_children=24` so the analyst sees the bulk of recent children, not just the single best.
+
+---
+
+## 3. The intra card
+
+`IntraMemoryStage` emits a Pydantic-validated structured output and renders it to Markdown for the mutation prompt. The structured schema lives in `gigaevo/programs/stages/lineage_memory.py`:
+
+```python
+IntraCardStructuredOutput
+├── parent_id: str
+├── parent_fitness: float
+├── n_mutations: int
+├── delta_distribution: IntraDeltaDistribution
+│   ├── min / median / max         (float | None)  — VALID children only
+│   ├── improving / neutral / catastrophic         — VALID children only
+│   └── n_failed                                    — INVALID children, tracked separately
+├── tried_strategies: list[IntraTriedStrategy]
+│   ├── label, n_attempts, mean_delta (float | None), verdict, n_failed, notes
+├── untried_directions: list[str]
+└── summary: str
+```
+
+**Invalid-child handling (heilbron `-1000` sentinel, etc.):** any child with `is_valid=false` is **excluded** from every distribution field and from per-cluster `mean_delta`, then **counted separately** in `n_failed`. The rendered card surfaces failures as a parenthesised count, e.g.:
+
+```
+- *naive_loop* — 5 attempt(s) (2 failed), mean delta 0.018, verdict: improved
+- *radius_blowup* — 3 attempt(s) (3 failed), mean delta n/a, verdict: failed
+Delta distribution (valid children only): min=0.01, median=0.015, max=0.02;
+  improving=2, neutral=0, catastrophic=0; n_failed=2 (excluded from stats above)
+```
+
+The system prompt explicitly instructs the LLM to follow this contract (rule 3 in `INTRA_SYSTEM_PROMPT_TEMPLATE`).
+
+---
+
+## 4. The live external memory
+
+The `extra` half of the pipeline name is provided by `LiveMemoryRefreshHook`, wired as the engine's `post_step_hook`:
+
+```yaml
+post_step_hook:
+  _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
+  tracker: ${ideas_tracker}
+  storage: ${ref:redis_storage}
+  refresh_every: 10
+```
+
+It wraps `IdeaTracker.run_increment(...)`, so the **mid-run hook and the existing end-of-run `post_run_hook` share state** via the tracker's `_run_lock`. After each refresh:
+
+- New cards land in the local card store.
+- `MemoryContextStage`'s reload-on-read selector picks them up on the next stage invocation.
+- The framework's `InputHashCache` sees the cards block change and invalidates downstream stages (including `IntraMemoryStage` for any parent whose lineage card hadn't already been invalidated by a new child).
+
+`refresh_every: 10` ≈ one refresh per 10 newly-evaluated mutants, which on heilbron's smoke (~45 programs) gave 4 mid-run refreshes plus the end-of-run pass.
+
+---
+
+## 5. Caching contract
+
+Both new stages are pure cache-aware nodes — the LLM only runs when an input actually changed:
+
+| Stage | Input that invalidates cache |
+|-------|------------------------------|
+| `IntraMemoryStage` | `children_ids` (`DescendantProgramIds` output) **or** `memory_cards` (`MemoryContextStage` block) |
+| `ConcatMemoryStage` | `intra` or `cards` |
+
+The smoke run saw **78 stage invocations, 11 distinct cards rendered** — the rest were cache hits. See [`tests/stages/test_intra_memory_cache.py`](../tests/stages/test_intra_memory_cache.py) and [`tests/stages/test_extra_memory_cache.py`](../tests/stages/test_extra_memory_cache.py) for the contract.
+
+**Cache-miss triggers in practice:**
+
+1. A new child of parent X finishes evaluating → `ParentRefresher` flips X `DONE → QUEUED` → `DescendantProgramIds` returns a new id list → intra invalidates for X.
+2. `LiveMemoryRefreshHook` writes new global cards → `MemoryContextStage` block changes → intra invalidates for **all** parents on their next visit.
+
+---
+
+## 6. Required co-overrides
+
+The mode depends on two upstream config nodes that Hydra's defaults-list cannot safely flip from inside `pipeline/`, so they must be passed on the CLI:
+
+```
+ideas_tracker=default    # LiveMemoryRefreshHook calls IdeaTracker.run_increment
+memory=local             # MemorySelectorAgent reads the local card store that
+                         # IdeaTracker writes to between refreshes
+```
+
+Omit either and the live refresh silently no-ops (no error — the card store is just empty).
+
+---
+
+## 7. Launching an experiment
+
+### Smoke (matches the 2026-05-15 acceptance run — 40 mutants, ~50 min)
+
+```bash
+cd ~/gigaevo
+HTTPS_PROXY=http://mathemage:jky5exmw@64.225.96.36:8888 \
+NO_PROXY="localhost,127.0.0.1,INTERNAL_IP" \
+OPENAI_API_KEY=sk-gigaevo \
+python3 run.py \
+  problem.name=heilbron \
+  llm_base_url=http://INTERNAL_IP:4000 \
+  model_name=Qwen3-235B-A22B-Thinking-2507 \
+  redis.db=10 \
+  num_parents=1 \
+  pipeline=intra_extra_memory \
+  ideas_tracker=default \
+  memory=local \
+  max_mutants=40 \
+  hydra.run.dir=output/smoke_intra_extra/$(date +%Y%m%d_%H%M%S)_smoke
+```
+
+### Full experiment (longer horizon, wider parallelism)
+
+```bash
+cd ~/gigaevo
+HTTPS_PROXY=http://mathemage:jky5exmw@64.225.96.36:8888 \
+NO_PROXY="localhost,127.0.0.1,INTERNAL_IP" \
+OPENAI_API_KEY=sk-gigaevo \
+python3 run.py \
+  problem.name=heilbron \
+  llm_base_url=http://INTERNAL_IP:4000 \
+  model_name=Qwen3-235B-A22B-Thinking-2507 \
+  redis.db=11 \
+  num_parents=4 \
+  pipeline=intra_extra_memory \
+  ideas_tracker=default \
+  memory=local \
+  max_mutants=500 \
+  hydra.run.dir=output/intra_extra_memory/$(date +%Y%m%d_%H%M%S)_heilbron
+```
+
+**What changes for the full run vs. the smoke:**
+
+| Knob | Smoke | Full | Why |
+|------|------:|-----:|-----|
+| `max_mutants` | 40 | 500 | Smoke only needs to prove the wiring; full needs convergence. |
+| `num_parents` | 1 | 4 | More parents per iteration → more concurrent intra-card slots and broader exploration. |
+| `redis.db` | 10 | 11 | Avoid clashing with the smoke's persisted state. |
+| `hydra.run.dir` | `smoke_intra_extra/...` | `intra_extra_memory/...` | Separate report aggregation. |
+
+### Background launch with Telegram completion notify
+
+```bash
+cd ~/gigaevo
+HTTPS_PROXY=http://mathemage:jky5exmw@64.225.96.36:8888 \
+NO_PROXY="localhost,127.0.0.1,INTERNAL_IP" \
+OPENAI_API_KEY=sk-gigaevo \
+nohup python3 run.py \
+  problem.name=heilbron \
+  llm_base_url=http://INTERNAL_IP:4000 \
+  model_name=Qwen3-235B-A22B-Thinking-2507 \
+  redis.db=11 num_parents=4 \
+  pipeline=intra_extra_memory ideas_tracker=default memory=local \
+  max_mutants=500 \
+  hydra.run.dir=output/intra_extra_memory/$(date +%Y%m%d_%H%M%S)_heilbron \
+  > /tmp/intra_extra_run.log 2>&1 &
+echo "PID=$!"
+```
+
+Pair with `tools/telegram_notify.notify(...)` from your monitoring shell for milestone pings.
+
+---
+
+## 8. Tuning knobs
+
+| Setting | Where | Default | Effect |
+|---------|-------|--------:|--------|
+| `intra_max_children` | `pipeline_builder` block | `24` | Cap on the descendant pool the analyst sees. Lower = cheaper but shallower context. |
+| `refresh_every` | `post_step_hook` block | `10` | Ingestor sweeps between live refreshes. Lower = fresher cards, more LLM calls. |
+| `max_insights` | top-level | inherited | Bound on memory-card count `MemoryContextStage` surfaces. |
+| `max_code_length` | top-level | inherited | Truncation guard for parent code in the intra prompt. |
+| `stage_timeout` | top-level | inherited | Per-stage timeout; respected by `IntraMemoryStage` and `ConcatMemoryStage`. |
+
+To override at launch:
+
+```bash
+... pipeline=intra_extra_memory \
+    pipeline_builder.intra_max_children=12 \
+    post_step_hook.refresh_every=5
+```
+
+---
+
+## 9. Verifying the wiring is live
+
+After a run finishes, four artefacts should all be non-empty:
+
+1. **Intra cards on parent metadata** — for any parent X visited by the mutator:
+   ```python
+   from gigaevo.programs.program import Program
+   ...
+   p = redis_storage.get(parent_id)
+   assert p.metadata.get("intra_memory_card", "").startswith("# Intra Memory")
+   ```
+2. **Chroma embedding count** — should grow from 0 → ~5 × card-count by end of run.
+3. **Mutation context** — at least one parent's `metadata["mutation_context"]["memory"]` contains both an `## Intra Memory` block and a `## Memory Cards` block.
+4. **Captured prompts** — `MutationAgent` request payloads contain both blocks under `EVIDENCE INPUTS`.
+
+The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) hit all four and produced a top fitness of `0.02487` (≈15× the best seed) with **0 `IntraMemoryStage` failures** over 78 invocations.
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `MemoryContextStage` block always empty | `ideas_tracker=default memory=local` not set | Add both to the CLI. |
+| Intra card never appears on parents | The mutator never visited any parent twice (run too short) | `max_mutants >= 2 * num_parents`. |
+| `IntraMemoryStage` runs every iteration (no cache hits) | Different `children_ids` order on each visit | Confirm `DescendantProgramIds` uses `strategy="best_fitness"`. |
+| Rendered card shows `min=-1000.0` etc. | Pre-fix build (`< 89f01be5`) | Pull main, rebuild. The current schema excludes invalid children from delta stats and routes them to `n_failed`. |
+| `LiveMemoryRefreshHook` never fires | Ingestor never landed ≥ 1 program in `refresh_every` sweeps | Lower `refresh_every`, or check ingestor health. |
+
+---
+
+## 11. See also
+
+- [MEMORY_ARCHITECTURE.md](MEMORY_ARCHITECTURE.md) — the global memory subsystem this mode plugs into
+- [DAG_SYSTEM.md](DAG_SYSTEM.md) — `InputHashCache`, `ExecutionOrderDependency`, `add_data_flow_edge` semantics
+- [memory.md](memory.md) — broader card / idea taxonomy
+- [`config/pipeline/intra_extra_memory.yaml`](../config/pipeline/intra_extra_memory.yaml) — the canonical config
+
+---
+
+*Last updated: 2026-05-15. Pipeline introduced in commit `89f01be5`.*

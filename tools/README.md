@@ -248,6 +248,7 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 | `benchmark.py` | Run throughput benchmark suite (`tests/benchmarks/`) |
 | `bench_snapshot.py` | Before/after benchmark snapshots for comparison |
 | `benchmark_capture.py` | Capture benchmark results to `benchmark_history.jsonl` |
+| `canonical_benchmark/run_benchmark.py` | **Regression benchmark — run on every major breaking change.** 5 problems × 2 seeds, spawning `python run.py problem.name=<P> redis.db=<N> hydra.run.dir=<DIR> llm_base_url=<URL> model_name=<NAME>`. The LLM endpoint must be supplied via required `--llm-base-url` / `--model-name` CLI args — no default is shipped because the framework default in `config/constants/endpoints.yaml` (OpenRouter Gemini-3-Flash) is too slow for a 10-run sweep and the right replacement is environment-specific. Reads framework defaults: `pipeline=standard num_parents=1 max_mutants=250` (intra-memory pipeline, no cross-population channel, no IdeaTracker). Extracts best fitness via `gigaevo top`, appends to `BENCHMARK_HISTORY.md`. Uplift sweeps: opt in via `--override ideas_tracker=default --override memory=local` and/or `--override pipeline=intra_extra_memory`. See `tools/canonical_benchmark/README.md`. |
 | `profiler.py` | Redis ops, DAG construction, stage execution profiling |
 
 ### Scaffolding Tools
@@ -579,7 +580,7 @@ Source: `gigaevo/experiment/manifest.py`. Top-level sub-sections:
 | `servers` | `list[str]` | gated | Required when `lifecycle.status ≥ implemented` |
 | `config` | `ConfigSpec` | gated | Typed standard keys + `extra: dict[str, Any]` for Hydra overrides |
 | `custom_env` | `dict[str, str]` | no | Env vars exported in generated `launch.sh` |
-| `max_generations` | `int` | `25` | Stopping-rule target |
+| `max_generations` | `int` | `25` | Stopping-rule target. **Naming note**: kept in the manifest schema for backwards-compat, but emitted as `max_mutants=<N>` at launch (since v2.0.0, the engine-side knob is `max_mutants`). |
 | `stopping_rule` | `StoppingRule` | no | Structured conditions (see `conditions[]`) + prose `description` |
 | `baseline` | `BaselineInfo` | no | Reference / mean / metric for comparison |
 | `tools` | `list[ToolRef]` | no | Experiment-specific tool registry |
@@ -695,7 +696,7 @@ fragment of `launch.sh`; every fragment of `launch.sh` is traceable back to a fi
 | `experiment.branch` | Header comment only |
 | `experiment.pr_number` | Header comment only |
 | `experiment.prereg_commit` | Header comment + launch banner |
-| `experiment.max_generations` | `max_generations=<N>` Hydra override per run |
+| `experiment.max_generations` | `max_mutants=<N>` Hydra override per run (manifest field name is historical; engine knob is `max_mutants` since v2.0.0) |
 | `servers[]` | `NO_PROXY` export: `localhost,127.0.0.1,api.github.com,<servers...>` |
 | `custom_env{}` | `export KEY="VALUE"` lines, then propagated to every run |
 | `config.extra.*` | Every key emitted as a Hydra override `KEY=VALUE` (bool → `true`/`false`, `None` → `null`). No defaults imposed — absent keys fall through to the Hydra config hierarchy. Dotted keys (`pipeline_builder.archive_reeval`) pass through verbatim. |
@@ -745,8 +746,7 @@ nohup "$PYTHON" "$PROJ/run.py" \
     redis.db=1 \
     stage_timeout=2400 \
     dag_timeout=2400 \
-    max_generations=50 \
-    max_mutations_per_generation=8 \
+    max_mutants=50 \
     max_elites_per_generation=8 \
     num_parents=1 \
     model_name=Qwen3-235B-A22B-Thinking-2507 \

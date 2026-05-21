@@ -22,8 +22,11 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 
 | Guide | Description |
 |-------|-------------|
+| [Adversarial Co-Evolution](docs/adversarial_coevolution.md) | Two-population co-evolution guide (generator/discriminator pattern) |
 | [DAG System](docs/DAG_SYSTEM.md) | Execution engine: stages, dependencies, caching |
 | [Evolution Strategies](docs/EVOLUTION_STRATEGIES.md) | MAP-Elites, multi-island, migration |
+| [Memory System](docs/memory.md) | How memory-augmented mutation works (writers, readers, providers, ideas tracker) |
+| [Optuna Optimization](docs/OPTUNA_OPTIMIZATION.md) | LLM-driven hyperparameter sweeps for evolved programs |
 | [Prompt Co-Evolution](docs/COEVOLUTION.md) | Co-evolve mutation prompts alongside programs |
 | [Tools](tools/README.md) | Analysis, debugging, and problem scaffolding utilities |
 | [Usage Guide](docs/USAGE.md) | Detailed usage and Hydra configuration |

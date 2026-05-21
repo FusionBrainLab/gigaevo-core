@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from abc import abstractmethod
 import bisect
-from typing import Any, TypeVar
+from collections.abc import Sequence
+import statistics
+from typing import Any, Literal, TypeVar
 
 from loguru import logger
 from pydantic import Field
@@ -23,6 +25,22 @@ from gigaevo.programs.stages.common import StringList
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
 T = TypeVar("T")
+
+DEFAULT_ITER_WINDOW_RADIUS = 15
+MEDIAN_HORIZON = 10
+# Bootstrap-only fallback when MAD cannot be estimated (window <4 valid).
+# Kept identical to the pre-bundle constant so behaviour at start-of-run is
+# unchanged.
+TREND_DELTA_RATIO = 0.05
+# Minimum sample size to compute MAD meaningfully — below this, fall back
+# to TREND_DELTA_RATIO. Not a regime threshold; a data-availability gate.
+N_MIN_FOR_MAD = 4
+# Minimum sample size for archive quartile estimation. Same justification:
+# below 4 samples a quartile is degenerate.
+N_MIN_ARCHIVE = 4
+# Numerical guard against true-zero MAD — keeps the inequality strict
+# without acting as a regime cutoff.
+_TREND_EPSILON = 1e-12
 
 
 class RelatedCollectorBase(Stage):
@@ -105,40 +123,17 @@ class AncestorProgramIds(ProgramIdsCollector):
         return selected
 
 
-class GenerationMetrics(StageIO):
-    """Metrics for a single generation (main metric only)."""
-
-    best: float | None = Field(
-        None,
-        description="Best fitness in generation (valid only), None if no valid programs have the metric",
-    )
-    worst: float | None = Field(
-        None,
-        description="Worst fitness in generation (valid only), None if no valid programs have the metric",
-    )
-    average: float | None = Field(
-        None,
-        description="Average fitness in generation (valid only), None if no valid programs have the metric",
-    )
-    valid_rate: float = Field(description="Valid rate in generation")
-    # num_children statistics
-    avg_num_children: float = Field(
-        description="Average number of children per program"
-    )
-    max_num_children: int = Field(
-        description="Maximum number of children any program has"
-    )
-    program_count: int = Field(description="Number of programs in generation")
+TrendLabel = Literal["rising", "flat", "falling"]
 
 
 class EvolutionaryStatistics(StageIO):
-    # program statistics
-    generation: int = Field(description="Generation")
+    """Snapshot of population state seen by a focal program in the mutation prompt."""
+
+    generation: int = Field(description="Program lineage generation depth")
     iteration: int | None = Field(None, description="Evolution loop iteration number")
     current_program_metrics: dict[str, float] = Field(
         description="Metrics of the current program"
     )
-    # global statistics (all programs) - keyed by metric name
     best_fitness: dict[str, float] = Field(
         description="Best fitness per metric (valid only)"
     )
@@ -149,7 +144,6 @@ class EvolutionaryStatistics(StageIO):
         description="Average fitness per metric (valid only)"
     )
     valid_rate: float = Field(description="Valid rate")
-    # global num_children statistics
     total_program_count: int = Field(description="Total number of programs")
     avg_num_children: float = Field(
         description="Average number of children per program"
@@ -157,36 +151,43 @@ class EvolutionaryStatistics(StageIO):
     max_num_children: int = Field(
         description="Maximum number of children any program has"
     )
-    # generation statistics - keyed by metric name
-    best_fitness_in_generation: dict[str, float] = Field(
-        description="Best fitness per metric in generation (valid only)"
+    iter_window_lo: int | None = Field(None, description="Window lower bound")
+    iter_window_hi: int | None = Field(None, description="Window upper bound")
+    iter_window_programs: int = Field(0, description="Programs in window")
+    iter_window_valid: int = Field(0, description="Valid programs in window")
+    iter_window_best_fitness: float | None = Field(
+        None, description="Best primary fitness in window"
     )
-    worst_fitness_in_generation: dict[str, float] = Field(
-        description="Worst fitness per metric in generation (valid only)"
+    iter_window_best_iter: int | None = Field(
+        None, description="Iter of window's best fitness"
     )
-    average_fitness_in_generation: dict[str, float] = Field(
-        description="Average fitness per metric in generation (valid only)"
+    iter_window_rank: int | None = Field(
+        None, description="Focal's rank among window valid programs (1=best)"
     )
-    valid_rate_in_generation: float = Field(description="Valid rate in generation")
-    # iteration-window statistics - keyed by metric name. The window is a
-    # trailing range of iterations [program.iteration - N, program.iteration]
-    # sized by ``EvolutionaryStatisticsCollector.iteration_window_size``;
-    # fields are None when the feature is disabled (N=0).
-    best_fitness_in_iteration: dict[str, float] | None = Field(
-        None, description="Best fitness per metric in the iteration window (valid only)"
+    iter_window_median_before: float | None = Field(
+        None, description="Median of last 10 valid fitnesses before focal"
     )
-    worst_fitness_in_iteration: dict[str, float] | None = Field(
-        None,
-        description="Worst fitness per metric in the iteration window (valid only)",
+    iter_window_median_after: float | None = Field(
+        None, description="Median of first 10 valid fitnesses after focal"
     )
-    average_fitness_in_iteration: dict[str, float] | None = Field(
-        None,
-        description="Average fitness per metric in the iteration window (valid only)",
+    iter_window_trend: TrendLabel = Field("flat", description="Window trend")
+    iter_window_trend_thirds: tuple[float | None, float | None, float | None] = Field(
+        (None, None, None), description="Medians of window thirds, in iter order"
     )
-    valid_rate_in_iteration: float | None = Field(
-        None, description="Valid rate in the iteration window"
+    iter_window_invalid_streak_max: int = Field(
+        0, description="Max consecutive invalid in window"
     )
-    # ancestor statistics - keyed by metric name
+    iter_window_invalid_count: int = Field(0, description="Invalid count in window")
+    iters_since_last_new_best: int = Field(
+        0, description="Iters since global running-best last advanced (at focal)"
+    )
+    archive_valid_fitnesses: tuple[float, ...] = Field(
+        default=(),
+        description=(
+            "Sorted-ascending valid primary fitnesses from the population (whole-run "
+            "archive snapshot). Render-time input for quartile/regime classification."
+        ),
+    )
     ancestor_count: int = Field(description="Number of ancestors (immediate parents)")
     best_fitness_in_ancestors: dict[str, float] = Field(
         description="Best fitness per metric in ancestors (valid only)"
@@ -198,7 +199,6 @@ class EvolutionaryStatistics(StageIO):
         description="Average fitness per metric in ancestors (valid only)"
     )
     valid_rate_in_ancestors: float = Field(description="Valid rate in ancestors")
-    # descendant statistics - keyed by metric name
     descendant_count: int = Field(
         description="Number of descendants (immediate children)"
     )
@@ -212,11 +212,6 @@ class EvolutionaryStatistics(StageIO):
         description="Average fitness per metric in descendants (valid only)"
     )
     valid_rate_in_descendants: float = Field(description="Valid rate in descendants")
-    # history of main metric across all generations - keyed by generation number
-    generation_history: dict[int, GenerationMetrics] = Field(
-        default_factory=dict,
-        description="History of main metric stats per generation (best/worst/avg/valid_rate)",
-    )
 
 
 def _compute_fitness_stats_all_metrics(
@@ -284,68 +279,62 @@ def _compute_num_children_stats(programs: list[Program]) -> tuple[float, int, in
     return (avg_num_children, max_num_children, len(programs))
 
 
-def _compute_main_metric_stats(
-    programs: list[Program],
-    metric_key: str,
-    higher_is_better: bool,
-) -> GenerationMetrics:
-    """Compute best, worst, average, valid rate, and num_children stats for the main metric.
+def _max_invalid_streak(window: list[Program]) -> int:
+    streak = max_streak = 0
+    for p in window:
+        if p.metrics.get(VALIDITY_KEY, 0) > 0:
+            streak = 0
+        else:
+            streak += 1
+            if streak > max_streak:
+                max_streak = streak
+    return max_streak
 
-    Returns None for best/worst/average if no valid programs have the metric.
 
-    Returns:
-        GenerationMetrics with all statistics
-    """
-    avg_children, max_children, program_count = _compute_num_children_stats(programs)
+def _mad(values: Sequence[float]) -> float:
+    """Median absolute deviation. Returns 0 for degenerate input."""
+    if len(values) < 2:
+        return 0.0
+    s = sorted(values)
+    m = s[len(s) // 2]
+    abs_devs = sorted(abs(v - m) for v in values)
+    return abs_devs[len(abs_devs) // 2]
 
-    if not programs:
-        return GenerationMetrics(
-            best=None,
-            worst=None,
-            average=None,
-            valid_rate=0.0,
-            avg_num_children=0.0,
-            max_num_children=0,
-            program_count=0,
-        )
 
-    valid_programs = [p for p in programs if p.metrics.get(VALIDITY_KEY, 0) > 0]
-    valid_rate = len(valid_programs) / len(programs)
+def _trend_from_thirds(
+    fits: list[float], higher_is_better: bool
+) -> tuple[TrendLabel, tuple[float | None, float | None, float | None]]:
+    # 'rising' means improving, 'falling' means worsening — direction-aware so
+    # the LLM sees the same word regardless of higher_is_better.
+    n = len(fits)
+    if n < 6:
+        return ("flat", (None, None, None))
 
-    # Only include valid programs that actually have the metric
-    fitness_values = [
-        p.metrics[metric_key] for p in valid_programs if metric_key in p.metrics
-    ]
+    t1 = statistics.median(fits[: n // 3])
+    t2 = statistics.median(fits[n // 3 : 2 * n // 3])
+    t3 = statistics.median(fits[2 * n // 3 :])
 
-    if not fitness_values:
-        return GenerationMetrics(
-            best=None,
-            worst=None,
-            average=None,
-            valid_rate=valid_rate,
-            avg_num_children=avg_children,
-            max_num_children=max_children,
-            program_count=program_count,
-        )
+    # Noise floor: MAD of recent valid fits when sample size permits, else the
+    # legacy ratio of |t1|. MAD is a textbook nonparametric noise estimator —
+    # no chosen number, just the run's own dispersion.
+    if n >= N_MIN_FOR_MAD:
+        noise_floor = _mad(fits)
+    else:
+        noise_floor = abs(t1) * TREND_DELTA_RATIO
+    noise_floor = max(noise_floor, _TREND_EPSILON)
 
     if higher_is_better:
-        best = max(fitness_values)
-        worst = min(fitness_values)
+        going_up = (t3 - t1) > noise_floor and t3 >= t2
+        going_down = (t1 - t3) > noise_floor and t3 <= t2
     else:
-        best = min(fitness_values)
-        worst = max(fitness_values)
+        going_up = (t1 - t3) > noise_floor and t3 <= t2
+        going_down = (t3 - t1) > noise_floor and t3 >= t2
 
-    average = sum(fitness_values) / len(fitness_values)
-
-    return GenerationMetrics(
-        best=best,
-        worst=worst,
-        average=average,
-        valid_rate=valid_rate,
-        avg_num_children=avg_children,
-        max_num_children=max_children,
-        program_count=program_count,
-    )
+    if going_up:
+        return ("rising", (t1, t2, t3))
+    if going_down:
+        return ("falling", (t1, t2, t3))
+    return ("flat", (t1, t2, t3))
 
 
 async def _get_ancestors(storage: ProgramStorage, program: Program) -> list[Program]:
@@ -366,27 +355,20 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         self,
         *,
         metrics_context: MetricsContext,
-        iteration_window_size: int = 8,
+        iteration_window_radius: int = DEFAULT_ITER_WINDOW_RADIUS,
         **kwargs: Any,
     ):
-        if iteration_window_size < 0:
+        if iteration_window_radius < 0:
             raise ValueError(
-                f"iteration_window_size must be >= 0, got {iteration_window_size}"
+                f"iteration_window_radius must be >= 0, got {iteration_window_radius}"
             )
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
-        #: Trailing-window size for iteration cohort aggregation. The window
-        #: for a program at iteration ``i`` is the set of programs with
-        #: iteration ``∈ [i - N, i]`` (the program itself is always included).
-        #: Set to 0 to disable iteration-cohort stats; fields are then None.
-        #: Default 8 gives prompts ~8 mutants of recent cohort context — wide
-        #: enough to smooth single-program noise, narrow enough to track
-        #: short-horizon trend changes.
-        self.iteration_window_size = iteration_window_size
+        self.iteration_window_radius = iteration_window_radius
         # Population-level stats cache (keyed on list identity from snapshot).
         # Within a single snapshot epoch, all programs see the same population,
-        # so global stats, per-generation stats, and generation history are
-        # identical.  Computing them once instead of N times reduces O(N²) to O(N).
+        # so global stats are identical.  Computing them once instead of N
+        # times reduces O(N²) to O(N).
         self._cached_related_pop_id: int = -1
         self._related_cache: dict[str, Program] = {}
         self._cached_pop_id: int = -1
@@ -402,13 +384,6 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             ]
             | None
         ) = None
-        self._cached_gen_stats: (
-            dict[
-                int, tuple[dict[str, float], dict[str, float], dict[str, float], float]
-            ]
-            | None
-        ) = None
-        self._cached_gen_history: dict[int, GenerationMetrics] | None = None
         # Iteration cohort index: programs sorted by iteration, plus a
         # parallel list of iteration keys for bisect lookup. Rebuilt once
         # per snapshot epoch alongside the other caches.
@@ -482,37 +457,12 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             total_count,
         )
 
-        # Group by generation
-        programs_by_gen: dict[int, list[Program]] = {}
-        for p in programs:
-            gen = p.generation
-            if gen not in programs_by_gen:
-                programs_by_gen[gen] = []
-            programs_by_gen[gen].append(p)
-
-        # Per-generation fitness stats
-        gen_stats: dict[
-            int, tuple[dict[str, float], dict[str, float], dict[str, float], float]
-        ] = {}
-        for gen_num, gen_progs in programs_by_gen.items():
-            gen_stats[gen_num] = _compute_fitness_stats_all_metrics(
-                gen_progs, self.metrics_context
-            )
-        self._cached_gen_stats = gen_stats
-
-        # Generation history (main metric)
-        main_metric = self.metrics_context.get_primary_key()
-        higher_is_better = self.metrics_context.is_higher_better(main_metric)
-        generation_history: dict[int, GenerationMetrics] = {}
-        for gen_num, gen_progs in sorted(programs_by_gen.items()):
-            generation_history[gen_num] = _compute_main_metric_stats(
-                gen_progs, main_metric, higher_is_better
-            )
-        self._cached_gen_history = generation_history
-
-        # Iteration cohort index (skipped when the feature is disabled).
-        if self.iteration_window_size > 0:
-            sorted_by_iter = sorted(programs, key=lambda p: p.iteration)
+        # Iteration cohort index. Only programs with a real iteration value
+        # (>= 0) are indexed; seed programs occasionally lack one and would
+        # corrupt the bisect order.
+        if self.iteration_window_radius > 0:
+            with_iter = [p for p in programs if p.iteration is not None]
+            sorted_by_iter = sorted(with_iter, key=lambda p: p.iteration)
             self._cached_iter_sorted = sorted_by_iter
             self._cached_iter_keys = [p.iteration for p in sorted_by_iter]
         else:
@@ -521,34 +471,152 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
 
         self._cached_pop_id = pop_id
 
-    def _compute_iteration_window_stats(
-        self, program: Program
-    ) -> tuple[
-        dict[str, float] | None,
-        dict[str, float] | None,
-        dict[str, float] | None,
-        float | None,
-    ]:
-        """Aggregate stats over the trailing iteration window of ``program``.
+    def _compute_iter_window_fields(
+        self,
+        program: Program,
+        primary_key: str,
+        higher_is_better: bool,
+    ) -> dict[str, Any]:
+        empty = {
+            "iter_window_lo": None,
+            "iter_window_hi": None,
+            "iter_window_programs": 0,
+            "iter_window_valid": 0,
+            "iter_window_best_fitness": None,
+            "iter_window_best_iter": None,
+            "iter_window_rank": None,
+            "iter_window_median_before": None,
+            "iter_window_median_after": None,
+            "iter_window_trend": "flat",
+            "iter_window_trend_thirds": (None, None, None),
+            "iter_window_invalid_streak_max": 0,
+            "iter_window_invalid_count": 0,
+            "iters_since_last_new_best": 0,
+        }
 
-        Window = programs whose iteration ``∈ [program.iteration - N, program.iteration]``
-        where ``N == self.iteration_window_size``. Returns ``(None, None, None, None)``
-        when the feature is disabled (``N == 0``). The program itself is always
-        in its own window so the cohort is non-empty for any valid input.
-        """
         if (
-            self.iteration_window_size == 0
+            self.iteration_window_radius == 0
             or self._cached_iter_sorted is None
             or self._cached_iter_keys is None
+            or program.iteration is None
         ):
-            return (None, None, None, None)
+            return empty
 
-        lo = program.iteration - self.iteration_window_size
-        hi = program.iteration
+        focal_iter = program.iteration
+        lo = focal_iter - self.iteration_window_radius
+        hi = focal_iter + self.iteration_window_radius
         left = bisect.bisect_left(self._cached_iter_keys, lo)
         right = bisect.bisect_right(self._cached_iter_keys, hi)
         window = self._cached_iter_sorted[left:right]
-        return _compute_fitness_stats_all_metrics(window, self.metrics_context)
+        window_size = len(window)
+
+        valid_with_fit = [
+            p
+            for p in window
+            if p.metrics.get(VALIDITY_KEY, 0) > 0 and primary_key in p.metrics
+        ]
+        # Snapshot-lag safeguard: when the collector runs for `program`, the
+        # population snapshot may not yet contain it (or may contain a stale
+        # view with VALIDITY_KEY=0). The focal program is logically a member
+        # of its own window, so include it here using the up-to-date metrics
+        # passed in by the pipeline. Without this, top-of-window programs hit
+        # the silent `sorted.index(focal_fit) → ValueError → rank=None` path
+        # and the rank line disappears from rendered stats.
+        focal_valid = program.metrics.get(VALIDITY_KEY, 0) > 0
+        focal_fit = program.metrics.get(primary_key)
+        focal_already_counted = any(p.id == program.id for p in valid_with_fit)
+        if focal_valid and focal_fit is not None and not focal_already_counted:
+            valid_with_fit = valid_with_fit + [program]
+        invalid_count = window_size - sum(
+            1 for p in window if p.metrics.get(VALIDITY_KEY, 0) > 0
+        )
+        invalid_streak_max = _max_invalid_streak(window)
+
+        out: dict[str, Any] = {
+            "iter_window_lo": lo,
+            "iter_window_hi": hi,
+            "iter_window_programs": window_size,
+            "iter_window_valid": len(valid_with_fit),
+            "iter_window_invalid_streak_max": invalid_streak_max,
+            "iter_window_invalid_count": invalid_count,
+            "iter_window_best_fitness": None,
+            "iter_window_best_iter": None,
+            "iter_window_rank": None,
+            "iter_window_median_before": None,
+            "iter_window_median_after": None,
+            "iter_window_trend": "flat",
+            "iter_window_trend_thirds": (None, None, None),
+            "iters_since_last_new_best": self._compute_global_plateau(
+                focal_iter, primary_key, higher_is_better
+            ),
+        }
+
+        if not valid_with_fit:
+            return out
+
+        fits = [p.metrics[primary_key] for p in valid_with_fit]
+        best_fit = max(fits) if higher_is_better else min(fits)
+        best_iter = next(
+            p.iteration for p in valid_with_fit if p.metrics[primary_key] == best_fit
+        )
+        out["iter_window_best_fitness"] = best_fit
+        out["iter_window_best_iter"] = best_iter
+
+        if focal_valid and focal_fit is not None:
+            # Count-based rank (1 = best). Robust to duplicate fitness values
+            # — `sorted.index` previously returned the first match for ties,
+            # which under-counted equal-fit competitors.
+            if higher_is_better:
+                better = sum(1 for f in fits if f > focal_fit)
+            else:
+                better = sum(1 for f in fits if f < focal_fit)
+            out["iter_window_rank"] = better + 1
+
+        before = [
+            p.metrics[primary_key] for p in valid_with_fit if p.iteration < focal_iter
+        ][-MEDIAN_HORIZON:]
+        after = [
+            p.metrics[primary_key] for p in valid_with_fit if p.iteration > focal_iter
+        ][:MEDIAN_HORIZON]
+        if before:
+            out["iter_window_median_before"] = statistics.median(before)
+        if after:
+            out["iter_window_median_after"] = statistics.median(after)
+
+        trend_label, thirds = _trend_from_thirds(fits, higher_is_better)
+        out["iter_window_trend"] = trend_label
+        out["iter_window_trend_thirds"] = thirds
+        return out
+
+    def _compute_global_plateau(
+        self,
+        focal_iter: int,
+        primary_key: str,
+        higher_is_better: bool,
+    ) -> int:
+        if self._cached_iter_sorted is None or self._cached_iter_keys is None:
+            return 0
+
+        hi_idx = bisect.bisect_right(self._cached_iter_keys, focal_iter)
+        candidates = self._cached_iter_sorted[:hi_idx]
+
+        running_best: float | None = None
+        last_new_best_iter: int | None = None
+        for p in candidates:
+            if p.metrics.get(VALIDITY_KEY, 0) <= 0:
+                continue
+            fit = p.metrics.get(primary_key)
+            if fit is None:
+                continue
+            if running_best is None or (
+                fit > running_best if higher_is_better else fit < running_best
+            ):
+                running_best = fit
+                last_new_best_iter = p.iteration
+
+        if last_new_best_iter is None:
+            return focal_iter
+        return focal_iter - last_new_best_iter
 
     async def _process(
         self, program: Program, programs: list[Program]
@@ -558,8 +626,6 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         # Population-level stats (cached per snapshot epoch)
         self._ensure_population_cache(programs)
         assert self._cached_global is not None
-        assert self._cached_gen_stats is not None
-        assert self._cached_gen_history is not None
         (
             best,
             worst,
@@ -570,20 +636,11 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             total_count,
         ) = self._cached_global
 
-        # Program's generation
-        generation = program.generation
-        iteration = program.iteration
+        primary_key = self.metrics_context.get_primary_key()
+        higher_is_better = self.metrics_context.is_higher_better(primary_key)
 
-        # Generation statistics (cached)
-        gen_best, gen_worst, gen_avg, gen_valid_rate = self._cached_gen_stats.get(
-            generation, ({}, {}, {}, 0.0)
-        )
-
-        # Iteration cohort aggregates: trailing window over programs with
-        # iteration ∈ [program.iteration - N, program.iteration]. When the
-        # feature is disabled (N=0) the fields stay None for schema stability.
-        iter_best, iter_worst, iter_avg, iter_valid_rate = (
-            self._compute_iteration_window_stats(program)
+        iter_window_fields = self._compute_iter_window_fields(
+            program, primary_key, higher_is_better
         )
 
         # Ancestor statistics (depth 1 - immediate parents, from batch cache)
@@ -606,12 +663,20 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             _compute_fitness_stats_all_metrics(descendants, self.metrics_context)
         )
 
+        # Archive snapshot of valid primary fitnesses — sorted ascending so the
+        # renderer can compute quartile boundaries in O(1) without resorting.
+        archive_valid_fitnesses: tuple[float, ...] = tuple(
+            sorted(
+                p.metrics[primary_key]
+                for p in programs
+                if p.metrics.get(VALIDITY_KEY, 0) > 0 and primary_key in p.metrics
+            )
+        )
+
         return EvolutionaryStatistics(
-            # Program statistics
-            generation=generation,
-            iteration=iteration,
+            generation=program.generation,
+            iteration=program.iteration,
             current_program_metrics=program.metrics,
-            # Global statistics
             best_fitness=best,
             worst_fitness=worst,
             average_fitness=avg,
@@ -619,28 +684,16 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             total_program_count=total_count,
             avg_num_children=global_avg_children,
             max_num_children=global_max_children,
-            # Generation statistics
-            best_fitness_in_generation=gen_best,
-            worst_fitness_in_generation=gen_worst,
-            average_fitness_in_generation=gen_avg,
-            valid_rate_in_generation=gen_valid_rate,
-            # Iteration statistics
-            best_fitness_in_iteration=iter_best,
-            worst_fitness_in_iteration=iter_worst,
-            average_fitness_in_iteration=iter_avg,
-            valid_rate_in_iteration=iter_valid_rate,
-            # Ancestor statistics
             ancestor_count=len(ancestors),
             best_fitness_in_ancestors=anc_best,
             worst_fitness_in_ancestors=anc_worst,
             average_fitness_in_ancestors=anc_avg,
             valid_rate_in_ancestors=anc_valid_rate,
-            # Descendant statistics
             descendant_count=len(descendants),
             best_fitness_in_descendants=desc_best,
             worst_fitness_in_descendants=desc_worst,
             average_fitness_in_descendants=desc_avg,
             valid_rate_in_descendants=desc_valid_rate,
-            # Generation history
-            generation_history=self._cached_gen_history,
+            archive_valid_fitnesses=archive_valid_fitnesses,
+            **iter_window_fields,
         )

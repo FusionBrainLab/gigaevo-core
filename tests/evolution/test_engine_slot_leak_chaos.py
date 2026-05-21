@@ -107,29 +107,6 @@ class TestSlotConservation:
         assert engine._producer_sema._value == 1
         assert _slot_conservation_check(engine)
 
-    @pytest.mark.xfail(
-        reason="Brittle: tests an invariant (buffer + in_flight == max) that "
-        "doesn't hold between buffer.acquire and in_flight.add — those are two "
-        "separate steps in the real flow. See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_buffer_acquire_transfer(self) -> None:
-        """After producer releases and buffer acquires, slot transfers between pools."""
-        engine = _make_chaos_engine(max_in_flight=2)
-        # Simulate: acquire producer, release it, then acquire buffer
-        await engine._producer_sema.acquire()
-        assert engine._producer_sema._value == 1
-        assert _slot_conservation_check(engine)
-
-        engine._producer_sema.release()
-        assert engine._producer_sema._value == 2
-        assert _slot_conservation_check(engine)
-
-        await engine._buffer_sema.acquire()
-        assert engine._buffer_sema._value == 1
-        assert _slot_conservation_check(engine)
-
     @pytest.mark.asyncio
     async def test_in_flight_holds_slot(self) -> None:
         """Adding to in_flight decreases available buffer, total conserved."""
@@ -184,50 +161,6 @@ class TestRaceConditions:
         # Back to full capacity
         assert _slot_conservation_check(engine)
 
-    @pytest.mark.xfail(
-        reason="Brittle: test's own invariant breaks after the final "
-        "buffer.acquire — buffer=0, in_flight=0, sum=0 != max=1. See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_ingestor_slow_release_backs_up_producer(self) -> None:
-        """Ingestor holds buffer slot, producer waits for acquisition."""
-        engine = _make_chaos_engine(max_in_flight=1)
-
-        # Ingestor acquires and holds the buffer slot
-        await engine._buffer_sema.acquire()
-        engine._in_flight.add("slow-1")
-        assert engine._buffer_sema._value == 0
-
-        # Producer tries to acquire buffer: should block
-        acquired = False
-
-        async def try_acquire():
-            nonlocal acquired
-            try:
-                await asyncio.wait_for(engine._buffer_sema.acquire(), timeout=0.1)
-                acquired = True
-            except TimeoutError:
-                pass
-
-        await try_acquire()
-        assert not acquired, "should be blocked"
-        assert _slot_conservation_check(engine)
-
-        # Ingestor releases
-        engine._buffer_sema.release()
-        engine._in_flight.discard("slow-1")
-
-        # Now producer can acquire
-        async def try_again():
-            nonlocal acquired
-            await engine._buffer_sema.acquire()
-            acquired = True
-
-        await try_again()
-        assert acquired
-        assert _slot_conservation_check(engine)
-
     @pytest.mark.asyncio
     async def test_cancel_on_producer_acquire_releases(self) -> None:
         """Cancelling a task blocked on producer acquire releases the slot."""
@@ -244,32 +177,6 @@ class TestRaceConditions:
 
         # Slot should be released back
         assert engine._producer_sema._value == 0  # still drained by first acquire
-        assert _slot_conservation_check(engine)
-
-    @pytest.mark.xfail(
-        reason="Brittle: drains buffer to 0, leaves only one in_flight; "
-        "sum=0+1=1 != max=2. Test's invariant doesn't match setup. See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_cancel_on_buffer_acquire_releases(self) -> None:
-        """Cancelling a task blocked on buffer acquire releases the slot."""
-        engine = _make_chaos_engine(max_in_flight=2)
-        await engine._buffer_sema.acquire()  # drain one
-        await engine._buffer_sema.acquire()
-
-        # Now buffer is full, producer tries to acquire and gets blocked
-        engine._in_flight.add("pre-existing")
-        task = asyncio.create_task(engine._buffer_sema.acquire())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-        # Both buffer slots should still be held externally
-        assert engine._buffer_sema._value == 0
         assert _slot_conservation_check(engine)
 
 
@@ -332,90 +239,9 @@ class TestMultiplexedRaces:
             f"in_flight={len(engine._in_flight)}"
         )
 
-    @pytest.mark.xfail(
-        reason="Brittle: producer task is cancelled mid-wait so buffer is "
-        "never released; ends with buffer=1, in_flight=0, sum=1 != max=2. "
-        "See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_cancel_mid_flight_queue(self) -> None:
-        """Cancelling producer mid-work ensures proper cleanup."""
-        engine = _make_chaos_engine(max_in_flight=2)
-
-        async def producer_task():
-            try:
-                await engine._producer_sema.acquire()
-                engine._in_flight.add("mid-cancel-1")
-                await engine._buffer_sema.acquire()
-                await asyncio.sleep(0.5)  # hold slot
-            finally:
-                # Critical: producer must release producer slot on cancel
-                engine._producer_sema.release()
-
-        prod = asyncio.create_task(producer_task())
-        await asyncio.sleep(0.05)
-        prod.cancel()
-
-        try:
-            await prod
-        except asyncio.CancelledError:
-            pass
-
-        # Cleanup: manually clean up in-flight (normally ingestor does this on DONE)
-        engine._in_flight.discard("mid-cancel-1")
-
-        # All slots should be back (no leak from the cancellation)
-        assert _slot_conservation_check(engine)
-
 
 class TestEdgeCases:
     """Boundary conditions and pathological scenarios."""
-
-    @pytest.mark.xfail(
-        reason="Brittle: acquires buffer without first adding to in_flight; "
-        "invariant buffer+in_flight==max fails in the intermediate state. "
-        "See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_max_in_flight_one(self) -> None:
-        """Minimal case: single slot."""
-        engine = _make_chaos_engine(max_in_flight=1)
-        assert _slot_conservation_check(engine)
-
-        await engine._producer_sema.acquire()
-        assert _slot_conservation_check(engine)
-
-        engine._producer_sema.release()
-        await engine._buffer_sema.acquire()
-        assert _slot_conservation_check(engine)
-
-        engine._in_flight.add("lone")
-        assert _slot_conservation_check(engine)
-
-    @pytest.mark.xfail(
-        reason="Brittle: acquires buffer slots without adding to in_flight; "
-        "invariant buffer+in_flight==max fails in the intermediate state. "
-        "See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_max_in_flight_large(self) -> None:
-        """Large pool: 100 slots per semaphore."""
-        engine = _make_chaos_engine(max_in_flight=100)
-        assert _slot_conservation_check(engine)
-
-        # Acquire 50 producer slots
-        for _ in range(50):
-            await engine._producer_sema.acquire()
-        assert _slot_conservation_check(engine)
-
-        # Release and acquire buffer
-        for _ in range(50):
-            engine._producer_sema.release()
-            await engine._buffer_sema.acquire()
-        assert _slot_conservation_check(engine)
 
     @pytest.mark.asyncio
     async def test_all_slots_in_flight(self) -> None:
@@ -432,24 +258,6 @@ class TestEdgeCases:
         assert engine._buffer_sema._value == 0
         assert len(engine._in_flight) == 3
         assert _slot_conservation_check(engine)
-
-    @pytest.mark.xfail(
-        reason="Brittle: buffer is held but in_flight is rapidly added/discarded; "
-        "after .discard the invariant buffer+in_flight==max no longer holds. "
-        "See #234.",
-        strict=False,
-    )
-    @pytest.mark.asyncio
-    async def test_rapid_in_flight_churn(self) -> None:
-        """Add/remove from in-flight rapidly."""
-        engine = _make_chaos_engine(max_in_flight=5)
-        await engine._buffer_sema.acquire()
-
-        for i in range(100):
-            engine._in_flight.add(f"churn-{i}")
-            assert _slot_conservation_check(engine)
-            engine._in_flight.discard(f"churn-{i}")
-            assert _slot_conservation_check(engine)
 
 
 __all__: list[str] = []

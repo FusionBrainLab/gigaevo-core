@@ -113,7 +113,7 @@ type REJECTED_ACCEPTOR are skipped (the mutant didn't produce reliable fitness).
 ### Synchronization
 
 The prompt run is lightweight (no expensive validation) and runs ~5x faster
-than the main run. Without throttling, it exhausts `max_generations` before the
+than the main run. Without throttling, it exhausts `max_mutants` before the
 main run accumulates any stats.
 
 `MainRunSyncHook` is wired as a `pre_step_hook` on the prompt run's
@@ -155,7 +155,7 @@ $PYTHON run.py \
     prompt_fetcher=coevolved \
     prompt_fetcher.prompt_redis_db=6 \
     redis.db=4 \
-    max_generations=25 \
+    max_mutants=25 \
     llm_base_url="http://MUT_HOST_1:8777/v1"
 
 # Prompt run (P1) — evolves mutation prompts, reads stats from DB 4
@@ -165,7 +165,7 @@ $PYTHON run.py \
     redis.db=6 \
     main_redis_db=4 \
     main_redis_prefix=chains/hotpotqa/static_f1_600 \
-    max_generations=25 \
+    max_mutants=25 \
     llm_base_url="http://MUT_HOST_2:8777/v1"
 ```
 

@@ -9,7 +9,7 @@ from gigaevo.monitoring.snapshot import RunSnapshot
 
 
 def _make_spec(label: str = "O") -> RunSpec:
-    return RunSpec(prefix="chains/hotpotqa/static", db=4, label=label)
+    return RunSpec(prefix="chains/synthetic/static", db=4, label=label)
 
 
 # ---------------------------------------------------------------------------

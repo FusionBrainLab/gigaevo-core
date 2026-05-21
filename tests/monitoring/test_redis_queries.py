@@ -18,7 +18,7 @@ from gigaevo.monitoring.redis_queries import (
 from gigaevo.monitoring.run_spec import RunSpec
 from tests.conftest import write_engine_snapshot_sync
 
-PREFIX = "chains/hotpotqa/static"
+PREFIX = "chains/synthetic/static"
 
 
 def _make_redis() -> fakeredis.FakeRedis:

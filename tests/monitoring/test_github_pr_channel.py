@@ -199,7 +199,7 @@ class TestCheckHealth:
 
 
 def _make_update(
-    experiment_name: str = "hover/test-exp",
+    experiment_name: str = "toy/test-exp",
     snapshots: list[RunSnapshot] | None = None,
     alerts: list[Alert] | None = None,
     plots: list[PlotAttachment] | None = None,
@@ -303,14 +303,14 @@ class TestSendStatusRollingComment:
             }
         )
         ch = _make_channel(recorder=recorder)
-        update = _make_update(experiment_name="hover/my-exp")
+        update = _make_update(experiment_name="toy/my-exp")
 
         await ch.send_status(update)
 
         import json
 
         body = json.loads(recorder.requests[0].content)["body"]
-        assert "hover/my-exp" in body
+        assert "toy/my-exp" in body
         assert "|" in body  # markdown table
         assert "A" in body  # run label A
         assert "B" in body  # run label B
@@ -649,17 +649,17 @@ class TestExperimentNameUploadPath:
             token="ghp_test",
             transport=transport,
             branch="exp/my-branch",
-            experiment_name="hover/test-exp",
+            experiment_name="toy/test-exp",
         )
 
         url = await ch._upload_plot(plot, branch="exp/my-branch")
 
         assert url is not None
-        assert "experiments/hover/test-exp/plots/fitness.png" in url
+        assert "experiments/toy/test-exp/plots/fitness.png" in url
         assert url.startswith("https://raw.githubusercontent.com/")
 
         put_req = [r for r in recorder.requests if r.method == "PUT"][0]
-        assert "experiments/hover/test-exp/plots/" in str(put_req.url)
+        assert "experiments/toy/test-exp/plots/" in str(put_req.url)
 
     @pytest.mark.asyncio
     async def test_upload_falls_back_to_generic_path(self, tmp_path: Path) -> None:
@@ -711,7 +711,7 @@ class TestRollingCommentRedis:
             repo="owner/repo",
             pr_number=42,
             token="ghp_test",
-            experiment_name="hover/test",
+            experiment_name="toy/test",
             rolling_comment_redis=r,
         )
 
@@ -728,7 +728,7 @@ class TestRollingCommentRedis:
             repo="owner/repo",
             pr_number=42,
             token="ghp_test",
-            experiment_name="hover/test",
+            experiment_name="toy/test",
             rolling_comment_redis=r,
         )
 
@@ -740,13 +740,13 @@ class TestRollingCommentRedis:
         import fakeredis
 
         r = fakeredis.FakeRedis(decode_responses=True)
-        r.set("experiments:hover/test:rolling_comment_id", "555")
+        r.set("experiments:toy/test:rolling_comment_id", "555")
 
         ch = GitHubPRChannel(
             repo="owner/repo",
             pr_number=42,
             token="ghp_test",
-            experiment_name="hover/test",
+            experiment_name="toy/test",
             rolling_comment_redis=r,
         )
 
@@ -767,12 +767,12 @@ class TestRollingCommentRedis:
             repo="owner/repo",
             pr_number=42,
             token="ghp_test",
-            experiment_name="hover/my-exp",
+            experiment_name="toy/my-exp",
             rolling_comment_redis=r,
         )
 
         ch._set_rolling_comment_id(777)
-        assert r.get("experiments:hover/my-exp:rolling_comment_id") == "777"
+        assert r.get("experiments:toy/my-exp:rolling_comment_id") == "777"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -840,7 +840,7 @@ class TestRollingCommentThreshold:
             pr_number=42,
             token="ghp_test",
             transport=transport,
-            experiment_name="hover/test",
+            experiment_name="toy/test",
             rolling_comment_redis=r,
             rolling_comment_threshold_hours=3,
         )
@@ -848,7 +848,7 @@ class TestRollingCommentThreshold:
 
         await ch.send_status(_make_update())
 
-        assert r.get("experiments:hover/test:rolling_comment_id") == "888"
+        assert r.get("experiments:toy/test:rolling_comment_id") == "888"
 
     @pytest.mark.asyncio
     async def test_custom_threshold(self) -> None:

@@ -1,0 +1,57 @@
+# @package _global_
+#
+# Live intra/extra-memory pipeline.
+#
+# REQUIRED CLI co-overrides (Hydra defaults-list ordering means we cannot
+# safely flip these from inside `pipeline/`):
+#   ideas_tracker=default   — IdeaTracker is what the live refresh hook calls.
+#   memory=local            — MemorySelectorAgent reads the local card store
+#                             that IdeaTracker writes to between refreshes.
+#
+# Full acceptance command:
+#   OPENAI_API_KEY=sk-gigaevo python run.py \
+#     problem.name=heilbron llm_base_url=http://INTERNAL_IP:4000 \
+#     model_name=Qwen3-235B-A22B-Thinking-2507 redis.db=10 num_parents=1 \
+#     pipeline=intra_extra_memory ideas_tracker=default memory=local
+#
+# Wiring:
+#   - pipeline_builder    = IntraExtraMemoryPipelineBuilder
+#                            (adds IntraMemoryStage + ConcatMemoryStage; reroutes
+#                             MemoryContextStage through the concat).
+#   - post_step_hook      = LiveMemoryRefreshHook(refresh_every=10) bound to
+#                            the same IdeaTracker that Hydra builds for
+#                            post_run_hook, so mid-run + end-of-run share state
+#                            via that tracker's _run_lock.
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${redis_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${memory_provider}
+
+pipeline_builder:
+  _target_: gigaevo.entrypoint.lineage_memory_pipeline.IntraExtraMemoryPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+  max_parallel: ${dag_concurrency}
+  max_insights: ${max_insights}
+  max_code_length: ${max_code_length}
+  intra_max_children: 24
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}
+
+# Live external-memory refresh — wraps the same IdeaTracker instance so the
+# mid-run hook and the post-run hook serialise via that tracker's _run_lock.
+# refresh_every counts ingestor sweeps that landed >=1 program. K=10 ≈ one
+# refresh per ~10 newly-evaluated mutants.
+post_step_hook:
+  _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
+  tracker: ${ideas_tracker}
+  storage: ${ref:redis_storage}
+  refresh_every: 10

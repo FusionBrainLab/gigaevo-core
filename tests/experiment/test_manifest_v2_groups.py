@@ -126,93 +126,189 @@ class TestControlPlaneShape:
 # ---------------------------------------------------------------------------
 
 
-def _heilbron_v2_yaml() -> dict:
-    path = (
-        REPO_ROOT
-        / "experiments"
-        / "heilbron"
-        / "asymmetric-iterations-v2"
-        / "experiment.yaml"
-    )
-    return yaml.safe_load(path.read_text())
+# Synthetic full-shape v2 manifest dict — exercises every nested attribute
+# path the sub-group view tests probe. Replaces a previous read of a real
+# heilbron experiment.yaml; the schema parsing under test is task-agnostic.
+_SYNTHETIC_V2_MANIFEST: dict = {
+    "schema_version": 2,
+    "contract": {
+        "identity": {
+            "name": "toy/v2-fixture",
+            "task": "toy",
+            "branch": "test/v2-fixture",
+            "prereg_commit": "deadbeef",
+            "pr_number": 1,
+            "tracking_issue": 1,
+        },
+        "problem": {
+            "has_test_set": False,
+            "fitness_type": "fractional",
+            "metric_name": "fitness",
+        },
+        "config": {
+            "pipeline": "standard",
+            "problem_name": "toy_kadane",
+            "max_generations": 25,
+        },
+        "runs": [
+            {
+                "label": "A1",
+                "db": 15,
+                "prefix": "test_prefix",
+                "pipeline": "standard",
+                "problem_name": "toy_kadane",
+                "condition": "control",
+                "mutation_url": "https://example.com/v1",
+                "model_name": "test-model",
+                "pid": 10001,
+            },
+            {
+                "label": "A2",
+                "db": 14,
+                "prefix": "test_prefix_2",
+                "pipeline": "standard",
+                "problem_name": "toy_kadane",
+                "condition": "treatment",
+                "mutation_url": "https://example.com/v1",
+                "model_name": "test-model",
+                "pid": 10002,
+            },
+        ],
+        "servers": ["example.com"],
+        "custom_env": {},
+        "max_generations": 25,
+        "baseline": {"reference": None},
+        "tools": [],
+    },
+    "lifecycle": {
+        "status": "running",
+        "launch": {
+            "time": "2026-05-20T00:00:00Z",
+            "commit": "cafebabe",
+        },
+        "smoke_test": {"completed": True},
+        "treatment_verification": {"completed": True},
+    },
+    "telemetry": {
+        "checkpoints": [
+            {
+                "gen": 10,
+                "timestamp": "2026-05-20T01:00:00Z",
+                "run_metrics": [
+                    {"label": "A1", "gen": 10, "best_fitness": 0.42},
+                    {"label": "A2", "gen": 10, "best_fitness": 0.51},
+                ],
+                "notes": "synthetic checkpoint",
+            }
+        ],
+        "checkpoint_analysis": {
+            "mid_run": {
+                "completed": True,
+                "completed_at": "2026-05-20T01:30:00Z",
+                "summary": "synthetic mid-run analysis",
+            }
+        },
+        "treatment_checks": {"completed": False, "results": []},
+    },
+    "control_plane": {
+        "watchdog": {
+            "plugin": "synthetic_watchdog_plugin",
+            "plot_commands": [],
+        },
+        "watchdog_pid": 99999,
+        "anomaly_detector_cron_id": "synthetic-anomaly-cron",
+        "checkpoint_cron_id": "synthetic-checkpoint-cron",
+        "notifications": {
+            "pr": {"enabled": True},
+            "telegram": {"enabled": True},
+        },
+    },
+}
+
+
+def _synthetic_v2_yaml() -> dict:
+    """Return a deep-ish copy of the synthetic v2 manifest dict."""
+    import copy
+
+    return copy.deepcopy(_SYNTHETIC_V2_MANIFEST)
 
 
 class TestManifestContractView:
     def test_identity_populated(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert m.contract.identity.name
         assert m.contract.identity.task
 
     def test_contract_runs_present(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert len(m.contract.runs) > 0
         # Every run has a label
         assert all(r.label for r in m.contract.runs)
 
     def test_contract_max_generations_is_int(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert isinstance(m.contract.max_generations, int)
         assert m.contract.max_generations > 0
 
 
 class TestManifestLifecycleView:
     def test_status_set(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert m.lifecycle.status
         assert isinstance(m.lifecycle.status, str)
 
     def test_launch_time_populated(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        # heilbron v2 is running/complete, so launch should be set
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
+        # Fixture is in "running" status, so launch should be set
         assert m.lifecycle.launch.time
         assert m.lifecycle.launch.commit
 
     def test_smoke_test_completed(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert m.lifecycle.smoke_test.completed is True
 
     def test_treatment_verification_boolean(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert isinstance(m.lifecycle.treatment_verification.completed, bool)
 
 
 class TestManifestTelemetryView:
     def test_checkpoints_typed_as_checkpoint_entries(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         first = m.telemetry.checkpoints[0]
         # It's the typed CheckpointEntry model, not a dict.
         assert first.gen > 0
-        assert first.run_metrics  # heilbron checkpoints have run_metrics
-        # best_actual_fitness preserved via RunMetric.extra_allow
+        assert first.run_metrics  # Synthetic fixture has run_metrics
+        # Problem-specific metric (best_fitness) preserved via RunMetric.extra_allow
         rm = first.run_metrics[0]
-        assert rm.model_dump()["best_actual_fitness"] > 0
+        assert rm.model_dump()["best_fitness"] > 0
 
     def test_checkpoint_analysis_mid_run_completed(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        # heilbron-v2 has checkpoint_analysis.mid_run.completed: true
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
+        # Synthetic fixture has checkpoint_analysis.mid_run.completed: true
         assert m.telemetry.checkpoint_analysis.mid_run.completed is True
 
 
 class TestManifestControlPlaneView:
     def test_watchdog_has_plugin(self):
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        # heilbron v2 uses a watchdog plugin
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
+        # Synthetic fixture sets a watchdog plugin
         assert m.control_plane.watchdog.plugin
 
     def test_watchdog_pid_populated(self):
         """``watchdog_pid`` is sourced from nested ``control_plane.watchdog_pid``."""
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        assert m.control_plane.watchdog_pid == 1133798
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
+        assert m.control_plane.watchdog_pid == 99999
 
     def test_cron_ids_populated(self):
         """Cron IDs live under ``control_plane.*`` in v2."""
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
-        assert m.control_plane.anomaly_detector_cron_id == "17f15a1c"
-        assert m.control_plane.checkpoint_cron_id == "1960d819"
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
+        assert m.control_plane.anomaly_detector_cron_id == "synthetic-anomaly-cron"
+        assert m.control_plane.checkpoint_cron_id == "synthetic-checkpoint-cron"
 
     def test_notifications_defaults_both_enabled(self):
         """v1 yamls never set notifications — defaults must be on."""
-        m = ExperimentManifest.from_dict(_heilbron_v2_yaml())
+        m = ExperimentManifest.from_dict(_synthetic_v2_yaml())
         assert m.control_plane.notifications.pr.enabled is True
         assert m.control_plane.notifications.telegram.enabled is True
 

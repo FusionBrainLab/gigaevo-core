@@ -602,14 +602,14 @@ class TestMutationOutcomeHandling:
 
 
 # ---------------------------------------------------------------------------
-# Realistic heilbron scenarios
+# Realistic small-delta scenarios (modeled on a fractional-fitness task)
 # ---------------------------------------------------------------------------
 
 
-class TestBanditHeilbronScenarios:
-    """Tests using realistic fitness values from the Heilbronn triangle problem.
+class TestBanditSmallDeltaScenarios:
+    """Tests using realistic fitness values for a fractional-fitness task.
 
-    Heilbron problem: higher_is_better=True, fitness_key="fitness",
+    higher_is_better=True, fitness_key="fitness",
     range ~[0.0, 0.0365], sentinel=-1000, significant_change=0.001.
     """
 
@@ -624,7 +624,7 @@ class TestBanditHeilbronScenarios:
         )
 
     def test_small_improvement_produces_positive_reward(self):
-        """Typical heilbron improvement: 0.025 → 0.026 (delta=0.001)."""
+        """Typical small-delta improvement: 0.025 → 0.026 (delta=0.001)."""
         router = self._make_router()
         router._bandit.record_pull("llama-70b")
 

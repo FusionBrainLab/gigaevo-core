@@ -614,7 +614,7 @@ class IdeaTracker(PostRunHook):
         if not programs:
             logger.warning("IdeaTracker: no programs in storage, skipping.")
             return
-        await self._run(programs)
+        await self.run_increment(programs)
 
     # ------------------------------------------------------------------
     # CLI entry point
@@ -624,13 +624,13 @@ class IdeaTracker(PostRunHook):
         """CLI entry: accepts list[Program] directly."""
         if not programs:
             return
-        asyncio.run(self._run(programs))
+        asyncio.run(self.run_increment(programs))
 
     # ------------------------------------------------------------------
     # Core pipeline
     # ------------------------------------------------------------------
 
-    async def _run(self, programs: list[Program]) -> None:
+    async def run_increment(self, programs: list[Program]) -> None:
         """Full pipeline: filter → analyse → enrich → log → write."""
         records = self._eligible_records(programs)
 

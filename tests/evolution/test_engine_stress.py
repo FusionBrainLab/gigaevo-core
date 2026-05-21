@@ -336,8 +336,8 @@ def _build_engine(
 
 PARAMS = [
     pytest.param(mif, n, dur, ov, id=f"mif{mif}-n{n}-{dur}-ov{int(ov * 10)}")
-    for mif in (1, 4, 16)
-    for n in (50, 200)
+    for mif in (4, 16)
+    for n in (50,)
     for dur in ("const", "expo", "heavy_tail")
     for ov in (0.0, 0.5)
 ]

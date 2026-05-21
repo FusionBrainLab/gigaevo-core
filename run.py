@@ -114,11 +114,11 @@ def main(cfg: DictConfig) -> None:
         interval_s=float(cfg.live_profiler.interval_s),
         last_n=last_n if last_n > 0 else None,
     )
-    _maybe_start_live_frontier_compare(cfg)
+    _maybe_start_live_frontier_compare(cfg, output_dir)
     asyncio.run(run_experiment(cfg))
 
 
-def _maybe_start_live_frontier_compare(cfg: DictConfig) -> None:
+def _maybe_start_live_frontier_compare(cfg: DictConfig, output_dir: Path) -> None:
     """Wire ``cfg.live_frontier_compare`` to the daemon entry point.
 
     The cfg group is optional — older configs may not declare it. We
@@ -164,6 +164,7 @@ def _maybe_start_live_frontier_compare(cfg: DictConfig) -> None:
         higher_is_better=higher_is_better,
         interval_s=float(lfc.get("interval_s", 60.0)),
         emit_targets=emit_targets,
+        output_dir=output_dir,
     )
 
 

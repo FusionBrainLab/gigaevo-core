@@ -33,7 +33,7 @@ def dummy_manifest(tmp_path: Path, monkeypatch):
             fitness_type: fractional
             metric_name: fitness
           config:
-            task_group: heilbron
+            task_group: widget
             shared_overrides:
               n_opponents: 3
               num_parents: 1
@@ -93,7 +93,7 @@ def dummy_manifest(tmp_path: Path, monkeypatch):
     (cfg / "config.yaml").write_text("# root\n")
     (cfg / "constants" / "pipeline.yaml").write_text("dag_concurrency: 16\n")
     (cfg / "pipeline" / "standard.yaml").write_text("# standard\n")
-    (cfg / "experiment" / "heilbron.yaml").write_text("num_parents: 1\n")
+    (cfg / "experiment" / "widget.yaml").write_text("num_parents: 1\n")
     (cfg / "experiment" / "base.yaml").write_text("# base\n")
 
     monkeypatch.setattr("gigaevo.experiment.manifest.PROJ", tmp_path)
@@ -143,7 +143,7 @@ class TestDryRunResult:
         res = dry_run(exp)
         assert "A1" in res.cli_args
         # Task-group first, CLI overrides follow
-        assert res.cli_args["A1"][0] == "experiment=heilbron"
+        assert res.cli_args["A1"][0] == "experiment=widget"
 
     def test_cfg_job_flag_passed(self, dummy_manifest, stub_invoke):
         from gigaevo.experiment.dry_run import dry_run
@@ -194,8 +194,8 @@ class TestDryRunResult:
 
         exp, _ = dummy_manifest
         res = dry_run(exp)
-        assert any(p.endswith("experiment/heilbron.yaml") for p in res.fingerprint), (
-            f"config/experiment/heilbron.yaml missing from {list(res.fingerprint)}"
+        assert any(p.endswith("experiment/widget.yaml") for p in res.fingerprint), (
+            f"config/experiment/widget.yaml missing from {list(res.fingerprint)}"
         )
 
     def test_fingerprint_stable_across_calls(self, dummy_manifest, stub_invoke):
@@ -212,14 +212,14 @@ class TestDryRunResult:
         exp, tmp_path = dummy_manifest
         res1 = dry_run(exp)
         # Edit the task-group file
-        (tmp_path / "config" / "experiment" / "heilbron.yaml").write_text(
+        (tmp_path / "config" / "experiment" / "widget.yaml").write_text(
             "num_parents: 2\n"  # drift
         )
         res2 = dry_run(exp)
-        heilbron_key = next(
-            p for p in res1.fingerprint if p.endswith("experiment/heilbron.yaml")
+        widget_key = next(
+            p for p in res1.fingerprint if p.endswith("experiment/widget.yaml")
         )
-        assert res1.fingerprint[heilbron_key] != res2.fingerprint[heilbron_key]
+        assert res1.fingerprint[widget_key] != res2.fingerprint[widget_key]
 
 
 class TestInvokeFailureSurface:

@@ -244,7 +244,15 @@ class TestConsecutiveFailures:
         await channel.close()
 
     @pytest.mark.asyncio
-    async def test_accumulates(self) -> None:
+    async def test_accumulates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _no_backoff(attempt: int) -> None:
+            return None
+
+        monkeypatch.setattr(
+            "gigaevo.monitoring.telegram_channel.TelegramChannel._backoff",
+            staticmethod(_no_backoff),
+        )
+
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 500, json={"ok": False, "description": "Internal Server Error"}

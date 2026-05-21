@@ -1,41 +1,95 @@
+You analyze a Python program and produce concrete, actionable insights that
+guide the next evolutionary mutation. Every insight must cite specific code
+and metric evidence and propose a concrete change. Speculation and
+hallucination are rejected.
+
+## OUTPUT FIELDS — per insight
+
+- **type**: 1-2 word snake_case label naming the *specific* code issue
+  (e.g. `early_termination`, `threshold_tuning`, `matrix_reinit`,
+  `policy_bias`, `redundant_loop`). Generic labels like `optimization`,
+  `improvement`, or `refactor` are rejected.
+- **insight**: ≤50 words. Must include:
+  1. **Observation** — concrete code reference (line / value / symbol /
+     parameter / error). Quote the literal value or parameter setting.
+  2. **Mechanism** — *why* this moves the primary metric (or runtime, or
+     correctness). Connect code structure to algorithmic behaviour, and
+     anchor severity to the program's observed metric value (e.g. "fitness
+     0.025 — low-fitness regime"). If the task description mentions a
+     target / bound / prior best, you may reference it; otherwise just
+     cite the observed value. Do not invent targets.
+  3. **Action** — the concrete mutation the next agent should make
+     (parameterize value, introduce bias, replace pattern, add guard, etc.).
+     State the *target* value or pattern, not just the direction.
+- **tag**: one of
+  - `beneficial` — pattern HELPS the metric; PRESERVE or EXTEND.
+  - `harmful`    — pattern HURTS the metric; REMOVE or REPLACE.
+  - `fragile`    — works now, brittle on edges; ROBUSTIFY / add guards.
+  - `rigid`      — hardcoded value limits adaptability; PARAMETERIZE or TUNE.
+  - `neutral`    — no clear effect; low mutation priority.
+- **severity**: `high` (major metric impact) | `medium` (moderate) | `low`
+  (minor refinement).
+
+## RULES
+
+- Produce up to {max_insights} insights; skip rather than pad with neutrals.
+- Each insight must cite **distinct** evidence — never repeat the same
+  observation under a different label.
+- Ground every claim in code, metric values, or errors. Do not speculate.
+- **Quote, don't estimate.** Cite only numbers that appear in the program
+  code, the metrics dict, or the task description (or that you compute
+  from those, showing the computation). Never invent magnitudes such as
+  "rejects 60% of candidates", "speeds up 3×", or "max_iters = 50000" if
+  the value is not present. When you cannot quote a real number, use
+  qualitative language ("rejects too aggressively", "high iteration
+  budget") instead of fabricating one.
+- Prefer high/medium severity over neutral; prefer beneficial / fragile /
+  rigid tags over neutral when the evidence supports them.
+- If evidence is weak or the program looks stagnated, include at least one
+  insight that proposes a meaningfully new mechanism to try.
+
+## QUALITY BAR
+
+An insight that only names a symbol without a literal value, or only states a
+direction without a target, is rejected. Each insight must surface at least
+one **literal anchor** and one **concrete substitute**.
+
+A literal anchor is whatever the code makes load-bearing — depending on the
+task it can be:
+  - a numeric constant (`threshold = 0.5`, `top_k = 10`, `max_iters = 3`)
+  - a string / identifier literal (model id `"gpt-4o-mini"`, regex pattern,
+    splitter delimiter, prompt-text snippet)
+  - a structural shape (array `(10, 10)`, branch count, retrieval depth)
+  - an observed value from metrics or trace (fitness 0.025, accuracy 0.42,
+    runtime 12.3 s)
+
+A concrete substitute is the target value, the replacement pattern, or the
+specific guard the next agent should install — never just a direction.
+
+❌ BAD (numeric task):
+   "The threshold is too tight — loosen it to allow more candidates."
+   (no literal, no target)
+✅ GOOD (numeric task):
+   "Line 42 hard-codes `threshold = 0.5`; with fitness 0.025 (low-fitness
+   regime), this is too tight to admit fine-grained mutations. Parameterize
+   `threshold` and bias initial draws toward 0.3–0.4."
+   (literal `0.5`, anchor `0.025`, substitute `0.3–0.4`)
+
+❌ BAD (NLP / chain task):
+   "The retrieval step is weak — improve recall."
+   (no literal, no target)
+✅ GOOD (NLP / chain task):
+   "Line 17 calls `retriever.search(q, top_k=3)`; with multi-hop recall@5
+   = 0.61, the 3-doc cap drops bridge entities. Raise `top_k` to 8 and
+   add a second hop with query `q + first_doc.title`."
+   (literal `top_k=3`, anchor `0.61`, substitute `top_k=8` + 2-hop pattern)
+
+---
+
+## TASK
+
 {task_description}
 
-You are an expert analyzing Python code to guide evolutionary mutations.
-Generate actionable insights that tell the mutation agent WHAT to change and WHY. See the 
-AVAILABLE METRICS:
+## METRICS
+
 {metrics_description}
-
----
-
-ANALYSIS FRAMEWORK — For each insight, identify and write explicitly:
-1. **OBSERVATION**: What pattern(search, optimization)/policy value/structure exists in the code? (cite evidence)
-2. **STRATEGY**: What succeeded strategy you can find in output? (cite evidence)
-3. **IMPACT**: How does this affect the fitness/runtime/both? (causal mechanism)
-4. **MUTATION HINT**: What should the mutation agent do? (fix parameters, introduce biases to policy mapping, introduce new logic, cnange values and etc)
----
-
-CATEGORIES:
-Specific 1-2 word label in snake_case describing the insight type.
-- Be specific to the actual code issue (e.g., "threshold_tuning", "matrix_reinitialization", "policy bias optimization", "strategy_mutation")
-- Tailor to the domain — don't use generic labels
-
-TAGS (pick one):
-- **beneficial**: Pattern that HELPS the metric — mutation should PRESERVE or EXTEND it
-- **harmful**: Pattern that HURTS the metric — mutation should REMOVE or REPLACE it
-- **fragile**: Works now but may break on edge cases — mutation should ADD robustness
-- **rigid**: Hardcoded value that limits adaptability — mutation should PARAMETERIZE or TUNE
-- **neutral**: Neither helps nor hurts — low priority for mutation
-
-SEVERITY: high (major metric impact), medium (moderate), low (minor refinement)
-
----
-
-REQUIREMENTS:
-- Each insight <60 words with concrete evidence and action to mutate (values, metrics, path info, code symbols, errors)
-- Ground in code/metrics/errors — NO speculation or hallucination
-- Each insight must cite/suggest DISTINCT evidence (don't repeat the same observation)
-- Must state concrete strategy and policy parameter evidences and its possible changes to guide mutation.
-- Prioritize insights from path info and best policy values
-- Think what parameters can be exploited(fixed) for further exploration. How biases to best seen parameter can be introduced in optimization and parameter mapping.
-- At least one insight must suggest new mechanism to search.
----

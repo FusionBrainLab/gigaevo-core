@@ -1,11 +1,5 @@
-"""RED tests for the analyzer factory that translates Hydra kwargs into
-ClassifyingAnalyzer or ClusteringAnalyzer instances.
-
-These tests pin the contract that unbreaks ``ideas_tracker=default`` /
-``ideas_tracker=fast`` / ``ideas_tracker=true`` Hydra configs on main.
-Before the d4abf550 port, ``_build_analyzer_from_hydra_fields`` does not
-exist → import fails → RED.
-"""
+"""Tests for the analyzer factory that translates Hydra kwargs into
+ClassifyingAnalyzer instances."""
 
 from __future__ import annotations
 
@@ -13,10 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gigaevo.memory.ideas_tracker.analyzers import (
-    ClassifyingAnalyzer,
-    ClusteringAnalyzer,
-)
+from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
 
 
 @pytest.fixture(autouse=True)
@@ -103,79 +94,6 @@ class TestBuildAnalyzerDefault:
         assert analyzer_off._description_rewriting is False
 
 
-class TestBuildAnalyzerFast:
-    @pytest.mark.xfail(
-        reason="CI-only: ClusteringAnalyzer instantiates a real httpx client "
-        "even with _init_clients stubbed (SentenceTransformer pulls a separate "
-        "httpx session that another test has already closed). Passes locally. "
-        "See #234.",
-        strict=False,
-    )
-    def test_fast_type_returns_clustering(self):
-        build = _factory()
-        analyzer = build(
-            analyzer_type="fast",
-            analyzer_model="google/gemini-3-flash-preview",
-            analyzer_base_url="https://openrouter.ai/api/v1",
-            analyzer_reasoning={"effort": "minimal"},
-            analyzer_fast_settings={
-                "batch_size": 32,
-                "min_samples_for_dbscan": 4,
-                "dbscan_eps": 0.25,
-                "dbscan_min_samples": 2,
-                "max_attempts": 10,
-                "max_rounds": 20,
-                "refine_subgroup_size": 20,
-                "llm_max_concurrent": 100,
-                "embeddings_model": "sentence-transformers/all-mpnet-base-v2",
-            },
-            description_rewriting=True,
-        )
-        assert isinstance(analyzer, ClusteringAnalyzer)
-        assert analyzer.model == "google/gemini-3-flash-preview"
-
-    @pytest.mark.xfail(
-        reason="CI-only: ClusteringAnalyzer instantiates a real httpx client. "
-        "See #234.",
-        strict=False,
-    )
-    def test_fast_drops_unknown_settings(self):
-        """Whitelist: keys not in _CLUSTERING_ANALYZER_KEYS must NOT be passed
-        to ClusteringAnalyzer.__init__, which would raise TypeError."""
-        build = _factory()
-        analyzer = build(
-            analyzer_type="fast",
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning=None,
-            analyzer_fast_settings={
-                "batch_size": 16,
-                "this_key_should_be_dropped": "xxx",
-                "yet_another_bogus_key": 99,
-                "recompute_center": True,  # explicitly popped by factory
-            },
-            description_rewriting=True,
-        )
-        assert isinstance(analyzer, ClusteringAnalyzer)
-
-    @pytest.mark.xfail(
-        reason="CI-only: ClusteringAnalyzer instantiates a real httpx client. "
-        "See #234.",
-        strict=False,
-    )
-    def test_fast_with_none_settings_uses_clustering_defaults(self):
-        build = _factory()
-        analyzer = build(
-            analyzer_type="fast",
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning=None,
-            analyzer_fast_settings=None,
-            description_rewriting=True,
-        )
-        assert isinstance(analyzer, ClusteringAnalyzer)
-
-
 class TestBuildAnalyzerNormalization:
     @pytest.mark.parametrize(
         "kind,expected",
@@ -184,33 +102,6 @@ class TestBuildAnalyzerNormalization:
             ("DEFAULT", ClassifyingAnalyzer),
             ("Default", ClassifyingAnalyzer),
             (" default ", ClassifyingAnalyzer),
-            pytest.param(
-                "fast",
-                ClusteringAnalyzer,
-                marks=pytest.mark.xfail(
-                    reason="CI-only: ClusteringAnalyzer instantiates a real "
-                    "httpx client. See #234.",
-                    strict=False,
-                ),
-            ),
-            pytest.param(
-                "FAST",
-                ClusteringAnalyzer,
-                marks=pytest.mark.xfail(
-                    reason="CI-only: ClusteringAnalyzer instantiates a real "
-                    "httpx client. See #234.",
-                    strict=False,
-                ),
-            ),
-            pytest.param(
-                " Fast ",
-                ClusteringAnalyzer,
-                marks=pytest.mark.xfail(
-                    reason="CI-only: ClusteringAnalyzer instantiates a real "
-                    "httpx client. See #234.",
-                    strict=False,
-                ),
-            ),
             ("", ClassifyingAnalyzer),
             (None, ClassifyingAnalyzer),
         ],

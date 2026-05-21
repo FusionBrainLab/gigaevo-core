@@ -17,16 +17,16 @@ from gigaevo.monitoring.run_spec import RunSpec
     "raw, expected_prefix, expected_db, expected_label",
     [
         (
-            "chains/hotpotqa/static@4:O",
-            "chains/hotpotqa/static",
+            "chains/synthetic/static@4:O",
+            "chains/synthetic/static",
             4,
             "O",
         ),
         (
-            "chains/hotpotqa/static@4",
-            "chains/hotpotqa/static",
+            "chains/synthetic/static@4",
+            "chains/synthetic/static",
             4,
-            "chains/hotpotqa/static@4",
+            "chains/synthetic/static@4",
         ),
         ("prefix@0:label", "prefix", 0, "label"),
         ("a@1:b", "a", 1, "b"),
@@ -50,22 +50,22 @@ def test_basic_parsing(
 
 
 def test_double_quoted_string() -> None:
-    result = RunSpec.parse('"chains/hotpotqa/static@4:O"')
-    assert result.prefix == "chains/hotpotqa/static"
+    result = RunSpec.parse('"chains/synthetic/static@4:O"')
+    assert result.prefix == "chains/synthetic/static"
     assert result.db == 4
     assert result.label == "O"
 
 
 def test_single_quoted_string() -> None:
-    result = RunSpec.parse("'chains/hotpotqa/static@4:O'")
-    assert result.prefix == "chains/hotpotqa/static"
+    result = RunSpec.parse("'chains/synthetic/static@4:O'")
+    assert result.prefix == "chains/synthetic/static"
     assert result.db == 4
     assert result.label == "O"
 
 
 def test_whitespace_stripped() -> None:
-    result = RunSpec.parse("  chains/hotpotqa/static@4:O  ")
-    assert result.prefix == "chains/hotpotqa/static"
+    result = RunSpec.parse("  chains/synthetic/static@4:O  ")
+    assert result.prefix == "chains/synthetic/static"
     assert result.db == 4
     assert result.label == "O"
 
@@ -186,14 +186,14 @@ def test_frozen() -> None:
 
 
 def test_display_name_with_explicit_label() -> None:
-    spec = RunSpec(prefix="chains/hotpotqa/static", db=4, label="O")
+    spec = RunSpec(prefix="chains/synthetic/static", db=4, label="O")
     assert spec.display_name == "O"
 
 
 def test_display_name_with_auto_label() -> None:
     spec = RunSpec(
-        prefix="chains/hotpotqa/static",
+        prefix="chains/synthetic/static",
         db=4,
-        label="chains/hotpotqa/static@4",
+        label="chains/synthetic/static@4",
     )
-    assert spec.display_name == "chains/hotpotqa/static@4"
+    assert spec.display_name == "chains/synthetic/static@4"

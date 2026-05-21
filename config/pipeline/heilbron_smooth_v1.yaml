@@ -47,9 +47,10 @@
 #
 # Residual gaps vs v1 (honest inventory — NOT a bit-for-bit replay):
 #   1. v1 bugs that caused early process death (KF-01, KF-04, etc.) are
-#      all fixed — runs will now reach max_generations instead of dying
-#      at gen 8–29. If v1's success depended on catching peaks before
-#      D-collapse pathology, monitor best-fitness trajectory per gen.
+#      all fixed — runs will now reach the configured mutation budget
+#      instead of dying at gen 8–29. If v1's success depended on catching
+#      peaks before D-collapse pathology, monitor best-fitness trajectory
+#      per gen.
 #   2. Library code (pipeline builders, injection hooks, steady-state
 #      engine) has drifted since commit 04bd5e69. Only hyperparameters
 #      and problem files are frozen.

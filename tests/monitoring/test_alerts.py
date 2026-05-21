@@ -19,7 +19,7 @@ from gigaevo.monitoring.snapshot import RunSnapshot
 
 def make_snapshot(
     label: str = "O",
-    prefix: str = "chains/hotpotqa/static",
+    prefix: str = "chains/synthetic/static",
     db: int = 4,
     generation: int | None = 10,
     fitness: float | None = 0.65,

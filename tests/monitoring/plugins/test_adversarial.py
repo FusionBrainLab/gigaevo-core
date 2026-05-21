@@ -15,7 +15,7 @@ from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, get_registry
 def _make_snapshot(
     label="S1",
     db=1,
-    prefix="heilbron_solo",
+    prefix="synthetic_solo",
     gen=10,
     fitness=0.03,
     actual_fitness=0.028,
@@ -40,7 +40,7 @@ def _make_snapshot(
 
 def _make_g_snapshot(label="G1", db=1, gen=10, fitness=0.03):
     snap = _make_snapshot(
-        label=label, db=db, prefix="heilbron_pop_a", gen=gen, fitness=fitness
+        label=label, db=db, prefix="synthetic_pop_a", gen=gen, fitness=fitness
     )
     # Set role explicitly (was inferred from pop_a/pop_b prefix, now explicit)
     return RunSnapshot(
@@ -62,7 +62,7 @@ def _make_g_snapshot(label="G1", db=1, gen=10, fitness=0.03):
 
 def _make_d_snapshot(label="D1", db=2, gen=10, fitness=0.02):
     snap = _make_snapshot(
-        label=label, db=db, prefix="heilbron_pop_b", gen=gen, fitness=fitness
+        label=label, db=db, prefix="synthetic_pop_b", gen=gen, fitness=fitness
     )
     # Set role explicitly (was inferred from pop_a/pop_b prefix, now explicit)
     return RunSnapshot(
@@ -146,10 +146,10 @@ class TestAdversarialPluginRunGrouping:
     def test_groups_by_prefix(self):
         plugin = AdversarialPlugin()
         snapshots = [
-            _make_snapshot("S1", 1, prefix="heilbron_solo"),
-            _make_snapshot("S2", 2, prefix="heilbron_solo"),
-            _make_snapshot("A1", 3, prefix="heilbron_adversarial_pop_a"),
-            _make_snapshot("A2", 4, prefix="heilbron_adversarial_pop_b"),
+            _make_snapshot("S1", 1, prefix="synthetic_solo"),
+            _make_snapshot("S2", 2, prefix="synthetic_solo"),
+            _make_snapshot("A1", 3, prefix="synthetic_adversarial_pop_a"),
+            _make_snapshot("A2", 4, prefix="synthetic_adversarial_pop_b"),
         ]
         groups = plugin._group_runs(snapshots)
         assert len(groups) >= 2
@@ -173,9 +173,9 @@ class TestAdversarialPluginBuildRunArgs:
         args = AdversarialPlugin._build_run_args(snapshots)
         assert args == [
             "-r",
-            "heilbron_pop_a@1:G1",
+            "synthetic_pop_a@1:G1",
             "-r",
-            "heilbron_pop_b@2:D1",
+            "synthetic_pop_b@2:D1",
         ]
 
 
@@ -315,8 +315,8 @@ class TestAdversarialPluginFormatStatus:
     def test_format_includes_group_headers(self):
         plugin = AdversarialPlugin()
         snapshots = [
-            _make_snapshot("S1", 1, prefix="heilbron_solo"),
-            _make_snapshot("A1", 3, prefix="heilbron_adv"),
+            _make_snapshot("S1", 1, prefix="synthetic_solo"),
+            _make_snapshot("A1", 3, prefix="synthetic_adv"),
         ]
         body = plugin.format_status_body(
             snapshots, "adversarial/test", cycle=5, max_generations=50
@@ -388,7 +388,7 @@ class TestAdversarialPluginFormatTelegramBody:
         plugin = AdversarialPlugin()
         snap = RunSnapshot(
             run_spec=RunSpec(
-                prefix="heilbron_pop_a", db=1, label="G1", role="constructor"
+                prefix="synthetic_pop_a", db=1, label="G1", role="constructor"
             ),
             generation=10,
             metrics={"fitness": 0.03},

@@ -102,6 +102,9 @@ async def poll_and_ingest(engine) -> int:
 
     # Persist programs_processed so external sync hooks see progress immediately.
     if handled_ids or leaked_ids:
+        # Without this bump, the population snapshot stays frozen at the seed
+        # drain and every collector sees stale data.
+        engine.storage.snapshot.bump(incremental=True)
         await engine._write_snapshot(
             programs_processed=engine.metrics.programs_processed
         )

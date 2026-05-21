@@ -104,7 +104,7 @@ class TestGigaEvoArchivePromptFetcher:
         """GigaEvoArchivePromptFetcher can be initialized."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
-            main_redis_prefix="chains/hotpotqa",
+            main_redis_prefix="chains/synthetic",
             fallback_prompts_dir=tmp_prompts_dir,
         )
         assert fetcher is not None
@@ -114,7 +114,7 @@ class TestGigaEvoArchivePromptFetcher:
         """fetch() returns fallback when no champion available."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
-            main_redis_prefix="chains/hotpotqa",
+            main_redis_prefix="chains/synthetic",
             fallback_prompts_dir=tmp_prompts_dir,
         )
         # Force no champion (avoid depending on real Redis state)
@@ -129,7 +129,7 @@ class TestGigaEvoArchivePromptFetcher:
         """record_outcome() skips REJECTED_ACCEPTOR outcomes."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
-            main_redis_prefix="chains/hotpotqa",
+            main_redis_prefix="chains/synthetic",
             fallback_prompts_dir=tmp_prompts_dir,
         )
         # Should not raise when prompt_id is None or outcome is REJECTED_ACCEPTOR
@@ -146,7 +146,7 @@ class TestGigaEvoArchivePromptFetcher:
         """record_outcome() is no-op when prompt_id is None."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
-            main_redis_prefix="chains/hotpotqa",
+            main_redis_prefix="chains/synthetic",
             fallback_prompts_dir=tmp_prompts_dir,
         )
         fetcher.record_outcome(
@@ -162,7 +162,7 @@ class TestGigaEvoArchivePromptFetcher:
         """get_stats() returns cache hit/error counts."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
-            main_redis_prefix="chains/hotpotqa",
+            main_redis_prefix="chains/synthetic",
             fallback_prompts_dir=tmp_prompts_dir,
         )
         stats = fetcher.get_stats()
@@ -206,7 +206,7 @@ class TestGigaEvoArchivePromptFetcher:
         """fetch('mutation', 'user') returns fallback when no champion."""
         fetcher = GigaEvoArchivePromptFetcher(
             prompt_redis_db=6,
-            main_redis_prefix="chains/hotpotqa",
+            main_redis_prefix="chains/synthetic",
             fallback_prompts_dir=tmp_prompts_dir,
         )
         # Force no champion (avoid depending on real Redis state)

@@ -258,20 +258,18 @@ class TestProgramToRecord:
         assert record.fitness == 7.5
         assert record.generation == 4
         assert record.parents == [_uuid("p1")]
-        assert record.insights == ["Use BFS"]
         assert record.strategy == "exploration"
 
     def test_missing_mutation_output_defaults_to_empty(self) -> None:
         prog = _make_program(mutation_output=None)
         record = program_to_record(prog, "task", "summary")
-        assert record.insights == []
         assert record.strategy == ""
 
     def test_invalid_mutation_output_type_defaults_to_empty(self) -> None:
         prog = _make_program()
         prog.metadata["mutation_output"] = "not a dict"
         record = program_to_record(prog, "task", "summary")
-        assert record.insights == []
+        assert record.strategy == ""
 
     def test_missing_fitness_defaults_to_zero(self) -> None:
         prog = _make_program()
@@ -468,7 +466,7 @@ class TestIdeaTrackerOnRunComplete:
         tracker = _make_tracker(
             memory_write_enabled=False, memory_usage_tracking_enabled=False
         )
-        tracker._run = AsyncMock()
+        tracker.run_increment = AsyncMock()
         return tracker
 
     @pytest.mark.asyncio
@@ -477,7 +475,7 @@ class TestIdeaTrackerOnRunComplete:
         storage = AsyncMock()
         storage.get_all.return_value = []
         await tracker.on_run_complete(storage)
-        tracker._run.assert_not_called()
+        tracker.run_increment.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_programs_passed_to_pipeline(self) -> None:
@@ -486,7 +484,7 @@ class TestIdeaTrackerOnRunComplete:
         storage = AsyncMock()
         storage.get_all.return_value = progs
         await tracker.on_run_complete(storage)
-        tracker._run.assert_awaited_once_with(progs)
+        tracker.run_increment.assert_awaited_once_with(progs)
 
     @pytest.mark.asyncio
     async def test_storage_excludes_stage_results(self) -> None:
@@ -502,18 +500,18 @@ class TestIdeaTrackerLegacyRun:
         tracker = _make_tracker(
             memory_write_enabled=False, memory_usage_tracking_enabled=False
         )
-        tracker._run = MagicMock()
+        tracker.run_increment = MagicMock()
         return tracker
 
     def test_none_programs_skips(self) -> None:
         tracker = self._make_tracker_with_mocked_run()
         tracker.run(None)
-        tracker._run.assert_not_called()
+        tracker.run_increment.assert_not_called()
 
     def test_empty_programs_skips(self) -> None:
         tracker = self._make_tracker_with_mocked_run()
         tracker.run([])
-        tracker._run.assert_not_called()
+        tracker.run_increment.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +623,6 @@ class TestEvolutionToIdeaExtraction:
         assert gen2_bad.id not in record_ids
         best = next(r for r in records if r.id == gen3_best.id)
         assert best.fitness == 8.0
-        assert best.insights == ["Use BFS for hops"]
         assert best.strategy == "exploitation"
 
     @pytest.mark.asyncio
@@ -657,12 +654,12 @@ class TestEvolutionToIdeaExtraction:
 
 
 # ---------------------------------------------------------------------------
-# Task 8: IdeaTracker._run() writes banks.json via flush
+# Task 8: IdeaTracker.run_increment() writes banks.json via flush
 # ---------------------------------------------------------------------------
 
 
 def test_ideas_tracker_run_writes_banks_file(tmp_path):
-    """IdeaTracker._run writes banks.json to a timestamped session dir."""
+    """IdeaTracker.run_increment writes banks.json to a timestamped session dir."""
     import asyncio
     import json
     from unittest.mock import AsyncMock, MagicMock
@@ -693,7 +690,7 @@ def test_ideas_tracker_run_writes_banks_file(tmp_path):
         logs_dir=tmp_path,
     )
 
-    asyncio.run(tracker._run([prog]))
+    asyncio.run(tracker.run_increment([prog]))
 
     log_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
     assert len(log_dirs) >= 1, (

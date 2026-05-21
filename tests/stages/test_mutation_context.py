@@ -43,7 +43,6 @@ def _make_stage() -> MutationContextStage:
 
 
 def _make_evo_stats() -> EvolutionaryStatistics:
-    """Minimal EvolutionaryStatistics for testing."""
     return EvolutionaryStatistics(
         generation=1,
         iteration=None,
@@ -55,10 +54,6 @@ def _make_evo_stats() -> EvolutionaryStatistics:
         total_program_count=5,
         avg_num_children=1.0,
         max_num_children=3,
-        best_fitness_in_generation={"score": 80.0},
-        worst_fitness_in_generation={"score": 20.0},
-        average_fitness_in_generation={"score": 50.0},
-        valid_rate_in_generation=1.0,
         ancestor_count=1,
         best_fitness_in_ancestors={"score": 70.0},
         worst_fitness_in_ancestors={"score": 70.0},

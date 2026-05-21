@@ -5,7 +5,11 @@ import asyncio
 from typing import Any
 
 from gigaevo.programs.program import Program
-from gigaevo.programs.program_state import ProgramState, validate_transition
+from gigaevo.programs.program_state import (
+    INCOMPLETE_STATES,
+    ProgramState,
+    validate_transition,
+)
 
 
 class PopulationSnapshot:
@@ -98,16 +102,28 @@ class PopulationSnapshot:
         storage: ProgramStorage,
         exclude: frozenset[str] | None,
     ) -> list[Program]:
-        """Fetch only new/removed programs, reuse cached objects for the rest."""
+        """Fetch new programs + refresh non-terminal cached programs.
+
+        Cached programs in INCOMPLETE_STATES (QUEUED/RUNNING) can still
+        transition + accrue metrics, so they must be refetched. Programs
+        already in DONE/DISCARDED are stable and stay cached as-is —
+        that's the whole point of the incremental optimization.
+        """
         current_ids = set(await storage.get_all_program_ids())
         cached_ids = set(self._id_cache)
 
         new_ids = current_ids - cached_ids
         removed_ids = cached_ids - current_ids
+        stale_ids = [
+            pid
+            for pid, p in self._id_cache.items()
+            if p.state in INCOMPLETE_STATES and pid in current_ids
+        ]
 
-        if new_ids:
-            new_programs = await storage.mget(list(new_ids), exclude=exclude)
-            for p in new_programs:
+        refresh_ids = list(new_ids) + stale_ids
+        if refresh_ids:
+            refreshed = await storage.mget(refresh_ids, exclude=exclude)
+            for p in refreshed:
                 self._id_cache[p.id] = p
 
         for rid in removed_ids:

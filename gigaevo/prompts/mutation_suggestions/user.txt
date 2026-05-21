@@ -1,0 +1,9 @@
+{exhaustion_block}## PROGRAM
+
+```python
+{code}
+```
+
+## CURRENT METRICS
+
+{metrics}{error_section}{intra_block}{memory_cards_block}{trail_block}{stats_block}

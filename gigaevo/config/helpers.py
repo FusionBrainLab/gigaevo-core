@@ -4,11 +4,9 @@ from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
-from gigaevo.entrypoint.default_pipelines import (
-    ContextPipelineBuilder,
-    DefaultPipelineBuilder,
-)
+from gigaevo.entrypoint.default_pipelines import ContextPipelineBuilder
 from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.entrypoint.lineage_memory_pipeline import IntraMemoryPipelineBuilder
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.evolution.strategies.map_elites import IslandConfig
 from gigaevo.evolution.strategies.models import (
@@ -168,8 +166,14 @@ def select_pipeline_builder(
     problem_context: ProblemContext,
     evolution_context: EvolutionContext,
     archive_gate_enabled: bool = False,
-) -> ContextPipelineBuilder | DefaultPipelineBuilder:
+) -> ContextPipelineBuilder | IntraMemoryPipelineBuilder:
     """Select appropriate pipeline builder based on problem type.
+
+    Non-contextual problems get ``IntraMemoryPipelineBuilder`` — the in-DAG
+    intra-memory pipeline that replaces the legacy ``DefaultPipelineBuilder``
+    (now only reachable via ``pipeline=legacy``). It runs ``IntraMemoryStage``
+    + ``MutationSuggestionStage`` without the cross-population extra channel
+    and is the canonical regression-benchmark contract.
 
     ``archive_gate_enabled`` enables the ArchivePotentialGateStage that
     short-circuits InsightsStage for programs dominated in every island.
@@ -178,7 +182,7 @@ def select_pipeline_builder(
         return ContextPipelineBuilder(
             evolution_context, archive_gate_enabled=archive_gate_enabled
         )
-    return DefaultPipelineBuilder(
+    return IntraMemoryPipelineBuilder(
         evolution_context, archive_gate_enabled=archive_gate_enabled
     )
 

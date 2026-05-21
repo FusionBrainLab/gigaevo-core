@@ -56,7 +56,7 @@ class Analyzer(Protocol):
     async def analyze_async(
         self, records: list[ProgramRecord], bank: IdeaBank
     ) -> AnalysisResult:
-        """Async version of analyze — used by IdeaTracker._run to avoid asyncio nesting."""
+        """Async version of analyze — used by IdeaTracker.run_increment to avoid asyncio nesting."""
         ...
 
     def call(self, step: str, content: str | dict[str, str] = "") -> str:

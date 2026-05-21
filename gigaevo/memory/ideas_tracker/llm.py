@@ -65,15 +65,22 @@ class _PromptLoader:
 
 
 def _init_clients(base_url: str | None) -> tuple[OpenAI, AsyncOpenAI, bool]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY is not set.")
     env_base = (
         os.getenv("OPENAI_BASE_URL")
         or os.getenv("BASE_URL")
         or os.getenv("LLM_BASE_URL")
     )
     effective_url = env_base or base_url
+    # Pick the OpenRouter key when targeting OpenRouter, so a LiteLLM-proxy
+    # OPENAI_API_KEY does not silently 401 against OpenRouter.
+    openai_key = os.getenv("OPENAI_API_KEY")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if effective_url and "openrouter.ai" in effective_url:
+        api_key = openrouter_key or openai_key
+    else:
+        api_key = openai_key or openrouter_key
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY/OPENROUTER_API_KEY is not set.")
     if not effective_url and api_key.startswith("sk-or-"):
         effective_url = "https://openrouter.ai/api/v1"
     is_openrouter = bool(effective_url and "openrouter.ai" in effective_url)

@@ -508,7 +508,7 @@ class TestMutationStructuredOutput:
     def test_defaults(self):
         """List fields default to empty lists."""
         out = MutationStructuredOutput(
-            archetype="test",
+            archetype="Precision Optimization",
             justification="just",
             code="print(1)",
         )

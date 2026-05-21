@@ -20,6 +20,7 @@ from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
 from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 from gigaevo.llm.agents.mutation import MutationAgent
+from gigaevo.llm.agents.mutation_suggestions import MutationSuggestionAgent
 from gigaevo.llm.agents.scoring import ScoringAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
@@ -27,6 +28,7 @@ from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.prompts import (
     InsightsPrompts,
     LineagePrompts,
+    MutationSuggestionsPrompts,
     ScoringPrompts,
 )
 
@@ -163,6 +165,51 @@ def create_insights_agent(
         user_prompt_template=user_template,
         max_insights=max_insights,
         metrics_formatter=metrics_formatter,
+    )
+
+
+def create_mutation_suggestion_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    task_description: str,
+    metrics_context: MetricsContext,
+    max_insights: int = 7,
+    prompts_dir: str | Path | None = None,
+) -> MutationSuggestionAgent:
+    """Create a fully configured mutation-suggestion agent.
+
+    The suggestion agent consumes the descriptive intra/extra memory cards
+    plus a backward ancestral trail and produces actionable suggestions in
+    the ``ProgramInsights`` schema (wire-compatible with the legacy insights
+    stage).
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        task_description: Description of the optimization task.
+        metrics_context: Metrics context for formatting.
+        max_insights: Maximum suggestions to generate.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``MutationSuggestionAgent``.
+    """
+    system_template = MutationSuggestionsPrompts.system(prompts_dir=prompts_dir)
+    user_template = MutationSuggestionsPrompts.user(prompts_dir=prompts_dir)
+    metrics_formatter = MetricsFormatter(metrics_context)
+
+    system_prompt = system_template.format(
+        task_description=task_description,
+        metrics_description=metrics_formatter.format_metrics_description(),
+        max_insights=max_insights,
+    )
+
+    return MutationSuggestionAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+        max_insights=max_insights,
+        metrics_formatter=metrics_formatter,
+        metrics_context=metrics_context,
     )
 
 

@@ -15,6 +15,7 @@ from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
+    ArchetypeName,
 )
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import (
@@ -57,8 +58,8 @@ class MutationStructuredOutput(BaseModel):
     Simplified schema to reduce cognitive overhead and let LLM focus on code quality.
     """
 
-    archetype: str = Field(
-        description="Selected evolutionary archetype (e.g., 'Precision Optimization', 'Computational Reinvention')"
+    archetype: ArchetypeName = Field(
+        description="Selected evolutionary archetype (one of the 8 canonical names in ARCHETYPE_NAMES)."
     )
     justification: str = Field(
         description="2-3 sentences: which insights acted on, strategy used, expected mechanism of improvement"

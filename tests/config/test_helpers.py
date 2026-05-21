@@ -25,6 +25,7 @@ from gigaevo.entrypoint.default_pipelines import (
     DefaultPipelineBuilder,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.entrypoint.lineage_memory_pipeline import IntraMemoryPipelineBuilder
 from gigaevo.evolution.strategies.map_elites import IslandConfig
 from gigaevo.evolution.strategies.models import (
     BehaviorSpace,
@@ -359,13 +360,23 @@ class TestBuildDagFromBuilder:
 
 
 class TestSelectPipelineBuilder:
-    def test_selects_default_for_non_contextual_problem(self):
+    def test_selects_intra_memory_for_non_contextual_problem(self):
+        """Non-contextual default is ``IntraMemoryPipelineBuilder`` (the
+        in-DAG intra-memory pipeline) — chosen so a fresh user typing
+        ``python run.py problem.name=<P>`` runs the same pipeline the
+        canonical regression benchmark measures. ``DefaultPipelineBuilder``
+        is now only reachable via ``pipeline=legacy``.
+        """
         problem_ctx = _make_problem_context(is_contextual=False)
         evo_ctx = _make_evolution_context()
         evo_ctx.problem_ctx = problem_ctx
 
         builder = select_pipeline_builder(problem_ctx, evo_ctx)
-        assert isinstance(builder, DefaultPipelineBuilder)
+        assert isinstance(builder, IntraMemoryPipelineBuilder)
+        # IntraMemoryPipelineBuilder subclasses DefaultPipelineBuilder, so
+        # `isinstance(builder, DefaultPipelineBuilder)` is still True. The
+        # discriminating check is that we DO get the intra-memory subclass
+        # and NOT the context variant.
         assert not isinstance(builder, ContextPipelineBuilder)
 
     def test_selects_context_for_contextual_problem(self):

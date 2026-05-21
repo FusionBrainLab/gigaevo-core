@@ -1,4 +1,27 @@
 # @package _global_
+#
+# Standard pipeline: intra-only memory channel.
+#
+# Replaces the old DefaultPipelineBuilder-based standard (now `pipeline=legacy`)
+# with `IntraMemoryPipelineBuilder` — runs IntraMemoryStage (per-parent lineage
+# card) + MutationSuggestionStage (prescriptive insights) inside the DAG, but
+# leaves the cross-population "extra" memory channel OFF.
+#
+# End-of-run external-memory extraction (IdeaTracker post_run_hook) is
+# independent of this builder. To turn it ON, opt in on the CLI:
+#
+#   python run.py problem.name=heilbron pipeline=standard \
+#     ideas_tracker=default memory=local
+#
+# The cards IdeaTracker writes are available for subsequent runs that use
+# `pipeline=intra_extra_memory`, but they are NOT consumed by this pipeline's
+# own DAG. The canonical regression benchmark uses bare `pipeline=standard`
+# without any tracker/memory overrides — so the contract stays "what does the
+# core mutation/evolution machinery achieve, with the new intra-card and
+# prescriptive-suggestion stages but no live cross-population channel".
+#
+# For the legacy DefaultPipelineBuilder (InsightsStage + LineageStage etc.),
+# use `pipeline=legacy`.
 
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
@@ -10,13 +33,14 @@ evolution_context:
   memory_provider: ${memory_provider}
 
 pipeline_builder:
-  _target_: gigaevo.entrypoint.default_pipelines.DefaultPipelineBuilder
+  _target_: gigaevo.entrypoint.lineage_memory_pipeline.IntraMemoryPipelineBuilder
   ctx: ${evolution_context}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}
   max_parallel: ${dag_concurrency}
   max_insights: ${max_insights}
   max_code_length: ${max_code_length}
+  intra_max_children: 24
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

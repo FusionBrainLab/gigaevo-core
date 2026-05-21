@@ -134,7 +134,7 @@ Program (state: QUEUED)
     ↓
 DagRunner picks it up
     ↓
-DAG built from blueprint (DefaultPipelineBuilder)
+DAG built from blueprint (IntraMemoryPipelineBuilder by default; DefaultPipelineBuilder under pipeline=legacy)
     ↓
 Stages execute in parallel (respecting dependencies)
     │
@@ -488,7 +488,7 @@ ${metrics_context}          # Resolves to metrics context
 | `gigaevo/database/redis_program_storage.py` | Redis interface |
 | `gigaevo/database/state_manager.py` | Program state transitions |
 | `gigaevo/database/redis/keys.py` | Redis key templates |
-| `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (stage wiring) |
+| `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (legacy stage wiring; `IntraMemoryPipelineBuilder` is the v2 default) |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
 
 ## Next Steps

@@ -213,7 +213,7 @@ ls config/llm/
 python run.py problem.name=<problem>
 
 # Run with config override
-python run.py problem.name=<problem> max_generations=10
+python run.py problem.name=<problem> max_mutants=10
 
 # Use different experiment
 python run.py experiment=<experiment> problem.name=<problem>

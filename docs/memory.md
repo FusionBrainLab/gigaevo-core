@@ -883,10 +883,7 @@ python run.py \
   ideas_tracker=true \
   checkpoint_dir=experiments/hover/memory/memory_bank \
   redis.db=3 \
-  max_generations=25 \
-  max_mutations_per_generation=8 \
-  model_name=Qwen3-235B-A22B-Thinking-2507 \
-  llm_base_url="http://localhost:4000/v1"
+  max_mutants=200
 ```
 
 After the run completes, check the memory bank:
@@ -1000,6 +997,27 @@ gigaevo top \
 | `gigaevo/memory/shared_memory/memory.py` | `AmemGamMemory` — local memory backend with GAM search |
 | `gigaevo/memory/runtime_config.py` | Loads `memory_backend.yaml` settings |
 | `config/memory_backend.yaml` | All backend settings (API, GAM, models, etc.) |
+
+### Shared Memory Module (`gigaevo/memory/shared_memory/`)
+
+`AmemGamMemory` is the orchestrator; the rest are pluggable collaborators wired
+via the `AgenticRuntime` DI container.
+
+| File | Responsibility |
+|------|---------------|
+| `memory.py` | `AmemGamMemory` orchestrator — coordinates save / search / rebuild / delete |
+| `memory_config.py` | Pydantic configs: `MemoryConfig`, `GamConfig`, `ApiConfig`, `CardUpdateDedupConfig` |
+| `card_store.py` | Card dict + entity mappings + JSON index persistence |
+| `note_sync.py` | Bridges cards to the A-MEM vector store (Chroma) |
+| `api_sync.py` | Paginated fetch / full sync / remote search via concept API |
+| `gam_search.py` | GAM `ResearchAgent` build + invalidate lifecycle |
+| `card_dedup.py` | Vector scoring + LLM dedup decision + card merge |
+| `agentic_runtime.py` | `AgenticRuntime` factory: injects LLM + generator + agentic classes |
+| `protocols.py` | DI protocols (`LLMServiceProtocol`, `AgenticMemorySystemProtocol`, …) |
+
+Search order is three-tier: GAM `ResearchAgent` (vector retrievers) → concept API
+(remote full-text + LLM synthesis) → in-memory keyword fallback. Each tier falls
+through on failure or empty result.
 
 ### PostRunHook (Engine Integration)
 

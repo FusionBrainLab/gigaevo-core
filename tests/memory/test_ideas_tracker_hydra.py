@@ -19,10 +19,7 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 import pytest
 
-from gigaevo.memory.ideas_tracker.analyzers import (
-    ClassifyingAnalyzer,
-    ClusteringAnalyzer,
-)
+from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
 from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
 
@@ -75,20 +72,6 @@ class TestHydraInstantiateDefault:
         # Factory must have materialized a ClassifyingAnalyzer since analyzer_type=default
         assert tracker._analyzer is not None
         assert isinstance(tracker._analyzer, ClassifyingAnalyzer)
-
-
-class TestHydraInstantiateFast:
-    @pytest.mark.xfail(
-        reason="CI-only: ClusteringAnalyzer instantiates a real httpx client. "
-        "Passes locally. See #234.",
-        strict=False,
-    )
-    def test_instantiate_fast_yaml(self, ideas_cfg_tmpdir):
-        cfg = _load_ideas_tracker_cfg("fast", ideas_cfg_tmpdir)
-        tracker = instantiate(cfg)
-        assert isinstance(tracker, IdeaTracker)
-        assert tracker._analyzer is not None
-        assert isinstance(tracker._analyzer, ClusteringAnalyzer)
 
 
 class TestHydraInstantiateTrue:

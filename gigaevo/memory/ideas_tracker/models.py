@@ -190,7 +190,6 @@ class ProgramRecord(BaseModel):
     fitness: float
     generation: int
     parents: list[str] = Field(default_factory=list)
-    insights: list[str] = Field(default_factory=list)
     improvements: list[dict[str, str]] = Field(default_factory=list)
     strategy: str = ""
     task_description: str = ""
@@ -270,7 +269,6 @@ def program_to_record(
         fitness=program.metrics.get(fitness_key, 0.0),
         generation=program.lineage.generation,
         parents=list(program.lineage.parents),
-        insights=mutation_output.get("insights_used") or [],
         improvements=normalize_improvements(mutation_output.get("changes")),
         strategy=mutation_output.get("archetype") or "",
         task_description=task_description,

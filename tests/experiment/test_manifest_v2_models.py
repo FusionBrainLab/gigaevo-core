@@ -240,7 +240,7 @@ class TestConfigSpec:
         c = ConfigSpec.model_validate(
             {
                 "pipeline": "adversarial_asymmetric",
-                "problem_name": "heilbron_adversarial",
+                "problem_name": "synthetic_task",
                 "llm_model": "Qwen3-235B",
                 "max_generations": 50,
                 # untyped knobs flow into model_extra automatically

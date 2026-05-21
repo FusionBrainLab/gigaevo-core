@@ -687,14 +687,14 @@ class TestRunAIdeaTrackerProgramNative:
                 memory_usage_tracking_enabled=False,
             )
 
-        tracker._run = AsyncMock()
+        tracker.run_increment = AsyncMock()
 
         storage = AsyncMock()
         storage.get_all.return_value = _make_run_a_programs()
 
         await tracker.on_run_complete(storage)
 
-        tracker._run.assert_called_once()
+        tracker.run_increment.assert_called_once()
         # Programs passed to pipeline
-        passed = tracker._run.call_args[0][0]
+        passed = tracker.run_increment.call_args[0][0]
         assert len(passed) == 4  # seed + 3 children

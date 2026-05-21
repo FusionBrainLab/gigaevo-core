@@ -14,9 +14,24 @@ from __future__ import annotations
 from pathlib import Path
 import textwrap
 
+import fakeredis
 import pytest
 
 from gigaevo.experiment.dry_run import DryRunResult
+
+
+@pytest.fixture()
+def fake_redis_for_manifest(monkeypatch):
+    """Patch ``get_redis`` everywhere it is imported to use fakeredis."""
+    server = fakeredis.FakeServer()
+    client = fakeredis.FakeRedis(server=server)
+
+    def _get_redis() -> fakeredis.FakeRedis:
+        return client
+
+    monkeypatch.setattr("gigaevo.experiment.lock.get_redis", _get_redis)
+    monkeypatch.setattr("gigaevo.experiment.manifest.get_redis", _get_redis)
+    return client
 
 
 @pytest.fixture()
@@ -308,20 +323,15 @@ class TestConfigFingerprintStable:
         assert r.passed, r.message
         assert "fresh" in r.message.lower() or "no fingerprint" in r.message.lower()
 
-    @pytest.mark.xfail(
-        reason="update_manifest takes a real Redis lock; CI has no Redis. "
-        "Test passes locally with a redis-server running. See #234.",
-        strict=False,
-    )
     def test_relaunch_matching_fingerprint_passes(
-        self, manifest_with_pinned, monkeypatch
+        self, manifest_with_pinned, monkeypatch, fake_redis_for_manifest
     ):
         """Recorded fingerprint matches current → PASS."""
         from gigaevo.experiment import checks as checks_mod
         from gigaevo.experiment.manifest import update_manifest
 
         exp, _ = manifest_with_pinned
-        fp = {"config/config.yaml": "abc", "config/experiment/heilbron.yaml": "def"}
+        fp = {"config/config.yaml": "abc", "config/experiment/widget.yaml": "def"}
 
         def set_fp(raw):
             raw.setdefault("lifecycle", {}).setdefault("launch", {})[
@@ -339,13 +349,8 @@ class TestConfigFingerprintStable:
         r = results[0]
         assert r.passed, r.message
 
-    @pytest.mark.xfail(
-        reason="update_manifest takes a real Redis lock; CI has no Redis. "
-        "Test passes locally with a redis-server running. See #234.",
-        strict=False,
-    )
     def test_relaunch_drifted_fingerprint_fails_critical(
-        self, manifest_with_pinned, monkeypatch
+        self, manifest_with_pinned, monkeypatch, fake_redis_for_manifest
     ):
         """Recorded fingerprint differs from current → CRITICAL."""
         from gigaevo.experiment import checks as checks_mod
@@ -354,7 +359,7 @@ class TestConfigFingerprintStable:
         exp, _ = manifest_with_pinned
         recorded = {
             "config/config.yaml": "abc",
-            "config/experiment/heilbron.yaml": "def",
+            "config/experiment/widget.yaml": "def",
         }
 
         def set_fp(raw):
@@ -364,10 +369,10 @@ class TestConfigFingerprintStable:
 
         update_manifest(exp, set_fp)
 
-        # Current scan sees a DIFFERENT sha for heilbron.yaml
+        # Current scan sees a DIFFERENT sha for widget.yaml
         current = {
             "config/config.yaml": "abc",
-            "config/experiment/heilbron.yaml": "CHANGED",
+            "config/experiment/widget.yaml": "CHANGED",
         }
         stub = _make_stub({"A1": {}, "A2": {}}, fingerprint=current)
         monkeypatch.setattr(checks_mod, "dry_run", stub)
@@ -378,4 +383,4 @@ class TestConfigFingerprintStable:
         r = results[0]
         assert not r.passed
         assert r.is_blocking
-        assert "heilbron" in r.message or "drift" in r.message.lower()
+        assert "widget" in r.message or "drift" in r.message.lower()

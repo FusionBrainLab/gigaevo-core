@@ -650,25 +650,25 @@ class TestScenarioCrossTask:
     """Different tasks use separate memory namespaces via checkpoint_path."""
 
     def test_separate_checkpoint_dirs_isolate_memory(self, tmp_path):
-        hover_cfg = MemoryConfig(checkpoint_path=tmp_path / "hover_mem")
-        hotpot_cfg = MemoryConfig(checkpoint_path=tmp_path / "hotpot_mem")
+        task_a_cfg = MemoryConfig(checkpoint_path=tmp_path / "task_a_mem")
+        task_b_cfg = MemoryConfig(checkpoint_path=tmp_path / "task_b_mem")
 
-        mem_hover = AmemGamMemory(config=hover_cfg)
-        mem_hotpot = AmemGamMemory(config=hotpot_cfg)
+        mem_a = AmemGamMemory(config=task_a_cfg)
+        mem_b = AmemGamMemory(config=task_b_cfg)
 
-        mem_hover.save_card({"id": "hover-1", "description": "HoVer retrieval idea"})
-        mem_hotpot.save_card({"id": "hotpot-1", "description": "HotpotQA chain idea"})
+        mem_a.save_card({"id": "task-a-1", "description": "Task A retrieval idea"})
+        mem_b.save_card({"id": "task-b-1", "description": "Task B chain idea"})
 
         # Each has only its own cards
-        assert mem_hover.get_card("hover-1") is not None
-        assert mem_hover.get_card("hotpot-1") is None
-        assert mem_hotpot.get_card("hotpot-1") is not None
-        assert mem_hotpot.get_card("hover-1") is None
+        assert mem_a.get_card("task-a-1") is not None
+        assert mem_a.get_card("task-b-1") is None
+        assert mem_b.get_card("task-b-1") is not None
+        assert mem_b.get_card("task-a-1") is None
 
         # Reload verifies isolation
-        mem_hover2 = AmemGamMemory(config=hover_cfg)
-        assert len(mem_hover2.card_store.cards) == 1
-        assert mem_hover2.get_card("hover-1") is not None
+        mem_a2 = AmemGamMemory(config=task_a_cfg)
+        assert len(mem_a2.card_store.cards) == 1
+        assert mem_a2.get_card("task-a-1") is not None
 
 
 # ===========================================================================

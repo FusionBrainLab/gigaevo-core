@@ -3,8 +3,6 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-import subprocess
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -223,17 +221,10 @@ class TestCliCsvPath:
 class TestRunFromCsvEntryPoint:
     def test_run_from_csv_help_shows_csv_path(self) -> None:
         """The entry point module should expose --csv-path via --help."""
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "gigaevo.memory.ideas_tracker.run_ideas_tracker_from_csv",
-                "--help",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert "--csv-path" in result.stdout
+        from gigaevo.memory.ideas_tracker.cli import _build_argument_parser
+
+        parser = _build_argument_parser()
+        assert "--csv-path" in parser.format_help()
 
     def test_run_from_csv_forwards_argv_to_main(self, tmp_path: Path) -> None:
         """run_ideas_tracker_from_csv.main() forwards args to cli.main."""
