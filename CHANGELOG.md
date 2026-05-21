@@ -2,6 +2,225 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-05-21)
+
+### Bug Fixes
+
+- **canonical_benchmark**: Make --llm-base-url and --model-name required
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **canonical_benchmark**: Pass --minimize for lower-is-better problems
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **evolution-stats**: Iteration-window aggregation + snapshot bump
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **intra-memory**: Ship unified diff (not full code) per child + soften mutator "untried
+  directions" preference ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **memory**: Pick OPENROUTER_API_KEY when LLM_BASE_URL targets OpenRouter
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **memory**: Rename IdeaTracker._run → run_increment to match call sites
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **stats**: Rank line dropout when focal missing from snapshot
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **suggester**: Escape literal {} braces in lineage-exhaustion sub-bullet
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+### Chores
+
+- Gitignore output/runs/tool-caches + capture pre-loop audit MDs
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Remove dead ProgramRecord.insights field
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Ruff fix + format on tools/pseudo_evo_bench (pre-loop)
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **merge-prep**: Drop 57 auto-loop / pseudo-evo / lineage / insights audits + tools
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **v2.0.0**: Commit erdos-minimum-overlap hand-recompute footnote
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **v2.0.0**: Drop broken tools/benchmarks/bench_{multirun,steady_state}.py
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+### Documentation
+
+- Align user-facing docs with v2.0.0 contract
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Intra/extra memory mode guide + USAGE / MEMORY_ARCHITECTURE cross-links
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Promote 3 live-feature docs, delete the rest
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **audit**: V3.1 decision tree — counterfactual audit on 289 prior-run programs (DBs 13/14/15)
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **audit**: V3.1 mutation decision tree — channels, gate, decision table, worked examples
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **audit**: V3.1 tree — soften row 13 target-awareness + add rows 19 / 19a per counterfactual audit
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **auto-optimize-loop**: Cycle-2 PROPOSE — variance-floor replicate #2 (db=13)
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **auto-optimize-loop**: Cycle-2.5 PROPOSE — 4th NO-EDIT variance-floor replicate (db=14)
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **auto-optimize-loop**: Finalize cycle-0 Analytics + cycle-1 PROPOSE + scope-expansion note
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **auto-optimize-loop**: Spec + reference schemas + history/patterns scaffolds
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **canonical_benchmark**: Bring frozen-knobs line in line with v2.0.0 defaults
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **usage**: Drop spurious num_parents requirement + ruff format
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+### Features
+
+- V2.0.0 — intra-memory pipeline becomes default
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **context**: R1+R3 — archive-quartile regime in mutation_context render
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **context**: R7+R8 v3.1 — archive distribution with worst/median/best + archive-percentile token
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **memory**: DAG-native intra+extra memory pipeline (per-parent lineage card + live global cards)
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **monitoring**: File emit target writes frontier_<metric>.png each tick
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **prescriptive**: MutationSuggestionStage + EvolutionaryStatistics wiring
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **prompts**: R6 — archive-quartile archetype gate + suggester tag-bias
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **prompts**: R9 v3.1 — archive-percentile gate + qualitative target awareness
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **prompts**: Soften target-awareness clause + add noise-dominated & empty-intra rules
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **stats**: R2 — MAD-based trend noise floor + archive_valid_fitnesses field
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **suggester**: Lineage-exhaustion override in rank-aware ambition
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **suggester**: Rank-aware ambition rule in mutation_suggestions/system.txt
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **suggester**: Revert rank+LEX to 9cca4344 baseline for cycle-6 A/B
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **suggester**: Server-computed EXHAUSTION ALERT banner overrides soft LEX
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **tools**: Trajectory_shape.py — log-based closeout analyzer for cycle comparisons
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+### Refactoring
+
+- Drop dormant ExtraMemoryStage and its cache tests
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Framework defaults match canonical benchmark contract
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **pipeline**: Split standard→intra-only base + intra+extra subclass; add canonical regression
+  benchmark ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+### Testing
+
+- Compress 8 tautological prompt-loader tests into 1 parametrized test
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Generalize problem-pinned tests + remove fragile prompt-phrase-pin tests
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Remove xfail markers (delete brittle/unsupported, fix schema drift)
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- Simplify slow tests so suite stays under 5 min
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **config**: Align evolution constants with v2.0.0 defaults
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **prompts**: Drop phrase-pinning trash tests on production prompt files
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+- **v3.1**: Archive-percentile gate, archive distribution, no Target/Regime tokens
+  ([#250](https://github.com/KhrulkovV/gigaevo-core-internal/pull/250),
+  [`a5ea71b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ea71b7a5f60169141a9ed2c0517eedd2b7d5ad))
+
+
 ## v1.31.0 (2026-05-16)
 
 ### Features
