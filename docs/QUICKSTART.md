@@ -4,19 +4,31 @@ This guide gets you from zero to running evolution in **5 minutes**.
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.11+
 - Redis server running
 - OpenRouter API key (or other LLM provider)
 
 ## Step 1: Install (30 seconds)
 
 ```bash
-# Clone and install
+# Minimal core (engine + LLM mutation + numpy exemplar problems)
 pip install -e .
 
 # Create .env file
 echo "OPENAI_API_KEY=sk-or-v1-your-key-here" > .env
 ```
+
+GigaEvo ships extras for opt-in stacks. If you intend to run chain problems
+(HoVer / HotpotQA / IFBench / …) or use `gigaevo plot` / `gigaevo profiler`,
+install:
+
+```bash
+pip install -e ".[chains,plotting]"      # common
+pip install -e ".[all]"                  # everything user-facing
+pip install -e ".[all,dev,test]"         # developer
+```
+
+See the [README install table](../README.md#1-install) for the full mapping.
 
 ## Step 2: Start Redis (10 seconds)
 

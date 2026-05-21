@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from typing import Any, Optional, TypeVar, Union
+from typing import Any, Generic, Optional, TypeVar, Union
 
 from pydantic import BaseModel
 
@@ -26,11 +26,11 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 
-class BoxModel[T](BaseModel):
+class BoxModel(BaseModel, Generic[T]):
     data: T
 
 
-class PairModel[K, V](BaseModel):
+class PairModel(BaseModel, Generic[K, V]):
     first: K
     second: V
 

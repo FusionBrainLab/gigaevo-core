@@ -8,14 +8,20 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
-from gigaevo.memory.shared_memory.models import (
+import pytest
+
+pytest.importorskip("gigaevo_memory")
+
+from gigaevo.memory.shared_memory.card_update_dedup import (  # noqa: E402
+    CardUpdateDedupConfig,
+)
+from gigaevo.memory.shared_memory.models import (  # noqa: E402
     ConnectedIdea,
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
 )
-from gigaevo.memory_platform.shared_memory.memory import (
+from gigaevo.memory_platform.shared_memory.memory import (  # noqa: E402
     AmemGamMemory,
     normalize_memory_card,
 )

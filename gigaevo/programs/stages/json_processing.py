@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import types
-from typing import Any, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 from loguru import logger
 
@@ -16,13 +16,13 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 
-class MergeDictInputs[K, V](StageIO):
+class MergeDictInputs(StageIO, Generic[K, V]):
     first: Box[dict[K, V]]
     second: Box[dict[K, V]]
 
 
 @StageRegistry.register(description="Merge two dictionaries")
-class MergeDictStage[K, V](Stage):
+class MergeDictStage(Stage, Generic[K, V]):
     """
     Merge two dictionaries ({**first, **second}); second overwrites conflicts.
     """

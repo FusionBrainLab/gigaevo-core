@@ -88,10 +88,10 @@ python run.py problem.name=toy_example \
 
 | Group | Options |
 |-------|---------|
-| `experiment` | `base`, `full_featured`, `heilbron`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state`, `steady_state_adversarial`, `steady_state_bus` |
-| `algorithm` | `single_island`, `single_island_2d` (+ `_d`, `_g` variants), `multi_island`, `topology_3d` (+ `_ret`, `_7step` variants), `single_island_fitness_prop_fixed_temp`, `single_island_weighted` |
-| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini25_pro`, `gemini31_pro`, `gemini3_flash` |
-| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `algotune_speed`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt`, `cma_opt` |
+| `experiment` | `base`, `full_featured`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state_adversarial` |
+| `algorithm` | `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
+| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini31_pro`, `gemini3_flash` |
+| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt`, `cma_opt` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |

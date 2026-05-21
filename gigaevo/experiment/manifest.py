@@ -978,9 +978,13 @@ def recover_status(
         target_status = Status(new_status)
 
         if target_status not in allowed:
+            transitions = ", ".join(
+                f"{k.value} → {', '.join(s.value for s in v)}"
+                for k, v in RECOVERY_TRANSITIONS.items()
+            )
             raise ValueError(
                 f"Cannot recover to {new_status} from {current}. "
-                f"Recovery transitions: {', '.join(f'{k.value} → {", ".join(s.value for s in v)}' for k, v in RECOVERY_TRANSITIONS.items())}"
+                f"Recovery transitions: {transitions}"
             )
 
         raw.setdefault("lifecycle", {})["status"] = new_status

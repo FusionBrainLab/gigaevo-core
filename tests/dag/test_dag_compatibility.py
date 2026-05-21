@@ -34,7 +34,7 @@ class ChildModel(PlainModel):
     extra: str = ""
 
 
-class GenericBox[T](BaseModel):
+class GenericBox(BaseModel, Generic[T]):
     data: T
 
 

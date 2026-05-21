@@ -1,6 +1,4 @@
 from gigaevo.utils.trackers.backends.redis import RedisMetricsBackend
-from gigaevo.utils.trackers.backends.tensorboard import TBBackend
-from gigaevo.utils.trackers.backends.wandb import WandBBackend
 from gigaevo.utils.trackers.composite import CompositeLogger
 from gigaevo.utils.trackers.configs import RedisMetricsConfig, TBConfig, WBConfig
 from gigaevo.utils.trackers.core import GenericLogger
@@ -16,6 +14,8 @@ def init_tb(
     global _tb_default
     if _tb_default is not None:
         return _tb_default
+    from gigaevo.utils.trackers.backends.tensorboard import TBBackend
+
     backend = TBBackend(cfg)
     _tb_default = GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
     return _tb_default
@@ -33,6 +33,8 @@ def init_wandb(
     global _wb_default
     if _wb_default is not None:
         return _wb_default
+    from gigaevo.utils.trackers.backends.wandb import WandBBackend
+
     backend = WandBBackend(cfg)
     _wb_default = GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
     return _wb_default

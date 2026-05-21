@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 from loguru import logger
 
@@ -27,7 +27,7 @@ from gigaevo.programs.utils import dedent_code
 T = TypeVar("T")
 
 
-class PythonCodeExecutor[T](Stage):
+class PythonCodeExecutor(Stage, Generic[T]):
     """
     Execute a user function from dynamic code in an isolated subprocess.
 

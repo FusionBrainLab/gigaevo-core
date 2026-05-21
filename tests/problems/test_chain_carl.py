@@ -13,21 +13,27 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from mmar_carl import LLMStepDescription, ToolStepDescription
-from mmar_carl.models import Language
-from mmar_carl.models.config import ToolStepConfig
 import pytest
 
-from problems.chains.carl_bridge import GigaEvoClientAdapter, GigaEvoPromptTemplate
-from problems.chains.chain_runner import (
+pytest.importorskip("mmar_carl")
+
+from mmar_carl import LLMStepDescription, ToolStepDescription  # noqa: E402
+from mmar_carl.models import Language  # noqa: E402
+from mmar_carl.models.config import ToolStepConfig  # noqa: E402
+
+from problems.chains.carl_bridge import (  # noqa: E402
+    GigaEvoClientAdapter,
+    GigaEvoPromptTemplate,
+)
+from problems.chains.chain_runner import (  # noqa: E402
     _resolve_dependencies,
     _resolve_reference,
     _run_chain_on_dataset_stepwise,
     _strip_thinking,
     run_chain_on_dataset_stepwise,
 )
-from problems.chains.chain_validation import validate_chain_spec
-from problems.chains.types import (
+from problems.chains.chain_validation import validate_chain_spec  # noqa: E402
+from problems.chains.types import (  # noqa: E402
     ChainSpec,
     LLMStep,
     PromptBuilder,

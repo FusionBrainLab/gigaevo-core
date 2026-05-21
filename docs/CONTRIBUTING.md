@@ -1,5 +1,18 @@
 ## Development Guidelines
 
+### Dev Install
+
+For contributors, install the full developer stack:
+
+```bash
+pip install -e ".[all,dev,test]"
+```
+
+This pulls in every user-facing extra (chains, optimization, plotting,
+tracking, local-llm, memory-platform) plus linters, type-checkers,
+pytest, and the dag_builder dev API. See [README — Install](../README.md#1-install)
+for the lighter install levels.
+
 ### Git Hooks
 Before starting work, you must set up [pre-commit hook](https://pre-commit.com/) for local style checks on your changes.
 - Install pre-commit:

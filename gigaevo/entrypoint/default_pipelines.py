@@ -37,12 +37,6 @@ from gigaevo.programs.stages.json_processing import MergeDictStage
 from gigaevo.programs.stages.memory_context import MemoryContextStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
-from gigaevo.programs.stages.optimization.cma import CMANumericalOptimizationStage
-from gigaevo.programs.stages.optimization.optuna import (
-    OptunaOptimizationStage,
-    OptunaPayloadBridge,
-    PayloadResolver,
-)
 from gigaevo.programs.stages.python_executors.execution import (
     CallFileFunction,
     CallProgramFunction,
@@ -655,6 +649,10 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         return {}
 
     def _add_cma_optimization(self, *, has_context: bool) -> None:
+        from gigaevo.programs.stages.optimization.cma import (
+            CMANumericalOptimizationStage,
+        )
+
         problem_ctx = self.ctx.problem_ctx
         validator_path = problem_ctx.problem_dir / "validate.py"
 
@@ -795,6 +793,12 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         return {}
 
     def _add_optuna_optimization(self, *, has_context: bool) -> None:
+        from gigaevo.programs.stages.optimization.optuna import (
+            OptunaOptimizationStage,
+            OptunaPayloadBridge,
+            PayloadResolver,
+        )
+
         problem_ctx = self.ctx.problem_ctx
         llm_wrapper = self.ctx.llm_wrapper
         metrics_ctx = problem_ctx.metrics_context

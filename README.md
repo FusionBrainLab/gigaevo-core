@@ -1,6 +1,6 @@
 # GigaEvo
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -37,11 +37,30 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 
 ### 1. Install
 
-**Requirements:** Python 3.12+, Redis
+**Requirements:** Python 3.11+, Redis
 
-```bash
-pip install -e .
-```
+GigaEvo ships with a minimal core and opt-in **extras** so installs stay fast
+on firewalled/slow networks. Pick the install level that matches your use:
+
+| Use case | Command |
+|---|---|
+| **Minimal** — engine + numpy exemplar problems + LLM mutation + core CLI (`status`, `top`, `trajectory`, `logs`, `flush`, `checkpoint`, `inspect`, `launch`, `watchdog`, `export`) | `pip install -e .` |
+| **Common** — also runs chain/NLP problems (HoVer, HotpotQA, IFBench, gsm8k, …) + `gigaevo plot` / `gigaevo events` / `gigaevo profiler` | `pip install -e ".[chains,plotting]"` |
+| **Full** — everything user-facing (chains, optimization, plotting, tracking, local-LLM runtime, memory platform) | `pip install -e ".[all]"` |
+| **Developer** — full + linters, type-checkers, pytest, dag_builder dev API | `pip install -e ".[all,dev,test]"` |
+
+À la carte mapping of features to extras:
+
+| Feature / module | Required extras |
+|---|---|
+| `gigaevo plot`, `gigaevo events`, `gigaevo profiler` | `[plotting]` |
+| Chain/prompt problems: HoVer, HotpotQA, IFBench, gsm8k, musique, papillon, pupa | `[chains]` |
+| Optuna / CMA optimization stages | `[optimization]` |
+| Alphaevolve / hexagon_improver / santa2025 problems (JAX, sympy, shapely) | `[optimization]` |
+| W&B / TensorBoard tracker backends | `[tracking]` |
+| sudoku local-runtime solver (torch + vllm) | `[local-llm]` |
+| GAM memory **platform** backend (`use_api=True`) — local backend needs nothing | `[memory-platform]` |
+| `tools/dag_builder` web API | `[dev]` (uvicorn) |
 
 Install Redis if not already available:
 
@@ -110,15 +129,9 @@ Evolution starts immediately. Logs are saved to `outputs/`.
 ### Experiment Presets
 
 ```bash
-# Steady-state: continuous mutation/evaluation, ~8x throughput
-python run.py experiment=steady_state problem.name=heilbron
-
 # Migration bus: parallel runs share rejected programs via Redis stream
 python run.py experiment=migration_bus problem.name=heilbron redis.db=0
 python run.py experiment=migration_bus problem.name=heilbron redis.db=1
-
-# Steady-state + bus: maximum throughput with cross-run sharing
-python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
 
 # Multi-island evolution (fitness + simplicity islands)
 python run.py experiment=multi_island_complexity problem.name=heilbron
@@ -176,7 +189,7 @@ files are in `config/`:
 
 | Directory | Purpose | Key files |
 |-----------|---------|-----------|
-| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `steady_state.yaml`, `migration_bus.yaml`, `multi_island_complexity.yaml`, `multi_llm_exploration.yaml`, `prompt_coevolution.yaml`, `steady_state_adversarial.yaml`, `steady_state_bus.yaml` |
+| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `migration_bus.yaml`, `multi_island_complexity.yaml`, `multi_llm_exploration.yaml`, `prompt_coevolution.yaml`, `steady_state_adversarial.yaml` |
 | `algorithm/` | Evolution algorithms | `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
 | `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
 | `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |

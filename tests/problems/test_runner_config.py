@@ -18,19 +18,22 @@ from __future__ import annotations
 import json
 import logging
 
-from mmar_carl import LLMStepDescription
-from mmar_carl.models.config import (
-    ToolStepConfig,  # noqa: F401  (parity with sibling test)
-)
 import pytest
 
-from problems.chains.chain_runner import (
+pytest.importorskip("mmar_carl")
+
+from mmar_carl import LLMStepDescription  # noqa: E402
+from mmar_carl.models.config import (  # noqa: E402
+    ToolStepConfig,  # noqa: F401  (parity with sibling test)
+)
+
+from problems.chains.chain_runner import (  # noqa: E402
     _apply_metric_feedback,
     _apply_self_critic,
     _apply_simple_retry,
     _run_chain_on_dataset_stepwise,
 )
-from problems.chains.runner_config import (
+from problems.chains.runner_config import (  # noqa: E402
     DatasetFeedbackConfig,
     FeedbackMode,
     MetricFeedbackConfig,
@@ -39,7 +42,7 @@ from problems.chains.runner_config import (
     SimpleRetryConfig,
     StepExecutionMode,
 )
-from problems.chains.types import ChainSpec
+from problems.chains.types import ChainSpec  # noqa: E402
 
 # ===========================================================================
 # Helpers

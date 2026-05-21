@@ -149,8 +149,8 @@ export PYTHONPATH=/path/to/gigaevo-core
 # Main run (X1) — evolves HotpotQA chains, fetches prompts from DB 6
 HOTPOTQA_CHAIN_URL="http://CHAIN_HOST:8001/v1" \
 $PYTHON run.py \
-    problem.name=chains/hotpotqa/static_f1_600 \
-    pipeline=hotpotqa_asi \
+    problem.name=chains/nlp/hotpotqa/static \
+    pipeline=standard \
     prompts=default \
     prompt_fetcher=coevolved \
     prompt_fetcher.prompt_redis_db=6 \
@@ -164,7 +164,7 @@ $PYTHON run.py \
     pipeline=prompt_evolution \
     redis.db=6 \
     main_redis_db=4 \
-    main_redis_prefix=chains/hotpotqa/static_f1_600 \
+    main_redis_prefix=chains/nlp/hotpotqa/static \
     max_mutants=25 \
     llm_base_url="http://MUT_HOST_2:8777/v1"
 ```

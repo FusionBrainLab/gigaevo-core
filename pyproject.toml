@@ -11,66 +11,124 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 
 dependencies = [
+    # Storage / orchestration
     "redis>=4.5.0",
-    "loguru>=0.7.0",
+    "fakeredis[lua]>=2.19.0",
     "hydra-core>=1.3.0",
     "omegaconf>=2.3.0",
+    # Math / data (engine eager paths)
     "numpy>=2.0.0",
+    "scipy",
+    "pandas==2.2.2",
+    "scikit-learn>=1.3.2",
+    "networkx",
+    # Validation + logging
     "pydantic>=2.0.0",
+    "loguru>=0.7.0",
     "psutil>=5.9.0",
-    "fakeredis[lua]>=2.19.0",
+    # System glue
     "orjson",
-    "diffpatch",
-    "openai>=1.0.0",
     "httpx>=0.27.0",
+    "requests",
     "PyYAML>=6.0",
     "ruamel.yaml>=0.18",
-    "chromadb>=0.4.22",
-    "sentence-transformers>=2.2.2",
-    "rank-bm25>=0.2.2",
-    "nltk>=3.8.1",
-    "transformers>=4.36.2",
-    "litellm>=1.16.11",
-    "scikit-learn>=1.3.2",
-    "tqdm>=4.65.0",
-    "networkx",
-    "scipy",
-    "pandas",
-    "wandb",
-    "cloudpickle",
-    "matplotlib",
-    "mmar-carl==0.2.0",
-    "pandas==2.2.2",
-    "seaborn",
-    "statsmodels",
-    "tensorboardX",
     "python-dotenv",
     "click",
+    "cloudpickle",
+    "tqdm>=4.65.0",
+    "diffpatch",
     "jinja2",
-    "langgraph>=0.2.0",
+    # LLM stack (engine entry points hard-import these)
+    "openai>=1.0.0",
+    "litellm>=1.16.11",
+    "langchain>=0.3.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
-    "langchain>=0.3.0",
+    "langgraph>=0.2.0",
     "langfuse>=4.0.0,<5",
-    "scikit-learn",
-    "optuna",
-    "cma",
-    "bm25s>=0.3.0",
-    "PyStemmer>=3.0.0",
-    "gigaevo-memory",
 ]
 
 [project.optional-dependencies]
-dev = ["pre-commit", "python-semantic-release"]
-typing = ["mypy>=1.10", "types-PyYAML", "types-redis", "types-psutil"]
-opt = ["jax", "optax"]
-prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
-# Chain-task runtime deps (IFBench instruction-following metrics, etc.).
-# Install with: pip install -e .[chains]
-chains = ["emoji", "syllapy", "langdetect", "immutabledict"]
+# Chain/prompt problem families (HoVer, HotpotQA, IFBench, gsm8k, musique,
+# papillon, pupa) + vendored memory backends (A_mem, GAM_root).
+chains = [
+    "transformers>=4.36.2",
+    "sentence-transformers>=2.2.2",
+    "chromadb>=0.4.22",
+    "nltk>=3.8.1",
+    "bm25s>=0.3.0",
+    "PyStemmer>=3.0.0",
+    "datasets",
+    "tenacity",
+    "absl-py",
+    "emoji",
+    "syllapy",
+    "langdetect",
+    "immutabledict",
+    # mmar-carl wheels require Python >=3.12; gated so CI on 3.11 can install [chains].
+    # Tests that import mmar_carl use pytest.importorskip to skip when unavailable.
+    "mmar-carl==0.2.0; python_version >= '3.12'",
+]
+
+# Optimization stages (Optuna/CMA) + JAX/Optax + symbolic/geometric problems
+# (alphaevolve, hexagon_improver, santa2025).
+optimization = [
+    "optuna",
+    "cma",
+    "jax",
+    "optax",
+    "sympy",
+    "shapely",
+]
+
+# CLI plotting commands + monitoring dashboards + flow profiler.
+# Required for: `gigaevo plot`, `gigaevo events`, `gigaevo profiler`.
+plotting = [
+    "matplotlib",
+    "seaborn",
+    "statsmodels",
+    "plotly>=5.0",
+]
+
+# Experiment tracking backends — opt-in by trackers config.
+tracking = [
+    "wandb",
+    "tensorboardX",
+]
+
+# Heavy GPU / local-LLM stack — required only by problems/prompts/sudoku
+# local_runtime.
+local-llm = [
+    "torch",
+    "vllm",
+]
+
+# GAM memory platform API client — opt-in when running with `use_api=True`
+# on the memory backend. Default backend is the local in-process variant
+# (does not require this extra).
+# gigaevo-memory wheels require Python >=3.12; gated so CI on 3.11 can install
+# [memory-platform] without resolution failure. The single test that imports
+# `gigaevo_memory` uses pytest.importorskip; production use_api=True paths
+# import gigaevo.memory_platform lazily so a 3.11 runtime never sees it
+# unless the user opts in.
+memory-platform = [
+    "gigaevo-memory; python_version >= '3.12'",
+]
+
+dev = [
+    "pre-commit",
+    "python-semantic-release",
+    "ruff",
+    "mypy>=1.10",
+    "types-PyYAML",
+    "types-redis",
+    "types-psutil",
+    "uvicorn",  # tools/dag_builder/{run,api}.py
+]
+
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -78,10 +136,11 @@ test = [
     "pytest-timeout>=2.4",
     "fakeredis[lua]>=2.19.0",
     "hypothesis>=6.0",
-    # Required by gigaevo.monitoring.flow_profiler (HTML dashboard render path).
-    # Profiler and live_profiler tests exercise the real render path; missing
-    # plotly produces ModuleNotFoundError on CI even though main deps build.
-    "plotly>=5.0",
+]
+
+# Convenience meta-extra — everything user-facing.
+all = [
+    "gigaevo[chains,optimization,plotting,tracking,local-llm,memory-platform]",
 ]
 
 [project.scripts]
@@ -98,7 +157,7 @@ include = ["gigaevo*"]
 
 [tool.ruff]
 line-length = 88  # same as in black
-target-version = "py312"
+target-version = "py311"
 exclude = [".claude/worktrees", "experiments/*/top_programs_*", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
 
 [tool.ruff.lint]
@@ -126,7 +185,7 @@ known-first-party = ["gigaevo"]
 force-sort-within-sections = true
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 warn_unused_configs = true
 check_untyped_defs = true
 warn_redundant_casts = true
@@ -137,45 +196,68 @@ exclude = ["build/", "dist/", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_
 
 [[tool.mypy.overrides]]
 module = [
+    # Core deps (always installed)
     "loguru.*",
     "numpy.*",
-    "matplotlib.*",
     "pandas.*",
     "hydra.*",
     "omegaconf.*",
-    "chromadb.*",
-    "sentence_transformers.*",
-    "rank_bm25.*",
-    "bm25s.*",
-    "nltk.*",
-    "transformers.*",
-    "litellm.*",
     "sklearn.*",
     "tqdm.*",
     "networkx.*",
     "scipy.*",
-    "wandb.*",
     "cloudpickle.*",
-    "seaborn.*",
-    "statsmodels.*",
-    "tensorboardX.*",
+    "litellm.*",
     "langchain.*",
     "langchain_core.*",
     "langchain_openai.*",
     "langgraph.*",
     "langfuse.*",
-    "optuna.*",
-    "cma.*",
     "orjson.*",
     "diffpatch.*",
     "dotenv.*",
     "jinja2.*",
     "fakeredis.*",
-    "GAM_root.*",
     "gigaevo_memory.*",
+    # [chains] extra
+    "chromadb.*",
+    "sentence_transformers.*",
+    "transformers.*",
+    "nltk.*",
+    "bm25s.*",
+    "Stemmer.*",
+    "datasets.*",
+    "tenacity.*",
+    "absl.*",
+    "emoji.*",
+    "syllapy.*",
+    "langdetect.*",
+    "immutabledict.*",
+    "mmar_carl.*",
+    "GAM_root.*",
     "A_mem.*",
     "shared_memory.*",
     "runtime_config.*",
+    # [optimization] extra
+    "optuna.*",
+    "cma.*",
+    "jax.*",
+    "optax.*",
+    "sympy.*",
+    "shapely.*",
+    # [plotting] extra
+    "matplotlib.*",
+    "seaborn.*",
+    "statsmodels.*",
+    "plotly.*",
+    # [tracking] extra
+    "wandb.*",
+    "tensorboardX.*",
+    # [local-llm] extra
+    "torch.*",
+    "vllm.*",
+    # [dev] extra
+    "uvicorn.*",
 ]
 ignore_missing_imports = true
 

@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - run: pip install ruff
       - name: Ruff check
         run: ruff check .
@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -45,9 +45,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Install dependencies
-        run: pip install -e ".[test]"
+        run: pip install -e ".[chains,optimization,memory-platform,plotting,test]"
       - name: Run tests with coverage
         run: python -m pytest -m "not benchmark" --timeout=120 --cov=gigaevo --cov-report=term-missing --cov-report=xml:coverage.xml tests/
       - name: Upload coverage report
@@ -108,7 +108,7 @@ jobs:
           git reset --hard origin/main
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Install dependencies
         run: pip install build
       - name: Semantic Release
