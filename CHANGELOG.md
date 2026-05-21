@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v2.1.2 (2026-05-21)
+
+### Bug Fixes
+
+- **config**: Default checkpoint_dir under Hydra run dir
+  ([#253](https://github.com/KhrulkovV/gigaevo-core-internal/pull/253),
+  [`702c84d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/702c84db62fdb48c3c00224601df8541a3992d5c))
+
+- **config**: Default checkpoint_dir under Hydra run dir for per-run memory isolation
+  ([#253](https://github.com/KhrulkovV/gigaevo-core-internal/pull/253),
+  [`702c84d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/702c84db62fdb48c3c00224601df8541a3992d5c))
+
+- **memory,selector**: Thread per-run checkpoint_dir + restore FP+tournament default
+  ([#253](https://github.com/KhrulkovV/gigaevo-core-internal/pull/253),
+  [`702c84d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/702c84db62fdb48c3c00224601df8541a3992d5c))
+
+
 ## v2.1.1 (2026-05-21)
 
 ### Bug Fixes
