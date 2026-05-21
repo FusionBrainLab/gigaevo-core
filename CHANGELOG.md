@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.1.3 (2026-05-21)
+
+### Bug Fixes
+
+- **cli**: Flush --db N no longer kills workers on db N0..N9
+  ([`044871a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/044871a49a909a2ebcb24fc53cc423e59c097a0e))
+
+
 ## v2.1.2 (2026-05-21)
 
 ### Bug Fixes
