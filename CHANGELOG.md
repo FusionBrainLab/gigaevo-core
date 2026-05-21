@@ -2,6 +2,67 @@
 
 <!-- version list -->
 
+## v2.1.1 (2026-05-21)
+
+### Bug Fixes
+
+- Backport PEP-695 generics + nested-quote f-strings to Python 3.11
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- **pipelines**: Lazy-load CMA/Optuna stages in default_pipelines
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- **trackers**: Lazy-load tensorboard/wandb backends so [tracking] is truly opt-in
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+### Chores
+
+- Lower Python floor 3.12 → 3.11
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- Minimal core + opt-in extras, Python 3.11 floor, config prune
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- **config**: Prune 15 stale/redundant YAML configs
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- **deps**: Split pyproject into minimal core + opt-in extras
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+### Continuous Integration
+
+- **chains**: Gate mmar-carl extra on Python >=3.12
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- **memory-platform**: Gate gigaevo-memory on Python >=3.12
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+- **test**: Install opt-in extras needed by the test suite
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+### Documentation
+
+- Install ladder for minimal core + opt-in extras
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+### Refactoring
+
+- **problems**: Rename chains/neurips_test → chains/nlp
+  ([#252](https://github.com/KhrulkovV/gigaevo-core-internal/pull/252),
+  [`d6ac3fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d6ac3fe380705cdbd63ad2588816149d28615af7))
+
+
 ## v2.1.0 (2026-05-21)
 
 ### Bug Fixes
