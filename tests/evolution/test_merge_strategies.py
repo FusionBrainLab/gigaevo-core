@@ -173,11 +173,8 @@ class TestMergePrograms:
             merge_programs(curr, inc)
 
     def test_name_filled_from_incoming_when_current_is_none(self):
-        """When current.name is None and incoming has a name, incoming name is kept.
-
-        Bug (Finding 18): `updates["name"] = current.name` silently dropped the
-        incoming name when current.name was None. The docstring said "fill name if
-        current is None" but the code didn't do it.
+        """When ``current.name`` is None and incoming has a name, the
+        incoming name is preserved on the merged program.
         """
         p_id = _make_prog().id
         curr = _make_prog(id=p_id, name=None, atomic_counter=1)

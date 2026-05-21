@@ -360,45 +360,46 @@ User Prompt (from prompts/mutation/user.txt):
 
 **Critical dependency**: If `MutationContextStage` is missing from your pipeline, mutation prompts will lack context and produce poor results.
 
-## Configuration System (Hydra)
+## Configuration System
 
-The config system uses Hydra with custom resolvers:
-
-```yaml
-# config/experiment/base.yaml
-defaults:
-  - /constants: base        # Load constants/base.yaml
-  - /redis: default         # Load redis/default.yaml
-  - /llm: single           # Load llm/single.yaml
-  - /algorithm: single_island
-  - /pipeline: auto
-
-# Hydra instantiation
-dag_blueprint:
-  _target_: gigaevo.runner.dag_blueprint.DAGBlueprint
-  nodes:
-    ValidateCode:
-      _target_: gigaevo.programs.stages.validation.ValidateCodeStage
-      _partial_: true       # Create factory, not instance
-      timeout: 30.0
-
-# Custom resolvers
-${problem.dir}              # Resolves to problem directory path
-${ref:redis_storage}        # References another instantiated object
-${metrics_context}          # Resolves to metrics context
-```
-
-### Understanding `_partial_`
+Configuration is a tree of Pydantic models rooted at
+``gigaevo.config.schemas.experiment.ExperimentConfig``. Each shipped
+experiment file under ``experiments/`` exports a ``build()`` that
+returns a fully populated instance. The CLI loads that file, applies
+tyro overrides on the typed field tree, re-runs every validator, and
+dumps the resolved tree to ``outputs/{experiment_id}/config.json``.
 
 ```python
-# _partial_: true
-# Creates: lambda: ValidateCodeStage(timeout=30.0)
-# Used when DAGBlueprint needs to create multiple instances
+# experiments/base.py
+from gigaevo.config.algorithm_presets import build_single_island
+from gigaevo.config.engine_presets import build_generational
+from gigaevo.config.llm_presets import build_openrouter_ensemble
+from gigaevo.config.pipeline_presets import build_auto
+from gigaevo.config.problem_presets import build_heilbron
+from gigaevo.config.runner_presets import build_default_runner
+from gigaevo.config.schemas import ExperimentConfig, RedisConfig
 
-# _partial_: false (or omitted)
-# Creates: ValidateCodeStage(timeout=30.0)
-# Used for singletons
+
+def build() -> ExperimentConfig:
+    return ExperimentConfig(
+        problem=build_heilbron(),
+        algorithm=build_single_island(),
+        engine=build_generational(),
+        pipeline=build_auto(),
+        llm=build_openrouter_ensemble(),
+        runner=build_default_runner(),
+        redis=RedisConfig(db=0),
+    )
 ```
+
+The pipeline builder is a discriminated-union ``PipelineBuilderConfig``;
+its ``build()`` returns the concrete ``PipelineBuilder`` and
+``build_blueprint()`` produces the ``DAGBlueprint``. Stage parameters
+(timeouts, LLM references, problem-directory paths) live on the builder
+config and are wired into stages by ``build_blueprint``. Override any
+nested field at the command line through tyro, for example
+``--pipeline.builder.stage_timeout 120`` or
+``--engine.max_generations 50``.
 
 ## Common Debugging Scenarios
 
@@ -477,7 +478,7 @@ ${metrics_context}          # Resolves to metrics context
 
 1. **Quick Start**: Follow README.md to run your first evolution
 2. **Create a Problem**: See `problems/heilbron/` as template
-3. **Customize Evolution**: Modify `config/experiment/base.yaml`
+3. **Customize Evolution**: Copy `experiments/base.py` and edit its `build()`
 4. **Add Custom Stages**: Read `DAG_SYSTEM.md`
 5. **Debug Issues**: Use Redis commands and logs
 
@@ -485,5 +486,5 @@ ${metrics_context}          # Resolves to metrics context
 
 - **DAG System**: See `DAG_SYSTEM.md`
 - **Evolution Strategies**: See `EVOLUTION_STRATEGIES.md`
-- **Configuration**: See `config/` directory structure
+- **Configuration**: See `gigaevo/config/schemas/` (Pydantic models) and `gigaevo/config/*_presets.py` (one-liner builders)
 - **Tools**: See `../tools/README.md` for analysis utilities

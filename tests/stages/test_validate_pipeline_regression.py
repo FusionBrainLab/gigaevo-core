@@ -1,19 +1,8 @@
-"""Regression tests for validate.py return-value bugs in the execution pipeline.
+"""Validation pipeline tests covering parse_output and metric coercion.
 
-Bug A — parse_output accepts None and wrong types (Findings 4+5):
-    CallValidatorFunction.parse_output() passes through any value unchecked.
-    None → (None, None), which causes 'TypeError: {**None}' deep in MergeMetricsStage
-    with no hint that validate() returned None.  Lists, ints, and floats crash
-    with similarly cryptic errors.
-    Fix: type-check in parse_output; raise ValueError with a clear message pointing
-    to the validate() return value.
-
-Bug B — _coerce_and_clamp raises TypeError for string metric values (Finding 6):
-    math.isfinite("0.85") raises TypeError (not ValueError).  This may confuse
-    error-handling code that only catches ValueError, and gives the junior researcher
-    no guidance that they returned a string instead of a float.
-    Fix: attempt float() coercion first; raise ValueError with a descriptive message
-    on failure.
+parse_output rejects non-mapping shapes (None / float / int / list) with
+ValueError or TypeError; EnsureMetricsStage._coerce_and_clamp raises
+ValueError naming the metric key for non-numeric inputs.
 """
 
 from __future__ import annotations
@@ -57,23 +46,13 @@ def _make_coerce_stage() -> EnsureMetricsStage:
 
 
 def test_parse_output_raises_for_none() -> None:
-    """parse_output(None) must raise, not silently produce (None, None).
-
-    'None' is the most common mistake: the researcher forgot the return statement.
-    Before the fix: returns (None, None) → downstream crash in MergeMetricsStage
-    with 'TypeError: {**None}' — no pointer to validate().
-    """
+    """parse_output(None) raises instead of producing (None, None)."""
     with pytest.raises((TypeError, ValueError)):
         _parse(None)
 
 
 def test_parse_output_raises_for_float() -> None:
-    """parse_output(0.85) must raise.
-
-    Researcher returned the raw float accuracy instead of wrapping it in a dict.
-    Before the fix: returns (0.85, None) → crash in MergeMetricsStage with
-    'TypeError: float is not iterable'.
-    """
+    """parse_output(<float>) raises; raw fitness values are not auto-wrapped."""
     with pytest.raises((TypeError, ValueError)):
         _parse(0.85)
 
@@ -109,14 +88,7 @@ def test_parse_output_accepts_tuple() -> None:
 
 
 def test_coerce_and_clamp_raises_value_error_for_nonnumeric_string() -> None:
-    """_coerce_and_clamp('fitness', 'high') must raise ValueError, not TypeError.
-
-    Before the fix: math.isfinite('high') raises TypeError with a generic message
-    from Python builtins — no pointer back to the metric key or validate().
-    Fix: try float(value) first; on coercion failure raise ValueError with a
-    message naming the metric key, e.g.
-    "Metric 'fitness' must be numeric, got 'str': 'high'".
-    """
+    """_coerce_and_clamp raises ValueError naming the metric key on non-numeric input."""
     stage = _make_coerce_stage()
     with pytest.raises(ValueError, match="fitness"):
         stage._coerce_and_clamp("fitness", "high")

@@ -228,12 +228,12 @@ class TestProperties:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 6: Exponential backoff boundary conditions
+# Exponential backoff boundary conditions
 # ---------------------------------------------------------------------------
 
 
 class TestExponentialBackoffBoundary:
-    """Audit finding 6: verify retries happen with increasing delays up to the max."""
+    """Retries must happen with increasing delays up to the configured max."""
 
     async def test_delays_increase_exponentially(self) -> None:
         """Each retry delay should be 2x the previous one, up to the cap of 1.0."""

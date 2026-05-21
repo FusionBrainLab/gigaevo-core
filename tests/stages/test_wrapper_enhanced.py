@@ -48,7 +48,7 @@ def _make_mock_proc(
         proc.kill.return_value = None
 
     # proc.wait() — async
-    wait_future: asyncio.Future = asyncio.get_event_loop().create_future()
+    wait_future: asyncio.Future = asyncio.get_running_loop().create_future()
     wait_future.set_result(0)
     proc.wait.return_value = wait_future
 
@@ -471,8 +471,7 @@ def _make_mock_pool(worker_proc: MagicMock | None = None) -> MagicMock:
 
 class TestRunExecRunnerFallback:
     """wrapper.py L333-399: When the worker pool path fails (timeout, broken pipe),
-    run_exec_runner falls back to a one-shot subprocess. This entire fallback
-    path previously had zero tests.
+    ``run_exec_runner`` falls back to a one-shot subprocess.
 
     All tests use a fully mocked WorkerPool — no real subprocesses are spawned."""
 

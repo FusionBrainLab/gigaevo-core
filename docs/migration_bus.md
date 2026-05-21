@@ -21,15 +21,12 @@ Key properties:
 
 ```bash
 # Using the experiment preset (recommended)
-python run.py experiment=migration_bus problem.name=heilbron redis.db=0
-python run.py experiment=migration_bus problem.name=heilbron redis.db=1
-python run.py experiment=migration_bus problem.name=heilbron redis.db=2
-
-# Or as a single Hydra override on any existing setup
-python run.py migration_bus=bus problem.name=heilbron redis.db=0
+python run.py experiments/migration_bus.py --redis.db 0
+python run.py experiments/migration_bus.py --redis.db 1
+python run.py experiments/migration_bus.py --redis.db 2
 
 # Combined with steady-state for maximum throughput
-python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
+python run.py experiments/steady_state_bus.py --redis.db 0
 ```
 
 All runs share a migration stream on Redis DB 15 (configurable via `migration_bus_db`).
@@ -39,11 +36,15 @@ Each run needs a unique `redis.db`.
 
 ### Presets
 
-| Preset | File | Description |
-|--------|------|-------------|
-| `disabled` (default) | `config/migration_bus/disabled.yaml` | No bus, normal EvolutionEngine |
-| `bus` | `config/migration_bus/bus.yaml` | Fully-connected — accept from any other run |
-| `ring` | `config/migration_bus/ring.yaml` | Ring — accept only from predecessor |
+The bus topology is selected by composing the engine preset:
+
+| Builder | Topology | Description |
+|---------|----------|-------------|
+| `build_generational` / `build_steady_state` | none | Normal `EvolutionEngine`, no cross-run sharing |
+| `build_bus_engine` | fully-connected | `BusedEvolutionEngine` accepting from any peer |
+| `build_ring_engine` | ring | `BusedEvolutionEngine` accepting only from the predecessor |
+
+See `gigaevo/config/engine_presets.py` for the builder signatures.
 
 ### Key Parameters
 
@@ -58,11 +59,9 @@ Each run needs a unique `redis.db`.
 
 ### Ring Topology
 
-```bash
-python run.py migration_bus=ring \
-  migration_bus_ring_ids='["heilbron@db0","heilbron@db2","heilbron@db3"]' \
-  redis.db=0
-```
+Set the ring in the experiment file by passing ``build_ring_engine``
+with the desired peer order; the topology lives on the engine schema
+and is part of the resolved config.
 
 ## Architecture
 

@@ -26,7 +26,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 | [Evolution Strategies](docs/EVOLUTION_STRATEGIES.md) | MAP-Elites, multi-island, migration |
 | [Prompt Co-Evolution](docs/COEVOLUTION.md) | Co-evolve mutation prompts alongside programs |
 | [Tools](tools/README.md) | Analysis, debugging, and problem scaffolding utilities |
-| [Usage Guide](docs/USAGE.md) | Detailed usage and Hydra configuration |
+| [Usage Guide](docs/USAGE.md) | Typed CLI overrides and experiment-file authoring |
 | [Contributing](docs/CONTRIBUTING.md) | Guidelines for contributors |
 | [Changelog](CHANGELOG.md) | Version history |
 
@@ -74,8 +74,19 @@ redis-server
 
 ### 4. Run Evolution
 
+Each shipped experiment file under `experiments/` exports
+`build() -> ExperimentConfig` and runs end-to-end via the typed CLI:
+
 ```bash
-python run.py problem.name=heilbron
+python run.py experiments/base.py
+```
+
+Use `--dry-run` to validate the configuration and dump the resolved
+tree to `outputs/{experiment_id}/config.json` without invoking the
+engine. Override any field through tyro:
+
+```bash
+python run.py experiments/base.py --seed 7 --engine.max_generations 200
 ```
 
 Evolution starts immediately. Logs are saved to `outputs/`.
@@ -105,58 +116,61 @@ Evolution starts immediately. Logs are saved to `outputs/`.
 
 ### Experiment Presets
 
+Each shipped preset lives at `experiments/<name>.py` and exports a `build()`
+function returning a fully resolved `ExperimentConfig`:
+
 ```bash
 # Steady-state: continuous mutation/evaluation, ~8x throughput
-python run.py experiment=steady_state problem.name=heilbron
+python run.py experiments/steady_state.py
 
 # Migration bus: parallel runs share rejected programs via Redis stream
-python run.py experiment=migration_bus problem.name=heilbron redis.db=0
-python run.py experiment=migration_bus problem.name=heilbron redis.db=1
+python run.py experiments/migration_bus.py
+python run.py experiments/migration_bus.py --redis.db 1 --engine.migration_bus.run_id heilbron@db1
 
 # Steady-state + bus: maximum throughput with cross-run sharing
-python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
+python run.py experiments/steady_state_bus.py
 
 # Multi-island evolution (fitness + simplicity islands)
-python run.py experiment=multi_island_complexity problem.name=heilbron
+python run.py experiments/multi_island_complexity.py
 
 # Multi-LLM exploration (diverse mutation models)
-python run.py experiment=multi_llm_exploration problem.name=heilbron
+python run.py experiments/multi_llm_exploration.py
 
 # Prompt co-evolution (evolve mutation prompts alongside programs)
-python run.py experiment=prompt_coevolution problem.name=heilbron \
-    redis.db=4 prompt_fetcher.prompt_redis_db=6
+python run.py experiments/prompt_coevolution.py
 ```
 
 ### Common Overrides
 
+Overrides are nested by `ExperimentConfig` field name, parsed by tyro:
+
 ```bash
 # Limit generations
-python run.py problem.name=heilbron max_generations=10
+python run.py experiments/base.py --engine.max_generations 10
 
 # Use different Redis database
-python run.py problem.name=heilbron redis.db=5
+python run.py experiments/base.py --redis.db 5
 
-# Change LLM model
-python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
-
-# Preview config without running
-python run.py problem.name=heilbron --cfg job
+# Validate and dump the resolved config without invoking the engine
+python run.py experiments/base.py --dry-run
 ```
+
+The resolved config dumps to `outputs/{experiment_id}/config.json` on every
+invocation, giving a reproducibility record per run.
 
 ### Prompt Co-Evolution
 
-Co-evolve the mutation prompts alongside your programs. A paired prompt run
-evolves the system prompt used by the mutation LLM, selecting for prompts that
-produce better mutations:
+Co-evolve the mutation prompts alongside your programs. Paired runs use the
+`experiments/prompt_coevolution.py` preset on the main side; the paired
+prompt-evolution loop runs against a different Redis database:
 
 ```bash
 # Main run — uses co-evolved prompts from DB 6
-python run.py problem.name=my_task pipeline=my_pipeline \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
+python run.py experiments/prompt_coevolution.py --redis.db 4 \
+    --prompt_fetcher.prompt_redis_db 6
 
 # Prompt run — evolves mutation prompts, reads outcomes from DB 4
-python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
-    redis.db=6 main_redis_db=4 main_redis_prefix=my_task
+# (uses a second experiment file dedicated to prompt evolution)
 ```
 
 See [Prompt Co-Evolution Guide](docs/COEVOLUTION.md) for the full architecture,
@@ -164,24 +178,23 @@ launch instructions, and monitoring.
 
 ## Configuration
 
-GigaEvo uses [Hydra](https://hydra.cc/) for modular configuration. All config
-files are in `config/`:
+Configuration lives in `gigaevo/config/` as typed Pydantic models. The public
+surface is:
 
-| Directory | Purpose | Key files |
-|-----------|---------|-----------|
-| `experiment/` | Complete experiment templates | `base.yaml`, `steady_state.yaml`, `migration_bus.yaml`, `prompt_coevolution.yaml`, `steady_state_bus.yaml` |
-| `algorithm/` | Evolution algorithms | `single_island.yaml`, `multi_island.yaml` |
-| `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml` |
-| `pipeline/` | DAG execution pipelines | `standard.yaml`, `with_context.yaml`, `prompt_evolution.yaml` |
-| `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
-| `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml` |
-| `loader/` | Program loading | `directory.yaml`, `redis_selection.yaml` |
-| `logging/` | Backends | `tensorboard.yaml`, `wandb.yaml` |
+| Module | Role |
+|--------|------|
+| `gigaevo/config/schemas/` | Discriminated-union Pydantic schemas (algorithm, engine, llm, pipeline, problem, runner, experiment) |
+| `gigaevo/config/defaults.py` | `Final`-typed module-level scalars (timeouts, retry counts, behavior-space resolutions) |
+| `gigaevo/config/algorithm_presets.py` | One-liner builders for single / multi-island MAP-Elites |
+| `gigaevo/config/engine_presets.py` | Generational / steady-state / bus / ring engine builders |
+| `gigaevo/config/llm_presets.py` | OpenRouter / Gemini / OpenAI / bandit ensembles |
+| `gigaevo/config/pipeline_presets.py` | Default / context / structural-metrics / problem-specific pipelines |
+| `gigaevo/config/problem_presets.py` | Heilbron, HotpotQA, AlgoTune, AlphaEvolve |
+| `gigaevo/config/runner_presets.py` | DAG runner |
 
-Override any setting via command line:
-```bash
-python run.py experiment=full_featured max_generations=50 temperature=0.8
-```
+An experiment file under `experiments/` composes these presets into an
+`ExperimentConfig`. The shipped files double as the reference for writing your
+own.
 
 ## Creating a Problem
 
@@ -196,14 +209,16 @@ python run.py experiment=full_featured max_generations=50 temperature=0.8
        └── strategy2.py
    ```
 
-2. Run:
+2. Create `experiments/my_problem.py` (start from `experiments/base.py`),
+   point `ProblemConfig.problem_dir` at the directory you just created,
+   and tune the algorithm / pipeline / engine selectors as needed.
+
+3. Run it:
    ```bash
-   python run.py problem.name=my_problem
+   python run.py experiments/my_problem.py
    ```
 
-Or use the wizard: `python -m tools.wizard config.yaml`
-
-See `problems/heilbron/` for a complete example.
+See `experiments/base.py` and `problems/heilbron/` for a complete example.
 
 ## Output
 
@@ -220,7 +235,6 @@ Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
 | `tools/comparison.py` | Compare runs with fitness curve plots |
 | `tools/top_programs.py` | Extract best programs from archive |
 | `tools/flush.py` | Safely flush Redis DBs (kills workers first) |
-| `tools/experiment/archive_run.sh` | Archive run data before flush |
 | `tools/dag_builder/` | Visual DAG pipeline designer |
 | `tools/wizard/` | Interactive problem scaffolding |
 
@@ -251,7 +265,7 @@ ruff check . && ruff format --check .
 PYTHONPATH=. python tools/flush.py --db 0 --confirm
 
 # Or use a different DB:
-python run.py redis.db=1
+python run.py experiments/base.py --redis.db 1
 ```
 
 **LLM connection issues:**

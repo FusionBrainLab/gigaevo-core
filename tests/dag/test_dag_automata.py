@@ -1173,14 +1173,12 @@ class TestDAGIntegrationFailurePropagation:
 
 
 class TestDAGIntegrationStaleResultRegression:
-    """Integration regression tests for the stale-result deadlock.
+    """Stale-result handling on re-run.
 
-    Before the fix: a stage with a stale COMPLETED result from a previous run
-    could not be overwritten by SKIPPED when upstream failed in the current run,
-    causing a deadlock (skip_progress=False + running={} -> RuntimeError).
-
-    After the fix: the skip guard is gated on `stage_name in finished_this_run`,
-    so stale results from prior runs are correctly replaced with SKIPPED.
+    A stage whose previous-run COMPLETED result is now invalid (because an
+    upstream stage failed in the current run) must be replaceable with
+    SKIPPED. The skip guard is gated on ``stage_name in finished_this_run``,
+    so stale results from prior runs do not block progress.
     """
 
     async def test_full_chain_stale_root_now_fails(self, state_manager, make_program):

@@ -23,7 +23,7 @@ _RUN_STATE_LAST_MIGRATION = "strategy:last_migration"
 
 
 class MapElitesMultiIsland(EvolutionStrategy):
-    """Multi-island MAP-Elites strategy (updated to new island API)."""
+    """Multi-island MAP-Elites strategy."""
 
     def __init__(
         self,
@@ -51,7 +51,6 @@ class MapElitesMultiIsland(EvolutionStrategy):
         self.generation = 0
         self.last_migration = 0
 
-        # Pluggables (kept for API completeness)
         self.island_selector = island_selector or WeightedIslandSelector()
         self.mutant_router = mutant_router or RandomMutantRouter()
 
@@ -328,7 +327,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
 
         random.shuffle(migrants)
         for migrant in migrants:
-            source_island_id = migrant.get_metadata("current_island")
+            source_island_id = migrant.get_metadata(METADATA_KEY_CURRENT_ISLAND)
             logger.debug(
                 "MultiIsland: migrating program {} from island '{}'",
                 migrant.id,

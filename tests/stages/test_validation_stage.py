@@ -152,10 +152,10 @@ class TestValidateCodeStageSecurity:
 
 
 class TestSecurityBypassGaps:
-    """Regression tests for bypass paths that were silently missed before the fix.
+    """Each payload must be rejected by ``ValidateCodeStage`` with ``safe_mode=True``.
 
-    Each payload was previously accepted by safe_mode=True; the fix closes all
-    four gaps simultaneously.
+    Covers four classes of dangerous-import / dangerous-call bypass that the
+    safe-mode pattern set must catch.
     """
 
     @pytest.mark.parametrize(

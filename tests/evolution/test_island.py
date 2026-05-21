@@ -408,7 +408,7 @@ class TestMapElitesIslandMigrants:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 4: Island add — displaced program verification
+# Island.add — displaced program verification
 # ---------------------------------------------------------------------------
 
 
@@ -479,7 +479,7 @@ class TestDisplacedProgramVerification:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 5: enforce_size_limit survivor identity
+# enforce_size_limit survivor identity
 # ---------------------------------------------------------------------------
 
 
@@ -545,7 +545,7 @@ class TestEnforceSizeLimitSurvivorIdentity:
 
 
 # ---------------------------------------------------------------------------
-# Audit finding 6: Migration integration
+# Migration integration
 # ---------------------------------------------------------------------------
 
 
@@ -679,3 +679,48 @@ class TestMigrationIntegration:
         # Verify in destination archive
         dest_elites = await dest_island.get_elites()
         assert any(e.id == prog.id for e in dest_elites)
+
+
+# ---------------------------------------------------------------------------
+# Schema pinning
+# ---------------------------------------------------------------------------
+
+
+class TestIslandConfigSchema:
+    """Pin the IslandConfig field set to prevent silent kwarg drift."""
+
+    def test_no_migration_rate_field(self) -> None:
+        """`migration_rate` must not appear in the model.
+
+        Migration cadence is controlled globally by
+        `MapElitesMultiIsland.migration_interval` and the volume by
+        `max_migrants_per_island`. A per-island `migration_rate` has no
+        consumer in the engine; leaving the kwarg silently accepted would
+        revive the original double-drop bug.
+        """
+        assert "migration_rate" not in IslandConfig.model_fields
+
+    def test_migration_rate_kwarg_is_silently_dropped_or_rejected(self) -> None:
+        """Constructing with `migration_rate` must not store the value.
+
+        With the model's current `extra='ignore'` default the kwarg is
+        dropped; if the project later switches to `extra='forbid'` the call
+        will raise. Either outcome is acceptable — the unacceptable
+        outcome is the value being silently kept and read by future code.
+        """
+        bs = _make_behavior_space()
+        try:
+            cfg = IslandConfig(
+                island_id="rate-pin",
+                behavior_space=bs,
+                max_size=None,
+                archive_selector=SumArchiveSelector(fitness_keys=["score"]),
+                elite_selector=RandomEliteSelector(),
+                migrant_selector=RandomMigrantSelector(),
+                archive_remover=None,
+                migration_rate=0.25,  # type: ignore[call-arg]
+            )
+        except Exception:
+            # `extra='forbid'` path — fine, the field is rejected.
+            return
+        assert not hasattr(cfg, "migration_rate")

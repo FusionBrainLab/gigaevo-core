@@ -427,7 +427,10 @@ async def _run_chain_on_dataset_stepwise(
                 resolved_kwargs = {}
                 for param_name, ref in step.step_config.input_mapping.items():
                     resolved_kwargs[param_name] = _resolve_reference(
-                        ref, outer_contexts[i], all_step_outputs[i]
+                        ref,
+                        outer_contexts[i],
+                        all_step_outputs[i],
+                        dataset[i],
                     )
                 all_resolved.append(resolved_kwargs)
 

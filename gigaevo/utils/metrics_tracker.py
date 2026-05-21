@@ -51,9 +51,10 @@ class MetricsTracker:
           * per-program metrics for valid programs: "valid/program/<metric>"
           * counts: programs/{valid_count, invalid_count, total_count}
           * frontier for valid only: "valid/frontier/<metric>" (step = iteration)
-          * NEW (valid only):
-              - per-iteration aggregates: "valid/iter/<metric>/{mean,std}" (step = iteration)
-              - per-generation aggregates: "valid/gen/<metric>/{mean,std}" (step = generation)
+          * per-iteration aggregates (valid only):
+            "valid/iter/<metric>/{mean,std}" (step = iteration)
+          * per-generation aggregates (valid only):
+            "valid/gen/<metric>/{mean,std}" (step = generation)
       - Frontier uses MetricsContext.specs[metric].higher_is_better (default True).
       - Frontier is the single source of truth: when NO_CACHE stages update
         metrics, the full frontier series is recomputed from all valid programs
@@ -175,9 +176,8 @@ class MetricsTracker:
                     )
                     self._seen_fitness[prog.id] = metrics_hash
 
-        # Re-check already-seen programs for fitness changes
-        # (handles NO_CACHE stages like PromptFitnessStage that update
-        # metrics after archive refresh re-runs)
+        # Re-check already-seen programs for fitness changes. NO_CACHE stages
+        # may update metrics after archive refresh re-runs.
         await self._refresh_changed_fitness()
 
     async def _refresh_changed_fitness(self) -> None:
@@ -328,8 +328,9 @@ class MetricsTracker:
         ``_valid_programs`` and rewrite the backend history.
 
         Called when ``_refresh_changed_fitness`` detects that a NO_CACHE stage
-        has changed program metrics, which may invalidate previously-written
-        frontier entries (e.g. the program that held the frontier got worse).
+        has changed program metrics, which may invalidate frontier entries
+        already written to the backend (e.g. the program that held the
+        frontier got worse).
         """
         spec = self._ctx.specs.get(metric_key)
         higher_is_better = True if spec is None else bool(spec.higher_is_better)

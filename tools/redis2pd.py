@@ -1,10 +1,12 @@
-import sys
-
-sys.path.append("../gigaevo-core-internal")
 import argparse
 import asyncio
 import json
+import os
+import sys
+import tempfile
 from pathlib import Path
+
+sys.path.append("../gigaevo-core-internal")
 
 import pandas as pd
 
@@ -14,6 +16,26 @@ from tools.utils import (
     fetch_evolution_dataframe,
     prepare_iteration_dataframe,
 )
+
+
+def _atomic_write_csv(df: pd.DataFrame, path: Path) -> None:
+    """Write ``df`` to ``path`` via tmpfile + os.replace.
+
+    Avoids leaving a half-written CSV when two writers target the same
+    output or when the process is interrupted mid-flush.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    )
+    os.close(fd)
+    tmp_path = Path(tmp)
+    try:
+        df.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,13 +66,12 @@ async def export_redis_run_to_csv(
     add_stage_results: bool = False,
 ) -> Path:
     output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     df: pd.DataFrame = await fetch_evolution_dataframe(
         config, add_stage_results=add_stage_results
     )
     df = _serialize_complex_columns(df)
-    df.to_csv(output_path, index=False)
+    _atomic_write_csv(df, output_path)
     return output_path
 
 
@@ -60,32 +81,30 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  # New format (preferred)
+  # Single-argument run spec
   PYTHONPATH=. python tools/redis2pd.py --run chains/hotpotqa/static@4:O --output-file /tmp/o.csv
 
   # Frontier-only CSV (gen,best_val) for 05_results.md tables
   PYTHONPATH=. python tools/redis2pd.py --run chains/hotpotqa/static@4:O \\
       --frontier-csv --output-file /tmp/frontier_o.csv
 
-  # Legacy format (still works, used by archive_run.sh)
+  # Split prefix/db form (used by archive_run.sh)
   PYTHONPATH=. python tools/redis2pd.py --redis-db 4 --redis-prefix chains/hotpotqa/static \\
       --output-file /tmp/o.csv
 """,
     )
-    # New unified format
+    # Combined run-spec argument
     parser.add_argument(
         "--run",
         metavar="PREFIX@DB[:LABEL]",
         help="Run spec: prefix@db or prefix@db:label (takes precedence over --redis-db/--redis-prefix)",
     )
-    # Legacy args (still supported for archive_run.sh compatibility)
+    # Split-form run arguments (consumed when --run is not provided)
     parser.add_argument("--redis-host", default="localhost", help="Redis host")
     parser.add_argument("--redis-port", type=int, default=6379, help="Redis port")
+    parser.add_argument("--redis-db", type=int, help="Redis database (paired with --redis-prefix)")
     parser.add_argument(
-        "--redis-db", type=int, help="Redis database [legacy; prefer --run]"
-    )
-    parser.add_argument(
-        "--redis-prefix", type=str, help="Redis prefix [legacy; prefer --run]"
+        "--redis-prefix", type=str, help="Redis prefix (paired with --redis-db)"
     )
     parser.add_argument(
         "--output-file", type=str, required=True, help="Output CSV file path"
@@ -100,7 +119,7 @@ Examples:
     )
     args = parser.parse_args()
 
-    # Resolve run config: --run takes precedence over legacy --redis-db / --redis-prefix
+    # Resolve run config: --run takes precedence over the split --redis-db / --redis-prefix pair
     if args.run:
         prefix, db, label = parse_run_arg(args.run)
         config = RedisRunConfig(
@@ -129,6 +148,7 @@ Examples:
         print(f"No data found for {config.display_label()}")
         return
 
+    output_path = Path(args.output_file)
     if args.frontier_csv:
         prepared = prepare_iteration_dataframe(df)
         if prepared.empty:
@@ -143,12 +163,12 @@ Examples:
             .sort_values(iteration_col)
             .rename(columns={iteration_col: "gen", frontier_col: "best_val"})
         )
-        frontier_df.to_csv(args.output_file, index=False)
-        print(f"Frontier CSV: {len(frontier_df)} gens → {args.output_file}")
+        _atomic_write_csv(frontier_df, output_path)
+        print(f"Frontier CSV: {len(frontier_df)} gens → {output_path}")
     else:
         df = _serialize_complex_columns(df)
-        df.to_csv(args.output_file, index=False)
-        print(f"Full history: {len(df)} programs → {args.output_file}")
+        _atomic_write_csv(df, output_path)
+        print(f"Full history: {len(df)} programs → {output_path}")
 
 
 if __name__ == "__main__":

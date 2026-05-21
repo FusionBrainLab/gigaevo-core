@@ -12,12 +12,13 @@ Launch two processes — one for programs, one for prompts:
 
 ```bash
 # 1. Main run — uses co-evolved prompts from DB 6
-python run.py experiment=prompt_coevolution problem.name=heilbron \
-    redis.db=4 prompt_fetcher.prompt_redis_db=6
+python run.py experiments/prompt_coevolution.py \
+    --redis.db 4 --prompt_fetcher.prompt_redis_db 6
 
 # 2. Prompt run — evolves mutation prompts, reads outcomes from DB 4
-python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
-    redis.db=6 main_redis_db=4 main_redis_prefix=heilbron
+# (the prompt-evolution preset is its own experiment file; copy
+# experiments/prompt_coevolution.py and adapt for the prompt side, or
+# write a dedicated experiments/prompt_evolution.py)
 ```
 
 The main run fetches the current best mutation prompt from the prompt run's archive. The prompt run reads fitness outcomes from the main run to select for prompts that produce better mutations.
@@ -68,8 +69,8 @@ The main run fetches the current best mutation prompt from the prompt run's arch
 | `gigaevo/prompts/coevolution/stages.py` | `PromptExecutionStage` + `PromptFitnessStage` — DAG stages for prompt evaluation |
 | `gigaevo/prompts/coevolution/sync.py` | `MainRunSyncHook` — blocks prompt run until main run advances |
 | `gigaevo/prompts/coevolution/pipeline.py` | `PromptEvolutionPipelineBuilder` — assembles the prompt run DAG |
-| `config/prompt_fetcher/coevolved.yaml` | Hydra config for `GigaEvoArchivePromptFetcher` |
-| `config/pipeline/prompt_evolution.yaml` | Hydra config for the prompt run pipeline |
+| `gigaevo/config/schemas/prompt.py` | `GigaEvoArchivePromptFetcherConfig` schema selecting `GigaEvoArchivePromptFetcher` |
+| `gigaevo/config/problem_presets.py` | `build_prompt_evolution()` problem preset for the prompt-run side |
 | `problems/prompt_evolution/` | Problem definition: seed programs, metrics, task description |
 
 ### Redis Key Schema
@@ -142,32 +143,36 @@ different lengths coexist even if they have similar fitness.
 
 ### Minimal Example (1 main + 1 prompt run)
 
+Two experiment files compose the topology — one for the main run, one
+for the prompt run. The shipped ``experiments/prompt_coevolution.py``
+covers the main side; copy it to ``experiments/prompt_evolution_run.py``
+and swap the problem preset to ``build_prompt_evolution()`` plus
+``PromptEvolutionPipelineBuilder`` for the prompt side. Override per-run
+fields through tyro:
+
 ```bash
 PYTHON=$GIGAEVO_PYTHON
 export PYTHONPATH=/path/to/gigaevo-core
 
 # Main run (X1) — evolves HotpotQA chains, fetches prompts from DB 6
 HOTPOTQA_CHAIN_URL="http://CHAIN_HOST:8001/v1" \
-$PYTHON run.py \
-    problem.name=chains/hotpotqa/static_f1_600 \
-    pipeline=hotpotqa_asi \
-    prompts=default \
-    prompt_fetcher=coevolved \
-    prompt_fetcher.prompt_redis_db=6 \
-    redis.db=4 \
-    max_generations=25 \
-    llm_base_url="http://MUT_HOST_1:8777/v1"
+$PYTHON run.py experiments/prompt_coevolution.py \
+    --redis.db 4 \
+    --prompt_fetcher.prompt_redis_db 6 \
+    --engine.max_generations 25 \
+    --llm.models.0.base_url http://MUT_HOST_1:8777/v1
 
 # Prompt run (P1) — evolves mutation prompts, reads stats from DB 4
-$PYTHON run.py \
-    problem.name=prompt_evolution \
-    pipeline=prompt_evolution \
-    redis.db=6 \
-    main_redis_db=4 \
-    main_redis_prefix=chains/hotpotqa/static_f1_600 \
-    max_generations=25 \
-    llm_base_url="http://MUT_HOST_2:8777/v1"
+$PYTHON run.py experiments/prompt_evolution_run.py \
+    --redis.db 6 \
+    --engine.max_generations 25 \
+    --llm.models.0.base_url http://MUT_HOST_2:8777/v1
 ```
+
+The prompt-run experiment file holds the ``main_redis_db`` and
+``main_redis_prefix`` selections on its pipeline-builder config so the
+``PromptFitnessStage`` and ``MainRunSyncHook`` resolve to the matching
+main-run Redis namespace at build time.
 
 ### Full Paired Experiment (2 main + 2 prompt runs)
 
@@ -188,21 +193,21 @@ script with preflight checks, config verification, and watchdog setup.
 
 **Main run** (adds co-evolved prompt fetching to a normal run):
 
-| Override | Purpose |
-|----------|---------|
-| `prompt_fetcher=coevolved` | Use `GigaEvoArchivePromptFetcher` instead of static files |
-| `prompt_fetcher.prompt_redis_db=N` | Redis DB of the paired prompt run |
+| Field | Purpose |
+|-------|---------|
+| `prompt_fetcher` (GigaEvoArchivePromptFetcherConfig) | Use `GigaEvoArchivePromptFetcher` instead of static files |
+| `--prompt_fetcher.prompt_redis_db N` | Redis DB of the paired prompt run |
 
 All other main run config is identical to a normal GigaEvo run.
 
-**Prompt run** (dedicated pipeline):
+**Prompt run** (dedicated experiment file):
 
-| Override | Purpose |
-|----------|---------|
-| `problem.name=prompt_evolution` | Prompt evolution problem (seeds, metrics) |
-| `pipeline=prompt_evolution` | Pipeline with `PromptFitnessStage` + `MainRunSyncHook` |
-| `main_redis_db=N` | Redis DB of the paired main run (for stats reads) |
-| `main_redis_prefix=...` | Key prefix of the main run |
+| Field | Purpose |
+|-------|---------|
+| `problem=build_prompt_evolution()` | Prompt evolution problem (seeds, metrics) |
+| `pipeline.builder=PromptEvolutionPipelineBuilder` | Pipeline with `PromptFitnessStage` + `MainRunSyncHook` |
+| `pipeline.builder.main_redis_db` | Redis DB of the paired main run (for stats reads) |
+| `pipeline.builder.main_redis_prefix` | Key prefix of the main run |
 
 ### Seed Programs
 
@@ -258,12 +263,16 @@ The co-evolution system is task-agnostic. To use it with a different problem:
 1. Create a task-specific prompt evolution problem directory (e.g.
    `problems/prompt_evolution_hover/`) with its own seed programs, metrics,
    and task description. Alternatively, reuse `problems/prompt_evolution/`.
-2. Change the main run's `problem.name` and `pipeline` to your task
-3. Add `prompt_fetcher=coevolved` and `prompt_fetcher.prompt_redis_db=N`
-4. Set `main_redis_prefix` on the prompt run to match your main run's prefix
-5. **Important**: Set `prompt_fetcher.prompt_prefix` on the main run to match
-   the prompt run's Redis prefix. The default is `prompt_evolution`, which
-   only works for HotpotQA. For HoVer, use `prompt_evolution_hover`.
+2. In the main experiment file, swap the problem and pipeline presets
+   to your task.
+3. Attach a `GigaEvoArchivePromptFetcherConfig` to the main experiment's
+   `prompt_fetcher` field and set its `prompt_redis_db` to the paired
+   prompt run's DB.
+4. In the prompt experiment file, set `main_redis_prefix` on
+   `PromptEvolutionPipelineBuilder` to match the main run's prefix.
+5. **Important**: Set `prompt_fetcher.prompt_prefix` on the main experiment
+   to match the prompt run's Redis prefix. The default is `prompt_evolution`,
+   which only works for HotpotQA. For HoVer, use `prompt_evolution_hover`.
 
 The fitness signal (mutation success rate) is universal — it measures whether
 the prompt helps produce better programs regardless of the downstream task.

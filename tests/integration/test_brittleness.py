@@ -145,10 +145,12 @@ SEED_CODE = _make_code(fitness=1.0, x=0.0)
 class TestLineageRace:
     """Parallel mutations from the same parent can lose child references.
 
-    Root cause: generate_mutations() does a non-atomic read-modify-write
-    on parent.lineage.children (mutation.py:74-78).  Two concurrent tasks
-    each fetch a fresh parent, add their own child, and persist — the last
-    writer wins, losing the other's child reference.
+    ``generate_mutations`` performs a non-atomic read-modify-write on
+    ``parent.lineage.children``: two concurrent tasks each fetch a fresh
+    parent, append their own child, and persist, so the last writer wins.
+    The test pins the lower-bound invariant (at least one child is
+    recorded) and skips on the rare interleaving where fewer than all
+    children survive under fakeredis.
     """
 
     async def test_parallel_mutations_from_same_parent_can_lose_children(self) -> None:
@@ -191,22 +193,19 @@ class TestLineageRace:
         fresh_parent = await storage.get(parent.id)
         assert fresh_parent is not None
 
-        # BUG DETECTION: With 3 parallel mutations, the parent should have
-        # 3 children.  Due to the read-modify-write race (mutation.py:74-78),
-        # fewer children may be recorded.
+        # With 3 parallel mutations, the parent ideally records 3 children,
+        # but the lineage update is a read-modify-write against Redis without
+        # a CAS guard, so concurrent writers can clobber each other.
         child_count = len(fresh_parent.lineage.children)
 
-        # This is the KNOWN BUG: we expect 3 but the race means we may get fewer.
-        # If this test passes with child_count == 3, the race didn't manifest
-        # (fakeredis is single-threaded so the race is hard to trigger).
-        # We assert >= 1 to prove the mechanism works at all.
+        # Lower bound: the mechanism wires up at all.
         assert child_count >= 1, "Parent should have at least 1 child recorded"
 
-        # Document the expectation: ideally all 3 should be recorded
+        # When fewer than all 3 are recorded the race manifested under
+        # fakeredis (rare but possible); skip rather than fail noisily.
         if child_count < 3:
             pytest.skip(
-                f"Race condition manifested: only {child_count}/3 children recorded. "
-                f"This is the known lineage race bug (mutation.py:74-78)."
+                f"Lineage write race manifested: only {child_count}/3 children recorded."
             )
 
         await storage.close()
@@ -218,11 +217,12 @@ class TestLineageRace:
 
 
 class TestIngestionAtomicity:
-    """When strategy.add() succeeds but on_program_ingested() raises,
-    the program ends up in the archive AND discarded.
+    """Behaviour when ``on_program_ingested`` raises after ``strategy.add``
+    has already accepted the program.
 
-    Root cause: core.py:291-315 catches the exception and discards the
-    program, but strategy.add() already added it to the archive. No rollback.
+    The acceptance path commits to the archive before invoking the hook,
+    so the hook failure is treated as non-fatal: the program stays in the
+    archive and remains DONE; no ghost or discarded duplicate appears.
     """
 
     async def test_on_program_ingested_failure_does_not_ghost_archive(self) -> None:

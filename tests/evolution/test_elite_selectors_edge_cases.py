@@ -192,7 +192,7 @@ class TestParetoTournamentTieBreaker:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 1: ParetoFrontSelector — strictly worse point is rejected
+# ParetoFrontSelector — strictly worse point is rejected
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -245,7 +245,7 @@ class TestParetoFrontSelectorReverseDominance:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 2: Tournament size variation
+# Tournament size variation
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -290,7 +290,7 @@ class TestExtTournamentSizeVariation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 3: dominates() asymmetry
+# dominates() asymmetry
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -314,7 +314,7 @@ class TestExtDominatesAsymmetry:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 4: weighted_sample multi-draw distribution
+# weighted_sample multi-draw distribution
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -350,7 +350,7 @@ class TestExtWeightedSampleMultiDraw:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 5: Fixed random seeds
+# Fixed random seeds
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -381,7 +381,7 @@ class TestExtFixedRandomSeeds:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 6: Negative fitness values
+# Negative fitness values
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -424,7 +424,7 @@ class TestExtNegativeFitness:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Audit Finding 7: Single-element population
+# Single-element population
 # ═══════════════════════════════════════════════════════════════════════════
 
 

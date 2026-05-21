@@ -1,0 +1,158 @@
+"""Typed configuration schemas.
+
+Pydantic-v2 models with ``extra='forbid'`` and ``frozen=True``. Each
+module owns one concern; the ``experiment`` module assembles them
+into ``ExperimentConfig`` — the single root the CLI loads and
+validates.
+"""
+
+from gigaevo.config.schemas._base import FrozenStrictModel
+from gigaevo.config.schemas.algorithm import (
+    AlgorithmConfig,
+    ArchiveRemoverConfig,
+    ArchiveSelectorConfig,
+    BehaviorSpaceConfig,
+    EliteSelectorConfig,
+    FitnessArchiveRemoverConfig,
+    FitnessProportionalEliteSelectorConfig,
+    IslandConfig,
+    MigrantSelectorConfig,
+    MultiIslandConfig,
+    SingleIslandConfig,
+    SumArchiveSelectorConfig,
+    TopFitnessMigrantSelectorConfig,
+    WeightedEliteSelectorConfig,
+)
+from gigaevo.config.schemas.engine import (
+    AcceptorConfig,
+    AllCombinationsParentSelectorConfig,
+    BusedEngineConfig,
+    EngineConfig,
+    GenerationalEngineConfig,
+    ParentSelectorConfig,
+    RandomParentSelectorConfig,
+    StandardAcceptorConfig,
+    SteadyStateEngineConfig,
+)
+from gigaevo.config.schemas.experiment import ExperimentConfig
+from gigaevo.config.schemas.llm import (
+    BanditRouterConfig,
+    ChatOpenAIConfig,
+    EnsembleRouterConfig,
+    LLMConfig,
+)
+from gigaevo.config.schemas.logging import (
+    LoggingConfig,
+    LoggingSettings,
+    RedisMetricsTrackerConfig,
+    TBTrackerConfig,
+    TrackerConfig,
+    WandBTrackerConfig,
+)
+from gigaevo.config.schemas.migration_bus import (
+    BusTopologyConfig,
+    MigrationBusConfig,
+    RedisStreamTransportConfig,
+    RingTopologyConfig,
+    TopologyConfig,
+)
+from gigaevo.config.schemas.pipeline import (
+    AlgoTuneSpeedPipelineBuilderConfig,
+    AutoPipelineBuilderConfig,
+    CMAOptPipelineBuilderConfig,
+    ContextPipelineBuilderConfig,
+    DefaultPipelineBuilderConfig,
+    OptunaOptPipelineBuilderConfig,
+    PipelineBuilderConfig,
+    PipelineConfig,
+    ProblemSpecificPipelineBuilderConfig,
+    StructuralMetricsPipelineBuilderConfig,
+)
+from gigaevo.config.schemas.problem import ProblemConfig
+from gigaevo.config.schemas.prompt import (
+    FixedDirPromptFetcherConfig,
+    GigaEvoArchivePromptFetcherConfig,
+    PromptFetcherConfig,
+)
+from gigaevo.config.schemas.redis import DataPlaneSettings, RedisConfig
+from gigaevo.config.schemas.runner import DAGRunnerConfig
+from gigaevo.config.schemas.scheduling import (
+    ChainFeatureExtractorConfig,
+    CodeFeatureExtractorConfig,
+    FeatureExtractorConfig,
+    FIFOConfig,
+    LPTConfig,
+    PredictorConfig,
+    RidgePredictorConfig,
+    SchedulingConfig,
+    SimpleHeuristicPredictorConfig,
+)
+
+__all__ = [
+    "AcceptorConfig",
+    "AlgorithmConfig",
+    "AlgoTuneSpeedPipelineBuilderConfig",
+    "AllCombinationsParentSelectorConfig",
+    "ArchiveRemoverConfig",
+    "ArchiveSelectorConfig",
+    "AutoPipelineBuilderConfig",
+    "BanditRouterConfig",
+    "BehaviorSpaceConfig",
+    "BusTopologyConfig",
+    "BusedEngineConfig",
+    "CMAOptPipelineBuilderConfig",
+    "ChainFeatureExtractorConfig",
+    "ChatOpenAIConfig",
+    "CodeFeatureExtractorConfig",
+    "ContextPipelineBuilderConfig",
+    "DAGRunnerConfig",
+    "DataPlaneSettings",
+    "DefaultPipelineBuilderConfig",
+    "EliteSelectorConfig",
+    "EngineConfig",
+    "EnsembleRouterConfig",
+    "ExperimentConfig",
+    "FIFOConfig",
+    "FeatureExtractorConfig",
+    "FixedDirPromptFetcherConfig",
+    "FitnessArchiveRemoverConfig",
+    "FitnessProportionalEliteSelectorConfig",
+    "FrozenStrictModel",
+    "GenerationalEngineConfig",
+    "GigaEvoArchivePromptFetcherConfig",
+    "IslandConfig",
+    "LLMConfig",
+    "LPTConfig",
+    "LoggingConfig",
+    "LoggingSettings",
+    "MigrantSelectorConfig",
+    "MigrationBusConfig",
+    "MultiIslandConfig",
+    "OptunaOptPipelineBuilderConfig",
+    "ParentSelectorConfig",
+    "PipelineBuilderConfig",
+    "PipelineConfig",
+    "PredictorConfig",
+    "ProblemConfig",
+    "ProblemSpecificPipelineBuilderConfig",
+    "PromptFetcherConfig",
+    "RandomParentSelectorConfig",
+    "RedisConfig",
+    "RedisMetricsTrackerConfig",
+    "RedisStreamTransportConfig",
+    "RidgePredictorConfig",
+    "RingTopologyConfig",
+    "SchedulingConfig",
+    "SimpleHeuristicPredictorConfig",
+    "SingleIslandConfig",
+    "StandardAcceptorConfig",
+    "SteadyStateEngineConfig",
+    "StructuralMetricsPipelineBuilderConfig",
+    "SumArchiveSelectorConfig",
+    "TBTrackerConfig",
+    "TopFitnessMigrantSelectorConfig",
+    "TopologyConfig",
+    "TrackerConfig",
+    "WandBTrackerConfig",
+    "WeightedEliteSelectorConfig",
+]

@@ -64,9 +64,8 @@ def validate(data):
 
     valid = shape_valid and is_not_nan_and_finite and valid
     if not valid:
-        raise ValueError("Solution is invalid: valid={valid}")
-    metrics = {}
-    metrics["is_valid"] = float(valid)
-    metrics["fitness"] = np.sum(radii)
-
-    return metrics
+        raise ValueError(f"Solution is invalid: valid={valid}")
+    return {
+        "is_valid": float(valid),
+        "fitness": float(np.sum(radii)),
+    }

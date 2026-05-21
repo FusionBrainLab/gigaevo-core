@@ -525,12 +525,12 @@ class TestIsOptionalTypeModernSyntax:
         modern_type = str | int | None
         assert _is_optional_type(modern_type) is True
 
-    def test_typing_optional_still_works(self):
-        """Optional[str] (legacy syntax) continues to be detected as optional."""
+    def test_typing_optional_is_detected(self):
+        """`Optional[str]` is detected as optional."""
         assert _is_optional_type(Optional[str]) is True  # noqa: UP045
 
-    def test_typing_union_with_none_still_works(self):
-        """Union[str, None] (legacy syntax) continues to be detected as optional."""
+    def test_typing_union_with_none_is_detected(self):
+        """`Union[str, None]` is detected as optional."""
         assert _is_optional_type(Union[str, None]) is True  # noqa: UP007
 
     def test_plain_type_is_not_optional(self):

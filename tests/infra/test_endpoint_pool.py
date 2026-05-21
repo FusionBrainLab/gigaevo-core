@@ -300,7 +300,7 @@ class TestCrossRunVisibility:
 
 
 # ---------------------------------------------------------------------------
-# Failure mode tests (previously ZERO coverage)
+# Failure mode tests
 # ---------------------------------------------------------------------------
 
 

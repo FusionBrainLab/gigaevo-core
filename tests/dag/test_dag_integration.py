@@ -469,7 +469,7 @@ class TestMultiRunEdgeCases:
 
 
 # ===================================================================
-# Category E: Metrics Verified in Redis (Audit Finding #1)
+# Category E: Metrics verified in Redis
 # ===================================================================
 
 
@@ -490,8 +490,7 @@ class MetricComputingStage(Stage):
 
 
 class TestMetricsVerifiedInRedis:
-    """Audit Finding #1: Integration tests run stages but never check that
-    computed metrics are actually stored in Redis."""
+    """Stage-computed metrics must round-trip through Redis."""
 
     async def test_metric_computing_stage_metrics_persisted_to_redis(
         self, state_manager, fakeredis_storage, make_program
@@ -553,13 +552,12 @@ class TestMetricsVerifiedInRedis:
 
 
 # ===================================================================
-# Category F: Skip Results Verified Persisted (Audit Finding #2)
+# Category F: Skip results persisted to Redis
 # ===================================================================
 
 
 class TestSkipResultsPersistedInRedis:
-    """Audit Finding #2: When stages are skipped via caching, the test never
-    checks that the skip result is correctly stored in Redis."""
+    """Skip results from cached stages must be readable back from Redis."""
 
     async def test_skipped_stage_result_persisted_to_redis(
         self, state_manager, fakeredis_storage, make_program
@@ -626,22 +624,18 @@ class TestSkipResultsPersistedInRedis:
 
 
 # ===================================================================
-# Category G: Bare Expression Fix (Audit Finding #3)
+# Category G: Stage-output value assertion after rerun
 # ===================================================================
-# The bare expression `prog.stage_results["b"].output.value` on line 135
-# of the original file is addressed by adding a proper assertion test below.
-# The original code is left untouched per the "only ADD" rule, but this test
-# explicitly asserts the value that was previously an unchecked bare expression.
 
 
 class TestBareExpressionRegression:
-    """Audit Finding #3: Bare expression that should be an assertion."""
+    """Assert ``stage_results["b"].output.value`` after an input-driven rerun."""
 
     async def test_second_run_after_input_change_b_output_value_verified(
         self, state_manager, fakeredis_storage, make_program
     ):
-        """Replicate the scenario from test_second_run_after_input_change_reruns_affected_stages
-        but with an explicit assertion on the value that was a bare expression."""
+        """Asserts the explicit ``b`` output value when an upstream input change
+        forces ``b`` and ``c`` to rerun."""
         edges = [
             DataFlowEdge.create("a", "b", "data"),
             DataFlowEdge.create("b", "c", "data"),

@@ -26,7 +26,7 @@ def start_metrics_collector(
     ],
     interval: float,
     stop_flag: Callable[[], bool],
-    task_name: str = "metrics-collector",  # kept for backward compat; used as task name
+    task_name: str = "metrics-collector",
 ) -> asyncio.Task:
     """
     Start an async task that periodically collects and writes scalar metrics.

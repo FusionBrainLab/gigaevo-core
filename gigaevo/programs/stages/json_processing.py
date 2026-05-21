@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import types
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from loguru import logger
 
@@ -11,9 +11,6 @@ from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.common import AnyContainer, Box, StringContainer
 from gigaevo.programs.stages.stage_registry import StageRegistry
-
-K = TypeVar("K")
-V = TypeVar("V")
 
 
 class MergeDictInputs[K, V](StageIO):
@@ -69,20 +66,17 @@ class MergeDictStage[K, V](Stage):
 
     @classmethod
     def create_typed(cls, key_type: type, value_type: type):
-        """Factory for Hydra configs: returns MergeDictStage[K, V] class.
+        """Return a specialized ``MergeDictStage[key_type, value_type]`` class.
+
+        Equivalent to writing ``MergeDictStage[K, V]`` directly; provided as
+        a named factory for callers that build stages from typed config.
 
         Args:
-            key_type: Type for dictionary keys
-            value_type: Type for dictionary values
+            key_type: Type for dictionary keys.
+            value_type: Type for dictionary values.
 
         Returns:
-            Specialized MergeDictStage class
-
-        Usage in Hydra:
-            _target_: gigaevo.programs.stages.json_processing.MergeDictStage.create_typed_factory
-            _partial_: true
-            key_type: ${get_object:builtins.str}
-            value_type: ${get_object:builtins.float}
+            Specialized ``MergeDictStage`` subclass.
         """
         return cls[key_type, value_type]  # type: ignore[index]  # dynamic generic specialization via __class_getitem__
 

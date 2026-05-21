@@ -761,9 +761,10 @@ class TestStreamOperations:
 
         r.xread = broken_xread
 
-        start = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        start = loop.time()
         await fakeredis_storage.wait_for_activity(timeout=0.05)
-        elapsed = asyncio.get_event_loop().time() - start
+        elapsed = loop.time() - start
         # Should have fallen back to asyncio.sleep(0.05)
         assert elapsed >= 0.04
 
@@ -772,12 +773,12 @@ class TestStreamOperations:
 
 
 # ===================================================================
-# Category M: Audit Finding 1 — Full Program round-trip (all fields)
+# Category M: Full Program round-trip (all fields)
 # ===================================================================
 
 
 class TestFullProgramRoundTrip:
-    """Audit finding 1: round-trip test must check ALL Program fields, not just id and code."""
+    """Round-trip serialization must preserve every Program field, not just id and code."""
 
     async def test_all_fields_survive_redis_roundtrip(
         self, fakeredis_storage, make_program
@@ -862,12 +863,12 @@ class TestFullProgramRoundTrip:
 
 
 # ===================================================================
-# Category N: Audit Finding 2 — Concurrent writers on SAME stage key
+# Category N: Concurrent writers on SAME stage key
 # ===================================================================
 
 
 class TestConcurrentSameKeyUpdate:
-    """Audit finding 2: concurrent updates to the SAME stage_result key."""
+    """Concurrent updates to the SAME ``stage_result`` key must not lose data."""
 
     async def test_concurrent_writers_same_stage_key_consistent(
         self, fakeredis_storage, make_program
@@ -900,12 +901,12 @@ class TestConcurrentSameKeyUpdate:
 
 
 # ===================================================================
-# Category O: Audit Finding 3 — State transitions persisted to Redis
+# Category O: State transitions persisted to Redis
 # ===================================================================
 
 
 class TestStateTransitionPersistence:
-    """Audit finding 3: state transitions must be readable after re-fetch from Redis."""
+    """State transitions must be readable after a re-fetch from Redis."""
 
     async def test_transition_status_persisted_and_refetched(
         self, fakeredis_storage, make_program
@@ -996,12 +997,12 @@ class TestStateTransitionPersistence:
 
 
 # ===================================================================
-# Category P: Audit Finding 4 — remove() cleans up status sets
+# Category P: remove() cleans up status sets
 # ===================================================================
 
 
 class TestRemoveStatusSetCleanup:
-    """Audit finding 4: remove() must clean up status set membership."""
+    """``remove()`` must clean up status-set membership."""
 
     async def test_remove_cleans_up_queued_status_set(
         self, fakeredis_storage, make_program
@@ -1082,12 +1083,12 @@ class TestRemoveStatusSetCleanup:
 
 
 # ===================================================================
-# Category Q: Audit Finding 5 — Key isolation between prefixes
+# Category Q: Key isolation between prefixes
 # ===================================================================
 
 
 class TestKeyIsolationBetweenPrefixes:
-    """Audit finding 5: two storage instances with different prefixes must be isolated."""
+    """Two storage instances with different prefixes must be isolated."""
 
     async def test_different_prefixes_are_isolated(self, make_program):
         """Programs stored in one prefix are invisible to another prefix."""

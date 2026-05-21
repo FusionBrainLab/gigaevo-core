@@ -4,6 +4,17 @@ This document explains GigaEvo's memory-augmented mutation system end-to-end.
 Memory lets the evolutionary algorithm learn from past experiments by feeding
 "ideas" (memory cards) into the mutation prompt.
 
+> **Status.** The memory provider is currently fixed to
+> ``NullMemoryProvider`` on the typed CLI; the pluggable memory schema
+> is not yet wired into ``ExperimentConfig``. The architecture, backend
+> configuration (``config/memory_backend.yaml``), CLI tool, and
+> PostRunHook described below are intact, but selecting ``local`` or
+> ``api`` requires constructing the provider in Python and threading it
+> through ``EvolutionContext`` until the schema lands. The
+> command-line ``memory=...`` overrides shown in some examples are
+> illustrative of intent — treat them as design notes, not as a runnable
+> CLI surface.
+
 ---
 
 ## Table of Contents
@@ -14,13 +25,13 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 4. [How Memory Flows Through the Pipeline](#how-memory-flows-through-the-pipeline)
 5. [Architecture: The Provider Pattern](#architecture-the-provider-pattern)
 6. [Configuration Reference](#configuration-reference)
-   - [Hydra Config Group (memory=...)](#hydra-config-group)
+   - [Memory Backend Selection](#memory-backend-selection)
    - [SelectorMemoryProvider Parameters](#selectormemoryprovider-parameters)
-   - [Backend Config (memory_backend.yaml)](#backend-config-memory_backendyaml)
+   - [Backend Config](#backend-config)
 7. [The Ideas Tracker (Write Phase)](#the-ideas-tracker-write-phase)
    - [What It Does](#what-it-does)
    - [Two Entry Points: PostRunHook vs CLI](#two-entry-points-postrunhook-vs-cli)
-   - [Hydra Config Group (ideas_tracker=...)](#ideas-tracker-hydra-config-group)
+   - [Ideas Tracker Configuration](#ideas-tracker-configuration)
    - [CLI Reference](#cli-reference)
    - [CLI Examples](#cli-examples)
    - [Pipeline Internals](#pipeline-internals)
@@ -42,13 +53,18 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 
 ## The 30-Second Version
 
-```bash
-python run.py memory=none  ...   # No memory (default)
-python run.py memory=local ...   # Memory from local backend
-python run.py memory=api   ...   # Memory from remote API service
-```
+Three memory providers exist as runtime classes:
 
-One Hydra override. Everything else is automatic.
+| Provider | What it does |
+|----------|--------------|
+| `NullMemoryProvider` | Returns empty. Zero overhead. Default. |
+| `SelectorMemoryProvider` (local) | Local `AmemGamMemory` backend on disk. |
+| `SelectorMemoryProvider` (api) | Remote memory API service. |
+
+The default at the CLI is ``NullMemoryProvider``; switching providers
+currently requires editing the experiment file to build the desired
+provider and pass it into ``EvolutionContext``. Everything else is
+automatic once the backend is selected.
 
 ---
 
@@ -96,7 +112,7 @@ The memory system has two completely separate phases:
 ╠═══════════════════════════════════════════════════════════════════╣
 ║                      READ PHASE                                   ║
 ║                                                                   ║
-║  Evolution Run B (memory=local) ──> DAG pipeline                  ║
+║  Evolution Run B (SelectorMemoryProvider) ──> DAG pipeline        ║
 ║                                       │                           ║
 ║                                       ▼                           ║
 ║                              MemoryContextStage                   ║
@@ -156,13 +172,13 @@ ValidateCodeStage ──(success)──► MemoryContextStage
                                  and uses memory ideas to guide the mutation
 ```
 
-When `memory=none`:
+With `NullMemoryProvider` (default):
 - MemoryContextStage uses NullMemoryProvider
 - Returns empty string immediately (zero latency, no network calls)
 - MutationContextStage skips the empty memory section
 - Everything works exactly as if the stage didn't exist
 
-When `memory=local` or `memory=api`:
+With `SelectorMemoryProvider` (local or API backend):
 - MemoryContextStage uses SelectorMemoryProvider
 - Queries the memory database for relevant cards
 - Returns formatted card text
@@ -188,23 +204,19 @@ Two implementations:
 
 | Provider | Config | What it does |
 |----------|--------|-------------|
-| `NullMemoryProvider` | `memory=none` | Returns empty. Zero overhead. Default. |
-| `SelectorMemoryProvider` | `memory=local` or `memory=api` | Queries memory DB via `MemorySelectorAgent` |
+| `NullMemoryProvider` | (default) | Returns empty. Zero overhead. |
+| `SelectorMemoryProvider` | local or API backend | Queries memory DB via `MemorySelectorAgent` |
 
-### Why a provider instead of a flag?
+### Null Object Pattern
 
-Old design had `memory_enabled=True` in the engine config, checked with
-`if/else` in the engine loop. Problems:
-- Broken in steady-state engine (the flag wasn't checked there)
-- `if/else` branches scattered across engine, operator, mutation functions
-- Hard to add new memory backends
+The provider is the behavior. ``NullMemoryProvider`` is the "off" state
+— a real object that does nothing, not a flag that gates code paths.
+Properties:
 
-New design uses the **Null Object pattern**: the provider IS the behavior.
-`NullMemoryProvider` is the "off" state — a real object that does nothing, not a
-flag that gates code paths. Benefits:
-- Works identically in generational AND steady-state engines
-- No `if memory_enabled:` checks anywhere
-- Adding a new backend = one new class + one YAML file
+- Works identically in generational and steady-state engines.
+- No `if memory_enabled:` checks anywhere; the DAG always calls
+  ``provider.select_cards(...)``.
+- Adding a new backend is one new ``MemoryProvider`` subclass.
 
 ---
 
@@ -212,74 +224,51 @@ flag that gates code paths. Benefits:
 
 There are two layers of configuration:
 
-1. **Hydra config group** (`config/memory/*.yaml`) — which provider to use
-2. **Backend config** (`config/memory_backend.yaml`) — how the memory backend itself works
+1. **Provider selection** — which class is instantiated and threaded into the DAG.
+2. **Backend config** (`config/memory_backend.yaml`) — how the memory backend itself works.
 
-### Hydra Config Group
+### Provider Selection
 
-Located in `config/memory/`. Selected via `memory=<name>` on the command line.
+Provider classes live in `gigaevo/memory/provider.py`:
 
-```
-config/memory/
-  none.yaml    →  NullMemoryProvider (default)
-  local.yaml   →  SelectorMemoryProvider (local backend)
-  api.yaml     →  SelectorMemoryProvider (API backend)
-```
+| Class | Role |
+|-------|------|
+| `NullMemoryProvider` | Default. Returns empty, zero overhead. |
+| `SelectorMemoryProvider` | Lazily builds a `MemorySelectorAgent`; backed by local `AmemGamMemory` or remote API depending on `config/memory_backend.yaml` → `api.use_api`. |
 
-The default is set in `config/config.yaml`:
-```yaml
-defaults:
-  - memory: none
-```
-
-#### `config/memory/none.yaml`
-```yaml
-# @package _global_
-memory_provider:
-  _target_: gigaevo.memory.provider.NullMemoryProvider
-```
-
-#### `config/memory/local.yaml`
-```yaml
-# @package _global_
-memory_provider:
-  _target_: gigaevo.memory.provider.SelectorMemoryProvider
-  max_cards: 3
-  checkpoint_dir: ${checkpoint_dir}
-  namespace: ${namespace}
-```
-
-#### `config/memory/api.yaml`
-Same as `local.yaml`. The difference between local and API is controlled by
-`config/memory_backend.yaml` → `api.use_api`, not by the Hydra config group.
-(Both use `SelectorMemoryProvider`; the agent decides local vs API internally.)
+Until the typed schema lands, swap providers by editing the experiment
+file and passing the instance into the
+``EvolutionContext`` constructor wired in
+``gigaevo/config/object_graph.py``.
 
 ### SelectorMemoryProvider Parameters
 
-These are the constructor parameters of `SelectorMemoryProvider`, set in the
-Hydra YAML:
+These are the constructor parameters of `SelectorMemoryProvider`:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `max_cards` | int | 3 | Maximum number of memory cards to return per mutation |
-| `checkpoint_dir` | str or None | None | Local disk path where memory cards are cached. Overrides `memory_backend.yaml` → `paths.checkpoint_dir`. Pass via Hydra override: `checkpoint_dir=/path/to/store` |
-| `namespace` | str or None | None | Isolation key for the memory API. Different experiments use different namespaces so their cards don't mix. Like a database schema. Overrides `memory_backend.yaml` → `api.namespace`. Pass via: `namespace=hover-memory-exp-1` |
+| `checkpoint_dir` | str or None | None | Local disk path where memory cards are cached. Overrides `memory_backend.yaml` → `paths.checkpoint_dir`. |
+| `namespace` | str or None | None | Isolation key for the memory API. Different experiments use different namespaces so their cards don't mix, like a database schema. Overrides `memory_backend.yaml` → `api.namespace`. |
 
-Example command line:
-```bash
-python run.py \
-  memory=local \
-  checkpoint_dir=/workspace/experiments/hover/memory/memory_store \
-  namespace=hover-memory-exp-1 \
-  problem.name=chains/hover/static \
-  ...
+Example construction:
+```python
+from gigaevo.memory.provider import SelectorMemoryProvider
+
+provider = SelectorMemoryProvider(
+    max_cards=3,
+    checkpoint_dir="/workspace/experiments/hover/memory/memory_store",
+    namespace="hover-memory-exp-1",
+)
 ```
 
 ### Backend Config (`memory_backend.yaml`)
 
-Located at `config/memory_backend.yaml`. This is NOT a Hydra config group — it's
-loaded directly by `MemorySelectorAgent` via `runtime_config.py`. You rarely
-need to edit this for normal experiments.
+Located at `config/memory_backend.yaml`. This is loaded directly by
+`MemorySelectorAgent` via `gigaevo/memory/runtime_config.py` (search
+path: ``config/memory.yaml``, then ``gigaevo/memory/config.yaml``, or
+``EVO_MEMORY_CONFIG_PATH``). You rarely need to edit this for normal
+experiments.
 
 #### Full reference with explanations:
 
@@ -461,9 +450,9 @@ For a typical experiment, you only care about:
 | `runtime.enable_llm_synthesis` | `memory_backend.yaml` | false = faster, cheaper search |
 | `runtime.search_limit` | `memory_backend.yaml` | How many candidate cards to retrieve |
 | `gam.pipeline_mode` | `memory_backend.yaml` | "default" = simple, "experimental" = multi-tool |
-| `max_cards` | `config/memory/local.yaml` | How many cards to include in the prompt |
-| `checkpoint_dir` | Command line override | Where cards are stored on disk |
-| `namespace` | Command line override | Isolation between experiments |
+| `max_cards` | `SelectorMemoryProvider` constructor | How many cards to include in the prompt |
+| `checkpoint_dir` | `SelectorMemoryProvider` constructor | Where cards are stored on disk |
+| `namespace` | `SelectorMemoryProvider` constructor | Isolation between experiments |
 
 Everything else has sane defaults.
 
@@ -515,8 +504,9 @@ The IdeaTracker has two ways to run:
                     └──────────────────────────────────┘
 ```
 
-**PostRunHook** (preferred for experiments): Set `ideas_tracker=default` or
-`ideas_tracker=fast` in your Hydra command. The engine fires
+**PostRunHook** (preferred for experiments): Attach an `IdeaTracker`
+instance as the engine's `post_run_hook` when constructing the
+`EvolutionEngine` in your experiment wiring. The engine fires
 `on_run_complete(storage)` in its `run()` method's `finally` block after
 evolution completes. Hook errors are caught and logged — they never crash the
 engine.
@@ -527,60 +517,44 @@ debugging, re-processing, or running on archived data.
 
 Both entry points call the same internal `_run_on_programs()` pipeline.
 
-### Ideas Tracker Hydra Config Group
+### Ideas Tracker Variants
 
-Located in `config/ideas_tracker/`. Selected via `ideas_tracker=<name>`.
+Two `IdeaTracker` configurations cover the common cases:
 
-```
-config/ideas_tracker/
-  none.yaml      →  NullPostRunHook (no-op, default)
-  default.yaml   →  IdeaTracker with default LLM analyzer
-  fast.yaml      →  IdeaTracker with fast embedding+DBSCAN analyzer
-  true.yaml      →  backward compat alias for default.yaml
-```
+| Name | Class / kwargs | Purpose |
+|------|----------------|---------|
+| `none` | `NullPostRunHook()` | No-op (default). |
+| `default` | `IdeaTracker(analyzer_type="default", postprocessing_type="default", record_conversion_type="default", ...)` | Sequential LLM-based analysis. |
+| `fast` | `IdeaTracker(analyzer_type="fast", postprocessing_type="fast", record_conversion_type="fast", analyzer_fast_settings=...)` | Embedding + DBSCAN batched analysis. |
 
-The default is set in `config/config.yaml`:
-```yaml
-defaults:
-  - ideas_tracker: none
-```
+Construct the chosen variant directly in your experiment wiring and
+pass it into `EvolutionEngine(post_run_hook=...)`. Example for the
+default variant:
 
-#### `config/ideas_tracker/none.yaml`
-```yaml
-# @package _global_
-ideas_tracker:
-  _target_: gigaevo.evolution.engine.hooks.NullPostRunHook
-```
+```python
+from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
-#### `config/ideas_tracker/default.yaml`
-```yaml
-# @package _global_
-ideas_tracker:
-  _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
-  analyzer_type: default
-  analyzer_model: google/gemini-3-flash-preview
-  analyzer_base_url: "https://openrouter.ai/api/v1"
-  analyzer_reasoning:
-    effort: "minimal"
-  list_max_ideas: 20
-  postprocessing_type: default
-  description_rewriting: true
-  record_conversion_type: default
-  memory_write_enabled: true
-  memory_write_best_programs_percent: 5.0
-  memory_usage_tracking_enabled: true
-  checkpoint_dir: ${checkpoint_dir}
-  namespace: ${namespace}
-  redis_prefix: ${problem.name}
+post_run_hook = IdeaTracker(
+    analyzer_type="default",
+    analyzer_model="google/gemini-3-flash-preview",
+    analyzer_base_url="https://openrouter.ai/api/v1",
+    analyzer_reasoning={"effort": "minimal"},
+    list_max_ideas=20,
+    postprocessing_type="default",
+    description_rewriting=True,
+    record_conversion_type="default",
+    memory_write_enabled=True,
+    memory_write_best_programs_percent=5.0,
+    memory_usage_tracking_enabled=True,
+    checkpoint_dir=checkpoint_dir,
+    namespace=namespace,
+    redis_prefix=problem_name,
+)
 ```
 
-#### `config/ideas_tracker/fast.yaml`
-
-Same structure as `default.yaml` but with:
-- `analyzer_type: fast` — uses sentence embeddings + DBSCAN clustering
-- `postprocessing_type: fast` — async postprocessing
-- `record_conversion_type: fast` — async record conversion
-- `analyzer_fast_settings:` — embedding model, DBSCAN parameters, batch sizes
+The `fast` variant uses the same constructor with `analyzer_type="fast"`,
+`postprocessing_type="fast"`, `record_conversion_type="fast"`, and an
+`analyzer_fast_settings` dict (embedding model, DBSCAN parameters, batch sizes).
 
 #### Parameter reference
 
@@ -597,9 +571,9 @@ Same structure as `default.yaml` but with:
 | `memory_write_enabled` | bool | `true` | Write extracted ideas to the memory database |
 | `memory_write_best_programs_percent` | float | `5.0` | Only extract ideas from the top N% of programs by fitness |
 | `memory_usage_tracking_enabled` | bool | `true` | Track fitness deltas for each card that was used |
-| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). When `null`, falls back to `memory_backend.yaml` → `paths.checkpoint_dir`. The same path must be used in Phase A (write) and Phase B (read) so the memory bank persists between phases. |
-| `namespace` | str | `${namespace}` | Isolation key for the memory API |
-| `redis_prefix` | str | `${problem.name}` | Redis key prefix for loading programs |
+| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. **Not** resolved via the run's output dir — set it explicitly when constructing the tracker (e.g. `checkpoint_dir="experiments/hover/memory/memory_bank"`). When `null`, falls back to `memory_backend.yaml` → `paths.checkpoint_dir`. The same path must be used in Phase A (write) and Phase B (read) so the memory bank persists between phases. |
+| `namespace` | str | (caller-supplied) | Isolation key for the memory API |
+| `redis_prefix` | str | (caller-supplied) | Redis key prefix for loading programs (typically the problem name) |
 
 ### CLI Reference
 
@@ -816,8 +790,8 @@ of the specified directory.
 
 ## The Memory Search (Read Phase)
 
-When `memory=local` or `memory=api`, here's what happens on each program
-evaluation:
+When the engine is wired with `SelectorMemoryProvider` (local or API
+mode), here's what happens on each program evaluation:
 
 1. **`MemoryContextStage`** calls `SelectorMemoryProvider.select_cards()`
 2. The provider delegates to **`MemorySelectorAgent`** (created lazily on first call)
@@ -870,23 +844,15 @@ experiment with and without memory.
 
 ### Phase A: Build the Memory Bank
 
-Run evolution with `ideas_tracker=true` (or `ideas_tracker=default`). The
-IdeaTracker fires as a PostRunHook after evolution completes and writes
-memory cards to `checkpoint_dir`.
+Construct the writer experiment with an `IdeaTracker` PostRunHook
+attached to the engine; on completion the tracker writes memory cards
+to `checkpoint_dir`. The runner CLI override only carries the Redis DB
+selection and any per-run knobs; the heavy wiring lives on the
+experiment file.
 
 ```bash
 # Phase A: Run evolution with IdeaTracker enabled
-python run.py \
-  problem.name=chains/hover/full7_no_deep \
-  pipeline=structural_metrics \
-  evolution=steady_state \
-  ideas_tracker=true \
-  checkpoint_dir=experiments/hover/memory/memory_bank \
-  redis.db=3 \
-  max_generations=25 \
-  max_mutations_per_generation=8 \
-  model_name=Qwen3-235B-A22B-Thinking-2507 \
-  llm_base_url="http://localhost:4000/v1"
+python run.py experiments/hover_memory_writer.py --redis.db 3
 ```
 
 After the run completes, check the memory bank:
@@ -907,44 +873,24 @@ PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
 
 ### Phase B: Controlled Experiment
 
-Run 2+ control runs (no memory) and 2+ treatment runs (with memory from
-Phase A). All runs use the same problem, config, and model.
+Pair a "control" experiment file (no memory provider — the default
+`NullMemoryProvider`) with a "treatment" experiment file that wires
+`SelectorMemoryProvider` against the bank from Phase A. Both use the
+same problem, pipeline, and model. Distinguish runs via `--redis.db`.
 
 ```bash
-MEMORY_BANK="experiments/hover/memory/memory_bank"
+# Controls: no memory
+python run.py experiments/hover_control.py --redis.db 4
+python run.py experiments/hover_control.py --redis.db 5
 
-# R1: control (no memory)
-python run.py \
-  problem.name=chains/hover/full7_no_deep \
-  pipeline=structural_metrics \
-  evolution=steady_state \
-  redis.db=4
-
-# R2: control (no memory)
-python run.py \
-  problem.name=chains/hover/full7_no_deep \
-  pipeline=structural_metrics \
-  evolution=steady_state \
-  redis.db=5
-
-# R3: treatment (memory enabled)
-python run.py \
-  problem.name=chains/hover/full7_no_deep \
-  pipeline=structural_metrics \
-  evolution=steady_state \
-  memory=local \
-  checkpoint_dir="$MEMORY_BANK" \
-  redis.db=6
-
-# R4: treatment (memory enabled)
-python run.py \
-  problem.name=chains/hover/full7_no_deep \
-  pipeline=structural_metrics \
-  evolution=steady_state \
-  memory=local \
-  checkpoint_dir="$MEMORY_BANK" \
-  redis.db=7
+# Treatments: memory enabled, reading from the Phase A bank
+python run.py experiments/hover_memory_reader.py --redis.db 6
+python run.py experiments/hover_memory_reader.py --redis.db 7
 ```
+
+`experiments/hover_memory_reader.py` builds
+`SelectorMemoryProvider(checkpoint_dir="experiments/hover/memory/memory_bank", ...)`
+and threads it into ``EvolutionContext``.
 
 ### Analysis
 
@@ -973,14 +919,11 @@ PYTHONPATH=. python tools/top_programs.py \
 
 ## Key Files
 
-### Provider Layer (Hydra-injected, Read Phase)
+### Provider Layer (Read Phase)
 
 | File | What it does |
 |------|-------------|
 | `gigaevo/memory/provider.py` | `MemoryProvider` ABC, `NullMemoryProvider`, `SelectorMemoryProvider` |
-| `config/memory/none.yaml` | Hydra config: NullMemoryProvider (default) |
-| `config/memory/local.yaml` | Hydra config: SelectorMemoryProvider (local) |
-| `config/memory/api.yaml` | Hydra config: SelectorMemoryProvider (API) |
 
 ### DAG Pipeline (Read Phase)
 
@@ -1014,11 +957,7 @@ PYTHONPATH=. python tools/top_programs.py \
 |------|-------------|
 | `gigaevo/memory/ideas_tracker/ideas_tracker.py` | `IdeaTracker(PostRunHook)` — core pipeline orchestrator |
 | `gigaevo/memory/ideas_tracker/cli.py` | CLI entry point (`python -m gigaevo.memory.ideas_tracker.cli`) |
-| `config/ideas_tracker/none.yaml` | Hydra config: NullPostRunHook (default) |
-| `config/ideas_tracker/default.yaml` | Hydra config: IdeaTracker with default LLM analyzer |
-| `config/ideas_tracker/fast.yaml` | Hydra config: IdeaTracker with fast embedding analyzer |
-| `config/ideas_tracker/true.yaml` | Backward compat alias for `default.yaml` |
-| `config/memory.yaml` | Unified memory config (backend + ideas_tracker sections) |
+| `config/memory.yaml` | Runtime memory backend config (loaded by `runtime_config.py`) |
 
 ### Ideas Tracker Components
 
@@ -1051,7 +990,7 @@ PYTHONPATH=. python tools/top_programs.py \
 | `tests/memory/test_provider.py` | Provider abstraction (null, selector, lazy init) |
 | `tests/memory/test_memory_context_stage.py` | MemoryContextStage + MemoryMutationContext |
 | `tests/memory/test_dag_memory_flow.py` | End-to-end DAG flow, composite context, auto-derivation |
-| `tests/memory/test_ideas_tracker_pipeline.py` | IdeaTracker pipeline: records conversion, PostRunHook contract, program filtering, engine integration, Hydra composability, E2E |
+| `tests/memory/test_ideas_tracker_pipeline.py` | IdeaTracker pipeline: records conversion, PostRunHook contract, program filtering, engine integration, end-to-end |
 | `tests/memory/test_data_components.py` | Data structures: RecordBank, RecordCardExtended, IncomingIdeas |
 | `tests/integration/test_memory_e2e.py` | Full-loop E2E with real EvolutionEngine + fakeredis |
 
@@ -1062,15 +1001,15 @@ PYTHONPATH=. python tools/top_programs.py \
 ### Memory Read Phase
 
 **Q: Does memory add latency?**
-With `memory=none`, zero. With `memory=local`, search runs on local disk
-(~50-200ms depending on card count and GAM tools). With `memory=api`, depends
-on network latency. The search runs in parallel with other DAG stages
-(insights, lineage), so the wall-clock impact is often hidden.
+With `NullMemoryProvider`, zero. With `SelectorMemoryProvider` against
+a local backend, search runs on local disk (~50-200ms depending on card
+count and GAM tools). Against the API backend, latency depends on the
+network. The search runs in parallel with other DAG stages (insights,
+lineage), so the wall-clock impact is often hidden.
 
 **Q: Can I use memory with the steady-state engine?**
-Yes. This was the main reason for the refactor. The old implementation was
-broken in steady-state because memory was hardcoded in the generational engine
-loop. Now both engines use the same DAG pipeline.
+Yes — both engines invoke the same DAG pipeline, so the provider is
+agnostic to the engine.
 
 **Q: What if the memory backend is unavailable?**
 `MemorySelectorAgent` catches backend errors and returns an empty selection
@@ -1078,14 +1017,16 @@ loop. Now both engines use the same DAG pipeline.
 without memory guidance.
 
 **Q: How many cards are selected per mutation?**
-Configurable via `max_cards` in the Hydra config (default: 3). The memory
-agent searches the database and returns the most relevant cards.
+Configurable via `max_cards` on the `SelectorMemoryProvider` constructor
+(default: 3). The memory agent searches the database and returns the most
+relevant cards.
 
-**Q: What's the difference between `memory=local` and `memory=api`?**
-Both use `SelectorMemoryProvider`. The actual backend switch (`use_api`) is in
-`memory_backend.yaml`. `local` is for experiments where you pre-populate cards
-on disk; `api` is for when you have a running memory API service. In practice,
-both configs are identical — the distinction is cosmetic for experiment clarity.
+**Q: What's the difference between local and API mode?**
+Both use `SelectorMemoryProvider`. The actual backend switch is
+`memory_backend.yaml` → `api.use_api`. Local mode reads cards
+pre-populated on disk; API mode talks to a running memory service. The
+provider constructor is identical — the distinction is in the runtime
+config file.
 
 **Q: How does the system decide which cards are "relevant"?**
 The GAM pipeline sends the parent code + task description as a query, then
@@ -1095,7 +1036,7 @@ control which tools run and how many results each returns.
 
 ### Ideas Tracker (Write Phase)
 
-**Q: What's the difference between `ideas_tracker=default` and `ideas_tracker=fast`?**
+**Q: What's the difference between the `default` and `fast` IdeaTracker variants?**
 `default` uses a sequential LLM-based analyzer that processes each program
 one at a time. It classifies each improvement against the full bank of existing
 ideas. Slower but more accurate for small runs.
@@ -1105,7 +1046,8 @@ Much faster for large runs (100+ programs).
 
 **Q: When does the IdeaTracker run?**
 Two ways: (1) **Automatically**, as a PostRunHook after evolution completes
-(`ideas_tracker=default` or `ideas_tracker=fast` in Hydra). The engine calls
+(when the experiment wires an `IdeaTracker` into
+`EvolutionEngine(post_run_hook=...)`). The engine calls
 `on_run_complete(storage)` in its `run()` finally block. (2) **Manually**, via
 CLI (`python -m gigaevo.memory.ideas_tracker.cli`), typically to re-extract
 ideas from a run that's already in Redis.
@@ -1131,16 +1073,17 @@ The `active_ideas.json` file contains the final idea bank with all extracted
 cards. Each card has `description`, `keywords`, `programs`, and `usage` fields.
 
 **Q: Can I disable memory write but still extract ideas?**
-Yes. Use `--no-memory-write` in the CLI, or set
-`memory_write_enabled: false` in the Hydra config. The tracker will still
-analyze programs and log ideas — it just won't write them to the memory backend.
+Yes. Use `--no-memory-write` in the CLI, or pass
+`memory_write_enabled=False` to the `IdeaTracker` constructor. The
+tracker will still analyze programs and log ideas — it just won't write
+them to the memory backend.
 
 ### General
 
 **Q: Can I add a new memory backend?**
-Yes. Implement `MemoryProvider.select_cards()`, create a new
-`config/memory/your_backend.yaml`, and use `memory=your_backend` on the
-command line. The pipeline doesn't need any changes.
+Yes. Implement `MemoryProvider.select_cards()` and pass the new
+provider into `EvolutionContext`. The pipeline doesn't need any
+changes.
 
 **Q: Where are cards stored on disk?**
 At the path specified by `checkpoint_dir`. Inside that directory, the

@@ -3,198 +3,151 @@
 ## Basic Usage
 
 ```bash
-# Default configuration
-python run.py problem.name=toy_example
+# Run a shipped experiment preset
+python run.py experiments/base.py
 
-# Override individual components
-python run.py problem.name=toy_example llm=heterogeneous
-python run.py problem.name=toy_example algorithm=multi_island
-python run.py problem.name=toy_example constants=base
+# Validate and dump the resolved config without invoking the engine
+python run.py experiments/base.py --dry-run
 ```
 
-## Using Experiments
+`run.py` is a thin entry point that loads the experiment file, applies any
+CLI overrides through tyro, dumps the resolved config to
+`outputs/{experiment_id}/config.json`, and runs the engine.
 
-Experiments are preset configurations in `config/experiment/`. Use the
-`experiment=` override to select one:
+## Shipped Experiments
+
+Each shipped preset lives at `experiments/<name>.py` and exports a `build()`
+returning an `ExperimentConfig`:
 
 ```bash
-# Simple single-island evolution (default)
-python run.py experiment=base problem.name=toy_example
+# Single-island MAP-Elites, Heilbron triangle problem (default)
+python run.py experiments/base.py
 
-# Two-island evolution (fitness + simplicity tradeoff)
-python run.py experiment=multi_island_complexity problem.name=toy_example
+# Steady-state engine (continuous mutation/evaluation, ~8x throughput)
+python run.py experiments/steady_state.py
+
+# Multi-island evolution (fitness + simplicity tradeoff)
+python run.py experiments/multi_island_complexity.py
 
 # Multiple LLMs for diverse mutations
-python run.py experiment=multi_llm_exploration problem.name=toy_example
+python run.py experiments/multi_llm_exploration.py
 
-# Everything enabled (multi-island + multi-LLM + complexity)
-python run.py experiment=full_featured problem.name=toy_example
+# Cross-run program sharing through a Redis stream
+python run.py experiments/migration_bus.py
+
+# Steady-state engine plus cross-run sharing
+python run.py experiments/steady_state_bus.py
+
+# Co-evolve mutation prompts alongside programs
+python run.py experiments/prompt_coevolution.py
+
+# Multi-stage pipeline with prompt-fetcher + structural metrics
+python run.py experiments/full_featured.py
 ```
 
-Experiments are starting points — override any setting after selecting one:
+## CLI Overrides
 
-```bash
-python run.py experiment=full_featured problem.name=toy_example \
-    max_generations=50 stage_timeout=300
-```
-
-## Common Overrides
+Overrides are parsed by tyro and dotted by `ExperimentConfig` field path:
 
 ```bash
 # Limit generations
-python run.py problem.name=toy_example max_generations=50
+python run.py experiments/base.py --engine.max_generations 50
 
-# Change population size
-python run.py problem.name=toy_example island_max_size=150
-
-# Change LLM settings
-python run.py problem.name=toy_example \
-    default_temperature=0.7 \
-    default_max_tokens=40960
-
-# More parallelism
-python run.py problem.name=toy_example \
-    dag_concurrency=32 \
-    max_concurrent_dags=20
-
-# Use a different Redis database
-python run.py problem.name=toy_example redis.db=5
+# Change Redis database
+python run.py experiments/base.py --redis.db 5
 ```
 
-## Configuration Groups
-
-Override individual config groups:
+For fields nested under a discriminated union (`algorithm`, `engine`,
+`llm`, `pipeline.builder`, `prompt_fetcher`) the active variant must be
+named as a subcommand before the override:
 
 ```bash
-# Use different LLM config
-python run.py problem.name=toy_example llm=heterogeneous
+# Tune the temperature of the first model in an ensemble router
+python run.py experiments/base.py \
+    llm:ensemble-router-config \
+    --llm.models.0.temperature 0.7 \
+    --llm.models.0.max_tokens 4096
 
-# Use different algorithm
-python run.py problem.name=toy_example algorithm=multi_island
-
-# Use custom pipeline
-python run.py problem.name=toy_example pipeline=custom
-
-# Co-evolved mutation prompts
-python run.py problem.name=toy_example \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6
+# Stack overrides; subcommands are positional and apply to the
+# preceding union field
+python run.py experiments/full_featured.py \
+    --engine.max_generations 50 \
+    pipeline.builder:default-pipeline-builder-config \
+    --pipeline.builder.stage_timeout 300
 ```
 
-### Available Config Groups
+`python run.py experiments/base.py --help` lists every available
+subcommand and the field paths each one exposes.
 
-| Group | Options |
-|-------|---------|
-| `experiment` | `base`, `full_featured`, `multi_island_complexity`, `multi_llm_exploration` |
-| `algorithm` | `single_island`, `single_island_2d`, `multi_island`, `single_island_fitness_prop_fixed_temp`, `single_island_weighted` |
-| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini25_pro`, `gemini31_pro`, `gemini3_flash` |
-| `pipeline` | `standard`, `with_context`, `auto`, `custom`, `hotpotqa_asi`, `hotpotqa_colbert`, `hotpotqa_reflective`, `hover_feedback`, `prompt_evolution`, `optuna_opt`, `cma_opt` |
-| `prompt_fetcher` | `fixed` (default), `coevolved` |
-| `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
-| `loader` | `directory`, `redis_selection` |
-| `logging` | `tensorboard`, `wandb` |
+Every override is re-validated against the Pydantic schema, including any
+cross-field invariants declared on `ExperimentConfig`. Invalid overrides
+fail fast with the validator's error.
 
-## Examples
+## Writing a Custom Experiment
 
-### Quick Test Run
+For anything beyond a couple of overrides, copy `experiments/base.py` to a
+new file under `experiments/` and edit its `build()`:
+
+```python
+# experiments/my_run.py
+from pathlib import Path
+
+from gigaevo.config.algorithm_presets import build_single_island
+from gigaevo.config.engine_presets import build_generational
+from gigaevo.config.llm_presets import build_openrouter_ensemble
+from gigaevo.config.pipeline_presets import build_auto
+from gigaevo.config.problem_presets import build_heilbron
+from gigaevo.config.runner_presets import build_default_runner
+from gigaevo.config.schemas import (
+    DataPlaneSettings,
+    ExperimentConfig,
+    RedisConfig,
+)
+
+
+def build() -> ExperimentConfig:
+    redis = RedisConfig(db=2)
+    return ExperimentConfig(
+        name="my_run",
+        seed=42,
+        output_dir=Path("outputs"),
+        redis=redis,
+        dataplane=DataPlaneSettings(redis=redis, key_prefix="gigaevo:my_run"),
+        problem=build_heilbron(),
+        algorithm=build_single_island(),
+        engine=build_generational(),
+        pipeline=build_auto(),
+        llm=build_openrouter_ensemble(),
+        runner=build_default_runner(),
+    )
+```
+
+Then:
+
 ```bash
-python run.py problem.name=toy_example max_generations=5
+python run.py experiments/my_run.py --dry-run    # validate first
+python run.py experiments/my_run.py              # run
 ```
 
-### Production Run with Multi-Island
-```bash
-python run.py experiment=multi_island_complexity \
-    problem.name=heilbron \
-    max_generations=100
-```
+## Resolved Config Output
 
-### Multi-LLM Exploration
-```bash
-python run.py experiment=multi_llm_exploration \
-    problem.name=heilbron \
-    max_mutations_per_generation=12
-```
+Every invocation writes the post-validation `ExperimentConfig` to
+`outputs/{experiment_id}/config.json`. The `experiment_id` is a content
+hash of the resolved configuration, so two runs with the same inputs share
+an output directory (idempotent) and any change in overrides produces a
+new directory.
 
-### Prompt Co-Evolution
-```bash
-# See docs/COEVOLUTION.md for full details
-python run.py problem.name=my_task pipeline=my_pipeline \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
-```
+To preview without running, add `--dry-run`.
 
-## Viewing Configuration
+## Customizing LLM Endpoints
 
-```bash
-# See the full resolved configuration (without running)
-python run.py problem.name=toy_example --cfg job
+LLM endpoints are described by Pydantic schemas under
+`gigaevo/config/schemas/llm.py`. Each `ChatOpenAIConfig` exposes the
+standard knobs (`model`, `api_key`, `base_url`, `temperature`,
+`max_tokens`, `request_timeout`) and can be assembled into routers
+(`EnsembleRouterConfig`, `BanditRouterConfig`) via the preset functions in
+`gigaevo/config/llm_presets.py`.
 
-# See resolved config for an experiment preset
-python run.py experiment=full_featured problem.name=toy_example --cfg job
-```
-
-## Specific OpenAI API Parameters
-
-Additional OpenAI API parameters can be specified by editing the `models` config
-section in configuration files under `config/llm`. Parameters should be named
-exactly as in the OpenAI API specification and placed under either `model_kwargs`
-or `extra_body`.
-
-### `model_kwargs` vs `extra_body`
-
-**`model_kwargs`** — standard OpenAI API parameters merged into the top-level
-request payload:
-
-```yaml
-model_kwargs:
-  stream_options:
-    include_usage: true
-  max_completion_tokens: 300
-```
-
-**`extra_body`** — custom parameters for OpenAI-compatible providers (vLLM,
-OpenRouter, etc.) nested under `extra_body` in the request:
-
-```yaml
-extra_body:
-  provider:                       # OpenRouter-specific
-    order: [google-vertex]
-    allow_fallbacks: false
-  top_k: 40                      # Provider-specific (Gemini, Claude)
-  use_beam_search: true           # vLLM-specific
-  reasoning:                      # OpenRouter-specific
-    effort: high
-    max_tokens: 5000
-```
-
-> **Warning:** Always use `extra_body` for non-standard parameters, **not**
-> `model_kwargs`. Using `model_kwargs` for non-OpenAI parameters will cause API
-> errors.
-
-See [OpenAI API docs](https://platform.openai.com/docs/api-reference) and
-[ChatOpenAI docs](https://reference.langchain.com/python/integrations/langchain_openai/ChatOpenAI/)
-for parameter references.
-
-## Tips
-
-1. **Start simple** — begin with the default config, add overrides as needed
-2. **Experiments are starting points** — override anything after selecting one
-3. **Check resolved config** — `--cfg job` shows exactly what will run
-4. **Hydra saves config** — full resolved config is saved to `outputs/YYYY-MM-DD/HH-MM-SS/.hydra/`
-5. **Use `experiment=` for presets** — don't need `--config-name`
-
-## Troubleshooting
-
-**Want to see available experiments?**
-```bash
-ls config/experiment/
-```
-
-**Want to see what an experiment does?**
-```bash
-cat config/experiment/base.yaml
-```
-
-**Want default config with one change?**
-```bash
-# Just override directly, no experiment needed
-python run.py problem.name=toy_example llm=heterogeneous
-```
+For provider-specific parameters not exposed on the schema, edit the
+preset (or your custom experiment file) and pass them through whichever
+`ChatOpenAI` field accepts them.

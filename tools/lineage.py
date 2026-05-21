@@ -3,8 +3,8 @@
 Trace evolutionary ancestry of a program back to its root seed.
 
 Reads all programs from Redis and walks the parent chain for the
-requested program(s). Useful for Phase 5 "Lessons Learned" — which
-mutations drove the best result?
+requested program(s). Useful for post-run analysis — which mutations
+drove the best result?
 
 Example usage:
     # Trace best program by fitness
@@ -19,18 +19,19 @@ Example usage:
 
 import argparse
 import asyncio
+import math
 from pathlib import Path
 import sys
 
 PROJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJ))
 
-from gigaevo.database.redis_program_storage import (  # noqa: E402
+from gigaevo.database.redis_program_storage import (
     RedisProgramStorage,
     RedisProgramStorageConfig,
 )
-from gigaevo.programs.program import Program  # noqa: E402
-from tools.status import parse_run_arg  # noqa: E402
+from gigaevo.programs.program import Program
+from tools.status import parse_run_arg
 
 
 async def _fetch_programs(url: str, prefix: str) -> list[Program]:
@@ -89,10 +90,14 @@ def _walk_lineage(
     start: Program,
     id_map: dict[str, Program],
     depth: int | None,
-    metric: str,
 ) -> list[Program]:
-    """Walk ancestor chain from start to root. Returns chain [start, parent, grandparent, ...]."""
+    """Walk ancestor chain from start to root. Returns chain [start, parent, grandparent, ...].
+
+    Stops on the first repeated program ID — a corrupted parent chain (cycle)
+    would otherwise loop indefinitely when no explicit depth is given.
+    """
     chain: list[Program] = [start]
+    seen: set[str] = {start.id}
     current = start
     hops = 0
     while True:
@@ -103,10 +108,13 @@ def _walk_lineage(
             break  # root reached
         # Handle multi-parent case: follow first parent, note merge
         parent_id = parents[0]
+        if parent_id in seen:
+            break  # cycle in parent chain — stop walking
         parent = id_map.get(parent_id)
         if parent is None:
             break  # parent not in Redis (e.g. external seed)
         chain.append(parent)
+        seen.add(parent_id)
         current = parent
         hops += 1
     return chain
@@ -213,9 +221,16 @@ if memory is constrained.
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
     else:
-        # Top-N by metric
+        # Top-N by metric. The filter above guarantees fitness is not None,
+        # but the lambda still falls back to -inf so a None slipping through
+        # cannot raise TypeError mid-sort.
         scored = [p for p in programs if _get_fitness(p, args.metric) is not None]
-        scored.sort(key=lambda p: _get_fitness(p, args.metric), reverse=True)
+
+        def _fitness_key(p: Program) -> float:
+            v = _get_fitness(p, args.metric)
+            return v if v is not None else -math.inf
+
+        scored.sort(key=_fitness_key, reverse=True)
         start_programs = scored[: args.top_n]
 
     if not start_programs:
@@ -225,7 +240,7 @@ if memory is constrained.
     for i, start in enumerate(start_programs):
         if i > 0:
             print("---")
-        chain = _walk_lineage(start, id_map, args.depth, args.metric)
+        chain = _walk_lineage(start, id_map, args.depth)
         _print_lineage(chain, label, args.metric)
         if args.depth is not None and len(chain) > args.depth:
             print(f"  ... (truncated at depth {args.depth})")

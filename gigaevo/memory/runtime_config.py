@@ -14,14 +14,26 @@ except Exception:  # pragma: no cover - defensive fallback
 
 
 _MODULE_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _MODULE_DIR.parent
-_DEFAULT_SETTINGS_PATHS = (
-    _PROJECT_ROOT / "config" / "memory.yaml",
-    _MODULE_DIR / "config.yaml",
-)
+_DEFAULT_SETTINGS_PATHS: tuple[Path, ...] = (_MODULE_DIR / "config.yaml",)
 
 
 def resolve_settings_path(path: str | Path | None = None) -> Path:
+    """Resolve the runtime-config YAML path consulted by ``load_settings``.
+
+    Resolution order:
+
+    1. The explicit ``path`` argument when provided.
+    2. ``EVO_MEMORY_CONFIG_PATH`` environment variable.
+    3. ``EVO_MEMORY_SETTINGS_PATH`` environment variable.
+    4. The first existing entry in the package-local defaults
+       (``gigaevo/memory/config.yaml``).
+
+    When nothing resolves, returns the first default path as a stable
+    placeholder. ``load_settings`` then short-circuits to ``{}`` if that
+    placeholder does not exist on disk, so callers that rely on
+    ``deep_get(..., default=...)`` continue to work without any config
+    file present.
+    """
     if path is not None:
         return Path(path)
 
@@ -41,6 +53,15 @@ def resolve_settings_path(path: str | Path | None = None) -> Path:
 
 
 def load_settings(path: str | Path | None = None) -> dict[str, Any]:
+    """Load runtime settings as a mapping.
+
+    Resolves the source file via :func:`resolve_settings_path`, then:
+
+    - Returns ``{}`` when no file is present on disk so the caller can
+      fall back to its hard-coded defaults via :func:`deep_get`.
+    - Raises ``RuntimeError`` when PyYAML is unavailable.
+    - Raises ``ValueError`` when the YAML payload is not a mapping.
+    """
     settings_path = resolve_settings_path(path)
     if not settings_path.exists():
         return {}

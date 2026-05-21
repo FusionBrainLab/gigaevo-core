@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class EngineMetrics(BaseModel):
-    """Simplified metrics tracking (extracted)."""
+    """Counters tracked by the evolution engine across generations."""
 
     total_generations: int = Field(
         default=0, description="Total number of generations run"

@@ -1,3 +1,0 @@
-# @package _global_
-ideas_tracker:
-  _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

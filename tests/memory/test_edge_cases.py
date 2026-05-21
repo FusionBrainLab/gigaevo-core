@@ -1,7 +1,9 @@
-"""Tests documenting known bugs and edge cases in the memory module.
+"""Edge-case tests pinning observable behavior of the memory module.
 
-Each test pins current (buggy) behavior so that intentional fixes are
-explicit. When a bug is fixed, update the assertion to match correct behavior.
+Each test asserts the current contract: persistence on corruption,
+ID-collision handling, JSON extraction quirks, write-amplification
+shape, dedup substring semantics, and program-card normalization.
+Tests serve as guard rails for changes to that contract.
 """
 
 import json
@@ -26,17 +28,13 @@ def _make_memory(tmp_path, **overrides):
 
 
 # ===========================================================================
-# BUG 1 (CRITICAL): Corrupt api_index.json → silent empty start
+# Corrupt api_index.json on load
 # ===========================================================================
 
 
-class TestBug1CorruptIndexFile:
+class TestCorruptIndexFile:
     def test_partial_json_silently_starts_empty(self, tmp_path):
-        """If api_index.json contains truncated JSON (from a crash mid-write),
-        AmemGamMemory silently starts with empty state instead of raising.
-
-        This documents current behavior. A fix would use atomic writes.
-        """
+        """Truncated api_index.json yields an empty in-memory state on load."""
         mem_dir = tmp_path / "mem"
         mem_dir.mkdir(parents=True)
         index_file = mem_dir / "api_index.json"
@@ -45,11 +43,10 @@ class TestBug1CorruptIndexFile:
         index_file.write_text('{"memory_cards": {"c1": {"id": "c1", "descr')
 
         mem = _make_memory(tmp_path)
-        # BUG: silently lost all data
         assert mem.card_store.cards == {}
 
     def test_valid_index_loads_correctly(self, tmp_path):
-        """Contrast: valid JSON loads fine."""
+        """Cards saved into one instance round-trip through a fresh load."""
         mem1 = _make_memory(tmp_path)
         mem1.save_card({"id": "c1", "description": "test"})
 
@@ -58,16 +55,16 @@ class TestBug1CorruptIndexFile:
 
 
 # ===========================================================================
-# BUG 5 (HIGH): Substring search matches too broadly
+# Substring search semantics
 # ===========================================================================
 
 
-class TestBug5SubstringSearchFixed:
-    """BUG 5 FIXED: search now uses word-boundary token matching."""
+class TestSubstringSearch:
+    """Search uses word-boundary token matching."""
 
     def test_short_token_no_longer_matches_inside_words(self, tmp_path):
-        """Token 'a' no longer matches 'general' (category) because 'a'
-        is not a standalone word in 'general'."""
+        """Token 'a' does not match inside 'general' because 'a' is not a
+        standalone word there."""
         mem = _make_memory(tmp_path)
         mem.save_card(
             {
@@ -79,7 +76,6 @@ class TestBug5SubstringSearchFixed:
         )
 
         result = mem.search("a")
-        # FIXED: "a" is not a word in any field → no match
         assert "No relevant memories found" in result
 
     def test_single_char_token_no_overmatch(self, tmp_path):
@@ -89,11 +85,10 @@ class TestBug5SubstringSearchFixed:
         mem.save_card({"id": "c2", "description": "python programming"})
 
         result = mem.search("a")
-        # FIXED: "a" is not a word in "database", "management", or "programming"
         assert "No relevant memories found" in result
 
     def test_whole_word_matching_still_works(self, tmp_path):
-        """Whole word tokens still match correctly."""
+        """Whole word tokens match correctly."""
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "database management system"})
         result = mem.search("database")
@@ -101,18 +96,16 @@ class TestBug5SubstringSearchFixed:
 
 
 # ===========================================================================
-# BUG 6 (MEDIUM): ID collision with 48-bit entropy
+# Auto-generated ID collisions
 # ===========================================================================
 
 
-class TestBug6IDCollision:
+class TestIDCollision:
     def test_collision_silently_overwrites(self, tmp_path):
-        """If uuid4 generates the same 12-hex prefix twice, the first card
-        is silently overwritten. No collision detection.
-        """
+        """When uuid4 yields the same 12-hex prefix twice, the first card is
+        overwritten without collision detection."""
         mem = _make_memory(tmp_path)
 
-        # Mock uuid4 to return same value twice
         fixed_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
         with patch(
             "gigaevo.memory.shared_memory.card_store.uuid.uuid4",
@@ -121,56 +114,45 @@ class TestBug6IDCollision:
             id1 = mem.save_card({"description": "first card"})
             id2 = mem.save_card({"description": "second card"})
 
-        # Both got the same auto-generated ID
         assert id1 == id2
-        # BUG: first card silently overwritten
         assert mem.get_card(id1).description == "second card"
-        assert len(mem.card_store.cards) == 1  # Only one card exists
+        assert len(mem.card_store.cards) == 1
 
 
 # ===========================================================================
-# BUG 8 (MEDIUM): Greedy regex grabs wrong braces
+# JSON-object extraction from LLM prose
 # ===========================================================================
 
 
-class TestBug8GreedyRegex:
+class TestExtractJSONObject:
     def test_reasoning_with_braces_before_json(self):
-        """LLM reasoning contains literal braces before the actual JSON.
-        Greedy .* captures from first { to last }, yielding invalid JSON.
-        """
+        """Brace-bearing prose ahead of the JSON yields no extraction."""
         text = 'I considered {various factors}. My decision: {"action": "discard", "duplicate_of": "c1"}'
         result = _extract_json_object(text)
-        # BUG: regex captures '{various factors}...{"action":...'
-        # json.loads fails on this, so result should be None or fall through
-        # Actually, the greedy regex captures from first { to last }:
-        # '{various factors}. My decision: {"action": "discard", "duplicate_of": "c1"}'
-        # This is invalid JSON, so json.loads fails → returns None
-        # Documenting actual behavior:
-        assert result is None  # The correct JSON is lost
+        # Greedy '{...}' span fails json.loads -> None.
+        assert result is None
 
     def test_clean_json_in_prose_works(self):
-        """When JSON has no preceding braces, extraction works fine."""
+        """JSON with no preceding braces extracts cleanly."""
         text = 'My decision is: {"action": "add"}'
         result = _extract_json_object(text)
         assert result == {"action": "add"}
 
     def test_nested_braces_in_json_works(self):
-        """Nested braces within the actual JSON are handled."""
+        """Nested braces within the JSON object extract."""
         text = '{"action": "update", "meta": {"key": "val"}}'
         result = _extract_json_object(text)
         assert result["action"] == "update"
 
 
 # ===========================================================================
-# BUG 11 (MEDIUM): O(n^2) persist — full JSON on every save
+# Index-file persist scaling
 # ===========================================================================
 
 
-class TestBug11PersistScaling:
+class TestPersistScaling:
     def test_index_file_grows_with_card_count(self, tmp_path):
-        """Each save_card serializes the ENTIRE memory_cards dict.
-        Verify index file size grows linearly with card count.
-        """
+        """Index file grows roughly linearly as cards are appended."""
         mem = _make_memory(tmp_path)
         sizes = []
         for i in range(20):
@@ -178,28 +160,22 @@ class TestBug11PersistScaling:
             size = mem.config.index_file.stat().st_size
             sizes.append(size)
 
-        # Index file should grow ~linearly with card count
-        assert sizes[-1] > sizes[0] * 5  # At least 5x growth from 1→20 cards
-        # This documents the O(n) per-write behavior (total O(n^2) for n saves)
+        assert sizes[-1] > sizes[0] * 5  # 1->20 cards produces >=5x growth
 
 
 # ===========================================================================
-# BUG 12 (MEDIUM): append_unique_text drops short text
+# append_unique_text substring semantics
 # ===========================================================================
 
 
-class TestBug12AppendUniqueTextSubstring:
+class TestAppendUniqueTextSubstring:
     def test_short_text_is_substring_of_long(self):
-        """'retrieval' is a substring of 'deep retrieval pipeline' →
-        silently discarded even though it could be a separate concept.
-        """
+        """Short text that is a substring of existing text is dropped."""
         result = append_unique_text(
             "deep retrieval pipeline for multi-hop verification",
             "retrieval",
         )
-        # BUG: "retrieval" is dropped because it's a substring of existing text
         assert result == "deep retrieval pipeline for multi-hop verification"
-        # The new text "retrieval" is silently lost
 
     def test_unrelated_short_text_appended(self):
         """Short text that isn't a substring gets appended correctly."""
@@ -213,15 +189,15 @@ class TestBug12AppendUniqueTextSubstring:
 
 
 # ===========================================================================
-# BUG (documented): program_id=0 silently lost
+# Falsy program_id normalization
 # ===========================================================================
 
 
-class TestBugFalsyProgramIdFixed:
-    """FIXED: program_id=0 now correctly triggers program card path."""
+class TestFalsyProgramId:
+    """program_id values pass through string-coercion before category check."""
 
     def test_zero_program_id_preserved(self):
-        """program_id=0 → _str_or_empty(0) → '0' → truthy → program card."""
+        """program_id=0 string-coerces to '0', producing a program card."""
         card = normalize_memory_card({"program_id": 0, "description": "prog"})
         assert isinstance(card, ProgramCard)
         assert card.program_id == "0"
@@ -237,26 +213,24 @@ class TestBugFalsyProgramIdFixed:
         assert card.category == "general"
 
     def test_false_program_id_preserved(self):
-        """program_id=False → _str_or_empty(False) → 'False' → truthy → program card."""
+        """program_id=False string-coerces to 'False', producing a program card."""
         card = normalize_memory_card({"program_id": False, "description": "d"})
         assert card.category == "program"
         assert card.program_id == "False"
 
 
 # ===========================================================================
-# BUG 7 (MEDIUM): Update action falls through to add
+# Update action with missing target card
 # ===========================================================================
 
 
-class TestBug7UpdateFallthrough:
+class TestUpdateMissingTarget:
     def test_update_target_deleted_between_score_and_apply(self, tmp_path):
-        """If LLM says 'update card X' but card X no longer exists,
-        the update returns empty and falls through to add.
-        """
+        """When an update names a card that no longer exists, the save falls
+        through to add and both cards land in the store."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
         mem.save_card({"id": "existing", "description": "original"})
 
-        # Set up LLM mock returning update action
         mock_llm = MagicMock()
         mock_llm.generate.return_value = (
             json.dumps(
@@ -280,21 +254,16 @@ class TestBug7UpdateFallthrough:
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
 
-        # Delete the target card BEFORE the dedup processes
-        # (simulating concurrent deletion)
+        # Delete the target card before dedup runs (concurrent deletion).
         del mem.card_store.cards["existing"]
 
-        # Now save a new card — dedup will try to update "existing" but it's gone
         mem.save_card({"description": "should be deduped"})
-        # BUG: Falls through to add because _apply_update_actions_from_merges returns []
         stats = mem.get_card_write_stats()
-        assert (
-            stats["added"] >= 2
-        )  # Both cards added despite dedup identifying duplicate
+        assert stats["added"] >= 2
 
 
 # ===========================================================================
-# get_card returns mutable reference (not a bug per se, but a footgun)
+# get_card returns a live Pydantic model
 # ===========================================================================
 
 

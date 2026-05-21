@@ -21,16 +21,11 @@ def _done_program() -> Program:
 
 
 def test_validity_acceptor_rejects_sentinel_value() -> None:
-    """Sentinel is_valid (-1e5) must be rejected, not accepted.
-
-    Before the fix: bool(-1e5) is True → 'not is_valid' is False →
-    check PASSES → programs with sentinel metrics pollute the archive.
-    """
+    """Sentinel is_valid (-1e5) is rejected (non-positive)."""
     program = _done_program()
     program.add_metrics({"is_valid": MIN_VALUE_DEFAULT})  # -1e5 (sentinel)
     assert ValidityMetricAcceptor().is_accepted(program) is False, (
-        "ValidityMetricAcceptor accepted a program with sentinel is_valid=-1e5.  "
-        "Fix: replace 'if not is_valid' with 'if is_valid is None or is_valid <= 0'."
+        "ValidityMetricAcceptor accepted a program with sentinel is_valid=-1e5."
     )
 
 

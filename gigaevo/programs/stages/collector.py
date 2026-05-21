@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, TypeVar
+from typing import Any
 
 from loguru import logger
 from pydantic import Field
@@ -20,8 +20,6 @@ from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import StringList
 from gigaevo.programs.stages.stage_registry import StageRegistry
-
-T = TypeVar("T")
 
 
 class RelatedCollectorBase(Stage):
@@ -385,6 +383,12 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             | None
         ) = None
         self._cached_gen_history: dict[int, GenerationMetrics] | None = None
+        self._cached_iter_stats: (
+            dict[
+                int, tuple[dict[str, float], dict[str, float], dict[str, float], float]
+            ]
+            | None
+        ) = None
 
     #: Skip metadata (89% of payload) and stage_results (10%) during
     #: deserialization.  The collector only reads metrics, lineage, and
@@ -481,6 +485,25 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             )
         self._cached_gen_history = generation_history
 
+        # Group by iteration (skip programs whose iteration metadata is absent).
+        # When the snapshot excludes metadata, get_metadata returns None and the
+        # bucket is skipped — _process will fall back to the None-iteration path.
+        programs_by_iter: dict[int, list[Program]] = {}
+        for p in programs:
+            it = p.get_metadata("iteration")
+            if it is None:
+                continue
+            programs_by_iter.setdefault(it, []).append(p)
+
+        iter_stats: dict[
+            int, tuple[dict[str, float], dict[str, float], dict[str, float], float]
+        ] = {}
+        for it, it_progs in programs_by_iter.items():
+            iter_stats[it] = _compute_fitness_stats_all_metrics(
+                it_progs, self.metrics_context
+            )
+        self._cached_iter_stats = iter_stats
+
         self._cached_pop_id = pop_id
 
     async def _process(
@@ -512,21 +535,15 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             generation, ({}, {}, {}, 0.0)
         )
 
-        # Iteration statistics (programs in same iteration)
-        # Note: when metadata is excluded from the snapshot (for performance),
-        # p.get_metadata("iteration") returns None for all snapshot programs,
-        # so iter_programs will be empty.  In that case keep None semantics.
+        # Iteration statistics (cached per snapshot epoch).
+        # When metadata is excluded from the snapshot, no program contributes
+        # to the iteration buckets and the cache lookup misses — iter_*
+        # remain None and the block is omitted from the rendered output.
         iter_best, iter_worst, iter_avg, iter_valid_rate = None, None, None, None
-        if iteration is not None:
-            iter_programs = [
-                p for p in programs if p.get_metadata("iteration") == iteration
-            ]
-            if iter_programs:
-                iter_best, iter_worst, iter_avg, iter_valid_rate = (
-                    _compute_fitness_stats_all_metrics(
-                        iter_programs, self.metrics_context
-                    )
-                )
+        if iteration is not None and self._cached_iter_stats is not None:
+            iter_entry = self._cached_iter_stats.get(iteration)
+            if iter_entry is not None:
+                iter_best, iter_worst, iter_avg, iter_valid_rate = iter_entry
 
         # Ancestor statistics (depth 1 - immediate parents, from batch cache)
         ancestors = [

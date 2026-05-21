@@ -1,12 +1,8 @@
 """Feedback pipeline builder for HoVer static chain evolution.
 
-Extends DefaultPipelineBuilder by swapping in HoVerFeedbackFormatter so that
-per-hop retrieval failure diagnostics from validate.py are injected into the
-mutation LLM's context.
-
-Usage (Hydra config):
-    pipeline_builder:
-      _target_: problems.chains.hover.static.pipeline.HoVerFeedbackPipelineBuilder
+Extends ``DefaultPipelineBuilder`` by swapping in ``HoVerFeedbackFormatter``
+so that per-hop retrieval failure diagnostics from ``validate.py`` are
+injected into the mutation LLM's context.
 """
 
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT

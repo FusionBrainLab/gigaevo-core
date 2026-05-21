@@ -8,17 +8,16 @@ and ingested continuously.
 ## Quick Start
 
 ```bash
-# Using the experiment preset (recommended)
-python run.py experiment=steady_state problem.name=heilbron
+# Steady-state engine on the default problem
+python run.py experiments/steady_state.py
 
-# Or as a single Hydra override on any existing setup
-python run.py evolution=steady_state problem.name=heilbron
-
-# Combined with migration bus for maximum throughput
-python run.py experiment=steady_state_bus problem.name=heilbron redis.db=0
+# Combined with the cross-run migration bus for maximum throughput
+python run.py experiments/steady_state_bus.py --redis.db 0
 ```
 
-Works with any problem — just change `problem.name`. All other config (strategy, pipeline, LLM) stays the same.
+For other problems, copy ``experiments/steady_state.py`` and swap the
+problem preset in the ``build()`` function; the strategy / pipeline /
+LLM selections can stay the same.
 
 ## How It Works
 
@@ -60,12 +59,14 @@ every `max_mutations_per_generation` processed programs.
 
 ## Configuration
 
-The only new config knob is `max_in_flight`:
+The only new config knob is `max_in_flight`, exposed on
+``SteadyStateEngineConfig`` in ``gigaevo/config/schemas/engine.py``:
 
-```yaml
-# config/evolution/steady_state.yaml
-engine_config:
-  max_in_flight: 8       # max programs in the mutation→evaluation pipeline
+```python
+# experiments/steady_state.py (excerpt)
+from gigaevo.config.engine_presets import build_steady_state
+
+engine = build_steady_state(max_in_flight=8)
 ```
 
 All other fields are inherited from the base `EngineConfig`:
@@ -158,7 +159,7 @@ The mutation gate uses try/finally to always reopen, even on errors.
 
 ## Compatibility
 
-- **Hydra config**: Drop-in replacement — just add `evolution=steady_state`
+- **Typed config**: Drop-in replacement — use `build_steady_state()` in place of `build_generational()` on `EngineConfig`.
 - **Status tools**: `tools/status.py`, watchdog, `tools/comparison.py` all work unchanged
 - **DagRunner**: No changes — communicates via Redis state transitions
 - **Strategies**: All strategies (MAP-Elites, islands, etc.) work unchanged

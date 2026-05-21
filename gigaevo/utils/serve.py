@@ -56,7 +56,7 @@ async def serve_until_signal(
         tasks_to_monitor = [t for t in on_stop if t and not t.done()]
         if tasks_to_monitor:
             wait_tasks = [asyncio.create_task(stop_event.wait())] + tasks_to_monitor
-            done, pending = await asyncio.wait(
+            _done, pending = await asyncio.wait(
                 wait_tasks, return_when=asyncio.FIRST_COMPLETED
             )
             # If stop_event wasn't the one that completed, set it now to proceed with cleanup

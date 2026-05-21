@@ -1,16 +1,17 @@
 """Tests for DAG-based memory flow: MemoryContextStage → MutationContextStage → mutation.
 
-The memory refactor (PR #161+) moved memory selection from the evolution engine
-into a DAG pipeline stage. These tests verify the complete data flow:
+Memory selection lives in a DAG pipeline stage. These tests pin down the
+data flow end-to-end:
 
-1. MemoryContextStage produces StringContainer with memory card text
-2. MutationContextStage consumes "memory" input and includes MemoryMutationContext
-3. Memory text appears in the final MUTATION_CONTEXT_METADATA_KEY
-4. generate_mutations auto-derives "memory_used" from parent metadata
-5. The mutation operator does NOT handle memory (backward compat: param is ignored)
+1. MemoryContextStage produces a StringContainer with memory card text.
+2. MutationContextStage consumes the "memory" input and emits a
+   MemoryMutationContext as part of the composite mutation context.
+3. The rendered memory text reaches MUTATION_CONTEXT_METADATA_KEY.
+4. generate_mutations derives "memory_used" from parent metadata.
+5. The mutation operator itself does not read memory; its ``memory_text``
+   parameter is accepted but ignored.
 
-These tests are the refactor's safety net — they break if the data flow is
-interrupted at any point.
+These tests break if the data flow is interrupted at any point.
 """
 
 from __future__ import annotations
@@ -687,25 +688,25 @@ class TestMemoryEdgeCases:
 
 
 # ===========================================================================
-# 8. Hydra config group contracts
+# 8. Memory-provider construction contracts
 # ===========================================================================
 
 
-class TestHydraConfigContracts:
-    """Verify that the Hydra config targets resolve to correct classes."""
+class TestMemoryProviderConstruction:
+    """Pin down constructor contracts for the memory-provider classes."""
 
     def test_null_provider_target(self) -> None:
-        """NullMemoryProvider can be instantiated with no args (Hydra default)."""
+        """NullMemoryProvider can be instantiated with no arguments."""
         provider = NullMemoryProvider()
         assert isinstance(provider, NullMemoryProvider)
 
     def test_selector_provider_target_with_max_cards(self) -> None:
-        """SelectorMemoryProvider accepts max_cards kwarg (from config/memory/local.yaml)."""
+        """SelectorMemoryProvider accepts the ``max_cards`` kwarg."""
         provider = SelectorMemoryProvider(max_cards=5)
         assert provider._max_cards == 5
 
     def test_selector_provider_target_with_all_params(self) -> None:
-        """SelectorMemoryProvider accepts all Hydra-injectable params."""
+        """SelectorMemoryProvider accepts all constructor params."""
         provider = SelectorMemoryProvider(
             max_cards=3,
             checkpoint_dir="/tmp/test",

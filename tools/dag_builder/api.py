@@ -685,7 +685,7 @@ def generate_pipeline_builder_code(dag_request: DAGRequest) -> str:
 
 
 def generate_yaml_config(dag_request: DAGRequest) -> str:
-    """Generate YAML configuration matching config/pipeline/custom.yaml structure."""
+    """Generate a YAML representation of the assembled pipeline."""
     # Get all stages from registry
     all_stages = StageRegistry.get_all_stages()
 
@@ -771,7 +771,7 @@ def generate_yaml_config(dag_request: DAGRequest) -> str:
         yaml_lines.append("    # No data flow edges defined")
         yaml_lines.append("")
 
-    # Add execution dependencies in Hydra format
+    # Add execution dependencies in the dag_blueprint YAML format
     yaml_lines.append("  # Execution order dependencies")
     yaml_lines.append("  exec_order_deps:")
     if dag_request.execution_dependencies:
@@ -817,7 +817,7 @@ def generate_yaml_config(dag_request: DAGRequest) -> str:
 
 @app.get("/api/yaml-configs", response_model=list[YAMLConfigInfo])
 async def list_yaml_configs():
-    """List available Hydra YAML pipeline configs with dag_blueprint section."""
+    """List YAML pipeline configs under ``config/pipeline/`` that contain a ``dag_blueprint`` section."""
     try:
         config_dir = project_root / "config" / "pipeline"
 
@@ -862,7 +862,7 @@ async def list_yaml_configs():
 
 @app.post("/api/load-yaml", response_model=LoadYAMLResponse)
 async def load_yaml_config(request: LoadYAMLRequest):
-    """Load and parse a Hydra YAML config into DAG builder format."""
+    """Load and parse a pipeline YAML config into DAG builder format."""
     try:
         yaml_path = project_root / request.yaml_path
 

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
 from typing import Any
@@ -23,7 +24,7 @@ LLM_CONFIG = {
         },
     },
     "client_kwargs": {
-        "api_key": "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",
+        "api_key": os.environ.get("OPENROUTER_API_KEY", ""),
         "base_url": "https://openrouter.ai/api/v1",
     },
 }

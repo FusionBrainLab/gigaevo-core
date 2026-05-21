@@ -12,8 +12,8 @@ Uses:
 - MemoryAwareFakeDagRunner (simulates DAG memory stage + validation)
 - Deterministic mutation operator (no LLM)
 
-This is the integration test that would have caught the bug where memory was
-hardcoded in the engine instead of flowing through the DAG.
+Ensures the memory context flows end-to-end through the DAG stages rather
+than being injected directly inside the engine.
 """
 
 from __future__ import annotations

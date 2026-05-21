@@ -1,12 +1,8 @@
 """ASI pipeline builder for HotpotQA static_a chain evolution.
 
-Extends DefaultPipelineBuilder by swapping in HotpotQAASIFormatter so that
-per-sample failure cases with per-hop retrieval diagnostics from static_a/validate.py
-are injected into the mutation LLM's context.
-
-Usage (Hydra config):
-    pipeline_builder:
-      _target_: problems.chains.hotpotqa.static_a.pipeline.ASIPipelineBuilder
+Extends ``DefaultPipelineBuilder`` by swapping in ``HotpotQAASIFormatter``
+so that per-sample failure cases with per-hop retrieval diagnostics from
+``static_a/validate.py`` are injected into the mutation LLM's context.
 """
 
 from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT

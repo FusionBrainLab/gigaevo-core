@@ -98,8 +98,9 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "--config-path",
         default=None,
         help=(
-            "Optional YAML config path. May be a full unified memory config or "
-            "a tracker-only config. Defaults to config/memory.yaml."
+            "Optional YAML config path. May be a full unified memory "
+            "config or a tracker-only config. The default location is "
+            "controlled by gigaevo.memory.runtime_config."
         ),
     )
     parser.add_argument(

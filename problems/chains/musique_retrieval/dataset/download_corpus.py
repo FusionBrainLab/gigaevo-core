@@ -1,7 +1,7 @@
 """Build per-task BM25 indices from MuSiQue dataset passages.
 
-Despite the legacy filename, this script does not download Wikipedia.
-It builds one local BM25 index per task/sample from dataset-provided passages.
+This script builds one local BM25 index per task/sample from dataset-provided
+passages; it does not download external corpora.
 
 Usage:
     python -m problems.chains.musique_retrieval.dataset.download_corpus

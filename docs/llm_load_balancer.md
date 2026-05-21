@@ -12,15 +12,10 @@ Each experiment run is statically pinned to one LLM server. With 4 runs and 4 se
 
 ## Quick Start
 
-```bash
-# Instead of:
-python run.py llm_base_url=http://server-1:8777/v1 ...
-
-# Use:
-python run.py llm=balanced ...
-```
-
-All endpoints are listed in `config/llm/balanced.yaml`. No per-run `llm_base_url` needed.
+Wire the load-balanced router into your experiment file by selecting
+``BalancedChatOpenAIConfig`` from the LLM schemas (or build it via
+``llm_presets``); endpoints are then listed once on that config and
+every run shares the pool. No per-run ``base_url`` override needed.
 
 ## How It Works
 
@@ -78,29 +73,35 @@ redis-cli -n 15 HGETALL llm_pool:mutation:stats:$(python -c "import hashlib; pri
 
 ## Configuration
 
-### config/llm/balanced.yaml
+Construct ``BalancedChatOpenAI`` directly in your experiment file and
+plug it into the LLM router. The runtime constructor takes the same
+parameters that any ``ChatOpenAI`` client accepts, plus the pool
+coordinates:
 
-```yaml
-llm:
-  _target_: gigaevo.llm.models.MultiModelRouter
-  models:
-    - _target_: gigaevo.infra.balanced_chat.BalancedChatOpenAI
-      model: ${model_name}
-      api_key: ${oc.env:OPENAI_API_KEY}
-      temperature: ${temperature}
-      max_tokens: ${max_tokens}
-      pool_name: "mutation"
-      redis_url: "redis://localhost:6379/15"
-      cooldown_secs: 60
-      endpoints:
-        - "http://10.226.72.211:8777/v1"
-        - "http://10.226.15.38:8777/v1"
-        - "http://10.226.185.47:8777/v1"
-        - "http://10.225.51.251:8777/v1"
-  probabilities: [1.0]
+```python
+from gigaevo.infra.balanced_chat import BalancedChatOpenAI
+from gigaevo.llm.models import MultiModelRouter
+
+balanced = BalancedChatOpenAI(
+    model="Qwen3-235B-A22B-Thinking-2507",
+    temperature=0.7,
+    max_tokens=4096,
+    pool_name="mutation",
+    redis_url="redis://localhost:6379/15",
+    cooldown_secs=60,
+    endpoints=[
+        "http://10.226.72.211:8777/v1",
+        "http://10.226.15.38:8777/v1",
+        "http://10.226.185.47:8777/v1",
+        "http://10.225.51.251:8777/v1",
+    ],
+)
+router = MultiModelRouter(models=[balanced], probabilities=[1.0])
 ```
 
-To add/remove servers: edit the `endpoints` list. No code changes needed.
+To add or remove servers, edit the `endpoints` list. No code changes
+are needed on the consumer side; the pool is keyed by ``pool_name`` and
+shared across all runs that connect to the same Redis DB.
 
 ## Metrics
 
@@ -130,9 +131,6 @@ gigaevo/infra/
   endpoint_pool.py     # EndpointPool — Lua-based atomic selection + EMA
   balanced_chat.py     # BalancedChatOpenAI — drop-in ChatOpenAI wrapper
   pool_metrics.py      # PoolMetricsTracker — per-endpoint observability
-
-config/llm/
-  balanced.yaml        # Hydra config group
 
 tests/infra/
   test_endpoint_pool.py   # 26 tests (selection, cooldown, EMA, cross-run)

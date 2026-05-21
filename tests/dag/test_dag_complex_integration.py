@@ -1454,12 +1454,12 @@ class TestAdditionalEdgeCases:
 
 
 # ===========================================================================
-# Group 8: Audit Finding Tests
+# Group 8: Cancellation, semaphore, input_hash and persistence checks
 # ===========================================================================
 
 
 class TestAuditCancelledErrorComplex:
-    """Audit Finding #4: CancelledError in a complex multi-stage DAG."""
+    """``CancelledError`` propagation in a complex multi-stage DAG."""
 
     async def test_cancelled_stage_in_diamond_cascades_correctly(
         self, state_manager, make_program
@@ -1512,7 +1512,7 @@ class TestAuditCancelledErrorComplex:
 
 
 class TestAuditSemaphoreComplex:
-    """Audit Finding #5: Strengthened semaphore with concurrency tracking."""
+    """Strengthened semaphore enforces peak concurrency limits."""
 
     async def test_semaphore_limit_2_with_6_stages_peak_concurrency_tracked(
         self, state_manager, make_program
@@ -1562,7 +1562,7 @@ class TestAuditSemaphoreComplex:
 
 
 class TestAuditInputHashComplex:
-    """Audit Finding #6: input_hash correctness end-to-end in complex DAGs."""
+    """``input_hash`` correctness end-to-end across a complex DAG."""
 
     async def test_input_hash_end_to_end_in_chain(self, state_manager, make_program):
         """Run A->B->C chain. Capture all input_hashes. Rerun with same inputs.
@@ -1599,7 +1599,7 @@ class TestAuditInputHashComplex:
 
 
 class TestAuditMetricsInRedisComplex:
-    """Audit Finding #1: Metrics verified in Redis for complex DAGs."""
+    """All stage-emitted metrics round-trip through Redis for complex DAGs."""
 
     async def test_multi_stage_metrics_all_persisted_to_redis(
         self, state_manager, fakeredis_storage, make_program
@@ -1635,7 +1635,7 @@ class TestAuditMetricsInRedisComplex:
 
 
 class TestAuditSkipResultComplex:
-    """Audit Finding #2: Skip results verified in Redis for complex DAGs."""
+    """Cascade-skip results persist correctly to Redis for complex DAGs."""
 
     async def test_skip_result_in_cascade_persisted_to_redis(
         self, state_manager, fakeredis_storage, make_program

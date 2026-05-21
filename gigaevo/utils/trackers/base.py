@@ -21,9 +21,8 @@ class LogWriter(ABC):
     def clear_series(self, metric: str, **kwargs) -> None:
         """Delete all history for a metric series so it can be rewritten.
 
-        Used by MetricsTracker to rewrite the frontier when NO_CACHE stages
-        change program metrics retroactively.  Default is a no-op; the Redis
-        backend implements the actual DELETE.
+        Default is a no-op; backends that persist history (e.g. Redis) override
+        this to delete the stored series.
         """
 
     @abstractmethod

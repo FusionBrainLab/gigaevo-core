@@ -162,7 +162,7 @@ class MemorySelectorAgent:
                 deep_get(settings, "runtime.sync_on_init"), default=True
             )
             if use_api:
-                # Platform backend uses its own constructor (legacy kwargs)
+                # Platform backend uses its own constructor signature
                 memory_backend_cls = self._resolve_memory_backend_class(use_api)
                 memory = memory_backend_cls(
                     checkpoint_path=str(memory_dir),
@@ -270,7 +270,7 @@ class MemorySelectorAgent:
             metrics_description=metrics_description,
             max_cards=max_cards,
         )
-        _ = memory_text  # legacy input kept for API compatibility; red search ignores it
+        _ = memory_text  # accepted for signature parity; the red-search path does not consume it
 
         result_text = ""
         raw_card_ids: list[str] = []

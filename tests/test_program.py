@@ -454,12 +454,12 @@ class TestIsCompleteProperty:
 
 
 # ---------------------------------------------------------------------------
-# Audit Finding 1: Full round-trip serialization (all fields)
+# Full round-trip serialization (all fields)
 # ---------------------------------------------------------------------------
 
 
 class TestFullFieldRoundTrip:
-    """Audit finding 1: to_dict -> from_dict must preserve ALL Program fields."""
+    """``to_dict`` then ``from_dict`` must preserve every Program field."""
 
     def test_all_fields_roundtrip(self) -> None:
         """Create a Program with every field populated, serialize, deserialize,

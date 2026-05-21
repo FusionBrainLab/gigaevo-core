@@ -29,33 +29,38 @@ Use CMA-ES (`pipeline=cma_opt`) when programs only have floating-point constants
 
 ## Quick Start
 
-**Default run** (auto-computes budget, eval timeout, and trial count):
+Select the Optuna pipeline by passing
+``OptunaOptPipelineBuilderConfig`` from the pipeline schemas (or
+``build_optuna_opt()`` from ``gigaevo/config/pipeline_presets.py``) in
+your experiment's ``build()``. The shipped experiment files do not
+include an Optuna preset by default, so a custom experiment file is
+the natural entry point:
 
-```bash
-python run.py problem.name=heilbron pipeline=optuna_opt
+```python
+# experiments/heilbron_optuna.py
+from gigaevo.config.pipeline_presets import build_optuna_opt
+# ...
+def build() -> ExperimentConfig:
+    return ExperimentConfig(
+        # ...
+        pipeline=PipelineConfig(builder=build_optuna_opt()),
+        engine=build_generational(optimization_time_budget=1800),
+        # ...
+    )
 ```
 
-**Custom time budget** (30 min optimization, 40 min DAG timeout):
+Once the experiment file exists, override the time budget and DAG
+timeout via tyro on the runtime command:
 
 ```bash
-python run.py problem.name=heilbron pipeline=optuna_opt \
-    optimization_time_budget=1800 \
-    dag_timeout=2400
+python run.py experiments/heilbron_optuna.py \
+    --engine.optimization_time_budget 1800 \
+    --pipeline.builder.dag_timeout 2400
 ```
 
-**Explicit trials and timeout** (override auto-computation):
-
-```bash
-python run.py problem.name=heilbron pipeline=optuna_opt \
-    '_optuna_stage_kwargs={eval_timeout: 60, n_trials: 80}'
-```
-
-**With a multi-island experiment**:
-
-```bash
-python run.py problem.name=heilbron pipeline=optuna_opt \
-    experiment=multi_island_complexity
-```
+Explicit ``n_trials`` and ``eval_timeout`` live on the Optuna stage
+configuration; tune them on the pipeline preset call rather than as
+CLI overrides.
 
 ---
 
@@ -155,10 +160,13 @@ Two user-facing parameters control the time budget. Everything else is derived a
 | `dag_timeout` | `3600` (1 hour) | Total time limit for the entire DAG pipeline |
 | `optimization_time_budget` | `null` → `0.75 * dag_timeout` | Time budget for the Optuna stage itself |
 
-Set these in `config/constants/pipeline.yaml` or via CLI overrides:
+Both default from ``gigaevo/config/defaults.py``; override per-run
+via tyro:
 
 ```bash
-python run.py dag_timeout=2400 optimization_time_budget=1800
+python run.py experiments/<name>.py \
+    --pipeline.builder.dag_timeout 2400 \
+    --engine.optimization_time_budget 1800
 ```
 
 ### Derived Values
@@ -209,42 +217,39 @@ total_trials = n_startup + n_trials
 
 ## Configuration Reference
 
-### Pipeline YAML (`config/pipeline/optuna_opt.yaml`)
+### Pipeline Builder Wiring
 
-```yaml
-# @package _global_
-evolution_context:
-  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
-  problem_ctx: ${problem_context}
-  llm_wrapper: ${ref:llm}
-  storage: ${redis_storage}
+``build_optuna_opt()`` returns an ``OptunaOptPipelineBuilderConfig``
+whose ``build()`` constructs the ``OptunaOptPipelineBuilder`` at
+runtime. The builder owns ``dag_timeout`` and forwards
+``optimization_time_budget`` from the engine config, so the same field
+values flow into both stage timeout and per-trial budgeting:
 
-pipeline_builder:
-  _target_: gigaevo.entrypoint.default_pipelines.OptunaOptPipelineBuilder
-  ctx: ${evolution_context}
-  dag_timeout: ${dag_timeout}
-  optimization_time_budget: ${optimization_time_budget}
+```python
+from gigaevo.config.pipeline_presets import build_optuna_opt
+from gigaevo.config.schemas import PipelineConfig
 
-dag_blueprint:
-  _target_: gigaevo.config.helpers.build_dag_from_builder
-  builder: ${pipeline_builder}
+pipeline = PipelineConfig(
+    builder=build_optuna_opt(
+        dag_timeout=3600,
+        n_trials=80,
+        eval_timeout=60,
+        max_parallel=4,
+    ),
+)
 ```
 
-### Constants YAML (`config/constants/pipeline.yaml`)
+### Defaults
 
-```yaml
-# @package _global_
-stage_timeout: 600               # lightweight stages only
-dag_timeout: 3600
-optimization_time_budget: null   # null = 0.75 * dag_timeout
-dag_concurrency: 16
-max_code_length: 30000
-max_insights: 8
-```
+``stage_timeout`` (600s for lightweight stages), ``dag_timeout``
+(3600s), and ``optimization_time_budget`` (``None`` → ``0.75 *
+dag_timeout``) live as ``Final`` scalars on
+``gigaevo/config/defaults.py``. ``dag_concurrency``, ``max_code_length``,
+and ``max_insights`` come from the same module.
 
 ### OptunaOptimizationConfig Fields
 
-These are set via the `config` parameter of `OptunaOptimizationStage`. Override them through `_optuna_stage_kwargs` in a pipeline builder subclass or via Hydra structured configs.
+These are set via the `config` parameter of `OptunaOptimizationStage`. Override them by passing an `OptunaOptimizationConfig` instance into the pipeline builder factory or by subclassing the stage in your experiment file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -286,18 +291,20 @@ These are passed directly to `OptunaOptimizationStage.__init__()`:
 | `optimization_time_budget` | `float \| None` | `None` | Time budget (falls back to stage timeout) |
 | `config` | `OptunaOptimizationConfig` | defaults | Advanced config (see table above) |
 
-### CLI Overrides
+### Setting Stage kwargs
 
-Override stage kwargs via the `_optuna_stage_kwargs` dict syntax:
+Set explicit ``n_trials``, ``eval_timeout``, and ``max_parallel``
+when constructing the pipeline builder in your experiment file:
 
-```bash
-# Set explicit trial count and timeout
-python run.py pipeline=optuna_opt \
-    '_optuna_stage_kwargs={n_trials: 80, eval_timeout: 60}'
-
-# Set explicit max_parallel
-python run.py pipeline=optuna_opt \
-    '_optuna_stage_kwargs={max_parallel: 4}'
+```python
+# experiments/heilbron_optuna.py
+pipeline=PipelineConfig(
+    builder=build_optuna_opt(
+        n_trials=80,
+        eval_timeout=60,
+        max_parallel=4,
+    ),
+),
 ```
 
 ---
@@ -333,11 +340,15 @@ When `importance_freezing=True` (default), the stage evaluates parameter importa
 
 ### Early Stopping
 
-Set `early_stopping_patience` to stop after N consecutive trials without improvement:
+Set `early_stopping_patience` on the stage configuration when
+building the pipeline:
 
-```bash
-python run.py pipeline=optuna_opt \
-    '_optuna_stage_kwargs={config: {early_stopping_patience: 30}}'
+```python
+pipeline=PipelineConfig(
+    builder=build_optuna_opt(
+        config=OptunaOptimizationConfig(early_stopping_patience=30),
+    ),
+),
 ```
 
 This is disabled by default (`None`).
@@ -370,14 +381,15 @@ The TPE sampler uses `constant_liar=True` by default, which enables concurrent t
 **Cause:** The stage timeout equals `optimization_time_budget` (default: `0.75 * dag_timeout`). If baseline measurement + LLM analysis + trials exceed this, the stage times out.
 
 **Fix:**
-- Increase `optimization_time_budget` and `dag_timeout`:
+- Increase ``optimization_time_budget`` and ``dag_timeout``:
   ```bash
-  python run.py dag_timeout=7200 optimization_time_budget=6000
+  python run.py experiments/<name>.py \
+      --pipeline.builder.dag_timeout 7200 \
+      --engine.optimization_time_budget 6000
   ```
-- Or reduce trial count / eval timeout:
-  ```bash
-  python run.py '_optuna_stage_kwargs={n_trials: 40, eval_timeout: 30}'
-  ```
+- Or reduce trial count / eval timeout on the pipeline builder in
+  the experiment file (``n_trials``, ``eval_timeout`` kwargs to
+  ``build_optuna_opt``).
 
 ### All Trials Fail
 
@@ -439,5 +451,5 @@ Key log messages to look for:
 | `gigaevo/programs/stages/optimization/optuna/routing.py` | `OptunaPayloadBridge`, `PayloadResolver` (bypass stages) |
 | `gigaevo/programs/stages/optimization/optuna/desubstitution.py` | Parameter desubstitution (clean code generation) |
 | `gigaevo/entrypoint/default_pipelines.py` | `OptunaOptPipelineBuilder` (pipeline wiring) |
-| `config/constants/pipeline.yaml` | `dag_timeout`, `optimization_time_budget` defaults |
-| `config/pipeline/optuna_opt.yaml` | Pipeline YAML config |
+| `gigaevo/config/defaults.py` | `dag_timeout`, `optimization_time_budget`, `stage_timeout` defaults |
+| `gigaevo/config/pipeline_presets.py` | `build_optuna_opt()` preset returning `OptunaOptPipelineBuilderConfig` |

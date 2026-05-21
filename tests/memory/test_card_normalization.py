@@ -336,13 +336,13 @@ class TestNormalizeEdgeCases:
         assert isinstance(result, MemoryCard)
 
     def test_zero_program_id_triggers_program_path(self):
-        """FIXED: program_id=0 → _str_or_empty(0) → "0" → truthy → program card."""
+        """program_id=0 string-coerces to '0' and yields a ProgramCard."""
         result = normalize_memory_card({"program_id": 0})
         assert isinstance(result, ProgramCard)
         assert result.program_id == "0"
 
     def test_false_program_id_triggers_program_path(self):
-        """FIXED: program_id=False → _str_or_empty(False) → "False" → truthy."""
+        """program_id=False string-coerces to 'False' and yields a ProgramCard."""
         result = normalize_memory_card({"program_id": False})
         assert isinstance(result, ProgramCard)
 
@@ -358,11 +358,11 @@ class TestNormalizeEdgeCases:
         assert "extra" not in MemoryCardExplanation.model_fields
 
     def test_aliases_with_ideas_tracker_dict_format(self):
-        """Ideas tracker stores aliases as list[dict] version history, not list[str].
+        """Ideas tracker stores aliases as list[dict] version history.
 
-        RecordCardExtended.aliases appends dicts like:
-            {"exp1-prog1": {"description": "old", "programs": ["p1"], "explanations": ["e"]}}
-        This must pass through normalize_memory_card without crashing (Bug #2, PR #161).
+        RecordCardExtended.aliases entries look like
+        {"exp1-prog1": {"description": "old", "programs": ["p1"], "explanations": ["e"]}}.
+        normalize_memory_card accepts that shape unchanged.
         """
         aliases = [
             {
@@ -389,7 +389,7 @@ class TestNormalizeEdgeCases:
         assert isinstance(result.aliases[0], dict)
 
     def test_aliases_mixed_types(self):
-        """Aliases can mix strings and dicts (legacy + ideas_tracker)."""
+        """Aliases accept a mixed list of strings and dict entries."""
         aliases = ["simple-alias", {"exp1-prog1": {"description": "old"}}]
         result = normalize_memory_card({"id": "idea-2", "aliases": aliases})
         assert result.aliases == aliases

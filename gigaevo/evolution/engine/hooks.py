@@ -1,9 +1,11 @@
 """Post-run hooks for EvolutionEngine.
 
-``PostRunHook`` is the ABC; concrete implementations are injected via Hydra.
+``PostRunHook`` is the ABC consumed by ``EvolutionEngine`` after the
+generation loop finishes.
 
-- ``NullPostRunHook`` — no-op (default: ``ideas_tracker=none``)
-- ``IdeaTracker`` — analyses programs and classifies ideas (``ideas_tracker=default``)
+- ``NullPostRunHook`` — no-op.
+- ``IdeaTracker`` (in ``gigaevo.memory.ideas_tracker``) — analyses
+  programs and classifies improvement ideas.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ class PostRunHook(ABC):
 
 
 class NullPostRunHook(PostRunHook):
-    """No-op hook. Default when ``ideas_tracker=none``."""
+    """No-op hook. Returns immediately without touching storage."""
 
     async def on_run_complete(self, storage: ProgramStorage) -> None:
         pass

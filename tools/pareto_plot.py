@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+from collections.abc import Iterable
 
 import matplotlib
 
@@ -28,10 +29,15 @@ COND_COLORS = {"control": "#2166ac", "treatment": "#b2182b"}
 MARKERS = {"V1": "o", "V2": "s", "V3": "^", "V4": "D"}
 
 
-def pareto_front(xs, ys, maximize_y=True):
+def pareto_front(
+    xs: Iterable[float],
+    ys: Iterable[float],
+    maximize_y: bool = True,
+) -> tuple[list[float], list[float]]:
     """Compute 2D Pareto front (minimize x, maximize y by default)."""
     points = sorted(zip(xs, ys), key=lambda p: p[0])
-    front_x, front_y = [], []
+    front_x: list[float] = []
+    front_y: list[float] = []
     best_y = -np.inf if maximize_y else np.inf
     for x, y in points:
         if (maximize_y and y > best_y) or (not maximize_y and y < best_y):
@@ -41,7 +47,7 @@ def pareto_front(xs, ys, maximize_y=True):
     return front_x, front_y
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True)
     parser.add_argument(

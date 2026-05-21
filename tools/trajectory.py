@@ -3,7 +3,7 @@
 Gen-by-gen trajectory dump for a GigaEvo evolution run.
 
 Reads Redis metrics keys directly — lightweight, no full program fetch.
-Use at checkpoints during a run or for Phase 5 analysis.
+Use at checkpoints during a run or for post-run analysis.
 
 Example usage:
     PYTHONPATH=. python tools/trajectory.py --run chains/hotpotqa/static@4:O
@@ -19,7 +19,7 @@ import redis as redis_lib
 from tools.status import parse_run_arg
 
 
-def _read_list(r, key: str) -> list[dict]:
+def _read_list(r: redis_lib.Redis, key: str) -> list[dict]:
     """Read all entries from a Redis list key as parsed JSON dicts."""
     raw_entries = r.lrange(key, 0, -1)
     result = []
@@ -31,7 +31,7 @@ def _read_list(r, key: str) -> list[dict]:
     return result
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Print gen-by-gen trajectory for a GigaEvo evolution run",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -169,7 +169,7 @@ Summary lines:
 
     if len(improvement_points) >= 2:
         last_s, last_v = improvement_points[-1]
-        prev_s, prev_v = improvement_points[-2]
+        _prev_s, prev_v = improvement_points[-2]
         delta = (last_v - prev_v) * 100
         print(
             f"  Last improvement: gen {last_s}"

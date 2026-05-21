@@ -28,8 +28,8 @@ redis-server
 ## Step 3: Run Your First Evolution (5 seconds to start)
 
 ```bash
-# Run the heilbron problem (triangle packing)
-python run.py problem.name=heilbron max_generations=5
+# Run the heilbron problem (triangle packing), capped at 5 generations
+python run.py experiments/base.py --engine.max_generations 5
 ```
 
 You should see:
@@ -124,7 +124,7 @@ PYTHONPATH=. python tools/top_programs.py --run heilbron@0:run-1 -n 10
 # Use tools/flush.py (kills exec_runner workers first):
 PYTHONPATH=. python tools/flush.py --db 0 --confirm
 # Or use a different database:
-python run.py problem.name=heilbron redis.db=1
+python run.py experiments/base.py --redis.db 1
 ```
 
 ### Issue: "No programs in EVOLVING state"
@@ -150,9 +150,9 @@ PYTHONPATH=. python tools/top_programs.py --run <prefix>@<db>:<label> -n 10
 - Generation cycle: ~2-5 minutes
 
 **Speed it up**:
-- Reduce `max_mutations_per_generation` in config
+- Reduce `engine.max_mutations_per_generation` (CLI override)
 - Use faster LLM models
-- Increase `max_concurrent_dags` (but beware of rate limits)
+- Increase `runner.max_concurrent_dags` (but beware of rate limits)
 
 ## Next Steps
 
@@ -169,20 +169,36 @@ cp -r problems/heilbron problems/my_problem
 # - problems/my_problem/task_description.txt (LLM instructions)
 ```
 
+Then create an experiment file that points at the new problem directory:
+
+```bash
+# Copy the base experiment and edit its build() function
+cp experiments/base.py experiments/my_problem.py
+# Set ProblemConfig.problem_dir to problems/my_problem inside build().
+```
+
+Run it:
+
+```bash
+python run.py experiments/my_problem.py
+```
+
 ### 2. Customize Evolution
 
 ```bash
 # Try multi-island evolution
-python run.py experiment=multi_island_complexity problem.name=heilbron
+python run.py experiments/multi_island_complexity.py
 
 # Use different LLM models
-python run.py experiment=multi_llm_exploration problem.name=heilbron
+python run.py experiments/multi_llm_exploration.py
 
-# Adjust parameters
-python run.py problem.name=heilbron \
-    max_generations=20 \
-    max_mutations_per_generation=15 \
-    model_name=anthropic/claude-3.5-sonnet
+# Adjust parameters via tyro overrides
+python run.py experiments/base.py \
+    --engine.max_generations 20 \
+    --engine.max_mutations_per_generation 15
+
+# Copy experiments/base.py to a new file and edit it for more
+# substantial customization than CLI overrides comfortably handle.
 ```
 
 ### 3. Read the Documentation
@@ -195,30 +211,27 @@ python run.py problem.name=heilbron \
 ### 4. Explore Examples
 
 ```bash
-# View all available experiments
-ls config/experiment/
+# View all available experiment files
+ls experiments/
 
 # View all available problems
 ls problems/
 
-# View available LLM configurations
-ls config/llm/
+# View available LLM presets
+grep "^def build_" gigaevo/config/llm_presets.py
 ```
 
 ## Quick Reference Commands
 
 ```bash
-# Run evolution
-python run.py problem.name=<problem>
+# Run evolution against a shipped experiment file
+python run.py experiments/<name>.py
 
-# Run with config override
-python run.py problem.name=<problem> max_generations=10
+# Run with a tyro override
+python run.py experiments/<name>.py --engine.max_generations 10
 
-# Use different experiment
-python run.py experiment=<experiment> problem.name=<problem>
-
-# Preview config (no execution)
-python run.py problem.name=<problem> --cfg job
+# Validate + dump resolved config without invoking the engine
+python run.py experiments/<name>.py --dry-run
 
 # Check run status (--experiment mode preferred for managed experiments)
 PYTHONPATH=. python tools/status.py --experiment <task>/<name>

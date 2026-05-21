@@ -1,21 +1,16 @@
-"""Tests for Finding 2: _task_model_map grows unbounded in MultiModelRouter.
+"""Map-lifetime tests for ``MultiModelRouter._task_model_map``.
 
-gigaevo/llm/models.py:
+``_select()`` stores the selected model name keyed by ``task_id``.
+``get_last_model()`` pops it. If the caller never reaches the pop —
+because the LLM call raises or because the consumer simply forgets — the
+entry stays in the map and the dict grows without bound.
 
-_select() stores the selected model name in _task_model_map[task_id].
-get_last_model() pops it. If the code between _select() and a successful
-get_last_model() call raises an exception (e.g. the LLM call fails), or if
-get_last_model() is simply never called, the entry is never removed.
-
-Over many calls this map leaks memory — one entry per failed/abandoned async task.
-
-Tests:
-1. Entry leaks when ainvoke raises before get_last_model() is called.
-2. Repeated failed calls accumulate entries (unbounded growth).
-3. Successful call + get_last_model() pops the entry (correct path).
-4. Two concurrent tasks each get their own entry; both popped on success.
-5. get_last_model() after a failed call returns None (stale entry not visible
-   from a *different* task).
+Coverage:
+* leak when ``ainvoke`` raises before ``get_last_model`` is called
+* unbounded growth over repeated failures
+* happy path pops the entry
+* two concurrent tasks keep separate entries and both are popped
+* a different task observing a stranded entry sees ``None``
 """
 
 from __future__ import annotations
@@ -61,7 +56,7 @@ def _router_with_model(name: str = "model_a") -> tuple[MultiModelRouter, MagicMo
 
 
 # ---------------------------------------------------------------------------
-# TestTaskModelMapLeak — Finding 2
+# TestTaskModelMapLeak
 # ---------------------------------------------------------------------------
 
 

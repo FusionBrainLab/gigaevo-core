@@ -151,19 +151,25 @@ class RidgePredictor(EvalTimePredictor):
         self._sklearn_available: bool | None = None  # None = not checked yet
 
     def predict(self, program: Program) -> float:
+        # Snapshot the (model, feature_keys) pair atomically. Only the
+        # snapshot read needs the lock — feature extraction is pure and
+        # ``model.predict`` operates on a captured local reference whose
+        # backing object is immutable post-fit, so it is safe outside.
         with self._lock:
-            if self._model is None or self._feature_keys is None:
-                return max(
-                    self._default_prediction,
-                    float(len(program.code)) * 0.1,
-                )
-            features = self._extractor.extract(program)
-            x = [features.get(k, 0.0) for k in self._feature_keys]
-            pred = float(self._model.predict([x])[0])
-            # Guard against NaN/Inf from degenerate training data
-            if not math.isfinite(pred) or pred < 1.0:
-                return self._default_prediction
-            return pred
+            model = self._model
+            feature_keys = self._feature_keys
+        if model is None or feature_keys is None:
+            return max(
+                self._default_prediction,
+                float(len(program.code)) * 0.1,
+            )
+        features = self._extractor.extract(program)
+        x = [features.get(k, 0.0) for k in feature_keys]
+        pred = float(model.predict([x])[0])
+        # Guard against NaN/Inf from degenerate training data
+        if not math.isfinite(pred) or pred < 1.0:
+            return self._default_prediction
+        return pred
 
     def update(self, program: Program, actual_duration: float) -> None:
         if actual_duration <= 0:

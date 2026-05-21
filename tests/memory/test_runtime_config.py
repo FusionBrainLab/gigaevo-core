@@ -216,6 +216,41 @@ class TestResolveSettingsPath:
         p = resolve_settings_path()
         assert p == Path("/fallback.yaml")
 
+    def test_default_paths_only_target_in_package_yaml(self, monkeypatch):
+        """When no overrides are present, only the in-package candidate is consulted."""
+        import gigaevo.memory.runtime_config as rc
+
+        monkeypatch.delenv("EVO_MEMORY_CONFIG_PATH", raising=False)
+        monkeypatch.delenv("EVO_MEMORY_SETTINGS_PATH", raising=False)
+
+        module_dir = Path(rc.__file__).resolve().parent
+        assert rc._DEFAULT_SETTINGS_PATHS == (module_dir / "config.yaml",)
+
+    def test_unresolved_default_returns_in_package_placeholder(self, monkeypatch):
+        """With nothing set up, the placeholder is the in-package config.yaml path."""
+        import gigaevo.memory.runtime_config as rc
+
+        monkeypatch.delenv("EVO_MEMORY_CONFIG_PATH", raising=False)
+        monkeypatch.delenv("EVO_MEMORY_SETTINGS_PATH", raising=False)
+
+        module_dir = Path(rc.__file__).resolve().parent
+        p = resolve_settings_path()
+        assert p == module_dir / "config.yaml"
+
+    def test_load_settings_returns_empty_when_placeholder_missing(self, monkeypatch):
+        """``load_settings`` is non-fatal when no config file is present."""
+        monkeypatch.delenv("EVO_MEMORY_CONFIG_PATH", raising=False)
+        monkeypatch.delenv("EVO_MEMORY_SETTINGS_PATH", raising=False)
+
+        import gigaevo.memory.runtime_config as rc
+
+        module_dir = Path(rc.__file__).resolve().parent
+        # Sanity: the in-package config.yaml does not ship with the package,
+        # so the placeholder path must not exist on disk.
+        assert not (module_dir / "config.yaml").exists()
+
+        assert load_settings() == {}
+
 
 # ===========================================================================
 # resolve_local_path

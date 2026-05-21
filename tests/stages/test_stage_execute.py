@@ -371,8 +371,10 @@ class _SpyTimeoutStage(Stage):
 
 
 class TestOnCompleteAllCallSites:
-    """Audit finding #1: on_complete() is called in 4 places in Stage.execute().
-    Verify that EACH path calls on_complete with the correct arguments."""
+    """``on_complete`` is invoked from every exit path in ``Stage.execute``.
+
+    Each path must hand the correct arguments to the cache handler.
+    """
 
     async def test_on_complete_called_on_normal_output_return(self):
         """Call site ~294: compute() returns an OutputModel instance."""
@@ -485,8 +487,7 @@ class TestOnCompleteAllCallSites:
 
 
 class TestFailurePathOnComplete:
-    """Audit finding #2: Verify that when a stage raises an exception,
-    on_complete() is called and the result has correct error information."""
+    """When a stage raises, ``on_complete`` still fires with an error result."""
 
     async def test_failure_on_complete_result_has_error_type(self):
         """Failed stage result passed to on_complete has error.type set."""
@@ -579,8 +580,7 @@ class TestFailurePathOnComplete:
 
 
 class TestTimeoutMechanismVerification:
-    """Audit finding #3: Verify the timeout mechanism fires correctly
-    and produces the right error type in the result."""
+    """The timeout path fires and surfaces the correct error type."""
 
     async def test_timeout_produces_timeout_error_type(self):
         """Timeout error type should be TimeoutError or asyncio.TimeoutError."""
@@ -638,8 +638,7 @@ class TestTimeoutMechanismVerification:
 
 
 class TestErrorStageFieldAssertion:
-    """Audit finding #4: When a stage fails, StageError.stage should contain
-    the stage class name for all failure modes."""
+    """``StageError.stage`` always carries the stage class name on failure."""
 
     async def test_error_stage_on_runtime_error(self):
         """RuntimeError in compute() produces error.stage == stage_name."""
@@ -703,8 +702,7 @@ class TestErrorStageFieldAssertion:
 
 
 class TestHashBeforeComputeOrdering:
-    """Audit finding #5: The input hash must be computed BEFORE compute() runs,
-    not after, since compute() could have side effects that modify state."""
+    """Input hash is computed before ``compute`` so side effects can't taint it."""
 
     async def test_hash_computed_before_compute_executes(self):
         """Verify input hash is computed before compute() is called
@@ -793,11 +791,10 @@ class TestHashBeforeComputeOrdering:
 
 
 class TestProgramStageResultTimestampBranches:
-    """Audit finding #6: ProgramStageResult has correct started_at and duration
-    for both success and failure cases."""
+    """``ProgramStageResult.started_at`` and ``duration`` are set on both paths."""
 
     async def test_success_has_positive_duration(self):
-        """Successful stage execution should have duration > 0."""
+        """Successful stage execution records a non-negative finite duration."""
         stage = ReturnOutputStage(timeout=5.0)
         stage.attach_inputs({})
         result = await stage.execute(_prog())
@@ -808,9 +805,10 @@ class TestProgramStageResultTimestampBranches:
         duration = result.duration_seconds()
         assert duration is not None
         assert duration >= 0
+        assert result.finished_at >= result.started_at
 
     async def test_failure_has_positive_duration(self):
-        """Failed stage execution should have duration > 0."""
+        """Failed stage execution records a non-negative finite duration."""
         stage = RaiseStage(timeout=5.0)
         stage.attach_inputs({})
         result = await stage.execute(_prog())
@@ -821,6 +819,7 @@ class TestProgramStageResultTimestampBranches:
         duration = result.duration_seconds()
         assert duration is not None
         assert duration >= 0
+        assert result.finished_at >= result.started_at
 
     async def test_timeout_has_bounded_duration(self):
         """Timed-out stage should have duration roughly matching the timeout."""
@@ -922,15 +921,13 @@ class TestProgramStageResultTimestampBranches:
 
 
 # ---------------------------------------------------------------------------
-# TestComputeInputsHashFailure (P0 bug fix)
+# compute_inputs_hash() error handling
 # ---------------------------------------------------------------------------
 
 
 class TestComputeInputsHashFailure:
-    """Bug fix: compute_inputs_hash() raising must be caught by execute(),
-    not propagate as an unhandled exception. Before the fix, the call was
-    outside the try/except block, so a bad compute_hash override would crash
-    the entire DAG runner."""
+    """compute_inputs_hash() raising is caught by execute() and surfaces as
+    a FAILED stage result rather than an unhandled crash."""
 
     async def test_hash_raises_returns_failure(self):
         """compute_inputs_hash() raises -> FAILED result, not unhandled crash."""

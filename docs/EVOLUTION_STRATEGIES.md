@@ -20,19 +20,20 @@
 
 ```bash
 # Single island (default) — one MAP-Elites archive
-python run.py problem.name=heilbron
+python run.py experiments/base.py
 
 # Multi-island — fitness + simplicity islands with migration
-python run.py experiment=multi_island_complexity problem.name=heilbron
+python run.py experiments/multi_island_complexity.py
 
 # Multi-LLM — diverse mutation models, single island
-python run.py experiment=multi_llm_exploration problem.name=heilbron
+python run.py experiments/multi_llm_exploration.py
 
 # Full featured — multi-island + multi-LLM
-python run.py experiment=full_featured problem.name=heilbron
+python run.py experiments/full_featured.py
 ```
 
-See `config/algorithm/` for all island configurations and `config/experiment/` for complete presets.
+See ``gigaevo/config/algorithm_presets.py`` for the island builder
+functions and ``experiments/`` for the shipped composition presets.
 
 ## Overview
 
@@ -409,116 +410,46 @@ async def _perform_migration(self):
 
 ### Single-Island Setup
 
-Simplest configuration (one behavior space):
+The simplest algorithm preset wires one MAP-Elites island with a
+fitness-only behavior space. Use the builder from
+``gigaevo/config/algorithm_presets.py``:
 
-```yaml
-# config/algorithm/single_island.yaml
-behavior_space:
-  _target_: gigaevo.config.helpers.build_behavior_space
-  keys:
-    - fitness
-    - validity
-  bounds:
-    - [0.0, 100.0]
-    - [0.0, 1.0]
-  resolutions:
-    - 20
-    - 5
-  binning_types:
-    - LINEAR
-    - LINEAR
+```python
+from gigaevo.config.algorithm_presets import build_single_island
+from gigaevo.config.schemas import AlgorithmConfig
 
-islands:
-  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
-    island_id: main_island
-    max_size: 100
-    behavior_space: ${behavior_space}
-
-    # Archive comparison: sum of fitness
-    archive_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
-      fitness_keys: [fitness]
-      fitness_key_higher_is_better: [true]
-
-    # Parent selection: fitness-proportional
-    elite_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalEliteSelector
-      fitness_key: fitness
-      fitness_key_higher_is_better: true
-
-    # Remove lowest-fitness programs when full
-    archive_remover:
-      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
-      fitness_key: fitness
-      fitness_key_higher_is_better: true
-
-    # Select top-fitness migrants
-    migrant_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
-      fitness_key: fitness
-      fitness_key_higher_is_better: true
-
-evolution_strategy:
-  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
-  island_configs: ${islands}
-  program_storage: ${ref:redis_storage}
-  migration_interval: 50
-  enable_migration: false  # No migration with single island
-  max_migrants_per_island: 5
+# Default behavior space: ("fitness", "validity"), bounds and
+# resolutions live on the schema; override per-experiment as needed.
+algorithm = build_single_island()
 ```
+
+Customise selectors and bounds by passing kwargs into the builder (see
+its docstring) or by constructing
+``SingleIslandConfig`` / ``IslandConfig`` directly from
+``gigaevo/config/schemas/algorithm.py``. ``build()`` on the resulting
+config returns the runtime ``MapElitesMultiIsland`` strategy with the
+program storage threaded through.
 
 ### Multi-Island Setup
 
-Multiple islands with different objectives:
+For multi-objective searches with migration, use the multi-island
+preset:
 
-```yaml
-# config/algorithm/multi_island.yaml
+```python
+from gigaevo.config.algorithm_presets import build_multi_island
 
-# Island 1: Fitness + Validity
-fitness_behavior_space:
-  _target_: gigaevo.config.helpers.build_behavior_space
-  keys: [fitness, validity]
-  bounds: [[0.0, 100.0], [0.0, 1.0]]
-  resolutions: [20, 5]
-
-# Island 2: Fitness + Simplicity
-simplicity_behavior_space:
-  _target_: gigaevo.config.helpers.build_behavior_space
-  keys: [fitness, complexity_score]
-  bounds: [[0.0, 100.0], [0, 1000]]
-  resolutions: [20, 10]
-
-islands:
-  # Island 1: Optimize fitness
-  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
-    island_id: fitness_island
-    max_size: 75
-    behavior_space: ${fitness_behavior_space}
-    archive_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
-      fitness_keys: [fitness]
-      fitness_key_higher_is_better: [true]
-    # ... (other selectors)
-
-  # Island 2: Optimize simplicity
-  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
-    island_id: simplicity_island
-    max_size: 75
-    behavior_space: ${simplicity_behavior_space}
-    archive_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
-      fitness_keys: [fitness, complexity_score]
-      fitness_key_higher_is_better: [true, false]  # Minimize complexity
-    # ... (other selectors)
-
-evolution_strategy:
-  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
-  island_configs: ${islands}
-  program_storage: ${ref:redis_storage}
-  migration_interval: 50      # Migrate every 50 generations
-  enable_migration: true
-  max_migrants_per_island: 5  # Each island exports 5 migrants
+algorithm = build_multi_island(
+    enable_migration=True,
+    migration_interval=50,
+    max_migrants_per_island=5,
+)
 ```
+
+Each island carries its own behavior space, archive selector,
+elite selector, archive remover, and migrant selector. The preset
+ships a fitness island and a fitness-plus-simplicity island wired
+for symmetric migration; subclass the schema or pass alternative
+selectors to vary the topology.
 
 ### Binning Types
 
@@ -1246,7 +1177,7 @@ It powers GigaEvo's evolutionary search by exploring the full solution space whi
 ---
 
 **For more information:**
-- Algorithm configs: `config/algorithm/`
+- Algorithm schemas + presets: `gigaevo/config/schemas/algorithm.py`, `gigaevo/config/algorithm_presets.py`
 - Strategy implementations: `gigaevo/evolution/strategies/`
 - Evolution engine: `gigaevo/evolution/engine/core.py`
-- Example experiments: `config/experiment/`
+- Example experiments: `experiments/`

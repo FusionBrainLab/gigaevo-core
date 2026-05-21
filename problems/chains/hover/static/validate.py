@@ -20,14 +20,18 @@ from problems.chains.hover.utils.utils import (
 )
 
 
-def validate(chain_spec: dict) -> dict:
+def validate(chain_spec: dict) -> tuple[dict, list[dict]]:
     """Validate chain specification and compute fitness metrics.
 
     Args:
         chain_spec: Dict from entrypoint() with system_prompt and steps
 
     Returns:
-        Dict with fitness (retrieval coverage) and is_valid
+        ``(metrics, failures)`` tuple — ``metrics`` carries fitness
+        (retrieval coverage) and ``is_valid``; ``failures`` is a list of
+        per-sample diagnostic dicts for cases where retrieval missed all
+        gold titles. Matches ``CallValidatorFunction.parse_output``'s
+        ``(dict, artifact)`` contract.
     """
     # 1. Structural validation
     baseline = load_baseline()

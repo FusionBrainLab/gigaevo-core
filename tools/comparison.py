@@ -59,7 +59,7 @@ MATPLOTLIB_COLORS = [
 ]
 
 
-def _configure_plotting_style(use_latex: bool = False):
+def _configure_plotting_style(use_latex: bool = False) -> None:
     """Configure matplotlib for publication-quality plots.
 
     Args:
@@ -301,7 +301,10 @@ def _smooth_series(
     else:
         smoothed = values_interp
 
-    # Restore NaN positions
+    # Restore NaN positions. ``smoothed`` is a numpy array in every branch
+    # above (some via ``Series.values``); the cast pins the type so the
+    # boolean-indexed assignment satisfies the numpy stub for ``__setitem__``.
+    smoothed = np.asarray(smoothed)
     if nan_mask.any():
         smoothed[nan_mask] = np.nan
 
@@ -342,7 +345,9 @@ def _aggregate_per_iteration(
     )
 
 
-def _select_frontier_improvements(df, iteration_col: str, minimize: bool):
+def _select_frontier_improvements(
+    df: pd.DataFrame, iteration_col: str, minimize: bool
+) -> pd.DataFrame:
     fp = (
         df[[iteration_col, "frontier_fitness"]]
         .dropna()

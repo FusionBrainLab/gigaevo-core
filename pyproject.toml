@@ -16,8 +16,6 @@ requires-python = ">=3.12"
 dependencies = [
     "redis>=4.5.0",
     "loguru>=0.7.0",
-    "hydra-core>=1.3.0",
-    "omegaconf>=2.3.0",
     "numpy>=2.0.0",
     "pydantic>=2.0.0",
     "psutil>=5.9.0",
@@ -29,7 +27,6 @@ dependencies = [
     "PyYAML>=6.0",
     "chromadb>=0.4.22",
     "sentence-transformers>=2.2.2",
-    "rank-bm25>=0.2.2",
     "nltk>=3.8.1",
     "transformers>=4.36.2",
     "litellm>=1.16.11",
@@ -47,6 +44,7 @@ dependencies = [
     "tensorboardX",
     "python-dotenv",
     "click",
+    "tyro>=0.8",
     "jinja2",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
@@ -95,8 +93,6 @@ select = ["E", "F", "I", "UP"]
 ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 
 [tool.ruff.lint.per-file-ignores]
-"run.py" = ["E402"]
-"run_hydra.py" = ["E402"]
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
 "problems/**/*.py" = ["E402", "E722", "E741", "F841"]
@@ -128,11 +124,8 @@ module = [
     "numpy.*",
     "matplotlib.*",
     "pandas.*",
-    "hydra.*",
-    "omegaconf.*",
     "chromadb.*",
     "sentence_transformers.*",
-    "rank_bm25.*",
     "bm25s.*",
     "nltk.*",
     "transformers.*",

@@ -221,12 +221,7 @@ class TestLoadMemoryCardsEdgeCases:
         assert program_cards[0].program_id == "p2"
 
     def test_ideas_tracker_dict_aliases_preserved(self, tmp_path):
-        """Integration: ideas_tracker writes aliases as list[dict] version history.
-
-        This is the boundary where ideas_tracker output enters Pydantic land.
-        Bug #2 (PR #161): MemoryCard.aliases was list[str], crashed on list[dict].
-        Fixed by changing to list[Any].
-        """
+        """ideas_tracker list[dict] aliases survive load_memory_cards intact."""
         aliases = [
             {
                 "exp1-prog1": {

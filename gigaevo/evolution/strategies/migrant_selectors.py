@@ -33,22 +33,14 @@ class TopFitnessMigrantSelector(MigrantSelector):
         if not programs:
             return []
 
-        fitness_values = [
-            extract_fitness_values(
+        scored_programs: list[tuple[Program, float]] = []
+        for program in programs:
+            values = extract_fitness_values(
                 program,
                 [self.fitness_key],
                 {self.fitness_key: self.fitness_key_higher_is_better},
             )
-            for program in programs
-        ]
-        scored_programs = [
-            (prog, fitness_values[i])
-            for i, prog in enumerate(programs)
-            if fitness_values[i] is not None
-        ]
-
-        if not scored_programs:
-            return random.sample(programs, min(count, len(programs)))
+            scored_programs.append((program, values[0]))
 
         sorted_programs = sorted(scored_programs, key=lambda x: x[1], reverse=True)
         return [p for p, _ in sorted_programs[:count]]
@@ -90,21 +82,18 @@ class ParetoFrontMigrantSelector(MigrantSelector):
         fitness_keys: list[str],
         fitness_key_higher_is_better: dict[str, bool],
     ) -> list[Program]:
-        pareto_front = []
+        fitness_vectors = [
+            extract_fitness_values(p, fitness_keys, fitness_key_higher_is_better)
+            for p in programs
+        ]
 
-        for p in programs:
-            if all(
-                not dominates(
-                    extract_fitness_values(
-                        other, fitness_keys, fitness_key_higher_is_better
-                    ),
-                    extract_fitness_values(
-                        p, fitness_keys, fitness_key_higher_is_better
-                    ),
-                )
-                for other in programs
-                if other != p
+        n = len(programs)
+        pareto_front: list[Program] = []
+        for i in range(n):
+            p_i = fitness_vectors[i]
+            if not any(
+                dominates(fitness_vectors[j], p_i) for j in range(n) if j != i
             ):
-                pareto_front.append(p)
+                pareto_front.append(programs[i])
 
         return pareto_front

@@ -34,11 +34,12 @@ def test_instruction_following(input, response):
         instruction_cls = instructions_registry.INSTRUCTION_DICT[instruction_id]
         instruction = instruction_cls(instruction_id)
 
-        input["kwargs"][index] = {
-            k: v for k, v in input["kwargs"][index].items() if v is not None
-        }
+        # ``input["kwargs"][index]`` aliases a list cell shared with the
+        # source DataFrame via ``to_dict(orient="records")``. Filter into a
+        # local dict so the dataset stays pristine across iterations.
+        kwargs = {k: v for k, v in input["kwargs"][index].items() if v is not None}
 
-        instruction.build_description(**input["kwargs"][index])
+        instruction.build_description(**kwargs)
         args = instruction.get_instruction_args()
         if args and "prompt" in args:
             instruction.build_description(prompt=input["prompt"])

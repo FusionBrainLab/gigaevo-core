@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import cast
 
 import matplotlib
 
@@ -37,8 +38,17 @@ def fetch_fitness_history(
     Returns list of (unix_timestamp, fitness_value) sorted by time.
     """
     r = redis.Redis(host=host, port=port, db=db, decode_responses=True)
-    key = f"{prefix}:metrics:history:program_metrics:{metric}"
-    entries = r.lrange(key, 0, -1)
+    try:
+        key = f"{prefix}:metrics:history:program_metrics:{metric}"
+        # redis-py shares type stubs between sync and async clients, so the
+        # return annotation widens to ``Union[Awaitable[list], list]``; the
+        # concrete return at runtime on the sync client is always ``list``.
+        entries = cast(list[str], r.lrange(key, 0, -1))
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
     if not entries:
         return []
 
@@ -91,7 +101,7 @@ def plot_fitness_vs_time(
     output: str,
     title: str = "Fitness vs Wall-Clock Time",
     metric_label: str = "Soft Fractional Retrieval Coverage",
-):
+) -> None:
     """Plot fitness trajectories against wall-clock time.
 
     Args:
@@ -136,28 +146,38 @@ def plot_fitness_vs_time(
 def fetch_pool_stats(host: str, port: int, pool_name: str) -> dict[str, dict]:
     """Fetch current endpoint pool stats from Redis DB 15."""
     r = redis.Redis(host=host, port=port, db=15, decode_responses=True)
-    inflight = r.hgetall(f"llm_pool:{pool_name}:inflight")
-    # Find all stats keys for this pool
-    stats_keys = r.keys(f"llm_pool:{pool_name}:stats:*")
-    endpoint_stats = {}
-    for sk in stats_keys:
-        data = r.hgetall(sk)
-        # Match stats key back to endpoint via inflight hash
-        for ep in inflight:
-            from hashlib import sha256
+    try:
+        # See ``fetch_fitness_history``: the shared sync/async stubs annotate
+        # these returns as ``Union[Awaitable[...], ...]``; the sync client
+        # always returns the concrete value, so the casts below narrow the
+        # stub-shape false positive without hiding a real bug.
+        inflight = cast(dict[str, str], r.hgetall(f"llm_pool:{pool_name}:inflight"))
+        # Find all stats keys for this pool
+        stats_keys = cast(list[str], r.keys(f"llm_pool:{pool_name}:stats:*"))
+        endpoint_stats = {}
+        for sk in stats_keys:
+            data = cast(dict[str, str], r.hgetall(sk))
+            # Match stats key back to endpoint via inflight hash
+            for ep in inflight:
+                from hashlib import sha256
 
-            if sha256(ep.encode()).hexdigest()[:12] in sk:
-                endpoint_stats[ep] = {
-                    "inflight": int(inflight.get(ep, 0)),
-                    "requests": int(data.get("requests", 0)),
-                    "errors": int(data.get("errors", 0)),
-                    "total_latency_ms": float(data.get("total_latency_ms", 0)),
-                }
-                break
-    return endpoint_stats
+                if sha256(ep.encode()).hexdigest()[:12] in sk:
+                    endpoint_stats[ep] = {
+                        "inflight": int(inflight.get(ep, 0)),
+                        "requests": int(data.get("requests", 0)),
+                        "errors": int(data.get("errors", 0)),
+                        "total_latency_ms": float(data.get("total_latency_ms", 0)),
+                    }
+                    break
+        return endpoint_stats
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
 
 
-def print_pool_summary(host: str, port: int):
+def print_pool_summary(host: str, port: int) -> None:
     """Print current mutation and chain server load."""
     for pool_name, label in [
         ("mutation", "Mutation LLM"),
@@ -179,7 +199,7 @@ def print_pool_summary(host: str, port: int):
         print(f"    Total: {total_req} requests, {total_err} errors")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Plot fitness vs wall-clock time")
     parser.add_argument("--experiment", help="Load runs from experiment.yaml")
     parser.add_argument(

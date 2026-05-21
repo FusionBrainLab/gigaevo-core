@@ -18,16 +18,16 @@ def clean_answer(s):
 
 
 def remove_boxed(s):
-    if "\\boxed " in s:
-        left = "\\boxed "
-        assert s[: len(left)] == left
-        return s[len(left) :]
+    left_space = "\\boxed "
+    if s.startswith(left_space):
+        return s[len(left_space) :]
 
     left = "\\boxed{"
     if not s.startswith(left):
         return None
 
-    assert s[-1] == "}"
+    if not s.endswith("}"):
+        return None
 
     return clean_answer(s[len(left) : -1])
 

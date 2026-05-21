@@ -1,9 +1,9 @@
 """Tests using fake A-MEM/GAM infrastructure.
 
-These tests cover the paths that were previously untestable without real
-Chroma/embedding dependencies: note_sync.upsert_agentic,
-note_sync.upsert_fast, note_sync.remove, note_sync.export_jsonl,
-rebuild with real data, and LLM card enrichment.
+Exercises code paths that would otherwise require real Chroma/embedding
+dependencies: ``note_sync.upsert_agentic``, ``note_sync.upsert_fast``,
+``note_sync.remove``, ``note_sync.export_jsonl``, rebuild with real data,
+and LLM card enrichment.
 """
 
 from __future__ import annotations
