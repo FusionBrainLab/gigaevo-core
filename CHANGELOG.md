@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v2.1.0 (2026-05-21)
+
+### Bug Fixes
+
+- **chains**: Wire RunnerConfig + add get_violated_constraints for IFBench
+  ([#251](https://github.com/KhrulkovV/gigaevo-core-internal/pull/251),
+  [`6d2161f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6d2161f7adaab87b6853aa20a17bad53d7ee7a94))
+
+### Features
+
+- **chains**: CARL chain runner (port from #184)
+  ([#251](https://github.com/KhrulkovV/gigaevo-core-internal/pull/251),
+  [`6d2161f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6d2161f7adaab87b6853aa20a17bad53d7ee7a94))
+
+- **chains**: CARL-backed step-batched chain runner + RunnerConfig presets
+  ([#251](https://github.com/KhrulkovV/gigaevo-core-internal/pull/251),
+  [`6d2161f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6d2161f7adaab87b6853aa20a17bad53d7ee7a94))
+
+- **chains**: Port paper task suites + chain canonical_benchmark profile
+  ([#251](https://github.com/KhrulkovV/gigaevo-core-internal/pull/251),
+  [`6d2161f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6d2161f7adaab87b6853aa20a17bad53d7ee7a94))
+
+
 ## v2.0.0 (2026-05-21)
 
 ### Bug Fixes
