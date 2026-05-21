@@ -1,0 +1,15 @@
+Task: IFBench — instruction following with complex constraints
+
+Given a user prompt that contains embedded constraints (formatting, length,
+style, content restrictions, etc.), generate a response that satisfies ALL
+specified constraints.
+
+Chain structure (static, 2 steps):
+  Step 1 (llm): Generate an initial response to the user prompt
+  Step 2 (llm): Rewrite the response to ensure all constraints are satisfied
+
+Fitness metric: constraint satisfaction rate (fraction of constraints met),
+averaged over 300 training examples. Values range from 0.0 to 1.0.
+
+Both steps are evolvable — their prompts, reasoning questions, and examples
+can be freely optimized.

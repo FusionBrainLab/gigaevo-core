@@ -61,3 +61,43 @@ def test_instruction_following(sample: dict, response: str) -> float:
         is_following_list.append(is_following)
 
     return mean(is_following_list) if is_following_list else 0.0
+
+
+def get_violated_constraints(sample: dict, response: str) -> list[str]:
+    """Return human-readable descriptions of constraints the response violates.
+
+    Uses the same 8-variant checking logic as ``test_instruction_following``
+    so results are consistent with the fitness metric.
+    """
+    r = response.split("\n")
+    all_responses = [
+        response,
+        response.replace("*", ""),
+        "\n".join(r[1:]).strip(),
+        "\n".join(r[:-1]).strip(),
+        "\n".join(r[1:-1]).strip(),
+        "\n".join(r[1:]).strip().replace("*", ""),
+        "\n".join(r[:-1]).strip().replace("*", ""),
+        "\n".join(r[1:-1]).strip().replace("*", ""),
+    ]
+
+    violated: list[str] = []
+    for index, instruction_id in enumerate(sample["instruction_id_list"]):
+        instruction_cls = instructions_registry.INSTRUCTION_DICT[instruction_id]
+        instruction = instruction_cls(instruction_id)
+
+        kwargs = {k: v for k, v in sample["kwargs"][index].items() if v is not None}
+        instruction.build_description(**kwargs)
+
+        args = instruction.get_instruction_args()
+        if args and "prompt" in args:
+            instruction.build_description(prompt=sample["prompt"])
+
+        is_ok = any(
+            resp.strip() and instruction.check_following(resp) for resp in all_responses
+        )
+        if not is_ok:
+            desc = getattr(instruction, "_description_pattern", instruction_id)
+            violated.append(str(desc) if desc else instruction_id)
+
+    return violated

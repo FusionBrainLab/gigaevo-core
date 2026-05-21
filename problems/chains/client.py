@@ -28,12 +28,13 @@ def get_async_client(
     return AsyncOpenAI(
         api_key=api_key or os.environ.get("OPENAI_API_KEY", "None"),
         base_url=base_url,
+        timeout=httpx.Timeout(timeout=1200.0, connect=30.0),
         http_client=httpx.AsyncClient(
             limits=httpx.Limits(
                 max_connections=300,
                 max_keepalive_connections=10,
             ),
-            timeout=httpx.Timeout(timeout=None, connect=30.0),
+            timeout=httpx.Timeout(timeout=1200.0, connect=30.0),
         ),
     )
 

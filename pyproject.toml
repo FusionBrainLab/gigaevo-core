@@ -42,6 +42,7 @@ dependencies = [
     "wandb",
     "cloudpickle",
     "matplotlib",
+    "mmar-carl==0.2.0",
     "pandas==2.2.2",
     "seaborn",
     "statsmodels",
@@ -67,6 +68,9 @@ dev = ["pre-commit", "python-semantic-release"]
 typing = ["mypy>=1.10", "types-PyYAML", "types-redis", "types-psutil"]
 opt = ["jax", "optax"]
 prompt = ["nltk", "emoji", "syllapy", "langdetect", "immutabledict"]
+# Chain-task runtime deps (IFBench instruction-following metrics, etc.).
+# Install with: pip install -e .[chains]
+chains = ["emoji", "syllapy", "langdetect", "immutabledict"]
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

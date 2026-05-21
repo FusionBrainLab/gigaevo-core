@@ -5,6 +5,7 @@ defaults:
   - memory: none           # Memory provider (override with memory=local for treatment arms)
   - aggregator: none       # NullAggregator sentinel (override with aggregator=heilbron_improver|heilbron_constructor)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
+  - chains/runner: none    # Chain runner preset for chain-task problems (override with chains/runner=simple|dataset|metrics|self_critic*)
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)

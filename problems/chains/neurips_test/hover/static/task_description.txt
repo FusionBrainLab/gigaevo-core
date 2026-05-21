@@ -1,0 +1,19 @@
+Task: HoVer — 3-hop multi-document fact verification
+
+Given a claim, retrieve evidence from Wikipedia across 3 hops and determine
+whether the claim is supported or refuted.
+
+Chain structure (static, 7 steps):
+  Step 1 (tool, frozen): retrieve first-hop passages using the claim as query
+  Step 2 (llm): summarize first-hop evidence
+  Step 3 (llm): generate second-hop query based on evidence gaps
+  Step 4 (tool, frozen): retrieve second-hop passages
+  Step 5 (llm): integrate first and second-hop evidence
+  Step 6 (llm): generate third-hop query
+  Step 7 (tool, frozen): retrieve third-hop passages (deeper search)
+
+Fitness metric: soft retrieval coverage (gold_found / n_gold per sample),
+averaged over 300 training examples. Values range from 0.0 to 1.0.
+
+The LLM steps (2, 3, 5, 6) are evolvable — their prompts, reasoning questions,
+and examples can be freely optimized. The tool steps (1, 4, 7) are frozen.

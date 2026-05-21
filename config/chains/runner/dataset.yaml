@@ -1,0 +1,24 @@
+# @package _global_
+# Chain runner: ground-truth reflection pass, fast execution.
+#
+# After the full chain completes, the runner checks whether the output
+# satisfies task-specific requirements. Two strategies are auto-selected:
+#   (a) Constraint-based (IFBench): checks constraint satisfaction via the
+#       instruction checker; retries with a list of violated constraints.
+#   (b) Answer-based (GSM8K, HoVer): checks if expected answer appears in
+#       the output; retries with expected/actual hint.
+#
+# Usage: python run.py ... chains/runner=dataset
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "dataset",
+          "execution_mode": "fast",
+          "dataset_feedback": {
+            "answer_key": "answer",
+            "max_retries": 1,
+            "feedback_template": "Your previous answer did not match the expected format or content. Expected answer type: {expected}. Your answer: {actual}. Reconsider your reasoning and provide a more accurate answer."
+          }
+        }

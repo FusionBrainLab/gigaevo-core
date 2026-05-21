@@ -1,0 +1,27 @@
+# @package _global_
+# Chain runner: self-critic execution mode + metrics quality-gate feedback.
+#
+# Each LLM step runs a generate → evaluate → regenerate loop.
+# Additionally, outputs scoring below the threshold (word-count heuristic by
+# default) are retried with a feedback message requesting more detail.
+#
+# Usage: python run.py ... chains/runner=self_critic_metrics
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "metrics",
+          "execution_mode": "self_critic",
+          "metric_feedback": {
+            "threshold": 0.4,
+            "max_retries": 2,
+            "feedback_message": "Your previous answer was too brief or lacked sufficient detail. Provide a more complete and specific response.",
+            "min_output_length": 20
+          },
+          "self_critic": {
+            "max_revisions": 2,
+            "evaluator_prompt_template": "Evaluate the following reasoning step output.\n\nStep objective: {aim}\nOutput to evaluate:\n{output}\n\nDoes this output fully address the objective with specific, grounded reasoning and concrete details?\nRespond with exactly one of:\n  APPROVE — if the output is satisfactory\n  REJECT:<brief_reason> — if it is not (one sentence after the colon)",
+            "disapprove_feedback_template": "Your previous answer was rejected: {reason}. Please revise your response to address this critique."
+          }
+        }

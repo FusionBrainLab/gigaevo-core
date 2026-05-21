@@ -1,0 +1,27 @@
+# @package _global_
+# Chain runner: simple pattern-based retry feedback, fast execution.
+#
+# If an LLM step output contains one of the bad_patterns, the step is
+# retried up to max_retries times with a feedback note appended.
+#
+# Usage: python run.py ... chains/runner=simple
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "simple",
+          "execution_mode": "fast",
+          "simple_retry": {
+            "max_retries": 2,
+            "bad_patterns": [
+              "i don't know",
+              "i cannot",
+              "insufficient information",
+              "not enough information",
+              "unable to determine",
+              "no information"
+            ],
+            "feedback_message": "Your previous response was not satisfactory. Provide a more specific and well-reasoned answer based on the available information."
+          }
+        }

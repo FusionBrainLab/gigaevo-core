@@ -1,0 +1,26 @@
+# @package _global_
+# Chain runner: self-critic execution mode + dataset feedback.
+#
+# Each LLM step runs a generate → evaluate → regenerate loop.
+# After all steps complete, samples with wrong final outputs get one
+# additional LLM call that shows the expected answer as a hint.
+#
+# Usage: python run.py ... chains/runner=self_critic_dataset
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "dataset",
+          "execution_mode": "self_critic",
+          "dataset_feedback": {
+            "answer_key": "answer",
+            "max_retries": 1,
+            "feedback_template": "Your previous answer did not match the expected format or content. Expected answer type: {expected}. Your answer: {actual}. Reconsider your reasoning and provide a more accurate answer."
+          },
+          "self_critic": {
+            "max_revisions": 2,
+            "evaluator_prompt_template": "Evaluate the following reasoning step output.\n\nStep objective: {aim}\nOutput to evaluate:\n{output}\n\nDoes this output fully address the objective with specific, grounded reasoning and concrete details?\nRespond with exactly one of:\n  APPROVE — if the output is satisfactory\n  REJECT:<brief_reason> — if it is not (one sentence after the colon)",
+            "disapprove_feedback_template": "Your previous answer was rejected: {reason}. Please revise your response to address this critique."
+          }
+        }

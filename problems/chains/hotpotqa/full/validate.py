@@ -12,6 +12,7 @@ from problems.chains.hotpotqa.shared_config import (
 )
 from problems.chains.hotpotqa.utils.retrieval import make_retrieve_fn
 from problems.chains.hotpotqa.utils.utils import normalize_text
+from problems.chains.runner_config import RunnerConfig
 
 
 def extract_answer(response: str) -> str | None:
@@ -87,7 +88,12 @@ def validate(chain_spec: dict) -> dict:
 
     # 5. Run chain on dataset
     results = run_chain_on_dataset(
-        chain, client, dataset, outer_context_builder, tool_registry
+        chain,
+        client,
+        dataset,
+        outer_context_builder,
+        tool_registry,
+        runner_config=RunnerConfig.from_env(),
     )
 
     # 6. Extract answers from final step outputs

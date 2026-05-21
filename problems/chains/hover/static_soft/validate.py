@@ -20,6 +20,7 @@ from problems.chains.hover.utils.utils import (
     extract_titles_from_passages,
     normalize_text,
 )
+from problems.chains.runner_config import RunnerConfig
 
 
 def validate(chain_spec: dict) -> dict:
@@ -62,7 +63,12 @@ def validate(chain_spec: dict) -> dict:
 
         # 5. Run chain on dataset
         results = run_chain_on_dataset(
-            chain, client, dataset, outer_context_builder, tool_registry
+            chain,
+            client,
+            dataset,
+            outer_context_builder,
+            tool_registry,
+            runner_config=RunnerConfig.from_env(),
         )
     except Exception:
         success = False

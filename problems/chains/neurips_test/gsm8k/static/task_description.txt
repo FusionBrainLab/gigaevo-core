@@ -1,0 +1,19 @@
+Task: GSM8K — grade school math word problems
+
+Given a multi-step arithmetic word problem, reason through it and output the
+final numerical answer.
+
+Chain structure (static, 3 steps):
+  Step 1 (llm): Understand the problem and identify key quantities/relationships
+  Step 2 (llm): Solve step by step, showing all arithmetic
+  Step 3 (llm): Extract and state the final answer (format: "Answer: <number>")
+
+Fitness metric: exact-match accuracy (fraction of predicted integers matching
+the ground-truth answer after the "####" delimiter), averaged over 200 training
+examples.
+
+All 3 steps are evolvable — their prompts, reasoning questions, and examples
+can be freely optimized.
+
+The model must output "Answer: <number>" in the final step to allow answer
+extraction. Extraction failures count as incorrect (score 0).

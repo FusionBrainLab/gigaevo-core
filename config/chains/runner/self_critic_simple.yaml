@@ -1,0 +1,24 @@
+# @package _global_
+# Chain runner: self-critic execution + simple pattern-based retry.
+#
+# Combines both modes:
+#   - self_critic: evaluate/regenerate on every LLM step
+#   - simple: additionally retry if output still matches bad patterns
+#
+# Usage: python run.py ... chains/runner=self_critic_simple
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "simple",
+          "execution_mode": "self_critic",
+          "simple_retry": {
+            "max_retries": 1,
+            "bad_patterns": ["i don't know", "i cannot", "insufficient information"],
+            "feedback_message": "Your previous response was not satisfactory. Provide a more specific and well-reasoned answer."
+          },
+          "self_critic": {
+            "max_revisions": 2
+          }
+        }

@@ -1,14 +1,20 @@
 """CARL-aligned chain specification validation with mode-aware checks.
 
 Structural validation (field presence, types, constraints, unknown fields) is
-handled by Pydantic models in types.py. This module adds semantic validation:
+handled by Pydantic models in types.py.  This module adds semantic validation:
 DAG acyclicity, topology matching, frozen-step equality, mode-specific rules.
+
+After validation passes the parse-layer steps (``LLMStep`` / ``ToolStep``) are
+converted to CARL execution types (``LLMStepDescription`` /
+``ToolStepDescription``) via their ``to_carl_step()`` method and stored in the
+returned ``ChainSpec``.
 
 Supports two evolution modes:
 - static: fixed topology, evolve structured fields of non-frozen LLM steps
 - full_chain: everything evolved (step count, types, deps, content)
 """
 
+from mmar_carl import LLMStepDescription, ToolStepDescription
 from pydantic import ValidationError
 
 from problems.chains.types import (
@@ -185,24 +191,35 @@ def validate_chain_spec(
     full_chain_config: dict | None = None,
     prompt_builder: PromptBuilder | None = None,
 ) -> ChainSpec:
-    """Validate chain specification and build executable ChainSpec.
+    """Validate chain specification and build an executable ``ChainSpec``.
+
+    Validation pipeline
+    -------------------
+    1. Structural validation via Pydantic (``RawChainSpec``).
+    2. Unique step numbers.
+    3. DAG acyclicity and forward-reference check.
+    4. Mode-specific validation (topology / frozen steps for ``static``;
+       max-steps / allowed types / tool availability for ``full_chain``).
+    5. Convert parse-layer steps to CARL execution types via ``to_carl_step()``.
+    6. Build and return ``ChainSpec`` with CARL steps sorted by step number.
 
     Args:
-        raw: Dict from entrypoint() with system_prompt and steps
-        mode: "static" or "full_chain"
-        topology: For static — STATIC_CHAIN_TOPOLOGY dict with
-            num_steps and steps (list of step descriptors)
-        frozen_baseline: Complete chain spec dict for frozen step validation
-        full_chain_config: For full_chain mode — {max_steps, allowed_step_types,
-            available_tools, require_final_llm}
-        prompt_builder: Optional PromptBuilder instance for prompt customization.
-            If None, the default PromptBuilder is used.
+        raw: Dict from ``entrypoint()`` with ``system_prompt`` and ``steps``.
+        mode: ``"static"`` or ``"full_chain"``.
+        topology: For static — ``STATIC_CHAIN_TOPOLOGY`` dict with
+            ``num_steps`` and ``steps`` (list of step descriptors).
+        frozen_baseline: Complete chain spec dict for frozen step validation.
+        full_chain_config: For full_chain mode — ``{max_steps,
+            allowed_step_types, available_tools, require_final_llm}``.
+        prompt_builder: Optional ``PromptBuilder`` instance for callers that
+            need it attached to the ``ChainSpec``.  The step-batched runner
+            uses ``GigaEvoPromptTemplate`` instead, so this is optional.
 
     Returns:
-        Executable ChainSpec
+        Executable ``ChainSpec`` with CARL step types.
 
     Raises:
-        ValueError on validation failure
+        ``ValueError`` on any validation failure.
     """
     # 1. Structural validation via Pydantic
     try:
@@ -229,10 +246,15 @@ def validate_chain_spec(
     else:
         raise ValueError(f"Unknown validation mode: '{mode}'")
 
-    # 5. Build ChainSpec (sorted by step number)
-    kwargs = {
+    # 5. Convert parse-layer steps to CARL execution types
+    carl_steps: list[LLMStepDescription | ToolStepDescription] = [
+        s.to_carl_step() for s in sorted(steps, key=lambda s: s.number)
+    ]
+
+    # 6. Build ChainSpec
+    kwargs: dict = {
         "system_prompt": parsed.system_prompt,
-        "steps": sorted(steps, key=lambda s: s.number),
+        "steps": carl_steps,
     }
     if prompt_builder is not None:
         kwargs["prompt_builder"] = prompt_builder

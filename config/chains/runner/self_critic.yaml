@@ -1,0 +1,26 @@
+# @package _global_
+# Chain runner: self-critic execution mode, no feedback.
+#
+# Each LLM step runs a generate → evaluate → regenerate loop:
+#   1. Generate the step output (normal call).
+#   2. Call the same LLM to evaluate it (APPROVE / REJECT:<reason>).
+#   3. If rejected, retry with the rejection reason as feedback.
+#   4. Repeat up to max_revisions times.
+#
+# Doubles (or more) the LLM call count per step — use only when quality
+# improvement justifies the added latency and cost.
+#
+# Usage: python run.py ... chains/runner=self_critic
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "none",
+          "execution_mode": "self_critic",
+          "self_critic": {
+            "max_revisions": 2,
+            "evaluator_prompt_template": "Evaluate the following reasoning step output.\n\nStep objective: {aim}\nOutput to evaluate:\n{output}\n\nDoes this output fully address the objective with specific, grounded reasoning and concrete details?\nRespond with exactly one of:\n  APPROVE — if the output is satisfactory\n  REJECT:<brief_reason> — if it is not (one sentence after the colon)",
+            "disapprove_feedback_template": "Your previous answer was rejected: {reason}. Please revise your response to address this critique."
+          }
+        }

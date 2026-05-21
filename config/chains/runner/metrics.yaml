@@ -1,0 +1,23 @@
+# @package _global_
+# Chain runner: quality-gate retry feedback (metric-based), fast execution.
+#
+# After each LLM step, outputs are scored by a metric function.
+# Outputs that score below `threshold` are retried with a feedback note.
+# Default metric: word count (outputs shorter than min_output_length words
+# score 0.0). Override metric_fn in code for custom scoring.
+#
+# Usage: python run.py ... chains/runner=metrics
+hydra:
+  job:
+    env_set:
+      GIGAEVO_CHAIN_RUNNER_CONFIG: >-
+        {
+          "feedback_mode": "metrics",
+          "execution_mode": "fast",
+          "metric_feedback": {
+            "threshold": 0.4,
+            "max_retries": 2,
+            "min_output_length": 20,
+            "feedback_message": "Your previous answer was too brief or lacked sufficient detail. Provide a more complete and specific response."
+          }
+        }
