@@ -1,18 +1,19 @@
 # @package _global_
 # Asymmetric adversarial co-evolution pipeline.
 #
-# Extends adversarial_coevo with:
-#   - D (Improver) runs: SourceCodeInjectionStage shows G's source code
-#     in D's mutation prompt (same opponents used for evaluation)
-#   - G (Constructor) runs, Arm C: GradientInPromptStage shows D's best
-#     code as textual gradient in G's mutation prompt
-#   - G (Constructor) runs, Arm A: composition injection (pre-step hook,
-#     not pipeline-level — wired separately)
-#
-# Experiment: heilbron/asymmetric-iterations
+# Extends adversarial_coevo with role-asymmetric prompt injections between
+# the two populations (Constructor / Improver, often abbreviated G / D):
+#   - Improver runs: SourceCodeInjectionStage shows the opponent's source
+#     code in the mutation prompt (same opponents used for evaluation)
+#   - Constructor runs, Variant 1 ("composition"): composition injection
+#     pre-step hook delivers opponent-improvement events into the mutation
+#     prompt (hook is wired in launch.sh, not pipeline-level)
+#   - Constructor runs, Variant 2 ("gradient_in_prompt"): GradientInPromptStage
+#     shows the opponent's best code as a textual gradient in the mutation
+#     prompt
 #
 # Parametric: n_opponents=k, source_prompt_k=l (l<=k).
-# Default: k=1, l=1 (D evaluates against 1 G, sees its source code).
+# Default: k=1, l=1 (Improver evaluates against 1 Constructor, sees its source).
 #
 # Requires at run time:
 #   opponent_redis_db=N            (DB of the opponent run)
@@ -23,28 +24,28 @@
 # Optional overrides:
 #   n_opponents=K        (default: 1)
 #   source_prompt_k=L    (default: 1, L<=K)
-#   d_sees_g_source=true (enables SourceCodeInjectionStage for D runs)
-#   d_archive_persistent=true (D's archive persists across generations)
+#   d_sees_g_source=true (enables SourceCodeInjectionStage for Improver runs)
+#   d_archive_persistent=true (Improver's archive persists across generations)
 #
 # Treatment verification:
-#   - D runs: log "[SourceCodeInjection] showing" after gen 1
-#   - G Arm C: log "[GradientInPrompt] injecting" after gen 1
-#   - G Arm A: log "[CompositionInjection] mutation_type=d_improvement" after gen 1
+#   - Improver runs: log "[SourceCodeInjection] showing" after gen 1
+#   - Constructor (gradient_in_prompt): log "[GradientInPrompt] injecting" after gen 1
+#   - Constructor (composition): log "[CompositionInjection] mutation_type=d_improvement" after gen 1
 #
-# Usage (Constructor, Arm A):
+# Usage (Constructor, composition variant):
 #   python run.py \
-#     problem.name=heilbron_adversarial/pop_a \
+#     problem.name=adversarial/g_d/pop_a \
 #     pipeline=adversarial_asymmetric redis.db=1 \
 #     opponent_redis_db=2 \
-#     opponent_redis_prefix=heilbron_adversarial/pop_b \
+#     opponent_redis_prefix=adversarial/g_d/pop_b \
 #     feedback_mode=composition
 #
 # Usage (Improver):
 #   python run.py \
-#     problem.name=heilbron_adversarial/pop_b \
+#     problem.name=adversarial/g_d/pop_b \
 #     pipeline=adversarial_asymmetric redis.db=2 \
 #     opponent_redis_db=1 \
-#     opponent_redis_prefix=heilbron_adversarial/pop_a \
+#     opponent_redis_prefix=adversarial/g_d/pop_a \
 #     feedback_mode=composition \
 #     d_sees_g_source=true d_archive_persistent=true
 

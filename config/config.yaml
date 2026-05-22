@@ -3,7 +3,7 @@ defaults:
   - /migration_bus: disabled
   - ideas_tracker: none    # Post-run ideas analysis (override with ideas_tracker=default)
   - memory: none           # Memory provider (override with memory=local for treatment arms)
-  - aggregator: none       # NullAggregator sentinel (override with aggregator=heilbron_improver|heilbron_constructor)
+  - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
   - chains/runner: none    # Chain runner preset for chain-task problems (override with chains/runner=simple|dataset|metrics|self_critic*)
   - _self_
