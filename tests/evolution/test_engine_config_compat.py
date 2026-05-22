@@ -103,4 +103,27 @@ def test_no_warnings_when_only_valid_keys() -> None:
     assert cfg.loop_interval == 0.5
 
 
+def test_coalesce_refresh_defaults_to_true() -> None:
+    """Coalesced refresh is the engine default — every existing config
+    without an explicit override gets the new path."""
+    cfg = EngineConfig()
+    assert cfg.coalesce_refresh is True
+
+
+def test_coalesce_refresh_accepts_false_override() -> None:
+    """Hydra-style opt-out restores the legacy lock-hold-across-child-DAG
+    behaviour without any other schema-validation noise."""
+    cfg = EngineConfig(coalesce_refresh=False)
+    assert cfg.coalesce_refresh is False
+
+
+def test_coalesce_refresh_rejects_non_bool() -> None:
+    """Pydantic v2 coerces 'true'/'false' strings to bools — accept that.
+    Other junk must raise."""
+    cfg = EngineConfig(coalesce_refresh="false")
+    assert cfg.coalesce_refresh is False
+    with pytest.raises(ValidationError):
+        EngineConfig(coalesce_refresh="not-a-bool")
+
+
 __all__: list[str] = []

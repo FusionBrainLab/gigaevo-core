@@ -52,7 +52,10 @@ class _FakeEngine:
         cfg = type("C", (), {})()
         cfg.loop_interval = 0.01
         cfg.parent_selector = RandomParentSelector(num_parents=1)
+        cfg.coalesce_refresh = False
+        cfg.max_in_flight = max_in_flight
         self.config = cfg
+        self._ss_config = cfg
 
         refresher = type("R", (), {})()
 

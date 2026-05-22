@@ -57,19 +57,31 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
             await asyncio.sleep(engine.config.loop_interval)
             return None
 
-        try:
-            ticket = await engine._parent_refresher.refresh_with_ticket(parents)
-        except (ValueError, TimeoutError) as exc:
-            logger.warning(
-                "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",
-                task_id,
-                exc,
-            )
-            return None
-        refreshed = ticket.refreshed
-
-        if refreshed:
-            engine.metrics.submitted_for_refresh += len(refreshed)
+        if engine._ss_config.coalesce_refresh:
+            try:
+                result = await engine._parent_refresher.refresh_if_stale(parents)
+            except (ValueError, TimeoutError) as exc:
+                logger.warning(
+                    "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",
+                    task_id,
+                    exc,
+                )
+                return None
+            refreshed = result.refreshed
+            engine.metrics.submitted_for_refresh += result.stale_count
+        else:
+            try:
+                ticket = await engine._parent_refresher.refresh_with_ticket(parents)
+            except (ValueError, TimeoutError) as exc:
+                logger.warning(
+                    "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",
+                    task_id,
+                    exc,
+                )
+                return None
+            refreshed = ticket.refreshed
+            if refreshed:
+                engine.metrics.submitted_for_refresh += len(refreshed)
 
         # Inline single-mutant primitive — no asyncio.gather to swallow the
         # persisted ID under outer-cancel. If we are cancelled after the
@@ -107,7 +119,8 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
         # critical section is two dict/set ops with no awaits.
         async with engine._in_flight_lock:
             engine._in_flight.add(new_id)
-            engine._inflight_tickets[new_id] = ticket
+            if ticket is not None:
+                engine._inflight_tickets[new_id] = ticket
         slot_transferred = True
         # Ticket ownership has transferred to the ingestor; null it locally
         # so the `finally` block does not double-release the same locks.

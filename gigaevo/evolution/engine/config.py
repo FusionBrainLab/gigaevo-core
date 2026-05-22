@@ -94,6 +94,20 @@ class EngineConfig(BaseModel):
         "engine loop. Configured via the ``stopper`` Hydra group "
         "(``config/stopper/``). Default is a no-op stopper that never stops.",
     )
+    coalesce_refresh: bool = Field(
+        default=True,
+        description=(
+            "When True (default), coalesce parent refreshes across "
+            "concurrent mutations: a refreshed parent stays valid until "
+            "any of its children completes (DONE or DISCARDED), and "
+            "subsequent mutations of that parent skip the refresh while "
+            "it is fresh. Refreshes of the same parent are still mutually "
+            "exclusive (no double-flip). Set to False to opt out and "
+            "restore the legacy behaviour, where the parent refresh lock "
+            "is held across the entire child-DAG and only one child of a "
+            "given parent can be in flight at a time."
+        ),
+    )
     post_step_hook_timeout_s: float = Field(
         default=300.0,
         gt=0,

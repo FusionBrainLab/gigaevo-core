@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 import time
 import weakref
@@ -76,6 +77,21 @@ class ParentRefreshTicket:
         self._released = True
         for lk in reversed(self._locks):
             lk.release()
+
+
+@dataclass
+class CoalescedRefreshResult:
+    """Result of :meth:`ParentRefresher.refresh_if_stale`.
+
+    ``refreshed`` mirrors the legacy ``refresh()`` return shape so
+    callers can drop it into mutation pipelines unchanged.
+    ``stale_count`` is the number of parents that actually triggered
+    a flip — the caller bumps ``submitted_for_refresh`` by this value
+    so fresh-skip parents are NOT counted as DAG work.
+    """
+
+    refreshed: list[Program]
+    stale_count: int
 
 
 class ParentRefreshSelector(ABC):
@@ -160,6 +176,25 @@ class ParentRefresher:
             weakref.WeakValueDictionary()
         )
         self._registry_lock = asyncio.Lock()
+        # Per-engine freshness table for ``coalesce_refresh`` mode. A parent
+        # id is "fresh" iff it has been refreshed since the last child of
+        # that parent reached DONE/DISCARDED. ``mark_children_completed``
+        # drops entries; ``refresh_if_stale`` (Task 3) adds them. Empty by
+        # default — every parent is stale on engine restart, which is the
+        # conservative warm-up. The legacy lock-held-across-child-DAG path
+        # never inspects this set.
+        self._fresh: set[str] = set()
+
+    def mark_children_completed(self, parent_ids: Iterable[str]) -> None:
+        """Drop ``parent_ids`` from the freshness table.
+
+        Called by the ingestor once a child of those parents reaches
+        DONE/DISCARDED — that completion is what invalidates the parent's
+        refreshed-against-current-HoF view, so the next mutation must
+        re-refresh before mutating. Unknown ids are no-ops, duplicates
+        fold, an empty iterable is a no-op.
+        """
+        self._fresh.difference_update(parent_ids)
 
     async def refresh(self, parents: list[Program]) -> list[Program]:
         """Flip and re-await all targets selected from ``parents``.
@@ -226,6 +261,92 @@ class ParentRefresher:
             for lk in reversed(acquired):
                 lk.release()
             raise
+
+    async def refresh_if_stale(self, parents: list[Program]) -> CoalescedRefreshResult:
+        """Refresh only parents not currently in ``_fresh`` (coalesced mode).
+
+        Locks are held only across the freshness check + flip, then released
+        before returning — unlike :meth:`refresh_with_ticket`, which holds
+        locks past return for the lifetime of the child mutant DAG.
+
+        Concurrent callers for the same stale id serialise on the per-id
+        lock: the first acquirer flips X and marks it fresh; subsequent
+        acquirers see fresh and skip the flip. Net work per
+        "stale→fresh→stale" cycle is exactly one flip, regardless of how
+        many concurrent mutations launch.
+
+        Output preserves input order (after dedup-by-id) so downstream
+        code that treats the parents list as positional (e.g. mutation
+        prompt templates) is unaffected.
+
+        Failures mirror :meth:`refresh`: ``ValueError`` on DISCARDED
+        parent or vanished fresh parent, ``TimeoutError`` on DAG stall.
+        Per-id locks are released; stale ids are NOT marked fresh —
+        the next caller retries.
+        """
+        if not parents:
+            return CoalescedRefreshResult(refreshed=[], stale_count=0)
+        targets = await self._selector.select(parents)
+        if not targets:
+            return CoalescedRefreshResult(refreshed=[], stale_count=0)
+
+        by_id: dict[str, Program] = {}
+        for p in targets:
+            by_id.setdefault(p.id, p)
+
+        ordered_ids = sorted(by_id.keys())
+        locks = [await self._get_lock(pid) for pid in ordered_ids]
+        acquired: list[asyncio.Lock] = []
+        marked_fresh: list[str] = []
+        try:
+            for lk in locks:
+                await lk.acquire()
+                acquired.append(lk)
+
+            stale_ids = [pid for pid in ordered_ids if pid not in self._fresh]
+            fresh_ids = [pid for pid in ordered_ids if pid in self._fresh]
+            stale_programs = [by_id[pid] for pid in stale_ids]
+
+            refreshed_by_id: dict[str, Program] = {}
+
+            if stale_programs:
+                refreshed_stale = await self._do_refresh(stale_programs)
+                for p in refreshed_stale:
+                    refreshed_by_id[p.id] = p
+                self._fresh.update(p.id for p in refreshed_stale)
+                marked_fresh = [p.id for p in refreshed_stale]
+
+            if fresh_ids:
+                fresh_programs = await self._storage.mget(
+                    fresh_ids, exclude=EXCLUDE_STAGE_RESULTS
+                )
+                found = {p.id for p in fresh_programs}
+                missing = [pid for pid in fresh_ids if pid not in found]
+                if missing:
+                    raise ValueError(
+                        f"ParentRefresher: {len(missing)} fresh parents vanished"
+                    )
+                for p in fresh_programs:
+                    refreshed_by_id[p.id] = p
+
+            output: list[Program] = []
+            seen: set[str] = set()
+            for original in parents:
+                if original.id in seen:
+                    continue
+                if original.id in refreshed_by_id:
+                    output.append(refreshed_by_id[original.id])
+                    seen.add(original.id)
+
+            return CoalescedRefreshResult(refreshed=output, stale_count=len(stale_ids))
+
+        except BaseException:
+            if marked_fresh:
+                self._fresh.difference_update(marked_fresh)
+            raise
+        finally:
+            for lk in reversed(acquired):
+                lk.release()
 
     async def _get_lock(self, pid: str) -> asyncio.Lock:
         async with self._registry_lock:
@@ -296,6 +417,7 @@ class ParentRefresher:
 
 
 __all__ = [
+    "CoalescedRefreshResult",
     "DirectParentsSelector",
     "ParentRefresher",
     "ParentRefreshSelector",

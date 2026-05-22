@@ -9,6 +9,7 @@ import gc
 import pytest
 
 from gigaevo.evolution.engine.refresh import (
+    CoalescedRefreshResult,
     DirectParentsSelector,
     ParentRefresher,
     ParentRefreshSelector,
@@ -848,3 +849,188 @@ async def test_refresh_concurrent_cancel_storm_no_deadlock(fakeredis_storage):
         assert cancelled, "no cancel landed — test setup did not exercise cancel path"
     finally:
         await fake_dag.stop()
+
+
+# ---------------------------------------------------------------------------
+# Freshness table — coalesce_refresh in-memory state on ParentRefresher.
+#
+# Task 2 of the coalesce-refresh plan introduces ``_fresh: set[str]`` plus
+# the ``mark_children_completed`` invalidation helper. These tests pin the
+# helper contract before Task 3 wires ``refresh_if_stale`` on top of it
+# and Task 4 has the ingestor invoke it.
+# ---------------------------------------------------------------------------
+
+
+class TestFreshnessTable:
+    def test_fresh_set_starts_empty(self) -> None:
+        refresher = ParentRefresher(storage=object())
+        assert refresher._fresh == set()
+
+    def test_mark_children_completed_drops_listed_ids(self) -> None:
+        refresher = ParentRefresher(storage=object())
+        refresher._fresh = {"p1", "p2", "p3"}
+        refresher.mark_children_completed(["p1", "p3"])
+        assert refresher._fresh == {"p2"}
+
+    def test_mark_children_completed_accepts_unknown_ids(self) -> None:
+        refresher = ParentRefresher(storage=object())
+        refresher._fresh = {"p1"}
+        refresher.mark_children_completed(["pX", "pY"])
+        assert refresher._fresh == {"p1"}
+
+    def test_mark_children_completed_handles_duplicates(self) -> None:
+        refresher = ParentRefresher(storage=object())
+        refresher._fresh = {"p1", "p2"}
+        refresher.mark_children_completed(["p1", "p1", "p2", "p1"])
+        assert refresher._fresh == set()
+
+    def test_mark_children_completed_accepts_empty(self) -> None:
+        refresher = ParentRefresher(storage=object())
+        refresher._fresh = {"p1", "p2"}
+        refresher.mark_children_completed([])
+        assert refresher._fresh == {"p1", "p2"}
+
+
+# ---------------------------------------------------------------------------
+# refresh_if_stale — coalesced refresh primitive.
+# Contract:
+#   1. Stale parents are flipped through DONE→QUEUED→DONE and marked fresh.
+#   2. Fresh parents are NOT flipped; their latest Program is mget'd.
+#   3. Locks are acquired around the check + flip and released BEFORE return.
+#   4. Concurrent callers for a stale id: first flips, marks fresh; others
+#      acquire the lock after release, see fresh, skip.
+#   5. Failures (DISCARDED parent, vanished fresh parent, timeout) raise,
+#      and the stale set is NOT marked fresh — next caller retries.
+# Result shape: CoalescedRefreshResult(refreshed: list[Program], stale_count: int)
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshIfStale:
+    @pytest.mark.asyncio
+    async def test_first_call_marks_parent_fresh(self, fakeredis_storage):
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            assert p1.id not in refresher._fresh
+            result = await refresher.refresh_if_stale([p1])
+            assert isinstance(result, CoalescedRefreshResult)
+            assert result.stale_count == 1
+            assert len(result.refreshed) == 1 and result.refreshed[0].id == p1.id
+            assert result.refreshed[0].state == ProgramState.DONE
+            assert p1.id in refresher._fresh
+            assert fake_dag.flip_count_for(p1.id) == 1
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_second_call_skips_flip_when_fresh(self, fakeredis_storage):
+        """Once a parent is in `_fresh`, a second call must NOT flip it.
+        It must still return that parent's latest Program (from storage)."""
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            await refresher.refresh_if_stale([p1])
+            assert fake_dag.flip_count_for(p1.id) == 1
+            result = await refresher.refresh_if_stale([p1])
+            assert result.stale_count == 0
+            assert fake_dag.flip_count_for(p1.id) == 1  # NO additional flip
+            assert len(result.refreshed) == 1 and result.refreshed[0].id == p1.id
+            assert result.refreshed[0].state == ProgramState.DONE
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_mixed_batch_flips_only_stale(self, fakeredis_storage):
+        """A batch with one fresh and one stale parent: only the stale
+        one is flipped; the fresh one passes through (mget'd)."""
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            p2 = await fake_dag.add_program("p2")
+            refresher._fresh.add(p1.id)  # pre-mark p1 fresh
+            result = await refresher.refresh_if_stale([p1, p2])
+            assert result.stale_count == 1  # only p2 was stale
+            assert fake_dag.flip_count_for(p1.id) == 0
+            assert fake_dag.flip_count_for(p2.id) == 1
+            assert {p.id for p in result.refreshed} == {p1.id, p2.id}
+            assert refresher._fresh == {p1.id, p2.id}
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_returns_programs_in_input_order(self, fakeredis_storage):
+        """Whatever the input order is, the output mirrors it — callers
+        downstream (mutation prompt) treat the ordering as meaningful."""
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            p2 = await fake_dag.add_program("p2")
+            p3 = await fake_dag.add_program("p3")
+            result = await refresher.refresh_if_stale([p3, p1, p2])
+            assert [p.id for p in result.refreshed] == [p3.id, p1.id, p2.id]
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_stale_calls_coalesce(self, fakeredis_storage):
+        """Three producers pick the same stale X concurrently. Only ONE
+        `_do_refresh` runs: the first acquirer flips and marks fresh; the
+        other two acquire the lock after release, see X fresh, and skip.
+
+        Net work: exactly one DAG flip, exactly one caller with stale_count=1.
+        """
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    refresher.refresh_if_stale([p1]),
+                    refresher.refresh_if_stale([p1]),
+                    refresher.refresh_if_stale([p1]),
+                ),
+                timeout=5.0,
+            )
+            # Exactly ONE flip total — that's the whole point of coalescing.
+            assert fake_dag.flip_count_for(p1.id) == 1
+            # Exactly one caller triggered the flip; the other two saw fresh.
+            stale_counts = sorted(r.stale_count for r in results)
+            assert stale_counts == [0, 0, 1]
+            for r in results:
+                assert len(r.refreshed) == 1 and r.refreshed[0].id == p1.id
+                assert r.refreshed[0].state == ProgramState.DONE
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_releases_lock_before_returning(self, fakeredis_storage):
+        """After `refresh_if_stale` returns, the per-id lock is free —
+        unlike `refresh_with_ticket` which keeps the lock held."""
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            await refresher.refresh_if_stale([p1])
+            lock = await refresher._get_lock(p1.id)
+            assert not lock.locked()
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_discarded_parent_raises_and_leaves_fresh_unchanged(
+        self, fakeredis_storage
+    ):
+        """A DISCARDED parent makes `_do_refresh` raise; `_fresh` must NOT
+        be updated for the stale set, so the next caller retries."""
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            p1.state = ProgramState.DISCARDED
+            with pytest.raises(ValueError, match="DISCARDED"):
+                await refresher.refresh_if_stale([p1])
+            assert p1.id not in refresher._fresh
+            lock = await refresher._get_lock(p1.id)
+            assert not lock.locked()
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_empty_input_returns_empty(self, fakeredis_storage):
+        refresher, _, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            result = await refresher.refresh_if_stale([])
+            assert result.refreshed == []
+            assert result.stale_count == 0
+        finally:
+            await fake_dag.stop()

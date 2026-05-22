@@ -68,6 +68,20 @@ async def poll_and_ingest(engine) -> int:
     if done_ids:
         added, handled_ids = await _ingest_batch(engine, done_ids)
 
+    # Invalidate the `_fresh` membership of every parent whose child
+    # just reached DONE or DISCARDED. Under `coalesce_refresh=True`
+    # this triggers a fresh flip the next time that parent is picked;
+    # under `coalesce_refresh=False` the call hits an empty `_fresh`
+    # set and is a no-op.
+    completed_parent_ids: set[str] = set()
+    for prog in programs:
+        if prog is None:
+            continue
+        if prog.state in (ProgramState.DONE, ProgramState.DISCARDED):
+            completed_parent_ids.update(prog.lineage.parents)
+    if completed_parent_ids:
+        engine._parent_refresher.mark_children_completed(completed_parent_ids)
+
     released = set(handled_ids) | set(leaked_ids)
     if released:
         if leaked_ids:

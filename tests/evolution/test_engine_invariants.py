@@ -548,6 +548,7 @@ class TestSlotTransferredExclusive:
         """When a mutant successfully persists, the slot transfers to the
         ingestor — the post-mutant_task semaphore value stays decremented."""
         engine = _make_engine(max_in_flight=1)
+        engine._ss_config.coalesce_refresh = False
         await engine._producer_sema.acquire()
         starting_value = engine._producer_sema._value
         assert starting_value == 0

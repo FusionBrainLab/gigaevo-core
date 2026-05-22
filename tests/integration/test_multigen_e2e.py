@@ -244,12 +244,14 @@ def _build_engine(
     max_mutations: int = 1,
     mutation_operator: MutationOperator | None = None,
     island_config: IslandConfig | None = None,
+    max_in_flight: int = 1,
 ) -> tuple[SteadyStateEvolutionEngine, MapElitesMultiIsland]:
     config = island_config or _make_island_config()
     strategy = MapElitesMultiIsland(
         island_configs=[config],
         program_storage=storage,
     )
+    # max_in_flight=1 forces sequential chained mutation; under coalesce_refresh=True the per-parent lock no longer serialises across the child-DAG.
     engine = SteadyStateEvolutionEngine(
         storage=storage,
         strategy=strategy,
@@ -257,6 +259,7 @@ def _build_engine(
         config=SteadyStateEngineConfig(
             loop_interval=0.005,
             max_elites_per_generation=max_elites,
+            max_in_flight=max_in_flight,
             stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),

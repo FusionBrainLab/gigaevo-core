@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from gigaevo.evolution.engine.ingestor import poll_and_ingest
-from gigaevo.evolution.engine.refresh import ParentRefreshTicket
+from gigaevo.evolution.engine.refresh import ParentRefresher, ParentRefreshTicket
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -59,6 +59,13 @@ class _FakeIngestorEngine:
             return None
 
         self._write_snapshot = _write_snapshot
+
+        # ParentRefresher proxy — the ingestor calls
+        # `mark_children_completed` after every sweep. The real
+        # ParentRefresher's helper is pure set mutation; no I/O.
+        self._parent_refresher = ParentRefresher(storage=self.storage)
+        self.parent_id_fixture = "parent-id-A"
+        self._parent_refresher._fresh.add(self.parent_id_fixture)
 
     async def _add_in_flight(self, pid: str) -> None:
         # Mirror what the producer does on transfer: acquire buffer_sema,
@@ -129,3 +136,85 @@ async def test_ingestor_vanished_program_releases_buffer() -> None:
     assert engine._buffer_sema._value == 3
     assert engine._producer_sema._value == 3
     assert not engine._in_flight
+
+
+@pytest.mark.asyncio
+async def test_ingestor_done_invalidates_parent_fresh_state() -> None:
+    """When a child reaches DONE, every id in its `lineage.parents`
+    must be dropped from `ParentRefresher._fresh` — the next pick of
+    that parent will then trigger a fresh flip."""
+    engine = _FakeIngestorEngine(max_in_flight=3)
+    parent_id = engine.parent_id_fixture
+    child_id = str(uuid.uuid4())
+    await engine._add_in_flight(child_id)
+    engine.strategy.add.return_value = True
+
+    done_child = Program(
+        id=child_id,
+        code="def f(): pass",
+        state=ProgramState.DONE,
+        metrics={},
+    )
+    done_child.lineage.parents = [parent_id]
+    engine.storage.mget.return_value = [done_child]
+
+    assert parent_id in engine._parent_refresher._fresh
+
+    await poll_and_ingest(engine)
+
+    assert parent_id not in engine._parent_refresher._fresh
+
+
+@pytest.mark.asyncio
+async def test_ingestor_discarded_invalidates_parent_fresh_state() -> None:
+    """A DISCARDED child also invalidates its parents — by the
+    spec's freshness rule, ANY child completion (DONE or DISCARDED)
+    marks the parent stale."""
+    engine = _FakeIngestorEngine(max_in_flight=3)
+    parent_id = engine.parent_id_fixture
+    child_id = str(uuid.uuid4())
+    await engine._add_in_flight(child_id)
+
+    discarded_child = Program(
+        id=child_id,
+        code="def f(): pass",
+        state=ProgramState.DISCARDED,
+        metrics={},
+    )
+    discarded_child.lineage.parents = [parent_id]
+    engine.storage.mget.return_value = [discarded_child]
+
+    assert parent_id in engine._parent_refresher._fresh
+
+    await poll_and_ingest(engine)
+
+    assert parent_id not in engine._parent_refresher._fresh
+
+
+@pytest.mark.asyncio
+async def test_ingestor_invalidates_all_parents_of_multi_parent_child() -> None:
+    """A child with two parents [X, Y] completing must drop BOTH from
+    `_fresh` — both ancestors' snapshots have aged."""
+    engine = _FakeIngestorEngine(max_in_flight=3)
+    parent_x = "parent-X"
+    parent_y = "parent-Y"
+    engine._parent_refresher._fresh.update({parent_x, parent_y, "unrelated"})
+
+    child_id = str(uuid.uuid4())
+    await engine._add_in_flight(child_id)
+    engine.strategy.add.return_value = True
+
+    done_child = Program(
+        id=child_id,
+        code="def f(): pass",
+        state=ProgramState.DONE,
+        metrics={},
+    )
+    done_child.lineage.parents = [parent_x, parent_y]
+    engine.storage.mget.return_value = [done_child]
+
+    await poll_and_ingest(engine)
+
+    assert parent_x not in engine._parent_refresher._fresh
+    assert parent_y not in engine._parent_refresher._fresh
+    assert "unrelated" in engine._parent_refresher._fresh
