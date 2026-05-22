@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.3.0 (2026-05-22)
+
+### Features
+
+- Add spherical_codes_improver_v2 + safe_mode=False in default pipeline
+  ([`3184550`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3184550db746e361d23cfc12cd1e4f90ae37a099))
+
+
 ## v2.2.0 (2026-05-22)
 
 ### Features
