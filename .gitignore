@@ -226,9 +226,6 @@ benchmark
 output/
 runs/
 
-# Local experiment forks (not for VCS)
-problems/heilbron_pro/
-
 # Rotated / sampler logs not covered by *.log (already above)
 tools/.litellm_sampler.log*
 

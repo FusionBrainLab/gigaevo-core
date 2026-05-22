@@ -185,11 +185,8 @@ cp -r problems/heilbron problems/my_problem
 ### 2. Customize Evolution
 
 ```bash
-# Try multi-island evolution
-python run.py experiment=multi_island_complexity problem.name=heilbron
-
-# Use different LLM models
-python run.py experiment=multi_llm_exploration problem.name=heilbron
+# Switch to a full-featured experiment preset (multi-island + multi-LLM)
+python run.py experiment=full_featured problem.name=heilbron
 
 # Adjust parameters
 python run.py problem.name=heilbron \

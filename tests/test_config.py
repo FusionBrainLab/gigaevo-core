@@ -232,11 +232,10 @@ def test_sync_min_delta_is_independent_constant():
     cfg = _compose()
     assert cfg.sync_min_delta == 8, "sync_min_delta should default to 8"
 
-    # 2. Both adversarial pipelines wire the drift/sync value from sync_min_delta.
-    # ProgressBasedSyncHook accepts either `drift_cap` (preferred) or `min_delta`
-    # (legacy alias). Pipelines differ in which key they use:
-    #   adversarial_asymmetric: min_delta: ${sync_min_delta}
-    #   adversarial_coevo_ss:   drift_cap: ${sync_min_delta}
+    # 2. The adversarial_asymmetric pipeline wires the drift/sync value from
+    # sync_min_delta. ProgressBasedSyncHook accepts either `drift_cap` (preferred)
+    # or `min_delta` (legacy alias); adversarial_asymmetric uses
+    #   min_delta: ${sync_min_delta}
     _ADVERSARIAL_OVERRIDES = [
         "opponent_redis_db=0",
         "opponent_redis_prefix=test",
@@ -247,49 +246,36 @@ def test_sync_min_delta_is_independent_constant():
             return hook_cfg.min_delta
         return hook_cfg.drift_cap
 
-    for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
-        cfg = _compose(f"pipeline={pipeline}", *_ADVERSARIAL_OVERRIDES)
-        assert _hook_sync_value(cfg.pre_step_hook) == 8, (
-            f"pipeline={pipeline}: pre_step_hook sync value should be 8 "
-            f"(from sync_min_delta), got {_hook_sync_value(cfg.pre_step_hook)}"
-        )
+    cfg = _compose("pipeline=adversarial_asymmetric", *_ADVERSARIAL_OVERRIDES)
+    assert _hook_sync_value(cfg.pre_step_hook) == 8, (
+        f"adversarial_asymmetric: pre_step_hook sync value should be 8 "
+        f"(from sync_min_delta), got {_hook_sync_value(cfg.pre_step_hook)}"
+    )
 
     # 3. sync_min_delta can be overridden independently.
-    for pipeline in ("adversarial_asymmetric", "adversarial_coevo_ss"):
-        cfg = _compose(
-            f"pipeline={pipeline}",
-            "sync_min_delta=1",
-            *_ADVERSARIAL_OVERRIDES,
-        )
-        assert _hook_sync_value(cfg.pre_step_hook) == 1, (
-            f"pipeline={pipeline}: overriding sync_min_delta=1 should set hook sync=1"
-        )
+    cfg = _compose(
+        "pipeline=adversarial_asymmetric",
+        "sync_min_delta=1",
+        *_ADVERSARIAL_OVERRIDES,
+    )
+    assert _hook_sync_value(cfg.pre_step_hook) == 1, (
+        "adversarial_asymmetric: overriding sync_min_delta=1 should set hook sync=1"
+    )
 
 
 def test_redis_prefix_resolves_to_problem_name():
-    """${redis.prefix} must resolve everywhere it's referenced (I-12).
+    """${redis.prefix} must resolve to ${problem.name} (I-12).
 
-    Pipelines such as adversarial_coevo_ss.yaml reference ${redis.prefix} for
-    ProgressBasedSyncHook.own_prefix. Before the I-12 fix, `redis.prefix` was
-    never defined, so Hydra raised InterpolationKeyError at run time. The fix
-    defines `redis.prefix: ${problem.name}` in config/redis/default.yaml so
-    the intuitive "redis.prefix = my namespace" mental model actually works.
+    Pipelines that reference ${redis.prefix} relied on this resolution.
+    Before the I-12 fix, `redis.prefix` was never defined, so Hydra raised
+    InterpolationKeyError at run time. The fix defines
+    `redis.prefix: ${problem.name}` in config/redis/default.yaml so the
+    intuitive "redis.prefix = my namespace" mental model actually works.
     """
     cfg = _compose()
     assert cfg.redis.prefix == "_test_", (
         "redis.prefix should resolve to ${problem.name} — did you delete the "
         "`prefix:` line in config/redis/default.yaml? (regression of I-12)"
-    )
-
-    # Any pipeline that references ${redis.prefix} must now resolve cleanly.
-    cfg = _compose(
-        "pipeline=adversarial_coevo_ss",
-        "opponent_redis_db=2",
-        "opponent_redis_prefix=_test_opponent_",
-    )
-    assert cfg.pre_step_hook.own_prefix == "_test_", (
-        "adversarial_coevo_ss.pre_step_hook.own_prefix must resolve to "
-        "${problem.name} via ${redis.prefix} (I-12)"
     )
 
 

@@ -711,24 +711,24 @@ fragment of `launch.sh`; every fragment of `launch.sh` is traceable back to a fi
 | `runs[].extra_overrides` | Appended verbatim to the run's Hydra CLI (`${…}` refs single-quoted per KF-02) |
 | `runs[].log_path` | Stdout/stderr redirection target (default `run_<label>.log`) |
 
-#### Worked example: `heilbron/asymmetric-iterations-v2` run `A1_G`
+#### Worked example: asymmetric adversarial run `A1_G` (composition variant)
 
 Manifest entry:
 
 ```yaml
 - label: A1_G
   db: 1
-  prefix: heilbron_adversarial/pop_a
+  prefix: adversarial/g_d/pop_a
   pipeline: adversarial_asymmetric
-  problem_name: heilbron_adversarial/pop_a
-  condition: 'Arm A (Composition): Constructor, pair 1'
+  problem_name: adversarial/g_d/pop_a
+  condition: 'Composition variant: Constructor, pair 1'
   chain_url: null
   mutation_url: http://localhost:8000/v1
   model_name: Qwen3-235B-A22B-Thinking-2507
   extra_overrides:
     - evolution=steady_state
     - opponent_redis_db=2
-    - opponent_redis_prefix=heilbron_adversarial/pop_b
+    - opponent_redis_prefix=adversarial/g_d/pop_b
     - feedback_mode=composition
     - population_role=constructor
     - post_step_hook=${composition_injection_hook}
@@ -738,9 +738,9 @@ Manifest entry:
 Generated `launch.sh` fragment:
 
 ```bash
-# ── Run A1_G: Arm A (Composition): Constructor, pair 1
+# ── Run A1_G: Composition variant: Constructor, pair 1
 nohup "$PYTHON" "$PROJ/run.py" \
-    problem.name=heilbron_adversarial/pop_a \
+    problem.name=adversarial/g_d/pop_a \
     pipeline=adversarial_asymmetric \
     prompts=default \
     redis.db=1 \
@@ -753,7 +753,7 @@ nohup "$PYTHON" "$PROJ/run.py" \
     llm_base_url="http://localhost:8000/v1" \
     evolution=steady_state \
     opponent_redis_db=2 \
-    opponent_redis_prefix=heilbron_adversarial/pop_b \
+    opponent_redis_prefix=adversarial/g_d/pop_b \
     feedback_mode=composition \
     population_role=constructor \
     '${composition_injection_hook}' \
