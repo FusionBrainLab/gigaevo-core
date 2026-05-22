@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v2.3.1 (2026-05-22)
+
+### Bug Fixes
+
+- **archive**: Idempotent re-add for elites already in the archive
+  ([#256](https://github.com/KhrulkovV/gigaevo-core-internal/pull/256),
+  [`b3d3232`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b3d3232fb294d4d2bca42b042d96b6ac847ea57c))
+
+### Chores
+
+- **config**: Drop stale experiment-specific YAMLs
+  ([`82caec1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/82caec1320ce6f0de0aa6457a5b89781996666f3))
+
+- **docs**: Trim references to deleted configs
+  ([`e10bc71`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e10bc71fc4e7e3ec527320cf3baa0626c69697a5))
+
+- **problems**: Delete dead heilbron_* problem directories
+  ([`85b5fc0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/85b5fc02910dc7256fc5352fc6d9e8a654f21d65))
+
+- **tests**: Drop tests for deleted configs + problems
+  ([`845911d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/845911df3610921261b494a652b0a43402a7c99d))
+
+
 ## v2.3.0 (2026-05-22)
 
 ### Features
