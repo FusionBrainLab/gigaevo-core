@@ -351,18 +351,18 @@ class TestRealisticE2E:
         engine = _make_steady_state_engine(
             dag_tracker,
             max_in_flight=4,
-            max_generations=2,
+            max_generations=8,
         )
 
         mutation_count = 0
 
-        async def fake_generate(elites, **kwargs):
+        async def fake_generate(parents, **kwargs):
             nonlocal mutation_count
             await asyncio.sleep(LLM_LATENCY)  # simulate LLM latency
             mutation_count += 1
             prog = _prog(ProgramState.DONE)
             dag_tracker.submit(prog.id)
-            return [prog.id]
+            return prog.id
 
         def get_ids_side_effect(status_val):
             if status_val == ProgramState.DONE.value:
@@ -377,7 +377,10 @@ class TestRealisticE2E:
             return 0
 
         def mget_side_effect(ids, **kwargs):
-            return [_prog(ProgramState.DONE) for _ in ids]
+            return [
+                Program(id=pid, code="def solve(): return 42", state=ProgramState.DONE)
+                for pid in ids
+            ]
 
         engine.storage.get_ids_by_status.side_effect = get_ids_side_effect
         engine.storage.count_by_status.side_effect = count_by_status_side_effect
@@ -390,7 +393,7 @@ class TestRealisticE2E:
 
         t0 = time.monotonic()
         with patch(
-            "gigaevo.evolution.engine.steady_state.generate_mutations",
+            "gigaevo.evolution.engine.mutant_task.generate_one_mutation",
             side_effect=fake_generate,
         ):
             await asyncio.wait_for(engine.run(), timeout=30.0)

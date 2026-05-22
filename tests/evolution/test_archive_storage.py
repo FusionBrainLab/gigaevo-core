@@ -200,17 +200,64 @@ class TestRedisArchiveStorageReverseIndex:
         assert removed_new is True
 
     async def test_one_to_one_mapping(self, storage, archive):
-        """Each program can only be elite in ONE cell at a time."""
+        """Each program can only be elite in ONE cell at a time.
+
+        Re-adding an existing archive elite at a different cell is idempotent —
+        the program stays in its original cell rather than splitting across two
+        cells (which would leave an orphan hash entry on remove_elite_by_id).
+        """
         p = _prog()
         await storage.add(p)
 
         await archive.add_elite((0,), p, _always_better)
-        await archive.add_elite((1,), p, _always_better)
+        second_add = await archive.add_elite((1,), p, _always_better)
 
-        # Program should be in cell (1,) now (latest add)
-        # The reverse index maps program_id -> cell
+        # Idempotent — second add succeeds without moving the program
+        assert second_add is True
+        assert (await archive.get_elite((0,))).id == p.id
+        assert await archive.get_elite((1,)) is None
+
         removed = await archive.remove_elite_by_id(p.id)
         assert removed is True
+
+
+class TestRedisArchiveStorageIdempotency:
+    """Re-adding a program already in the archive must be a no-op success.
+
+    Otherwise the ingestor's reject path (ingestor.py:230-251) transitions the
+    program DONE→DISCARDED while it remains in the archive — the
+    archive-member-cannot-be-DISCARDED invariant breaks. Surfaces when
+    ParentRefresher flips DONE elites back to QUEUED for re-evaluation in
+    deterministic-fitness problems (e.g. static HoVer).
+    """
+
+    async def test_readd_same_cell_with_rejecting_selector_is_success(
+        self, storage, archive
+    ):
+        p = _prog(metrics={"score": 5.0})
+        await storage.add(p)
+        assert await archive.add_elite((0,), p, _always_better) is True
+
+        # Re-add with a comparator that rejects everything — would normally
+        # return False, but the program is already an archive member.
+        re_added = await archive.add_elite((0,), p, _never_better)
+        assert re_added is True
+
+        assert await archive.size() == 1
+        assert (await archive.get_elite((0,))).id == p.id
+
+    async def test_readd_different_cell_does_not_create_orphan(self, storage, archive):
+        p = _prog()
+        await storage.add(p)
+        assert await archive.add_elite((0,), p, _always_better) is True
+
+        re_added = await archive.add_elite((1,), p, _always_better)
+        assert re_added is True
+
+        # Program remained in original cell — no orphan in (1,)
+        assert (await archive.get_elite((0,))).id == p.id
+        assert await archive.get_elite((1,)) is None
+        assert await archive.size() == 1
 
 
 class TestRedisArchiveStorageCellDescriptor:

@@ -180,6 +180,14 @@ class RedisArchiveStorage(ArchiveStorage):
         await self._ensure_cache()
         field = self._field(cell)
 
+        # Idempotent re-add: a program already in the archive (any cell) stays
+        # put. Re-evaluation paths (e.g. ParentRefresher → DAG → ingestor) feed
+        # the same id back in; without this guard the ingestor's reject branch
+        # transitions DONE→DISCARDED while the archive entry is untouched,
+        # breaking the archive-member-is-DONE invariant.
+        if program.id in self._elite_reverse:
+            return True
+
         # Fast path: compare in-memory (0 Redis RT for rejected programs)
         current_prog = self._elite_cache.get(field)
         if current_prog is not None and not is_better(program, current_prog):
