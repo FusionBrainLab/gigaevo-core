@@ -256,9 +256,10 @@ class TestConfigurableAggregator:
             "fitness",
         ]
 
-    def test_heilbron_improver_shape_via_config(self) -> None:
-        """Smoke-check: a D-shaped aggregator built from primitives produces
-        the exact metrics schema evaluate.py emits on a full opponent set.
+    def test_improver_shape_via_primitives(self) -> None:
+        """Smoke-check: an Improver-shaped aggregator built from primitives
+        produces the exact metrics schema evaluate.py emits on a full
+        opponent set (fitness + per-opponent quality + improvement deltas).
         """
         agg = ConfigurableAggregator(
             outputs={
