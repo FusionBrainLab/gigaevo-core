@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v2.2.0 (2026-05-22)
+
+### Features
+
+- **engine**: Add coalesce_refresh config knob (default True)
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+- **engine**: Add ParentRefresher._fresh + mark_children_completed
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+- **engine**: Add ParentRefresher.refresh_if_stale (coalesced mode)
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+- **engine**: Coalesce parent refreshes across concurrent mutations (default ON)
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+- **engine**: Dispatch run_one_mutant on coalesce_refresh
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+- **engine**: Ingestor invalidates parents of completed children
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+### Testing
+
+- Pin _build_engine to max_in_flight=1 for chained-mutation tests
+  ([#254](https://github.com/KhrulkovV/gigaevo-core-internal/pull/254),
+  [`46e54a0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/46e54a0a60bd4d18aab630fba936e2324a6352ac))
+
+
 ## v2.1.3 (2026-05-21)
 
 ### Bug Fixes
