@@ -1,0 +1,118 @@
+**SPHERICAL CODES — MINIMIZE PAIRWISE COHERENCE ON ANY (n, d)**
+
+Place n unit vectors in R^d such that the maximum pairwise inner product
+
+    μ(X) = max_{i<j} ⟨x_i, x_j⟩
+
+is as small as possible. Fitness = −μ(X); lower μ → higher fitness → better.
+
+**Generality requirement.** The class must accept any `n ≥ 2` and any `d ≥ 2`. No hardcoded dimensions, shapes, constants, or branches tied to a single (n, d).
+
+**Scoring benchmark:** (n, d) = (600, 11).
+
+**Targets:**
+
+| Bound                                            | μ(X)    |
+|--------------------------------------------------|---------|
+| Welch lower bound √((n−d)/(d(n−1)))              | ≈ 0.299 |
+| Goal                                             | ≤ 0.507 |
+
+The Welch formula applies to every (n, d): μ(X) ≥ √((n−d)/(d(n−1))) is a physical floor at any pair.
+
+---
+
+**THE GRADER — exactly what runs your code**
+
+```python
+imp = Improver(n=n, d=d, seed=42)
+
+# STAGE A — up to 10 cold restarts; failed attempts are skipped
+survivors = []
+last_error  = None
+for i in range(10):
+    try:
+        draft  = imp.generate_config(seed=i)
+        cand_i = imp.improve(draft, seed=i)
+        # norm tolerance check: max_k |‖cand_i[k]‖ − 1| ≤ 1e-12
+        survivors.append(cand_i)
+    except Exception as e:
+        last_error = f"{type(e).__name__}: {e}"
+        continue                                 # this candidate is discarded, the run continues
+if not survivors:
+    raise ValueError(f"All 10 Stage A candidates raised. Last error: {last_error}")
+winner = argmin over survivors of μ(cand)
+
+# STAGE B — 5 outer × 10 inner = 50 perturb→improve cycles
+intensities = np.geomspace(1.0, 1e-4, num=10)    # ← resets to 1.0 every outer loop
+current = winner
+for loop in range(5):
+    for step in range(10):
+        try:
+            pert = imp.perturb(current, intensity=intensities[step], seed=loop*100+step)
+            cand = imp.improve(pert,  seed=10000+loop*100+step)
+        except Exception:
+            continue                             # treat as a rejected perturb; current unchanged
+        if μ(cand) <= μ(current):
+            current = cand                         # hill-climb; ties accepted, regressions discarded
+fitness = -μ(best ever seen)                     # always negative; no sentinel value
+```
+
+Facts:
+
+* `improve` is called up to 60 times, `perturb` up to 50 times per evaluation.
+* Total wall budget: 2400 s.
+* `__init__` runs once per evaluation.
+* `generate_config(seed=i)` is called with `i = 0..9`.
+* `perturb(intensity)` sees `intensity` sweep `np.geomspace(1.0, 1e-4, 10)`, resetting to 1.0 every outer loop.
+* Stage A `improve` receives `seed = i`; Stage B `improve` receives `seed = 10000 + loop*100 + step`.
+* Stage B accepts improvements and ties; rejects only regressions.
+* Individual exceptions are tolerated: Stage A skips that candidate, Stage B counts it as a rejected perturb. The run aborts only if every Stage A call raises — in that case the grader re-raises `ValueError` with the last error message, which becomes the failure feedback the next iteration reads.
+* Returned fitness is the best ever observed across all evaluations (not the final `current`).
+* The `points` array passed to `perturb` and `improve` is a fresh copy you may mutate in place; the grader keeps the unmodified baseline internally.
+
+---
+
+**HARD CONSTRAINTS**
+
+1. Output shape exactly `(n, d)`.
+2. Norm tolerance `max_k |‖x_k‖ − 1| ≤ 1e-12`. Float32 round-off (~1e-7) cannot satisfy this; compute in float64 (eps ≈ 2e-16).
+3. No NaN, no Inf in any returned array.
+4. A raised exception costs that one call (Stage A: candidate skipped; Stage B: that perturb→improve pair counted as rejected). The grader propagates an exception out only when every Stage A call fails — and only then does the message you raised reach the next iteration.
+
+---
+
+**REQUIRED CLASS — exact signature**
+
+```python
+import numpy as np
+
+class Improver:
+    def __init__(self, n: int, d: int, seed: int = 0):
+        self.n = n
+        self.d = d
+        self.seed = seed
+
+    def generate_config(self, seed=None) -> np.ndarray:
+        """Return a (n, d) unit-norm starting configuration."""
+
+    def improve(self, points: np.ndarray, seed=None) -> np.ndarray:
+        """Refine the configuration; return (n, d) unit-norm."""
+
+    def perturb(self, points: np.ndarray, intensity: float, seed=None) -> np.ndarray:
+        """Apply a structured perturbation scaled by intensity ∈ [1e-4, 1.0]; return (n, d) unit-norm."""
+
+def entrypoint():
+    return Improver
+```
+
+---
+
+**LIBRARIES VERIFIED IMPORTABLE**
+
+`numpy 2.4.4`, `scipy 1.17.1`, `sklearn 1.8.0`, `jax 0.10.0`, `jaxopt`, `optax 0.2.8`, `optuna 4.8.0`, and the Python standard library.
+
+---
+
+**DOCUMENTATION**
+
+Open the file with a brief docstring describing your approach.

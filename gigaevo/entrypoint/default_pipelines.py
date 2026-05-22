@@ -188,7 +188,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             lambda: ValidateCodeStage(
                 max_code_length=max_code_length,
                 timeout=stage_timeout,
-                safe_mode=True,
+                safe_mode=False,
             ),
         )
 
