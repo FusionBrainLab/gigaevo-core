@@ -306,12 +306,11 @@ Only metrics declared in `metrics.yaml` pass through `EnsureMetricsStage`. If `e
 
 ---
 
-## Existing Adversarial Problems
+## Example Adversarial Setups
 
-| Problem | Pop A Role | Pop B Role | Status |
-|---------|-----------|-----------|--------|
-| `adversarial/optimizer_v2` | Optimizer (minimize f) | Landscape designer (make deceptive f) | Pilot complete (PR #169) |
-| `heilbron_adversarial` | Constructor (place 11 points) | Improver (improve point configs) | Running (PR #183) |
+| Problem | Pop A Role | Pop B Role |
+|---------|-----------|-----------|
+| `adversarial/optimizer_v2` | Optimizer (minimize f) | Landscape designer (make deceptive f) |
 
 ---
 

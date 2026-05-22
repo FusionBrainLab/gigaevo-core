@@ -21,12 +21,6 @@ Experiments are preset configurations in `config/experiment/`. Use the
 # Simple single-island evolution (default)
 python run.py experiment=base problem.name=toy_example
 
-# Two-island evolution (fitness + simplicity tradeoff)
-python run.py experiment=multi_island_complexity problem.name=toy_example
-
-# Multiple LLMs for diverse mutations
-python run.py experiment=multi_llm_exploration problem.name=toy_example
-
 # Everything enabled (multi-island + multi-LLM + complexity)
 python run.py experiment=full_featured problem.name=toy_example
 ```
@@ -88,10 +82,10 @@ python run.py problem.name=toy_example \
 
 | Group | Options |
 |-------|---------|
-| `experiment` | `base`, `full_featured`, `migration_bus`, `multi_island_complexity`, `multi_llm_exploration`, `prompt_coevolution`, `steady_state_adversarial` |
+| `experiment` | `base`, `full_featured`, `prompt_coevolution` |
 | `algorithm` | `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
-| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini31_pro`, `gemini3_flash` |
-| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt`, `cma_opt` |
+| `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini35_flash` |
+| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
@@ -105,18 +99,11 @@ python run.py problem.name=toy_example \
 python run.py problem.name=toy_example max_mutants=5
 ```
 
-### Production Run with Multi-Island
+### Production Run with Full-Featured Experiment
 ```bash
-python run.py experiment=multi_island_complexity \
+python run.py experiment=full_featured \
     problem.name=heilbron \
     max_mutants=100
-```
-
-### Multi-LLM Exploration
-```bash
-python run.py experiment=multi_llm_exploration \
-    problem.name=heilbron \
-    max_in_flight=12
 ```
 
 ### Prompt Co-Evolution

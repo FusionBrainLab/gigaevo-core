@@ -23,8 +23,6 @@ Use the Optuna pipeline when:
 - You want the LLM to reason about which parameters to tune
 - The search space is heterogeneous (mix of floats, ints, categoricals)
 
-Use CMA-ES (`pipeline=cma_opt`) when programs only have floating-point constants and you want fast, gradient-free numerical optimization without LLM involvement.
-
 ---
 
 ## Quick Start
@@ -48,13 +46,6 @@ python run.py problem.name=heilbron pipeline=optuna_opt \
 ```bash
 python run.py problem.name=heilbron pipeline=optuna_opt \
     '_optuna_stage_kwargs={eval_timeout: 60, n_trials: 80}'
-```
-
-**With a multi-island experiment**:
-
-```bash
-python run.py problem.name=heilbron pipeline=optuna_opt \
-    experiment=multi_island_complexity
 ```
 
 ---
