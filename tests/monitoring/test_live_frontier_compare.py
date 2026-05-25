@@ -15,6 +15,7 @@ import pytest
 from gigaevo.monitoring.live_frontier_compare import (
     FrontierCompareSnapshot,
     MetricComparison,
+    _extend_frontier_to_axis,
     _render_frontier_plot,
     compute_snapshot,
     format_snapshot,
@@ -151,6 +152,105 @@ class TestRenderFrontierPlot:
         # No `/` in the produced filename — sanitised to '_'.
         out = tmp_path / "frontier_loss_train.png"
         assert out.exists()
+
+
+class TestExtendFrontierToAxis:
+    def test_extends_flat_to_match_other_x_max_when_extended(self) -> None:
+        fi, fv = _extend_frontier_to_axis(
+            [4, 6], [-0.448, -0.4296], [0, 1, 4, 6, 12, 20]
+        )
+        assert fi == [4, 6, 20]
+        assert fv == [-0.448, -0.4296, -0.4296]
+
+    def test_does_not_extend_when_frontier_already_covers_axis(self) -> None:
+        fi, fv = _extend_frontier_to_axis([0, 5, 10], [1.0, 2.0, 3.0], [0, 5, 10])
+        assert fi == [0, 5, 10]
+        assert fv == [1.0, 2.0, 3.0]
+
+    def test_does_not_extend_when_other_iters_end_before_frontier(self) -> None:
+        fi, fv = _extend_frontier_to_axis([0, 5, 10], [1.0, 2.0, 3.0], [0, 1, 2])
+        assert fi == [0, 5, 10]
+        assert fv == [1.0, 2.0, 3.0]
+
+    def test_empty_frontier_returns_empty(self) -> None:
+        fi, fv = _extend_frontier_to_axis([], [], [0, 1, 2])
+        assert fi == []
+        assert fv == []
+
+    def test_empty_other_iters_returns_frontier_unchanged(self) -> None:
+        fi, fv = _extend_frontier_to_axis([0, 5], [1.0, 2.0], [])
+        assert fi == [0, 5]
+        assert fv == [1.0, 2.0]
+
+    def test_render_plot_flat_segment_visible_beyond_last_frontier_point(
+        self, tmp_path
+    ) -> None:
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="fitness",
+            frontier_history=[(4, -0.448), (6, -0.4296)],
+            iter_mean_history=[(i, -0.5 + 0.005 * i) for i in range(0, 21)],
+            higher_is_better=True,
+        )
+        out = tmp_path / "frontier_fitness.png"
+        assert out.exists()
+        assert out.stat().st_size > 0
+
+
+class TestRenderFrontierAnnotates:
+    def test_render_calls_annotate_frontier_points_with_running_best(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from gigaevo.monitoring import live_frontier_compare as mod
+
+        captured: dict = {}
+
+        def fake_annotate(
+            ax, x_vals, frontier_vals, *, minimize, max_annotations, color, **kw
+        ):
+            captured["x_vals"] = list(x_vals)
+            captured["frontier_vals"] = list(frontier_vals)
+            captured["minimize"] = minimize
+            captured["max_annotations"] = max_annotations
+
+        monkeypatch.setattr(mod, "annotate_frontier_points", fake_annotate)
+
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="fitness",
+            frontier_history=[(0, 0.1), (1, 0.3), (2, 0.7)],
+            iter_mean_history=[(0, 0.05), (1, 0.2), (2, 0.5)],
+            higher_is_better=True,
+        )
+        assert captured["x_vals"] == [0, 1, 2]
+        assert captured["frontier_vals"] == [0.1, 0.3, 0.7]
+        assert captured["minimize"] is False
+        assert captured["max_annotations"] >= 1
+
+    def test_render_passes_minimize_true_when_lower_is_better(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from gigaevo.monitoring import live_frontier_compare as mod
+
+        captured: dict = {}
+
+        def fake_annotate(
+            ax, x_vals, frontier_vals, *, minimize, max_annotations, color, **kw
+        ):
+            captured["minimize"] = minimize
+            captured["frontier_vals"] = list(frontier_vals)
+
+        monkeypatch.setattr(mod, "annotate_frontier_points", fake_annotate)
+
+        _render_frontier_plot(
+            output_dir=tmp_path,
+            metric="loss",
+            frontier_history=[(0, 1.0), (1, 0.5), (2, 0.2)],
+            iter_mean_history=[],
+            higher_is_better=False,
+        )
+        assert captured["minimize"] is True
+        assert captured["frontier_vals"] == [1.0, 0.5, 0.2]
 
 
 class TestStartLiveFrontierCompare:

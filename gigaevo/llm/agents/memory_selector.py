@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-import re
 from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
+from gigaevo.memory._vendor.GAM_root.gam.schemas.result import ExperimentalDecision
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 from gigaevo.memory.write_pipeline_config import load_config as _load_memory_config
 from gigaevo.programs.program import Program
+from gigaevo.prompts import MemorySelectorPrompts
 
 
 class MemorySelection(BaseModel):
@@ -29,8 +30,6 @@ class MemorySelection(BaseModel):
 
 class MemorySelectorAgent:
     """Select relevant memory ideas via the gigaevo.memory red agent."""
-
-    _RESULT_CHAR_LIMIT = 6000
 
     def __init__(
         self,
@@ -117,7 +116,7 @@ class MemorySelectorAgent:
                 memory = AmemGamMemory(config=mem_config)
 
             logger.info(
-                "[MemorySelectorAgent] Using memory backend "
+                "[Memory][SelectorAgent] Using memory backend "
                 "(class={}, use_api={}, namespace={}, channel={}, checkpoint={})",
                 type(memory).__module__,
                 use_api,
@@ -129,7 +128,8 @@ class MemorySelectorAgent:
         except Exception as exc:
             self._backend_error = str(exc)
             logger.warning(
-                "[MemorySelectorAgent] Failed to initialize red memory backend: {}", exc
+                "[Memory][SelectorAgent] Failed to initialize red memory backend: {}",
+                exc,
             )
             return None
 
@@ -167,7 +167,7 @@ class MemorySelectorAgent:
             return MemorySelection(cards=[], card_ids=[])
         if self.memory is None:
             logger.warning(
-                "[MemorySelectorAgent] Memory backend unavailable: {}",
+                "[Memory][SelectorAgent] Memory backend unavailable: {}",
                 self._backend_error or "unknown error",
             )
             return MemorySelection(cards=[], card_ids=[])
@@ -181,34 +181,28 @@ class MemorySelectorAgent:
         )
         _ = memory_text  # legacy input kept for API compatibility; red search ignores it
 
-        result_text = ""
-        raw_card_ids: list[str] = []
         try:
             async with self._search_lock:
-                result_text, raw_card_ids = await asyncio.to_thread(
-                    self._search_with_ids, query
-                )
+                research_result = await asyncio.to_thread(self.memory.research, query)
         except Exception as exc:
-            logger.warning("[MemorySelectorAgent] Red memory search failed: {}", exc)
+            logger.warning("[Memory][SelectorAgent] Red memory search failed: {}", exc)
             return MemorySelection(cards=[], card_ids=[])
 
-        cards = self._parse_search_result(result_text, max_cards=max_cards)
-        parsed_card_ids = self._extract_card_ids_from_text(result_text)
-        card_ids = self._merge_card_ids(
-            primary=raw_card_ids,
-            secondary=parsed_card_ids,
-            max_cards=max_cards,
-        )
+        decision = self._parse_final_decision(research_result.raw_memory)
+        card_ids = [
+            idea.card_id for idea in decision.top_ideas[:max_cards] if idea.card_id
+        ]
+        cards = self._fetch_card_texts(card_ids)
 
         if cards:
             logger.debug(
-                "[MemorySelectorAgent] Selected {} memory idea(s) via red agent (ids={})",
+                "[Memory][SelectorAgent] Selected {} memory idea(s) via red agent (ids={})",
                 len(cards),
                 card_ids,
             )
         else:
             logger.debug(
-                "[MemorySelectorAgent] Red agent returned no relevant memories"
+                "[Memory][SelectorAgent] Red agent returned no relevant memories"
             )
         return MemorySelection(cards=cards, card_ids=card_ids)
 
@@ -222,7 +216,16 @@ class MemorySelectorAgent:
         max_cards: int,
     ) -> str:
         parent_blocks = self._build_parent_blocks(parents)
+        try:
+            selector_role = MemorySelectorPrompts.system().format()
+        except Exception as exc:
+            logger.warning(
+                "[Memory][SelectorAgent] selector system.txt load failed: {}", exc
+            )
+            selector_role = ""
+        role_block = f"{selector_role.rstrip()}\n\n" if selector_role else ""
         return (
+            f"{role_block}"
             "MUTATION INPUTS\n\n"
             "TASK DESCRIPTION:\n"
             f"{task_description.strip() or '<empty>'}\n\n"
@@ -232,130 +235,54 @@ class MemorySelectorAgent:
             f"{mutation_mode.strip() or 'rewrite'}\n\n"
             "PARENTS (same parent code + mutation context given to mutation agent):\n"
             f"{parent_blocks}\n\n"
-            "Search your memory database and return mutation guidance ideas.\n"
-            f"Return exactly {max_cards} concise ideas as a numbered list.\n"
-            "Each item should be one line and actionable for mutation."
+            f"Search your memory database and pick up to {max_cards} card(s) per "
+            "the selection criteria above. Emit only their `card_id` values via "
+            "the structured-output schema; emit zero entries if no card overlaps "
+            "the candidate mechanism."
         )
 
-    def _parse_search_result(self, result: str, *, max_cards: int) -> list[str]:
-        text = result.strip()
-        if not text:
-            return []
-        if "No relevant memories found" in text:
-            return []
+    @staticmethod
+    def _parse_final_decision(raw_memory: Any) -> ExperimentalDecision:
+        empty = ExperimentalDecision(mode="final", top_ideas=[], additional_queries=[])
+        if not isinstance(raw_memory, dict):
+            return empty
+        final = raw_memory.get("final_decision")
+        if not isinstance(final, dict):
+            return empty
+        try:
+            return ExperimentalDecision.model_validate(final)
+        except ValidationError as exc:
+            logger.warning(
+                "[Memory][SelectorAgent] final_decision shape invalid: {}", exc
+            )
+            return empty
 
-        numbered = [m.strip() for m in re.findall(r"(?m)^\d+\.\s.+$", text)]
-        if numbered:
-            return [self._truncate(item) for item in numbered[:max_cards]]
-        bulleted = [m.strip() for m in re.findall(r"(?m)^(?:-|\*)\s+.+$", text)]
-        if bulleted:
-            return [self._truncate(item) for item in bulleted[:max_cards]]
-        return [self._truncate(text)]
-
-    def _search_with_ids(self, query: str) -> tuple[str, list[str]]:
-        # Prefer direct GAM output so we can reliably extract selected card ids.
-        research_agent = getattr(self.memory, "research_agent", None)
-        if research_agent is not None and hasattr(research_agent, "research"):
+    def _fetch_card_texts(self, card_ids: list[str]) -> list[str]:
+        if self.memory is None:
+            return []
+        texts: list[str] = []
+        for cid in card_ids:
             try:
-                research_result = research_agent.research(query)
-                integrated_memory = str(
-                    getattr(research_result, "integrated_memory", "") or ""
-                )
-                raw_memory = getattr(research_result, "raw_memory", None)
-                card_ids = self._extract_card_ids_from_raw_memory(raw_memory)
-                return integrated_memory, card_ids
+                card = self.memory.get_card(cid)
             except Exception as exc:
                 logger.warning(
-                    "[MemorySelectorAgent] Direct GAM research failed, falling back to plain search: {}",
-                    exc,
+                    "[Memory][SelectorAgent] get_card({}) failed: {}", cid, exc
                 )
-
-        assert self.memory is not None  # caller checks self.memory before calling
-        result_text = str(self.memory.search(query) or "")
-        card_ids = self._extract_card_ids_from_text(result_text)
-        return result_text, card_ids
-
-    def _extract_card_ids_from_raw_memory(self, raw_memory: Any) -> list[str]:
-        if not isinstance(raw_memory, dict):
-            return []
-
-        card_ids: list[str] = []
-
-        final_decision = raw_memory.get("final_decision")
-        if isinstance(final_decision, dict):
-            top_ideas = final_decision.get("top_ideas")
-            if isinstance(top_ideas, list):
-                for item in top_ideas:
-                    if not isinstance(item, dict):
-                        continue
-                    card_id = str(item.get("card_id") or "").strip()
-                    if card_id:
-                        card_ids.append(card_id)
-
-        if not card_ids:
-            evidence_sources = raw_memory.get("evidence_sources")
-            if isinstance(evidence_sources, list):
-                for source in evidence_sources:
-                    card_id = str(source or "").strip()
-                    if card_id:
-                        card_ids.append(card_id)
-
-        return self._dedupe_keep_order(card_ids)
-
-    def _extract_card_ids_from_text(self, result: str) -> list[str]:
-        text = (result or "").strip()
-        if not text:
-            return []
-
-        ids: list[str] = []
-
-        # Query: <...>\n\nTop relevant memory cards:\n1. <card_id> [category] ...
-        for match in re.finditer(r"(?m)^\d+\.\s+([^\s\[]+)\s+\[[^\]]+\]\s+", text):
-            ids.append(match.group(1).strip())
-
-        # JSON-like outputs from GAM internals: {"card_id": "..."}.
-        for match in re.finditer(r'card_id"\s*:\s*"([^"]+)"', text):
-            ids.append(match.group(1).strip())
-        for match in re.finditer(r"card_id\s*[:=]\s*([A-Za-z0-9._:-]+)", text):
-            ids.append(match.group(1).strip())
-
-        # Fallback for UUID-like card ids.
-        for match in re.finditer(
-            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
-            text,
-        ):
-            ids.append(match.group(0).strip())
-
-        return self._dedupe_keep_order(ids)
-
-    def _merge_card_ids(
-        self,
-        *,
-        primary: list[str],
-        secondary: list[str],
-        max_cards: int,
-    ) -> list[str]:
-        merged = self._dedupe_keep_order([*primary, *secondary])
-        if max_cards <= 0:
-            return []
-        return merged[:max_cards]
-
-    def _dedupe_keep_order(self, values: list[str]) -> list[str]:
-        seen: set[str] = set()
-        out: list[str] = []
-        for value in values:
-            item = str(value or "").strip()
-            if not item or item in seen:
                 continue
-            seen.add(item)
-            out.append(item)
-        return out
+            content = self._render_card(card)
+            if content:
+                texts.append(content)
+        return texts
 
-    def _truncate(self, text: str) -> str:
-        normalized = text.strip()
-        if len(normalized) <= self._RESULT_CHAR_LIMIT:
-            return normalized
-        return normalized[: self._RESULT_CHAR_LIMIT].rstrip() + "\n...[truncated]"
+    @staticmethod
+    def _render_card(card: Any) -> str:
+        if card is None:
+            return ""
+        if isinstance(card, dict):
+            description = str(card.get("description") or "")
+        else:
+            description = str(getattr(card, "description", "") or "")
+        return description.strip()
 
     def _build_parent_blocks(self, parents: list[Program]) -> str:
         """Build formatted parent blocks to mirror mutation agent context."""

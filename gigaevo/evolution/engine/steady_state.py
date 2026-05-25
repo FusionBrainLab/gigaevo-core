@@ -83,7 +83,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._run_start_time = time.monotonic()
 
         await self._write_snapshot(
-            total_mutants=self.metrics.iteration,
+            total_mutants=self.metrics.mutations_created,
+            next_iteration=self.metrics.iteration,
             programs_processed=self.metrics.programs_processed,
         )
 
@@ -158,6 +159,18 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 await self._final_ingestion_sweep(deadline_seconds=5.0)
             except asyncio.CancelledError:
                 sweep_cancelled = True
+
+            # Per-persist snapshot writes capture iteration at their call time;
+            # in-flight reservations that never persisted (cancellation, LLM
+            # error) leave the snapshot trailing the live counter. Burn those
+            # ordinals into the snapshot now so a resumed run hands out the
+            # next-unused ordinal, preserving x-axis uniqueness across resumes.
+            with contextlib.suppress(Exception):
+                await self._write_snapshot(
+                    total_mutants=self.metrics.mutations_created,
+                    next_iteration=self.metrics.iteration,
+                    programs_processed=self.metrics.programs_processed,
+                )
 
             try:
                 await self._post_run_hook.on_run_complete(self.storage)

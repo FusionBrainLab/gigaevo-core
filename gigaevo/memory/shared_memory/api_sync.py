@@ -67,7 +67,7 @@ class ApiSync:
                 )
             except (MemoryStorageError, OSError) as exc:
                 logger.warning(
-                    "[Memory] API pagination interrupted at offset {}: {}",
+                    "[Memory][ApiSync]API pagination interrupted at offset {}: {}",
                     offset,
                     exc,
                 )

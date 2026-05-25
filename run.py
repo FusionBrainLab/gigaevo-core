@@ -15,6 +15,7 @@ from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
     reset_event_counters,
 )
+from gigaevo.monitoring.eta_ticker import start_eta_ticker
 from gigaevo.monitoring.live_frontier_compare import start_live_frontier_compare
 from gigaevo.monitoring.live_profiler import start_live_profiler
 from gigaevo.problems.initial_loaders import InitialProgramLoader
@@ -68,11 +69,23 @@ async def run_experiment(cfg: DictConfig) -> None:
             )
         else:
             programs = await program_loader.load(redis_storage)
-            logger.info("Loaded {} initial programs", len(programs))
+            # Seeds occupy ordinals 0..N-1 (set by the loader); the engine's
+            # next ordinal to hand out to the first mutant is therefore N.
+            # Without this bootstrap the first mutant collides with seed 0.
+            evolution_engine.metrics.iteration = len(programs)
+            logger.info(
+                "Loaded {} initial programs (next_iteration={})",
+                len(programs),
+                evolution_engine.metrics.iteration,
+            )
 
         dag_runner.start()
         evolution_engine.start()
         logger.info("Evolution running (max_mutants={})", cfg.max_mutants)
+        start_eta_ticker(
+            evolution_engine,
+            interval_s=float(cfg.live_profiler.interval_s),
+        )
 
         await serve_until_signal(
             stop_coros=(evolution_engine.stop(), dag_runner.stop()),

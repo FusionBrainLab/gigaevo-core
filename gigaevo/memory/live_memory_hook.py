@@ -41,6 +41,8 @@ class LiveMemoryRefreshHook:
         refresh_every: Number of post-step invocations between refreshes.
             ``1`` refreshes on every ingestor sweep that lands a program.
             Defaults to ``10``.
+        max_programs_per_sweep: If set, cap each refresh to the N newest
+            programs by ``created_at``; ``None`` (default) is unbounded.
     """
 
     def __init__(
@@ -49,10 +51,16 @@ class LiveMemoryRefreshHook:
         tracker: IdeaTracker,
         storage: ProgramStorage,
         refresh_every: int = 10,
+        max_programs_per_sweep: int | None = None,
     ) -> None:
         self._tracker = tracker
         self._storage = storage
         self._refresh_every = max(1, int(refresh_every))
+        self._max_programs_per_sweep = (
+            None
+            if max_programs_per_sweep is None
+            else max(1, int(max_programs_per_sweep))
+        )
         self._sweep_counter = 0
         self._last_refresh_sweep = 0
 
@@ -63,15 +71,24 @@ class LiveMemoryRefreshHook:
         programs = await self._storage.get_all(exclude=EXCLUDE_STAGE_RESULTS)
         if not programs:
             logger.debug(
-                "[LiveMemoryRefresh] sweep={} storage empty, skipping refresh",
+                "[Memory][LiveRefresh] sweep={} storage empty, skipping refresh",
                 self._sweep_counter,
             )
             self._last_refresh_sweep = self._sweep_counter
             return
+        total = len(programs)
+        if (
+            self._max_programs_per_sweep is not None
+            and total > self._max_programs_per_sweep
+        ):
+            programs = sorted(programs, key=lambda p: p.created_at, reverse=True)[
+                : self._max_programs_per_sweep
+            ]
         logger.info(
-            "[LiveMemoryRefresh] sweep={} programs={} refreshing memory bank",
+            "[Memory][LiveRefresh] sweep={} programs={}/{} refreshing memory bank",
             self._sweep_counter,
             len(programs),
+            total,
         )
         await self._tracker.run_increment(programs)
         self._last_refresh_sweep = self._sweep_counter

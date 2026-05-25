@@ -41,7 +41,7 @@ Use a Python 3.12 env for `gigaevo-memory`.
 conda create -n gigaevo-memory python=3.12 -y
 conda activate gigaevo-memory
 
-cd /home/petranokhin/projects/gigaevo_memory/gigaevo-memory
+cd <gigaevo-memory-repo>
 python -m pip install --upgrade pip
 python -m pip install -e ./api
 python -m pip install sentence-transformers
@@ -60,7 +60,7 @@ export EMBEDDING_MODEL=all-MiniLM-L6-v2
 Run migrations and start the API:
 
 ```bash
-cd /home/petranokhin/projects/gigaevo_memory/gigaevo-memory/api
+cd <gigaevo-memory-repo>/api
 alembic -c app/db/alembic.ini upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
@@ -73,7 +73,7 @@ curl http://localhost:8000/health
 
 ## 3. Configure `gigaevo-core-internal`
 
-In [config/memory.yaml](/home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal/config/memory.yaml), set:
+In `config/memory/api.yaml`, set:
 
 ```yaml
 api:
@@ -98,24 +98,24 @@ Use your normal `gigaevo-core-internal` env.
 If `gigaevo_memory` is not installed in that env, install the lightweight client:
 
 ```bash
-python -m pip install -e /home/petranokhin/projects/gigaevo_memory/gigaevo-memory/client/python
+python -m pip install -e <gigaevo-memory-repo>/client/python
 ```
 
 Then run:
 
 ```bash
 conda activate <your-gigaevo-core-env>
-cd /home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal
+cd <this-repo>
 
 export MEMORY_API_URL=http://localhost:8000
-python run.py problem.name=heilbron memory_enabled=true ideas_tracker=true namespace=exp9 redis.db=1
+python run.py problem.name=heilbron memory=api ideas_tracker=default namespace=exp9 redis.db=1
 ```
 
 Notes:
 
 - `namespace=exp9` selects the remote memory bank to read/write
-- `memory_enabled=true` tests runtime retrieval
-- `ideas_tracker=true` tests the final write pipeline
+- `memory=api` enables runtime retrieval via the remote API
+- `ideas_tracker=default` enables the final write pipeline
 - `checkpoint_dir` is optional in API mode; it only changes local runtime artifacts
 
 ## 5. What success looks like
@@ -183,9 +183,9 @@ Core says `No module named 'gigaevo_memory'`
 Install the client package in the core env:
 
 ```bash
-python -m pip install -e /home/petranokhin/projects/gigaevo_memory/gigaevo-memory/client/python
+python -m pip install -e <gigaevo-memory-repo>/client/python
 ```
 
 Selector uses `namespace=default`
 
-Pass `namespace=...` on `run.py`, or set `api.namespace` in [config/memory.yaml](/home/petranokhin/projects/gigaevo_memory/gigaevo-core-internal/config/memory.yaml).
+Pass `namespace=...` on `run.py`, or set `api.namespace` in `config/memory/api.yaml`.

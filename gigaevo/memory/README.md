@@ -4,9 +4,15 @@ Core components:
 - **AmemGamMemory** (`shared_memory/memory.py`): Main orchestrator — saves cards, searches memory, manages lifecycle
 - **CardStore** (`shared_memory/card_store.py`): In-memory card catalog with persistence to disk
 - **NoteSync** (`shared_memory/note_sync.py`): Bridges cards ↔ local A-MEM vector store (Chroma)
-- **GamSearch** (`shared_memory/gam_search.py`): Builds + manages agentic retriever (ResearchAgent)
+- **GamSearch** (`shared_memory/gam_search.py`): Manages GAM `ResearchAgent` lifecycle (build/rebuild/clear)
+- **AmemGamRetriever** (`shared_memory/amem_gam_retriever.py`): GAM store + retriever construction helpers
+- **CardSearch** (`shared_memory/card_search.py`): Lexical search, ranking, and optional LLM synthesis
 - **CardDedup** (`shared_memory/card_dedup.py`): LLM-scored duplicate detection before writes
+- **CardConversion** (`shared_memory/card_conversion.py`): Card ↔ A-MEM note conversion + JSONL export
 - **ApiSync** (`shared_memory/api_sync.py`): Optional API backend for remote concept sync
+
+All modules log under a uniform `[Memory][<Component>]` prefix —
+single-grep `\[Memory\]\[` covers the whole subsystem.
 
 API-backed mode wraps local A-MEM + GAM retrieval with cloud persistence:
 - **Source of truth**: Remote API concepts (`/v1/concepts`)
@@ -189,29 +195,22 @@ Important runtime flags in `AmemGamMemory(...)`:
 
 ## Quick Start
 
-1. Start API stack from repo root:
+Local-only smoke (no API backend required):
 
 ```bash
-make up
+python gigaevo/memory/examples/memory_usage_example.py
 ```
 
-2. Write cards to API:
+Read-only example against an already-populated backend:
 
 ```bash
-python gigaevo.memory/memory_write_example.py
+python gigaevo/memory/examples/memory_read_example.py
 ```
 
-3. Search:
-
-```bash
-python gigaevo.memory/memory_read_example.py
-```
-
-4. Save + search in one script:
-
-```bash
-python gigaevo.memory/shared_memory/memory_usage_example.py
-```
+For end-to-end usage from an evolution run, see the root-level
+[`README_memory.md`](../../README_memory.md) (single-pass live pipeline)
+and [`README_memory_platform_run.md`](../../README_memory_platform_run.md)
+(remote API backend).
 
 ## Local-only Mode
 

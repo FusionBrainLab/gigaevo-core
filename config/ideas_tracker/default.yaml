@@ -6,6 +6,7 @@ ideas_tracker:
   analyzer_base_url: "https://openrouter.ai/api/v1"
   analyzer_reasoning:
     effort: "minimal"
+  analyzer_max_concurrent_classifications: 8
   list_max_ideas: 20
   postprocessing_type: default
   description_rewriting: true

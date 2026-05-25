@@ -99,3 +99,11 @@ OPENROUTER_API_KEY = _normalize_env(
 OPENROUTER_REASONING: dict[str, object] = _reasoning
 AMEM_EMBEDDING_MODEL_NAME: str = str(_models["amem_embedding_model_name"])
 GAM_DENSE_RETRIEVER_MODEL_NAME: str = str(_models["gam_dense_retriever_model_name"])
+
+# Unset by default → LangChain's with_structured_output picks the
+# provider-appropriate method. Set STRUCTURED_OUTPUT_METHOD=function_calling
+# (tool-call wire), =json_schema (OpenAI strict mode), or =json_mode
+# (lenient) to override.
+STRUCTURED_OUTPUT_METHOD: str | None = _normalize_env(
+    os.getenv("STRUCTURED_OUTPUT_METHOD")
+)

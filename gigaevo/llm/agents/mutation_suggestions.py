@@ -23,11 +23,11 @@ stalled.
 
 from __future__ import annotations
 
-import re
 from typing import Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from loguru import logger
 
 from gigaevo.evolution.mutation.context import EvolutionaryStatisticsMutationContext
 from gigaevo.llm.agents.base import LangGraphAgent
@@ -37,6 +37,7 @@ from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 from gigaevo.programs.stages.collector import EvolutionaryStatistics
+from gigaevo.programs.stages.lineage_memory import INTRA_MEMORY_SIGNAL_METADATA_KEY
 
 
 class MutationSuggestionState(TypedDict):
@@ -47,6 +48,7 @@ class MutationSuggestionState(TypedDict):
     memory_cards: str | None
     ancestral_trail: list[dict[str, Any]] | None
     evolutionary_statistics: EvolutionaryStatistics | None
+    mutation_mode: str | None
 
     messages: list[BaseMessage]
     llm_response: AIMessage | ProgramInsights | None
@@ -124,7 +126,17 @@ class MutationSuggestionAgent(LangGraphAgent):
         stats_block = self._format_stats_block(
             state.get("evolutionary_statistics"), self.metrics_context
         )
-        exhaustion_block = self._format_exhaustion_block(intra)
+        signal = program.metadata.get(INTRA_MEMORY_SIGNAL_METADATA_KEY)
+        intra_signal_block = self._format_intra_signal_block(signal)
+        mutation_mode_block = self._format_mutation_mode_block(
+            state.get("mutation_mode")
+        )
+        logger.info(
+            "[MutationSuggestionAgent] parent={} intra_signal={} mutation_mode={}",
+            (program.id[:8] if program.id else "?"),
+            (signal.get("severity") if isinstance(signal, dict) else "absent"),
+            (state.get("mutation_mode") or "absent"),
+        )
 
         user_prompt = self.user_prompt_template.format(
             code=program.code,
@@ -134,7 +146,8 @@ class MutationSuggestionAgent(LangGraphAgent):
             memory_cards_block=memory_cards_block,
             trail_block=trail_block,
             stats_block=stats_block,
-            exhaustion_block=exhaustion_block,
+            intra_signal_block=intra_signal_block,
+            mutation_mode_block=mutation_mode_block,
         )
 
         state["messages"] = [
@@ -205,99 +218,60 @@ class MutationSuggestionAgent(LangGraphAgent):
         ).format()
         return f"\n\n{body}"
 
-    _CLUSTER_BULLET_RE = re.compile(
-        r"^\s*-\s+\*([^*\n]+?)\*\s+—.*?verdict:\s+(\w+)",
-        re.MULTILINE,
-    )
-    _IMPROVING_RE = re.compile(r"improving=(\d+)")
-    _CATASTROPHIC_RE = re.compile(r"catastrophic=(\d+)")
-    _N_FAILED_RE = re.compile(r"n_failed=(\d+)")
+    @staticmethod
+    def _format_mutation_mode_block(mutation_mode: str | None) -> str:
+        """Render the downstream MUTATION MODE banner.
+
+        Tells the suggester which mutation operator will consume its output
+        (``rewrite`` vs ``diff``) so it can shape substitutes to fit.
+        Returns the empty string when unspecified so the slot collapses.
+        """
+        mode = (mutation_mode or "").strip()
+        if not mode:
+            return ""
+        return f"## MUTATION MODE\nmutation_mode: {mode}\n\n"
 
     @staticmethod
-    def _format_exhaustion_block(intra: str) -> str:
-        """Render an `EXHAUSTION ALERT` banner when the intra card shows
-        the local gradient is exhausted.
+    def _format_intra_signal_block(signal: dict[str, Any] | None) -> str:
+        """Render the structured INTRA STRATEGY SIGNAL block.
 
-        Trigger (deterministic, computed server-side so the LLM cannot
-        rationalize around a soft instruction):
-          (a) two or more distinct tried-strategy clusters with verdict in
-              {regressed, failed}, OR
-          (b) the delta-distribution line shows
-              ``catastrophic + n_failed >= 2`` with ``improving = 0``.
+        Reads the upstream ``IntraMemoryStage`` signal dict
+        (``severity``, ``n_clusters``, ``n_negative``, ``clusters``,
+        ``delta_dist``) and emits a compact informational block ALWAYS
+        when data exists — severity-tiered guidance lives in system.txt,
+        not in this banner.
 
-        Returns the empty string when not triggered or when the intra card
-        is absent / unparseable. When triggered, returns a banner that lists
-        the tried-cluster names as an explicit AVOID-LIST and instructs the
-        suggester to propose only structural axes that do not refine any
-        listed cluster.
-
-        The banner is task-agnostic — it never names a specific domain
-        ("triangle", "graph", "MCTS", ...). Cluster names come from the
-        intra card itself, which the upstream ``IntraMemoryStage`` already
-        labels in problem-neutral terms.
+        Returns the empty string when the signal is absent or empty so
+        seed programs / pre-intra runs collapse cleanly.
         """
-        if not intra:
+        if not signal:
             return ""
 
-        clusters = MutationSuggestionAgent._CLUSTER_BULLET_RE.findall(intra)
-        # clusters: list of (name, verdict)
-        negative = [(n.strip(), v) for n, v in clusters if v in {"regressed", "failed"}]
+        severity = signal.get("severity", "healthy")
+        clusters = signal.get("clusters") or []
+        delta = signal.get("delta_dist") or {}
+        n_neg = signal.get("n_negative", 0)
+        n_total = signal.get("n_clusters", len(clusters))
 
-        cond_a = len(negative) >= 2
-        cond_b = False
-        m_imp = MutationSuggestionAgent._IMPROVING_RE.search(intra)
-        m_cat = MutationSuggestionAgent._CATASTROPHIC_RE.search(intra)
-        m_fail = MutationSuggestionAgent._N_FAILED_RE.search(intra)
-        if m_imp and m_cat and m_fail:
-            improving = int(m_imp.group(1))
-            catastrophic = int(m_cat.group(1))
-            n_failed = int(m_fail.group(1))
-            cond_b = improving == 0 and (catastrophic + n_failed) >= 2
-
-        if not (cond_a or cond_b):
-            return ""
-
-        all_tried = [n.strip() for n, _ in clusters]
-        avoid_lines = (
-            "\n".join(f"- `{n}` (verdict: {v})" for n, v in (negative or []))
-            or "- (no labelled clusters; see intra card)"
+        cluster_lines = (
+            "\n".join(
+                f"- `{c.get('label', '?')}` ({c.get('verdict', '?')}, "
+                f"n={c.get('n_attempts', 0)})"
+                for c in clusters
+            )
+            or "- (none)"
         )
-        all_lines = "\n".join(f"- `{n}`" for n in all_tried) or "- (none)"
-
-        trigger_desc = []
-        if cond_a:
-            trigger_desc.append(
-                f"{len(negative)} distinct cluster(s) with negative verdicts"
-            )
-        if cond_b:
-            trigger_desc.append(
-                "delta distribution: catastrophic + n_failed ≥ 2 with improving = 0"
-            )
-        trigger_str = "; ".join(trigger_desc)
-
+        delta_line = (
+            f"improving={delta.get('improving', 0)}, "
+            f"neutral={delta.get('neutral', 0)}, "
+            f"catastrophic={delta.get('catastrophic', 0)}, "
+            f"n_failed={delta.get('n_failed', 0)}"
+        )
         return (
-            "## EXHAUSTION ALERT — strict structural-pivot mode (HARD CONSTRAINT)\n\n"
-            "The parent's intra card shows the LOCAL gradient is exhausted "
-            f"({trigger_str}). This block OVERRIDES the rank-aware ambition "
-            "guidance in the system prompt for this parent.\n\n"
-            "**Hard rule:** Every suggestion's `type` MUST name a STRUCTURAL "
-            "axis that is NOT a refinement of any cluster in the AVOID-LIST "
-            "below. Refinements of any listed cluster (parameter tweaks, "
-            "step-size adjustments, threshold shifts, init re-roll, retry "
-            "with smaller magnitudes, etc.) are explicitly rejected here — "
-            "the goal is to leave the local basin, not polish it.\n\n"
-            "**Structural axes** are orthogonal mechanisms — pick one that "
-            "is grounded in the program code, the cross-population memory "
-            "cards, or the ancestral trail, e.g.: a different algorithm "
-            "family, a different representation, a different initialization "
-            "scheme, a different objective formulation, a different control "
-            "structure. Do NOT invent a mechanism that has no evidence in "
-            "the inputs.\n\n"
-            "**AVOID-LIST — do not refine these clusters:**\n"
-            f"{avoid_lines}\n\n"
-            "**Full tried-strategies (context):**\n"
-            f"{all_lines}\n\n"
-            "---\n\n"
+            "## INTRA STRATEGY SIGNAL\n"
+            f"intra_signal: {severity} ({n_neg}/{n_total} clusters negative)\n"
+            f"{cluster_lines}\n"
+            f"Delta: {delta_line}\n\n"
         )
 
     def parse_response(self, state: MutationSuggestionState) -> MutationSuggestionState:
@@ -316,6 +290,7 @@ class MutationSuggestionAgent(LangGraphAgent):
         memory_cards: str | None = None,
         ancestral_trail: list[dict[str, Any]] | None = None,
         evolutionary_statistics: EvolutionaryStatistics | None = None,
+        mutation_mode: str | None = None,
     ) -> ProgramInsights:
         initial_state: MutationSuggestionState = {
             "program": program,
@@ -323,6 +298,7 @@ class MutationSuggestionAgent(LangGraphAgent):
             "memory_cards": memory_cards,
             "ancestral_trail": ancestral_trail,
             "evolutionary_statistics": evolutionary_statistics,
+            "mutation_mode": mutation_mode,
             "messages": [],
             "llm_response": None,
             "insights": None,
@@ -332,6 +308,7 @@ class MutationSuggestionAgent(LangGraphAgent):
                 "memory_cards_present": bool((memory_cards or "").strip()),
                 "trail_len": len(ancestral_trail or []),
                 "stats_present": evolutionary_statistics is not None,
+                "mutation_mode": mutation_mode,
             },
         }
         final_state = await self.graph.ainvoke(initial_state)

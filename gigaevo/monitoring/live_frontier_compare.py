@@ -51,6 +51,8 @@ import time
 
 from loguru import logger
 
+from gigaevo.utils.plotting import annotate_frontier_points
+
 # ---------------------------------------------------------------------------
 # Pure data classes + compute helper (test-friendly, no I/O).
 # ---------------------------------------------------------------------------
@@ -226,6 +228,22 @@ def _running_frontier(
     return iters, bests
 
 
+def _extend_frontier_to_axis(
+    front_iters: Sequence[int],
+    front_best: Sequence[float],
+    other_iters: Sequence[int],
+) -> tuple[list[int], list[float]]:
+    """Append a flat segment so the frontier line reaches max(other_iters)."""
+    fi = list(front_iters)
+    fv = list(front_best)
+    if not fi or not other_iters:
+        return fi, fv
+    x_max = max(other_iters)
+    if x_max <= fi[-1]:
+        return fi, fv
+    return fi + [x_max], fv + [fv[-1]]
+
+
 def _render_frontier_plot(
     *,
     output_dir: Path,
@@ -241,7 +259,6 @@ def _render_frontier_plot(
     """
     if not frontier_history:
         return None
-    # Lazy matplotlib import: optional dep, keeps test/import time cheap.
     import matplotlib
 
     matplotlib.use("Agg")
@@ -252,12 +269,17 @@ def _render_frontier_plot(
     mean_iters = [it for it, _ in mean_sorted]
     mean_vals = [v for _, v in mean_sorted]
 
+    plot_iters, plot_best = _extend_frontier_to_axis(
+        front_iters, front_best, mean_iters
+    )
+
     fig, ax = plt.subplots(figsize=(10, 6))
+    frontier_color = "#1f77b4"
     ax.plot(
-        front_iters,
-        front_best,
+        plot_iters,
+        plot_best,
         linewidth=2.0,
-        color="#1f77b4",
+        color=frontier_color,
         label=f"Frontier (best-so-far) {metric}",
         zorder=3,
     )
@@ -271,6 +293,21 @@ def _render_frontier_plot(
             label=f"Per-iter mean {metric}",
             zorder=2,
         )
+
+    try:
+        annotate_frontier_points(
+            ax,
+            front_iters,
+            front_best,
+            minimize=not higher_is_better,
+            max_annotations=10,
+            color=frontier_color,
+        )
+    except Exception:
+        logger.opt(exception=True).debug(
+            "[live_frontier_compare] annotate_frontier_points failed for {}", metric
+        )
+
     ax.set_xlabel("Iteration")
     ax.set_ylabel(metric.replace("_", " ").title())
     ax.set_title(f"{metric} — frontier vs. per-iter mean")

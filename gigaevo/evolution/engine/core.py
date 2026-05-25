@@ -434,6 +434,14 @@ class EvolutionEngine:
         # tasks can leave Redis on an older version than the mirror, and a
         # crash resume would rehydrate a snapshot that has lost updates.
         async with self._snapshot_lock:
+            # Monotonic counters: kwargs are evaluated at call time before the
+            # lock is acquired, so a slow writer can carry a stale read past a
+            # fresher writer. Clamp to the live counter so the snapshot can
+            # never regress — otherwise resume would re-issue ordinals that
+            # already-persisted programs claim (plot collisions, dup x-axis).
+            for field in ("next_iteration", "total_mutants", "programs_processed"):
+                if field in updates:
+                    updates[field] = max(updates[field], getattr(self._snapshot, field))
             next_snapshot = self._snapshot.model_copy(
                 update={**updates, "version": self._snapshot.version + 1}
             )
@@ -452,16 +460,14 @@ class EvolutionEngine:
         set_current_snapshot(self._snapshot)
 
     async def restore_state(self) -> None:
-        """Restore iteration and programs_processed from storage after a resume.
-
-        Note: EngineSnapshot still spells the persisted field ``total_mutants``;
-        the rename to ``iteration`` will land in a follow-up slice (#232).
-        """
+        """Restore ordinal/mutant counters and programs_processed from storage."""
         await self._load_snapshot_on_resume()
-        self.metrics.iteration = self._snapshot.total_mutants
+        self.metrics.iteration = self._snapshot.next_iteration
+        self.metrics.mutations_created = self._snapshot.total_mutants
         self.metrics.programs_processed = self._snapshot.programs_processed
         logger.info(
-            "[EvolutionEngine] Restored iteration={} programs_processed={}",
+            "[EvolutionEngine] Restored next_iteration={} mutations_created={} programs_processed={}",
+            self._snapshot.next_iteration,
             self._snapshot.total_mutants,
             self._snapshot.programs_processed,
         )
@@ -470,18 +476,18 @@ class EvolutionEngine:
     def stopper(self) -> EvolutionStopper:
         return self.config.stopper
 
-    def _build_stop_context(self) -> StopContext:
+    def build_stop_context(self) -> StopContext:
         elapsed = (
             time.monotonic() - self._run_start_time
             if self._run_start_time is not None
             else 0.0
         )
         return StopContext(
-            total_mutants=self.metrics.iteration,
+            total_mutants=self.metrics.mutations_created,
             elapsed_seconds=elapsed,
             best_fitness=self._metrics_tracker.get_best_fitness(),
             programs_processed=self.metrics.programs_processed,
         )
 
     def _reached_mutant_cap(self) -> bool:
-        return self.stopper.should_stop(self._build_stop_context()).stop
+        return self.stopper.should_stop(self.build_stop_context()).stop

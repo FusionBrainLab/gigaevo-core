@@ -6,6 +6,7 @@ import pytest
 
 from gigaevo.evolution.engine.stopper import (
     CompositeStopper,
+    EngineThroughput,
     EvolutionStopper,
     FitnessPlateauStopper,
     MaxMutantsStopper,
@@ -190,6 +191,127 @@ class TestBaseEvolutionStopper:
     def test_base_never_stops(self) -> None:
         stopper = EvolutionStopper()
         assert stopper.should_stop(_ctx(total_mutants=9999)).stop is False
+
+    def test_base_estimate_remaining_is_none(self) -> None:
+        stopper = EvolutionStopper()
+        tp = EngineThroughput(mutants_per_second=1.0, elapsed_seconds=10.0)
+        assert stopper.estimate_remaining(_ctx(total_mutants=5), tp) is None
+
+
+class TestMaxMutantsEstimateRemaining:
+    def test_positive_rate_returns_seconds_and_label(self) -> None:
+        stopper = MaxMutantsStopper(max_mutants=100)
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        result = stopper.estimate_remaining(_ctx(total_mutants=40), tp)
+        assert result == (30.0, "MaxMutantsStopper")
+
+    def test_zero_rate_returns_none(self) -> None:
+        stopper = MaxMutantsStopper(max_mutants=100)
+        tp = EngineThroughput(mutants_per_second=0.0, elapsed_seconds=20.0)
+        assert stopper.estimate_remaining(_ctx(total_mutants=40), tp) is None
+
+    def test_negative_rate_returns_none(self) -> None:
+        stopper = MaxMutantsStopper(max_mutants=100)
+        tp = EngineThroughput(mutants_per_second=-1.0, elapsed_seconds=20.0)
+        assert stopper.estimate_remaining(_ctx(total_mutants=40), tp) is None
+
+    def test_past_cap_clamps_to_zero(self) -> None:
+        stopper = MaxMutantsStopper(max_mutants=100)
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=200.0)
+        result = stopper.estimate_remaining(_ctx(total_mutants=150), tp)
+        assert result == (0.0, "MaxMutantsStopper")
+
+
+class TestWallClockEstimateRemaining:
+    def test_returns_budget_minus_elapsed(self) -> None:
+        stopper = WallClockStopper(budget_seconds=3600)
+        tp = EngineThroughput(mutants_per_second=1.0, elapsed_seconds=600.0)
+        result = stopper.estimate_remaining(_ctx(elapsed_seconds=600.0), tp)
+        assert result == (3000.0, "WallClockStopper")
+
+    def test_past_budget_clamps_to_zero(self) -> None:
+        stopper = WallClockStopper(budget_seconds=3600)
+        tp = EngineThroughput(mutants_per_second=1.0, elapsed_seconds=7200.0)
+        result = stopper.estimate_remaining(_ctx(elapsed_seconds=7200.0), tp)
+        assert result == (0.0, "WallClockStopper")
+
+    def test_throughput_is_ignored(self) -> None:
+        stopper = WallClockStopper(budget_seconds=3600)
+        tp_a = EngineThroughput(mutants_per_second=0.0, elapsed_seconds=100.0)
+        tp_b = EngineThroughput(mutants_per_second=99.0, elapsed_seconds=100.0)
+        assert stopper.estimate_remaining(
+            _ctx(elapsed_seconds=100.0), tp_a
+        ) == stopper.estimate_remaining(_ctx(elapsed_seconds=100.0), tp_b)
+
+
+class TestFitnessPlateauEstimateRemaining:
+    def test_always_returns_none(self) -> None:
+        stopper = FitnessPlateauStopper(window=10, min_delta=0.01)
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=100.0)
+        assert (
+            stopper.estimate_remaining(_ctx(total_mutants=50, best_fitness=0.5), tp)
+            is None
+        )
+
+
+class TestCompositeEstimateRemaining:
+    def test_any_mode_picks_min_bounded_with_winner_label(self) -> None:
+        stopper = CompositeStopper(
+            mode="any",
+            children=[
+                MaxMutantsStopper(max_mutants=100),
+                WallClockStopper(budget_seconds=3600),
+            ],
+        )
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        result = stopper.estimate_remaining(
+            _ctx(total_mutants=40, elapsed_seconds=20.0), tp
+        )
+        assert result == (30.0, "MaxMutantsStopper")
+
+    def test_all_mode_picks_max_bounded_with_winner_label(self) -> None:
+        stopper = CompositeStopper(
+            mode="all",
+            children=[
+                MaxMutantsStopper(max_mutants=100),
+                WallClockStopper(budget_seconds=3600),
+            ],
+        )
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        result = stopper.estimate_remaining(
+            _ctx(total_mutants=40, elapsed_seconds=20.0), tp
+        )
+        assert result == (3580.0, "WallClockStopper")
+
+    def test_mixed_bounded_and_unbounded_returns_bounded_min(self) -> None:
+        stopper = CompositeStopper(
+            mode="any",
+            children=[
+                MaxMutantsStopper(max_mutants=100),
+                FitnessPlateauStopper(window=10),
+            ],
+        )
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        result = stopper.estimate_remaining(
+            _ctx(total_mutants=40, elapsed_seconds=20.0), tp
+        )
+        assert result == (30.0, "MaxMutantsStopper")
+
+    def test_all_unbounded_returns_none(self) -> None:
+        stopper = CompositeStopper(
+            mode="any",
+            children=[
+                FitnessPlateauStopper(window=5),
+                FitnessPlateauStopper(window=10),
+            ],
+        )
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        assert stopper.estimate_remaining(_ctx(total_mutants=40), tp) is None
+
+    def test_empty_children_returns_none(self) -> None:
+        stopper = CompositeStopper(mode="any", children=[])
+        tp = EngineThroughput(mutants_per_second=2.0, elapsed_seconds=20.0)
+        assert stopper.estimate_remaining(_ctx(), tp) is None
 
 
 class TestHydraInstantiation:

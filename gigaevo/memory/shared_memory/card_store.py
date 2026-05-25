@@ -132,6 +132,20 @@ class CardStore:
             return mapped
         return None
 
+    def reload(self) -> None:
+        """Re-read the index file from disk, replacing in-memory state.
+
+        Used by readers that need to pick up writes made by a separate
+        ``AmemGamMemory`` instance (typical writer/reader split where both
+        sides share an on-disk checkpoint but each holds its own RAM state).
+        """
+        with self._lock:
+            self.cards.clear()
+            self.entity_by_card_id.clear()
+            self.card_id_by_entity.clear()
+            self.entity_version.clear()
+            self._load()
+
     def _load(self) -> None:
         if not self._index_file.exists():
             return
@@ -140,7 +154,9 @@ class CardStore:
             payload = json.loads(self._index_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning(
-                "[Memory] Could not parse index file {}: {}", self._index_file, exc
+                "[Memory][CardStore]Could not parse index file {}: {}",
+                self._index_file,
+                exc,
             )
             return
 
@@ -161,7 +177,7 @@ class CardStore:
                     continue
                 if cid not in self.cards:
                     logger.debug(
-                        "[Memory] Skipping dangling entity mapping: "
+                        "[Memory][CardStore]Skipping dangling entity mapping: "
                         "card_id={!r} not in cards",
                         cid,
                     )

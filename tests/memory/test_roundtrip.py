@@ -315,6 +315,24 @@ class TestMemoryWritePipeline:
 # ===========================================================================
 
 
+class _FakeResearchResult:
+    """Minimal stand-in for the gigaevo.memory red-agent research result."""
+
+    def __init__(self, raw_memory):
+        self.integrated_memory = ""
+        self.raw_memory = raw_memory
+
+
+def _final_raw(card_ids):
+    return {
+        "final_decision": {
+            "mode": "final",
+            "top_ideas": [{"card_id": cid} for cid in card_ids],
+            "additional_queries": [],
+        }
+    }
+
+
 class TestMemorySelectorIntegration:
     """Test MemorySelectorAgent.select() with a real AmemGamMemory backend."""
 
@@ -324,7 +342,6 @@ class TestMemorySelectorIntegration:
         for idea in ideas:
             mem.save_card(idea)
 
-        # Create selector with injected memory backend
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         selector._search_lock = asyncio.Lock()
         selector._backend_error = None
@@ -344,6 +361,9 @@ class TestMemorySelectorIntegration:
             ),
         ]
         selector = self._make_selector_with_memory(tmp_path, ideas)
+        selector.memory.research = lambda *a, **k: _FakeResearchResult(
+            _final_raw(["idea-1"])
+        )
         parent = FakeProgram(code="def solve(): return sum(x)")
 
         selection = await selector.select(
@@ -355,9 +375,8 @@ class TestMemorySelectorIntegration:
             max_cards=3,
         )
 
-        # Must return non-empty cards with actual content
+        assert "idea-1" in selection.card_ids
         assert len(selection.cards) > 0
-        # Cards should contain actual text, not empty strings
         assert all(len(card.strip()) > 0 for card in selection.cards)
 
     @pytest.mark.asyncio
@@ -421,58 +440,27 @@ class TestMemorySelectorIntegration:
         assert "MUTATION MODE:" in query
         assert "rewrite" in query
         assert "def solve(x):" in query
-        assert "Return exactly 3 concise ideas" in query
+        assert "Search your memory database" in query
+        assert "pick up to 3 card(s)" in query
 
-    def test_parse_search_result_numbered(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        result = (
-            "Query: test\n\n"
-            "1. Use simulated annealing for local search\n"
-            "2. Apply crossover between top pairs\n"
-            "3. Add repair step after mutation\n"
-        )
-        cards = selector._parse_search_result(result, max_cards=2)
-        assert len(cards) == 2
-        assert "simulated annealing" in cards[0]
-
-    def test_parse_search_result_no_relevant(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        result = "Query: test\n\nNo relevant memories found."
-        cards = selector._parse_search_result(result, max_cards=3)
-        assert cards == []
-
-    def test_extract_card_ids_from_text(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        text = (
-            "Top relevant memory cards:\n"
-            "1. idea-1 [general] Use SA for optimization\n"
-            "2. idea-2 [general] Apply crossover\n"
-        )
-        ids = selector._extract_card_ids_from_text(text)
-        assert "idea-1" in ids
-        assert "idea-2" in ids
-
-    def test_extract_card_ids_from_raw_memory(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
+    def test_parse_final_decision_extracts_card_ids(self, tmp_path):
+        """_parse_final_decision turns raw_memory.final_decision into ExperimentalDecision."""
         raw_memory = {
             "final_decision": {
-                "top_ideas": [
-                    {"card_id": "idea-1"},
-                    {"card_id": "idea-2"},
-                ],
+                "mode": "final",
+                "top_ideas": [{"card_id": "idea-1"}, {"card_id": "idea-2"}],
+                "additional_queries": [],
             },
         }
-        ids = selector._extract_card_ids_from_raw_memory(raw_memory)
+        decision = MemorySelectorAgent._parse_final_decision(raw_memory)
+        ids = [idea.card_id for idea in decision.top_ideas]
         assert ids == ["idea-1", "idea-2"]
 
-    def test_merge_card_ids_dedupes(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        merged = selector._merge_card_ids(
-            primary=["idea-1", "idea-2"],
-            secondary=["idea-2", "idea-3"],
-            max_cards=3,
-        )
-        assert merged == ["idea-1", "idea-2", "idea-3"]
+    def test_parse_final_decision_handles_invalid_shape(self, tmp_path):
+        """Non-dict or missing final_decision returns an empty decision."""
+        for raw in (None, "not-a-dict", {}, {"final_decision": "not-a-dict"}):
+            decision = MemorySelectorAgent._parse_final_decision(raw)
+            assert decision.top_ideas == []
 
 
 # ===========================================================================
@@ -580,72 +568,38 @@ class TestFullMemoryCycle:
 
 
 class TestSearchFallbackPaths:
-    """Test _search_with_ids GAM vs plain-search fallback, parse guarantees,
-    and API client error handling."""
+    """Test memory-side failure handling exposed through MemorySelectorAgent.select()
+    and other top-level parse/API helpers."""
 
-    def test_search_with_ids_fallback_to_plain_search(self, tmp_path):
-        """When research_agent is None, _search_with_ids falls to memory.search()."""
-        mem = _make_memory(tmp_path)
-        mem.save_card(
-            _make_idea_card(
-                "idea-1", "simulated annealing optimization", keywords=["annealing"]
-            )
-        )
-        # Ensure no research_agent
-        assert mem.research_agent is None
-
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = mem
-
-        result_text, card_ids = selector._search_with_ids("annealing optimization")
-        assert "idea-1" in result_text
-        assert isinstance(card_ids, list)
-
-    def test_search_with_ids_gam_path(self, tmp_path):
-        """When research_agent exists, _search_with_ids uses it."""
-        mem = _make_memory(tmp_path)
-        mem.save_card(_make_idea_card("idea-1", "annealing"))
-
-        # Mock research_agent
-        mock_result = MagicMock()
-        mock_result.integrated_memory = "1. idea-1 [general] Use annealing"
-        mock_result.raw_memory = {
-            "final_decision": {"top_ideas": [{"card_id": "idea-1"}]},
-        }
-        mock_agent = MagicMock()
-        mock_agent.research.return_value = mock_result
-        mem.research_agent = mock_agent
-
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = mem
-
-        result_text, card_ids = selector._search_with_ids("annealing")
-        assert "idea-1" in result_text
-        assert "idea-1" in card_ids
-        mock_agent.research.assert_called_once()
-
-    def test_search_with_ids_gam_failure_falls_back(self, tmp_path):
-        """When research_agent.research() raises, falls back to plain search."""
+    @pytest.mark.asyncio
+    async def test_select_returns_empty_when_research_raises(self, tmp_path):
+        """When memory.research raises, select() swallows and returns an empty selection."""
         mem = _make_memory(tmp_path)
         mem.save_card(
             _make_idea_card("idea-1", "annealing optimization", keywords=["annealing"])
         )
 
-        mock_agent = MagicMock()
-        mock_agent.research.side_effect = RuntimeError("GAM failed")
-        mem.research_agent = mock_agent
+        def _boom(*a, **k):
+            raise RuntimeError("GAM failed")
+
+        mem.research = _boom  # type: ignore[method-assign]
 
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         selector._search_lock = asyncio.Lock()
         selector._backend_error = None
         selector.memory = mem
 
-        result_text, card_ids = selector._search_with_ids("annealing")
-        assert "idea-1" in result_text  # Fell back to plain search
+        parent = FakeProgram(code="def solve(x):\n    return x\n")
+        selection = await selector.select(
+            input=[parent],
+            mutation_mode="rewrite",
+            task_description="annealing",
+            metrics_description="fitness",
+            memory_text="",
+            max_cards=3,
+        )
+        assert selection.cards == []
+        assert selection.card_ids == []
 
     def test_merge_updated_card_does_not_mutate_original_explanations(self, tmp_path):
         """merge_updated_card: _safe_string_list creates new list, so

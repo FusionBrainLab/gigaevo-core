@@ -81,7 +81,7 @@ def _ensure_writable_hf_cache() -> None:
         if not raw or not str(raw).strip():
             continue
         if not _hf_cache_dir_usable(Path(raw)):
-            print(f"[Memory] Clearing unwritable {key}={raw!r}")
+            print(f"[Memory][IdeaTracker] Clearing unwritable {key}={raw!r}")
             os.environ.pop(key, None)
 
     hf = os.environ.get("HF_HOME")
@@ -95,7 +95,7 @@ def _ensure_writable_hf_cache() -> None:
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
     os.environ["TRANSFORMERS_CACHE"] = str(hub)
     os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(fallback)
-    print(f"[Memory] HF cache directory -> {fallback}")
+    print(f"[Memory][IdeaTracker] HF cache directory -> {fallback}")
 
 
 def _load_task_description(redis_prefix: str, package_path: Path) -> str:
@@ -116,7 +116,9 @@ def _load_task_description(redis_prefix: str, package_path: Path) -> str:
                         return candidate.read_text(encoding="utf-8").strip()
     except Exception as exc:
         logger.warning(
-            "[Memory] Failed to read task description for prefix {!r}: {}", prefix, exc
+            "[Memory][IdeaTracker] Failed to read task description for prefix {!r}: {}",
+            prefix,
+            exc,
         )
     return "No description available"
 
@@ -133,7 +135,7 @@ def _summarise_task_description(analyzer: Analyzer, task_description: str) -> st
         return summary or text[:240].strip()
     except Exception as exc:
         logger.warning(
-            "[Memory] Task description summarization failed, using truncated text: {}",
+            "[Memory][IdeaTracker] Task description summarization failed, using truncated text: {}",
             exc,
         )
         return text[:240].strip()
@@ -184,6 +186,16 @@ def _compute_usage_updates_from_program_selection(
     }
 
 
+def _select_ideas_needing_enrichment(
+    ideas: list[Idea], last_entry_count: dict[str, int]
+) -> list[Idea]:
+    return [
+        idea
+        for idea in ideas
+        if last_entry_count.get(idea.id, -1) != len(idea.explanation.entries)
+    ]
+
+
 async def _enrich_ideas_with_keywords_and_summaries(
     ideas: list[Idea], analyzer: Analyzer, task_summary: str
 ) -> list[Idea]:
@@ -196,7 +208,9 @@ async def _enrich_ideas_with_keywords_and_summaries(
             keywords = json.loads(kw_raw).get("keywords", [])
         except Exception as exc:
             logger.warning(
-                "[Memory] Keyword extraction failed for idea {!r}: {}", idea.id, exc
+                "[Memory][IdeaTracker] Keyword extraction failed for idea {!r}: {}",
+                idea.id,
+                exc,
             )
 
         summary = ""
@@ -210,7 +224,9 @@ async def _enrich_ideas_with_keywords_and_summaries(
                 summary = json.loads(sum_raw).get("summary", "")
             except Exception as exc:
                 logger.warning(
-                    "[Memory] Summary generation failed for idea {!r}: {}", idea.id, exc
+                    "[Memory][IdeaTracker] Summary generation failed for idea {!r}: {}",
+                    idea.id,
+                    exc,
                 )
 
         return idea.model_copy(
@@ -244,10 +260,14 @@ def _run_write_pipeline(
     if not enabled:
         return
     if banks_path is None or best_ideas_path is None:
-        logger.warning("Memory write pipeline skipped: log paths unavailable.")
+        logger.warning(
+            "[Memory][IdeaTracker] write pipeline skipped: log paths unavailable."
+        )
         return
     if not banks_path.exists():
-        logger.warning("Memory write pipeline skipped: missing {}.", banks_path)
+        logger.warning(
+            "[Memory][IdeaTracker] write pipeline skipped: missing {}.", banks_path
+        )
         return
 
     try:
@@ -260,7 +280,9 @@ def _run_write_pipeline(
         has_snapshot = False
 
     if not has_snapshot:
-        logger.warning("Memory write pipeline skipped: no best_ideas snapshot.")
+        logger.warning(
+            "[Memory][IdeaTracker] write pipeline skipped: no best_ideas snapshot."
+        )
         return
 
     effective_programs_path = (
@@ -291,7 +313,7 @@ def _run_write_pipeline(
         stats = snapshot.get("stats", {})
         if isinstance(stats, dict):
             logger.info(
-                "Memory write: processed={}, added={}, updated={}, rejected={}",
+                "[Memory][IdeaTracker] write: processed={}, added={}, updated={}, rejected={}",
                 stats.get("processed", 0),
                 stats.get("added", 0),
                 stats.get("updated", 0),
@@ -417,7 +439,10 @@ class _SessionLog:
                 return
             raise
         except Exception as exc:
-            logger.warning("Could not compute evolutionary statistics: {}", exc)
+            logger.warning(
+                "[Memory][IdeaTracker] Could not compute evolutionary statistics: {}",
+                exc,
+            )
             return
 
         if df_summary.empty:
@@ -482,6 +507,7 @@ def _build_analyzer_from_hydra_fields(
     analyzer_reasoning: dict[str, Any] | None,
     analyzer_fast_settings: dict[str, Any] | None,
     description_rewriting: bool,
+    analyzer_max_concurrent_classifications: int = 8,
 ) -> ClassifyingAnalyzer | ClusteringAnalyzer:
     """Construct ClassifyingAnalyzer or ClusteringAnalyzer from flat Hydra kwargs."""
     base_url = (analyzer_base_url or "").strip() or None
@@ -504,6 +530,7 @@ def _build_analyzer_from_hydra_fields(
         base_url=base_url,
         reasoning=reasoning,
         description_rewriting=description_rewriting,
+        max_concurrent_classifications=analyzer_max_concurrent_classifications,
     )
 
 
@@ -556,6 +583,7 @@ class IdeaTracker(PostRunHook):
         analyzer_base_url: str = "https://openrouter.ai/api/v1",
         analyzer_reasoning: dict[str, Any] | None = None,
         analyzer_fast_settings: dict[str, Any] | None = None,
+        analyzer_max_concurrent_classifications: int = 8,
         list_max_ideas: int = 20,
         postprocessing_type: str = "default",
         description_rewriting: bool = True,
@@ -574,7 +602,9 @@ class IdeaTracker(PostRunHook):
         **extras: Any,
     ) -> None:
         if extras:
-            logger.debug("IdeaTracker: ignoring extra instantiate kwargs: {}", extras)
+            logger.debug(
+                "[Memory][IdeaTracker] ignoring extra instantiate kwargs: {}", extras
+            )
 
         _ensure_writable_hf_cache()
         if analyzer is None:
@@ -587,6 +617,7 @@ class IdeaTracker(PostRunHook):
                     analyzer_reasoning=analyzer_reasoning,
                     analyzer_fast_settings=analyzer_fast_settings,
                     description_rewriting=description_rewriting,
+                    analyzer_max_concurrent_classifications=analyzer_max_concurrent_classifications,
                 ),
             )
 
@@ -600,6 +631,7 @@ class IdeaTracker(PostRunHook):
         self._namespace = namespace
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
+        self._last_entry_count: dict[str, int] = {}
 
         if task_description:
             self._task_description = task_description
@@ -629,7 +661,7 @@ class IdeaTracker(PostRunHook):
         """Called by EvolutionEngine after the generation loop finishes."""
         programs = await storage.get_all(exclude=EXCLUDE_STAGE_RESULTS)
         if not programs:
-            logger.warning("IdeaTracker: no programs in storage, skipping.")
+            logger.warning("[Memory][IdeaTracker] no programs in storage, skipping.")
             return
         await self.run_increment(programs)
 
@@ -671,18 +703,25 @@ class IdeaTracker(PostRunHook):
         if self._memory_usage_tracking_enabled and usage_updates:
             self._bank.apply_usage_updates(usage_updates)
 
-        # Only enrich ideas if there are eligible records to process
         if records:
-            enriched = await _enrich_ideas_with_keywords_and_summaries(
-                self._bank.all_ideas(), self._analyzer, self._task_summary
+            stale_ideas = _select_ideas_needing_enrichment(
+                self._bank.all_ideas(), self._last_entry_count
             )
-            for idea in enriched:
-                self._bank.enrich(
-                    idea.id,
-                    keywords=idea.keywords,
-                    summary=idea.explanation.summary,
-                    task_summary=self._task_summary,
+            if stale_ideas:
+                enriched = await _enrich_ideas_with_keywords_and_summaries(
+                    stale_ideas, self._analyzer, self._task_summary
                 )
+                for idea in enriched:
+                    self._bank.enrich(
+                        idea.id,
+                        keywords=idea.keywords,
+                        summary=idea.explanation.summary,
+                        task_summary=self._task_summary,
+                    )
+            self._last_entry_count = {
+                idea.id: len(idea.explanation.entries)
+                for idea in self._bank.all_ideas()
+            }
 
         self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
         self._log.flush(self._bank, records=self._all_records)
@@ -716,9 +755,14 @@ class IdeaTracker(PostRunHook):
                 continue
             eligible.append(prog)
 
+        parent_codes: dict[str, str] = {p.id: p.code for p in programs if p.code}
         records = [
             program_to_record(
-                p, self._task_description, self._task_summary, self._fitness_key
+                p,
+                self._task_description,
+                self._task_summary,
+                self._fitness_key,
+                parent_codes=parent_codes,
             )
             for p in eligible
         ]

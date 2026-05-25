@@ -98,7 +98,7 @@ class CardDedup:
                 build_retrievers,
             )
         except ImportError as exc:
-            logger.warning("[Memory] Dedup retriever import failed: {}", exc)
+            logger.warning("[Memory][CardDedup]Dedup retriever import failed: {}", exc)
             return {}
 
         self._gam_store_dir.mkdir(parents=True, exist_ok=True)
@@ -126,7 +126,7 @@ class CardDedup:
                 ],
             )
         except (MemoryRetrieverError, OSError) as exc:
-            logger.warning("[Memory] Dedup retriever build failed: {}", exc)
+            logger.warning("[Memory][CardDedup]Dedup retriever build failed: {}", exc)
             return {}
 
         return {
@@ -192,7 +192,7 @@ class CardDedup:
                 hits_by_query = retriever.search([text], top_k=cfg.top_k_per_query)
             except Exception as exc:
                 logger.warning(
-                    "[Memory] Dedup retrieval failed for query '{}': {}",
+                    "[Memory][CardDedup]Dedup retrieval failed for query '{}': {}",
                     query_key,
                     exc,
                 )
@@ -371,7 +371,9 @@ class CardDedup:
             try:
                 response_text, _, _, _ = self.llm_service.generate(prompt)
             except Exception as exc:
-                logger.warning("[Memory] Dedup LLM decision call failed: {}", exc)
+                logger.warning(
+                    "[Memory][CardDedup]Dedup LLM decision call failed: {}", exc
+                )
                 continue
             parsed = parse_llm_card_decision(
                 response_text,
@@ -381,14 +383,14 @@ class CardDedup:
                 decision = parsed
                 break
             logger.warning(
-                "[Memory] Dedup LLM returned no valid JSON (attempt {}/{})",
+                "[Memory][CardDedup]Dedup LLM returned no valid JSON (attempt {}/{})",
                 attempt + 1,
                 cfg.llm_max_retries,
             )
         else:
             # All retries exhausted without a valid JSON response — fall back to add
             logger.warning(
-                "[Memory] Dedup LLM failed all {} attempts, defaulting to action=add "
+                "[Memory][CardDedup]Dedup LLM failed all {} attempts, defaulting to action=add "
                 "for card {!r}",
                 cfg.llm_max_retries,
                 _str_or_empty(incoming_card.id).strip(),

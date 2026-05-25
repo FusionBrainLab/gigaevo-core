@@ -15,7 +15,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 import gigaevo.memory.config as env_config
-from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.langchain_llm_service import LangChainLLMService
 from gigaevo.memory.shared_memory.card_conversion import DEFAULT_MODEL_NAME
 from gigaevo.memory.shared_memory.protocols import (
     AgenticMemoryProtocol,
@@ -58,7 +58,7 @@ def load_agentic_runtime() -> AgenticRuntime | None:
         )
     except ImportError as exc:
         logger.info(
-            "[Memory] Agentic runtime dependencies unavailable: {}. "
+            "[Memory][Runtime] Agentic runtime dependencies unavailable: {}. "
             "Falling back to API full-text mode.",
             exc,
         )
@@ -90,26 +90,27 @@ def init_llm_and_generator(
 
     if not api_key:
         logger.info(
-            "[Memory] OPENAI_API_KEY/OPENROUTER_API_KEY is not set. "
+            "[Memory][Runtime] OPENAI_API_KEY/OPENROUTER_API_KEY is not set. "
             "Agentic retrieval is disabled; API full-text fallback is available."
         )
         return None, None
 
     try:
-        llm_service: LLMServiceProtocol = OpenAIInferenceService(
+        llm_service: LLMServiceProtocol = LangChainLLMService(
             model_name=env_config.OPENROUTER_MODEL_NAME or DEFAULT_MODEL_NAME,
             api_key=api_key,
             base_url=env_config.LLM_BASE_URL,
             temperature=0.0,
             max_tokens=None,
             reasoning=env_config.OPENROUTER_REASONING,
+            structured_output_method=env_config.STRUCTURED_OUTPUT_METHOD,
         )
         if generator_cls is None:
             return llm_service, None
         generator: GeneratorProtocol = generator_cls({"llm_service": llm_service})
         return llm_service, generator
     except Exception as exc:
-        logger.warning("[Memory] Could not initialize LLM/generator: {}", exc)
+        logger.warning("[Memory][Runtime] Could not initialize LLM/generator: {}", exc)
         return None, None
 
 
@@ -137,5 +138,7 @@ def init_agentic_storage(
             enable_evolution=enable_evolution,
         )
     except Exception as exc:
-        logger.warning("[Memory] Could not initialize AgenticMemorySystem: {}", exc)
+        logger.warning(
+            "[Memory][Runtime] Could not initialize AgenticMemorySystem: {}", exc
+        )
         return None

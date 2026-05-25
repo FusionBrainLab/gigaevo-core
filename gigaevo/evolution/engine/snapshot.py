@@ -28,6 +28,7 @@ ENGINE_SNAPSHOT_KEY = "engine:snapshot"
 
 class EngineSnapshot(BaseModel):
     total_mutants: int = 0
+    next_iteration: int = 0
     programs_processed: int = 0
     completion_reason: str | None = None
     version: int = 0

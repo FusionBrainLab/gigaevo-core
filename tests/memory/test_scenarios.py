@@ -204,6 +204,21 @@ class TestScenarioTwoRunCycle:
         # Reload (simulating new process)
         mem2 = _make_memory(tmp_path)
 
+        # Mock the red agent: pick the first persisted card id deterministically.
+        target_id = next(iter(mem2.card_store.cards))
+
+        class _FakeRaw:
+            integrated_memory = ""
+            raw_memory = {
+                "final_decision": {
+                    "mode": "final",
+                    "top_ideas": [{"card_id": target_id}],
+                    "additional_queries": [],
+                }
+            }
+
+        mem2.research = lambda *a, **k: _FakeRaw()
+
         # Create selector with real memory
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         selector._search_lock = asyncio.Lock()
@@ -232,7 +247,8 @@ class TestScenarioTwoRunCycle:
             loop.close()
 
         # Should get results from memory
-        assert len(selection.cards) > 0 or len(selection.card_ids) > 0
+        assert target_id in selection.card_ids
+        assert len(selection.cards) > 0
 
 
 # ===========================================================================

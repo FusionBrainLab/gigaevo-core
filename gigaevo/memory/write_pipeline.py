@@ -212,7 +212,7 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
 
     if missing_cards:
         logger.warning(
-            "{} best_ideas IDs were missing in banks and were skipped.",
+            "[Memory][WritePipeline] {} best_ideas IDs were missing in banks and were skipped.",
             len(missing_cards),
         )
 
@@ -296,7 +296,6 @@ def _build_program_cards_from_top_programs(
             )
 
     cards: list[dict[str, Any]] = []
-    total_programs = len(eligible_programs)
     for rank, program in enumerate(selected_programs, start=1):
         program_id = str(program["program_id"])
         task_description = str(program.get("task_description") or "").strip()
@@ -313,15 +312,13 @@ def _build_program_cards_from_top_programs(
         connected_summary = "; ".join(
             connected_descriptions[:_MAX_CONNECTED_DESCRIPTIONS]
         )
-        description_seed = (
-            task_description_summary or task_description or "task summary unavailable"
-        )
-        description = (
-            f"Top evolved program for {description_seed} "
-            f"(fitness={float(program['fitness']):.6g}, rank={rank}/{total_programs})."
-        )
+        connected_summary = connected_summary.strip()
         if connected_summary:
-            description += f" Connected ideas: {connected_summary}"
+            description = connected_summary
+            keywords = [f"program_rank:{rank}"]
+        else:
+            description = ""
+            keywords = ["pending_analysis:true", f"program_rank:{rank}"]
 
         cards.append(
             {
@@ -334,6 +331,7 @@ def _build_program_cards_from_top_programs(
                 "fitness": float(program["fitness"]),
                 "code": str(program.get("code") or ""),
                 "connected_ideas": connected_ideas,
+                "keywords": keywords,
             }
         )
 
@@ -373,7 +371,7 @@ def _apply_usage_updates_to_card_list(
 
     if missing_card_ids:
         logger.warning(
-            "Skipped usage updates for {} card(s) not found in memory store.",
+            "[Memory][WritePipeline] Skipped usage updates for {} card(s) not found in memory store.",
             len(missing_card_ids),
         )
 
@@ -449,7 +447,7 @@ def _write_memory_write_stats(
                 existing = [raw]
         except Exception as exc:
             logger.warning(
-                "[Memory] Failed to load existing write stats from {}: {}",
+                "[Memory][WritePipeline] Failed to load existing write stats from {}: {}",
                 stats_path,
                 exc,
             )
@@ -523,9 +521,9 @@ def main(
 
     memory = AmemGamMemory(config=config)
 
-    logger.info("API Memory Demo: Card Write")
+    logger.info("[Memory][WritePipeline] API Memory Demo: Card Write")
     logger.info(
-        "Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
+        "[Memory][WritePipeline] Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
         cfg.settings_path,
         cfg.should_evolve,
         cfg.fill_missing_fields_with_llm,
@@ -545,17 +543,22 @@ def main(
             memory=memory,
         )
         logger.info(
-            "Loaded {} cards from banks: {} (filtered by: {})",
+            "[Memory][WritePipeline] Loaded {} cards from banks: {} (filtered by: {})",
             len(memory_cards),
             _banks_path,
             _best_ideas_path,
         )
         if cfg.use_api:
             logger.info(
-                "Writing to API: {} (namespace={})", cfg.memory_api_url, cfg.namespace
+                "[Memory][WritePipeline] Writing to API: {} (namespace={})",
+                cfg.memory_api_url,
+                cfg.namespace,
             )
         else:
-            logger.info("Writing in local-only mode (checkpoint={})", cfg.memory_dir)
+            logger.info(
+                "[Memory][WritePipeline] Writing in local-only mode (checkpoint={})",
+                cfg.memory_dir,
+            )
 
         write_stats_by_classify_card_type = {
             "ideas": _zero_write_stats(),
@@ -574,17 +577,20 @@ def main(
                     ) + int(stat_value)
                 stored = memory.get_card(memory_id)
                 logger.debug(
-                    "[{:03d}] saved {}: {}",
+                    "[Memory][WritePipeline] [{:03d}] saved {}: {}",
                     idx,
                     memory_id,
                     (stored.description if stored is not None else "")[:110],
                 )
         except (RuntimeError, MemoryStorageError) as exc:
-            logger.error("Write failed: {}", exc)
+            logger.error("[Memory][WritePipeline] Write failed: {}", exc)
             return None
 
         memory.rebuild()
-        logger.info("Local API index saved in: {}", cfg.memory_dir / "api_index.json")
+        logger.info(
+            "[Memory][WritePipeline] Local API index saved in: {}",
+            cfg.memory_dir / "api_index.json",
+        )
 
         write_stats = memory.get_card_write_stats()
         input_classify_card_type_counts = {
@@ -596,7 +602,7 @@ def main(
             ),
         }
         logger.info(
-            "Write stats: processed={} added={} updated={} rejected={} "
+            "[Memory][WritePipeline] Write stats: processed={} added={} updated={} rejected={} "
             "ideas(proc={} add={} upd={} rej={}) "
             "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
             write_stats.get("processed", 0),
@@ -622,7 +628,9 @@ def main(
             write_stats=write_stats,
             write_stats_by_classify_card_type=write_stats_by_classify_card_type,
         )
-        logger.info("Memory write stats saved to: {}", stats_path)
+        logger.info(
+            "[Memory][WritePipeline] Memory write stats saved to: {}", stats_path
+        )
         return snapshot
     finally:
         memory.close()

@@ -67,6 +67,92 @@ from gigaevo.programs.stages.stage_registry import StageRegistry
 _DEADLINE_GRACE_S: int = 10  # post-eval margin before hard stage timeout
 
 
+def _compile_check(code: str) -> SyntaxError | None:
+    """Compile-time syntax check. Catches both AST-level errors and bytecode-level
+    errors like duplicate keyword arguments (which ``ast.parse`` accepts silently)."""
+    try:
+        compile(code, "<optuna-patched>", "exec")
+        return None
+    except SyntaxError as e:
+        return e
+
+
+def _repair_overescaped_quotes(code: str) -> str | None:
+    """Strip JSON-style backslash-quote escapes outside string literals.
+
+    LLMs sometimes emit ``_optuna_params[\\'name\\']`` because they over-apply
+    JSON escaping rules — JSON does not require quoting single quotes, and
+    ``\\'`` outside a string is a Python SyntaxError.
+    """
+    repaired = code.replace("\\'", "'").replace('\\"', '"')
+    return repaired if repaired != code else None
+
+
+def _kw_uses_optuna_param(kw: ast.keyword) -> bool:
+    """True if a keyword argument value references ``_optuna_params[...]``."""
+    for sub in ast.walk(kw.value):
+        if (
+            isinstance(sub, ast.Subscript)
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == _OPTUNA_PARAMS_NAME
+        ):
+            return True
+    return False
+
+
+def _repair_duplicate_call_keywords(code: str) -> str | None:
+    """Dedupe duplicate keyword arguments in any ``Call`` node.
+
+    LLMs sometimes emit ``f(x=31, x=_optuna_params['x'])`` — the parametrization
+    was tacked on without removing the original literal. ``compile()`` rejects
+    this as ``SyntaxError: keyword argument repeated``. We prefer the keyword
+    that uses ``_optuna_params`` (the intended override); if none do, keep the
+    rightmost — which matches the LLM's likely intent of overriding earlier
+    occurrences.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    changed = False
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and node.keywords):
+            continue
+        groups: dict[str, list[ast.keyword]] = {}
+        order: list[str | None] = []
+        for kw in node.keywords:
+            if kw.arg is None:  # **kwargs spread
+                order.append(None)
+                continue
+            if kw.arg not in groups:
+                groups[kw.arg] = []
+                order.append(kw.arg)
+            groups[kw.arg].append(kw)
+        if not any(len(g) > 1 for g in groups.values()):
+            continue
+        new_keywords: list[ast.keyword] = []
+        star_iter = (kw for kw in node.keywords if kw.arg is None)
+        seen: set[str] = set()
+        for name in order:
+            if name is None:
+                new_keywords.append(next(star_iter))
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            kws = groups[name]
+            if len(kws) == 1:
+                new_keywords.append(kws[0])
+                continue
+            changed = True
+            preferred = [kw for kw in kws if _kw_uses_optuna_param(kw)]
+            new_keywords.append(preferred[-1] if preferred else kws[-1])
+        node.keywords = new_keywords
+    if not changed:
+        return None
+    return ast.unparse(tree)
+
+
 @StageRegistry.register(
     description="LLM-guided hyperparameter optimization using Optuna"
 )
@@ -248,19 +334,29 @@ class OptunaOptimizationStage(Stage):
             imports_str = "\n".join(search_space.new_imports)
             code = f"{imports_str}\n{code}"
 
-        try:
-            ast.parse(code)
-        except SyntaxError as e:
-            logger.error(
-                "[Optuna] Parameterized code has syntax error: {}\nCode snippet around error:\n{}",
-                e,
-                "\n".join(code.splitlines()[max(0, e.lineno - 5) : e.lineno + 5])
-                if e.lineno
-                else "Unknown location",
-            )
-            raise ValueError(f"Parameterized code syntax error: {e}")
+        err = _compile_check(code)
+        if err is None:
+            return code
 
-        return code
+        for label, repair_fn in (
+            ("over-escaped quotes (\\' / \\\")", _repair_overescaped_quotes),
+            ("duplicate keyword arguments", _repair_duplicate_call_keywords),
+        ):
+            repaired = repair_fn(code)
+            if repaired is not None and _compile_check(repaired) is None:
+                logger.warning("[Optuna] Repaired {} in LLM snippet.", label)
+                if original_code.endswith("\n") and not repaired.endswith("\n"):
+                    repaired += "\n"
+                return repaired
+
+        logger.error(
+            "[Optuna] Parameterized code has syntax error: {}\nCode snippet around error:\n{}",
+            err,
+            "\n".join(code.splitlines()[max(0, err.lineno - 5) : err.lineno + 5])
+            if err.lineno
+            else "Unknown location",
+        )
+        raise ValueError(f"Parameterized code syntax error: {err}")
 
     async def _measure_baseline_runtime(
         self,

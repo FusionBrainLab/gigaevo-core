@@ -83,12 +83,14 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
             if refreshed:
                 engine.metrics.submitted_for_refresh += len(refreshed)
 
-        # Inline single-mutant primitive — no asyncio.gather to swallow the
-        # persisted ID under outer-cancel. If we are cancelled after the
-        # program is persisted, generate_one_mutation's except BaseException
-        # arm returns the ID and we transfer the slot below before the
-        # finally block re-raises.
-        # Track LLM occupancy: increment before LLM call, decrement after.
+        # Atomic ordinal reserve — the read+increment pair has no `await` in
+        # between, so under asyncio one coroutine cannot interleave another.
+        # Without this, N concurrent producers all read the same pre-await
+        # value and every child program shares one iteration ordinal,
+        # producing the "long vertical lines at iteration 0" plot symptom.
+        my_iteration = engine.metrics.iteration
+        engine.metrics.iteration += 1
+
         engine._llm_active += 1
         try:
             new_id = await generate_one_mutation(
@@ -96,7 +98,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                 mutator=engine.mutation_operator,
                 storage=engine.storage,
                 state_manager=engine.state,
-                iteration=engine.metrics.iteration,
+                iteration=my_iteration,
                 task_id=task_id,
             )
         finally:
@@ -125,14 +127,14 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
         # Ticket ownership has transferred to the ingestor; null it locally
         # so the `finally` block does not double-release the same locks.
         ticket = None
-        engine.metrics.iteration += 1
         engine.metrics.mutations_created += 1
-        # Persist counter so a resume after a crash continues from the
-        # correct mutant count rather than 0. Without this,
-        # MaxMutantsStopper would run the full budget again on resume.
-        # (EngineSnapshot still spells the field ``total_mutants``; rename
-        # follow-up tracked under #232.)
-        await engine._write_snapshot(total_mutants=engine.metrics.iteration)
+        # Persist both counters: total_mutants drives the stopper across
+        # resume; next_iteration is the next ordinal to hand out so the
+        # x-axis stays unique even after a crash.
+        await engine._write_snapshot(
+            total_mutants=engine.metrics.mutations_created,
+            next_iteration=engine.metrics.iteration,
+        )
         return new_id
 
     finally:

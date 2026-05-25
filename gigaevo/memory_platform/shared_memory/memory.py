@@ -8,7 +8,7 @@ import uuid
 from dotenv import load_dotenv
 
 from gigaevo.memory import config
-from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.langchain_llm_service import LangChainLLMService
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
     QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
@@ -316,13 +316,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if not api_key:
             return None, None
         try:
-            llm_service = OpenAIInferenceService(
+            llm_service = LangChainLLMService(
                 model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
                 api_key=api_key,
                 base_url=config.LLM_BASE_URL,
                 temperature=0.0,
                 max_tokens=0,
                 reasoning=config.OPENROUTER_REASONING,
+                structured_output_method=config.STRUCTURED_OUTPUT_METHOD,
             )
             if self._AMemGeneratorCls is None:
                 return llm_service, None

@@ -201,6 +201,11 @@ class MetricsTracker:
         # metrics after archive refresh re-runs)
         await self._refresh_changed_fitness()
 
+        # Rebuild from in-memory snapshot so the frontier reflects
+        # iteration-order (not ingestion-order) cumulative-best.
+        for key in list(self._best_valid):
+            self._recompute_and_write_frontier(key)
+
     async def _refresh_changed_fitness(self) -> None:
         if not self._seen_fitness:
             return
@@ -288,7 +293,7 @@ class MetricsTracker:
             fval = float(val)
 
             # per-program
-            self._writer.scalar(f"valid/program/{key}", fval)
+            self._writer.scalar(f"valid/program/{key}", fval, step=iteration)
 
             # frontier
             if self._maybe_update_frontier(key, fval, iteration):
@@ -377,15 +382,22 @@ class MetricsTracker:
         sorted_iters = sorted(iter_best.items())  # (iteration, best_val)
         frontier_series: list[tuple[int, float]] = []
         best_so_far = sorted_iters[0][1]
+        best_at_iter = sorted_iters[0][0]
         for it, val in sorted_iters:
             if higher_is_better:
-                best_so_far = max(best_so_far, val)
+                if val > best_so_far:
+                    best_so_far = val
+                    best_at_iter = it
             else:
-                best_so_far = min(best_so_far, val)
+                if val < best_so_far:
+                    best_so_far = val
+                    best_at_iter = it
             frontier_series.append((it, best_so_far))
 
-        # Update _best_valid to match recomputed frontier
-        self._best_valid[metric_key] = (frontier_series[-1][1], frontier_series[-1][0])
+        # _best_valid tracks (peak_value, iter_where_peak_was_first_achieved),
+        # NOT the last-iter value. Required by _maybe_update_frontier's
+        # comparison semantics and consumer assertions on the iter field.
+        self._best_valid[metric_key] = (best_so_far, best_at_iter)
 
         # Clear the old series and write the full recomputed frontier
         tag = f"valid/frontier/{metric_key}"

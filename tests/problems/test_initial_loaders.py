@@ -46,7 +46,14 @@ class TestDirectoryProgramLoader:
                 assert prog.metadata["source"] == "initial_program"
                 assert "strategy_name" in prog.metadata
                 assert "file_path" in prog.metadata
-                assert prog.iteration == 0
+            # Seeds get unique iteration ordinals 0..N-1 so the engine's
+            # ordinal counter can start at N and every program in the run
+            # has a unique iteration. Anything else collapses initial seeds
+            # onto one point in the plot.
+            iterations = sorted(p.iteration for p in programs)
+            assert iterations == list(range(len(programs))), (
+                f"Seeds must enumerate as 0..N-1, got {iterations}"
+            )
 
     @pytest.mark.asyncio
     async def test_loads_specific_strategy_names(self):
@@ -453,7 +460,51 @@ class TestRedisTopProgramsLoader:
             assert loaded.metadata["source_db"] == 2
             assert loaded.metadata["selection_rank"] == 1
             assert loaded.metadata["original_id"] == original_id
+            # Single seed loaded → ordinal 0 (sole element of 0..N-1).
             assert loaded.iteration == 0
+
+    @pytest.mark.asyncio
+    async def test_enumerates_iterations_across_selection(self):
+        """Multiple selected programs must each get a unique iteration ordinal."""
+        loader = RedisTopProgramsLoader(
+            source_host="localhost",
+            source_port=6379,
+            source_db=1,
+            key_prefix="test",
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=5,
+        )
+
+        programs = []
+        for i, fitness in enumerate([0.1, 0.5, 0.9, 0.3, 0.7]):
+            prog = MagicMock()
+            prog.id = uuid.uuid4()
+            prog.code = "def solve(): pass"
+            prog.metrics = {"fitness": fitness}
+            prog.lineage.children = []
+            prog.lineage.parents = []
+            prog.stage_results = {}
+            prog.metadata = {}
+            programs.append(prog)
+
+        with patch(
+            "gigaevo.problems.initial_loaders.RedisProgramStorage"
+        ) as MockStorage:
+            source = AsyncMock()
+            source.get_all = AsyncMock(return_value=programs)
+            source.close = AsyncMock()
+            MockStorage.return_value = source
+
+            dest = AsyncMock()
+            dest.add = AsyncMock()
+
+            result = await loader.load(dest)
+
+            iterations = sorted(p.iteration for p in result)
+            assert iterations == list(range(len(result))), (
+                f"Redis seeds must enumerate as 0..N-1, got {iterations}"
+            )
 
     @pytest.mark.asyncio
     async def test_closes_source_even_on_error(self):

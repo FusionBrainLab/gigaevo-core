@@ -33,6 +33,16 @@ from gigaevo.memory.utils import to_float
 _ENTITY_NAME_MAX_LENGTH = 255
 
 
+def normalize_delta_best(value: Any, *, lower_is_better: bool) -> float:
+    """Producer-normalized Δbest: positive ALWAYS = improvement.
+
+    For lower-is-better metrics (loss, error), flips the raw child−parent
+    delta so an improvement is reported as positive.
+    """
+    raw = to_float(value, default=0.0) or 0.0
+    return -raw if lower_is_better else raw
+
+
 class MemoryNoteProtocol(Protocol):
     """Structural type for A-MEM MemoryNote objects."""
 
@@ -102,7 +112,8 @@ def _normalize_usage(raw_usage: Any) -> UsagePayload:
         return UsagePayload.model_validate(raw_usage)
     except Exception as exc:
         logger.warning(
-            "[Memory] UsagePayload validation failed, using empty payload: {}", exc
+            "[Memory][CardConversion]UsagePayload validation failed, using empty payload: {}",
+            exc,
         )
         return UsagePayload()
 

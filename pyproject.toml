@@ -49,6 +49,11 @@ dependencies = [
     "langchain-openai>=0.2.0",
     "langgraph>=0.2.0",
     "langfuse>=4.0.0,<5",
+    # Live profiler (run.py imports start_live_profiler unconditionally)
+    # and default tensorboard logging tracker — required for the basic
+    # `python run.py problem.name=heilbron` smoke path on a minimal install.
+    "plotly>=5.0",
+    "tensorboardX",
 ]
 
 [project.optional-dependencies]
@@ -84,19 +89,19 @@ optimization = [
     "shapely",
 ]
 
-# CLI plotting commands + monitoring dashboards + flow profiler.
-# Required for: `gigaevo plot`, `gigaevo events`, `gigaevo profiler`.
+# CLI plotting commands + monitoring dashboards.
+# Required for: `gigaevo plot`, `gigaevo events`. (plotly is in core for the
+# flow profiler imported by run.py; matplotlib/seaborn/statsmodels stay opt-in.)
 plotting = [
     "matplotlib",
     "seaborn",
     "statsmodels",
-    "plotly>=5.0",
 ]
 
 # Experiment tracking backends — opt-in by trackers config.
+# (tensorboardX moved to core: default `/logging: tensorboard` requires it.)
 tracking = [
     "wandb",
-    "tensorboardX",
 ]
 
 # Heavy GPU / local-LLM stack — required only by problems/prompts/sudoku

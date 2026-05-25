@@ -195,6 +195,7 @@ class ProgramRecord(BaseModel):
     task_description: str = ""
     task_description_summary: str = ""
     code: str = ""
+    parent_code: str = ""
 
 
 class IdeaUpdate(BaseModel):
@@ -259,21 +260,27 @@ def program_to_record(
     task_description: str,
     task_description_summary: str,
     fitness_key: str = "fitness",
+    parent_codes: dict[str, str] | None = None,
 ) -> ProgramRecord:
     """Convert a Program to a ProgramRecord for analyser consumption."""
     mutation_output = program.metadata.get("mutation_output", {})
     if not isinstance(mutation_output, dict):
         mutation_output = {}
+    parents = list(program.lineage.parents)
+    parent_code = ""
+    if parent_codes and parents:
+        parent_code = parent_codes.get(parents[0], "")
     return ProgramRecord(
         id=program.id,
         fitness=program.metrics.get(fitness_key, 0.0),
         generation=program.lineage.generation,
-        parents=list(program.lineage.parents),
+        parents=parents,
         improvements=normalize_improvements(mutation_output.get("changes")),
         strategy=mutation_output.get("archetype") or "",
         task_description=task_description,
         task_description_summary=task_description_summary,
         code=program.code,
+        parent_code=parent_code,
     )
 
 
@@ -282,10 +289,13 @@ def programs_to_records(
     task_description: str,
     task_description_summary: str,
     fitness_key: str = "fitness",
+    parent_codes: dict[str, str] | None = None,
 ) -> tuple[list[ProgramRecord], set[str]]:
     """Convert a list of Programs to (list[ProgramRecord], set of their ids)."""
     records = [
-        program_to_record(p, task_description, task_description_summary, fitness_key)
+        program_to_record(
+            p, task_description, task_description_summary, fitness_key, parent_codes
+        )
         for p in programs
     ]
     return records, {p.id for p in programs}

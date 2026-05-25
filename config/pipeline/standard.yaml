@@ -41,6 +41,9 @@ pipeline_builder:
   max_insights: ${max_insights}
   max_code_length: ${max_code_length}
   intra_max_children: 24
+  mutation_mode: ${mutation_mode}
+  enable_optuna_stage: ${enable_optuna_stage}
+  optimization_time_budget: ${optimization_time_budget}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

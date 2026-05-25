@@ -24,9 +24,20 @@ class StopDecision:
     reason: str
 
 
+@dataclass(frozen=True)
+class EngineThroughput:
+    mutants_per_second: float
+    elapsed_seconds: float
+
+
 class EvolutionStopper:
     def should_stop(self, ctx: StopContext) -> StopDecision:
         return StopDecision(stop=False, reason="")
+
+    def estimate_remaining(
+        self, ctx: StopContext, tp: EngineThroughput
+    ) -> tuple[float, str] | None:
+        return None
 
 
 class MaxMutantsStopper(EvolutionStopper):
@@ -41,6 +52,14 @@ class MaxMutantsStopper(EvolutionStopper):
             )
         return StopDecision(stop=False, reason="")
 
+    def estimate_remaining(
+        self, ctx: StopContext, tp: EngineThroughput
+    ) -> tuple[float, str] | None:
+        if tp.mutants_per_second <= 0:
+            return None
+        remaining = max(0, self.max_mutants - ctx.total_mutants)
+        return (remaining / tp.mutants_per_second, "MaxMutantsStopper")
+
 
 class WallClockStopper(EvolutionStopper):
     def __init__(self, budget_seconds: float) -> None:
@@ -53,6 +72,14 @@ class WallClockStopper(EvolutionStopper):
                 reason=f"Wall clock budget exceeded: {ctx.elapsed_seconds:.0f}s >= {self.budget_seconds:.0f}s",
             )
         return StopDecision(stop=False, reason="")
+
+    def estimate_remaining(
+        self, ctx: StopContext, tp: EngineThroughput
+    ) -> tuple[float, str] | None:
+        return (
+            max(0.0, self.budget_seconds - ctx.elapsed_seconds),
+            "WallClockStopper",
+        )
 
 
 class FitnessPlateauStopper(EvolutionStopper):
@@ -112,3 +139,19 @@ class CompositeStopper(EvolutionStopper):
             return StopDecision(stop=True, reason=reasons)
 
         return StopDecision(stop=False, reason="")
+
+    def estimate_remaining(
+        self, ctx: StopContext, tp: EngineThroughput
+    ) -> tuple[float, str] | None:
+        if not self.children:
+            return None
+        bounded = [
+            est
+            for est in (c.estimate_remaining(ctx, tp) for c in self.children)
+            if est is not None
+        ]
+        if not bounded:
+            return None
+        if self.mode == "all":
+            return max(bounded, key=lambda e: e[0])
+        return min(bounded, key=lambda e: e[0])

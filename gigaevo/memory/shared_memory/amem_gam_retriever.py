@@ -1,6 +1,4 @@
-"""
-GAM retriever script that loads A-mem exports and uses OpenAI-style inference.
-"""
+"""GAM retriever script that loads A-mem exports and runs research via LangChain."""
 
 from __future__ import annotations
 
@@ -21,7 +19,7 @@ from gigaevo.memory._vendor.GAM_root.gam import (
 from gigaevo.memory._vendor.GAM_root.gam.generator import AMemGenerator
 from gigaevo.memory._vendor.GAM_root.gam.schemas import Page
 import gigaevo.memory.config as config
-from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.langchain_llm_service import LangChainLLMService
 
 
 def load_amem_records(path: Path) -> list[dict[str, Any]]:
@@ -180,9 +178,11 @@ def build_retrievers(
             )
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
-            logger.debug("[Memory] Index retriever ready")
+            logger.debug("[Memory][AmemGamRetriever]Index retriever ready")
         except Exception as exc:
-            logger.warning("[Memory] Index retriever init failed: {}", exc)
+            logger.warning(
+                "[Memory][AmemGamRetriever]Index retriever init failed: {}", exc
+            )
 
     for tool_name, extra in vector_tool_configs.items():
         if tool_name not in allowed:
@@ -195,10 +195,14 @@ def build_retrievers(
                 **extra,
             }
             retrievers[tool_name] = ChromaRetriever(chroma_config)
-            logger.debug("[Memory] Chroma retriever ready: {}", tool_name)
+            logger.debug(
+                "[Memory][AmemGamRetriever]Chroma retriever ready: {}", tool_name
+            )
         except Exception as exc:
             logger.warning(
-                "[Memory] Chroma retriever init for '{}' failed: {}", tool_name, exc
+                "[Memory][AmemGamRetriever]Chroma retriever init for '{}' failed: {}",
+                tool_name,
+                exc,
             )
 
     if enable_bm25 and "keyword" in allowed:
@@ -211,9 +215,11 @@ def build_retrievers(
             bm25_retriever = BM25Retriever(bm25_config)
             bm25_retriever.build(page_store)
             retrievers["keyword"] = bm25_retriever
-            logger.debug("[Memory] BM25 retriever ready")
+            logger.debug("[Memory][AmemGamRetriever]BM25 retriever ready")
         except Exception as exc:
-            logger.warning("[Memory] BM25 retriever init failed: {}", exc)
+            logger.warning(
+                "[Memory][AmemGamRetriever]BM25 retriever init failed: {}", exc
+            )
 
     return retrievers
 
@@ -245,13 +251,14 @@ def main():
 
     base_url = config.LLM_BASE_URL
 
-    llm_service = OpenAIInferenceService(
+    llm_service = LangChainLLMService(
         model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
         api_key=api_key,
         base_url=base_url,
         temperature=0.0,
         max_tokens=2048,
         reasoning=config.OPENROUTER_REASONING,
+        structured_output_method=config.STRUCTURED_OUTPUT_METHOD,
     )
     generator = AMemGenerator({"llm_service": llm_service})
 

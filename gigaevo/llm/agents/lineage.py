@@ -21,10 +21,10 @@ class TransitionInsight(BaseModel):
     """Single insight about a parent→child transition."""
 
     strategy: str = Field(
-        description="Strategy type: imitation, avoidance, generalization, exploration"
+        description="Strategy type: imitation, avoidance, generalization, exploration, refinement"
     )
     description: str = Field(
-        description="Specific explanation with evidence (≤30 words)"
+        description="Hunk reference + mechanism + transferable rule + quantification (≤40 words)"
     )
 
 

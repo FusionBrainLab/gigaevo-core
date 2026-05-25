@@ -307,6 +307,18 @@ async def run_exec_runner(
     env = os.environ.copy()
     env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # Cap intra-worker threading so concurrent mutants don't oversubscribe the box.
+    # XGBoost/CatBoost/LightGBM/sklearn all multiply via libgomp/MKL.
+    _exec_threads = os.environ.get("EVO_EXEC_THREADS") or str(
+        max(1, (os.cpu_count() or 4) // 8)
+    )
+    for _var in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        env.setdefault(_var, _exec_threads)
     if python_path:
         python_path_entries = [str(p) for p in python_path]
         existing_pythonpath = env.get("PYTHONPATH")

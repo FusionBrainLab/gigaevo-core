@@ -79,20 +79,22 @@ class TestRestoreState:
         from gigaevo.evolution.engine.snapshot import EngineSnapshot
 
         engine.storage.load_run_state_str.return_value = EngineSnapshot(
-            total_mutants=17
+            total_mutants=17, next_iteration=20
         ).model_dump_json()
 
         await engine.restore_state()
 
-        assert engine.metrics.iteration == 17
+        assert engine.metrics.mutations_created == 17
+        assert engine.metrics.iteration == 20
 
     async def test_restore_no_saved_state(self):
-        """When no saved snapshot, total_mutants stays at 0."""
+        """When no saved snapshot, both counters stay at 0."""
         engine = _engine()
         engine.storage.load_run_state_str.return_value = None
 
         await engine.restore_state()
 
+        assert engine.metrics.mutations_created == 0
         assert engine.metrics.iteration == 0
 
 

@@ -111,6 +111,7 @@ storybook-static/
 Thumbs.db
 ehthumbs.db
 desktop.ini
+__MACOSX/
 
 # ---------------------------------------------------------------------------
 # Logs, pids, backups, temp
@@ -218,9 +219,17 @@ migration_*.json
 # Data roots (binary artifacts)
 data/
 outcmaes/
+catboost_info/
 plots/
 snapshots/
 benchmark
+tb_logs/
+solutions/
+redis_db_test/
+
+# Per-problem AutoML / benchmark fixture caches (regenerate via bench scripts)
+# Catches autogluon_bench_artifacts/, mljar_bench_artifacts/, etc. under any problem
+problems/*/*_bench_artifacts/
 
 # Loop / Hydra run outputs (top-level)
 output/

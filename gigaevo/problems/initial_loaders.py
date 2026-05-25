@@ -30,7 +30,7 @@ class DirectoryProgramLoader:
         for program_file in tqdm(python_files, desc="Loading initial programs"):
             try:
                 program_code = program_file.read_text()
-                program = Program(code=program_code)
+                program = Program(code=program_code, iteration=len(programs))
                 program.metadata = {
                     "source": "initial_program",
                     "strategy_name": program_file.stem,
@@ -99,7 +99,7 @@ class RedisTopProgramsLoader:
             for rank, program in enumerate(
                 tqdm(selected, desc="Loading selected programs")
             ):
-                copy = Program(code=program.code, id=program.id)
+                copy = Program(code=program.code, id=program.id, iteration=rank)
                 copy.metadata = {
                     "source": "redis_selection",
                     "source_db": self.source_db,

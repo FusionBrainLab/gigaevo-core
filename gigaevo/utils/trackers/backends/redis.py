@@ -141,6 +141,8 @@ class RedisMetricsBackend(LoggerBackend):
 
     def clear_series(self, tag: str) -> None:
         """Delete the history list for *tag* so it can be rewritten."""
+        with self._lock:
+            self._buffer = [e for e in self._buffer if e.get("tag") != tag]
         if not self._client:
             return
         try:

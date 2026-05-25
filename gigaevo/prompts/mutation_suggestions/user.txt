@@ -1,4 +1,4 @@
-{exhaustion_block}## PROGRAM
+{intra_signal_block}{mutation_mode_block}## PROGRAM
 
 ```python
 {code}

@@ -144,18 +144,20 @@ class TestRecoverStrandedPrograms:
 
 class TestEvolutionEngineRestoreState:
     async def test_restores_total_mutants(self, fakeredis_storage) -> None:
-        """restore_state() loads total_mutants from Redis."""
-        snap = EngineSnapshot(total_mutants=17)
+        """restore_state() loads stop-counter and next ordinal from Redis."""
+        snap = EngineSnapshot(total_mutants=17, next_iteration=20)
         await fakeredis_storage.save_run_state(
             ENGINE_SNAPSHOT_KEY, snap.model_dump_json()
         )
 
         engine = _make_engine(storage=fakeredis_storage)
-        assert engine.metrics.iteration == 0  # starts at 0
+        assert engine.metrics.mutations_created == 0
+        assert engine.metrics.iteration == 0
 
         await engine.restore_state()
 
-        assert engine.metrics.iteration == 17
+        assert engine.metrics.mutations_created == 17
+        assert engine.metrics.iteration == 20
 
     async def test_no_saved_state_keeps_zero(self, fakeredis_storage) -> None:
         """When no state is persisted, total_mutants stays at 0."""

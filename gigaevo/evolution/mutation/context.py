@@ -12,7 +12,7 @@ from gigaevo.evolution.mutation.constants import (  # noqa: F401 — re-export
     MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
-from gigaevo.llm.agents.insights import ProgramInsights
+from gigaevo.llm.agents.insights import ProgramInsight, ProgramInsights
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -99,11 +99,47 @@ class InsightsMutationContext(MutationContext):
 
         lines = ["## Program Insights", ""]
         for insight in self.insights.insights:
-            lines.append(
-                f"- **[{insight.type}][{insight.tag}][{insight.severity}]** — {insight.insight}"
-            )
+            header = f"- **[{insight.type}][{insight.tag}][{insight.severity}]**"
+            structured_body = self._render_structured(insight)
+            if structured_body:
+                lines.append(f"{header} {structured_body}")
+            else:
+                # Legacy free-string fallback (used by the off-path InsightsAgent)
+                lines.append(f"{header} — {insight.insight}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_structured(insight: ProgramInsight) -> str:
+        """Render the v2 structured fields when populated; '' when empty.
+
+        The mutator reads this as compact prose; refs/relations are appended
+        only when non-empty so the line stays scannable for the simpler
+        suggestions while preserving the full grounding chain when present.
+        """
+        anchor = (insight.anchor_quote or "").strip()
+        mechanism = (insight.mechanism or "").strip()
+        substitute = (insight.substitute or "").strip()
+        if not (anchor or mechanism or substitute):
+            return ""
+
+        parts: list[str] = []
+        if anchor:
+            source = (insight.evidence_source or "").strip()
+            parts.append(
+                f"anchor `{anchor}` ({source})" if source else f"anchor `{anchor}`"
+            )
+        if mechanism:
+            parts.append(f"mechanism: {mechanism}")
+        if substitute:
+            parts.append(f"substitute: {substitute}")
+        relation = (insight.relation_to_lineage or "").strip()
+        if relation:
+            parts.append(f"vs lineage: {relation}")
+        refs = [r for r in (insight.evidence_refs or []) if r and r.strip()]
+        if refs:
+            parts.append(f"refs: {', '.join(refs)}")
+        return " — " + " | ".join(parts)
 
 
 class FamilyTreeMutationContext(MutationContext):

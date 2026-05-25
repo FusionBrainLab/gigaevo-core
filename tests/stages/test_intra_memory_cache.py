@@ -21,10 +21,11 @@ from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.common import StringContainer, StringList
 from gigaevo.programs.stages.lineage_memory import (
     INTRA_MEMORY_CARD_METADATA_KEY,
-    IntraCardStructuredOutput,
+    IntraCardLLMOutput,
     IntraDeltaDistribution,
     IntraMemoryStage,
     IntraTriedStrategy,
+    IntraTriedStrategyLLM,
     _render_intra_card_text,
 )
 
@@ -54,36 +55,23 @@ def _program(
     return prog
 
 
-def _card_obj() -> IntraCardStructuredOutput:
-    return IntraCardStructuredOutput(
-        parent_id="p",
-        parent_fitness=0.1,
-        n_attempts=1,
-        delta_distribution=IntraDeltaDistribution(
-            min=0.05,
-            median=0.05,
-            max=0.05,
-            improving=1,
-            neutral=0,
-            catastrophic=0,
-        ),
+def _card_obj() -> IntraCardLLMOutput:
+    return IntraCardLLMOutput(
         tried_strategies=[
-            IntraTriedStrategy(
+            IntraTriedStrategyLLM(
                 label="x",
-                n_attempts=1,
-                mean_delta=0.05,
-                verdict="improved",
-                notes="",
+                child_indices=[0],
+                representative_anchors=["alpha=1"],
+                mechanism_note="speeds inner loop",
             )
         ],
-        untried_hints=["try y"],
         summary="ok",
     )
 
 
 def _mock_llm() -> MagicMock:
     """Mock LLM whose ``with_structured_output`` returns a structured_llm whose
-    ``ainvoke`` always yields the canned IntraCardStructuredOutput.
+    ``ainvoke`` always yields the canned IntraCardLLMOutput.
     """
     structured = MagicMock()
     structured.ainvoke = AsyncMock(return_value=_card_obj())

@@ -3548,3 +3548,120 @@ class TestDeadlineStop:
         # All trials should complete (baseline + startup + TPE).
         # n_trials in output counts COMPLETE study trials.
         assert result.n_trials >= n_tpe
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 17. _apply_modifications repair branches (over-escape, duplicate kwargs)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestApplyModificationsRepair:
+    """Both LLM-generated bug classes seen in production must be caught at
+    parent-process gate time and repaired (or fail fast) — never silently
+    burn the Optuna budget on NaN trials.
+    """
+
+    @staticmethod
+    def _stage(tmp_path: Path) -> OptunaOptimizationStage:
+        vpath = tmp_path / "validator.py"
+        vpath.write_text("def validate(output): return {'score': float(output)}")
+        ss = OptunaSearchSpace(parameters=[], modifications=[], reasoning="r")
+        return OptunaOptimizationStage(
+            llm=_mock_llm(ss),
+            validator_path=vpath,
+            score_key="score",
+            timeout=60,
+        )
+
+    @staticmethod
+    def _ss(snippet: str, end_line: int = 1) -> OptunaSearchSpace:
+        from gigaevo.programs.stages.optimization.optuna.models import CodeModification
+
+        return OptunaSearchSpace(
+            parameters=[
+                ParamSpec(
+                    name="x",
+                    initial_value=0.05,
+                    param_type="float",
+                    low=0.0,
+                    high=1.0,
+                    reason="r",
+                )
+            ],
+            modifications=[
+                CodeModification(
+                    start_line=1, end_line=end_line, parameterized_snippet=snippet
+                )
+            ],
+            reasoning="r",
+        )
+
+    def test_overescaped_single_quotes_repaired(self, tmp_path: Path) -> None:
+        stage = self._stage(tmp_path)
+        original = "lr = 0.05\n"
+        snippet = "lr = _optuna_params[\\'x\\']"
+        result = stage._apply_modifications(original, self._ss(snippet))
+        assert "\\'" not in result
+        assert "_optuna_params['x']" in result
+        compile(result, "<t>", "exec")  # ensure repaired code actually compiles
+
+    def test_overescaped_double_quotes_repaired(self, tmp_path: Path) -> None:
+        stage = self._stage(tmp_path)
+        original = "lr = 0.05\n"
+        snippet = 'lr = _optuna_params[\\"x\\"]'
+        result = stage._apply_modifications(original, self._ss(snippet))
+        assert '\\"' not in result
+        assert '_optuna_params["x"]' in result
+        compile(result, "<t>", "exec")
+
+    def test_duplicate_keyword_repaired_prefers_optuna_param(
+        self, tmp_path: Path
+    ) -> None:
+        """LLM tacks the parametrization on without removing the literal —
+        ``compile()`` raises ``keyword argument repeated``; we keep the
+        ``_optuna_params``-using kwarg and drop the bare literal."""
+        stage = self._stage(tmp_path)
+        original = "f(num_leaves=31)\n"
+        snippet = "f(num_leaves=31, num_leaves=_optuna_params['x'])"
+        result = stage._apply_modifications(original, self._ss(snippet))
+        compile(result, "<t>", "exec")  # must compile now
+        # The literal 31 kwarg is gone; the parametrized one survives.
+        assert "_optuna_params['x']" in result
+        # Exactly one occurrence of "num_leaves=" in the repaired snippet line.
+        target_line = [ln for ln in result.splitlines() if "num_leaves=" in ln]
+        assert len(target_line) == 1
+        assert target_line[0].count("num_leaves=") == 1
+
+    def test_duplicate_keyword_repaired_optuna_param_on_left(
+        self, tmp_path: Path
+    ) -> None:
+        """Order-independence: keep the ``_optuna_params`` kwarg even when it
+        appears BEFORE the duplicate literal."""
+        stage = self._stage(tmp_path)
+        original = "f(num_leaves=31)\n"
+        snippet = "f(num_leaves=_optuna_params['x'], num_leaves=31)"
+        result = stage._apply_modifications(original, self._ss(snippet))
+        compile(result, "<t>", "exec")
+        assert "_optuna_params['x']" in result
+        # The dropped duplicate would have re-introduced a hardcoded literal;
+        # verify the surviving kwarg references the param dict.
+        assert "num_leaves=31" not in "".join(
+            ln for ln in result.splitlines() if "f(" in ln
+        )
+
+    def test_unrepairable_syntax_raises(self, tmp_path: Path) -> None:
+        """Snippet with a syntax error neither repair can fix must raise."""
+        stage = self._stage(tmp_path)
+        original = "x = 1\n"
+        snippet = "x = (1 +"  # unterminated expression
+        with pytest.raises(ValueError, match="Parameterized code syntax error"):
+            stage._apply_modifications(original, self._ss(snippet))
+
+    def test_clean_snippet_passes_through_unchanged(self, tmp_path: Path) -> None:
+        """No repair should fire for a snippet that already compiles."""
+        stage = self._stage(tmp_path)
+        original = "lr = 0.05\n"
+        snippet = "lr = _optuna_params['x']"
+        result = stage._apply_modifications(original, self._ss(snippet))
+        # No reformatting (we didn't go through ast.unparse).
+        assert result == "lr = _optuna_params['x']\n"

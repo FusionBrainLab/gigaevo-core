@@ -1,0 +1,7 @@
+# @package _global_
+
+defaults:
+  - single
+
+llm:
+  structured_output_method: function_calling

@@ -253,8 +253,30 @@ def _make_memory(tmp_path, **overrides) -> AmemGamMemory:
     return make_test_memory(tmp_path, **overrides)
 
 
-def _make_selector(memory: AmemGamMemory) -> MemorySelectorAgent:
-    """Create a MemorySelectorAgent wired to the given memory (no __init__ side effects)."""
+def _make_selector(
+    memory: AmemGamMemory, *, mock_card_ids: list[str] | None = None
+) -> MemorySelectorAgent:
+    """Create a MemorySelectorAgent wired to the given memory (no __init__ side effects).
+
+    When ``mock_card_ids`` is provided, ``memory.research`` is stubbed to return
+    those ids via ``final_decision.top_ideas`` — the same structured-output shape
+    the production red-search path emits. Necessary in CI where no real LLM is
+    available to populate ``raw_memory``.
+    """
+    if mock_card_ids is not None:
+        ids = list(mock_card_ids)
+
+        class _FakeRaw:
+            integrated_memory = ""
+            raw_memory = {
+                "final_decision": {
+                    "mode": "final",
+                    "top_ideas": [{"card_id": cid} for cid in ids],
+                    "additional_queries": [],
+                }
+            }
+
+        memory.research = lambda *a, **k: _FakeRaw()
     selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
     selector._search_lock = asyncio.Lock()
     selector._backend_error = None
@@ -414,7 +436,9 @@ class TestTwoRunMemoryLifecycle:
         assert memory.get_card("idea-sort") is not None
 
         # === RUN B: Use memory during evolution ===
-        selector = _make_selector(memory)
+        selector = _make_selector(
+            memory, mock_card_ids=["idea-sort", "idea-bfs", "idea-cache"]
+        )
 
         # MemorySelectorAgent.select() finds relevant cards
         seed_prog = Program(
@@ -487,7 +511,7 @@ class TestTwoRunMemoryLifecycle:
             }
         )
 
-        selector = _make_selector(memory)
+        selector = _make_selector(memory, mock_card_ids=["idea-relevance"])
 
         # MemoryContextStage produces card text
         provider = SelectorMemoryProvider(max_cards=3)

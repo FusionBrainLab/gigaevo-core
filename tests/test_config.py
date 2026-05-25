@@ -211,8 +211,9 @@ def test_evolution_constants_default_values():
 def test_pipeline_constants_default_values():
     """Pipeline execution timeout constants must match their documented values."""
     cfg = _compose()
-    assert cfg.stage_timeout == 2400, (
-        "stage_timeout changed from 2400s — validate.py runs need at least 40 min"
+    assert cfg.stage_timeout == 3600, (
+        "stage_timeout changed from 3600s — sized for heaviest validators "
+        "(e.g. tabular_regression k-fold CV); must stay ≥ 2400s lower bound"
     )
     assert cfg.dag_timeout == 7200, (
         "dag_timeout changed from 7200s — full DAG needs 2 hours for slow eval runs"

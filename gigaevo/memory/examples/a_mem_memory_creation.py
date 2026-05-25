@@ -14,7 +14,7 @@ from gigaevo.memory._vendor.A_mem.agentic_memory.memory_system import (
     AgenticMemorySystem,
 )
 import gigaevo.memory.config as config
-from gigaevo.memory.openai_inference import OpenAIInferenceService
+from gigaevo.memory.langchain_llm_service import LangChainLLMService
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card as _canonical_normalize,
 )
@@ -172,13 +172,14 @@ def main():
 
     base_url = config.LLM_BASE_URL
 
-    llm_service = OpenAIInferenceService(
+    llm_service = LangChainLLMService(
         model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
         api_key=api_key,
         base_url=base_url,
         temperature=0,
         max_tokens=0,
         reasoning=config.OPENROUTER_REASONING,
+        structured_output_method=config.STRUCTURED_OUTPUT_METHOD,
     )
 
     # Initialize the memory system 🚀

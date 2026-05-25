@@ -21,33 +21,18 @@ class AMemGenerator(AbsGenerator):
                 "AMemGenerator requires an LLMService instance in config['llm_service']"
             )
 
-    def _format_prompt(self, prompt: str, schema: dict[str, Any] | None) -> str:
-        if not schema:
-            return prompt
+    @staticmethod
+    def _coerce_to_parameters_schema(schema: dict[str, Any]) -> dict[str, Any]:
+        """Unwrap legacy ``{"type":"json_schema","json_schema":{...}}`` payloads.
 
-        schema_instruction = "You must respond with a JSON object."
+        Tools-API ``parameters`` wants the bare JSON Schema dict, not the
+        OpenAI response_format wrapper.
+        """
         if schema.get("type") == "json_schema":
-            schema_body = schema.get("json_schema", {}).get("schema")
-            schema_json = json.dumps(schema_body, indent=2)
-            schema_name = schema.get("json_schema", {}).get("name")
-            strict = schema.get("json_schema", {}).get("strict")
-
-            extra = []
-            if schema_name:
-                extra.append(f"Schema name: {schema_name}")
-            if strict:
-                extra.append("Only include fields defined in the schema.")
-            extra.append("Here is the JSON schema your response must follow:")
-            extra.append(schema_json)
-            extra.append("Return only JSON without commentary.")
-            schema_instruction = "\n".join(extra)
-        else:
-            schema_instruction = (
-                "You must respond with JSON that matches this specification:\n"
-                f"{json.dumps(schema, indent=2)}"
-            )
-
-        return f"{schema_instruction}\n\nUser prompt:\n{prompt}"
+            body = schema.get("json_schema", {}).get("schema")
+            if isinstance(body, dict):
+                return body
+        return schema
 
     def _messages_to_prompt(self, messages: list[dict[str, str]]) -> str:
         parts: list[str] = []
@@ -75,17 +60,14 @@ class AMemGenerator(AbsGenerator):
             prompt = self._messages_to_prompt(messages)
         assert prompt is not None
 
-        formatted_prompt = self._format_prompt(prompt, schema)
-        text, response, _, _ = self.llm_service.generate(formatted_prompt)
+        wire_schema = (
+            self._coerce_to_parameters_schema(schema) if schema is not None else None
+        )
+        text, response, _, _ = self.llm_service.generate(prompt, schema=wire_schema)
 
         out: dict[str, Any] = {"text": text or "", "json": None, "response": response}
-        if schema is not None:
-            try:
-                out["json"] = json.loads(
-                    out["text"][out["text"].find("{") : out["text"].rfind("}") + 1]
-                )
-            except Exception:
-                out["json"] = None
+        if schema is not None and out["text"]:
+            out["json"] = json.loads(out["text"])
         return out
 
     def generate_batch(

@@ -82,6 +82,10 @@ Python, not fragments of an expression.
 - ``parameterized_snippet``: write as if at top indentation level (no leading spaces \
 on the first line); use relative indentation for nested lines. Strip the ``N | `` prefix. \
 The runtime re-indents to match the original code automatically.
+- **Do NOT backslash-escape single or double quotes** inside the snippet. \
+Write ``_optuna_params['name']`` (or ``_optuna_params["name"]``), NOT \
+``_optuna_params[\\'name\\']`` — JSON does not require quoting single quotes, \
+and backslash-quote outside a string is a Python SyntaxError.
 
 **new_imports** — only ``import`` statements (e.g. ``"import numpy as np"``). \
 Never put ``_optuna_params`` assignments or executable logic here — imports only. \

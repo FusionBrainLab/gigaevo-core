@@ -68,7 +68,7 @@ class SelectorMemoryProvider(MemoryProvider):
     def _get_selector(self) -> MemorySelectorAgent:
         if self._selector is None:
             logger.info(
-                "[SelectorMemoryProvider] Creating MemorySelectorAgent "
+                "[Memory][Provider] Creating MemorySelectorAgent "
                 "(checkpoint_dir={}, namespace={}, use_api=False)",
                 self._checkpoint_dir,
                 self._namespace,

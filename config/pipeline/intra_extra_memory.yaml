@@ -41,6 +41,9 @@ pipeline_builder:
   max_insights: ${max_insights}
   max_code_length: ${max_code_length}
   intra_max_children: 24
+  mutation_mode: ${mutation_mode}
+  enable_optuna_stage: ${enable_optuna_stage}
+  optimization_time_budget: ${optimization_time_budget}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder
@@ -50,8 +53,13 @@ dag_blueprint:
 # mid-run hook and the post-run hook serialise via that tracker's _run_lock.
 # refresh_every counts ingestor sweeps that landed >=1 program. K=10 ≈ one
 # refresh per ~10 newly-evaluated mutants.
+# max_programs_per_sweep caps each refresh to the N newest programs so the
+# post_step_hook stays inside the engine's 300 s budget; combined with the
+# analyzer's parallel classifier (analyzer_max_concurrent_classifications)
+# this prevents sweep time from growing linearly with storage size.
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
   tracker: ${ideas_tracker}
   storage: ${ref:redis_storage}
   refresh_every: 10
+  max_programs_per_sweep: 24

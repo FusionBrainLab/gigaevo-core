@@ -49,7 +49,18 @@ class TestMemorySelectorInMutationLoop:
             }
         )
 
-        # Create selector with injected memory
+        class _FakeRaw:
+            integrated_memory = ""
+            raw_memory = {
+                "final_decision": {
+                    "mode": "final",
+                    "top_ideas": [{"card_id": "idea-1"}, {"card_id": "idea-2"}],
+                    "additional_queries": [],
+                }
+            }
+
+        mem.research = lambda *a, **k: _FakeRaw()
+
         selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
         selector._search_lock = asyncio.Lock()
         selector._backend_error = None

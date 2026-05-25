@@ -121,6 +121,7 @@ class MutationSuggestionStage(LangGraphStage):
         trail_max_depth: int = DEFAULT_TRAIL_MAX_DEPTH,
         trail_max_ancestors: int = DEFAULT_TRAIL_MAX_ANCESTORS,
         prompts_dir: str | Path | None = None,
+        mutation_mode: str | None = None,
         **kwargs: Any,
     ) -> None:
         self._max_insights = max_insights
@@ -128,6 +129,7 @@ class MutationSuggestionStage(LangGraphStage):
         self._metrics_context = metrics_context
         self._trail_max_depth = trail_max_depth
         self._trail_max_ancestors = trail_max_ancestors
+        self._mutation_mode = mutation_mode
         from gigaevo.llm.agents.factories import create_mutation_suggestion_agent
 
         super().__init__(
@@ -165,6 +167,7 @@ class MutationSuggestionStage(LangGraphStage):
             "intra_card": intra,
             "memory_cards": cards,
             "evolutionary_statistics": p.evolutionary_statistics,
+            "mutation_mode": self._mutation_mode,
         }
 
     async def compute(self, program: Program) -> InsightsOutput:

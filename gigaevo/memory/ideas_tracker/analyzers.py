@@ -22,7 +22,7 @@ from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
 from tqdm import tqdm
 
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, enrich_with_verification
 from gigaevo.memory.ideas_tracker.llm import LLMClient
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
@@ -136,7 +136,8 @@ class _PendingIdeas:
         desc = self.mapping.get(seq_num)
         if desc is None:
             logger.warning(
-                "ClassifyingAnalyzer: no pending idea at position {}", seq_num
+                "[Memory][Analyzer] ClassifyingAnalyzer: no pending idea at position {}",
+                seq_num,
             )
             return
         for item in self.items:
@@ -184,12 +185,16 @@ class ClassifyingAnalyzer:
         reasoning: dict[str, Any] | None = None,
         retry_attempts: int = 10,
         description_rewriting: bool = True,
+        max_concurrent_classifications: int = 8,
     ) -> None:
         self.model = model
         self._reasoning = reasoning or {}
         self._retry_attempts = retry_attempts
         self._description_rewriting = description_rewriting
         self._llm = LLMClient(model=model, base_url=base_url)
+        self._max_concurrent_classifications = max(
+            1, int(max_concurrent_classifications)
+        )
 
     def call(self, step: str, content: str | dict[str, str] = "") -> str:
         """Synchronous LLM call — used by IdeaTracker enrichment step."""
@@ -217,12 +222,56 @@ class ClassifyingAnalyzer:
     async def analyze_async(
         self, records: list[ProgramRecord], bank: IdeaBank
     ) -> AnalysisResult:
-        """Async wrapper — runs synchronous analyze() in a thread pool to avoid blocking."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.analyze, records, bank)
+        """Fan out per-record classification, bounded by a semaphore; chunk loop per record stays sequential."""
+        if not records:
+            return AnalysisResult()
+        chunks = bank.classification_chunks()
+        sem = asyncio.Semaphore(self._max_concurrent_classifications)
+
+        async def classify_one(
+            record: ProgramRecord,
+        ) -> tuple[ProgramRecord, _PendingIdeas] | None:
+            pending = _PendingIdeas.from_improvements(record.improvements)
+            if not pending.items:
+                return None
+            async with sem:
+                await self._classify_against_bank_async(pending, chunks)
+            return record, pending
+
+        completed = await asyncio.gather(*(classify_one(r) for r in records))
+        result = AnalysisResult()
+        for item in completed:
+            if item is None:
+                continue
+            record, pending = item
+            self._apply_pending_to_result(pending, record, result)
+        return result
+
+    def _apply_classify_response(
+        self, parsed: dict[str, Any], pending: _PendingIdeas, chunk: Any
+    ) -> None:
+        for ref in parsed.get("present_ideas", []):
+            if not isinstance(ref, str):
+                continue
+            short_id, seq = _split_id(ref)
+            full_id = self._resolve_id(short_id, chunk.short_ids)
+            if full_id:
+                pending.mark_classified(seq, full_id, False)
+
+        for item in parsed.get("updated_ideas", []):
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str):
+                continue
+            short_id, seq = _split_id(item_id)
+            full_id = self._resolve_id(short_id, chunk.short_ids)
+            if full_id:
+                pending.mark_classified(seq, full_id, True)
+
+        pending.refresh_mapping()
 
     def _classify_against_bank(self, pending: _PendingIdeas, chunks: list) -> None:
-        """Classify pending ideas against each bank chunk, updating pending in place."""
         for chunk in chunks:
             if pending.unclassified_count == 0:
                 break
@@ -240,32 +289,49 @@ class ClassifyingAnalyzer:
                     break
                 except json.JSONDecodeError as exc:
                     logger.warning(
-                        "ClassifyingAnalyzer: LLM returned invalid JSON (retrying): {}",
+                        "[Memory][Analyzer] ClassifyingAnalyzer: LLM returned invalid JSON (retrying): {}",
                         exc,
                     )
                 except Exception as exc:
-                    logger.error("ClassifyingAnalyzer: LLM call failed: {}", exc)
+                    logger.error(
+                        "[Memory][Analyzer] ClassifyingAnalyzer: LLM call failed: {}",
+                        exc,
+                    )
 
-            for ref in parsed.get("present_ideas", []):
-                if not isinstance(ref, str):
-                    continue
-                short_id, seq = _split_id(ref)
-                full_id = self._resolve_id(short_id, chunk.short_ids)
-                if full_id:
-                    pending.mark_classified(seq, full_id, False)
+            self._apply_classify_response(parsed, pending, chunk)
 
-            for item in parsed.get("updated_ideas", []):
-                if not isinstance(item, dict):
-                    continue
-                item_id = item.get("id")
-                if not isinstance(item_id, str):
-                    continue
-                short_id, seq = _split_id(item_id)
-                full_id = self._resolve_id(short_id, chunk.short_ids)
-                if full_id:
-                    pending.mark_classified(seq, full_id, True)
+    async def _classify_against_bank_async(
+        self, pending: _PendingIdeas, chunks: list
+    ) -> None:
+        for chunk in chunks:
+            if pending.unclassified_count == 0:
+                break
+            unclassified_text = pending.as_numbered_text()
+            prompt = f" Existing Ideas: \n {chunk.text} \n Incoming Ideas: \n {unclassified_text}"
+            parsed: dict[str, list[Any]] = {
+                "present_ideas": [],
+                "new_ideas": [],
+                "updated_ideas": [],
+            }
+            for _ in range(self._retry_attempts):
+                try:
+                    raw = await self._llm.call_async(
+                        "classify_ext", prompt, self._reasoning
+                    )
+                    parsed = json.loads(raw)
+                    break
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "[Memory][Analyzer] ClassifyingAnalyzer: LLM returned invalid JSON (retrying): {}",
+                        exc,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[Memory][Analyzer] ClassifyingAnalyzer: LLM call failed: {}",
+                        exc,
+                    )
 
-            pending.refresh_mapping()
+            self._apply_classify_response(parsed, pending, chunk)
 
     def _resolve_id(self, short_id: str, short_ids: list[dict[str, str]]) -> str:
         """Map a short UUID prefix to a full UUID, or return '' if not found."""
@@ -280,13 +346,19 @@ class ClassifyingAnalyzer:
         """Convert classified/unclassified pending items into AnalysisResult entries."""
         for item in pending.items:
             if not item["classified"]:
+                enriched = enrich_with_verification(
+                    description=item["description"],
+                    parent_code=record.parent_code,
+                    child_code=record.code,
+                )
                 result.new_ideas.append(
                     Idea(
-                        description=item["description"],
+                        description=enriched["description"],
                         strategy=record.strategy,
                         task_description=record.task_description,
                         last_generation=record.generation,
                         programs=[record.id],
+                        keywords=enriched["keywords"],
                         explanation=IdeaExplanation(
                             entries=[item["motivation"]] if item["motivation"] else []
                         ),
@@ -758,5 +830,7 @@ class ClusteringAnalyzer:
                     "cluster_desc_synth", prompt, self._reasoning
                 )
             except Exception as exc:
-                logger.error("ClusteringAnalyzer desc_synth failed: {}", exc)
+                logger.error(
+                    "[Memory][Analyzer] ClusteringAnalyzer desc_synth failed: {}", exc
+                )
         return ""

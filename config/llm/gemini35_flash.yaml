@@ -1,0 +1,38 @@
+# @package _global_
+
+# Single mutation LLM: google/gemini-3.5-flash via OpenRouter.
+# Pricing: $0.50/M input, $3.00/M output (OpenRouter, 2026-03-12).
+#
+# Per https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.5:
+#   - sampling params (temperature/top_p/top_k) NOT recommended for Gemini 3.x;
+#     "reasoning capabilities are optimized for the default settings" → omitted.
+#   - Gemini's native `thinking_level` (minimal/low/medium/high) is exposed
+#     through OpenRouter's unified `reasoning.effort` field, NOT under the
+#     native name. Verified empirically 2026-05-22 against
+#     openrouter.ai/api/v1/chat/completions: top-level `thinking_level=minimal`
+#     was silently dropped (still burned 3930 reasoning tokens); only
+#     `reasoning.effort=minimal` actually shorted thinking to 0 reasoning
+#     tokens. So we pin `reasoning.effort: high` via `extra_body`.
+#   - `max_output_tokens` supports up to 65000; using `max_tokens` (OpenAI
+#     alias accepted by OpenRouter) wired to ${max_tokens}.
+#
+# Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
+#
+# Usage:
+#   python run.py ... llm=gemini35_flash
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: google/gemini-3.5-flash
+      api_key: ${oc.env:OPENROUTER_API_KEY}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+      extra_body:
+        reasoning:
+          effort: high
+  probabilities: [1.0]
+  writer: ${writer}

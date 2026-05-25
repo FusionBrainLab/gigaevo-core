@@ -495,6 +495,9 @@ def _make_invalid_program(pid: str = "p1") -> MagicMock:
     # is_valid=0 → filtered out by _eligible_records
     prog.metrics = {"is_valid": 0.0}
     prog.id = pid
+    # _eligible_records iterates all programs for the parent_codes dict;
+    # mocks need .code present. Empty string is falsy → excluded from dict.
+    prog.code = ""
     return prog
 
 

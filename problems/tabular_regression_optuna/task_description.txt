@@ -1,0 +1,105 @@
+TASK — TABULAR REGRESSION (CALIFORNIA HOUSING)
+
+Define a regression model evaluated on the canonical train / val / test split from
+Gorishniy et al., "Revisiting Deep Learning Models for Tabular Data" (NeurIPS 2021).
+
+OBJECTIVE
+Return a CLASS `Model` whose
+  `.fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray`
+is scored by RMSE on `X_query` against the corresponding held-out targets.
+- Fitness = -mean(per-fold RMSE) across 5-fold CV on combined train+val.
+- Test split is held out for end-of-evolution reporting; never a search signal.
+- Stretch target: fitness ≥ -0.38
+
+ENTRYPOINT
+- `def entrypoint() -> type` — returns the `Model` class.
+- A fresh `Model()` is instantiated once; `fit_predict` is called once.
+
+DATASET (loaded by the validator; programs never see it directly)
+- California Housing, fixed split: 13209 train / 3303 val / 4128 test
+  (rtdl / Gorishniy split index 0; 64 / 16 / 20 percent).
+- 8 numeric features, raw scale (no feature/target normalization applied).
+  Column ordering and semantics (`X[:, i]`):
+    [0] MedInc      median income of households in the block group (units of $10k)
+    [1] HouseAge    median house age in the block group (years)
+    [2] AveRooms    average number of rooms per household
+    [3] AveBedrms   average number of bedrooms per household
+    [4] Population  block group population (count, right-skewed / heavy-tailed)
+    [5] AveOccup    average number of occupants per household
+    [6] Latitude    block group latitude (degrees, ~32.5 – 42.0)
+    [7] Longitude   block group longitude (degrees, ~-124.5 – -114.0)
+- Target: median house value of the block group in units of $100k,
+  range 0.15 – 5.0, HARD-CAPPED at 5.0 (right-tail bias / clipping).
+- Feature distributions vary widely: monotone-but-noisy income signal,
+  heavy-tailed count, paired ratio-like averages, paired geographic coordinates.
+
+PROTOCOL
+- Train on (X_train, y_train); (X_val, y_val) may be used for early stopping
+  / HPO / epoch tracking.
+- Predict on `X_query`; raw-scale RMSE against the held-out targets.
+- Search: 5-fold CV over train+val. Each fold calls `fit_predict` with
+  `(X_tr, y_tr, X_vl, y_vl, X_vl)`. The framework averages folds.
+- Reporting: a separate tool runs `fit_predict` once with `X_query = X_test`
+  on the full train+val. Programs never receive test rows.
+
+OPTUNA POLISH (post-mutation)
+- An LLM-guided Optuna (TPE) stage tunes numeric / categorical constants in
+  your code; trials scored by 1-fold val RMSE, final archive fitness =
+  polished code's 5-fold CV.
+- Expose tuneables as named constants (`lr = 0.05`, `max_depth = 6`); solver /
+  objective / method choices as plain strings or attribute refs.
+- Don't call Optuna inside `fit_predict`.
+
+STRATEGIES KNOWN TO HELP (generic; non-exhaustive)
+- Ensembling across model families (e.g. XGBoost / LightGBM / CatBoost / linear /
+  KNN), with weights tuned on val.
+- Stacking with out-of-fold predictions from (X_train, y_train) feeding a
+  meta-learner; the val set then calibrates / weights the stack.
+- Target transforms suited to the target's distribution (log1p for skewed,
+  capping near a natural ceiling, residual modelling).
+- Dataset-aware feature engineering: inspect the DATASET section above and
+  construct features that exploit the documented feature semantics —
+  interactions / ratios between related columns, clustering / distance features
+  for paired columns that share a natural metric, monotone transforms for
+  heavy-tailed columns, robust scaling, etc. Generic FE on raw columns
+  (PCA, polynomial expansion) is almost always weaker than FE that uses what
+  each column actually means.
+
+CONTRACT
+1. `Model()` is instantiable with no arguments.
+2. `instance.fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray`
+   returns a 1D float array of length `len(X_query)`.
+3. All predictions are finite (no NaN, no inf).
+4. No dataset peek: do NOT import `sklearn.datasets.fetch_california_housing`,
+   `openml`, or any pickled cache that could leak held-out rows.
+
+CONSTRAINTS
+- Any installed Python library is fair game (sklearn, xgboost, lightgbm, catboost,
+  torch, numpy, scipy, pandas, ...).
+- A single `validate(Model)` call must finish within 1 h (3600 s) on this
+  machine.
+- No internet access, no auxiliary file reads.
+- Fix all random seeds for reproducibility (numpy, and library-specific
+  `random_state` / `random_seed` / `seed`; `torch.manual_seed(0)` if PyTorch is
+  used).
+- Training-time uses only `(X_train, y_train, X_val, y_val)`; prediction-time
+  uses only `X_query`.
+
+OUTPUT FORMAT
+
+```python
+import numpy as np
+# imports as needed
+
+class Model:
+    def fit_predict(
+        self,
+        X_train: np.ndarray, y_train: np.ndarray,
+        X_val: np.ndarray,   y_val: np.ndarray,
+        X_query: np.ndarray,
+    ) -> np.ndarray:
+        ...
+
+def entrypoint() -> type:
+    return Model
+```

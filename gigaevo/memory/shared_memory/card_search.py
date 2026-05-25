@@ -10,8 +10,97 @@ import re
 
 from loguru import logger
 
-from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard
+from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
 from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
+
+
+def _overlap_ratio(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    short, long_s = (a, b) if len(a) <= len(b) else (b, a)
+    matches = sum(
+        1 for i in range(len(short)) if i < len(long_s) and short[i] == long_s[i]
+    )
+    return matches / max(len(short), 1)
+
+
+def apply_render_filters(cards: list[AnyCard]) -> list[AnyCard]:
+    mem_cards: list[MemoryCard] = []
+    prog_cards: list[ProgramCard] = []
+    for c in cards:
+        if isinstance(c, ProgramCard):
+            prog_cards.append(c)
+        elif isinstance(c, MemoryCard):
+            mem_cards.append(c)
+
+    def _stats(card: MemoryCard) -> dict[str, float]:
+        es = card.evolution_statistics or {}
+        return {
+            "support": int(es.get("support", 0)),
+            "delta_best": float(es.get("delta_best", 0.0)),
+        }
+
+    def _has_keyword(card: AnyCard, key: str) -> bool:
+        return any(kw == key for kw in (card.keywords or []))
+
+    def _canonical(card: MemoryCard) -> str | None:
+        for kw in card.keywords or []:
+            if isinstance(kw, str) and kw.startswith("canonical:"):
+                return kw
+        return None
+
+    filtered_mem: list[MemoryCard] = []
+    for c in mem_cards:
+        s = _stats(c)
+        if _has_keyword(c, "verified:false") and s["support"] < 3:
+            continue
+        filtered_mem.append(c)
+
+    seen: dict[str, MemoryCard] = {}
+    for c in filtered_mem:
+        ck = _canonical(c)
+        if ck is None:
+            seen[c.id] = c
+            continue
+        prev = seen.get(ck)
+        if prev is None or _stats(c)["delta_best"] > _stats(prev)["delta_best"]:
+            seen[ck] = c
+    filtered_mem = list(seen.values())
+
+    def _first60(card: MemoryCard) -> str:
+        return (card.description or "").strip()[:60].lower()
+
+    with_canon: list[MemoryCard] = [c for c in filtered_mem if _canonical(c)]
+    without_canon: list[MemoryCard] = [c for c in filtered_mem if not _canonical(c)]
+
+    dedup_no_canon: list[MemoryCard] = []
+    for c in without_canon:
+        prefix = _first60(c)
+        if any(_overlap_ratio(prefix, _first60(d)) > 0.7 for d in dedup_no_canon):
+            continue
+        dedup_no_canon.append(c)
+
+    dedup_mem = with_canon + dedup_no_canon
+
+    dedup_mem.sort(
+        key=lambda c: _stats(c)["support"] * max(_stats(c)["delta_best"], 0.0),
+        reverse=True,
+    )
+
+    def _filter_prog(c: ProgramCard) -> bool:
+        if _has_keyword(c, "pending_analysis:true"):
+            return False
+        if not (c.description or "").strip() and not c.connected_ideas:
+            return False
+        return True
+
+    filtered_prog = [c for c in prog_cards if _filter_prog(c)]
+    filtered_prog.sort(
+        key=lambda c: c.fitness if c.fitness is not None else 0.0,
+        reverse=True,
+    )
+
+    return dedup_mem + filtered_prog
 
 
 def format_search_results(query: str, cards: list[AnyCard]) -> str:
@@ -122,7 +211,8 @@ def synthesize_search_results(
             return text
     except Exception as exc:
         logger.warning(
-            "[Memory] LLM synthesis failed, falling back to keyword results: {}", exc
+            "[Memory][CardSearch]LLM synthesis failed, falling back to keyword results: {}",
+            exc,
         )
 
     return format_search_results(query, cards)

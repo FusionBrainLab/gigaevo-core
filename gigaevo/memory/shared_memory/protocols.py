@@ -10,9 +10,14 @@ from gigaevo.memory.shared_memory.card_conversion import MemoryNoteProtocol
 
 
 class LLMServiceProtocol(Protocol):
-    """Structural type for OpenAIInferenceService."""
+    """Structural type for LangChainLLMService."""
 
-    def generate(self, data: str) -> tuple[str, Any, int | None, float | None]: ...
+    def generate(
+        self,
+        data: str,
+        *,
+        schema: dict[str, Any] | None = None,
+    ) -> tuple[str, Any, int | None, float | None]: ...
 
 
 class AgenticMemoryProtocol(Protocol):

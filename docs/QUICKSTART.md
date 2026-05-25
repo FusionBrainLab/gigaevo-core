@@ -40,17 +40,26 @@ redis-server
 ## Step 3: Run Your First Evolution (5 seconds to start)
 
 ```bash
-# Run the heilbron problem (triangle packing)
+# Default provider: OpenRouter (set OPENAI_API_KEY=sk-or-v1-...)
 python run.py problem.name=heilbron max_mutants=5
+```
+
+**Alternative: z.ai coding-plan subscription** (uses function_calling for
+structured output; pin via `llm=zai`):
+
+```bash
+OPENAI_API_KEY=<your-zai-key> python run.py problem.name=heilbron max_mutants=5 \
+    llm=zai model_name=glm-5.1 \
+    llm_base_url=https://api.z.ai/api/coding/paas/v4
 ```
 
 You should see:
 ```
-[INFO] GigaEvo Evolution Experiment
-[INFO] Problem: heilbron
+[INFO] GigaEvo - Problem: heilbron
 [INFO] Loading initial programs...
-[INFO] Loaded 5 initial programs
-[INFO] Starting evolution...
+[INFO] Loaded 5 initial programs (next_iteration=5)
+[INFO] Evolution running (max_mutants=5)
+[INFO] Estimated wall: ~1 min (LLM-bound, +/-2-3x)
 ```
 
 **Congratulations!** Evolution is running. 🎉

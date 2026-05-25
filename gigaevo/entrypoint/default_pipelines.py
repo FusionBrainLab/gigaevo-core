@@ -148,6 +148,9 @@ class PipelineBuilder:
 class DefaultPipelineBuilder(PipelineBuilder):
     """Recreates the current default pipeline (no context added)."""
 
+    OPTUNA_SCORE_KEY: str | None = None
+    OPTUNA_MAX_PARALLEL: int = 10
+
     def __init__(
         self,
         ctx: EvolutionContext,
@@ -164,9 +167,120 @@ class DefaultPipelineBuilder(PipelineBuilder):
         self._max_insights = max_insights
         self._max_code_length = max_code_length
         self._archive_gate_enabled = archive_gate_enabled
+        self._optimization_time_budget: float | None = None
         self._contribute_default_nodes()
         self._contribute_default_edges()
         self._contribute_default_deps()
+
+    def _optuna_stage_kwargs(self) -> dict:
+        """Extra kwargs forwarded to :class:`OptunaOptimizationStage`.
+
+        Override in a subclass to customise Optuna hyper-parameters.
+        """
+        return {}
+
+    def _wire_optuna_stage(self) -> None:
+        """Insert OptunaOptimizationStage between validate and program-call.
+
+        Requires ``self._optimization_time_budget`` set before calling.
+        Detects context auto-magically via the presence of an ``AddContext``
+        stage in ``self._nodes``.
+        """
+        from gigaevo.programs.stages.optimization.optuna import (
+            OptunaOptimizationStage,
+            OptunaPayloadBridge,
+            PayloadResolver,
+        )
+
+        if self._optimization_time_budget is None:
+            raise ValueError(
+                "_optimization_time_budget must be set before _wire_optuna_stage()"
+            )
+
+        problem_ctx = self.ctx.problem_ctx
+        llm_wrapper = self.ctx.llm_wrapper
+        metrics_ctx = problem_ctx.metrics_context
+        primary_spec = metrics_ctx.get_primary_spec()
+
+        validator_path = problem_ctx.problem_dir / "validate2.py"
+        task_description = problem_ctx.task_description
+
+        extra = self._optuna_stage_kwargs()
+
+        max_par = extra.pop("max_parallel", self.OPTUNA_MAX_PARALLEL)
+        score_key = extra.pop(
+            "score_key", self.OPTUNA_SCORE_KEY or metrics_ctx.get_primary_key()
+        )
+        minimize = extra.pop("minimize", not primary_spec.higher_is_better)
+
+        budget = self._optimization_time_budget
+        n_trials = extra.pop("n_trials", None)
+        eval_to = extra.pop("eval_timeout", None)
+        stage_timeout = int(budget)
+
+        self.add_stage(
+            "OptunaOptStage",
+            lambda: OptunaOptimizationStage(
+                llm=llm_wrapper,
+                validator_path=validator_path,
+                score_key=score_key,
+                function_name="entrypoint",
+                validator_fn="validate",
+                python_path=[problem_ctx.problem_dir.resolve()],
+                minimize=minimize,
+                n_trials=n_trials,
+                max_parallel=max_par,
+                eval_timeout=eval_to,
+                update_program_code=True,
+                task_description=task_description,
+                optimization_time_budget=budget,
+                timeout=stage_timeout,
+                max_memory_mb=MAX_MEMORY_MB,
+                **extra,
+            ),
+        )
+
+        self.add_exec_dep(
+            "OptunaOptStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+
+        if "AddContext" in self._nodes:
+            self.add_data_flow_edge("AddContext", "OptunaOptStage", "context")
+            self.add_exec_dep(
+                "OptunaOptStage",
+                ExecutionOrderDependency.always_after("AddContext"),
+            )
+
+        # Bypass: when Optuna succeeds, OptunaPayloadBridge → PayloadResolver
+        # feeds the validator; CallProgramFunction only runs on Optuna failure.
+        bridge_timeout = self._stage_timeout
+        self.add_stage(
+            "OptunaPayloadBridge",
+            lambda: OptunaPayloadBridge(timeout=bridge_timeout),
+        )
+        self.add_stage(
+            "PayloadResolver",
+            lambda: PayloadResolver(timeout=bridge_timeout),
+        )
+
+        self.add_data_flow_edge(
+            "OptunaOptStage", "OptunaPayloadBridge", "optuna_output"
+        )
+        self.add_data_flow_edge(
+            "OptunaPayloadBridge", "PayloadResolver", "optuna_payload"
+        )
+        self.add_data_flow_edge(
+            "CallProgramFunction", "PayloadResolver", "program_payload"
+        )
+
+        self.remove_data_flow_edge("CallProgramFunction", "CallValidatorFunction")
+        self.add_data_flow_edge("PayloadResolver", "CallValidatorFunction", "payload")
+
+        self.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.on_failure("OptunaOptStage"),
+        )
 
     def _contribute_default_nodes(self) -> None:
         # Context is available for future wiring
@@ -662,6 +776,10 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         pop_size = extra.pop("population_size", self.CMA_POPULATION_SIZE)
         max_par = extra.pop("max_parallel", self.CMA_MAX_PARALLEL)
 
+        if self._optimization_time_budget is None:
+            raise ValueError(
+                "_optimization_time_budget must be set before _add_cma_optimization()"
+            )
         budget = self._optimization_time_budget
 
         # Derive eval_timeout from budget if not explicitly overridden.
@@ -734,10 +852,6 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
     Override ``_optuna_stage_kwargs`` in a subclass to tweak hyper-parameters.
     """
 
-    # Sensible defaults – override in subclasses.
-    OPTUNA_SCORE_KEY: str | None = None  # None -> auto-detect from problem_ctx
-    OPTUNA_MAX_PARALLEL: int = 10
-
     def __init__(
         self,
         ctx: EvolutionContext,
@@ -764,10 +878,9 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
             if optimization_time_budget is not None
             else dag_timeout * DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION
         )
-        has_context = ctx.problem_ctx.is_contextual
-        if has_context:
+        if ctx.problem_ctx.is_contextual:
             self._add_context_stage_and_edges()
-        self._add_optuna_optimization(has_context=has_context)
+        self._wire_optuna_stage()
 
     def _add_context_stage_and_edges(self) -> None:
         """Add the AddContext stage (same as ContextPipelineBuilder)."""
@@ -783,121 +896,6 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         )
         self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
         self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
-
-    def _optuna_stage_kwargs(self) -> dict:
-        """Return extra kwargs forwarded to :class:`OptunaOptimizationStage`.
-
-        Override in a subclass to customise Optuna hyper-parameters without
-        rewriting the whole pipeline.
-        """
-        return {}
-
-    def _add_optuna_optimization(self, *, has_context: bool) -> None:
-        from gigaevo.programs.stages.optimization.optuna import (
-            OptunaOptimizationStage,
-            OptunaPayloadBridge,
-            PayloadResolver,
-        )
-
-        problem_ctx = self.ctx.problem_ctx
-        llm_wrapper = self.ctx.llm_wrapper
-        metrics_ctx = problem_ctx.metrics_context
-        primary_spec = metrics_ctx.get_primary_spec()
-
-        validator_path = problem_ctx.problem_dir / "validate2.py"
-        task_description = problem_ctx.task_description
-
-        extra = self._optuna_stage_kwargs()
-
-        max_par = extra.pop("max_parallel", self.OPTUNA_MAX_PARALLEL)
-        score_key = extra.pop(
-            "score_key", self.OPTUNA_SCORE_KEY or metrics_ctx.get_primary_key()
-        )
-        minimize = extra.pop("minimize", not primary_spec.higher_is_better)
-
-        budget = self._optimization_time_budget
-
-        # Pass None for eval_timeout and n_trials so the stage auto-computes
-        # them from the optimization budget + baseline runtime.
-        # Explicit overrides from _optuna_stage_kwargs() still work.
-        n_trials = extra.pop("n_trials", None)
-        eval_to = extra.pop("eval_timeout", None)
-
-        # Stage timeout = the full optimization budget
-        stage_timeout = int(budget)
-
-        self.add_stage(
-            "OptunaOptStage",
-            lambda: OptunaOptimizationStage(
-                llm=llm_wrapper,
-                validator_path=validator_path,
-                score_key=score_key,
-                function_name="entrypoint",
-                validator_fn="validate",
-                python_path=[problem_ctx.problem_dir.resolve()],
-                minimize=minimize,
-                n_trials=n_trials,
-                max_parallel=max_par,
-                eval_timeout=eval_to,
-                update_program_code=True,
-                task_description=task_description,
-                optimization_time_budget=budget,
-                timeout=stage_timeout,
-                max_memory_mb=MAX_MEMORY_MB,
-                **extra,
-            ),
-        )
-
-        # Optuna runs after validation succeeds
-        self.add_exec_dep(
-            "OptunaOptStage",
-            ExecutionOrderDependency.on_success("ValidateCodeStage"),
-        )
-
-        # If context exists, wire it into Optuna and wait for it
-        if has_context:
-            self.add_data_flow_edge("AddContext", "OptunaOptStage", "context")
-            self.add_exec_dep(
-                "OptunaOptStage",
-                ExecutionOrderDependency.always_after("AddContext"),
-            )
-
-        # -- Bypass: skip CallProgramFunction when Optuna succeeds --------
-        #
-        # OptunaPayloadBridge extracts best_program_output from Optuna.
-        # PayloadResolver picks whichever payload source completed.
-        # CallValidatorFunction always runs (single source of truth).
-        bridge_timeout = self._stage_timeout
-        self.add_stage(
-            "OptunaPayloadBridge",
-            lambda: OptunaPayloadBridge(timeout=bridge_timeout),
-        )
-        self.add_stage(
-            "PayloadResolver",
-            lambda: PayloadResolver(timeout=bridge_timeout),
-        )
-
-        # Data flow: Optuna → bridge → resolver → validator
-        self.add_data_flow_edge(
-            "OptunaOptStage", "OptunaPayloadBridge", "optuna_output"
-        )
-        self.add_data_flow_edge(
-            "OptunaPayloadBridge", "PayloadResolver", "optuna_payload"
-        )
-        self.add_data_flow_edge(
-            "CallProgramFunction", "PayloadResolver", "program_payload"
-        )
-
-        # Replace the default CallProgramFunction → CallValidatorFunction edge
-        # with PayloadResolver → CallValidatorFunction.
-        self.remove_data_flow_edge("CallProgramFunction", "CallValidatorFunction")
-        self.add_data_flow_edge("PayloadResolver", "CallValidatorFunction", "payload")
-
-        # CallProgramFunction only runs when Optuna fails (fallback path).
-        self.add_exec_dep(
-            "CallProgramFunction",
-            ExecutionOrderDependency.on_failure("OptunaOptStage"),
-        )
 
 
 class CustomPipelineBuilder(PipelineBuilder):

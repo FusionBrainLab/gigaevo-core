@@ -183,3 +183,40 @@ async def test_cancel_blocked_on_buffer_releases_producer(monkeypatch) -> None:
     # _in_flight not populated; persist is the user-visible orphan we
     # acknowledge in the spec's cancellation matrix.
     assert "drift-id-1" not in engine._in_flight
+
+
+@pytest.mark.asyncio
+async def test_concurrent_mutants_get_unique_iterations(monkeypatch) -> None:
+    """Race regression: N concurrent producers must each receive a unique iteration.
+
+    The original bug: ``iteration=engine.metrics.iteration`` was read BEFORE
+    the LLM await, with the increment AFTER the await. With max_in_flight=8,
+    up to 8 concurrent tasks read the same pre-increment value and all child
+    programs ended up sharing one iteration ordinal — producing the
+    "long vertical lines at iteration 0" plot symptom.
+    """
+    N = 8
+    engine = _FakeEngine(_make_parent(), max_in_flight=N)
+    for _ in range(N):
+        await engine._producer_sema.acquire()
+
+    captured: list[int] = []
+
+    async def fake_gen(*, iteration, task_id, **_k):
+        captured.append(iteration)
+        # Yield to event loop so concurrent tasks interleave; this is what
+        # exposes the race in the pre-fix code.
+        await asyncio.sleep(0.01)
+        return f"id-{task_id}"
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+    )
+
+    tasks = [asyncio.create_task(run_one_mutant(engine, task_id=i)) for i in range(N)]
+    results = await asyncio.gather(*tasks)
+
+    assert all(r is not None for r in results), f"Some tasks failed: {results}"
+    assert len(set(captured)) == N, (
+        f"Iteration uniqueness violated under concurrency: got {captured}"
+    )

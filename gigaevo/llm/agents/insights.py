@@ -17,10 +17,69 @@ from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 
 
 class ProgramInsight(BaseModel):
-    """Single structured insight about a program."""
+    """Single structured insight about a program.
+
+    Schema v2 (2026-05-23): split the legacy free-string ``insight`` into
+    structured grounding fields (``anchor_quote``, ``evidence_source``,
+    ``mechanism``, ``substitute``, ``evidence_refs``, ``relation_to_lineage``)
+    so the suggester cannot hide a missing anchor or missing substitute
+    inside one ≤35-word sentence. ``insight`` is kept as an OPTIONAL legacy
+    fallback for the off-path :class:`InsightsAgent` (legacy ``InsightsStage``
+    prompt still emits the free string); the renderer prefers the structured
+    fields when present.
+    """
 
     type: str = Field(description="Insight category")
-    insight: str = Field(description="Actionable insight with evidence (≤35 words)")
+    anchor_quote: str = Field(
+        default="",
+        description=(
+            "Literal string copied verbatim from one of the evidence inputs "
+            "(numeric constant, identifier, cluster label, fitness number). "
+            "Must appear in the source verbatim."
+        ),
+    )
+    evidence_source: str = Field(
+        default="",
+        description=(
+            "Which input the anchor came from: program | metrics | intra_memory "
+            "| memory_cards | ancestral_trail | evolutionary_statistics."
+        ),
+    )
+    mechanism: str = Field(
+        default="",
+        description="One-clause explanation of why the anchor moves the primary metric.",
+    )
+    substitute: str = Field(
+        default="",
+        description=(
+            "Concrete target value, replacement pattern, or specific guard. "
+            "NOT a direction."
+        ),
+    )
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of identifiers of the exact evidence items cited "
+            "(memory card IDs, cluster labels, trail depth_back values). "
+            "Empty when not citing specific items."
+        ),
+    )
+    relation_to_lineage: str = Field(
+        default="",
+        description=(
+            "Optional one-clause note describing how this suggestion DIFFERS "
+            "from prior tried strategies (required when refining a "
+            "negative/regressed cluster)."
+        ),
+    )
+    insight: str = Field(
+        default="",
+        description=(
+            "DEPRECATED legacy free-string insight (≤35 words). Retained for "
+            "the legacy InsightsAgent prompt; new prompts populate the "
+            "structured fields above instead."
+        ),
+    )
     tag: str = Field(description="Tag for the insight")
     severity: str = Field(description="Severity of the insight")
 

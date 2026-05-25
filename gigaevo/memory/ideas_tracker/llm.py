@@ -148,10 +148,11 @@ class LLMClient:
         """Synchronous LLM call for the given prompt step."""
         try:
             request = self._build_request(step, content, reasoning)
-            return (
-                self._sync.chat.completions.create(**request).choices[0].message.content
-                or ""
-            )
+            resp = self._sync.chat.completions.create(**request)
+            if not resp.choices:
+                logger.warning("LLMClient.call({!r}) returned no choices", step)
+                return ""
+            return resp.choices[0].message.content or ""
         except Exception as exc:
             logger.error("LLMClient.call({!r}) failed: {}", step, exc)
             return ""
@@ -183,6 +184,11 @@ class LLMClient:
         async def _do() -> str:
             try:
                 resp = await self._async.chat.completions.create(**request)
+                if not resp.choices:
+                    logger.warning(
+                        "LLMClient.call_async({!r}) returned no choices", step
+                    )
+                    return ""
                 return resp.choices[0].message.content or ""
             except Exception as exc:
                 logger.error("LLMClient.call_async({!r}) failed: {}", step, exc)

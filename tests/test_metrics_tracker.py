@@ -21,16 +21,24 @@ from gigaevo.utils.trackers.base import LogWriter
 
 
 class RecordingWriter(LogWriter):
-    """Captures all scalar() calls for assertion."""
+    """Captures all scalar() / clear_series() calls for assertion."""
 
     def __init__(self) -> None:
         self.scalars: list[tuple[str, float, dict[str, Any]]] = []
+        self.clears: list[str] = []
+        # Combined op log preserves interleaving of scalar + clear_series.
+        self.ops: list[tuple[str, str, float | None, dict[str, Any]]] = []
 
     def bind(self, path: list[str]) -> RecordingWriter:
         return self
 
     def scalar(self, metric: str, value: float, **kwargs: Any) -> None:
         self.scalars[len(self.scalars) :] = [(metric, value, kwargs)]
+        self.ops.append(("scalar", metric, value, kwargs))
+
+    def clear_series(self, metric: str, **kwargs: Any) -> None:
+        self.clears.append(metric)
+        self.ops.append(("clear", metric, None, kwargs))
 
     def hist(self, metric: str, values: list[float], **kwargs: Any) -> None:
         pass
@@ -275,6 +283,27 @@ class TestProcessProgram:
         assert frontier[-1][2].get("step") == 3
 
     @pytest.mark.asyncio
+    async def test_valid_program_metric_uses_iteration_as_step(self) -> None:
+        prog = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 7.0},
+            iteration=42,
+        )
+        writer = RecordingWriter()
+        ctx = _make_metrics_context()
+        tracker = MetricsTracker(
+            storage=_mock_storage([]),
+            metrics_context=ctx,
+            writer=writer,
+        )
+        await tracker._process_program(prog)
+
+        program_writes = [
+            (t, v, kw) for t, v, kw in writer.scalars if t == "valid/program/score"
+        ]
+        assert len(program_writes) == 1
+        assert program_writes[0][2].get("step") == 42
+
+    @pytest.mark.asyncio
     async def test_frontier_improves_on_higher_is_better(self) -> None:
         """Frontier updates when a higher score comes in (higher_is_better=True)."""
         writer = RecordingWriter()
@@ -364,6 +393,49 @@ class TestDrainOnce:
         assert tag_to_val["programs/valid_count"] == pytest.approx(1.0)
 
     @pytest.mark.asyncio
+    async def test_drain_recomputes_frontier_in_iteration_order(self) -> None:
+        # Out-of-iteration-order ingestion: iter=4 first (worst score in
+        # higher_is_better terms), then iter=1, then iter=0 (best). The
+        # incremental update path would anchor the frontier at iter=4 and
+        # never add earlier-iter points; a per-drain recompute rebuilds
+        # the series sorted by iteration.
+        p_iter4 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.1}, iteration=4, prog_id="p4"
+        )
+        p_iter1 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.05}, iteration=1, prog_id="p1"
+        )
+        p_iter0 = _make_program(
+            metrics={VALIDITY_KEY: 1.0, "score": 0.01}, iteration=0, prog_id="p0"
+        )
+        storage = _mock_storage([p_iter4, p_iter1, p_iter0])
+        writer = RecordingWriter()
+        ctx = _make_metrics_context(higher_is_better=True)
+        tracker = MetricsTracker(
+            storage=storage,
+            metrics_context=ctx,
+            writer=writer,
+        )
+        await tracker._drain_once()
+
+        last_clear = -1
+        for i, op in enumerate(writer.ops):
+            if op[0] == "clear" and op[1] == "valid/frontier/score":
+                last_clear = i
+        assert last_clear >= 0
+
+        post_clear_frontier = [
+            (op[3].get("step"), op[2])
+            for op in writer.ops[last_clear + 1 :]
+            if op[0] == "scalar" and op[1] == "valid/frontier/score"
+        ]
+        assert post_clear_frontier == [
+            (0, pytest.approx(0.01)),
+            (1, pytest.approx(0.05)),
+            (4, pytest.approx(0.1)),
+        ]
+
+    @pytest.mark.asyncio
     async def test_skip_already_seen(self) -> None:
         prog = _make_program(metrics={VALIDITY_KEY: 1.0, "score": 5.0}, iteration=1)
         storage = _mock_storage([prog])
@@ -376,11 +448,16 @@ class TestDrainOnce:
         )
         # First drain
         await tracker._drain_once()
-        count_after_first = len(writer.scalars)
 
         # Second drain — same ids returned but already seen
         await tracker._drain_once()
-        assert len(writer.scalars) == count_after_first
+
+        # Per-program path must run exactly once for the program.
+        prog_writes = [t for t, _, _ in writer.scalars if t == "valid/program/score"]
+        validity_writes = [t for t, _, _ in writer.scalars if t == VALIDITY_KEY]
+        assert len(prog_writes) == 1
+        assert len(validity_writes) == 1
+
         # mget is called: once for new ids in drain1, once for refresh in drain1,
         # and once for refresh in drain2 (no new ids in drain2)
         assert storage.mget.call_count == 3
@@ -723,7 +800,10 @@ class TestRecomputeAndWriteFrontier:
             (20.0, 2),
             (20.0, 3),
         ]
-        assert tracker._best_valid["score"] == (20.0, 3)
+        # Peak value 20.0 was first achieved at iter=2; the cummax stays at
+        # 20.0 through iter=3 but the iter field tracks where the peak was
+        # last raised, not the latest data point.
+        assert tracker._best_valid["score"] == (20.0, 2)
 
     def test_recompute_after_metric_decrease(self) -> None:
         """When frontier holder's fitness decreases, frontier corrects."""
@@ -894,7 +974,8 @@ class TestRefreshChangedFitnessFrontierRecompute:
         storage.mget = AsyncMock(return_value=[p1_updated, p2])
 
         await tracker._drain_once()
-        assert tracker._best_valid["score"] == (0.70, 2)
+        # Peak 0.70 is at iter=1 (p1's new value beats p2's 0.50 at iter=2).
+        assert tracker._best_valid["score"] == (0.70, 1)
 
     @pytest.mark.asyncio
     async def test_valid_programs_updated_on_process(self) -> None:

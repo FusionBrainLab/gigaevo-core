@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import difflib
 import json
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -34,6 +34,7 @@ from gigaevo.programs.stages.common import StageIO, StringContainer, StringList
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
 INTRA_MEMORY_CARD_METADATA_KEY = "intra_memory_card"
+INTRA_MEMORY_SIGNAL_METADATA_KEY = "intra_memory_signal"
 # Legacy signature key kept for back-compat reads of programs persisted by the
 # pre-DAG-native stage; new runs do not write this field.
 INTRA_MEMORY_CARD_SIGNATURE_KEY = "intra_memory_card_signature"
@@ -204,69 +205,51 @@ def _select_code_form(
 
 
 INTRA_SYSTEM_PROMPT_TEMPLATE = """\
-TASK BEING SOLVED
-{task_description}
+## ROLE
 
-AVAILABLE METRICS
-{metrics_description}
+You are the **lineage analyst** in an LLM-guided evolutionary algorithm. You read ONE parent Python program plus EVERY child the algorithm has produced from it so far (with deltas, validity, error_summary). You emit ONE compact, **purely descriptive** clustering: which children share the same code-level move, and HOW failures failed.
 
-YOUR ROLE
-Lineage analyst for an LLM-guided evolutionary algorithm that mutates Python
-programs to maximise fitness on the task above. You see ONE parent program and
-EVERY evaluated child the algorithm produced from it so far. Distil that
-experience into ONE compact, **purely descriptive** card: what was tried,
-how each cluster fared (including HOW failures failed). A separate
-downstream stage turns this card into actionable mutation suggestions —
-your job is the history, not the prescription.
+You do NOT solve the task in CONTEXT below. You do NOT prescribe what to try next — a separate downstream stage does that. Your job is the HISTORY.
 
-USER MESSAGE STRUCTURE (JSON payload)
-| Field                              | Meaning |
-|------------------------------------|---------|
-| parent.code                        | Python source of the parent |
-| parent.fitness                     | parent's primary metric value |
-| children[i].change_form            | "diff" or "full_code"; discriminates which field below carries the child source |
-| children[i].diff                   | unified diff of child vs parent.code (present iff change_form=="diff"); read this to see exactly what the child changed |
-| children[i].code                   | full child Python source (present iff change_form=="full_code"; used when the diff would not be smaller than the file, or when the child is invalid so error_summary line refs remain readable) |
-| children[i].delta                  | child.fitness − parent.fitness (+ better, − worse) |
-| children[i].is_valid               | whether the child compiled AND ran cleanly |
-| children[i].error_summary          | LLM-friendly stage-error text for FAILED children (empty for successes) |
-| children[i].mutation_archetype     | mutator self-report (may be absent) |
+**You do NOT compute statistics.** Python computes `mean_delta`, `n_attempts`, `n_failed`, `verdict`, `delta_distribution`, and best/worst child deltas from your cluster membership. Your job is membership + qualitative labels + concrete anchors + failure mode.
+
+## USER MESSAGE (JSON payload)
+
+| Field | Meaning |
+|---|---|
+| parent.code | parent's Python source |
+| parent.fitness | parent's primary metric value |
+| children[i].index | stable integer index into the children array — USE THESE in `child_indices` |
+| children[i].change_form | "diff" or "full_code"; discriminates which field below carries the child source |
+| children[i].diff | unified diff of child vs parent.code (present iff change_form=="diff") |
+| children[i].code | full child source (present iff change_form=="full_code"; used when diff isn't smaller, or when child is invalid) |
+| children[i].delta | child.fitness − parent.fitness (+ better, − worse) — informational only; Python re-aggregates |
+| children[i].is_valid | whether the child compiled AND ran cleanly |
+| children[i].error_summary | LLM-friendly stage-error text for FAILED children (empty for successes) |
+| children[i].mutation_archetype | mutator self-report (may be absent) |
 | children[i].mutation_justification | mutator rationale (may be absent) |
 
-When you cluster children by "what the code actually changed" (rule 1 below),
-read `diff` for `change_form=="diff"` children — it already isolates the
-edit — and compare against `parent.code` for `change_form=="full_code"`
-children.
+When clustering by what the CODE actually changed, read `diff` for `change_form=="diff"` and compare `code` against `parent.code` for `change_form=="full_code"`.
 
-CARD CONSTRUCTION RULES
-1. Cluster children by what their CODE actually changed (vs. the parent), not
-   by their self-reported archetype. Each child belongs to EXACTLY ONE cluster.
-   Sum of `tried_strategies[*].n_attempts` MUST equal top-level `n_attempts`.
-2. For each cluster, set `verdict` ∈ {{"improved", "neutral", "regressed"}}
-   using the delta bucketing below. If a cluster is failure-dominated, set
-   verdict="regressed" AND fill `notes` with the dominant failure mode named
-   concretely from `error_summary` (e.g. "IndexError when k=4 reached", "NaN
-   from sqrt of negative", "timeout in inner loop"). For successful clusters,
-   `notes` can be a brief mechanism note or left empty.
-3. Delta bucketing: near-zero = within the noise floor of one evaluation;
-   positive = measurably above; catastrophic = measurably below. EXCLUDE every
-   `is_valid=false` child from `delta_distribution` (min / median / max /
-   improving / neutral / catastrophic) AND from each cluster's `mean_delta`.
-   Invalid programs carry a fitness sentinel (e.g. -1000) that would otherwise
-   swamp the central tendency. Route them instead to `delta_distribution.n_failed`
-   and, inside each cluster they belong to, to `tried_strategies[*].n_failed`.
-   If a cluster has zero valid children, set its `mean_delta` to null and its
-   `verdict` to "failed"; put the dominant failure mode in `notes`. Report
-   `delta_distribution` directly from the input deltas; never invent values.
-4. Labels: short (≤5 words), mutually exclusive, discriminating.
-5. `summary`: one sentence, names the dominant outcome of this lineage so far
-   (e.g. "Three threshold tweaks all regressed; loop-structure rewrites
-   neutral; nothing has lifted fitness above parent yet").
+## CARD CONSTRUCTION
 
-OUTPUT
-The schema (field names, types) is enforced by the system. Fill the fields;
-no prose, no preamble, no fences. Do NOT include forward-looking hints or
-suggestions — those are produced by a downstream stage.
+1. **Cluster by what the CODE actually changed**, not by self-reported archetype. Each child's index MUST appear in EXACTLY ONE cluster's `child_indices`. Union of `child_indices` MUST cover every index 0..n-1 once.
+2. **Labels** — short (≤5 words), mutually exclusive, discriminating (e.g. `threshold tighten`, `loop unroll`, `early termination`).
+3. **representative_anchors** — for each cluster, 1–3 LITERAL strings copied verbatim from the cluster's diff/code: numeric constants that changed, identifiers added/removed, or distinctive expressions. These anchor the cluster so the downstream suggester can talk about specific code, not vague labels.
+4. **failure_signature** — when ANY child in the cluster has `is_valid=false`, set this to a concrete failure-mode string named from `error_summary` (e.g. "IndexError when k=4 reached", "NaN from sqrt of negative", "timeout in inner loop"). Empty when all children in the cluster were valid.
+5. **mechanism_note** — for clusters with at least one valid child, a brief sentence explaining what the cluster's code change does (mechanistically) and how it would move the primary metric. Empty when the entire cluster failed (use `failure_signature` instead).
+6. **Summary** — one sentence naming the dominant outcome qualitatively (e.g. "Three threshold tweaks; loop-structure rewrites; one early-termination attempt; nothing structural has shifted yet").
+
+## OUTPUT
+
+Schema enforced. No prose, no preamble, no fences. Do NOT emit `mean_delta`, `verdict`, `n_attempts`, `n_failed`, or `delta_distribution` — Python computes these from `child_indices`.
+
+## CONTEXT (the TASK the PROGRAM is solving — background for interpreting code changes)
+
+{task_description}
+
+Available metrics:
+{metrics_description}
 """
 
 
@@ -309,7 +292,14 @@ class IntraDeltaDistribution(BaseModel):
 
 
 class IntraTriedStrategy(BaseModel):
-    """One strategy already tried on this parent's lineage."""
+    """One strategy already tried on this parent's lineage.
+
+    Post-merge shape: ``n_attempts``/``mean_delta``/``verdict``/``n_failed``/
+    ``best_delta``/``worst_delta`` are Python-computed from the LLM-emitted
+    ``child_indices`` (see ``IntraTriedStrategyLLM``) and the raw children
+    deltas. ``label``/``notes``/``representative_anchors`` are the LLM's
+    qualitative contributions.
+    """
 
     label: str = Field(
         description="Short (≤5 words), discriminating name for the strategy class."
@@ -344,10 +334,39 @@ class IntraTriedStrategy(BaseModel):
             "strategies, a brief mechanism note or empty."
         ),
     )
+    best_delta: float | None = Field(
+        default=None,
+        description=(
+            "Best (most-improving, sign-oriented) valid child delta in this "
+            "cluster; null when no valid child exists."
+        ),
+    )
+    worst_delta: float | None = Field(
+        default=None,
+        description=(
+            "Worst (most-regressing) valid child delta in this cluster; null "
+            "when no valid child exists. Distinct from invalid children, "
+            "which are excluded and counted in n_failed."
+        ),
+    )
+    representative_anchors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Literal code snippets the LLM extracted from this cluster's "
+            "diffs/code — concrete grounding for the downstream suggester."
+        ),
+    )
 
 
 class IntraCardStructuredOutput(BaseModel):
-    """Structured intra (per-parent) lineage card returned by the analyst LLM."""
+    """Structured intra (per-parent) lineage card.
+
+    Post-merge representation: ``tried_strategies`` carries Python-computed
+    ``mean_delta``/``verdict``/``n_attempts``/``n_failed`` plus the LLM's
+    qualitative ``label``/``notes``. The downstream renderer + signal derivation
+    read this shape; only the LLM-side input schema (``IntraCardLLMOutput``)
+    changed in the A2+F8 split.
+    """
 
     parent_id: str = Field(description="Parent program id (copied from input).")
     parent_fitness: float = Field(description="Parent's evaluated primary fitness.")
@@ -360,6 +379,73 @@ class IntraCardStructuredOutput(BaseModel):
         description=(
             "Strategies already tried, clustered by code change. Sum of "
             "n_attempts MUST equal the top-level n_attempts."
+        ),
+    )
+    summary: str = Field(
+        description=(
+            "One-line descriptive takeaway about this lineage's outcomes so "
+            "far. Forward-looking suggestions are produced by a separate "
+            "stage and MUST NOT appear here."
+        )
+    )
+
+
+class IntraTriedStrategyLLM(BaseModel):
+    """LLM-emitted descriptive cluster (membership + qualitative labels only).
+
+    Python computes ``mean_delta``/``verdict``/``n_attempts``/``n_failed`` from
+    ``child_indices`` and the raw children deltas — see ``_merge_intra_card``.
+    """
+
+    label: str = Field(
+        description="Short (≤5 words), discriminating name for the strategy class."
+    )
+    child_indices: list[int] = Field(
+        description=(
+            "Indices into the children array (0..n-1) of every child belonging "
+            "to this cluster. Disjoint across clusters; union covers every "
+            "child exactly once."
+        )
+    )
+    representative_anchors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "1–3 literal strings copied verbatim from the cluster's diff/code "
+            "(numeric constants, identifiers, distinctive expressions) so the "
+            "downstream suggester can ground on concrete code."
+        ),
+    )
+    mechanism_note: str = Field(
+        default="",
+        description=(
+            "Brief mechanism description for clusters with at least one valid "
+            "child. Empty when the cluster has zero valid children — use "
+            "`failure_signature` instead."
+        ),
+    )
+    failure_signature: str = Field(
+        default="",
+        description=(
+            "Concrete failure mode named from children's `error_summary` when "
+            "ANY child in the cluster was invalid (e.g. 'IndexError when k "
+            "reached limit', 'timeout in inner loop'). Empty when every "
+            "child in the cluster was valid."
+        ),
+    )
+
+
+class IntraCardLLMOutput(BaseModel):
+    """Structured payload the analyst LLM emits.
+
+    Membership + qualitative labels + anchors only. All numeric aggregation
+    happens in Python (``_merge_intra_card``).
+    """
+
+    tried_strategies: list[IntraTriedStrategyLLM] = Field(
+        default_factory=list,
+        description=(
+            "Cluster membership of every evaluated child. Disjoint and "
+            "covering: union of child_indices covers every index 0..n-1 once."
         ),
     )
     summary: str = Field(
@@ -440,6 +526,16 @@ def _render_intra_card_text(
                 f"- *{s.get('label', '?')}* — {attempt_part}, "
                 f"{mean_part}, verdict: {s.get('verdict', '?')}"
             )
+            best = s.get("best_delta")
+            worst = s.get("worst_delta")
+            if best is not None or worst is not None:
+                line += (
+                    f" (best {_fmt(best, signed=True)}, "
+                    f"worst {_fmt(worst, signed=True)})"
+                )
+            anchors = [a for a in (s.get("representative_anchors") or []) if a]
+            if anchors:
+                line += f" — anchors: {', '.join(f'`{a}`' for a in anchors)}"
             notes = (s.get("notes") or "").strip()
             if notes:
                 line += f" — {notes}"
@@ -451,6 +547,250 @@ def _render_intra_card_text(
         lines.append(f"_{summary}_")
 
     return "\n".join(lines)
+
+
+_NEGATIVE_VERDICTS = frozenset({"regressed", "failed"})
+
+# Delta bucket thresholds (in primary-metric units, oriented so positive =
+# improvement). Tighter than display precision so weak signals are not
+# rounded into "neutral". The current pipelines work in fitness ≈ 0.02–0.05
+# bands; 1e-4 captures noise vs signal at that scale without becoming a
+# behavioural knob.
+_DELTA_NOISE_FLOOR = 1e-4
+
+
+def _bucket_delta(delta: float) -> str:
+    if delta > _DELTA_NOISE_FLOOR:
+        return "improving"
+    if delta < -_DELTA_NOISE_FLOOR:
+        return "catastrophic"
+    return "neutral"
+
+
+def _verdict_from_buckets(buckets: dict[str, int], n_valid: int) -> str:
+    """Map per-cluster bucket counts → categorical verdict.
+
+    Pure aggregation: 'failed' iff every child was invalid; otherwise the
+    plurality of improving/neutral/catastrophic with improving and
+    catastrophic tie-broken in favour of the worse direction so latent
+    regression isn't masked by a single improvement.
+    """
+    if n_valid == 0:
+        return "failed"
+    improving = buckets.get("improving", 0)
+    neutral = buckets.get("neutral", 0)
+    catastrophic = buckets.get("catastrophic", 0)
+    if improving > catastrophic and improving > neutral:
+        return "improved"
+    if catastrophic >= improving and catastrophic > 0:
+        return "regressed"
+    return "neutral"
+
+
+def _merge_intra_card(
+    llm_output: IntraCardLLMOutput,
+    evaluated: list[dict[str, Any]],
+    parent_id: str,
+    parent_fitness: float,
+) -> IntraCardStructuredOutput:
+    """Fold LLM-emitted cluster membership + raw child deltas → numeric card.
+
+    Python owns every aggregation (counts, mean_delta, verdict bucketing,
+    delta distribution, best/worst per cluster). The LLM contributes
+    membership + qualitative labels + anchors + mechanism/failure notes only.
+
+    Membership validation: indices outside ``0..n-1`` are dropped with a
+    warning; missing indices land in an ``unassigned`` catch-all cluster so
+    aggregate counts always reconcile with the input. Duplicates across
+    clusters are awarded to the first cluster that claimed them.
+    """
+    n_children = len(evaluated)
+    assigned: set[int] = set()
+    clusters: list[IntraTriedStrategy] = []
+
+    delta_dist_buckets = {"improving": 0, "neutral": 0, "catastrophic": 0}
+    valid_deltas: list[float] = []
+    n_failed_total = 0
+
+    for cluster_llm in llm_output.tried_strategies:
+        idxs: list[int] = []
+        for raw_idx in cluster_llm.child_indices:
+            try:
+                i = int(raw_idx)
+            except (TypeError, ValueError):
+                continue
+            if i < 0 or i >= n_children or i in assigned:
+                continue
+            idxs.append(i)
+            assigned.add(i)
+
+        cluster = _build_cluster(
+            label=cluster_llm.label,
+            indices=idxs,
+            evaluated=evaluated,
+            notes=cluster_llm.failure_signature or cluster_llm.mechanism_note,
+            anchors=cluster_llm.representative_anchors,
+        )
+        clusters.append(cluster)
+
+    unassigned = [i for i in range(n_children) if i not in assigned]
+    if unassigned:
+        clusters.append(
+            _build_cluster(
+                label="unassigned",
+                indices=unassigned,
+                evaluated=evaluated,
+                notes=(
+                    "Children whose cluster the LLM did not assign — Python "
+                    "fallback bucket to keep aggregate counts consistent."
+                ),
+                anchors=[],
+            )
+        )
+
+    for entry in evaluated:
+        delta = float(entry["delta"])
+        if entry.get("is_valid"):
+            valid_deltas.append(delta)
+            delta_dist_buckets[_bucket_delta(delta)] += 1
+        else:
+            n_failed_total += 1
+
+    distribution = IntraDeltaDistribution(
+        min=min(valid_deltas) if valid_deltas else None,
+        median=(sorted(valid_deltas)[len(valid_deltas) // 2] if valid_deltas else None),
+        max=max(valid_deltas) if valid_deltas else None,
+        improving=delta_dist_buckets["improving"],
+        neutral=delta_dist_buckets["neutral"],
+        catastrophic=delta_dist_buckets["catastrophic"],
+        n_failed=n_failed_total,
+    )
+
+    return IntraCardStructuredOutput(
+        parent_id=parent_id,
+        parent_fitness=parent_fitness,
+        n_attempts=n_children,
+        delta_distribution=distribution,
+        tried_strategies=clusters,
+        summary=llm_output.summary,
+    )
+
+
+def _build_cluster(
+    *,
+    label: str,
+    indices: list[int],
+    evaluated: list[dict[str, Any]],
+    notes: str,
+    anchors: list[str],
+) -> IntraTriedStrategy:
+    valid_deltas: list[float] = []
+    buckets = {"improving": 0, "neutral": 0, "catastrophic": 0}
+    n_failed = 0
+    for i in indices:
+        entry = evaluated[i]
+        delta = float(entry["delta"])
+        if entry.get("is_valid"):
+            valid_deltas.append(delta)
+            buckets[_bucket_delta(delta)] += 1
+        else:
+            n_failed += 1
+    n_attempts = len(indices)
+    mean_delta = sum(valid_deltas) / len(valid_deltas) if valid_deltas else None
+    verdict = _verdict_from_buckets(buckets, n_valid=len(valid_deltas))
+    return IntraTriedStrategy(
+        label=label,
+        n_attempts=n_attempts,
+        mean_delta=mean_delta,
+        verdict=verdict,
+        n_failed=n_failed,
+        notes=(notes or "").strip(),
+        best_delta=max(valid_deltas) if valid_deltas else None,
+        worst_delta=min(valid_deltas) if valid_deltas else None,
+        representative_anchors=[a for a in (anchors or []) if a and a.strip()],
+    )
+
+
+class IntraStrategyEntry(BaseModel):
+    """Compact view of one tried cluster — the only fields the downstream
+    suggester needs to weight a cluster (full notes live in the card text)."""
+
+    label: str
+    verdict: str
+    n_attempts: int
+
+
+class IntraMemorySignal(BaseModel):
+    """Structured plateau signal derived from the intra card.
+
+    Severity tiers, all derived from the existing IntraCardStructuredOutput:
+
+    * ``healthy``   — no clusters with verdict in {regressed, failed}
+    * ``negative``  — >=1 negative cluster, neither cond_a nor cond_b fires
+    * ``exhausted`` — cond_a (>=2 negative clusters) OR cond_b
+                      (improving == 0 AND catastrophic + n_failed >= 2)
+
+    Always emitted when an intra card exists, so the downstream prompt can
+    grade guidance by severity instead of toggling on a binary predicate.
+    """
+
+    severity: Literal["healthy", "negative", "exhausted"]
+    n_clusters: int
+    n_negative: int
+    clusters: list[IntraStrategyEntry]
+    delta_dist: dict[str, Any]
+
+
+def _derive_intra_signal(card: dict[str, Any]) -> IntraMemorySignal:
+    """Compute the three-tier plateau signal from an IntraCardStructuredOutput dict.
+
+    Replaces ``MutationSuggestionAgent._format_exhaustion_block``'s
+    regex-on-rendered-markdown predicate with a single source of truth that
+    reads the structured Pydantic fields the LLM already produced.
+    """
+    tried = card.get("tried_strategies") or []
+    dist = card.get("delta_distribution") or {}
+
+    clusters = [
+        IntraStrategyEntry(
+            label=str(s.get("label", "?")),
+            verdict=str(s.get("verdict", "?")),
+            n_attempts=int(s.get("n_attempts", 0) or 0),
+        )
+        for s in tried
+    ]
+    n_clusters = len(clusters)
+    n_negative = sum(1 for c in clusters if c.verdict in _NEGATIVE_VERDICTS)
+
+    improving = int(dist.get("improving", 0) or 0)
+    neutral = int(dist.get("neutral", 0) or 0)
+    catastrophic = int(dist.get("catastrophic", 0) or 0)
+    n_failed = int(dist.get("n_failed", 0) or 0)
+
+    cond_a = n_negative >= 2
+    cond_b = improving == 0 and (catastrophic + n_failed) >= 2
+    if cond_a or cond_b:
+        severity: Literal["healthy", "negative", "exhausted"] = "exhausted"
+    elif n_negative >= 1:
+        severity = "negative"
+    else:
+        severity = "healthy"
+
+    return IntraMemorySignal(
+        severity=severity,
+        n_clusters=n_clusters,
+        n_negative=n_negative,
+        clusters=clusters,
+        delta_dist={
+            "min": dist.get("min"),
+            "median": dist.get("median"),
+            "max": dist.get("max"),
+            "improving": improving,
+            "neutral": neutral,
+            "catastrophic": catastrophic,
+            "n_failed": n_failed,
+        },
+    )
 
 
 class IntraMemoryInputs(StageIO):
@@ -473,16 +813,25 @@ class _ConcatMemoryInputs(StageIO):
     cards: StringContainer | None
 
 
+_SECTION_HEADERS = {
+    "intra": "## PARENT LINEAGE CARD",
+    "extra": "## EXTRA EVIDENCE",
+    "cards": "## CROSS-POP MEMORY CARDS",
+}
+
+
 @StageRegistry.register(
     description="Concat intra/extra/cards memory blocks into a single memory string"
 )
 class ConcatMemoryStage(Stage):
     """Joins intra/extra/cards memory blocks into a single ``memory`` string.
 
-    Routes through the existing ``MutationContextStage.memory`` input so the
-    prompt structure is unchanged — only the source of the memory block grows.
-    Empty inputs are dropped; if everything is empty the output is an empty
-    string (which MutationContextStage already skips).
+    Each present slot is rendered under an explicit provenance header so the
+    downstream mutator can tell parent-lineage evidence from cross-population
+    memory cards (preserves the distinction the v2 architecture review flagged
+    as lost by a raw ``\\n\\n`` join). Empty inputs are dropped; if everything
+    is empty the output is an empty string (which MutationContextStage already
+    skips).
     """
 
     InputsModel: type[StageIO] = _ConcatMemoryInputs
@@ -491,11 +840,16 @@ class ConcatMemoryStage(Stage):
 
     async def compute(self, program: Program) -> StageIO:  # noqa: ARG002 — program unused
         params = cast(_ConcatMemoryInputs, self.params)
-        blocks: list[str] = []
-        for slot in (params.intra, params.extra, params.cards):
+        sections: list[str] = []
+        for slot_name, slot in (
+            ("intra", params.intra),
+            ("extra", params.extra),
+            ("cards", params.cards),
+        ):
             if slot is not None and slot.data.strip():
-                blocks.append(slot.data.strip())
-        return StringContainer(data="\n\n".join(blocks))
+                header = _SECTION_HEADERS[slot_name]
+                sections.append(f"{header}\n\n{slot.data.strip()}")
+        return StringContainer(data="\n\n".join(sections))
 
 
 @StageRegistry.register(description="Per-program lineage card (intra memory)")
@@ -535,7 +889,7 @@ class IntraMemoryStage(Stage):
     ) -> None:
         super().__init__(**kwargs)
         self._llm = llm
-        self._structured_llm = llm.with_structured_output(IntraCardStructuredOutput)
+        self._structured_llm = llm.with_structured_output(IntraCardLLMOutput)
         self._storage = storage
         self._metrics_context = metrics_context
         self._max_children = max_children
@@ -579,6 +933,7 @@ class IntraMemoryStage(Stage):
                 except Exception:
                     error_summary = ""
             entry: dict[str, Any] = {
+                "index": len(evaluated),
                 "delta": child_fitness - parent_fitness,
                 "is_valid": is_valid,
                 "error_summary": error_summary,
@@ -599,7 +954,7 @@ class IntraMemoryStage(Stage):
         child_ids = list(params.children_ids.items) if params.children_ids else []
         if not child_ids:
             logger.debug(
-                "[IntraMemoryStage] {} has no children to summarise; no-op",
+                "[Memory][IntraStage] {} has no children to summarise; no-op",
                 program.id[:8],
             )
             return StringContainer(data="")
@@ -608,7 +963,7 @@ class IntraMemoryStage(Stage):
         parent_fitness = program.metrics.get(primary_key)
         if parent_fitness is None:
             logger.debug(
-                "[IntraMemoryStage] {} has no '{}' metric; no-op",
+                "[Memory][IntraStage] {} has no '{}' metric; no-op",
                 program.id[:8],
                 primary_key,
             )
@@ -618,7 +973,7 @@ class IntraMemoryStage(Stage):
         evaluated = self._collect_evaluated(children, parent_fitness, program.code)
         if not evaluated:
             logger.debug(
-                "[IntraMemoryStage] {} has no evaluated children; no-op",
+                "[Memory][IntraStage] {} has no evaluated children; no-op",
                 program.id[:8],
             )
             return StringContainer(data="")
@@ -638,7 +993,7 @@ class IntraMemoryStage(Stage):
         )
 
         try:
-            card_obj = await self._structured_llm.ainvoke(
+            llm_output = await self._structured_llm.ainvoke(
                 [
                     SystemMessage(content=self._system_prompt),
                     HumanMessage(content=user),
@@ -646,31 +1001,41 @@ class IntraMemoryStage(Stage):
             )
         except Exception:
             logger.opt(exception=True).warning(
-                "[IntraMemoryStage] LLM call failed for {}", program.id[:8]
+                "[Memory][IntraStage] LLM call failed for {}", program.id[:8]
             )
             return StringContainer(data="")
 
-        if not isinstance(card_obj, IntraCardStructuredOutput):
+        if not isinstance(llm_output, IntraCardLLMOutput):
             logger.warning(
-                "[IntraMemoryStage] structured_llm returned {} (expected "
-                "IntraCardStructuredOutput) for {}; dropping card",
-                type(card_obj).__name__,
+                "[Memory][IntraStage] structured_llm returned {} (expected "
+                "IntraCardLLMOutput) for {}; dropping card",
+                type(llm_output).__name__,
                 program.id[:8],
             )
             return StringContainer(data="")
 
-        card = card_obj.model_dump()
+        merged = _merge_intra_card(
+            llm_output=llm_output,
+            evaluated=evaluated,
+            parent_id=program.id,
+            parent_fitness=parent_fitness,
+        )
+        card = merged.model_dump()
         rendered = _render_intra_card_text(card, self._metrics_context)
+        signal = _derive_intra_signal(card)
         program.set_metadata(INTRA_MEMORY_CARD_METADATA_KEY, rendered)
+        program.set_metadata(INTRA_MEMORY_SIGNAL_METADATA_KEY, signal.model_dump())
         try:
             await self._storage.update(program)
         except Exception:
             logger.opt(exception=True).warning(
-                "[IntraMemoryStage] storage.update failed for {}", program.id[:8]
+                "[Memory][IntraStage] storage.update failed for {}", program.id[:8]
             )
         logger.info(
-            "[IntraMemoryStage] Built intra card for {} ({} evaluated children)",
+            "[Memory][IntraStage] Built intra card for {} ({} evaluated children, "
+            "signal severity={})",
             program.id[:8],
             len(evaluated),
+            signal.severity,
         )
         return StringContainer(data=rendered)

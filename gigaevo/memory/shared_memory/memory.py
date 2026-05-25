@@ -34,6 +34,7 @@ from gigaevo.memory.shared_memory.gam_search import GamSearch
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 from gigaevo.memory.shared_memory.memory_state import MemoryState
 from gigaevo.memory.shared_memory.note_sync import NoteSync
+from gigaevo.memory.shared_memory.protocols import ResearchOutput
 
 if TYPE_CHECKING:
     from gigaevo.memory.shared_memory.protocols import (
@@ -76,6 +77,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._iters_after_rebuild = 0
         self._gam_build_failed = False
         self._state = MemoryState()
+        self._last_seen_index_mtime: float = 0.0
 
         # --- API client ---
         api_cfg = cfg.api
@@ -83,7 +85,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if api_cfg is not None:
             self.api = _ConceptApiClient(base_url=api_cfg.base_url)
         else:
-            logger.info("[Memory] API mode disabled. Running in local-only mode.")
+            logger.info(
+                "[Memory][Store] API mode disabled. Running in local-only mode."
+            )
 
         # --- Agentic runtime (DI or auto-detect) ---
         rt = runtime if runtime is not None else load_agentic_runtime()
@@ -166,7 +170,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self.gam.build_research_agent()
                 self.research_agent = self.gam.agent
             except MemoryRetrieverError as exc:
-                logger.debug("[Memory] Initial retriever load skipped: {}", exc)
+                logger.debug("[Memory][Store] Initial retriever load skipped: {}", exc)
+
+        if cfg.index_file.exists():
+            self._last_seen_index_mtime = cfg.index_file.stat().st_mtime
 
         if api_cfg is not None and api_cfg.sync_on_init:
             self._sync_from_api(force_full=True)
@@ -207,7 +214,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if needs_rebuild:
             self.rebuild()
         else:
-            self.card_store.persist()
+            self._persist_index()
         return changed
 
     def _apply_dedup_merge_updates(
@@ -220,9 +227,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self._insert_new_card(merged_card)
                 updated_ids.append(card_id)
             except Exception as exc:
-                logger.warning("[Memory] Merge into card {!r} failed: {}", card_id, exc)
+                logger.warning(
+                    "[Memory][Store] Merge into card {!r} failed: {}", card_id, exc
+                )
         if updated_ids:
-            self.card_store.persist()
+            self._persist_index()
         return updated_ids
 
     def _insert_new_card(self, card: AnyCard) -> tuple[str, bool]:
@@ -265,7 +274,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         """Save card and persist index unless a periodic rebuild already did."""
         card_id, rebuilt = self._insert_new_card(card)
         if not rebuilt:
-            self.card_store.persist()
+            self._persist_index()
         return card_id
 
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
@@ -294,7 +303,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if dedup_ready and self.llm_service is None:
             if not self._warned_missing_card_update_llm:
                 logger.warning(
-                    "[Memory] card_update_dedup enabled but LLM unavailable; "
+                    "[Memory][Store] card_update_dedup enabled but LLM unavailable; "
                     "falling back to regular save_card."
                 )
                 self._warned_missing_card_update_llm = True
@@ -350,7 +359,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if local_changed and self._has_agentic:
             self.rebuild()
         else:
-            self.card_store.persist()
+            self._persist_index()
 
         return self._format_search_output(query, cards, memory_state)
 
@@ -364,8 +373,82 @@ class AmemGamMemory(GigaEvoMemoryBase):
         )
         return self._format_search_output(query, top_cards, memory_state)
 
+    def _persist_index(
+        self, serialized: dict[str, dict[str, Any]] | None = None
+    ) -> None:
+        """Persist card_store and advance the self-seen mtime watermark.
+
+        Without the bump, our own writes would later trip the staleness check
+        and trigger a self-reload that discards in-memory state that hasn't
+        been flushed yet (e.g. test mutations on `card_store.cards`).
+        """
+        self.card_store.persist(serialized=serialized)
+        try:
+            self._last_seen_index_mtime = self.config.index_file.stat().st_mtime
+        except OSError as exc:
+            logger.debug("[Memory][Store] post-persist mtime read failed: {}", exc)
+
+    def _refresh_from_disk_if_stale(self) -> None:
+        """Reload card_store + rebuild GAM agent if the on-disk index changed.
+
+        Fixes the reader-vs-writer split-brain: when a reader instance is
+        created before any cards exist (or before a writer's later additions),
+        it must pick up subsequent on-disk writes performed by the separate
+        writer instance. Triggered lazily on every search() call.
+        """
+        cfg = self.config
+        if not cfg.index_file.exists():
+            return
+        try:
+            mtime = cfg.index_file.stat().st_mtime
+        except OSError as exc:
+            logger.debug("[Memory][Store] mtime check failed: {}", exc)
+            return
+        if mtime <= self._last_seen_index_mtime:
+            return
+
+        try:
+            self.card_store.reload()
+        except Exception as exc:
+            logger.warning("[Memory][Store] card_store reload failed: {}", exc)
+            return
+
+        if self._has_agentic and self.gam is not None and cfg.export_file.exists():
+            try:
+                self.gam.build_research_agent()
+                self.research_agent = self.gam.agent
+                self._gam_build_failed = False
+            except MemoryRetrieverError as exc:
+                logger.warning(
+                    "[Memory][Store] Stale-refresh GAM rebuild failed: {}", exc
+                )
+                self.research_agent = None
+                self._gam_build_failed = True
+
+        self._last_seen_index_mtime = mtime
+
+    def research(self, query: str, memory_state: str | None = None) -> ResearchOutput:
+        """Self-healing structured search.
+
+        Refreshes from disk if a separate writer instance has advanced the
+        on-disk index, then dispatches to the GAM research agent. Falls back
+        to a local-cards ResearchOutput when GAM is unavailable.
+        """
+        self._refresh_from_disk_if_stale()
+        if self.research_agent is not None:
+            try:
+                return self.research_agent.research(query, memory_state=memory_state)
+            except Exception as exc:
+                logger.warning(
+                    "[Memory][Store] GAM research failed, falling back to local cards: {}",
+                    exc,
+                )
+        text = self._search_local_cards(query, memory_state=memory_state)
+        return ResearchOutput(integrated_memory=text, raw_memory=None)
+
     def search(self, query: str, memory_state: str | None = None) -> str:
         """Search memory cards. Tries GAM agent, then API, then local keyword match."""
+        self._refresh_from_disk_if_stale()
         if self.api is not None:
             self._sync_from_api(force_full=False)
 
@@ -376,7 +459,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 ).integrated_memory
             except Exception as exc:
                 logger.warning(
-                    "[Memory] GAM search failed, falling back to non-agentic search: {}",
+                    "[Memory][Store] GAM search failed, falling back to non-agentic search: {}",
                     exc,
                 )
 
@@ -394,7 +477,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def rebuild(self) -> None:
         """Persist cards, re-export JSONL, rebuild GAM index and dedup retrievers."""
         serialized = self.card_store.serialize_all()
-        self.card_store.persist(serialized=serialized)
+        self._persist_index(serialized=serialized)
         if not self._has_agentic:
             return
         if self.note_sync is not None:
@@ -411,7 +494,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 if track_state:
                     self._state.mark_ready()
             except MemoryRetrieverError as exc:
-                logger.warning("[Memory] GAM build failed: {}", exc)
+                logger.warning("[Memory][Store] GAM build failed: {}", exc)
                 self.gam.clear_research_agent()
                 self.research_agent = None
                 self._gam_build_failed = True
@@ -445,7 +528,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if self._has_agentic:
             self.rebuild()
         else:
-            store.persist()
+            self._persist_index()
 
         return True
 
@@ -467,7 +550,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self.rebuild()
             except Exception as exc:
                 logger.warning(
-                    "[Memory] Final rebuild during context exit failed; "
+                    "[Memory][Store] Final rebuild during context exit failed; "
                     "some changes may not be persisted: {}",
                     exc,
                 )

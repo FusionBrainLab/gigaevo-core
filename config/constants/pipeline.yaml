@@ -1,14 +1,21 @@
 # @package _global_
 # Pipeline execution constants
 
-stage_timeout: 2400               # lightweight stages only (validate, format, etc.)
+stage_timeout: 3600               # 1 h on this machine; sized for the heaviest validators (e.g. tabular_regression k-fold CV)
 dag_timeout: 7200
 # optimization_time_budget: null means it auto-computes as
-# 0.75 * dag_timeout at runtime (DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION in
-# gigaevo/entrypoint/constants.py). The 0.75 fraction itself is NOT
+# 0.45 * dag_timeout at runtime (DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION in
+# gigaevo/entrypoint/constants.py). The 0.45 fraction is sized so that
+# Optuna budget + worst-case stage_timeout ≤ dag_timeout (with the
+# defaults: 3240 + 3600 = 6840 ≤ 7200). The fraction itself is NOT
 # CLI-overridable — only the absolute budget is. Override via
 # `optimization_time_budget=<seconds>` on the CLI when you need a different split.
 optimization_time_budget: null
+# Opt-in flag for any pipeline that supports it (currently `standard` and
+# `intra_extra_memory`) to wire OptunaOptimizationStage on top of its default
+# DAG. When true, the Optuna stage bypasses CallProgramFunction on success.
+# `pipeline=optuna_opt` always wires Optuna regardless of this flag.
+enable_optuna_stage: false
 dag_concurrency: 16
 max_code_length: 30000
 max_insights: 8

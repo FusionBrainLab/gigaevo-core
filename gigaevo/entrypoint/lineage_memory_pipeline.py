@@ -68,7 +68,11 @@ reload-on-read.
 
 from __future__ import annotations
 
-from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT, MAX_CODE_LENGTH
+from gigaevo.entrypoint.constants import (
+    DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION,
+    DEFAULT_SIMPLE_STAGE_TIMEOUT,
+    MAX_CODE_LENGTH,
+)
 from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
@@ -109,6 +113,9 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
         max_code_length: int = MAX_CODE_LENGTH,
         archive_gate_enabled: bool = False,
         intra_max_children: int = DEFAULT_INTRA_MAX_CHILDREN,
+        mutation_mode: str | None = None,
+        enable_optuna_stage: bool = False,
+        optimization_time_budget: float | None = None,
     ):
         super().__init__(
             ctx,
@@ -119,12 +126,16 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
             max_code_length=max_code_length,
             archive_gate_enabled=archive_gate_enabled,
         )
+        self._enable_optuna_stage = enable_optuna_stage
+        self._optimization_time_budget_arg = optimization_time_budget
+        self._dag_timeout_arg = dag_timeout
 
         metrics_context = self.ctx.problem_ctx.metrics_context
         storage = self.ctx.storage
         strong_llm = self.ctx.llm_wrapper
         intra_max_children_val = intra_max_children
         task_description = self.ctx.problem_ctx.task_description
+        mutation_mode_val = mutation_mode
 
         # Override the default DescendantProgramIds (which the default builder
         # configures with max_selected=1 for LineageStage) with a wider one
@@ -168,6 +179,7 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
                 task_description=task_description,
                 max_insights=max_insights_val,
                 timeout=stage_timeout,
+                mutation_mode=mutation_mode_val,
             ),
         )
 
@@ -279,6 +291,14 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
                 ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
             )
 
+        if self._enable_optuna_stage:
+            self._optimization_time_budget = (
+                self._optimization_time_budget_arg
+                if self._optimization_time_budget_arg is not None
+                else self._dag_timeout_arg * DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION
+            )
+            self._wire_optuna_stage()
+
 
 class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     """Intra base + extra (cross-population) memory channel.
@@ -315,6 +335,9 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         max_code_length: int = MAX_CODE_LENGTH,
         archive_gate_enabled: bool = False,
         intra_max_children: int = DEFAULT_INTRA_MAX_CHILDREN,
+        mutation_mode: str | None = None,
+        enable_optuna_stage: bool = False,
+        optimization_time_budget: float | None = None,
     ):
         super().__init__(
             ctx,
@@ -325,6 +348,9 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
             max_code_length=max_code_length,
             archive_gate_enabled=archive_gate_enabled,
             intra_max_children=intra_max_children,
+            mutation_mode=mutation_mode,
+            enable_optuna_stage=enable_optuna_stage,
+            optimization_time_budget=optimization_time_budget,
         )
 
         memory_provider = self.ctx.memory_provider

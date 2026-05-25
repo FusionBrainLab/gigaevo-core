@@ -122,7 +122,7 @@ class NoteSync:
             self.memory_system.retriever.delete_document(note.id)
         except Exception as exc:
             logger.warning(
-                "[Memory] Failed to delete document {!r} before re-add: {}",
+                "[Memory][NoteSync]Failed to delete document {!r} before re-add: {}",
                 note.id,
                 exc,
             )

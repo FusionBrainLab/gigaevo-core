@@ -233,14 +233,15 @@ async def test_cancel_midrun_leaves_engine_recoverable() -> None:
         # Wait until at least 3 mutants are persisted (== have advanced
         # the cap counter past the seed).
         deadline = asyncio.get_event_loop().time() + 20.0
-        while engine.metrics.iteration < 3:
+        while engine.metrics.mutations_created < 3:
             if asyncio.get_event_loop().time() > deadline:
                 pytest.fail(
-                    f"never reached 3 mutants; total_mutants={engine.metrics.iteration}"
+                    f"never reached 3 mutants; "
+                    f"mutations_created={engine.metrics.mutations_created}"
                 )
             await asyncio.sleep(0.005)
 
-        tm_at_cancel = engine.metrics.iteration
+        tm_at_cancel = engine.metrics.mutations_created
         pp_at_cancel = engine.metrics.programs_processed
         run_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -264,12 +265,13 @@ async def test_cancel_midrun_leaves_engine_recoverable() -> None:
         f"in_flight oversize: {len(engine._in_flight)} > max_in_flight=4"
     )
 
-    # ---- Invariant 3: total_mutants did not regress on cancel ----
-    assert engine.metrics.iteration >= tm_at_cancel, (
-        f"total_mutants regressed: {tm_at_cancel} -> {engine.metrics.iteration}"
+    # ---- Invariant 3: mutations_created did not regress on cancel ----
+    assert engine.metrics.mutations_created >= tm_at_cancel, (
+        f"mutations_created regressed: "
+        f"{tm_at_cancel} -> {engine.metrics.mutations_created}"
     )
     # And was bounded by the configured cap + max_in_flight overshoot.
-    assert engine.metrics.iteration <= 10 + 4
+    assert engine.metrics.mutations_created <= 10 + 4
 
     # ---- Invariant 4: programs_processed did not regress on cancel ----
     assert engine.metrics.programs_processed >= pp_at_cancel, (
@@ -278,7 +280,8 @@ async def test_cancel_midrun_leaves_engine_recoverable() -> None:
     )
 
     # ---- Invariant 5: snapshot is consistent with metrics ----
-    assert engine._snapshot.total_mutants == engine.metrics.iteration
+    assert engine._snapshot.total_mutants == engine.metrics.mutations_created
+    assert engine._snapshot.next_iteration == engine.metrics.iteration
     assert engine._snapshot.programs_processed == engine.metrics.programs_processed
 
 
@@ -314,7 +317,7 @@ async def test_cancel_before_first_mutant_drains_cleanly() -> None:
         f"|in_flight|={len(engine._in_flight)} != max_in_flight=2"
     )
     # Counter is bounded.
-    assert engine.metrics.iteration <= 5 + 2
+    assert engine.metrics.mutations_created <= 5 + 2
 
 
 @pytest.mark.timeout(60)
@@ -340,10 +343,11 @@ async def test_cancel_drains_done_programs_via_final_sweep() -> None:
         # Wait until the engine has produced several mutants, ensuring the
         # final sweep has real work to do.
         deadline = asyncio.get_event_loop().time() + 20.0
-        while engine.metrics.iteration < 5:
+        while engine.metrics.mutations_created < 5:
             if asyncio.get_event_loop().time() > deadline:
                 pytest.fail(
-                    f"never reached 5 mutants; total_mutants={engine.metrics.iteration}"
+                    f"never reached 5 mutants; "
+                    f"mutations_created={engine.metrics.mutations_created}"
                 )
             await asyncio.sleep(0.005)
 
@@ -366,10 +370,10 @@ async def test_cancel_drains_done_programs_via_final_sweep() -> None:
     # in practice the sweep drains everything — but we only assert the
     # weaker invariant: programs_processed should have advanced PAST the
     # in-process counter at cancel, proving the sweep ran.
-    assert engine.metrics.programs_processed >= engine.metrics.iteration - 4, (
+    assert engine.metrics.programs_processed >= engine.metrics.mutations_created - 4, (
         f"final sweep did not drain DONE programs: "
         f"programs_processed={engine.metrics.programs_processed} "
-        f"vs total_mutants={engine.metrics.iteration}"
+        f"vs mutations_created={engine.metrics.mutations_created}"
     )
 
 
