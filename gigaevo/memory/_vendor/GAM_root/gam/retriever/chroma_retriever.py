@@ -3,8 +3,6 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from gigaevo.memory._vendor.GAM_root.gam.retriever.base import AbsRetriever
 from gigaevo.memory._vendor.GAM_root.gam.schemas import Hit
 
@@ -20,6 +18,17 @@ class ChromaRetriever(AbsRetriever):
     }
 
     def __init__(self, config: dict[str, Any]):
+        try:
+            import chromadb
+            from chromadb.utils.embedding_functions import (
+                SentenceTransformerEmbeddingFunction,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "ChromaRetriever requires the [chains] extras. "
+                "Install with: pip install 'gigaevo[chains]'"
+            ) from exc
+
         super().__init__(config)
         persist_dir = config.get("persist_dir")
         if not persist_dir:

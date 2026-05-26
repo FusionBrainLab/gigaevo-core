@@ -49,9 +49,14 @@ from pathlib import Path
 import threading
 import time
 
-from loguru import logger
+import matplotlib
 
-from gigaevo.utils.plotting import annotate_frontier_points
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+from loguru import logger  # noqa: E402
+
+from gigaevo.utils.plotting import annotate_frontier_points  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Pure data classes + compute helper (test-friendly, no I/O).
@@ -259,10 +264,6 @@ def _render_frontier_plot(
     """
     if not frontier_history:
         return None
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     front_iters, front_best = _running_frontier(frontier_history, higher_is_better)
     mean_sorted = sorted(iter_mean_history, key=lambda x: x[0])

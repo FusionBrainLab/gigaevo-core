@@ -54,6 +54,10 @@ dependencies = [
     # `python run.py problem.name=heilbron` smoke path on a minimal install.
     "plotly>=5.0",
     "tensorboardX",
+    # live_frontier_compare renders frontier_<metric>.png every tick on the
+    # default smoke path; matplotlib is small enough to ship by default.
+    "matplotlib",
+    "seaborn",
 ]
 
 [project.optional-dependencies]
@@ -89,12 +93,11 @@ optimization = [
     "shapely",
 ]
 
-# CLI plotting commands + monitoring dashboards.
-# Required for: `gigaevo plot`, `gigaevo events`. (plotly is in core for the
-# flow profiler imported by run.py; matplotlib/seaborn/statsmodels stay opt-in.)
+# Statistical-modeling extras for `gigaevo plot` / `gigaevo events`.
+# (matplotlib/seaborn/plotly are in core for live_frontier_compare and the
+# flow profiler; statsmodels stays opt-in because of its SciPy/Pandas
+# compile-time deps and minute-scale install footprint.)
 plotting = [
-    "matplotlib",
-    "seaborn",
     "statsmodels",
 ]
 
