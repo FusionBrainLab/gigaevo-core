@@ -19,3 +19,4 @@ llm:
       max_retries: 2
   probabilities: [1.0]
   writer: ${writer}
+  max_concurrent: ${llm_max_concurrent}

@@ -115,6 +115,7 @@ class MultiModelRouter(Runnable):
         writer: LogWriter | None = None,
         name: str = "default",
         structured_output_method: str | None = None,
+        max_concurrent: int | None = None,
     ):
         if len(models) != len(probabilities):
             raise ValueError(
@@ -122,6 +123,10 @@ class MultiModelRouter(Runnable):
             )
         if any(p <= 0 for p in probabilities):
             raise ValueError("All probabilities must be positive")
+        if max_concurrent is not None and max_concurrent < 1:
+            raise ValueError(
+                f"max_concurrent must be >= 1 or None, got {max_concurrent}"
+            )
 
         self.models = models
         self.model_names = [m.model_name for m in models]
@@ -129,6 +134,8 @@ class MultiModelRouter(Runnable):
         self._task_model_map: dict[int, str] = {}
         self._name = name
         self._structured_output_method = structured_output_method
+        self._max_concurrent = max_concurrent
+        self._semaphore: asyncio.Semaphore | None = None
 
         self._tracker = TokenTracker(
             name=name,
@@ -217,6 +224,30 @@ class MultiModelRouter(Runnable):
                         sorted(available),
                     )
 
+    def get_semaphore(self) -> asyncio.Semaphore | None:
+        """Lazy-init shared semaphore that caps concurrent async LLM calls.
+
+        Returns ``None`` when no cap was configured. Otherwise the same
+        :class:`asyncio.Semaphore` instance is returned on every call —
+        both this router's ``ainvoke``/``astream`` paths and the
+        structured-output router obtained via
+        :meth:`with_structured_output` share it, so the cap is global
+        across all async LLM calls routed through this instance.
+
+        Must be called from inside a running event loop (the standard
+        ``asyncio.Semaphore`` constructor binds to the current loop).
+        """
+        if self._max_concurrent is None:
+            return None
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+            logger.info(
+                "[MultiModelRouter:{}] LLM concurrency capped at {}",
+                self._name,
+                self._max_concurrent,
+            )
+        return self._semaphore
+
     @staticmethod
     def _current_task_id() -> int | None:
         """Return ``id(asyncio.current_task())`` or *None* outside an event loop."""
@@ -268,6 +299,15 @@ class MultiModelRouter(Runnable):
     async def ainvoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> BaseMessage:
+        sema = self.get_semaphore()
+        if sema is None:
+            return await self._ainvoke_inner(input, config, **kwargs)
+        async with sema:
+            return await self._ainvoke_inner(input, config, **kwargs)
+
+    async def _ainvoke_inner(
+        self, input: LanguageModelInput, config: RunnableConfig | None, **kwargs
+    ) -> BaseMessage:
         model, name = self._select()
         response = await model.ainvoke(input, self._config(config, name), **kwargs)
         self._tracker.track(response, name)
@@ -288,6 +328,18 @@ class MultiModelRouter(Runnable):
 
     async def astream(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> AsyncIterator[BaseMessage]:
+        sema = self.get_semaphore()
+        if sema is None:
+            async for chunk in self._astream_inner(input, config, **kwargs):
+                yield chunk
+            return
+        async with sema:
+            async for chunk in self._astream_inner(input, config, **kwargs):
+                yield chunk
+
+    async def _astream_inner(
+        self, input: LanguageModelInput, config: RunnableConfig | None, **kwargs
     ) -> AsyncIterator[BaseMessage]:
         model, name = self._select()
         last = None
@@ -318,6 +370,7 @@ class MultiModelRouter(Runnable):
             self._langfuse,
             self._tracker,
             task_model_map=self._task_model_map,
+            semaphore_factory=self.get_semaphore,
         )
 
 
@@ -333,6 +386,7 @@ class _StructuredOutputRouter(Runnable):
         tracker: TokenTracker,
         task_model_map: dict[int, str] | None = None,
         select_override: Callable[[], tuple[Any, str]] | None = None,
+        semaphore_factory: Callable[[], asyncio.Semaphore | None] | None = None,
     ):
         self._models = models
         self._names = model_names
@@ -341,6 +395,7 @@ class _StructuredOutputRouter(Runnable):
         self._tracker = tracker
         self._task_model_map = task_model_map
         self._select_override = select_override
+        self._semaphore_factory = semaphore_factory
 
     def _select(self) -> tuple[Any, str]:
         if self._select_override is not None:
@@ -385,7 +440,14 @@ class _StructuredOutputRouter(Runnable):
     async def ainvoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
     ) -> Any:
-        model, name = self._select()
-        return self._process(
-            await model.ainvoke(input, self._config(config, name), **kwargs), name
-        )
+        sema = self._semaphore_factory() if self._semaphore_factory else None
+        if sema is None:
+            model, name = self._select()
+            return self._process(
+                await model.ainvoke(input, self._config(config, name), **kwargs), name
+            )
+        async with sema:
+            model, name = self._select()
+            return self._process(
+                await model.ainvoke(input, self._config(config, name), **kwargs), name
+            )

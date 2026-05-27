@@ -18,7 +18,6 @@ from langchain_openai import ChatOpenAI
 
 from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
-from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 from gigaevo.llm.agents.mutation import MutationAgent
 from gigaevo.llm.agents.mutation_suggestions import MutationSuggestionAgent
 from gigaevo.llm.agents.scoring import ScoringAgent
@@ -33,6 +32,7 @@ from gigaevo.prompts import (
 )
 
 if TYPE_CHECKING:
+    from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
     from gigaevo.prompts.fetcher import PromptFetcher
 
 
@@ -306,4 +306,6 @@ def create_memory_selector_agent(
 ) -> MemorySelectorAgent:
     """Create a red-agent-backed memory selector for filtering memory ideas."""
     _ = llm  # kept for API compatibility with existing call sites
+    from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
+
     return MemorySelectorAgent()
