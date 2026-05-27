@@ -163,6 +163,31 @@ python run.py problem.name=heilbron stopper=wall_clock
 python run.py problem.name=heilbron --cfg job
 ```
 
+### Provider example: z.ai (rate-limited endpoint)
+
+z.ai's coding-paas endpoint only allows one in-flight request per key.
+Use `llm=zai` and cap every concurrency layer at 1 — the
+`llm_max_concurrent` semaphore serializes both producer-side mutation
+generation and DAG-stage LLM calls behind a single global lock:
+
+```bash
+OPENAI_API_KEY=<your-zai-key> \
+python run.py \
+    problem.name=heilbron \
+    max_mutants=10 \
+    llm=zai \
+    model_name=glm-5.1 \
+    llm_base_url=https://api.z.ai/api/coding/paas/v4 \
+    max_in_flight=1 \
+    max_concurrent_dags=1 \
+    llm_max_concurrent=1 \
+    redis.db=5
+```
+
+`llm_max_concurrent` defaults to `null` (no cap). Set it to a small
+integer whenever the endpoint is rate-limited and per-key parallel
+calls would be rejected.
+
 ### Prompt Co-Evolution
 
 Co-evolve the mutation prompts alongside your programs. A paired prompt run

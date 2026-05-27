@@ -4,3 +4,10 @@
 temperature: 0.6
 max_tokens: 81920
 request_timeout: 600
+
+# Global cap on in-flight async LLM calls across the whole process.
+# Applied as an asyncio.Semaphore at the MultiModelRouter level so both
+# producer-side mutation generation and DAG-stage LLM calls share it.
+# `null` (default) means no cap. Set to a small integer (e.g. 1) when
+# the LLM endpoint is rate-limited and you need to serialize all calls.
+llm_max_concurrent: null
