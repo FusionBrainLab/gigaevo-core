@@ -52,9 +52,8 @@ import time
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
 from loguru import logger  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 
 from gigaevo.utils.plotting import annotate_frontier_points  # noqa: E402
 
