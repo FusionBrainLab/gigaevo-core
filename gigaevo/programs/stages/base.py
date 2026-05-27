@@ -313,9 +313,39 @@ class Stage:
             ok = self.get_cache_handler().on_complete(ok, self._current_inputs_hash)
             return ok
 
+        except asyncio.CancelledError:
+            dur = time.monotonic() - t0
+            salvaged = await self._try_salvage(program)
+            if salvaged is not None:
+                logger.warning(
+                    "[{stage}] {prog} salvaged partial result after cancellation ({dur:.2f}s)",
+                    stage=self.stage_name,
+                    prog=program.id[:8],
+                    dur=dur,
+                )
+                ok = ProgramStageResult.success(output=salvaged, started_at=started_at)
+                return self.get_cache_handler().on_complete(
+                    ok, self._current_inputs_hash
+                )
+            raise
         except Exception as exc:
             dur = time.monotonic() - t0
             if isinstance(exc, asyncio.TimeoutError):
+                salvaged = await self._try_salvage(program)
+                if salvaged is not None:
+                    logger.warning(
+                        "[{stage}] {prog} salvaged partial result after timeout ({dur:.2f}s, timeout={to}s)",
+                        stage=self.stage_name,
+                        prog=program.id[:8],
+                        dur=dur,
+                        to=self.timeout,
+                    )
+                    ok = ProgramStageResult.success(
+                        output=salvaged, started_at=started_at
+                    )
+                    return self.get_cache_handler().on_complete(
+                        ok, self._current_inputs_hash
+                    )
                 logger.warning(
                     "[{stage}] {prog} TIMED OUT after {dur:.2f}s (timeout={to}s)",
                     stage=self.stage_name,
@@ -346,6 +376,37 @@ class Stage:
             self._params_obj = None
             self._current_inputs_hash = None
 
+    async def _try_salvage(self, program: Program) -> StageIO | None:
+        try:
+            salvaged = await self.partial_result(program)
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[{stage}] partial_result raised during shutdown — falling through to failure",
+                stage=self.stage_name,
+            )
+            return None
+        if salvaged is None:
+            return None
+        if not isinstance(salvaged, self.__class__.OutputModel):
+            logger.warning(
+                "[{stage}] partial_result returned {got} (expected {want}) — ignoring",
+                stage=self.stage_name,
+                got=type(salvaged).__name__,
+                want=self.__class__.OutputModel.__name__,
+            )
+            return None
+        return salvaged
+
     async def compute(self, program: Program) -> StageIO | ProgramStageResult | None:
         """Override in subclasses."""
         raise NotImplementedError(f"{self.__class__.__name__} must implement compute()")
+
+    async def partial_result(self, program: Program) -> StageIO | None:
+        """Return best-so-far output when execute() is timing out or being cancelled.
+
+        Default: no salvage (returns None → stage reports FAILED on timeout).
+        Long-running stages that maintain an in-memory best should override this
+        to return an OutputModel instance built from that state, which makes the
+        stage report COMPLETED with the partial output instead.
+        """
+        return None

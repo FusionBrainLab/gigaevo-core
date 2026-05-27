@@ -413,6 +413,16 @@ class CMANumericalOptimizationStage(Stage):
         else:
             self._fallback_penalty = 1e18
 
+        # Best-so-far state read by ``partial_result()`` for graceful-shutdown
+        # salvage. Populated incrementally by ``compute``; values stay valid
+        # if the stage is cancelled mid-run.
+        self._best_tree: ast.Module | None = None
+        self._best_constants: list[_ConstantInfo] | None = None
+        self._best_solution: list[float] | None = None
+        self._best_scores: dict[str, float] = {}
+        self._best_generation: int = 0
+        self._best_initial_constants: list[float] = []
+
     def _build_eval_code(self, parameterized_code: str, params: list[float]) -> str:
         """Compose a self-contained script that runs *program -> validator*."""
         # Ensure plain Python floats (CMA-ES returns numpy.float64 whose
@@ -508,6 +518,14 @@ class CMANumericalOptimizationStage(Stage):
         code = program.code
         pid = program.id[:8]
 
+        # Reset salvage state for this run (instance may be reused).
+        self._best_tree = None
+        self._best_constants = None
+        self._best_solution = None
+        self._best_scores = {}
+        self._best_generation = 0
+        self._best_initial_constants = []
+
         # 1. Extract numerical constants ------------------------------------
         tree, constants = _extract_constants(
             code,
@@ -536,6 +554,13 @@ class CMANumericalOptimizationStage(Stage):
         logger.info(
             "[CMA][{}] Found {} optimisable constants: {}", pid, n, initial_values
         )
+
+        # Seed salvage state so ``partial_result()`` has tree+constants from
+        # this point on; ``_best_scores`` stays empty until baseline succeeds.
+        self._best_tree = tree
+        self._best_constants = constants
+        self._best_initial_constants = list(initial_values)
+        self._best_solution = list(initial_values)
 
         # 2. Parameterise ---------------------------------------------------
         parameterized_code = _parameterize(tree, constants)
@@ -600,6 +625,7 @@ class CMANumericalOptimizationStage(Stage):
 
         if baseline_scores is not None:
             best_scores = baseline_scores
+            self._best_scores = dict(baseline_scores)
             score = float(baseline_scores[self.score_key])
             best_fitness = score if self.minimize else -score
             ever_succeeded = True
@@ -631,6 +657,7 @@ class CMANumericalOptimizationStage(Stage):
             if improved:
                 best_fitness = fitnesses[gen_best_idx]
                 best_solution = list(solutions[gen_best_idx])
+                self._best_solution = list(best_solution)
                 # Re-evaluate best to capture the full score dict
                 # Note: We use self._evaluate_single to ignore the error msg in this loop
                 scores, _ = await self._evaluate_single(
@@ -638,6 +665,8 @@ class CMANumericalOptimizationStage(Stage):
                 )
                 if scores is not None:
                     best_scores = scores
+                    self._best_scores = dict(scores)
+            self._best_generation = generation
 
             display_score = -best_fitness if not self.minimize else best_fitness
 
@@ -701,4 +730,34 @@ class CMANumericalOptimizationStage(Stage):
             n_generations=generation,
             initial_constants=initial_values,
             optimized_constants=best_solution,
+        )
+
+    async def partial_result(self, program: Program) -> CMAOptimizationOutput | None:
+        """Salvage the best constants found so far when the stage is cancelled.
+
+        Returns ``None`` until at least one successful evaluation has populated
+        ``self._best_scores``; otherwise builds a ``CMAOptimizationOutput``
+        from the in-memory best state via the same ``_substitute`` path used
+        on the happy path.
+        """
+        if (
+            self._best_tree is None
+            or self._best_constants is None
+            or self._best_solution is None
+            or not self._best_scores
+        ):
+            return None
+        try:
+            optimized_code = _substitute(
+                self._best_tree, self._best_constants, self._best_solution
+            )
+        except Exception:
+            return None
+        return CMAOptimizationOutput(
+            optimized_code=optimized_code,
+            best_scores=dict(self._best_scores),
+            n_constants=len(self._best_constants),
+            n_generations=self._best_generation,
+            initial_constants=list(self._best_initial_constants),
+            optimized_constants=list(self._best_solution),
         )
