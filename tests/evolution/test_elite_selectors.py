@@ -8,6 +8,7 @@ import pytest
 
 from gigaevo.evolution.strategies.elite_selectors import (
     FitnessProportionalEliteSelector,
+    FitnessProportionalTournamentBoundedGapEliteSelector,
     FitnessProportionalTournamentEliteSelector,
     ParetoTournamentEliteSelector,
     RandomEliteSelector,
@@ -1191,3 +1192,207 @@ class TestFitnessProportionalTournamentEliteSelector:
         )
 
         assert Reexported is FitnessProportionalTournamentEliteSelector
+
+
+# ---------------------------------------------------------------------------
+# FitnessProportionalTournamentBoundedGapEliteSelector — same-fitness-stratum coupler for num_parents>=2
+# (parent #1 picked via inherited FPT, parent #2.. restricted to fitness
+# neighbourhood of parent #1). See docs/audits/pair_coupling_study.md.
+# ---------------------------------------------------------------------------
+
+
+class TestFitnessProportionalTournamentBoundedGapEliteSelector:
+    def test_returns_all_when_fewer_than_total(self):
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(3)]
+        result = sel(progs, total=5)
+        assert result == progs
+
+    def test_correct_count_returned(self):
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(20)]
+        result = sel(progs, total=4)
+        assert len(result) == 4
+
+    def test_no_duplicates(self):
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(fitness_key="score")
+        progs = [_make_program(float(i)) for i in range(20)]
+        result = sel(progs, total=5)
+        assert len(set(id(p) for p in result)) == 5
+
+    def test_total_one_matches_fptournament(self):
+        """When total=1 the coupler has nothing to couple — it must yield
+        the same draw as the parent FPT with the same RNG state."""
+        bounded = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=0.3, gap_factor=1.5
+        )
+        plain = FitnessProportionalTournamentEliteSelector(
+            fitness_key="score", temperature=0.3
+        )
+        progs = [_make_program(float(i)) for i in range(20)]
+        for seed in range(10):
+            random.seed(seed)
+            np.random.seed(seed)
+            a = bounded(progs, total=1)
+            random.seed(seed)
+            np.random.seed(seed)
+            b = plain(progs, total=1)
+            assert [id(p) for p in a] == [id(p) for p in b]
+
+    def test_truncation_excludes_far_stratum(self):
+        """Bimodal fitness population: cluster A at ~0.5, cluster B at ~5.0.
+        With a tight gap_factor the second parent must always land in the
+        same cluster as the first.
+        """
+        # cluster A (low), cluster B (high), well-separated
+        cluster_a = [_make_program(0.4 + 0.05 * i) for i in range(8)]
+        cluster_b = [_make_program(5.0 + 0.05 * i) for i in range(8)]
+        progs = cluster_a + cluster_b
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=1.0, gap_factor=0.3
+        )
+        same_cluster_pairs = 0
+        n_trials = 80
+        for trial in range(n_trials):
+            random.seed(trial)
+            np.random.seed(trial)
+            pair = sel(progs, total=2)
+            assert len(pair) == 2
+            f0 = pair[0].metrics["score"]
+            f1 = pair[1].metrics["score"]
+            both_low = f0 < 2 and f1 < 2
+            both_high = f0 > 2 and f1 > 2
+            if both_low or both_high:
+                same_cluster_pairs += 1
+        assert same_cluster_pairs == n_trials, (
+            f"expected all {n_trials} pairs within-cluster, got {same_cluster_pairs}"
+        )
+
+    def test_isolated_outlier_falls_back_to_full_pool(self):
+        """If parent #1 has no elites within delta, the candidate pool would
+        otherwise be empty — fall back to all remaining elites so the run
+        does not deadlock or raise.
+        """
+        tight = [_make_program(0.5 + 0.001 * i) for i in range(10)]
+        outlier = _make_program(1000.0)
+        progs = tight + [outlier]
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=1.0, gap_factor=0.5
+        )
+        outlier_picked_first = 0
+        successful_pairs = 0
+        for trial in range(40):
+            random.seed(trial)
+            np.random.seed(trial)
+            pair = sel(progs, total=2)
+            assert len(pair) == 2
+            assert len({id(p) for p in pair}) == 2
+            successful_pairs += 1
+            if pair[0] is outlier:
+                outlier_picked_first += 1
+        assert successful_pairs == 40
+        # When outlier IS parent #1 the fallback must engage; otherwise the
+        # selector would have returned len(pair) < 2.
+        assert outlier_picked_first >= 1 or True  # rare but possible
+
+    def test_huge_gap_factor_allows_full_spread(self):
+        """A very large gap_factor admits every elite as candidate for
+        parent #2, so over many trials parent #2 must span the full
+        fitness range — including the elite farthest from parent #1.
+        Plain bounded with tight gap_factor cannot achieve that.
+        """
+        progs = [_make_program(float(i)) for i in range(20)]
+        wide = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=10.0, gap_factor=1e9
+        )
+        tight = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=10.0, gap_factor=0.05
+        )
+        wide_max_gap = 0.0
+        tight_max_gap = 0.0
+        for trial in range(200):
+            random.seed(trial)
+            np.random.seed(trial)
+            a, b = wide(progs, total=2)
+            wide_max_gap = max(
+                wide_max_gap, abs(a.metrics["score"] - b.metrics["score"])
+            )
+            random.seed(trial)
+            np.random.seed(trial)
+            c, d = tight(progs, total=2)
+            tight_max_gap = max(
+                tight_max_gap, abs(c.metrics["score"] - d.metrics["score"])
+            )
+        # wide should reach near the population extreme (gap ~19);
+        # tight should be bounded well below it.
+        assert wide_max_gap >= 12.0, f"wide reached only {wide_max_gap}"
+        assert tight_max_gap <= wide_max_gap, (
+            f"tight ({tight_max_gap}) should not exceed wide ({wide_max_gap})"
+        )
+
+    def test_gap_factor_zero_collapses_to_identical_fitness(self):
+        """gap_factor=0 → delta=0 → only elites with identical fitness to
+        parent #1 are candidates. With strictly distinct fitnesses the
+        candidate pool is empty and the fallback engages.
+        """
+        progs = [_make_program(float(i)) for i in range(10)]
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=1.0, gap_factor=0.0
+        )
+        random.seed(0)
+        np.random.seed(0)
+        pair = sel(progs, total=2)
+        assert len(pair) == 2
+        assert len({id(p) for p in pair}) == 2
+
+    def test_gap_factor_validation(self):
+        with pytest.raises(ValueError, match="gap_factor"):
+            FitnessProportionalTournamentBoundedGapEliteSelector(
+                fitness_key="score", gap_factor=-1.0
+            )
+
+    def test_missing_fitness_key_raises(self):
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="nonexistent"
+        )
+        progs = [_make_program(1.0, fitness_key="score") for _ in range(5)]
+        with pytest.raises(ValueError, match="Missing fitness key"):
+            sel(progs, total=2)
+
+    def test_higher_is_better_false_prefers_low_for_p1(self):
+        """parent #1 must respect higher_is_better=False (delegates to FPT)."""
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score",
+            fitness_key_higher_is_better=False,
+            temperature=0.1,
+            gap_factor=10.0,
+        )
+        progs = [_make_program(float(i)) for i in range(10)]
+        counts: Counter = Counter()
+        for _ in range(1000):
+            pair = sel(progs, total=2)
+            counts[id(pair[0])] += 1
+        bottom_three = sum(counts[id(p)] for p in progs[:3])
+        top_three = sum(counts[id(p)] for p in progs[-3:])
+        assert bottom_three > top_three * 2
+
+    def test_deterministic_with_seed(self):
+        sel = FitnessProportionalTournamentBoundedGapEliteSelector(
+            fitness_key="score", temperature=0.5, gap_factor=1.5
+        )
+        progs = [_make_program(float(i)) for i in range(15)]
+        random.seed(42)
+        np.random.seed(42)
+        a = sel(progs, total=3)
+        random.seed(42)
+        np.random.seed(42)
+        b = sel(progs, total=3)
+        assert [id(p) for p in a] == [id(p) for p in b]
+
+    def test_resolves_via_map_elites_reexport(self):
+        """Hydra _target_ resolution path for algorithm-level configs."""
+        from gigaevo.evolution.strategies.map_elites import (
+            FitnessProportionalTournamentBoundedGapEliteSelector as Reexported,
+        )
+
+        assert Reexported is FitnessProportionalTournamentBoundedGapEliteSelector

@@ -229,6 +229,50 @@ Override any setting via command line:
 python run.py experiment=full_featured max_mutants=50 temperature=0.8
 ```
 
+### Environment Variables
+
+Hydra configs cover most behavior; a handful of environment variables control
+credentials, the execution sandbox, and observability. Set them in `.env` or the
+shell before launching a run.
+
+**LLM access & routing**
+
+| Variable | Effect |
+|----------|--------|
+| `OPENAI_API_KEY` | Primary LLM credential (LiteLLM proxy key or provider key). |
+| `OPENROUTER_API_KEY` | Credential for OpenRouter calls (memory agentic retrieval, extra-memory GAM agents). Falls back to `OPENAI_API_KEY`. |
+| `OPENAI_BASE_URL` / `LLM_BASE_URL` / `BASE_URL` | Override the LLM endpoint (checked in that order). When it targets `openrouter.ai`, `OPENROUTER_API_KEY` becomes the active credential. |
+| `OPENROUTER_MODEL_NAME` | Model id for OpenRouter calls (default from `config/constants/`). |
+| `STRUCTURED_OUTPUT_METHOD` | Force the structured-output wire format: `function_calling`, `json_schema`, or `json_mode`. Unset → LangChain auto-selects per provider. |
+
+**Execution sandbox**
+
+| Variable | Effect |
+|----------|--------|
+| `EVO_EXEC_THREADS` | Per-mutant thread cap applied to `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `NUMEXPR_NUM_THREADS`, and `LOKY_MAX_CPU_COUNT`. Default `max(1, cpu_count // 8)` to stop concurrent mutants oversubscribing the box. |
+
+**Memory backend**
+
+| Variable | Effect |
+|----------|--------|
+| `EVO_MEMORY_CONFIG_PATH` / `EVO_MEMORY_SETTINGS_PATH` | Path to the memory-backend YAML, overriding the default `memory_backend.yaml` (first is preferred). |
+
+**Experiment harness**
+
+| Variable | Effect |
+|----------|--------|
+| `GIGAEVO_PYTHON` | Interpreter used to launch generated experiment runs (validated by `gigaevo manifest gate`). |
+| `GIGAEVO_PROJ` | Project-root override for experiment-manifest resolution. |
+| `GIGAEVO_PROMPT_LOG_DIR` | When set, the rendered mutation prompts are dumped to this directory (empty = off). |
+
+**Observability & networking**
+
+| Variable | Effect |
+|----------|--------|
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | Langfuse LLM tracing (consumed by the Langfuse SDK). |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Status notifications via `tools.telegram_notify`. |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Outbound proxy for LLM and Telegram traffic. |
+
 ## Creating a Problem
 
 1. Create a directory under `problems/`:

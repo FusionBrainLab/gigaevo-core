@@ -15,6 +15,7 @@ ideas_tracker:
   memory_write_enabled: true
   memory_write_best_programs_percent: 5.0
   memory_usage_tracking_enabled: true
+  fitness_higher_is_better: ${higher_is_better}
   checkpoint_dir: ${checkpoint_dir}
   namespace: ${namespace}
   redis_prefix: ${problem.name}

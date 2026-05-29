@@ -1217,12 +1217,12 @@ class OptunaOptimizationStage(Stage):
 
         # Pre-seed best-so-far state so partial_result() returns None if
         # execute() is cancelled before _run_optuna populates anything.
-        self._best_scores: dict[str, float] = {}
-        self._best_value: float | None = None
-        self._best_params: dict[str, Any] = {}
-        self._best_prog_output: Any = None
-        self._best_param_specs: list[ParamSpec] | None = None
-        self._best_parameterized_code: str | None = None
+        self._best_scores = {}
+        self._best_value = None
+        self._best_params = {}
+        self._best_prog_output = None
+        self._best_param_specs = None
+        self._best_parameterized_code = None
 
         # 0. Resolve context early (needed for baseline runtime measurement)
         opt_params = cast(OptimizationInput, self.params)
@@ -1374,7 +1374,7 @@ class OptunaOptimizationStage(Stage):
             return None
 
         param_specs = self._best_param_specs
-        param_types = {p.name: p.param_type for p in param_specs}
+        param_types: dict[str, str] = {p.name: p.param_type for p in param_specs}
         try:
             optimized_code = desubstitute_params(
                 self._best_parameterized_code,

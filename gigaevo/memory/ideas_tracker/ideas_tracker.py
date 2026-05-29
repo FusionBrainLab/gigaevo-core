@@ -145,8 +145,14 @@ def _compute_usage_updates_from_program_selection(
     programs: list[Program],
     task_summary: str,
     fitness_key: str,
+    *,
+    higher_is_better: bool = True,
 ) -> dict[str, UsagePayload]:
-    """Build per-memory-card usage payloads from program fitness deltas."""
+    """Build per-memory-card usage payloads from program fitness deltas.
+
+    Delta is always improvement-positive: positive = card helped, negative = hurt.
+    For lower-is-better tasks, the best parent is the min-fitness parent and
+    improvement is parent - child."""
     fitness_by_id: dict[str, float] = {}
     for prog in programs:
         is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
@@ -155,6 +161,8 @@ def _compute_usage_updates_from_program_selection(
         f = to_float(prog.metrics.get(fitness_key))
         if f is not None:
             fitness_by_id[prog.id] = f
+
+    best_parent_op = max if higher_is_better else min
 
     usage_by_card: dict[str, dict[str, list[float]]] = {}
     for prog in programs:
@@ -174,7 +182,12 @@ def _compute_usage_updates_from_program_selection(
         ]
         if not parent_fitnesses:
             continue
-        delta = child_fitness - max(parent_fitnesses)
+        best_parent = best_parent_op(parent_fitnesses)
+        delta = (
+            child_fitness - best_parent
+            if higher_is_better
+            else best_parent - child_fitness
+        )
         for card_id in list(dict.fromkeys(selected)):
             usage_by_card.setdefault(card_id, {}).setdefault(task_summary, []).append(
                 delta
@@ -250,6 +263,7 @@ def _run_write_pipeline(
     config_path: Path | None = None,
     checkpoint_dir: str | Path | None = None,
     namespace: str | None = None,
+    higher_is_better: bool = True,
 ) -> None:
     """Optionally trigger the downstream memory write pipeline.
 
@@ -308,6 +322,7 @@ def _run_write_pipeline(
         config_path=config_path,
         checkpoint_dir=checkpoint_dir,
         namespace=namespace,
+        higher_is_better=higher_is_better,
     )
     if isinstance(snapshot, dict):
         stats = snapshot.get("stats", {})
@@ -597,6 +612,7 @@ class IdeaTracker(PostRunHook):
         redis_prefix: str = "",
         chunk_size: int = 5,
         fitness_key: str = "fitness",
+        fitness_higher_is_better: bool = True,
         logs_dir: str | Path | None = None,
         config_path: Path | None = None,
         **extras: Any,
@@ -624,6 +640,7 @@ class IdeaTracker(PostRunHook):
         self._analyzer: Analyzer = analyzer
         self._bank = IdeaBank(chunk_size=chunk_size)
         self._fitness_key = fitness_key
+        self._fitness_higher_is_better = fitness_higher_is_better
         self._memory_write_enabled = memory_write_enabled
         self._memory_usage_tracking_enabled = memory_usage_tracking_enabled
         self._config_path = config_path
@@ -691,7 +708,10 @@ class IdeaTracker(PostRunHook):
         )
         if self._memory_usage_tracking_enabled and _has_valid_fitness:
             usage_updates = _compute_usage_updates_from_program_selection(
-                programs, self._task_summary, self._fitness_key
+                programs,
+                self._task_summary,
+                self._fitness_key,
+                higher_is_better=self._fitness_higher_is_better,
             )
             self._log.record_usage_updates(usage_updates)
         else:
@@ -736,6 +756,7 @@ class IdeaTracker(PostRunHook):
             config_path=self._config_path,
             checkpoint_dir=self._checkpoint_dir,
             namespace=self._namespace,
+            higher_is_better=self._fitness_higher_is_better,
         )
 
     def _eligible_records(self, programs: list[Program]) -> list[ProgramRecord]:

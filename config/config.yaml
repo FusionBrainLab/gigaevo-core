@@ -6,6 +6,7 @@ defaults:
   - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
   - chains/runner: none    # Chain runner preset for chain-task problems (override with chains/runner=simple|dataset|metrics|self_critic*)
+  - override hydra/job_logging: disabled   # Suppress Hydra's auto-created {job.name}.log; gigaevo uses loguru → evolution_*.log
   - _self_
 
 # Problem metadata (set via command line or problem-specific config)

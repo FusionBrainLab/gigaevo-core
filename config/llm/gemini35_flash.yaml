@@ -1,7 +1,9 @@
 # @package _global_
 
-# Single mutation LLM: google/gemini-3.5-flash via OpenRouter.
-# Pricing: $0.50/M input, $3.00/M output (OpenRouter, 2026-03-12).
+# Single mutation LLM: google/gemini-3.5-flash via OpenRouter, flex tier.
+# Pricing (OpenRouter, 2026-05-27): standard $0.50/M in / $3.00/M out; the
+# `service_tier: flex` request gets cheaper async/deferred pricing (~50% off)
+# at the cost of longer/best-effort latency.
 #
 # Per https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.5:
 #   - sampling params (temperature/top_p/top_k) NOT recommended for Gemini 3.x;
@@ -15,6 +17,9 @@
 #     tokens. So we pin `reasoning.effort: high` via `extra_body`.
 #   - `max_output_tokens` supports up to 65000; using `max_tokens` (OpenAI
 #     alias accepted by OpenRouter) wired to ${max_tokens}.
+#   - `service_tier: flex` is the standard Google async-pricing flag; OpenRouter
+#     forwards it as-is to Gemini. Use this config when latency tolerance is
+#     high (offline evolution batches) and dollar-cost matters.
 #
 # Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
 #
@@ -32,6 +37,7 @@ llm:
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
       extra_body:
+        service_tier: flex
         reasoning:
           effort: high
   probabilities: [1.0]

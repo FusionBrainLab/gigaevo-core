@@ -124,10 +124,15 @@ def _make_memory_program(
 # ---------------------------------------------------------------------------
 
 
-def _build_memory_usage_updates(programs, task_summary="", fitness_key="fitness"):
+def _build_memory_usage_updates(
+    programs, task_summary="", fitness_key="fitness", higher_is_better=True
+):
     """Thin wrapper around _compute_usage_updates_from_program_selection with sensible test defaults."""
     return _compute_usage_updates_from_program_selection(
-        programs, task_summary or "Task summary unavailable", fitness_key
+        programs,
+        task_summary or "Task summary unavailable",
+        fitness_key,
+        higher_is_better=higher_is_better,
     )
 
 
@@ -236,6 +241,59 @@ class TestBuildMemoryUsageFromPrograms:
         # Only valid child contributes: delta = 7.0 - 5.0 = 2.0
         assert result["card-1"].total_used == 1
         assert result["card-1"].entries[0].fitness_delta_per_use == [2.0]
+
+
+class TestBuildMemoryUsageDirection:
+    """For lower-is-better problems (vartodd_ham_high, loss metrics), an
+    improvement is child < parent, so the delta sign must flip: positive
+    delta = improvement regardless of optimization direction. The best
+    parent is also the min fitness (not max)."""
+
+    def test_lower_is_better_child_below_parent_yields_positive_delta(self) -> None:
+        parent = _make_program(program_id="p1", fitness=500.0, parents=[], generation=1)
+        child = _make_memory_program(fitness=400.0, parent_id="p1", card_ids=["idea-1"])
+        result = _build_memory_usage_updates(
+            [parent, child], "task", higher_is_better=False
+        )
+        # child=400 < parent=500 → improvement of 100 (positive)
+        assert result["idea-1"].entries[0].fitness_delta_per_use == [100.0]
+
+    def test_lower_is_better_child_above_parent_yields_negative_delta(self) -> None:
+        parent = _make_program(program_id="p1", fitness=400.0, parents=[], generation=1)
+        child = _make_memory_program(fitness=500.0, parent_id="p1", card_ids=["idea-1"])
+        result = _build_memory_usage_updates(
+            [parent, child], "task", higher_is_better=False
+        )
+        # child=500 > parent=400 → regression of -100 (negative)
+        assert result["idea-1"].entries[0].fitness_delta_per_use == [-100.0]
+
+    def test_lower_is_better_picks_best_parent_as_min(self) -> None:
+        """With multiple parents, the comparison anchor is the best (lowest) parent."""
+        parent_good = _make_program(
+            program_id="p_good", fitness=400.0, parents=[], generation=1
+        )
+        parent_bad = _make_program(
+            program_id="p_bad", fitness=600.0, parents=[], generation=1
+        )
+        child = _make_program(
+            fitness=450.0,
+            generation=2,
+            parents=["p_good", "p_bad"],
+            memory_ids=["idea-1"],
+        )
+        result = _build_memory_usage_updates(
+            [parent_good, parent_bad, child], "task", higher_is_better=False
+        )
+        # Best parent = min = 400; child = 450 → regression of -50 (negative).
+        # Using max parent (600) instead would falsely report +150 improvement.
+        assert result["idea-1"].entries[0].fitness_delta_per_use == [-50.0]
+
+    def test_higher_is_better_default_unchanged(self) -> None:
+        """Existing higher-is-better callers must not regress."""
+        parent = _make_program(program_id="p1", fitness=5.0, parents=[], generation=1)
+        child = _make_memory_program(fitness=8.0, parent_id="p1", card_ids=["idea-1"])
+        result = _build_memory_usage_updates([parent, child], "task")
+        assert result["idea-1"].entries[0].fitness_delta_per_use == [3.0]
 
 
 # ---------------------------------------------------------------------------

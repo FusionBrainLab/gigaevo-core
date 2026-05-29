@@ -249,6 +249,53 @@ class TestEvolutionaryStatisticsMutationContext:
         assert "Recent failure rate: 3/15 invalid" in result
         assert "Invalid streak (max consecutive in window): 2" in result
 
+    def test_format_pending_shown_in_window_line(self) -> None:
+        """When some window programs are still mid-DAG (no is_valid metric yet),
+        the renderer must show `evaluated=N pending=M` instead of conflating
+        pending with invalid."""
+        ctx = EvolutionaryStatisticsMutationContext(
+            evolutionary_statistics=_make_evo_stats(
+                iter_window_programs=7,
+                iter_window_valid=1,
+                iter_window_invalid_count=0,
+                iter_window_pending_count=6,
+                iter_window_invalid_streak_max=0,
+            ),
+            metrics_context=_make_ctx(),
+        )
+        result = ctx.format()
+        assert "programs=7" in result
+        assert "evaluated=1" in result
+        assert "pending=6" in result
+        assert "valid=1" in result
+
+    def test_format_failure_rate_rebased_on_evaluated(self) -> None:
+        """Reproduces the smoke-#6 bug: 1 valid + 6 pending on iter 0 must NOT
+        render as '7/7 invalid (100%)' — failure rate denominator is evaluated
+        programs only, so 0/1 invalid (0%)."""
+        ctx = EvolutionaryStatisticsMutationContext(
+            evolutionary_statistics=_make_evo_stats(
+                iter_window_programs=7,
+                iter_window_valid=1,
+                iter_window_invalid_count=0,
+                iter_window_pending_count=6,
+                iter_window_invalid_streak_max=0,
+            ),
+            metrics_context=_make_ctx(),
+        )
+        result = ctx.format()
+        assert "7/7 invalid" not in result
+        assert "Recent failure rate: 0/1 invalid (0.0%)" in result
+
+    def test_format_pending_hidden_when_zero(self) -> None:
+        """No `pending=` substring when pending_count=0 (default case)."""
+        ctx = EvolutionaryStatisticsMutationContext(
+            evolutionary_statistics=_make_evo_stats(),
+            metrics_context=_make_ctx(),
+        )
+        result = ctx.format()
+        assert "pending=" not in result
+
     def test_format_invalid_focal_shows_INVALID(self) -> None:
         ctx = EvolutionaryStatisticsMutationContext(
             evolutionary_statistics=_make_evo_stats(

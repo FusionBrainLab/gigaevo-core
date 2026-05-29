@@ -231,6 +231,10 @@ redis_db_test/
 # Catches autogluon_bench_artifacts/, mljar_bench_artifacts/, etc. under any problem
 problems/*/*_bench_artifacts/
 
+# No data committed to the repo: tabular dataset splits are provided out-of-band
+problems/*/rtdl_split/
+problems/**/*.npy
+
 # Loop / Hydra run outputs (top-level)
 output/
 runs/
