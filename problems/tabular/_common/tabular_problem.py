@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import os
+
+import numpy as np
+from sklearn.metrics import f1_score, r2_score, roc_auc_score
+from sklearn.model_selection import KFold
+import tabular_bd
+import tabular_data
+import tabular_metrics
+
+CV_FOLDS_ENV = "GIGAEVO_TABULAR_CV_FOLDS"
+CV_MAX_ENV = "GIGAEVO_TABULAR_CV_MAX"
+BD_MAX_ENV = "GIGAEVO_TABULAR_BD_MAX"
+
+_ALLOWED_FOLDS = {2, 3, 5, 10}
+_DEFAULT_FOLDS = 3
+_DEFAULT_CV_MAX = 100_000
+_DEFAULT_BD_MAX = 2048
+_HOLDOUT_SPLITS = 5  # first fold of a 5-way split == 80/20 holdout
+_SEED = 0
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be an integer; got {raw!r}") from e
+
+
+def _k_folds() -> int:
+    k = _env_int(CV_FOLDS_ENV, _DEFAULT_FOLDS)
+    if k not in _ALLOWED_FOLDS:
+        raise ValueError(
+            f"{CV_FOLDS_ENV} must be one of {sorted(_ALLOWED_FOLDS)}; got {k}"
+        )
+    return k
+
+
+class TabularProblem:
+    def __init__(self, name: str):
+        self.name = name
+
+    def _dataset(self) -> tabular_data.Dataset:
+        return tabular_data.load_dataset(self.name)
+
+    def _splits(self, n: int) -> list[tuple[np.ndarray, np.ndarray]]:
+        idx = np.arange(n)
+        if n <= _env_int(CV_MAX_ENV, _DEFAULT_CV_MAX):
+            kf = KFold(n_splits=_k_folds(), shuffle=True, random_state=_SEED)
+            return list(kf.split(idx))
+        kf = KFold(n_splits=_HOLDOUT_SPLITS, shuffle=True, random_state=_SEED)
+        return [next(iter(kf.split(idx)))]
+
+    def _fold_metrics(self, ds, y_true, pred) -> dict[str, float]:
+        if ds.task_type == tabular_data.REGRESSION:
+            return tabular_metrics.regression_fold_metrics(y_true, pred)
+        return tabular_metrics.classification_fold_metrics(
+            y_true, pred, ds.n_classes, ds.task_type
+        )
+
+    def _bd(self, ds, model_factory) -> dict[str, float]:
+        sd_y = (
+            float(np.std(ds.y_train) + tabular_bd.BD_EPS)
+            if ds.task_type == tabular_data.REGRESSION
+            else 1.0
+        )
+        try:
+            return tabular_bd.compute_bd_axes(
+                model_factory,
+                ds.X_train,
+                ds.y_train,
+                ds.X_val,
+                ds.y_val,
+                task_type=ds.task_type,
+                sd_y=sd_y,
+                bd_max=_env_int(BD_MAX_ENV, _DEFAULT_BD_MAX),
+            )
+        except Exception:
+            return {
+                "local_lipschitz_p95": tabular_bd.BD_LL_MAX,
+                "ood_delta_slope": tabular_bd.BD_OOD_MAX,
+            }
+
+    def validate(self, model_factory) -> dict[str, float]:
+        ds = self._dataset()
+        splits = self._splits(ds.X_train.shape[0])
+        folds: list[dict[str, float]] = []
+        for fit_idx, query_idx in splits:
+            instance = tabular_metrics.instantiate(model_factory)
+            pred = instance.fit_predict(
+                ds.X_train[fit_idx],
+                ds.y_train[fit_idx],
+                ds.X_val.copy(),
+                ds.y_val.copy(),
+                ds.X_train[query_idx],
+            )
+            folds.append(self._fold_metrics(ds, ds.y_train[query_idx], pred))
+
+        scores = [m["score"] for m in folds]
+        fitness = float(np.mean(scores))
+        cv_score_std = float(np.std(scores, ddof=1)) if len(folds) > 1 else 0.0
+        secondary_keys = [k for k in folds[0] if k != "score"]
+        secondary = {k: float(np.mean([m[k] for m in folds])) for k in secondary_keys}
+
+        result = {
+            "fitness": fitness,
+            "is_valid": 1,
+            "cv_score_std": cv_score_std,
+            **secondary,
+            **self._bd(ds, model_factory),
+        }
+        return result
+
+    def score_on_test(self, model_factory) -> dict[str, float]:
+        ds = self._dataset()
+        instance = tabular_metrics.instantiate(model_factory)
+        pred = instance.fit_predict(
+            ds.X_train, ds.y_train, ds.X_val, ds.y_val, ds.X_test
+        )
+        if ds.task_type == tabular_data.REGRESSION:
+            m = tabular_metrics.regression_fold_metrics(ds.y_test, pred)
+            return {"test_rmse": m["rmse"], "test_r2": float(r2_score(ds.y_test, pred))}
+        labels = tabular_metrics.to_labels(pred, ds.n_classes)
+        acc = float(np.mean(labels == ds.y_test.astype(int)))
+        if ds.task_type == tabular_data.BINCLASS:
+            proba = tabular_metrics.to_proba(pred, ds.n_classes)
+            try:
+                auc = float(roc_auc_score(ds.y_test, proba[:, 1]))
+            except ValueError:
+                auc = 0.5
+            return {"test_accuracy": acc, "test_auc": auc}
+        macro = float(
+            f1_score(ds.y_test.astype(int), labels, average="macro", zero_division=0)
+        )
+        return {"test_accuracy": acc, "test_macro_f1": macro}
+
+
+def build(name: str) -> TabularProblem:
+    return TabularProblem(name)
