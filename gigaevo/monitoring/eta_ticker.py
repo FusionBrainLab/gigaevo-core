@@ -63,7 +63,12 @@ def _tick(
 
     remaining_s, stopper_label = est_remaining
     remaining_str = _humanize_seconds(remaining_s)
-    return f"[eta] elapsed={elapsed_str} | mutants={ctx.total_mutants} ({rate:.1f}/min) | remaining={int(remaining_s // throughput.mutants_per_second) if throughput.mutants_per_second > 0 else '?'} | ETA={remaining_str} (bound: {stopper_label})"
+    remaining_mutants = (
+        int(round(remaining_s * throughput.mutants_per_second))
+        if throughput.mutants_per_second > 0
+        else "?"
+    )
+    return f"[eta] elapsed={elapsed_str} | mutants={ctx.total_mutants} ({rate:.1f}/min) | remaining={remaining_mutants} | ETA={remaining_str} (bound: {stopper_label})"
 
 
 def _unbounded_label(stopper) -> str:

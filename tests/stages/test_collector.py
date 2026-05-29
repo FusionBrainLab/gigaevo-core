@@ -57,6 +57,14 @@ def _prog(
     return p
 
 
+def _pending_prog(generation: int = 1, iteration: int = 0) -> Program:
+    """Program mid-DAG: no is_valid metric written yet."""
+    p = Program(code="def solve(): return 42", state=ProgramState.DONE)
+    p.lineage.generation = generation
+    p.iteration = iteration
+    return p
+
+
 class TestComputeFitnessStatsAllMetrics:
     def test_empty_list(self):
         best, worst, avg, vr = _compute_fitness_stats_all_metrics([], _ctx())
@@ -143,6 +151,33 @@ class TestMaxInvalidStreak:
             _prog(is_valid=1.0),
         ]
         assert _max_invalid_streak(progs) == 3
+
+    def test_only_pending(self):
+        """Pending programs (no is_valid key) contribute nothing to streak."""
+        progs = [_pending_prog() for _ in range(5)]
+        assert _max_invalid_streak(progs) == 0
+
+    def test_pending_skipped_does_not_break_streak(self):
+        """Pending programs should be invisible to the streak counter (skipped),
+        so two invalids straddling a pending program count as one streak of 2."""
+        progs = [
+            _prog(is_valid=0.0),
+            _pending_prog(),
+            _prog(is_valid=0.0),
+            _prog(is_valid=1.0),
+        ]
+        assert _max_invalid_streak(progs) == 2
+
+    def test_pending_does_not_extend_streak(self):
+        """Pending alone in a sequence cannot push streak past observed invalids."""
+        progs = [
+            _prog(is_valid=1.0),
+            _pending_prog(),
+            _prog(is_valid=0.0),
+            _pending_prog(),
+            _prog(is_valid=1.0),
+        ]
+        assert _max_invalid_streak(progs) == 1
 
 
 class TestTrendFromThirds:
@@ -469,6 +504,40 @@ class TestEvolutionaryStatisticsCollector:
         stats = result.output
         assert stats.iter_window_invalid_count == 2
         assert stats.iter_window_invalid_streak_max == 2
+        assert stats.iter_window_pending_count == 0
+
+    async def test_iter_window_pending_distinct_from_invalid(self):
+        """Programs without is_valid key (mid-DAG) must NOT be counted as
+        invalid; they show up separately as iter_window_pending_count. This
+        prevents the 'valid=1 / 7/7 invalid (100%)' rendering bug when 6/7
+        seeds are still evaluating on iter 0."""
+        storage = AsyncMock()
+        progs = [
+            _prog(score=50.0, is_valid=1.0, iteration=1),
+            _pending_prog(iteration=2),
+            _pending_prog(iteration=3),
+            _prog(score=10.0, is_valid=0.0, iteration=4),
+            _pending_prog(iteration=5),
+        ]
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = progs
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage,
+            metrics_context=_ctx(),
+            timeout=5.0,
+            iteration_window_radius=10,
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(progs[0])
+
+        stats = result.output
+        assert stats.iter_window_programs == 5
+        assert stats.iter_window_valid == 1
+        assert stats.iter_window_invalid_count == 1  # one true invalid, NOT 4
+        assert stats.iter_window_pending_count == 3
+        # streak counts only evaluated invalids → 1
+        assert stats.iter_window_invalid_streak_max == 1
 
     async def test_iters_since_last_new_best_zero_at_new_best(self):
         storage = AsyncMock()
@@ -559,6 +628,33 @@ class TestEvolutionaryStatisticsCollector:
         assert stats.iter_window_valid == 3
         assert stats.iter_window_best_fitness == 50.0
         assert stats.iter_window_best_iter == 3
+
+    async def test_iter_window_counts_consistent_when_focal_missing_from_snapshot(
+        self,
+    ):
+        """Focal absent from the snapshot is still a logical window member, so
+        programs/evaluated/valid must stay mutually consistent
+        (valid <= evaluated <= programs) instead of valid exceeding programs.
+        """
+        storage = AsyncMock()
+        peer1 = _prog(score=10.0, iteration=1)
+        peer2 = _prog(score=30.0, iteration=2)
+        focal = _prog(score=50.0, iteration=3)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [peer1, peer2]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(focal)
+
+        stats = result.output
+        evaluated = stats.iter_window_programs - stats.iter_window_pending_count
+        assert stats.iter_window_programs == 3
+        assert evaluated == 3
+        assert stats.iter_window_valid == 3
+        assert stats.iter_window_valid <= evaluated <= stats.iter_window_programs
 
     async def test_iter_window_rank_when_focal_in_snapshot_but_stale_metrics(
         self,

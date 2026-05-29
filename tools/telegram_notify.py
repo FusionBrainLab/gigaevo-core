@@ -59,12 +59,14 @@ def _chat_id() -> str:
     return chat_id
 
 
-def notify(message: str, *, parse_mode: str = "Markdown") -> bool:
-    """Send a Telegram message. Returns True on success."""
+def notify(message: str, *, parse_mode: str | None = "Markdown") -> bool:
+    """Send a Telegram message. Pass parse_mode=None for plain text. Returns True on success."""
     token = _bot_token()
     chat_id = _chat_id()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message, "parse_mode": parse_mode}
+    payload: dict = {"chat_id": chat_id, "text": message}
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     try:
         resp = requests.post(url, json=payload, timeout=10, proxies=_PROXIES)
         resp.raise_for_status()
@@ -75,23 +77,22 @@ def notify(message: str, *, parse_mode: str = "Markdown") -> bool:
 
 
 def send_photo(
-    image_path: str, caption: str = "", *, parse_mode: str = "Markdown"
+    image_path: str, caption: str = "", *, parse_mode: str | None = "Markdown"
 ) -> bool:
-    """Send a PNG/JPG image to Telegram with an optional caption. Returns True on success."""
+    """Send a PNG/JPG image to Telegram with an optional caption. Pass parse_mode=None for plain text. Returns True on success."""
     from pathlib import Path
 
     token = _bot_token()
     chat_id = _chat_id()
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     try:
+        data = {"chat_id": chat_id, "caption": caption[:1024]}
+        if parse_mode is not None:
+            data["parse_mode"] = parse_mode
         with open(image_path, "rb") as f:
             resp = requests.post(
                 url,
-                data={
-                    "chat_id": chat_id,
-                    "caption": caption[:1024],
-                    "parse_mode": parse_mode,
-                },
+                data=data,
                 files={"photo": (Path(image_path).name, f, "image/png")},
                 timeout=30,
                 proxies=_PROXIES,

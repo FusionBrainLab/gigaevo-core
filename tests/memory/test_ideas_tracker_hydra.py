@@ -36,22 +36,23 @@ def _stub_llm_clients(monkeypatch):
 
 # Yaml files ship with ``# @package _global_`` — loading them with OmegaConf.load
 # returns a DictConfig whose sole key is ``ideas_tracker``.  We pick that out and
-# supply the three interpolated vars (checkpoint_dir, namespace, problem.name)
-# from a tempdir-backed dummy context.
+# supply the four interpolated vars (checkpoint_dir, namespace, problem.name,
+# higher_is_better) from a tempdir-backed dummy context.
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 IDEAS_TRACKER_CONFIG_DIR = REPO_ROOT / "config" / "ideas_tracker"
 
 
 def _load_ideas_tracker_cfg(name: str, tmp_path: Path):
-    """Load ``config/ideas_tracker/<name>.yaml`` and resolve the 3 interpolations."""
+    """Load ``config/ideas_tracker/<name>.yaml`` and resolve the 4 interpolations."""
     raw = OmegaConf.load(IDEAS_TRACKER_CONFIG_DIR / f"{name}.yaml")
-    # Supply the three top-level interpolations that the yamls reference.
+    # Supply the four top-level interpolations that the yamls reference.
     ctx = OmegaConf.create(
         {
             "checkpoint_dir": str(tmp_path / "ckpt"),
             "namespace": "pytest",
             "problem": {"name": "pytest_problem"},
+            "higher_is_better": True,
         }
     )
     merged = OmegaConf.merge(ctx, raw)

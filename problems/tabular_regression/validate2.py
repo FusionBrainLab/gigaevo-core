@@ -1,7 +1,7 @@
 """1-fold validator used by OptunaOptimizationStage.
 
-Single train→val split (no CV) so each Optuna trial costs one fit/predict.
-The full k-fold CV lives in validate.py and remains the search-loop validator.
+Single CV fold (no full k-fold) so each Optuna trial costs one fit/predict.
+The full 3-fold CV lives in validate.py and remains the search-loop validator.
 Test set is NEVER read here.
 """
 
@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+from sklearn.model_selection import KFold
 
 try:
     DATA_DIR = Path(__file__).parent / "rtdl_split"
@@ -16,6 +17,7 @@ except NameError:
     DATA_DIR = Path(sys.path[0]) / "rtdl_split"
 
 _DATA_CACHE: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
+_CV_SEED = 0
 
 
 def _load_split() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -57,13 +59,23 @@ def _score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
 
 
 def validate(model_factory) -> dict[str, float]:
-    """Single-fold validator. Fitness = -RMSE on the predetermined val set."""
+    """Single-fold validator. Fitness = -RMSE on the first 3-fold CV split of canonical X_train.
+
+    Mirrors validate.py's protocol (X_query is a hidden slice of X_train,
+    (X_train, X_val) are training data) but evaluates only the first fold
+    so each Optuna trial costs one fit/predict.
+    """
     X_train, y_train, X_val, y_val = _load_split()
+    kf = KFold(n_splits=3, shuffle=True, random_state=_CV_SEED)
+    fit_idx, query_idx = next(iter(kf.split(X_train)))
+
     instance = _instantiate(model_factory)
-    y_pred = instance.fit_predict(X_train, y_train, X_val, y_val, X_val)
-    val_rmse = _score(y_pred, y_val)
-    return {
-        "fitness": -val_rmse,
-        "is_valid": 1,
-        "val_rmse": val_rmse,
-    }
+    y_pred = instance.fit_predict(
+        X_train[fit_idx],
+        y_train[fit_idx],
+        X_val.copy(),
+        y_val.copy(),
+        X_train[query_idx],
+    )
+    rmse = _score(y_pred, y_train[query_idx])
+    return {"fitness": -rmse, "is_valid": 1}

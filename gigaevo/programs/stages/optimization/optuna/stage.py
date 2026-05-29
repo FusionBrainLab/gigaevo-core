@@ -266,6 +266,15 @@ class OptunaOptimizationStage(Stage):
         self.eval_timeout: int = eval_timeout if eval_timeout is not None else 30
         self.n_trials: int = n_trials if n_trials is not None else 50
 
+        # Best-so-far state — populated during compute()/_run_optuna; read by
+        # partial_result() when execute() is cancelled mid-run.
+        self._best_scores: dict[str, float] = {}
+        self._best_value: float | None = None
+        self._best_params: dict[str, Any] = {}
+        self._best_prog_output: Any = None
+        self._best_param_specs: list[ParamSpec] | None = None
+        self._best_parameterized_code: str | None = None
+
     # ------------------------------------------------------------------
     # Phase 1: LLM analysis
     # ------------------------------------------------------------------
@@ -659,17 +668,22 @@ class OptunaOptimizationStage(Stage):
 
         sem = asyncio.Semaphore(self.max_parallel)
 
-        best_scores: dict[str, float] = {}
-        best_value: float | None = None
-        best_params: dict[str, Any] = {p.name: p.initial_value for p in param_specs}
-        best_prog_output: Any = None
+        # Best-so-far state lives on the instance so partial_result() can
+        # salvage it when execute() is cancelled mid-loop. compute() pre-seeds
+        # these attrs to None at the very top of its body.
+        self._best_scores = {}
+        self._best_value = None
+        self._best_params = {p.name: p.initial_value for p in param_specs}
+        self._best_prog_output = None
+        self._best_param_specs = param_specs
+        self._best_parameterized_code = parameterized_code
 
         def _is_better(score: float) -> bool:
-            if best_value is None:
+            if self._best_value is None:
                 return True
             if direction == "minimize":
-                return score < best_value
-            return score > best_value
+                return score < self._best_value
+            return score > self._best_value
 
         # -- Two-phase importance schedule ------------------------------------
         # Early check (~33% into TPE) with conservative threshold to catch
@@ -843,7 +857,7 @@ class OptunaOptimizationStage(Stage):
                         async with _importance_lock:
                             for name in silent_zero:
                                 if name not in frozen_params:
-                                    frozen_val = best_params.get(name)
+                                    frozen_val = self._best_params.get(name)
                                     frozen_params[name] = frozen_val
                                     logger.info(
                                         "[Optuna][{}][{}] Freezing '{}' "
@@ -857,7 +871,7 @@ class OptunaOptimizationStage(Stage):
                                 if name not in frozen_params and (
                                     imp < threshold or imp < abs_thresh
                                 ):
-                                    frozen_val = best_params.get(name)
+                                    frozen_val = self._best_params.get(name)
                                     frozen_params[name] = frozen_val
                                     reason = (
                                         f"< abs_thresh={abs_thresh:.4f}"
@@ -907,17 +921,14 @@ class OptunaOptimizationStage(Stage):
                         n_completed,
                         total_trials,
                         self.score_key,
-                        best_value if best_value is not None else float("nan"),
+                        self._best_value
+                        if self._best_value is not None
+                        else float("nan"),
                         prec=_DEFAULT_PRECISION,
                     )
 
         async def _run_trial(trial_number: int) -> None:
-            nonlocal \
-                best_scores, \
-                best_value, \
-                best_params, \
-                best_prog_output, \
-                _trials_since_improvement
+            nonlocal _trials_since_improvement
             trial = None
             k = trial_number + 1
             try:
@@ -1031,10 +1042,10 @@ class OptunaOptimizationStage(Stage):
                     study.tell(trial, score)
                     async with _completed_lock:
                         if _is_better(score):
-                            best_value = score
-                            best_scores = scores
-                            best_params = dict(values)
-                            best_prog_output = prog_output
+                            self._best_value = score
+                            self._best_scores = scores
+                            self._best_params = dict(values)
+                            self._best_prog_output = prog_output
                             _trials_since_improvement = 0
                         else:
                             _trials_since_improvement += 1
@@ -1083,10 +1094,10 @@ class OptunaOptimizationStage(Stage):
         if baseline_result is not None:
             baseline_score = float(baseline_result[self.score_key])
             if _is_better(baseline_score):
-                best_value = baseline_score
-                best_scores = baseline_result
-                best_params = dict(baseline_values)
-                best_prog_output = baseline_prog
+                self._best_value = baseline_score
+                self._best_scores = baseline_result
+                self._best_params = dict(baseline_values)
+                self._best_prog_output = baseline_prog
             # Tell the study about the baseline so TPE can learn from it.
             try:
                 study.enqueue_trial(baseline_values)
@@ -1159,17 +1170,29 @@ class OptunaOptimizationStage(Stage):
                 pid,
                 reasons_str,
             )
-            return best_params, best_scores, 0, total_trials, best_prog_output
+            return (
+                self._best_params,
+                self._best_scores,
+                0,
+                total_trials,
+                self._best_prog_output,
+            )
 
         logger.debug(
             "[Optuna][{}] Best trial: {} {}={}",
             pid,
-            best_params,
+            self._best_params,
             self.score_key,
-            best_value,
+            self._best_value,
         )
 
-        return best_params, best_scores, n_complete, total_trials, best_prog_output
+        return (
+            self._best_params,
+            self._best_scores,
+            n_complete,
+            total_trials,
+            self._best_prog_output,
+        )
 
     # ------------------------------------------------------------------
     # Main compute
@@ -1191,6 +1214,15 @@ class OptunaOptimizationStage(Stage):
         _compute_start = time.monotonic()
         code = program.code
         pid = program.id[:8]
+
+        # Pre-seed best-so-far state so partial_result() returns None if
+        # execute() is cancelled before _run_optuna populates anything.
+        self._best_scores = {}
+        self._best_value = None
+        self._best_params = {}
+        self._best_prog_output = None
+        self._best_param_specs = None
+        self._best_parameterized_code = None
 
         # 0. Resolve context early (needed for baseline runtime measurement)
         opt_params = cast(OptimizationInput, self.params)
@@ -1326,4 +1358,59 @@ class OptunaOptimizationStage(Stage):
             n_trials=n_complete,
             search_space_summary=search_summary,
             best_program_output=best_prog_output,
+        )
+
+    async def partial_result(self, program: Program) -> OptunaOptimizationOutput | None:
+        """Salvage the in-memory best-so-far when execute() is cancelled.
+
+        Returns None when no completed trial (not even the baseline) has been
+        recorded — the caller treats that as a genuine failure.
+        """
+        if (
+            self._best_value is None
+            or self._best_param_specs is None
+            or self._best_parameterized_code is None
+        ):
+            return None
+
+        param_specs = self._best_param_specs
+        param_types: dict[str, str] = {p.name: p.param_type for p in param_specs}
+        try:
+            optimized_code = desubstitute_params(
+                self._best_parameterized_code,
+                self._best_params,
+                param_types,
+                add_tuned_comment=self.add_tuned_comment,
+            )
+        except Exception:
+            return None
+
+        search_summary = [
+            {
+                "name": p.name,
+                "param_type": p.param_type,
+                "initial_value": p.initial_value,
+                "optimized_value": self._best_params.get(p.name),
+                "low": p.low,
+                "high": p.high,
+                "choices": p.choices,
+            }
+            for p in param_specs
+        ]
+
+        float_scores: dict[str, float] = {}
+        for k, v in self._best_scores.items():
+            try:
+                float_scores[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+
+        return OptunaOptimizationOutput(
+            optimized_code=optimized_code,
+            best_scores=float_scores,
+            best_params=self._best_params,
+            n_params=len(param_specs),
+            n_trials=0,
+            search_space_summary=search_summary,
+            best_program_output=self._best_prog_output,
         )

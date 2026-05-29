@@ -233,6 +233,7 @@ def _build_program_cards_from_top_programs(
     programs_path: Path | None,
     banks_path: Path,
     best_programs_percent: float,
+    higher_is_better: bool = True,
 ) -> list[dict[str, Any]]:
     if (
         programs_path is None
@@ -264,12 +265,15 @@ def _build_program_cards_from_top_programs(
     if not eligible_programs:
         return []
 
+    # When higher_is_better=True the best programs sit at the top of a
+    # descending sort; for lower-is-better tasks (vartodd_ham_high, loss-style
+    # metrics) the best programs are the LOWEST fitness, so we flip the sort.
     eligible_programs.sort(
         key=lambda program: (
             float(program.get("fitness", 0.0)),
             str(program["program_id"]),
         ),
-        reverse=True,
+        reverse=higher_is_better,
     )
     selected_count = _top_percent_count(len(eligible_programs), best_programs_percent)
     selected_programs = eligible_programs[:selected_count]
@@ -386,6 +390,7 @@ def load_memory_cards(
     best_programs_percent: float = 0.0,
     usage_updates_path: Path | None = None,
     memory: CardMemory | None = None,
+    higher_is_better: bool = True,
 ) -> list:
     """Load idea and program cards from banks, apply usage updates and filters."""
     payload = _load_json(path)
@@ -417,6 +422,7 @@ def load_memory_cards(
         programs_path=programs_path,
         banks_path=path,
         best_programs_percent=best_programs_percent,
+        higher_is_better=higher_is_better,
     )
     return [normalize_memory_card(c) for c in all_cards]
 
@@ -468,6 +474,7 @@ def main(
     config_path: Path | None = None,
     checkpoint_dir: str | Path | None = None,
     namespace: str | None = None,
+    higher_is_better: bool = True,
 ) -> dict[str, Any] | None:
     """Load cards from banks, write to memory backend, report stats.
 
@@ -541,6 +548,7 @@ def main(
             best_programs_percent=cfg.best_programs_percent,
             usage_updates_path=_usage_updates_path,
             memory=memory,
+            higher_is_better=higher_is_better,
         )
         logger.info(
             "[Memory][WritePipeline] Loaded {} cards from banks: {} (filtered by: {})",

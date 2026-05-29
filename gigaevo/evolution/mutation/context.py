@@ -311,10 +311,18 @@ class EvolutionaryStatisticsMutationContext(MutationContext):
             f"This program: iter={iteration_str}  gen={stats.generation}  "
             f"fitness={focal_fit_str}{rank_part}"
         )
-        lines.append(
-            f"Window: iters [{stats.iter_window_lo}..{stats.iter_window_hi}]  "
-            f"programs={stats.iter_window_programs}  valid={stats.iter_window_valid}"
+        evaluated_in_window = (
+            stats.iter_window_programs - stats.iter_window_pending_count
         )
+        window_line = (
+            f"Window: iters [{stats.iter_window_lo}..{stats.iter_window_hi}]  "
+            f"programs={stats.iter_window_programs}  "
+            f"evaluated={evaluated_in_window}  "
+            f"valid={stats.iter_window_valid}"
+        )
+        if stats.iter_window_pending_count > 0:
+            window_line += f"  pending={stats.iter_window_pending_count}"
+        lines.append(window_line)
         if archive_line is not None:
             lines.append(archive_line)
 
@@ -362,11 +370,11 @@ class EvolutionaryStatisticsMutationContext(MutationContext):
             "Invalid streak (max consecutive in window): "
             f"{stats.iter_window_invalid_streak_max}"
         )
-        if stats.iter_window_programs > 0:
-            pct = stats.iter_window_invalid_count / stats.iter_window_programs * 100
+        if evaluated_in_window > 0:
+            pct = stats.iter_window_invalid_count / evaluated_in_window * 100
             lines.append(
                 f"Recent failure rate: {stats.iter_window_invalid_count}/"
-                f"{stats.iter_window_programs} invalid ({pct:.1f}%)"
+                f"{evaluated_in_window} invalid ({pct:.1f}%)"
             )
 
         return "\n".join(lines)

@@ -212,6 +212,113 @@ class TestLoadMemoryCardsEdgeCases:
         fitnesses = [c.fitness for c in program_cards]
         assert fitnesses == sorted(fitnesses, reverse=True)
 
+
+# ===========================================================================
+# Direction-aware program selection (higher_is_better)
+# ===========================================================================
+
+
+class TestProgramSelectionDirection:
+    """For lower-is-better problems (e.g. vartodd_ham_high, validation loss),
+    the "best" programs are the LOWEST fitness, not the highest. The memory
+    pipeline must honour metrics.yaml direction so the program cards fed to
+    the mutator are actually the better programs.
+    """
+
+    def test_lower_is_better_picks_lowest_fitness(self, tmp_path):
+        banks = _make_banks(tmp_path, active_bank=[])
+        best = _make_best_ideas(tmp_path, best_ideas=[])
+        programs = _make_programs(
+            tmp_path,
+            programs=[
+                {
+                    "id": "p_worst",
+                    "fitness": 500.0,
+                    "code": "a",
+                    "task_description_summary": "t",
+                },
+                {
+                    "id": "p_best",
+                    "fitness": 400.0,
+                    "code": "b",
+                    "task_description_summary": "t",
+                },
+                {
+                    "id": "p_mid",
+                    "fitness": 450.0,
+                    "code": "c",
+                    "task_description_summary": "t",
+                },
+            ],
+        )
+        cards = load_memory_cards(
+            banks,
+            best,
+            programs_path=programs,
+            best_programs_percent=1.0,
+            higher_is_better=False,
+        )
+        program_cards = [c for c in cards if c.category == "program"]
+        assert len(program_cards) == 1
+        assert program_cards[0].program_id == "p_best"
+        assert program_cards[0].fitness == 400.0
+
+    def test_lower_is_better_orders_by_ascending_fitness(self, tmp_path):
+        banks = _make_banks(tmp_path, active_bank=[])
+        best = _make_best_ideas(tmp_path, best_ideas=[])
+        programs = _make_programs(
+            tmp_path,
+            programs=[
+                {
+                    "id": f"p{i}",
+                    "fitness": float(fit),
+                    "code": "x",
+                    "task_description_summary": "t",
+                }
+                for i, fit in enumerate([500.0, 410.0, 450.0, 405.0, 460.0])
+            ],
+        )
+        cards = load_memory_cards(
+            banks,
+            best,
+            programs_path=programs,
+            best_programs_percent=100.0,
+            higher_is_better=False,
+        )
+        program_cards = [c for c in cards if c.category == "program"]
+        fitnesses = [c.fitness for c in program_cards]
+        assert fitnesses == sorted(fitnesses)
+
+    def test_higher_is_better_default_picks_highest_fitness(self, tmp_path):
+        banks = _make_banks(tmp_path, active_bank=[])
+        best = _make_best_ideas(tmp_path, best_ideas=[])
+        programs = _make_programs(
+            tmp_path,
+            programs=[
+                {
+                    "id": "p_low",
+                    "fitness": 0.1,
+                    "code": "a",
+                    "task_description_summary": "t",
+                },
+                {
+                    "id": "p_high",
+                    "fitness": 0.9,
+                    "code": "b",
+                    "task_description_summary": "t",
+                },
+            ],
+        )
+        cards = load_memory_cards(
+            banks,
+            best,
+            programs_path=programs,
+            best_programs_percent=50.0,
+        )
+        program_cards = [c for c in cards if c.category == "program"]
+        assert len(program_cards) == 1
+        assert program_cards[0].program_id == "p_high"
+
     def test_program_without_fitness_skipped(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
         best = _make_best_ideas(tmp_path, best_ideas=[])

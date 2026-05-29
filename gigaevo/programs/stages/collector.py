@@ -175,9 +175,15 @@ class EvolutionaryStatistics(StageIO):
         (None, None, None), description="Medians of window thirds, in iter order"
     )
     iter_window_invalid_streak_max: int = Field(
-        0, description="Max consecutive invalid in window"
+        0, description="Max consecutive invalid in window (pending programs skipped)"
     )
-    iter_window_invalid_count: int = Field(0, description="Invalid count in window")
+    iter_window_invalid_count: int = Field(
+        0, description="Invalid count in window (over evaluated programs only)"
+    )
+    iter_window_pending_count: int = Field(
+        0,
+        description="Programs in window still mid-DAG (no is_valid key written yet)",
+    )
     iters_since_last_new_best: int = Field(
         0, description="Iters since global running-best last advanced (at focal)"
     )
@@ -282,6 +288,8 @@ def _compute_num_children_stats(programs: list[Program]) -> tuple[float, int, in
 def _max_invalid_streak(window: list[Program]) -> int:
     streak = max_streak = 0
     for p in window:
+        if VALIDITY_KEY not in p.metrics:
+            continue
         if p.metrics.get(VALIDITY_KEY, 0) > 0:
             streak = 0
         else:
@@ -491,6 +499,7 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             "iter_window_trend_thirds": (None, None, None),
             "iter_window_invalid_streak_max": 0,
             "iter_window_invalid_count": 0,
+            "iter_window_pending_count": 0,
             "iters_since_last_new_best": 0,
         }
 
@@ -508,7 +517,6 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         left = bisect.bisect_left(self._cached_iter_keys, lo)
         right = bisect.bisect_right(self._cached_iter_keys, hi)
         window = self._cached_iter_sorted[left:right]
-        window_size = len(window)
 
         valid_with_fit = [
             p
@@ -527,8 +535,16 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
         focal_already_counted = any(p.id == program.id for p in valid_with_fit)
         if focal_valid and focal_fit is not None and not focal_already_counted:
             valid_with_fit = valid_with_fit + [program]
-        invalid_count = window_size - sum(
-            1 for p in window if p.metrics.get(VALIDITY_KEY, 0) > 0
+        # Counters dedupe by id + fold in the focal's fresh metrics so the
+        # rendered programs/evaluated/valid stay consistent (valid<=evaluated<=programs).
+        counted = {p.id: p for p in window}
+        counted[program.id] = program
+        counted_members = list(counted.values())
+        window_size = len(counted_members)
+        evaluated_in_window = [p for p in counted_members if VALIDITY_KEY in p.metrics]
+        pending_count = window_size - len(evaluated_in_window)
+        invalid_count = len(evaluated_in_window) - sum(
+            1 for p in evaluated_in_window if p.metrics.get(VALIDITY_KEY, 0) > 0
         )
         invalid_streak_max = _max_invalid_streak(window)
 
@@ -539,6 +555,7 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             "iter_window_valid": len(valid_with_fit),
             "iter_window_invalid_streak_max": invalid_streak_max,
             "iter_window_invalid_count": invalid_count,
+            "iter_window_pending_count": pending_count,
             "iter_window_best_fitness": None,
             "iter_window_best_iter": None,
             "iter_window_rank": None,

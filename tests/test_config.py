@@ -51,12 +51,19 @@ def _compose(*overrides: str):
 
 
 def _group_choices(group: str) -> list[str]:
-    """Return non-private YAML stems in a config group directory."""
-    return [
-        f.stem
-        for f in sorted((CONFIG_DIR / group).glob("*.yaml"))
-        if not f.name.startswith("_")
-    ]
+    """Return non-private YAML choices in a config group directory.
+
+    Recurses into subdirectories so namespaced choices like ``tabular/2d_local_ood``
+    stay covered; any path with a private (``_``-prefixed) part is skipped.
+    """
+    group_dir = CONFIG_DIR / group
+    choices = []
+    for f in sorted(group_dir.rglob("*.yaml")):
+        rel = f.relative_to(group_dir).with_suffix("")
+        if any(part.startswith("_") for part in rel.parts):
+            continue
+        choices.append(rel.as_posix())
+    return choices
 
 
 # ---------------------------------------------------------------------------

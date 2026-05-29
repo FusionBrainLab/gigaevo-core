@@ -231,6 +231,135 @@ class FitnessProportionalTournamentEliteSelector(FitnessProportionalEliteSelecto
         return random.sample(pool, total)
 
 
+class FitnessProportionalTournamentBoundedGapEliteSelector(
+    FitnessProportionalTournamentEliteSelector
+):
+    """FPT for parent #1; FPT for parent #2.. restricted to elites within a
+    bounded fitness gap of parent #1 — a same-stratum coupler.
+
+    Derived from the 2026-05-26 pair-coupling audit on two
+    ``num_parents=2`` runs (HoVer + tabular_regression): pairs whose
+    ``|p1.fitness - p2.fitness|`` lands in the top quartile of pairwise
+    gaps advance ~3-5x worse than inner-quartile pairs in both runs.
+    LCA-based and iter/gen-gap couplers do not survive the data
+    (non-monotonic / sign-flip).
+
+    Behaviour
+    ---------
+    For ``total >= 2`` the call decomposes into:
+
+    1. parent #1 via inherited FPT — preserves the dominant
+       ``pair_max_fit`` signal (r~+0.43 on tabular child fitness).
+    2. ``natural_gap = 2 * MAD(elite_fitnesses)`` — O(n), deterministic
+       estimator of the median pairwise gap. ``MAD =
+       median(|f - median(f)|)``.
+    3. ``delta = gap_factor * natural_gap``.
+    4. ``candidates = {e in elites : e != parent_1 and
+       |e.fit - parent_1.fit| <= delta}``.
+    5. If fewer than ``total - 1`` candidates survive, fall back to
+       ``elites \\ {parent_1}`` so a run with a high-fitness outlier
+       does not deadlock.
+    6. parent #2.. via inherited FPT on ``candidates``.
+
+    For ``total <= 1`` the call delegates to the inherited FPT
+    unchanged — there is nothing to couple.
+
+    Parameters
+    ----------
+    gap_factor:
+        Multiplier on the natural gap. ``1.5`` (default) drops
+        approximately the top quartile of fitness-gap pairs in the
+        audit's two runs. ``+inf`` is equivalent to plain FPT. Must be
+        non-negative.
+    """
+
+    def __init__(
+        self,
+        fitness_key: str,
+        fitness_key_higher_is_better: bool = True,
+        temperature: float | None = None,
+        pool_multiplier: int = 5,
+        gap_factor: float = 1.5,
+    ):
+        super().__init__(
+            fitness_key=fitness_key,
+            fitness_key_higher_is_better=fitness_key_higher_is_better,
+            temperature=temperature,
+            pool_multiplier=pool_multiplier,
+        )
+        if not np.isfinite(gap_factor) and gap_factor != float("inf"):
+            raise ValueError(f"gap_factor must be finite or +inf, got {gap_factor}")
+        if gap_factor < 0:
+            raise ValueError(f"gap_factor must be non-negative, got {gap_factor}")
+        self.gap_factor = float(gap_factor)
+
+    @staticmethod
+    def _natural_gap(fitnesses: list[float]) -> float:
+        arr = np.asarray(fitnesses, dtype=np.float64)
+        if len(arr) < 2:
+            return 0.0
+        return float(2.0 * np.median(np.abs(arr - np.median(arr))))
+
+    def __call__(self, programs: list[Program], total: int) -> list[Program]:
+        logger.debug(
+            "FitnessProportionalTournamentBoundedGapEliteSelector: selecting {} "
+            "from {} programs (gap_factor={})",
+            total,
+            len(programs),
+            self.gap_factor,
+        )
+
+        if len(programs) <= total:
+            return programs
+        if total <= 1:
+            return super().__call__(programs, total)
+
+        first = super().__call__(programs, 1)
+        if not first:
+            return super().__call__(programs, total)
+        p1 = first[0]
+
+        fitnesses = []
+        for p in programs:
+            if self.fitness_key not in p.metrics:
+                raise ValueError(
+                    f"Missing fitness key '{self.fitness_key}' in program {p.id}"
+                )
+            fitnesses.append(p.metrics[self.fitness_key])
+
+        if not all(np.isfinite(f) for f in fitnesses):
+            logger.warning(
+                "FitnessProportionalTournamentBoundedGapEliteSelector: non-finite "
+                "fitnesses; coupling disabled, uniform-sampling the remainder"
+            )
+            remaining = [p for p in programs if p is not p1]
+            rest = random.sample(remaining, min(total - 1, len(remaining)))
+            return [p1, *rest]
+
+        natural_gap = self._natural_gap(fitnesses)
+        delta = self.gap_factor * natural_gap
+        p1_fit = p1.metrics[self.fitness_key]
+
+        candidates = [
+            p
+            for p in programs
+            if p is not p1 and abs(p.metrics[self.fitness_key] - p1_fit) <= delta
+        ]
+        if len(candidates) < total - 1:
+            logger.debug(
+                "FitnessProportionalTournamentBoundedGapEliteSelector: only {} "
+                "candidates within delta={:.4g} of parent#1 (need {}); "
+                "falling back to full elite pool minus parent#1",
+                len(candidates),
+                delta,
+                total - 1,
+            )
+            candidates = [p for p in programs if p is not p1]
+
+        rest = super().__call__(candidates, total - 1)
+        return [p1, *rest]
+
+
 class WeightedEliteSelector(EliteSelector):
     """ShinkaEvolve-inspired weighted sampling combining sigmoid-scaled fitness
     with a children-count novelty penalty.

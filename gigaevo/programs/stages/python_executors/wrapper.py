@@ -317,6 +317,7 @@ async def run_exec_runner(
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
         "NUMEXPR_NUM_THREADS",
+        "LOKY_MAX_CPU_COUNT",
     ):
         env.setdefault(_var, _exec_threads)
     if python_path:

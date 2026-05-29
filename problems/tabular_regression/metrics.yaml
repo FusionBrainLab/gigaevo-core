@@ -1,6 +1,6 @@
 specs:
   fitness:
-    description: Negative mean RMSE across k-fold CV on train ∪ val (higher is better, perfect = 0). MAP-Elites selection signal.
+    description: Negative mean RMSE across 3-fold CV over canonical X_train (higher is better, perfect = 0). MAP-Elites selection signal.
     decimals: 5
     is_primary: true
     higher_is_better: true
@@ -18,7 +18,7 @@ specs:
     include_in_prompts: true
     significant_change: 1.0
   cv_rmse_mean:
-    description: Mean RMSE across k-fold CV on combined train+val (raw target scale, default k=5). Drives fitness.
+    description: Mean RMSE across k-fold CV over canonical X_train (raw target scale, default k=3). Drives fitness.
     decimals: 5
     is_primary: false
     higher_is_better: false
@@ -35,3 +35,21 @@ specs:
     upper_bound: 0.5
     include_in_prompts: true
     significant_change: 1.0e-4
+  local_lipschitz_p95:
+    description: log1p of the 95th-percentile normalised local Lipschitz slope (BD axis; archive coordinate, not optimisation target).
+    decimals: 4
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 4.0
+    include_in_prompts: false
+    significant_change: 1.0e-3
+  ood_delta_slope:
+    description: log1p of normalised median |f(X_shift) - f(X_val)| under a 1.5 sigma covariate shift (BD axis; archive coordinate, not optimisation target).
+    decimals: 4
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 2.0
+    include_in_prompts: false
+    significant_change: 1.0e-3
