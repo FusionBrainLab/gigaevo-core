@@ -1,0 +1,24 @@
+TASK — TABULAR REGRESSION (black-friday)
+
+CONTRACT
+- entrypoint() -> Model class; Model() takes no arguments
+- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
+- return a 1D float array of length len(X_query)
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0-3]      numeric
+- [4]        binary (0/1)
+- [5]       categorical (integer code), 2 levels: 0=F 1=M
+- [6]       categorical (integer code), 7 levels: 0=0-17 1=18-25 2=26-35 3=36-45 4=46-50 5=51-55 6=55+
+- [7]       categorical (integer code), 3 levels: 0=A 1=B 2=C
+- [8]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4+
+
+PROTOCOL
+- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

@@ -1,0 +1,21 @@
+TASK — TABULAR MULTICLASS CLASSIFICATION (covtype2, 7 classes)
+
+CONTRACT
+- entrypoint() -> Model class; Model() takes no arguments
+- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
+- return a 2D array (len(X_query), n_classes) of class probabilities (column j = P(class j)); 1D int labels also accepted
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0-9]      numeric
+- [10-13]    binary (0/1)
+- [14]       categorical (integer code), 40 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6 7=7 8=8 9=9 10=10 11=11 12=12 13=13 14=14 15=15 16=16 17=17 18=18 19=19 20=20 21=21 22=22 23=23 24=24 25=25 26=26 27=27 28=28 29=29 30=30 31=31 32=32 33=33 34=34 35=35 36=36 37=37 38=38 39=39
+
+PROTOCOL
+- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

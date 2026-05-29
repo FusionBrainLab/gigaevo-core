@@ -1,0 +1,22 @@
+TASK — TABULAR REGRESSION (diamond)
+
+CONTRACT
+- entrypoint() -> Model class; Model() takes no arguments
+- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
+- return a 1D float array of length len(X_query)
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0-5]      numeric
+- [6]       categorical (integer code), 5 levels: 0=Fair 1=Good 2=Ideal 3=Premium 4=Very Good
+- [7]       categorical (integer code), 7 levels: 0=D 1=E 2=F 3=G 4=H 5=I 6=J
+- [8]       categorical (integer code), 8 levels: 0=I1 1=IF 2=SI1 3=SI2 4=VS1 5=VS2 6=VVS1 7=VVS2
+
+PROTOCOL
+- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs

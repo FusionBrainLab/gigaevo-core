@@ -1,0 +1,19 @@
+TASK — TABULAR REGRESSION (house)
+
+CONTRACT
+- entrypoint() -> Model class; Model() takes no arguments
+- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
+- return a 1D float array of length len(X_query)
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0-15]     numeric
+
+PROTOCOL
+- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs
