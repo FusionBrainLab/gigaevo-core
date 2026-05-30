@@ -3,7 +3,7 @@
 defaults:
   - /algorithm/_base
 
-# 2D MAP-Elites for tabular regression: local_lipschitz_p95 × ood_delta_slope
+# 2D MAP-Elites for tabular: local_lipschitz_p95 × ood_delta_slope
 # 15×10 = 150 cells. Requires problem.metrics_context to define both BD keys.
 
 behavior_space:
