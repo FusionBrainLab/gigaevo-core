@@ -1,0 +1,27 @@
+TASK — TABULAR BINARY CLASSIFICATION (adult)
+
+CONTRACT
+- entrypoint() -> Model class; Model() takes no arguments
+- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
+- return a 2D array (len(X_query), n_classes) of class probabilities (column j = P(class j)); 1D int labels also accepted
+- all predictions finite (no NaN, no inf)
+
+COLUMNS (assembled X[:, j], left to right)
+- [0-5]      numeric
+- [6]        binary (0/1)
+- [7]       categorical (integer code), 9 levels: 0=Federal-gov 1=Local-gov 2=Never-worked 3=Private 4=Self-emp-inc 5=Self-emp-not-inc 6=State-gov 7=Without-pay 8=nan
+- [8]       categorical (integer code), 16 levels: 0=10th 1=11th 2=12th 3=1st-4th 4=5th-6th 5=7th-8th 6=9th 7=Assoc-acdm 8=Assoc-voc 9=Bachelors 10=Doctorate 11=HS-grad 12=Masters 13=Preschool 14=Prof-school 15=Some-college
+- [9]       categorical (integer code), 7 levels: 0=Divorced 1=Married-AF-spouse 2=Married-civ-spouse 3=Married-spouse-absent 4=Never-married 5=Separated 6=Widowed
+- [10]       categorical (integer code), 15 levels: 0=Adm-clerical 1=Armed-Forces 2=Craft-repair 3=Exec-managerial 4=Farming-fishing 5=Handlers-cleaners 6=Machine-op-inspct 7=Other-service 8=Priv-house-serv 9=Prof-specialty 10=Protective-serv 11=Sales 12=Tech-support 13=Transport-moving 14=nan
+- [11]       categorical (integer code), 6 levels: 0=Husband 1=Not-in-family 2=Other-relative 3=Own-child 4=Unmarried 5=Wife
+- [12]       categorical (integer code), 5 levels: 0=Amer-Indian-Eskimo 1=Asian-Pac-Islander 2=Black 3=Other 4=White
+- [13]       categorical (integer code), 42 levels: 0=Cambodia 1=Canada 2=China 3=Columbia 4=Cuba 5=Dominican-Republic ... 41=nan
+
+PROTOCOL
+- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+CONSTRAINTS
+- fix all random seeds (numpy + library random_state/random_seed/seed)
+- no dataset peek (no fetch_*, openml, pickled caches)
+- no print()/stdout in fit_predict; silence library logs
