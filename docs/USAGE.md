@@ -129,6 +129,15 @@ python run.py problem.name=heilbron \
 > zero cards silently. Verify the resolved config does not contain
 > `Null*` targets before trusting results.
 
+### Tabular Suite (regression + classification, 10 datasets)
+
+See `problems/tabular/README.md`. Requires `$GIGAEVO_TABULAR_DATA` pointing at the tabm data root.
+
+```bash
+GIGAEVO_TABULAR_DATA=/path/to/data \
+python run.py problem.name=tabular/california algorithm=tabular/2d_local_ood
+```
+
 ## Viewing Configuration
 
 ```bash
