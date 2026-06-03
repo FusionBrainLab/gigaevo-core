@@ -34,10 +34,34 @@ _HEADERS = {
     "multiclass": "TASK — TABULAR MULTICLASS CLASSIFICATION ({name}, {k} classes)",
 }
 
-_RETURN = {
-    "regression": "- return a 1D float array of length len(X_query)",
-    "binclass": "- return a 2D array (len(X_query), n_classes) of class probabilities (column j = P(class j))",
-    "multiclass": "- return a 2D array (len(X_query), n_classes) of class probabilities (column j = P(class j))",
+_REG_SKELETON = """```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return preds  # 1D float array, shape (len(X_query),)
+
+def entrypoint() -> type:
+    return Model
+```"""
+
+_CLF_SKELETON = """```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
+
+def entrypoint() -> type:
+    return Model
+```"""
+
+_SKELETON = {
+    "regression": _REG_SKELETON,
+    "binclass": _CLF_SKELETON,
+    "multiclass": _CLF_SKELETON,
 }
 
 # General, model-agnostic guidance to steer the mutation LLM. Kept deliberately
@@ -74,9 +98,8 @@ def render(name: str, task_type: str) -> str:
         parts += [f"DATASET — {sem['source']}", ""]
     parts += [
         "CONTRACT",
-        "- entrypoint() -> Model class; Model() takes no arguments",
-        "- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray",
-        _RETURN[task_type],
+        _SKELETON[task_type],
+        "- Model() takes no constructor arguments",
         "- all predictions finite (no NaN, no inf)",
         "",
         cols,

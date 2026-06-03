@@ -3,9 +3,18 @@ TASK — TABULAR REGRESSION (california)
 DATASET — California Housing (1990 census block groups); predict median house value in units of $100k, capped at 5.0
 
 CONTRACT
-- entrypoint() -> Model class; Model() takes no arguments
-- Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
-- return a 1D float array of length len(X_query)
+```python
+import numpy as np
+
+class Model:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
+        ...
+        return preds  # 1D float array, shape (len(X_query),)
+
+def entrypoint() -> type:
+    return Model
+```
+- Model() takes no constructor arguments
 - all predictions finite (no NaN, no inf)
 
 COLUMNS (assembled X[:, j], left to right)
