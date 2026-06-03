@@ -1,5 +1,7 @@
 TASK — TABULAR REGRESSION (california)
 
+DATASET — California Housing (1990 census block groups); predict median house value in units of $100k, capped at 5.0
+
 CONTRACT
 - entrypoint() -> Model class; Model() takes no arguments
 - Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
@@ -7,18 +9,26 @@ CONTRACT
 - all predictions finite (no NaN, no inf)
 
 COLUMNS (assembled X[:, j], left to right)
-- [0] MedInc      median income (units of $10k)
-- [1] HouseAge    median house age (years)
+- [0] MedInc      median income of households in the block group (units of $10k)
+- [1] HouseAge    median house age in the block group (years)
 - [2] AveRooms    average rooms per household
 - [3] AveBedrms   average bedrooms per household
-- [4] Population   block-group population
+- [4] Population  block-group population (count)
 - [5] AveOccup    average occupants per household
-- [6] Latitude    degrees (~32.5 to 42.0)
-- [7] Longitude   degrees (~-124.5 to -114.0)
+- [6] Latitude    block-group latitude (degrees, ~32.5 to 42.0)
+- [7] Longitude   block-group longitude (degrees, ~-124.3 to -114.3)
 
 PROTOCOL
-- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
 - categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- for a skewed target, consider a log/power transform of y and clip predictions back to the observed target range
 
 CONSTRAINTS
 - fix all random seeds (numpy + library random_state/random_seed/seed)

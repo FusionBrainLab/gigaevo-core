@@ -1,5 +1,7 @@
 TASK — TABULAR REGRESSION (black-friday)
 
+DATASET — predict a customer's purchase amount at a Black Friday retail event from demographic and product-category attributes
+
 CONTRACT
 - entrypoint() -> Model class; Model() takes no arguments
 - Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
@@ -7,16 +9,27 @@ CONTRACT
 - all predictions finite (no NaN, no inf)
 
 COLUMNS (assembled X[:, j], left to right)
-- [0-3]      numeric
-- [4]        binary (0/1)
-- [5]       categorical (integer code), 2 levels: 0=F 1=M
-- [6]       categorical (integer code), 7 levels: 0=0-17 1=18-25 2=26-35 3=36-45 4=46-50 5=51-55 6=55+
-- [7]       categorical (integer code), 3 levels: 0=A 1=B 2=C
-- [8]       categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4+
+- [0] Occupation  customer occupation, masked code 0-20 (treated as numeric)
+- [1] Product_Category_1 primary product category, integer 1-18 (no missing)
+- [2] Product_Category_2 secondary product category, integer 2-18 (sparser; originally ~31% missing)
+- [3] Product_Category_3 tertiary product category, integer 3-18 (sparsest; originally ~69% missing)
+- [4] Marital_Status 0=single, 1=married (~40% married)
+- [5] Gender      customer gender — categorical (integer code), 2 levels: 0=F 1=M
+- [6] Age         age range bin — categorical (integer code), 7 levels: 0=0-17 1=18-25 2=26-35 3=36-45 4=46-50 5=51-55 6=55+
+- [7] City_Category city tier (anonymized) — categorical (integer code), 3 levels: 0=A 1=B 2=C
+- [8] Stay_In_Current_City_Years years lived in current city — categorical (integer code), 5 levels: 0=0 1=1 2=2 3=3 4=4+
 
 PROTOCOL
-- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
 - categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- for a skewed target, consider a log/power transform of y and clip predictions back to the observed target range
 
 CONSTRAINTS
 - fix all random seeds (numpy + library random_state/random_seed/seed)

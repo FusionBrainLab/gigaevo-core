@@ -1,17 +1,27 @@
 TASK — TABULAR MULTICLASS CLASSIFICATION (otto, 9 classes)
 
+DATASET — Otto Group product classification; classify products into 9 categories from 93 anonymized non-negative count features (sparse, many zeros)
+
 CONTRACT
 - entrypoint() -> Model class; Model() takes no arguments
 - Model().fit_predict(X_train, y_train, X_val, y_val, X_query) -> np.ndarray
-- return a 2D array (len(X_query), n_classes) of class probabilities (column j = P(class j)); 1D int labels also accepted
+- return a 2D array (len(X_query), n_classes) of class probabilities (column j = P(class j))
 - all predictions finite (no NaN, no inf)
 
 COLUMNS (assembled X[:, j], left to right)
 - [0-92]     numeric
 
 PROTOCOL
-- (X_train, y_train, X_val, y_val) are training data; X_query is the scoring slice
+- (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
 - categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
+
+STRATEGY (general heuristics; adapt to the data)
+- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
+- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
+- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
+- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
+- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
+- return well-calibrated per-class probabilities and handle class imbalance if present
 
 CONSTRAINTS
 - fix all random seeds (numpy + library random_state/random_seed/seed)

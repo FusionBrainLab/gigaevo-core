@@ -181,8 +181,30 @@ def _fmt_vocab(levels: tuple[str, ...]) -> str:
     return f"{len(levels)} levels: {head} ... {len(levels) - 1}={levels[-1]}"
 
 
-def describe_columns(name: str) -> str:
+def _named_columns(cols: tuple[ColumnSpec, ...], names: dict) -> str:
+    lines: list[str] = ["COLUMNS (assembled X[:, j], left to right)"]
+    for c in cols:
+        meta = names.get(c.index, names.get(str(c.index), {})) or {}
+        label = str(meta.get("name", "")).strip()
+        desc = str(meta.get("desc", "")).strip()
+        if c.kind == "categorical":
+            vocab_note = f"categorical (integer code), {_fmt_vocab(c.vocabulary)}"
+            note = f"{desc} — {vocab_note}" if desc else vocab_note
+        elif c.kind == "binary":
+            note = desc or "binary (0/1)"
+        else:
+            note = desc or "numeric"
+        if label:
+            lines.append(f"- [{c.index}] {label:<11} {note}".rstrip())
+        else:
+            lines.append(f"- [{c.index}]{'':<6} {note}")
+    return "\n".join(lines)
+
+
+def describe_columns(name: str, names: dict | None = None) -> str:
     ds = load_dataset(name)
+    if names:
+        return _named_columns(ds.columns, names)
     lines: list[str] = ["COLUMNS (assembled X[:, j], left to right)"]
     i = 0
     cols = ds.columns

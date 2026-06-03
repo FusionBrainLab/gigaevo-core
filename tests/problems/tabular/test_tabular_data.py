@@ -62,3 +62,19 @@ def test_describe_columns_lists_categorical_values(data_root):
     assert "categorical" in text
     # diamond cut categories include 'Ideal'
     assert "Ideal" in text
+
+
+def test_describe_columns_named_path_keeps_vocab(data_root):
+    # adult: numerics 0-5, binary 6, categoricals 7-13 (col 7 = workclass).
+    names = {
+        0: {"name": "age", "desc": "age in years"},
+        7: {"name": "workclass", "desc": "employer / employment type"},
+    }
+    text = tabular_data.describe_columns("adult", names=names)
+    # semantic name + desc surface for the numeric column
+    assert "age in years" in text
+    # a named categorical shows BOTH its semantic label/desc AND its decoded
+    # vocabulary (a program needs the code->value mapping to encode it)
+    assert "workclass" in text
+    assert "employer / employment type" in text
+    assert "Private" in text

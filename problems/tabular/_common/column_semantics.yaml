@@ -1,0 +1,150 @@
+# Optional per-dataset semantic meaning for the *assembled* feature columns.
+#
+# Index = position in X[:, j] AFTER tabM assembly (numeric block, then binary,
+# then categorical) — NOT the original source order. Every mapping here is
+# verified empirically against the .npy column statistics / cardinalities, not
+# taken on faith from dataset docs. Datasets (or individual columns) with no
+# recoverable meaning are simply omitted and fall back to the generic block.
+#
+# For categorical columns the decoded code->value vocabulary is appended
+# automatically by the renderer, so a `desc` only needs the semantic role (and
+# any ordering for ordinal grades).
+#
+# Schema:
+#   <dataset>:
+#     source: one-line domain context (what the rows are, what is predicted)
+#     columns:               # optional; omit for anonymized datasets
+#       <index>: {name: <short>, desc: <meaning + units/range>}
+
+california:
+  source: "California Housing (1990 census block groups); predict median house value in units of $100k, capped at 5.0"
+  columns:
+    0: {name: MedInc,     desc: "median income of households in the block group (units of $10k)"}
+    1: {name: HouseAge,   desc: "median house age in the block group (years)"}
+    2: {name: AveRooms,   desc: "average rooms per household"}
+    3: {name: AveBedrms,  desc: "average bedrooms per household"}
+    4: {name: Population, desc: "block-group population (count)"}
+    5: {name: AveOccup,   desc: "average occupants per household"}
+    6: {name: Latitude,   desc: "block-group latitude (degrees, ~32.5 to 42.0)"}
+    7: {name: Longitude,  desc: "block-group longitude (degrees, ~-124.3 to -114.3)"}
+
+diamond:
+  source: "predict diamond price (USD) from physical dimensions and quality grades"
+  columns:
+    0: {name: carat,   desc: "diamond weight in carats (~0.2-4.5)"}
+    1: {name: depth,   desc: "total depth percentage, 2*z/(x+y) (~43-79)"}
+    2: {name: table,   desc: "width of top facet relative to widest point, percent (~50-79)"}
+    3: {name: x,       desc: "length in mm (~0-10.23)"}
+    4: {name: y,       desc: "width in mm (~0-58.9; large values are data-entry outliers)"}
+    5: {name: z,       desc: "depth/height in mm (~0-31.8; large values are outliers)"}
+    6: {name: cut,     desc: "cut quality, ordinal Fair < Good < Very Good < Premium < Ideal"}
+    7: {name: color,   desc: "color grade, ordinal D (best) to J (worst)"}
+    8: {name: clarity, desc: "clarity grade, ordinal I1 (worst) to IF (best)"}
+
+adult:
+  source: "predict whether a person's annual income exceeds $50K from 1994 US census attributes"
+  columns:
+    0: {name: age,            desc: "age in years (17-90)"}
+    1: {name: fnlwgt,         desc: "census final sampling weight, people the row represents (~1.9e4-1.5e6)"}
+    2: {name: education_num,  desc: "education level as ordinal integer 1 (Preschool) to 16 (Doctorate)"}
+    3: {name: capital_gain,   desc: "capital gains income, USD (0-99999)"}
+    4: {name: capital_loss,   desc: "capital losses, USD (0-4356)"}
+    5: {name: hours_per_week, desc: "hours worked per week (1-99)"}
+    6: {name: sex,            desc: "sex; 1=Female (~33%), 0=Male"}
+    7: {name: workclass,      desc: "employer / employment type"}
+    8: {name: education,      desc: "highest education attained"}
+    9: {name: marital_status, desc: "marital status"}
+    10: {name: occupation,    desc: "occupation type"}
+    11: {name: relationship,  desc: "role in household / family"}
+    12: {name: race,          desc: "race"}
+    13: {name: native_country, desc: "country of origin"}
+
+churn:
+  source: "predict whether a bank customer churns (closes their account) from credit, demographic, and account-activity attributes"
+  columns:
+    0: {name: CreditScore,    desc: "customer credit score (350-850)"}
+    1: {name: Age,            desc: "customer age in years (18-92)"}
+    2: {name: Tenure,         desc: "years as a bank customer (0-10)"}
+    3: {name: Balance,        desc: "account balance (0-250898; many exact zeros)"}
+    4: {name: NumOfProducts,  desc: "count of bank products held (1-4)"}
+    5: {name: EstimatedSalary, desc: "estimated annual salary (~11.6-199992)"}
+    6: {name: EstimatedSalary_dup, desc: "byte-identical duplicate of column 5 (EstimatedSalary)"}
+    7: {name: Gender,         desc: "1=Male (~54.5%), 0=Female"}
+    8: {name: HasCrCard,      desc: "1=holds a credit card (~70%), 0=no card"}
+    9: {name: IsActiveMember, desc: "1=active member (~52%), 0=inactive"}
+    10: {name: Geography,     desc: "country of residence"}
+
+black-friday:
+  source: "predict a customer's purchase amount at a Black Friday retail event from demographic and product-category attributes"
+  columns:
+    0: {name: Occupation,         desc: "customer occupation, masked code 0-20 (treated as numeric)"}
+    1: {name: Product_Category_1, desc: "primary product category, integer 1-18 (no missing)"}
+    2: {name: Product_Category_2, desc: "secondary product category, integer 2-18 (sparser; originally ~31% missing)"}
+    3: {name: Product_Category_3, desc: "tertiary product category, integer 3-18 (sparsest; originally ~69% missing)"}
+    4: {name: Marital_Status,     desc: "0=single, 1=married (~40% married)"}
+    5: {name: Gender,             desc: "customer gender"}
+    6: {name: Age,                desc: "age range bin"}
+    7: {name: City_Category,      desc: "city tier (anonymized)"}
+    8: {name: Stay_In_Current_City_Years, desc: "years lived in current city"}
+
+higgs-small:
+  source: "classify simulated particle-collision events as Higgs-boson signal vs background from detector kinematics and derived invariant-mass features; all features standardized"
+  columns:
+    0: {name: lepton_pT,    desc: "transverse momentum of the charged lepton"}
+    1: {name: lepton_eta,   desc: "pseudorapidity of the charged lepton"}
+    2: {name: lepton_phi,   desc: "azimuthal angle of the charged lepton"}
+    3: {name: met_magnitude, desc: "magnitude of missing transverse energy (undetected neutrino)"}
+    4: {name: met_phi,      desc: "azimuthal angle of missing transverse energy"}
+    5: {name: jet1_pt,      desc: "transverse momentum of jet 1"}
+    6: {name: jet1_eta,     desc: "pseudorapidity of jet 1"}
+    7: {name: jet1_phi,     desc: "azimuthal angle of jet 1"}
+    8: {name: jet1_btag,    desc: "b-tagging discriminant of jet 1 (discrete, 3 values)"}
+    9: {name: jet2_pt,      desc: "transverse momentum of jet 2"}
+    10: {name: jet2_eta,    desc: "pseudorapidity of jet 2"}
+    11: {name: jet2_phi,    desc: "azimuthal angle of jet 2"}
+    12: {name: jet2_btag,   desc: "b-tagging discriminant of jet 2 (discrete, 3 values)"}
+    13: {name: jet3_pt,     desc: "transverse momentum of jet 3"}
+    14: {name: jet3_eta,    desc: "pseudorapidity of jet 3"}
+    15: {name: jet3_phi,    desc: "azimuthal angle of jet 3"}
+    16: {name: jet3_btag,   desc: "b-tagging discriminant of jet 3 (discrete, 3 values)"}
+    17: {name: jet4_pt,     desc: "transverse momentum of jet 4"}
+    18: {name: jet4_eta,    desc: "pseudorapidity of jet 4"}
+    19: {name: jet4_phi,    desc: "azimuthal angle of jet 4"}
+    20: {name: jet4_btag,   desc: "b-tagging discriminant of jet 4 (discrete, 3 values)"}
+    21: {name: m_jj,        desc: "invariant mass of the two-jet system (derived)"}
+    22: {name: m_jjj,       desc: "invariant mass of the three-jet system (derived)"}
+    23: {name: m_lv,        desc: "invariant mass of lepton + neutrino system (derived)"}
+    24: {name: m_jlv,       desc: "invariant mass of jet + lepton + neutrino system (derived)"}
+    25: {name: m_bb,        desc: "invariant mass of the two b-tagged jets (derived)"}
+    26: {name: m_wbb,       desc: "invariant mass of the W + bb system (derived)"}
+    27: {name: m_wwbb,      desc: "invariant mass of the WW + bb system (derived)"}
+
+covtype2:
+  source: "predict forest cover type (7 classes) for 30m x 30m forest cells from cartographic variables (Roosevelt National Forest, Colorado)"
+  columns:
+    0: {name: Elevation, desc: "elevation in meters (~1860-3858)"}
+    1: {name: Aspect,    desc: "compass direction the slope faces, degrees azimuth (0-360)"}
+    2: {name: Slope,     desc: "slope steepness in degrees (0-66)"}
+    3: {name: HDist_Hydrology, desc: "horizontal distance to nearest surface water, m"}
+    4: {name: VDist_Hydrology, desc: "vertical distance to nearest surface water, m (signed)"}
+    5: {name: HDist_Roadways,  desc: "horizontal distance to nearest roadway, m"}
+    6: {name: Hillshade_9am,   desc: "hillshade index at 9am, summer solstice (0-255)"}
+    7: {name: Hillshade_Noon,  desc: "hillshade index at noon (0-255)"}
+    8: {name: Hillshade_3pm,   desc: "hillshade index at 3pm (0-255)"}
+    9: {name: HDist_FirePoints, desc: "horizontal distance to nearest wildfire ignition point, m"}
+    10: {name: Wilderness_1, desc: "one-hot indicator for wilderness area 1 of 4"}
+    11: {name: Wilderness_2, desc: "one-hot indicator for wilderness area 2 of 4"}
+    12: {name: Wilderness_3, desc: "one-hot indicator for wilderness area 3 of 4"}
+    13: {name: Wilderness_4, desc: "one-hot indicator for wilderness area 4 of 4"}
+    14: {name: Soil_Type,    desc: "soil-type id (40 categories)"}
+
+# --- anonymized datasets: domain context only, no per-column meaning ---
+
+house:
+  source: "1990 US Census survey regions; predict regional median house price (USD, top-coded near 500001); the 16 numeric features are an anonymized, normalized census-attribute subset"
+
+microsoft:
+  source: "MSLR-WEB10K learning-to-rank; each row is a query-document pair, predict the relevance grade (0-4) from ~136 anonymized ranking-signal features"
+
+otto:
+  source: "Otto Group product classification; classify products into 9 categories from 93 anonymized non-negative count features (sparse, many zeros)"
