@@ -7,8 +7,10 @@ from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+    MUTATION_PARENT_STAGE_OUTPUTS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
+from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
 from gigaevo.programs.program import Program
 
 
@@ -61,6 +63,21 @@ async def generate_one_mutation(
             for parent in parents
         )
         program.set_metadata("memory_used", bool(has_memory_ids))
+
+        # Freeze the parent stage outputs that produced this child (debug only —
+        # must never block the mutation, so failures are swallowed).
+        try:
+            stage_outputs = await snapshot_parent_stage_outputs(parents, storage)
+            if stage_outputs:
+                program.set_metadata(
+                    MUTATION_PARENT_STAGE_OUTPUTS_METADATA_KEY, stage_outputs
+                )
+        except Exception as snap_exc:
+            logger.warning(
+                "[mutation] Task {}: stage-output snapshot failed (non-critical): {}",
+                task_id,
+                snap_exc,
+            )
 
         await storage.add(program)
         persisted_id = program.id  # Point of no return — ID must be returned

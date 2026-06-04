@@ -369,6 +369,16 @@ class ProgramStorage(ABC):
         """Load a previously saved string field. Returns None if not found."""
         return None
 
+    async def put_stage_output(self, cache_id: str, blob: str) -> None:
+        """Store a serialized stage output under its content-derived cache id.
+
+        Idempotent: the same id always maps to the same bytes. No-op by default.
+        """
+
+    async def get_stage_output(self, cache_id: str) -> str | None:
+        """Load a serialized stage output by cache id. Returns None if absent."""
+        return None
+
     async def recover_stranded_programs(self) -> int:
         """Reset RUNNING programs to QUEUED after a crash/kill (for resume).
 

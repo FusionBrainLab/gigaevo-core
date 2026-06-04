@@ -728,6 +728,29 @@ class RedisProgramStorage(ProgramStorage):
         raw = await self._conn.execute("load_run_state_str", _get)
         return raw if raw is not None else None
 
+    # --------------------- Stage-output store (debug observability) ---------
+
+    async def put_stage_output(self, cache_id: str, blob: str) -> None:
+        """Store a serialized stage output, content-addressed by cache id.
+
+        ``SET NX``: the id is content-derived, so an existing entry already holds
+        identical bytes — never rewrite it (dedup across sibling children).
+        """
+        self._check_write_allowed("put_stage_output")
+
+        async def _set(r: aioredis.Redis) -> None:
+            await r.set(self._keys.stage_output(cache_id), blob, nx=True)
+
+        await self._conn.execute("put_stage_output", _set)
+
+    async def get_stage_output(self, cache_id: str) -> str | None:
+        """Load a serialized stage output by cache id. Returns None if absent."""
+
+        async def _get(r: aioredis.Redis) -> str | None:
+            return await r.get(self._keys.stage_output(cache_id))
+
+        return await self._conn.execute("get_stage_output", _get)
+
     async def recover_stranded_programs(self) -> int:
         """Reset all RUNNING programs to QUEUED after a crash/kill.
 

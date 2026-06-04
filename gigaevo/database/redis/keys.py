@@ -52,3 +52,7 @@ class RedisProgramKeys:
     def run_state(self) -> str:
         """Hash key for persisting run-level counters (e.g., generation, migration)."""
         return f"{self.config.key_prefix}:run_state"
+
+    def stage_output(self, cache_id: str) -> str:
+        """Key for a content-addressed stage output in the stage-output store."""
+        return f"{self.config.key_prefix}:stage_output:{cache_id}"

@@ -864,6 +864,7 @@ There are three independent key namespaces per run:
 | **Program status** | `{prefix}:status:{state}` | set | Sets of program IDs by state (PENDING, RUNNING, DONE, ERROR) |
 | **Status stream** | `{prefix}:status_events` | stream | Status change events |
 | **Run state** | `{prefix}:run_state` | hash | Engine counters (generation, migration) |
+| **Stage-output store** | `{prefix}:stage_output:{cache_id}` | string (b64) | Content-addressed parent stage outputs frozen at child birth (debug); child metadata holds `{parent_id: {stage: cache_id}}` references |
 | **Archive** | `{prefix}:archive` | hash | MAP-Elites archive: cell → program_id |
 | **Archive reverse** | `{prefix}:archive:reverse` | hash | Reverse index: program_id → cell |
 | **Timestamp** | `{prefix}:ts` | string (int) | Atomic counter |
