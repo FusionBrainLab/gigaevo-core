@@ -184,9 +184,9 @@ class TestReadOnlyMode:
         with pytest.raises(StorageError, match="read-only"):
             await readonly_storage.save_run_state("field", 1)
 
-    async def test_flushdb_raises_in_read_only(self, readonly_storage):
+    async def test_clear_raises_in_read_only(self, readonly_storage):
         with pytest.raises(StorageError, match="read-only"):
-            await readonly_storage.flushdb()
+            await readonly_storage.clear()
 
     async def test_get_works_in_read_only(self, readonly_storage):
         """Read operations should work fine in read-only mode."""

@@ -22,6 +22,7 @@ from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import (
     ScalarTournamentEliteSelector,
 )
@@ -75,6 +76,7 @@ def _make_engine(
     strategy = MapElitesMultiIsland(
         island_configs=[IslandConfig(**defaults)],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     tracker = MagicMock()
     tracker.start = MagicMock()

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from gigaevo.database.redis import RedisProgramStorageConfig
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.factory import build_readonly_redis_storage
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 
@@ -28,15 +27,12 @@ def load_programs_from_redis(
     Returns:
         All programs stored in the DB, with stage_results excluded for speed.
     """
-    redis_url = f"redis://{host}:{port}/{db}"
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=prefix,
-        read_only=True,
+    storage = build_readonly_redis_storage(
+        host=host, port=port, db=db, key_prefix=prefix
     )
 
     async def _load() -> list[Program]:
-        async with RedisProgramStorage(config) as storage:
+        async with storage:
             return await storage.get_all(exclude=EXCLUDE_STAGE_RESULTS)
 
     return asyncio.run(_load())

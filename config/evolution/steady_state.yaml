@@ -19,7 +19,7 @@ engine_config:
 # Override engine target
 evolution_engine:
   _target_: gigaevo.evolution.engine.SteadyStateEvolutionEngine
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   strategy: ${evolution_strategy}
   mutation_operator: ${mutation_operator}
   config: ${engine_config}

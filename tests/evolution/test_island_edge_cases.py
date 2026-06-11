@@ -97,10 +97,12 @@ def _make_island_config(
 class TestSetdefaultPreservesNone:
     """island.py L154: setdefault does NOT overwrite when key exists with None."""
 
-    async def test_home_island_none_stays_none_after_add(self, fakeredis_storage):
+    async def test_home_island_none_stays_none_after_add(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """If metadata already has home_island=None, add() does NOT overwrite it."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0, metadata={METADATA_KEY_HOME_ISLAND: None})
         await fakeredis_storage.add(prog)
@@ -109,10 +111,12 @@ class TestSetdefaultPreservesNone:
         # setdefault won't overwrite existing None — this tests the real behavior
         assert prog.metadata[METADATA_KEY_HOME_ISLAND] is None
 
-    async def test_home_island_absent_gets_set(self, fakeredis_storage):
+    async def test_home_island_absent_gets_set(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """If metadata has no home_island key, add() sets it to island_id."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0)
         assert METADATA_KEY_HOME_ISLAND not in prog.metadata
@@ -122,11 +126,11 @@ class TestSetdefaultPreservesNone:
         assert prog.metadata[METADATA_KEY_HOME_ISLAND] == "test"
 
     async def test_home_island_preset_to_other_island_not_overwritten(
-        self, fakeredis_storage
+        self, fakeredis_storage, archive_storage_factory
     ):
         """If home_island is already set to another island, setdefault keeps it."""
         config = _make_island_config(island_id="island-B")
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0, metadata={METADATA_KEY_HOME_ISLAND: "island-A"})
         await fakeredis_storage.add(prog)
@@ -147,10 +151,12 @@ class TestSetdefaultPreservesNone:
 class TestBehaviorKeyValidation:
     """island.py L82-90: missing keys raise KeyError; extra keys are fine."""
 
-    async def test_missing_behavior_key_raises_key_error(self, fakeredis_storage):
+    async def test_missing_behavior_key_raises_key_error(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Program with score but missing 'x' -> KeyError."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = Program(code="x=1", state=ProgramState.DONE, atomic_counter=999_999)
         prog.add_metrics({"score": 50.0})  # missing 'x'
@@ -159,10 +165,12 @@ class TestBehaviorKeyValidation:
         with pytest.raises(KeyError, match="behavior keys"):
             await isl.add(prog)
 
-    async def test_extra_metrics_beyond_behavior_keys_ok(self, fakeredis_storage):
+    async def test_extra_metrics_beyond_behavior_keys_ok(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Program with extra metrics beyond behavior_keys works fine."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0)
         prog.add_metrics({"extra1": 99.0, "extra2": 77.0})
@@ -171,7 +179,9 @@ class TestBehaviorKeyValidation:
         result = await isl.add(prog)
         assert result is True
 
-    async def test_all_behavior_keys_missing_raises(self, fakeredis_storage):
+    async def test_all_behavior_keys_missing_raises(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Program with zero matching keys raises listing all missing."""
         bs = BehaviorSpace(
             bins={
@@ -180,7 +190,7 @@ class TestBehaviorKeyValidation:
             }
         )
         config = _make_island_config(behavior_space=bs)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = Program(code="x=1", state=ProgramState.DONE, atomic_counter=999_999)
         prog.add_metrics({"score": 50.0, "x": 5.0})  # has neither 'a' nor 'b'
@@ -201,11 +211,11 @@ class TestEnforceSizeLimitDiscardFailure:
     The removed count (L280) still reflects len(to_remove), not actual successes."""
 
     async def test_size_enforcement_continues_when_discard_raises(
-        self, fakeredis_storage
+        self, fakeredis_storage, archive_storage_factory
     ):
         """Even if _discard_one raises for a program, the archive is still trimmed."""
         config = _make_island_config(max_size=2)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Add 3 programs in different cells
         progs = [_prog(score=float(i * 10 + 10), x=float(i * 2 + 1)) for i in range(3)]
@@ -244,7 +254,9 @@ class TestReindexArchiveCollision:
     """island.py L296-339: reindex clears all then re-adds.
     If two elites now map to the same cell, only one survives."""
 
-    async def test_reindex_collision_fewer_elites(self, fakeredis_storage):
+    async def test_reindex_collision_fewer_elites(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """After changing binning so two programs map to same cell,
         reindex drops one of them."""
         # Wide bins so initially programs are in different cells
@@ -255,7 +267,7 @@ class TestReindexArchiveCollision:
             expansion_buffer_ratio=0.0,  # no buffer to make it predictable
         )
         config = _make_island_config(behavior_space=wide_space, island_id="reindex")
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Two programs at x=15 and x=19 — in 10 bins over [0,100], both in bin 1
         # Actually bins: [0,10), [10,20), [20,30)...
@@ -288,10 +300,12 @@ class TestReindexArchiveCollision:
         # The higher-score program should win
         assert elites_after[0].id == p2.id
 
-    async def test_reindex_empty_is_noop(self, fakeredis_storage):
+    async def test_reindex_empty_is_noop(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Empty archive -> reindex does nothing, no error."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
         await isl.reindex_archive()
         assert await isl.__len__() == 0
 
@@ -304,10 +318,12 @@ class TestReindexArchiveCollision:
 class TestSelectElitesZeroNegative:
     """island.py L177: `if not elites or total <= 0: return []`"""
 
-    async def test_select_elites_total_zero_returns_empty(self, fakeredis_storage):
+    async def test_select_elites_total_zero_returns_empty(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """total=0 should return empty list even with elites."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0)
         await fakeredis_storage.add(prog)
@@ -316,10 +332,12 @@ class TestSelectElitesZeroNegative:
         result = await isl.select_elites(0)
         assert result == []
 
-    async def test_select_elites_negative_total_returns_empty(self, fakeredis_storage):
+    async def test_select_elites_negative_total_returns_empty(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Negative total also returns empty list."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0)
         await fakeredis_storage.add(prog)
@@ -328,10 +346,12 @@ class TestSelectElitesZeroNegative:
         result = await isl.select_elites(-5)
         assert result == []
 
-    async def test_select_elites_zero_with_empty_archive(self, fakeredis_storage):
+    async def test_select_elites_zero_with_empty_archive(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """total=0 with empty archive -> empty list."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         result = await isl.select_elites(0)
         assert result == []
@@ -345,18 +365,22 @@ class TestSelectElitesZeroNegative:
 class TestSelectMigrantsPassthrough:
     """island.py L206: island does not clamp migrant_selector result."""
 
-    async def test_select_migrants_empty_archive(self, fakeredis_storage):
+    async def test_select_migrants_empty_archive(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """No elites -> empty list regardless of count."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         result = await isl.select_migrants(10)
         assert result == []
 
-    async def test_select_migrants_count_exceeds_elites(self, fakeredis_storage):
+    async def test_select_migrants_count_exceeds_elites(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """RandomMigrantSelector returns all when count > len(elites)."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog = _prog(score=50.0, x=5.0)
         await fakeredis_storage.add(prog)
@@ -367,10 +391,12 @@ class TestSelectMigrantsPassthrough:
         # RandomMigrantSelector returns all programs when count >= len(programs)
         assert len(result) == 1
 
-    async def test_select_migrants_delegates_to_selector(self, fakeredis_storage):
+    async def test_select_migrants_delegates_to_selector(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Verify island passes count directly without clamping."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         progs = [_prog(score=float(i * 10 + 10), x=float(i * 2 + 1)) for i in range(5)]
         for p in progs:
@@ -389,10 +415,12 @@ class TestSelectMigrantsPassthrough:
 class TestAsyncLen:
     """island.py L220: __len__ is async, so builtin len() cannot be used."""
 
-    async def test_await_len_returns_int(self, fakeredis_storage):
+    async def test_await_len_returns_int(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """await island.__len__() returns correct count."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         assert await isl.__len__() == 0
 
@@ -402,11 +430,13 @@ class TestAsyncLen:
 
         assert await isl.__len__() == 1
 
-    async def test_builtin_len_raises_type_error(self, fakeredis_storage):
+    async def test_builtin_len_raises_type_error(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Using builtin len() on island should raise TypeError
         because __len__ returns a coroutine, not an int."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Calling len() on an object whose __len__ is async gives TypeError
         # because __len__ returns a coroutine, which is not an int.
@@ -954,7 +984,9 @@ class TestIslandDynamicExpandIntegration:
     """island.py L94-101: add() with DynamicBehaviorSpace triggers check_and_expand
     and reindex_archive when expansion occurs."""
 
-    async def test_add_out_of_bounds_triggers_expansion(self, fakeredis_storage):
+    async def test_add_out_of_bounds_triggers_expansion(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Adding a program outside current bounds expands the dynamic space."""
         # Use wide initial bounds so expansion is not capped by initial hard limits
         space = DynamicBehaviorSpace(
@@ -970,7 +1002,7 @@ class TestIslandDynamicExpandIntegration:
         space.bins["x"].max_val = 20.0
 
         config = _make_island_config(behavior_space=space, island_id="dynamic")
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # First add: within the shrunk bounds
         p1 = _prog(score=60.0, x=15.0)
@@ -1060,10 +1092,12 @@ class TestReindexArchiveIdempotency:
     """reindex_archive() must be idempotent: calling it twice with unchanged
     metrics produces the same archive state (same elites, same cells)."""
 
-    async def test_double_reindex_same_result(self, fakeredis_storage):
+    async def test_double_reindex_same_result(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Calling reindex_archive twice yields identical archive both times."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         progs = [_prog(score=float(i * 20 + 10), x=float(i * 2 + 1)) for i in range(4)]
         for p in progs:
@@ -1095,7 +1129,9 @@ class TestReindexArchiveIdempotency:
         assert ids_first == ids_second
         assert cells_first == cells_second
 
-    async def test_reindex_after_fitness_change_evicts_worse(self, fakeredis_storage):
+    async def test_reindex_after_fitness_change_evicts_worse(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """When a program's fitness degrades, reindex evicts it if a better
         program now maps to the same cell."""
         # Single bin so all programs compete in same cell
@@ -1103,7 +1139,7 @@ class TestReindexArchiveIdempotency:
             bins={"x": LinearBinning(min_val=0, max_val=10, num_bins=1, type="linear")}
         )
         config = _make_island_config(behavior_space=space)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # p1 starts as the better program
         p1 = _prog(score=80.0, x=5.0)
@@ -1139,7 +1175,9 @@ class TestReindexArchiveIdempotency:
         # p2 (40) should now beat p1 (20)
         assert elites_after[0].id == p2.id
 
-    async def test_reindex_idempotent_with_dynamic_space(self, fakeredis_storage):
+    async def test_reindex_idempotent_with_dynamic_space(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """reindex_archive on DynamicBehaviorSpace is idempotent."""
         space = DynamicBehaviorSpace(
             bins={
@@ -1150,7 +1188,7 @@ class TestReindexArchiveIdempotency:
             expansion_buffer_ratio=0.1,
         )
         config = _make_island_config(behavior_space=space, island_id="dynamic")
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         progs = [_prog(score=float(i * 15 + 5), x=float(i * 25 + 5)) for i in range(3)]
         for p in progs:
@@ -1172,7 +1210,9 @@ class TestReindexArchiveIdempotency:
         # Bounds should not change from reindex (no check_and_expand called)
         assert desc_before == desc_mid == desc_after
 
-    async def test_reindex_multi_island_delegates(self, fakeredis_storage):
+    async def test_reindex_multi_island_delegates(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """MapElitesMultiIsland.reindex_archive delegates to each island."""
         from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 
@@ -1180,7 +1220,9 @@ class TestReindexArchiveIdempotency:
             _make_island_config(island_id="a"),
             _make_island_config(island_id="b"),
         ]
-        multi = MapElitesMultiIsland(configs, fakeredis_storage)
+        multi = MapElitesMultiIsland(
+            configs, fakeredis_storage, archive_storage_factory
+        )
 
         # Add one program to island a
         p = _prog(score=50.0, x=5.0)

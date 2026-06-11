@@ -26,6 +26,7 @@ from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import (
     RandomEliteSelector,
     ScalarTournamentEliteSelector,
@@ -98,6 +99,7 @@ def _make_engine(storage: RedisProgramStorage) -> SteadyStateEvolutionEngine:
             )
         ],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     tracker = MagicMock()
     tracker.start = MagicMock()
@@ -212,6 +214,7 @@ async def test_migration_no_keyerror_when_current_island_is_none() -> None:
                 _make_island_config("island_B"),
             ],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
             migration_interval=1,
             enable_migration=True,
             max_migrants_per_island=5,

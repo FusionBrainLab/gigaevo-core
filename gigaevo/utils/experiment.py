@@ -3,65 +3,42 @@
 from __future__ import annotations
 
 from loguru import logger
-from omegaconf import DictConfig
 
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.program_storage import ProgramStorage
 
-REDIS_NOT_EMPTY_ERROR = """
-ERROR: Redis database is not empty!
+STORAGE_NOT_EMPTY_ERROR = """
+ERROR: program storage is not empty!
 
-  Database {db} at {host}:{port} contains existing programs.
+  {location} contains existing programs.
 
-To prevent accidental data loss, you must manually flush the database.
-
-Run this command to flush:
-  redis-cli -h {host} -p {port} -n {db} FLUSHDB
-
-Or use a different database number:
-  python run.py redis.db=<number> ...
+To prevent accidental data loss, flush it manually:
+  {flush_hint}
 
 Or set resume=true to continue with existing data:
   python run.py redis.resume=true ...
 """
 
 
-async def check_redis_resume(
-    storage: RedisProgramStorage,
-    cfg: DictConfig,
+async def check_storage_resume(
+    storage: ProgramStorage,
+    *,
+    resume: bool,
+    location: str,
+    flush_hint: str,
 ) -> bool:
-    """Check Redis state and determine if we should resume.
+    """Decide fresh-start vs resume; refuse to clobber existing data.
 
-    Args:
-        storage: The Redis program storage
-        cfg: Hydra config with redis.db, redis.host, redis.port, redis.resume
-
-    Returns:
-        True if should resume from existing data, False if starting fresh
-
-    Raises:
-        RuntimeError: If database has data but resume=False
+    Returns True iff existing data should be resumed.
+    Raises RuntimeError if storage has data and resume is False.
     """
     has_data = await storage.has_data()
-    resume = cfg.redis.get("resume", False)
-
     if has_data and not resume:
-        error_msg = REDIS_NOT_EMPTY_ERROR.format(
-            db=cfg.redis.db,
-            host=cfg.redis.host,
-            port=cfg.redis.port,
+        logger.error(
+            STORAGE_NOT_EMPTY_ERROR.format(location=location, flush_hint=flush_hint)
         )
-        logger.error(error_msg)
-        raise RuntimeError(
-            f"Redis database {cfg.redis.db} is not empty. Flush manually to proceed."
-        )
-
-    if has_data and resume:
-        logger.info(
-            "Resuming experiment on database {} (found existing data)", cfg.redis.db
-        )
+        raise RuntimeError(f"{location} is not empty. Flush manually to proceed.")
+    if has_data:
+        logger.info("Resuming experiment: {} has existing data", location)
     elif resume:
-        logger.info(
-            "Resume requested but database {} is empty. Starting fresh.", cfg.redis.db
-        )
-
-    return has_data and resume
+        logger.info("Resume requested but {} is empty. Starting fresh.", location)
+    return has_data

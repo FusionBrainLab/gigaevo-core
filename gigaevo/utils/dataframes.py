@@ -7,14 +7,77 @@ outlier detection with multiple methods, and Redis frontier integration.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from loguru import logger
 import numpy as np
 import pandas as pd
 import redis
 
-from gigaevo.utils.redis import RedisRunConfig  # noqa: F401
+from gigaevo.database.program_storage import ProgramStorage
+from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
+
+
+async def fetch_evolution_dataframe(
+    storage: ProgramStorage, *, add_stage_results: bool = False
+) -> pd.DataFrame:
+    """Fetch all programs from storage as a DataFrame with metrics and metadata.
+
+    Args:
+        storage: Read-only or read-write storage instance (caller owns lifecycle).
+        add_stage_results: If True, include stage_results column; defaults to False for speed.
+
+    Returns:
+        DataFrame with program metadata, metrics, lineage, and optional stage results.
+        Empty DataFrame if no programs found.
+    """
+    exclude = None if add_stage_results else EXCLUDE_STAGE_RESULTS
+    programs = await storage.get_all(exclude=exclude)
+
+    if not programs:
+        logger.warning(f"No programs found for prefix='{storage.key_prefix}'")
+        return pd.DataFrame()
+
+    rows: list[dict[str, Any]] = []
+    for program in programs:
+        row: dict[str, Any] = {
+            "program_id": program.id,
+            "name": program.name or "unnamed",
+            "code": program.code,
+            "created_at": program.created_at,
+            "atomic_counter": program.atomic_counter,
+            "state": program.state.value,
+            "is_complete": program.is_complete,
+            "generation": program.generation,
+            "iteration": program.iteration,
+            "is_root": program.is_root,
+            "parent_ids": (program.lineage.parents),
+            "children_ids": (program.lineage.children),
+        }
+        if add_stage_results:
+            row["stage_results"] = program.stage_results
+        metrics = program.metrics
+        for mname, mval in metrics.items():
+            row[f"metric_{mname}"] = mval
+
+        lineage = program.lineage
+        row["lineage_num_parents"] = len(lineage.parents)
+        row["lineage_num_children"] = len(lineage.children)
+        row["lineage_mutation"] = lineage.mutation
+        row["lineage_generation"] = lineage.generation
+
+        metadata = program.metadata
+        for k, v in metadata.items():
+            row[f"metadata_{k}"] = v
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    for col in ["created_at"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    return df
 
 
 class OutlierMethod(StrEnum):

@@ -393,7 +393,7 @@ dag_blueprint:
 
 # Custom resolvers
 ${problem.dir}              # Resolves to problem directory path
-${ref:redis_storage}        # References another instantiated object
+${ref:program_storage}        # References another instantiated object
 ${metrics_context}          # Resolves to metrics context
 ```
 
@@ -467,6 +467,14 @@ ${metrics_context}          # Resolves to metrics context
 3. Parent selector: Is it producing valid parent tuples?
 4. Stopper fired: Has the configured stopper (e.g. `max_mutants`,
    `wall_clock`, `fitness_plateau`) reported `stop=True`?
+
+## Storage Abstraction
+
+Program data is accessed via `ProgramStorage` (abstract interface in `gigaevo/database/program_storage.py`). The ABC defines CRUD operations, status set management, `key_prefix`, and async context manager support; read-only and write flags guard mutation methods.
+
+`RedisProgramStorage` is the current backend. The Hydra node `program_storage` (config `config/redis/default.yaml`) builds the storage for the evolution engine. Read-only CLI/analytics paths use `gigaevo/database/factory.py` — the single non-Hydra construction point — which exposes `build_readonly_redis_storage()` and `build_writable_redis_storage()` for analytics scripts and testing.
+
+Archive storage (MAP-Elites elite cells) is accessed via `ArchiveStorageFactory` protocol, wired to Hydra and passed to strategies. Contract tests are backend-parametrized (`tests/database/storage_backends.py` registry) — a new disk backend would be one entry.
 
 ## Quick Reference: Key Files
 

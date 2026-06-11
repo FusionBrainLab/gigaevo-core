@@ -19,6 +19,7 @@ from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import MaxMutantsStopper
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.core_types import ProgramStageResult, StageState
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
@@ -287,9 +288,11 @@ def build_system(
     _reset_counter()
     storage = make_storage(server=server, redis_url=redis_url)
     config = _make_island_config()
+    factory = RedisArchiveStorageFactory(storage)
     strategy = MapElitesMultiIsland(
         island_configs=[config],
         program_storage=storage,
+        archive_storage_factory=factory,
     )
     writer = _make_null_writer()
 

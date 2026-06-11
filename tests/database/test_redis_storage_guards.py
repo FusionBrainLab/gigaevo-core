@@ -65,26 +65,26 @@ def _make_prog(code: str = "def solve(): return 42") -> Program:
 
 
 # ===================================================================
-# _check_write_allowed
+# require_writable
 # ===================================================================
 
 
-class TestCheckWriteAllowed:
-    """_check_write_allowed guards every write path (9 production callers)."""
+class TestRequireWritable:
+    """require_writable guards every write path (9 production callers)."""
 
     def test_rw_mode_does_not_raise(self, rw_storage: RedisProgramStorage):
         """Write-allowed storage should not raise."""
-        rw_storage._check_write_allowed("add")
+        rw_storage.require_writable("add")
 
     def test_ro_mode_raises_storage_error(self, ro_storage: RedisProgramStorage):
         """Read-only storage must raise StorageError with operation name."""
         with pytest.raises(StorageError, match="add"):
-            ro_storage._check_write_allowed("add")
+            ro_storage.require_writable("add")
 
     def test_ro_error_message_contains_operation(self, ro_storage: RedisProgramStorage):
         """Error message should mention the blocked operation."""
         with pytest.raises(StorageError, match="update"):
-            ro_storage._check_write_allowed("update")
+            ro_storage.require_writable("update")
 
     async def test_ro_blocks_add(self, ro_storage: RedisProgramStorage):
         """add() in read-only mode raises StorageError."""
@@ -118,10 +118,10 @@ class TestCheckWriteAllowed:
         with pytest.raises(StorageError, match="atomic_state_transition"):
             await ro_storage.atomic_state_transition(_make_prog(), "old", "new")
 
-    async def test_ro_blocks_flushdb(self, ro_storage: RedisProgramStorage):
-        """flushdb() in read-only mode raises StorageError."""
-        with pytest.raises(StorageError, match="flushdb"):
-            await ro_storage.flushdb()
+    async def test_ro_blocks_clear(self, ro_storage: RedisProgramStorage):
+        """clear() in read-only mode raises StorageError."""
+        with pytest.raises(StorageError, match="clear"):
+            await ro_storage.clear()
 
     async def test_ro_allows_reads(self, ro_storage: RedisProgramStorage):
         """Read operations should work in read-only mode."""
@@ -141,7 +141,7 @@ class TestWithRedis:
 
     async def test_executes_callback(self, rw_storage: RedisProgramStorage):
         """Callback receives a Redis client and returns result."""
-        result = await rw_storage.with_redis("test_op", lambda r: r.ping())
+        result = await rw_storage._with_redis("test_op", lambda r: r.ping())
         assert result is True
 
     async def test_passes_through_return_value(self, rw_storage: RedisProgramStorage):
@@ -151,7 +151,7 @@ class TestWithRedis:
             await r.set("mykey", "hello")
             return await r.get("mykey")
 
-        result = await rw_storage.with_redis("test_op", _set_and_get)
+        result = await rw_storage._with_redis("test_op", _set_and_get)
         assert result == "hello"
 
     async def test_wraps_exceptions_in_storage_error(
@@ -163,7 +163,7 @@ class TestWithRedis:
             raise ValueError("boom")
 
         with pytest.raises(StorageError, match="boom"):
-            await rw_storage.with_redis("test_op", _raise)
+            await rw_storage._with_redis("test_op", _raise)
 
 
 # ===================================================================

@@ -68,25 +68,25 @@ def _make_island_config(
 
 
 @pytest.fixture
-async def island(fakeredis_storage):
+async def island(fakeredis_storage, archive_storage_factory):
     """MapElitesIsland backed by fakeredis."""
     config = _make_island_config()
-    return MapElitesIsland(config, fakeredis_storage)
+    return MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
 
 @pytest.fixture
-async def island_with_storage(fakeredis_storage):
+async def island_with_storage(fakeredis_storage, archive_storage_factory):
     """Return both island and storage for tests that need direct storage access."""
     config = _make_island_config()
-    isl = MapElitesIsland(config, fakeredis_storage)
+    isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
     return isl, fakeredis_storage
 
 
 @pytest.fixture
-async def island_max_size(fakeredis_storage):
+async def island_max_size(fakeredis_storage, archive_storage_factory):
     """MapElitesIsland with max_size=2."""
     config = _make_island_config(max_size=2)
-    return MapElitesIsland(config, fakeredis_storage)
+    return MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
 
 # ---------------------------------------------------------------------------
@@ -178,10 +178,12 @@ class TestMapElitesIslandAdd:
 
 
 class TestMapElitesIslandSizeLimit:
-    async def test_enforce_size_limit_removes_excess(self, fakeredis_storage):
+    async def test_enforce_size_limit_removes_excess(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """max_size=2, add 3 programs → archive has 2."""
         config = _make_island_config(max_size=2)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Programs in different cells
         prog1 = _prog(score=10.0, x=1.0)
@@ -197,10 +199,12 @@ class TestMapElitesIslandSizeLimit:
         elites = await isl.get_elites()
         assert len(elites) == 2
 
-    async def test_enforce_size_limit_noop_when_under(self, fakeredis_storage):
+    async def test_enforce_size_limit_noop_when_under(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """max_size=5, add 2 programs → nothing removed."""
         config = _make_island_config(max_size=5)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         prog1 = _prog(score=10.0, x=1.0)
         prog2 = _prog(score=20.0, x=7.0)
@@ -302,7 +306,9 @@ class TestMapElitesIslandReindex:
 
 
 class TestMapElitesIslandDynamicSpace:
-    async def test_dynamic_expand_triggers_reindex(self, fakeredis_storage):
+    async def test_dynamic_expand_triggers_reindex(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """DynamicBehaviorSpace: add programs, verify optimize_space tightens bounds."""
         dynamic_space = DynamicBehaviorSpace(
             bins={
@@ -319,7 +325,7 @@ class TestMapElitesIslandDynamicSpace:
             elite_selector=RandomEliteSelector(),
             migrant_selector=RandomMigrantSelector(),
         )
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Add programs in a narrow range — bounds will tighten via optimize_space
         for x_val in [40.0, 50.0, 60.0]:
@@ -334,7 +340,9 @@ class TestMapElitesIslandDynamicSpace:
         elites = await isl.get_elites()
         assert len(elites) >= 2
 
-    async def test_optimize_space_with_programs(self, fakeredis_storage):
+    async def test_optimize_space_with_programs(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """optimize_space called after add with DynamicBehaviorSpace."""
         dynamic_space = DynamicBehaviorSpace(
             bins={
@@ -351,7 +359,7 @@ class TestMapElitesIslandDynamicSpace:
             elite_selector=RandomEliteSelector(),
             migrant_selector=RandomMigrantSelector(),
         )
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Add programs with small range of x values
         for x_val in [40.0, 45.0, 50.0]:
@@ -414,12 +422,12 @@ class TestMapElitesIslandMigrants:
 
 class TestDisplacedProgramVerification:
     async def test_add_better_program_removes_worse_from_archive(
-        self, fakeredis_storage
+        self, fakeredis_storage, archive_storage_factory
     ):
         """When a better program replaces a worse one in the same cell,
         the worse program must no longer appear in the archive."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         worse = _prog(score=30.0, x=5.0)
         better = _prog(score=90.0, x=5.0)
@@ -438,10 +446,12 @@ class TestDisplacedProgramVerification:
         # Only 1 program in the cell
         assert len(elites) == 1
 
-    async def test_displaced_program_not_in_elite_ids(self, fakeredis_storage):
+    async def test_displaced_program_not_in_elite_ids(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Verify displaced program's ID is also absent from get_elite_ids()."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         worse = _prog(score=10.0, x=5.0)
         better = _prog(score=50.0, x=5.0)
@@ -455,10 +465,12 @@ class TestDisplacedProgramVerification:
         assert better.id in all_ids
         assert worse.id not in all_ids
 
-    async def test_multiple_replacements_only_best_survives(self, fakeredis_storage):
+    async def test_multiple_replacements_only_best_survives(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Three programs in the same cell — only the best survives."""
         config = _make_island_config()
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         p1 = _prog(score=10.0, x=5.0)
         p2 = _prog(score=50.0, x=5.0)
@@ -484,10 +496,12 @@ class TestDisplacedProgramVerification:
 
 
 class TestEnforceSizeLimitSurvivorIdentity:
-    async def test_survivors_are_best_programs_by_fitness(self, fakeredis_storage):
+    async def test_survivors_are_best_programs_by_fitness(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """When enforce_size_limit evicts, the highest-fitness programs survive."""
         config = _make_island_config(max_size=2)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         # Three programs in different cells — after size enforcement, 2 should remain
         low = _prog(score=10.0, x=1.0)
@@ -510,10 +524,12 @@ class TestEnforceSizeLimitSurvivorIdentity:
         # The worst program should be removed
         assert low.id not in elite_ids
 
-    async def test_survivors_after_multiple_additions(self, fakeredis_storage):
+    async def test_survivors_after_multiple_additions(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Add 5 programs with max_size=3, verify the 3 highest-scoring survive."""
         config = _make_island_config(max_size=3)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         scores = [10.0, 30.0, 70.0, 50.0, 90.0]
         progs = []
@@ -530,10 +546,12 @@ class TestEnforceSizeLimitSurvivorIdentity:
         assert len(elites) == 3
         assert elite_scores == [50.0, 70.0, 90.0]
 
-    async def test_size_limit_with_equal_scores(self, fakeredis_storage):
+    async def test_size_limit_with_equal_scores(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """When programs have equal fitness, size limit still trims to max_size."""
         config = _make_island_config(max_size=2)
-        isl = MapElitesIsland(config, fakeredis_storage)
+        isl = MapElitesIsland(config, fakeredis_storage, archive_storage_factory)
 
         progs = [_prog(score=50.0, x=float(i * 2 + 1)) for i in range(3)]
         for p in progs:
@@ -550,7 +568,9 @@ class TestEnforceSizeLimitSurvivorIdentity:
 
 
 class TestMigrationIntegration:
-    async def test_program_migrates_between_islands(self, fakeredis_storage):
+    async def test_program_migrates_between_islands(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """A program from island A appears in island B after migration."""
         from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 
@@ -577,6 +597,7 @@ class TestMigrationIntegration:
         strategy = MapElitesMultiIsland(
             island_configs=[config_a, config_b],
             program_storage=fakeredis_storage,
+            archive_storage_factory=archive_storage_factory,
             migration_interval=1,
             enable_migration=True,
             max_migrants_per_island=5,
@@ -603,7 +624,9 @@ class TestMigrationIntegration:
         # Program must be in at least one island
         assert prog.id in b_ids or prog.id in a_ids_after
 
-    async def test_migration_updates_current_island_metadata(self, fakeredis_storage):
+    async def test_migration_updates_current_island_metadata(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """After successful migration, the program's current_island metadata is updated."""
         from gigaevo.evolution.strategies.island import METADATA_KEY_CURRENT_ISLAND
         from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
@@ -631,6 +654,7 @@ class TestMigrationIntegration:
         strategy = MapElitesMultiIsland(
             island_configs=[config_a, config_b],
             program_storage=fakeredis_storage,
+            archive_storage_factory=archive_storage_factory,
             migration_interval=1,
             enable_migration=True,
             max_migrants_per_island=5,
@@ -654,7 +678,9 @@ class TestMigrationIntegration:
         # After migration, the program is either still in "source" or moved to "destination"
         assert current in ("source", "destination")
 
-    async def test_migrated_program_in_destination_archive(self, fakeredis_storage):
+    async def test_migrated_program_in_destination_archive(
+        self, fakeredis_storage, archive_storage_factory
+    ):
         """Direct add to destination island simulates a successful migration,
         ensuring the program appears in the destination's archive."""
         bs = _make_behavior_space()
@@ -667,7 +693,9 @@ class TestMigrationIntegration:
             elite_selector=RandomEliteSelector(),
             migrant_selector=RandomMigrantSelector(),
         )
-        dest_island = MapElitesIsland(config, fakeredis_storage)
+        dest_island = MapElitesIsland(
+            config, fakeredis_storage, archive_storage_factory
+        )
 
         prog = _prog(score=80.0, x=5.0)
         await fakeredis_storage.add(prog)

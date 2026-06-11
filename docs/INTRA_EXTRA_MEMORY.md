@@ -115,7 +115,7 @@ The `extra` half of the pipeline name is provided by `LiveMemoryRefreshHook`, wi
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
   tracker: ${ideas_tracker}
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   refresh_every: 10
 ```
 
@@ -263,7 +263,7 @@ After a run finishes, four artefacts should all be non-empty:
    ```python
    from gigaevo.programs.program import Program
    ...
-   p = redis_storage.get(parent_id)
+   p = program_storage.get(parent_id)
    assert p.metadata.get("intra_memory_card", "").startswith("# Intra Memory")
    ```
 2. **Chroma embedding count** — should grow from 0 → ~5 × card-count by end of run.

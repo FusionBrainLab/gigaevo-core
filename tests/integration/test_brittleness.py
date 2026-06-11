@@ -39,6 +39,7 @@ from gigaevo.evolution.mutation.parent_selector import (
     AllCombinationsParentSelector,
     RandomParentSelector,
 )
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -243,6 +244,7 @@ class TestIngestionAtomicity:
         strategy = MapElitesMultiIsland(
             island_configs=[_make_island_config()],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
         )
 
         class ExplodingMutator(MutationOperator):
@@ -688,6 +690,7 @@ class TestStrategyEdgeCases:
         strategy = MapElitesMultiIsland(
             island_configs=[_make_island_config()],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
         )
 
         prog = Program(code=SEED_CODE, state=ProgramState.DONE)
@@ -707,6 +710,7 @@ class TestStrategyEdgeCases:
         strategy = MapElitesMultiIsland(
             island_configs=[_make_island_config()],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
         )
 
         prog = Program(code=SEED_CODE, state=ProgramState.DONE)
@@ -728,6 +732,7 @@ class TestStrategyEdgeCases:
         strategy = MapElitesMultiIsland(
             island_configs=[_make_island_config()],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
         )
 
         elites = await strategy.select_elites(total=10)
@@ -743,6 +748,7 @@ class TestStrategyEdgeCases:
         strategy = MapElitesMultiIsland(
             island_configs=[_make_island_config()],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
         )
 
         # Both map to same cell (x=0.5, same bin)
@@ -776,6 +782,7 @@ class TestStrategyEdgeCases:
         strategy = MapElitesMultiIsland(
             island_configs=[_make_island_config(max_size=2)],
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
         )
 
         # Add 3 programs to different cells

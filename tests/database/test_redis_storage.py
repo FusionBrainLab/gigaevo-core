@@ -551,12 +551,12 @@ class TestReadOnlyMode:
         finally:
             await storage.close()
 
-    async def test_flushdb_raises_in_read_only(self):
-        """flushdb() raises StorageError in read-only mode."""
+    async def test_clear_raises_in_read_only(self):
+        """clear() raises StorageError in read-only mode."""
         storage = _make_read_only_storage()
         try:
             with pytest.raises(StorageError, match="read-only"):
-                await storage.flushdb()
+                await storage.clear()
         finally:
             await storage.close()
 

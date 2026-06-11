@@ -5,11 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import fakeredis.aioredis
 import pytest
 
 from gigaevo.config.resolvers import register_resolvers
-from gigaevo.database.redis import RedisProgramStorageConfig
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.engine.snapshot import (
@@ -222,24 +220,24 @@ async def _clear_exec_runner_pool():
 @pytest.fixture
 async def fakeredis_storage():
     """RedisProgramStorage backed by fakeredis (async)."""
-    server = fakeredis.FakeServer()
-    config = RedisProgramStorageConfig(
-        redis_url="redis://fake:6379/0",
-        key_prefix="test",
-    )
-    storage = RedisProgramStorage(config)
-    # Monkey-patch the connection to use fakeredis
-    fake_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
-    storage._conn._redis = fake_redis
-    storage._conn._closing = False
-    yield storage
-    await storage.close()
+    from tests.database.storage_backends import _fakeredis_storage
+
+    async with _fakeredis_storage() as storage:
+        yield storage
 
 
 @pytest.fixture
 async def state_manager(fakeredis_storage: RedisProgramStorage):
     """ProgramStateManager wrapping the fake storage."""
     return ProgramStateManager(fakeredis_storage)
+
+
+@pytest.fixture
+async def archive_storage_factory(fakeredis_storage: RedisProgramStorage):
+    """ArchiveStorageFactory for tests."""
+    from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
+
+    return RedisArchiveStorageFactory(fakeredis_storage)
 
 
 @pytest.fixture

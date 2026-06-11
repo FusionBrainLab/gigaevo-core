@@ -8,7 +8,7 @@ runner_config:
 
 dag_runner:
   _target_: gigaevo.runner.dag_runner.DagRunner
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   dag_blueprint: ${dag_blueprint}
   config: ${runner_config}
   writer: ${writer}

@@ -1,0 +1,23 @@
+# @package _global_
+
+program_loader:
+  _target_: gigaevo.problems.initial_loaders.TopProgramsLoader
+  source:
+    _target_: gigaevo.database.redis_program_storage.RedisProgramStorage
+    config:
+      _target_: gigaevo.database.redis_program_storage.RedisProgramStorageConfig
+      redis_url: redis://${redis.host}:${redis.port}/${loader.source_db}
+      key_prefix: ${problem.name}
+      max_connections: ${redis_max_connections}
+      connection_pool_timeout: ${redis_connection_pool_timeout}
+      health_check_interval: ${redis_health_check_interval}
+      max_retries: ${redis_max_retries}
+      retry_delay: ${redis_retry_delay}
+      read_only: true
+  metric_key: ${primary_key}
+  higher_is_better: ${higher_is_better}
+  top_n: ${loader.top_n}
+
+loader:
+  source_db: 0
+  top_n: 50

@@ -20,7 +20,6 @@ from gigaevo.database.redis import (
     RedisProgramKeys,
     RedisProgramStorageConfig,
 )
-from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState, validate_transition
 from gigaevo.utils.json import dumps as _dumps
@@ -43,7 +42,7 @@ class RedisProgramStorage(ProgramStorage):
     def __init__(
         self, config: RedisProgramStorageConfig, writer: LogWriter | None = None
     ):
-        super().__init__()
+        super().__init__(read_only=config.read_only)
         self.config = config
         self._merge = resolve_merge_strategy(config.merge_strategy)  # type: ignore[arg-type]
 
@@ -54,6 +53,10 @@ class RedisProgramStorage(ProgramStorage):
         self._metrics = RedisMetricsCollector(
             self._conn, self._keys, writer, config.metrics_interval
         )
+
+    @property
+    def key_prefix(self) -> str:
+        return self.config.key_prefix
 
     # --------------------- Context Manager ---------------------
 
@@ -77,19 +80,11 @@ class RedisProgramStorage(ProgramStorage):
 
     # --------------------- Helpers ---------------------
 
-    async def with_redis(
+    async def _with_redis(
         self, name: str, fn: Callable[[aioredis.Redis], Awaitable[T]]
     ) -> T:
-        """Execute Redis operation. Compatibility shim for external code."""
+        """Execute Redis operation. Private hook for RedisArchiveStorage."""
         return await self._conn.execute(name, fn)
-
-    def _check_write_allowed(self, operation: str) -> None:
-        """Raise error if write operation is attempted in read-only mode."""
-        if self.config.read_only:
-            raise StorageError(
-                f"Cannot perform '{operation}' in read-only mode. "
-                f"Create storage without read_only=True for write operations."
-            )
 
     _T = TypeVar("_T")
 
@@ -134,7 +129,7 @@ class RedisProgramStorage(ProgramStorage):
 
     async def add(self, program: Program) -> None:
         """Add a new program. If program exists, cleans up old status set first."""
-        self._check_write_allowed("add")
+        self.require_writable("add")
 
         async def _add(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -178,7 +173,7 @@ class RedisProgramStorage(ProgramStorage):
         return await self._conn.execute("get", _get)
 
     async def update(self, program: Program) -> None:
-        self._check_write_allowed("update")
+        self.require_writable("update")
 
         async def _update(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -216,7 +211,7 @@ class RedisProgramStorage(ProgramStorage):
         (i.e., during DAG execution where asyncio.Lock + RedisInstanceLock
         prevent concurrent writes).
         """
-        self._check_write_allowed("write_exclusive")
+        self.require_writable("write_exclusive")
 
         async def _write(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -229,7 +224,7 @@ class RedisProgramStorage(ProgramStorage):
 
     async def remove(self, program_id: str) -> None:
         """Remove a program and clean up its status set entry."""
-        self._check_write_allowed("remove")
+        self.require_writable("remove")
 
         async def _del(r: aioredis.Redis) -> None:
             key = self._keys.program(program_id)
@@ -341,7 +336,7 @@ class RedisProgramStorage(ProgramStorage):
     async def transition_status(
         self, program_id: str, old: str | None, new: str
     ) -> None:
-        self._check_write_allowed("transition_status")
+        self.require_writable("transition_status")
 
         async def _tx(r: aioredis.Redis) -> None:
             pipe = r.pipeline(transaction=False)
@@ -355,7 +350,7 @@ class RedisProgramStorage(ProgramStorage):
     async def publish_status_event(
         self, status: str, program_id: str, extra: dict[str, Any] | None = None
     ) -> None:
-        self._check_write_allowed("publish_status_event")
+        self.require_writable("publish_status_event")
 
         async def _event(r: aioredis.Redis) -> None:
             data: dict[str, Any] = {
@@ -409,7 +404,7 @@ class RedisProgramStorage(ProgramStorage):
     async def atomic_state_transition(
         self, program: Program, old_state: str | None, new_state: str
     ) -> None:
-        self._check_write_allowed("atomic_state_transition")
+        self.require_writable("atomic_state_transition")
 
         async def _atomic(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -493,7 +488,7 @@ class RedisProgramStorage(ProgramStorage):
         safety — assumes each program is processed by exactly one engine instance.
         Unlike atomic_state_transition, does not WATCH/GET/MERGE.
         """
-        self._check_write_allowed("fast_state_transition")
+        self.require_writable("fast_state_transition")
 
         async def _fast(r: aioredis.Redis) -> None:
             key = self._keys.program(program.id)
@@ -530,7 +525,7 @@ class RedisProgramStorage(ProgramStorage):
 
         Returns the number of programs transitioned.
         """
-        self._check_write_allowed("batch_transition_state")
+        self.require_writable("batch_transition_state")
         if not programs:
             return 0
 
@@ -593,7 +588,7 @@ class RedisProgramStorage(ProgramStorage):
         Only transitions programs whose current state matches ``old_state``.
         Returns the number of programs actually transitioned.
         """
-        self._check_write_allowed("batch_transition_by_ids")
+        self.require_writable("batch_transition_by_ids")
         if not program_ids:
             return 0
 
@@ -654,7 +649,7 @@ class RedisProgramStorage(ProgramStorage):
         """Remove specific IDs from a status set using SREM."""
         if not ids:
             return
-        self._check_write_allowed("remove_ids_from_status_set")
+        self.require_writable("remove_ids_from_status_set")
 
         async def _srem(r: aioredis.Redis) -> None:
             await r.srem(self._keys.status_set(status), *ids)
@@ -675,7 +670,7 @@ class RedisProgramStorage(ProgramStorage):
         """
         if not program_ids:
             return
-        self._check_write_allowed("batch_move_status_sets")
+        self.require_writable("batch_move_status_sets")
 
         async def _move(r: aioredis.Redis) -> None:
             from_key = self._keys.status_set(from_status)
@@ -703,7 +698,7 @@ class RedisProgramStorage(ProgramStorage):
 
     async def save_run_state(self, field: str, value: int | str) -> None:
         """Persist a named field into the run-state hash."""
-        self._check_write_allowed("save_run_state")
+        self.require_writable("save_run_state")
 
         async def _set(r: aioredis.Redis) -> None:
             await r.hset(self._keys.run_state(), field, str(value))
@@ -788,13 +783,13 @@ class RedisProgramStorage(ProgramStorage):
 
     # --------------------- Admin Operations ---------------------
 
-    async def flushdb(self) -> None:
-        self._check_write_allowed("flushdb")
+    async def clear(self) -> None:
+        self.require_writable("clear")
 
         async def _flush(r: aioredis.Redis) -> None:
             await r.flushdb()
 
-        await self._conn.execute("flushdb", _flush)
+        await self._conn.execute("clear", _flush)
 
     # --------------------- Instance Locking (delegates) ---------------------
 

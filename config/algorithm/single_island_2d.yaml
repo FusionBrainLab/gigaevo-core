@@ -53,7 +53,8 @@ islands:
 evolution_strategy:
   _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
   island_configs: ${islands}
-  program_storage: ${ref:redis_storage}
+  program_storage: ${ref:program_storage}
+  archive_storage_factory: ${ref:archive_storage_factory}
   migration_interval: ${migration_interval}
   enable_migration: ${enable_migration}
   max_migrants_per_island: ${max_migrants_per_island}

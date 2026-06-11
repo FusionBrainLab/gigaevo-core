@@ -8,11 +8,11 @@ redis:
   resume: false
   # Namespace for this run's Redis keys. Defaults to ${problem.name} so that
   # pipelines can write `${redis.prefix}` and get the same key-prefix used by
-  # redis_storage.config.key_prefix below (I-12). Override per-run if a run
+  # program_storage.config.key_prefix below (I-12). Override per-run if a run
   # needs a namespace that differs from its problem name.
   prefix: ${problem.name}
 # Redis storage configuration
-redis_storage:
+program_storage:
   _target_: gigaevo.database.redis_program_storage.RedisProgramStorage
   config:
     _target_: gigaevo.database.redis_program_storage.RedisProgramStorageConfig
@@ -24,3 +24,7 @@ redis_storage:
     max_retries: ${redis_max_retries}
     retry_delay: ${redis_retry_delay}
   writer: ${writer}
+
+archive_storage_factory:
+  _target_: gigaevo.evolution.storage.archive_storage.RedisArchiveStorageFactory
+  program_storage: ${ref:program_storage}

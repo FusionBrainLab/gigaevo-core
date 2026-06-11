@@ -7,7 +7,7 @@ evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${memory_provider}
@@ -95,7 +95,7 @@ dag_blueprint:
     DescendantProgramIds:
       _target_: gigaevo.programs.stages.collector.DescendantProgramIds
       _partial_: true
-      storage: ${ref:redis_storage}
+      storage: ${ref:program_storage}
       selector:
         _target_: gigaevo.programs.stages.ancestry_selector.AncestrySelector
         metrics_context: ${metrics_context}
@@ -107,7 +107,7 @@ dag_blueprint:
     AncestorProgramIds:
       _target_: gigaevo.programs.stages.collector.AncestorProgramIds
       _partial_: true
-      storage: ${ref:redis_storage}
+      storage: ${ref:program_storage}
       selector:
         _target_: gigaevo.programs.stages.ancestry_selector.AncestrySelector
         metrics_context: ${metrics_context}
@@ -122,7 +122,7 @@ dag_blueprint:
       llm: ${ref:llm}
       task_description: ${ref:problem_context::task_description}
       metrics_context: ${metrics_context}
-      storage: ${ref:redis_storage}
+      storage: ${ref:program_storage}
       prompts_dir: ${prompts.dir}
       timeout: ${stage_timeout}
 
@@ -130,7 +130,7 @@ dag_blueprint:
     LineagesToDescendants:
       _target_: gigaevo.programs.stages.insights_lineage.LineagesToDescendants
       _partial_: true
-      storage: ${ref:redis_storage}
+      storage: ${ref:program_storage}
       source_stage_name: LineageStage
       timeout: ${stage_timeout}
 
@@ -138,7 +138,7 @@ dag_blueprint:
     LineagesFromAncestors:
       _target_: gigaevo.programs.stages.insights_lineage.LineagesFromAncestors
       _partial_: true
-      storage: ${ref:redis_storage}
+      storage: ${ref:program_storage}
       source_stage_name: LineageStage
       timeout: ${stage_timeout}
 

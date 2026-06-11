@@ -9,7 +9,7 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
@@ -25,6 +25,7 @@ from gigaevo.monitoring.live_profiler import _render_once, start_live_profiler
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
 from gigaevo.runner.dag_runner import DagRunner
+from gigaevo.utils.experiment import check_storage_resume
 from gigaevo.utils.logger_setup import setup_logger
 from gigaevo.utils.serve import serve_until_signal
 from gigaevo.utils.trackers.base import LogWriter
@@ -34,11 +35,11 @@ async def run_experiment(cfg: DictConfig) -> None:
     start_time = time.time()
     logger.info("GigaEvo — Problem: {}", cfg.problem.name)
 
-    redis_storage: RedisProgramStorage | None = None
+    storage: ProgramStorage | None = None
     writer: LogWriter | None = None
     try:
         config_with_instances = instantiate(cfg, recursive=True)
-        redis_storage: RedisProgramStorage = config_with_instances.redis_storage
+        storage: ProgramStorage = config_with_instances.program_storage
         program_loader: InitialProgramLoader = config_with_instances.program_loader
         dag_runner: DagRunner = config_with_instances.dag_runner
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
@@ -49,30 +50,26 @@ async def run_experiment(cfg: DictConfig) -> None:
         )
         configure_event_counters_from_cfg(cfg)
 
-        await redis_storage.acquire_instance_lock()
+        await storage.acquire_instance_lock()
 
-        has_data = await redis_storage.has_data()
-        resume = cfg.redis.get("resume", False)
-
-        if has_data and not resume:
-            raise RuntimeError(
-                f"Redis database {cfg.redis.db} is not empty. "
-                f"Flush with: redis-cli -h {cfg.redis.host} -p {cfg.redis.port} "
-                f"-n {cfg.redis.db} FLUSHDB  — or set redis.resume=true"
-            )
-
-        if has_data and resume:
-            recovered = await redis_storage.recover_stranded_programs()
+        resume = await check_storage_resume(
+            storage,
+            resume=bool(cfg.redis.get("resume", False)),
+            location=f"Redis DB {cfg.redis.db} at {cfg.redis.host}:{cfg.redis.port}",
+            flush_hint=f"gigaevo flush --db {cfg.redis.db} --confirm",
+        )
+        if resume:
+            recovered = await storage.recover_stranded_programs()
             if recovered:
                 logger.info("Recovered {} stranded RUNNING program(s)", recovered)
             await evolution_engine.restore_state()
             await evolution_engine.strategy.restore_state()
             logger.info(
                 "Resumed with {} existing programs",
-                await redis_storage.size(),
+                await storage.size(),
             )
         else:
-            programs = await program_loader.load(redis_storage)
+            programs = await program_loader.load(storage)
             # Seeds occupy ordinals 0..N-1 (set by the loader); the engine's
             # next ordinal to hand out to the first mutant is therefore N.
             # Without this bootstrap the first mutant collides with seed 0.
@@ -104,8 +101,8 @@ async def run_experiment(cfg: DictConfig) -> None:
     finally:
         reset_event_counters()
         await default_exec_runner_pool().shutdown()
-        if redis_storage is not None:
-            await redis_storage.close()
+        if storage is not None:
+            await storage.close()
         if writer is not None:
             writer.close()
         duration = time.time() - start_time

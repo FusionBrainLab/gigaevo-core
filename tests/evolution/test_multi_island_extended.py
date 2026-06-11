@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -69,11 +70,12 @@ def _make_multi_island(
 
     with patch(
         "gigaevo.evolution.strategies.multi_island.MapElitesIsland",
-        side_effect=lambda cfg, s: mock_islands[cfg.island_id],
+        side_effect=lambda cfg, s, f: mock_islands[cfg.island_id],
     ):
         multi = MapElitesMultiIsland(
             island_configs=mock_configs,
             program_storage=storage,
+            archive_storage_factory=RedisArchiveStorageFactory(storage),
             migration_interval=migration_interval,
             enable_migration=enable_migration,
             max_migrants_per_island=max_migrants_per_island,
@@ -91,9 +93,11 @@ class TestMultiIslandConstruction:
     def test_no_configs_raises_value_error(self):
         with pytest.raises(ValueError, match="At least one island"):
             with patch("gigaevo.evolution.strategies.multi_island.MapElitesIsland"):
+                storage = _mock_storage()
                 MapElitesMultiIsland(
                     island_configs=[],
-                    program_storage=_mock_storage(),
+                    program_storage=storage,
+                    archive_storage_factory=RedisArchiveStorageFactory(storage),
                 )
 
     def test_islands_dict_populated(self):

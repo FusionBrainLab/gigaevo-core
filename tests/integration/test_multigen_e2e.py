@@ -44,6 +44,7 @@ from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import MaxMutantsStopper
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -250,6 +251,7 @@ def _build_engine(
     strategy = MapElitesMultiIsland(
         island_configs=[config],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     # max_in_flight=1 forces sequential chained mutation; under coalesce_refresh=True the per-parent lock no longer serialises across the child-DAG.
     engine = SteadyStateEvolutionEngine(
@@ -312,6 +314,7 @@ async def _get_archive(server: fakeredis.FakeServer) -> list[Program]:
     strategy = MapElitesMultiIsland(
         island_configs=[_make_island_config()],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     programs = await strategy.islands["main"].get_elites()
     await storage.close()
@@ -699,6 +702,7 @@ class TestMultiGenMaxSizeEviction:
         strategy = MapElitesMultiIsland(
             island_configs=[island_config],
             program_storage=check_storage,
+            archive_storage_factory=RedisArchiveStorageFactory(check_storage),
         )
         programs = await strategy.islands["main"].get_elites()
         await check_storage.close()
@@ -730,6 +734,7 @@ class TestMultiGenMaxSizeEviction:
         strategy = MapElitesMultiIsland(
             island_configs=[island_config],
             program_storage=check_storage,
+            archive_storage_factory=RedisArchiveStorageFactory(check_storage),
         )
         programs = await strategy.islands["main"].get_elites()
         await check_storage.close()

@@ -29,8 +29,7 @@ import uuid
 
 from loguru import logger
 
-from gigaevo.database.redis.config import RedisProgramStorageConfig
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.factory import build_writable_redis_storage
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.python_executors.execution import (
     CallProgramFunctionWithFixedArgs,
@@ -129,17 +128,20 @@ async def run_redis_benchmarks(
     redis_url: str, iterations: int = 100
 ) -> list[BenchmarkResult]:
     """Run Redis-specific benchmarks."""
+    from urllib.parse import urlparse
 
     results: list[BenchmarkResult] = []
 
     # Setup
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=f"profiler_{uuid.uuid4().hex[:8]}",
-        read_only=False,
-    )
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+    key_prefix = f"profiler_{uuid.uuid4().hex[:8]}"
 
-    storage = RedisProgramStorage(config)
+    storage = build_writable_redis_storage(
+        host=host, port=port, db=db, key_prefix=key_prefix
+    )
     await storage._conn.get()  # Establish connection
 
     try:
@@ -252,7 +254,7 @@ async def run_redis_benchmarks(
     finally:
         # Cleanup
         async def cleanup(r):
-            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            keys = [k async for k in r.scan_iter(f"{key_prefix}:*")]
             if keys:
                 await r.delete(*keys)
 
@@ -343,16 +345,19 @@ async def run_concurrent_benchmarks(
     redis_url: str, concurrency: int = 10
 ) -> list[BenchmarkResult]:
     """Benchmark concurrent operations."""
+    from urllib.parse import urlparse
 
     results: list[BenchmarkResult] = []
 
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=f"profiler_concurrent_{uuid.uuid4().hex[:8]}",
-        read_only=False,
-    )
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+    key_prefix = f"profiler_concurrent_{uuid.uuid4().hex[:8]}"
 
-    storage = RedisProgramStorage(config)
+    storage = build_writable_redis_storage(
+        host=host, port=port, db=db, key_prefix=key_prefix
+    )
     await storage._conn.get()
 
     try:
@@ -393,7 +398,7 @@ async def run_concurrent_benchmarks(
     finally:
 
         async def cleanup(r):
-            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            keys = [k async for k in r.scan_iter(f"{key_prefix}:*")]
             if keys:
                 await r.delete(*keys)
 
@@ -407,8 +412,6 @@ async def run_dag_benchmarks(
     redis_url: str, iterations: int = 20
 ) -> list[BenchmarkResult]:
     """Benchmark DAG construction and execution."""
-    from gigaevo.database.redis.config import RedisProgramStorageConfig
-    from gigaevo.database.redis_program_storage import RedisProgramStorage
     from gigaevo.database.state_manager import ProgramStateManager
     from gigaevo.programs.core_types import StageIO, VoidInput
     from gigaevo.programs.dag.automata import DataFlowEdge
@@ -444,13 +447,17 @@ async def run_dag_benchmarks(
             return MockOutput(value=self.params.data.value + 1)
 
     # Setup
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=f"profiler_dag_{uuid.uuid4().hex[:8]}",
-        read_only=False,
-    )
+    from urllib.parse import urlparse
 
-    storage = RedisProgramStorage(config)
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+    key_prefix = f"profiler_dag_{uuid.uuid4().hex[:8]}"
+
+    storage = build_writable_redis_storage(
+        host=host, port=port, db=db, key_prefix=key_prefix
+    )
     await storage._conn.get()
     state_manager = ProgramStateManager(storage)
 
@@ -594,7 +601,7 @@ async def run_dag_benchmarks(
     finally:
 
         async def cleanup(r):
-            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            keys = [k async for k in r.scan_iter(f"{key_prefix}:*")]
             if keys:
                 await r.delete(*keys)
 
@@ -652,16 +659,21 @@ async def run_heavy_program_benchmarks(
     These benchmarks specifically target the deep copy and dict-patch optimizations
     (Change 3) which are invisible on lightweight toy programs.
     """
+    from urllib.parse import urlparse
+
     from gigaevo.database.merge_strategies import merge_programs
 
     results: list[BenchmarkResult] = []
 
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=f"profiler_heavy_{uuid.uuid4().hex[:8]}",
-        read_only=False,
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+    key_prefix = f"profiler_heavy_{uuid.uuid4().hex[:8]}"
+
+    storage = build_writable_redis_storage(
+        host=host, port=port, db=db, key_prefix=key_prefix
     )
-    storage = RedisProgramStorage(config)
     await storage._conn.get()
 
     heavy = _make_heavy_program()
@@ -729,7 +741,7 @@ async def run_heavy_program_benchmarks(
     finally:
 
         async def cleanup(r):
-            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            keys = [k async for k in r.scan_iter(f"{key_prefix}:*")]
             if keys:
                 await r.delete(*keys)
 
@@ -743,17 +755,19 @@ async def run_throughput_simulation(
     redis_url: str, duration_seconds: float = 5.0
 ) -> dict[str, Any]:
     """Simulate realistic throughput over time."""
-    from gigaevo.database.redis.config import RedisProgramStorageConfig
-    from gigaevo.database.redis_program_storage import RedisProgramStorage
+    from urllib.parse import urlparse
+
     from gigaevo.programs.program import Program
 
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=f"profiler_throughput_{uuid.uuid4().hex[:8]}",
-        read_only=False,
-    )
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+    key_prefix = f"profiler_throughput_{uuid.uuid4().hex[:8]}"
 
-    storage = RedisProgramStorage(config)
+    storage = build_writable_redis_storage(
+        host=host, port=port, db=db, key_prefix=key_prefix
+    )
     await storage._conn.get()
 
     results = {
@@ -795,7 +809,7 @@ async def run_throughput_simulation(
         results["read_throughput"] = results["programs_read"] / elapsed
 
         async def cleanup(r):
-            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            keys = [k async for k in r.scan_iter(f"{key_prefix}:*")]
             if keys:
                 await r.delete(*keys)
 
@@ -875,6 +889,8 @@ async def run_strategy_benchmarks(
     redis_url: str, iterations: int = 50
 ) -> list[BenchmarkResult]:
     """Benchmark MAP-Elites strategy operations."""
+    from urllib.parse import urlparse
+
     from gigaevo.evolution.strategies.island import IslandConfig
     from gigaevo.evolution.strategies.models import (
         BehaviorSpace,
@@ -887,12 +903,15 @@ async def run_strategy_benchmarks(
 
     results: list[BenchmarkResult] = []
 
-    config = RedisProgramStorageConfig(
-        redis_url=redis_url,
-        key_prefix=f"profiler_strategy_{uuid.uuid4().hex[:8]}",
-        read_only=False,
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+    key_prefix = f"profiler_strategy_{uuid.uuid4().hex[:8]}"
+
+    storage = build_writable_redis_storage(
+        host=host, port=port, db=db, key_prefix=key_prefix
     )
-    storage = RedisProgramStorage(config)
     await storage._conn.get()
 
     island_config = IslandConfig(
@@ -945,7 +964,7 @@ async def run_strategy_benchmarks(
     finally:
 
         async def cleanup(r):
-            keys = [k async for k in r.scan_iter(f"{config.key_prefix}:*")]
+            keys = [k async for k in r.scan_iter(f"{key_prefix}:*")]
             if keys:
                 await r.delete(*keys)
 

@@ -5,7 +5,8 @@ import random
 
 from loguru import logger
 
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.program_storage import ProgramStorage
+from gigaevo.evolution.storage.archive_storage import ArchiveStorageFactory
 from gigaevo.evolution.strategies.base import EvolutionStrategy, StrategyMetrics
 from gigaevo.evolution.strategies.island import (
     METADATA_KEY_CURRENT_ISLAND,
@@ -17,7 +18,7 @@ from gigaevo.evolution.strategies.mutant_router import RandomMutantRouter
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
-# Redis run-state field names (used for resume persistence)
+# Run-state field names (used for resume persistence)
 _RUN_STATE_GENERATION = "strategy:generation"
 _RUN_STATE_LAST_MIGRATION = "strategy:last_migration"
 
@@ -28,7 +29,8 @@ class MapElitesMultiIsland(EvolutionStrategy):
     def __init__(
         self,
         island_configs: list[IslandConfig],
-        program_storage: RedisProgramStorage,
+        program_storage: ProgramStorage,
+        archive_storage_factory: ArchiveStorageFactory,
         migration_interval: int = 50,
         enable_migration: bool = True,
         max_migrants_per_island: int = 5,
@@ -39,7 +41,9 @@ class MapElitesMultiIsland(EvolutionStrategy):
             raise ValueError("At least one island configuration is required")
 
         self.islands: dict[str, MapElitesIsland] = {
-            cfg.island_id: MapElitesIsland(cfg, program_storage)
+            cfg.island_id: MapElitesIsland(
+                cfg, program_storage, archive_storage_factory
+            )
             for cfg in island_configs
         }
 
@@ -264,7 +268,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
         )
 
     async def restore_state(self) -> None:
-        """Restore generation counters from Redis after a resume."""
+        """Restore generation counters from storage after a resume."""
         gen = await self.program_storage.load_run_state(_RUN_STATE_GENERATION)
         last_mig = await self.program_storage.load_run_state(_RUN_STATE_LAST_MIGRATION)
         if gen is not None:

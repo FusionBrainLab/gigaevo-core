@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Protocol
 
 from loguru import logger
 from redis.exceptions import WatchError
@@ -87,7 +88,7 @@ class RedisArchiveStorage(ArchiveStorage):
         self, program_storage: RedisProgramStorage, key_prefix: str | None = None
     ) -> None:
         self._storage = program_storage
-        prefix = key_prefix or program_storage.config.key_prefix
+        prefix = key_prefix or program_storage.key_prefix
         self._hash_key = f"{prefix}:archive"
         self._reverse_key = f"{prefix}:archive:reverse"
         # In-memory write-through cache: cell_field -> elite Program
@@ -106,25 +107,25 @@ class RedisArchiveStorage(ArchiveStorage):
         async def _op(r):
             return await r.hget(self._hash_key, field)
 
-        return await self._storage.with_redis("archive:hget", _op)
+        return await self._storage._with_redis("archive:hget", _op)
 
     async def _hvals(self) -> list[str]:
         async def _op(r):
             return await r.hvals(self._hash_key)
 
-        return await self._storage.with_redis("archive:hvals", _op) or []
+        return await self._storage._with_redis("archive:hvals", _op) or []
 
     async def _hlen(self) -> int:
         async def _op(r):
             return await r.hlen(self._hash_key)
 
-        return await self._storage.with_redis("archive:hlen", _op)
+        return await self._storage._with_redis("archive:hlen", _op)
 
     async def _hgetall(self) -> dict[str, str]:
         async def _op(r):
             return await r.hgetall(self._hash_key)
 
-        return await self._storage.with_redis("archive:hgetall", _op) or {}
+        return await self._storage._with_redis("archive:hgetall", _op) or {}
 
     async def _ensure_cache(self) -> None:
         """Lazily populate the in-memory elite cache from Redis."""
@@ -233,7 +234,7 @@ class RedisArchiveStorage(ArchiveStorage):
                     self._cache_remove_field(field)
                     continue
 
-        ok = await self._storage.with_redis("archive:add_elite", _op)
+        ok = await self._storage._with_redis("archive:add_elite", _op)
         if ok:
             self._cache_set(field, program)
             logger.debug("[Archive] cell {} -> {}", field, program.id)
@@ -254,7 +255,7 @@ class RedisArchiveStorage(ArchiveStorage):
             await pipe.execute()
             return True
 
-        removed = await self._storage.with_redis("archive:remove_elite", _op)
+        removed = await self._storage._with_redis("archive:remove_elite", _op)
         if removed:
             self._cache_remove_field(field)
             logger.debug("[Archive] removed cell {}", field)
@@ -283,7 +284,7 @@ class RedisArchiveStorage(ArchiveStorage):
             await pipe.execute()
             return True
 
-        removed = await self._storage.with_redis("archive:remove_elite_by_id", _op)
+        removed = await self._storage._with_redis("archive:remove_elite_by_id", _op)
         if removed:
             self._cache_remove_id(program_id)
             logger.debug("[Archive] removed id {}", program_id)
@@ -311,7 +312,7 @@ class RedisArchiveStorage(ArchiveStorage):
                 await pipe2.execute()
             return removed
 
-        count = await self._storage.with_redis("archive:bulk_remove_elites_by_id", _op)
+        count = await self._storage._with_redis("archive:bulk_remove_elites_by_id", _op)
         if count:
             for pid in program_ids:
                 self._cache_remove_id(pid)
@@ -331,7 +332,7 @@ class RedisArchiveStorage(ArchiveStorage):
             pipe.delete(self._reverse_key)
             await pipe.execute()
 
-        await self._storage.with_redis("archive:clear_all", _op)
+        await self._storage._with_redis("archive:clear_all", _op)
         self._cache_clear()
 
         logger.debug("[Archive] cleared {} elites", count)
@@ -355,3 +356,21 @@ class RedisArchiveStorage(ArchiveStorage):
                 added_count += 1
 
         return added_count
+
+
+class ArchiveStorageFactory(Protocol):
+    """Builds prefix-scoped ArchiveStorage instances (one per island)."""
+
+    def __call__(self, key_prefix: str | None = None) -> ArchiveStorage: ...
+
+
+class RedisArchiveStorageFactory:
+    """Default factory: archives share the program storage's Redis connection."""
+
+    def __init__(self, program_storage: RedisProgramStorage) -> None:
+        self._program_storage = program_storage
+
+    def __call__(self, key_prefix: str | None = None) -> RedisArchiveStorage:
+        return RedisArchiveStorage(
+            program_storage=self._program_storage, key_prefix=key_prefix
+        )

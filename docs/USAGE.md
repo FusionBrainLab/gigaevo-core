@@ -89,7 +89,7 @@ python run.py problem.name=toy_example \
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
-| `loader` | `directory`, `redis_selection` |
+| `loader` | `directory`, `top_programs` |
 | `logging` | `tensorboard`, `wandb` |
 
 ## Examples
