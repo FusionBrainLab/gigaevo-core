@@ -9,7 +9,8 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.disk_program_storage import DiskProgramStorage
+from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
@@ -25,8 +26,10 @@ from gigaevo.monitoring.live_profiler import _render_once, start_live_profiler
 from gigaevo.problems.initial_loaders import InitialProgramLoader
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
 from gigaevo.runner.dag_runner import DagRunner
+from gigaevo.utils.experiment import check_storage_resume
 from gigaevo.utils.logger_setup import setup_logger
 from gigaevo.utils.serve import serve_until_signal
+from gigaevo.utils.trackers import get_default_history_reader
 from gigaevo.utils.trackers.base import LogWriter
 
 
@@ -34,45 +37,45 @@ async def run_experiment(cfg: DictConfig) -> None:
     start_time = time.time()
     logger.info("GigaEvo — Problem: {}", cfg.problem.name)
 
-    redis_storage: RedisProgramStorage | None = None
+    storage: ProgramStorage | None = None
     writer: LogWriter | None = None
     try:
         config_with_instances = instantiate(cfg, recursive=True)
-        redis_storage: RedisProgramStorage = config_with_instances.redis_storage
+        storage: ProgramStorage = config_with_instances.program_storage
         program_loader: InitialProgramLoader = config_with_instances.program_loader
         dag_runner: DagRunner = config_with_instances.dag_runner
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
         writer: LogWriter = config_with_instances.writer
 
-        logger.info(
-            "Redis DB {} at {}:{}", cfg.redis.db, cfg.redis.host, cfg.redis.port
-        )
+        if isinstance(storage, DiskProgramStorage):
+            location = f"disk storage at {storage.config.root_dir}"
+            flush_hint = f"rm -rf {storage.config.root_dir}"
+        else:
+            location = f"Redis DB {cfg.redis.db} at {cfg.redis.host}:{cfg.redis.port}"
+            flush_hint = f"gigaevo flush --db {cfg.redis.db} --confirm"
+        logger.info("Program storage: {}", location)
         configure_event_counters_from_cfg(cfg)
 
-        await redis_storage.acquire_instance_lock()
+        await storage.acquire_instance_lock()
 
-        has_data = await redis_storage.has_data()
-        resume = cfg.redis.get("resume", False)
-
-        if has_data and not resume:
-            raise RuntimeError(
-                f"Redis database {cfg.redis.db} is not empty. "
-                f"Flush with: redis-cli -h {cfg.redis.host} -p {cfg.redis.port} "
-                f"-n {cfg.redis.db} FLUSHDB  — or set redis.resume=true"
-            )
-
-        if has_data and resume:
-            recovered = await redis_storage.recover_stranded_programs()
+        resume = await check_storage_resume(
+            storage,
+            resume=bool(cfg.redis.get("resume", False)),
+            location=location,
+            flush_hint=flush_hint,
+        )
+        if resume:
+            recovered = await storage.recover_stranded_programs()
             if recovered:
                 logger.info("Recovered {} stranded RUNNING program(s)", recovered)
             await evolution_engine.restore_state()
             await evolution_engine.strategy.restore_state()
             logger.info(
                 "Resumed with {} existing programs",
-                await redis_storage.size(),
+                await storage.size(),
             )
         else:
-            programs = await program_loader.load(redis_storage)
+            programs = await program_loader.load(storage)
             # Seeds occupy ordinals 0..N-1 (set by the loader); the engine's
             # next ordinal to hand out to the first mutant is therefore N.
             # Without this bootstrap the first mutant collides with seed 0.
@@ -104,8 +107,8 @@ async def run_experiment(cfg: DictConfig) -> None:
     finally:
         reset_event_counters()
         await default_exec_runner_pool().shutdown()
-        if redis_storage is not None:
-            await redis_storage.close()
+        if storage is not None:
+            await storage.close()
         if writer is not None:
             writer.close()
         duration = time.time() - start_time
@@ -149,11 +152,10 @@ def _maybe_start_live_frontier_compare(
 ) -> dict | None:
     """Wire ``cfg.live_frontier_compare`` to the daemon entry point.
 
-    Returns a context dict ``{redis_url, key_prefix, metrics,
-    higher_is_better}`` describing what the periodic thread is rendering,
-    so the end-of-run finalizer can issue one more synchronous render
-    against the same Redis state. Returns ``None`` when the group is
-    missing or disabled.
+    Returns a context dict ``{metrics, higher_is_better}`` describing
+    what the periodic thread is rendering, so the end-of-run finalizer
+    can issue one more synchronous render against the same metrics
+    backend. Returns ``None`` when the group is missing or disabled.
     """
     lfc = cfg.get("live_frontier_compare") if hasattr(cfg, "get") else None
     if lfc is None:
@@ -181,16 +183,10 @@ def _maybe_start_live_frontier_compare(
             frontier_source,
         )
 
-    redis_url = f"redis://{cfg.redis.host}:{cfg.redis.port}/{cfg.redis.db}"
-    # The metrics tracker writes under "${problem.name}:metrics" — same as
-    # the RedisMetricsConfig.key_prefix in config/logging/{tensorboard,wandb}.yaml.
-    key_prefix = f"{cfg.problem.name}:metrics"
     metrics = [str(m) for m in lfc.get("metrics", ["fitness"])]
     emit_targets = [str(t) for t in lfc.get("emit_targets", ["log"])]
 
     start_live_frontier_compare(
-        redis_url=redis_url,
-        key_prefix=key_prefix,
         metrics=metrics,
         higher_is_better=higher_is_better,
         interval_s=float(lfc.get("interval_s", 60.0)),
@@ -198,8 +194,6 @@ def _maybe_start_live_frontier_compare(
         output_dir=output_dir,
     )
     return {
-        "redis_url": redis_url,
-        "key_prefix": key_prefix,
         "metrics": metrics,
         "higher_is_better": higher_is_better,
     }
@@ -237,17 +231,16 @@ def _finalize_live_artifacts(
     if frontier_ctx is None:
         return
     try:
-        import redis as redis_lib
-
-        client = redis_lib.Redis.from_url(
-            frontier_ctx["redis_url"], decode_responses=True
-        )
-        frontier, iter_mean, _ = _fetch_histories(
-            client, frontier_ctx["key_prefix"], frontier_ctx["metrics"]
-        )
+        reader = get_default_history_reader()
+        if reader is None:
+            logger.warning(
+                "[finalize] no metrics backend initialized; skipping plot finalize"
+            )
+            return
+        frontier, iter_mean, _ = _fetch_histories(reader, frontier_ctx["metrics"])
     except Exception:
         logger.opt(exception=True).warning(
-            "[finalize] frontier Redis fetch failed; skipping plot finalize"
+            "[finalize] frontier history fetch failed; skipping plot finalize"
         )
         return
     for m in frontier_ctx["metrics"]:

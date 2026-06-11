@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import click
 import redis as redis_lib
 
 from gigaevo.cli.output_formatter import OutputFormatter
-from gigaevo.cli.run_resolver import RunResolver
+from gigaevo.cli.run_resolver import RunResolver, build_readonly_storage
 
 
 def _fetch_top_programs(
@@ -42,6 +43,37 @@ def _fetch_top_programs(
                 metric: val,
                 "state": prog.get("state", "?"),
                 "code": prog.get("code", ""),
+            }
+        )
+
+    programs.sort(key=lambda p: p.get(metric, 0), reverse=not minimize)
+    return programs[:n]
+
+
+def _fetch_top_programs_storage(
+    storage,
+    metric: str,
+    n: int,
+    minimize: bool = False,
+) -> list[dict]:
+    """Fetch top N programs through the ProgramStorage ABC (disk specs)."""
+
+    async def _all():
+        async with storage:
+            return await storage.get_all()
+
+    programs = []
+    for prog in asyncio.run(_all()):
+        val = prog.metrics.get(metric)
+        if val is None:
+            continue
+        programs.append(
+            {
+                "id": prog.id,
+                "generation": prog.lineage.generation,
+                metric: val,
+                "state": prog.state.value,
+                "code": prog.code,
             }
         )
 
@@ -124,19 +156,23 @@ def top(
 
     for rc in run_configs:
         spec = rc.run_spec
-        if redis_factory:
-            r = redis_factory(spec.db)
+        if spec.is_disk:
+            storage = build_readonly_storage(spec, redis_host, redis_port)
+            progs = _fetch_top_programs_storage(storage, metric, top_n, minimize)
         else:
-            r = redis_lib.Redis(
-                host=redis_host, port=redis_port, db=spec.db, decode_responses=True
-            )
-        try:
-            progs = _fetch_top_programs(r, spec.prefix, metric, top_n, minimize)
-            for p in progs:
-                p["label"] = spec.label
-            all_programs.extend(progs)
-        finally:
-            r.close()
+            if redis_factory:
+                r = redis_factory(spec.db)
+            else:
+                r = redis_lib.Redis(
+                    host=redis_host, port=redis_port, db=spec.db, decode_responses=True
+                )
+            try:
+                progs = _fetch_top_programs(r, spec.prefix, metric, top_n, minimize)
+            finally:
+                r.close()
+        for p in progs:
+            p["label"] = spec.label
+        all_programs.extend(progs)
 
     all_programs.sort(key=lambda p: p.get(metric, 0), reverse=not minimize)
     all_programs = all_programs[:top_n]

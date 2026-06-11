@@ -276,12 +276,12 @@ async def test_reads_schema_written_by_real_archive_storage(monkeypatch):
     # --- wire a fakeredis-backed program storage + archive storage ---
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
 
-    # Minimal RedisProgramStorage-shaped stub: we only need `with_redis`,
+    # Minimal RedisProgramStorage-shaped stub: we only need `_with_redis`,
     # `exists`, `mget`, `get`, and `config.key_prefix`.
     stored: dict[str, Program] = {}
     PREFIX = "intg"
 
-    async def _with_redis(_tag, op):
+    async def _with_redis_impl(_tag, op):
         return await op(fake)
 
     async def _exists(pid: str) -> bool:
@@ -294,7 +294,7 @@ async def test_reads_schema_written_by_real_archive_storage(monkeypatch):
         return [stored[p] for p in pids if p in stored]
 
     program_storage_stub = SimpleNamespace(
-        with_redis=_with_redis,
+        _with_redis=_with_redis_impl,
         exists=_exists,
         get=_get,
         mget=_mget,

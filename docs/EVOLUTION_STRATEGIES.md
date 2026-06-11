@@ -455,7 +455,7 @@ islands:
 evolution_strategy:
   _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
   island_configs: ${islands}
-  program_storage: ${ref:redis_storage}
+  program_storage: ${ref:program_storage}
   migration_interval: 50
   enable_migration: false  # No migration with single island
   max_migrants_per_island: 5
@@ -508,7 +508,7 @@ islands:
 evolution_strategy:
   _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
   island_configs: ${islands}
-  program_storage: ${ref:redis_storage}
+  program_storage: ${ref:program_storage}
   migration_interval: 50      # Migrate every 50 generations
   enable_migration: true
   max_migrants_per_island: 5  # Each island exports 5 migrants

@@ -161,6 +161,8 @@ class TestFetchRunDataSentinelPassthrough:
         mock_asyncio.run.return_value = raw_df
 
         mock_rc = MagicMock()
+        mock_rc.run_spec.db = 0
+        mock_rc.run_spec.prefix = "test_prefix"
         results = _fetch_run_data(
             [mock_rc], "localhost", 6379, metric="fitness", sentinel_value=-1.0
         )
@@ -184,6 +186,8 @@ class TestFetchRunDataSentinelPassthrough:
         mock_asyncio.run.return_value = raw_df
 
         mock_rc = MagicMock()
+        mock_rc.run_spec.db = 0
+        mock_rc.run_spec.prefix = "test_prefix"
         results = _fetch_run_data([mock_rc], "localhost", 6379, metric="fitness")
 
         assert len(results) == 1

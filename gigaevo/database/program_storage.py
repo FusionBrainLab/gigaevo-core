@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+from types import TracebackType
 from typing import Any
 
+from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import (
     INCOMPLETE_STATES,
@@ -140,8 +142,9 @@ class PopulationSnapshot:
 class ProgramStorage(ABC):
     """Abstract interface for persisting :class:`Program` objects."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, read_only: bool = False) -> None:
         self.snapshot = PopulationSnapshot()
+        self.read_only = read_only
 
     @abstractmethod
     async def add(self, program: Program) -> None: ...
@@ -178,6 +181,20 @@ class ProgramStorage(ABC):
 
     @abstractmethod
     async def exists(self, program_id: str) -> bool: ...
+
+    @property
+    @abstractmethod
+    def key_prefix(self) -> str:
+        """Namespace prefix isolating this run's data within the backend."""
+        ...
+
+    @abstractmethod
+    async def remove(self, program_id: str) -> None: ...
+
+    @abstractmethod
+    async def clear(self) -> None:
+        """Delete ALL data for this storage (programs, indices, locks)."""
+        ...
 
     @abstractmethod
     async def publish_status_event(
@@ -388,3 +405,30 @@ class ProgramStorage(ABC):
 
     @abstractmethod
     async def close(self) -> None: ...
+
+    async def size(self) -> int:
+        """Total number of stored programs. Override for a faster backend path."""
+        return len(await self.get_all_program_ids())
+
+    async def has_data(self) -> bool:
+        """True if any program exists. Override for a faster backend path."""
+        return await self.size() > 0
+
+    def require_writable(self, operation: str) -> None:
+        """Raise StorageError if a write is attempted on a read-only instance."""
+        if self.read_only:
+            raise StorageError(
+                f"Cannot perform '{operation}' in read-only mode. "
+                f"Create storage without read_only=True for write operations."
+            )
+
+    async def __aenter__(self) -> ProgramStorage:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.close()

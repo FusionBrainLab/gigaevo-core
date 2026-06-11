@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from gigaevo.database.redis_program_storage import (
-    RedisProgramStorage,
-    RedisProgramStorageConfig,
-)
-from tools.utils import RedisRunConfig
+from gigaevo.database.factory import RedisRunConfig, build_readonly_redis_storage
 
 
 def get_best_program(
@@ -28,20 +24,14 @@ def get_best_program(
     """
 
     async def _fetch():
-        storage = RedisProgramStorage(
-            RedisProgramStorageConfig(
-                redis_url=config.url(),
-                key_prefix=config.redis_prefix,
-                max_connections=50,
-                connection_pool_timeout=30.0,
-                health_check_interval=60,
-                read_only=True,
-            )
+        storage = build_readonly_redis_storage(
+            host=config.redis_host,
+            port=config.redis_port,
+            db=config.redis_db,
+            key_prefix=config.redis_prefix,
         )
-        try:
+        async with storage:
             return await storage.get_all()
-        finally:
-            await storage.close()
 
     programs = asyncio.run(_fetch())
 

@@ -39,6 +39,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import ScalarTournamentEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
@@ -226,6 +227,7 @@ def _build_engine(
     strategy = MapElitesMultiIsland(
         island_configs=[_make_island_config()],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     engine = SteadyStateEvolutionEngine(
         storage=storage,

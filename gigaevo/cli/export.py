@@ -21,7 +21,7 @@ from gigaevo.cli.run_resolver import RunResolver
 
 def _build_redis_config(run_config, redis_host: str, redis_port: int):
     """Build a RedisRunConfig from a monitoring RunConfig."""
-    from gigaevo.utils.redis import RedisRunConfig
+    from gigaevo.database.factory import RedisRunConfig
 
     spec = run_config.run_spec
     return RedisRunConfig(
@@ -34,11 +34,17 @@ def _build_redis_config(run_config, redis_host: str, redis_port: int):
 
 
 def _fetch_dataframe(run_config, redis_host: str, redis_port: int) -> pd.DataFrame:
-    """Fetch evolution DataFrame for a single run."""
-    from gigaevo.utils.redis import fetch_evolution_dataframe
+    """Fetch evolution DataFrame for a single run (disk or Redis)."""
+    from gigaevo.cli.run_resolver import build_readonly_storage
+    from gigaevo.utils.dataframes import fetch_evolution_dataframe
 
-    config = _build_redis_config(run_config, redis_host, redis_port)
-    return asyncio.run(fetch_evolution_dataframe(config, add_stage_results=False))
+    storage = build_readonly_storage(run_config.run_spec, redis_host, redis_port)
+
+    async def _fetch():
+        async with storage:
+            return await fetch_evolution_dataframe(storage, add_stage_results=False)
+
+    return asyncio.run(_fetch())
 
 
 def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -109,6 +115,8 @@ def _verify_prefixes_exist(
     missing: list[tuple[str, int, list[str]]] = []
     for rc in run_configs:
         spec = rc.run_spec
+        if spec.is_disk:
+            continue  # existence already verified during disk-path resolution
         try:
             available = discover_prefixes(redis_host, redis_port, spec.db)
         except RedisError:

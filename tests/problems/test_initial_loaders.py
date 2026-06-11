@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 import uuid
 
 import pytest
 
 from gigaevo.problems.initial_loaders import (
     DirectoryProgramLoader,
-    RedisTopProgramsLoader,
+    TopProgramsLoader,
 )
 
 # ===================================================================
@@ -184,77 +184,49 @@ class TestDirectoryProgramLoader:
 
 
 # ===================================================================
-# RedisTopProgramsLoader
+# TopProgramsLoader
 # ===================================================================
 
 
-class TestRedisTopProgramsLoader:
+class TestTopProgramsLoader:
     def test_init_stores_config(self):
         """Test that constructor stores all config parameters."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="exp:v1",
+        source = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
             metric_key="fitness",
             higher_is_better=True,
             top_n=25,
-            max_connections=100,
-            connection_pool_timeout=60.0,
-            health_check_interval=120,
         )
 
-        assert loader.source_host == "localhost"
-        assert loader.source_port == 6379
-        assert loader.source_db == 1
-        assert loader.key_prefix == "exp:v1"
+        assert loader.source is source
         assert loader.metric_key == "fitness"
         assert loader.higher_is_better is True
         assert loader.top_n == 25
-        assert loader.max_connections == 100
-        assert loader.connection_pool_timeout == 60.0
-        assert loader.health_check_interval == 120
 
     @pytest.mark.asyncio
     async def test_returns_empty_if_no_programs_in_source(self):
         """Test graceful handling when source storage is empty."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=[])
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
+
+        loader = TopProgramsLoader(
+            source=source,
             metric_key="fitness",
             higher_is_better=True,
         )
 
-        # Mock source storage to return empty list
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=[])
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        dest = AsyncMock()
+        result = await loader.load(dest)
 
-            dest = AsyncMock()
-            result = await loader.load(dest)
-
-            assert result == []
-            source.close.assert_called_once()
+        assert result == []
+        source.__aexit__.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_filters_programs_without_metric(self):
         """Test that programs without the metric key are filtered out."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
-            metric_key="fitness",
-            higher_is_better=True,
-            top_n=10,
-        )
-
         # Create programs: some with metric, some without
         prog_with = MagicMock()
         prog_with.id = uuid.uuid4()
@@ -274,36 +246,31 @@ class TestRedisTopProgramsLoader:
         prog_without.stage_results = {}
         prog_without.metadata = {}
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=[prog_with, prog_without])
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=[prog_with, prog_without])
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=10,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            # Only prog_with should be added
-            assert len(result) == 1
-            assert dest.add.call_count == 1
+        result = await loader.load(dest)
+
+        # Only prog_with should be added
+        assert len(result) == 1
+        assert dest.add.call_count == 1
 
     @pytest.mark.asyncio
     async def test_sorts_by_fitness_higher_is_better(self):
         """Test that programs are sorted by fitness in descending order."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
-            metric_key="fitness",
-            higher_is_better=True,
-            top_n=2,
-        )
-
         # Create programs with different fitness values
         programs = []
         for i, fitness in enumerate([0.5, 0.9, 0.7]):
@@ -317,37 +284,32 @@ class TestRedisTopProgramsLoader:
             prog.metadata = {}
             programs.append(prog)
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=programs)
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=programs)
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=2,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            # Should select top 2: 0.9 and 0.7
-            assert len(result) == 2
-            # Check that the highest fitness was selected
-            assert dest.add.call_count == 2
+        result = await loader.load(dest)
+
+        # Should select top 2: 0.9 and 0.7
+        assert len(result) == 2
+        # Check that the highest fitness was selected
+        assert dest.add.call_count == 2
 
     @pytest.mark.asyncio
     async def test_sorts_by_fitness_lower_is_better(self):
         """Test that programs are sorted correctly when lower is better."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
-            metric_key="loss",
-            higher_is_better=False,  # Lower is better
-            top_n=2,
-        )
-
         # Create programs with different loss values
         programs = []
         for i, loss in enumerate([1.5, 0.2, 0.8]):
@@ -361,35 +323,30 @@ class TestRedisTopProgramsLoader:
             prog.metadata = {}
             programs.append(prog)
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=programs)
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=programs)
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="loss",
+            higher_is_better=False,  # Lower is better
+            top_n=2,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            # Should select top 2 (lowest losses): 0.2 and 0.8
-            assert len(result) == 2
+        result = await loader.load(dest)
+
+        # Should select top 2 (lowest losses): 0.2 and 0.8
+        assert len(result) == 2
 
     @pytest.mark.asyncio
     async def test_respects_top_n_limit(self):
         """Test that only top_n programs are selected."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
-            metric_key="fitness",
-            higher_is_better=True,
-            top_n=3,
-        )
-
         # Create 10 programs
         programs = []
         for i in range(10):
@@ -403,34 +360,29 @@ class TestRedisTopProgramsLoader:
             prog.metadata = {}
             programs.append(prog)
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=programs)
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=programs)
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=3,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            assert len(result) == 3
+        result = await loader.load(dest)
+
+        assert len(result) == 3
 
     @pytest.mark.asyncio
     async def test_sets_metadata_for_loaded_programs(self):
         """Test that loaded programs have correct metadata set."""
-        loader = RedisTopProgramsLoader(
-            source_host="redis.example.com",
-            source_port=6379,
-            source_db=2,
-            key_prefix="test",
-            metric_key="fitness",
-            higher_is_better=True,
-            top_n=1,
-        )
-
         prog = MagicMock()
         original_id = uuid.uuid4()
         prog.id = original_id
@@ -441,41 +393,36 @@ class TestRedisTopProgramsLoader:
         prog.stage_results = {}
         prog.metadata = {"existing": "value"}
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=[prog])
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=[prog])
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=1,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            assert len(result) == 1
-            loaded = result[0]
-            assert loaded.metadata["source"] == "redis_selection"
-            assert loaded.metadata["source_db"] == 2
-            assert loaded.metadata["selection_rank"] == 1
-            assert loaded.metadata["original_id"] == original_id
-            # Single seed loaded → ordinal 0 (sole element of 0..N-1).
-            assert loaded.iteration == 0
+        result = await loader.load(dest)
+
+        assert len(result) == 1
+        loaded = result[0]
+        assert loaded.metadata["source"] == "top_programs"
+        assert loaded.metadata["source_prefix"] == "test"
+        assert loaded.metadata["selection_rank"] == 1
+        assert loaded.metadata["original_id"] == original_id
+        # Single seed loaded → ordinal 0 (sole element of 0..N-1).
+        assert loaded.iteration == 0
 
     @pytest.mark.asyncio
     async def test_enumerates_iterations_across_selection(self):
         """Multiple selected programs must each get a unique iteration ordinal."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
-            metric_key="fitness",
-            higher_is_better=True,
-            top_n=5,
-        )
-
         programs = []
         for i, fitness in enumerate([0.1, 0.5, 0.9, 0.3, 0.7]):
             prog = MagicMock()
@@ -488,91 +435,77 @@ class TestRedisTopProgramsLoader:
             prog.metadata = {}
             programs.append(prog)
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=programs)
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=programs)
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=5,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            iterations = sorted(p.iteration for p in result)
-            assert iterations == list(range(len(result))), (
-                f"Redis seeds must enumerate as 0..N-1, got {iterations}"
-            )
+        result = await loader.load(dest)
+
+        iterations = sorted(p.iteration for p in result)
+        assert iterations == list(range(len(result))), (
+            f"Loaded seeds must enumerate as 0..N-1, got {iterations}"
+        )
 
     @pytest.mark.asyncio
     async def test_closes_source_even_on_error(self):
         """Test that source storage is closed even if error occurs."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
+        source = AsyncMock()
+        source.get_all = AsyncMock(side_effect=RuntimeError("connection failed"))
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
+
+        loader = TopProgramsLoader(
+            source=source,
             metric_key="fitness",
             higher_is_better=True,
         )
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(side_effect=RuntimeError("connection failed"))
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        dest = AsyncMock()
 
-            dest = AsyncMock()
+        with pytest.raises(RuntimeError):
+            await loader.load(dest)
 
-            with pytest.raises(RuntimeError):
-                await loader.load(dest)
-
-            # Verify that close was still called
-            source.close.assert_called_once()
+        # Verify that __aexit__ was called (which includes close logic)
+        source.__aexit__.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handles_close_error_gracefully(self):
-        """Test that errors during close don't propagate."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
+    async def test_async_context_manager_lifecycle(self):
+        """Test that source is used via async context manager."""
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=[])
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
+
+        loader = TopProgramsLoader(
+            source=source,
             metric_key="fitness",
             higher_is_better=True,
         )
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=[])
-            source.close = AsyncMock(side_effect=RuntimeError("close failed"))
-            MockStorage.return_value = source
+        dest = AsyncMock()
+        result = await loader.load(dest)
 
-            dest = AsyncMock()
-
-            # Should not raise even though close() fails
-            result = await loader.load(dest)
-            assert result == []
+        assert result == []
+        # Verify context manager was used
+        source.__aenter__.assert_called_once()
+        source.__aexit__.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_uses_sentinel_for_missing_metrics(self):
         """Test that sentinel values are used for programs without the metric."""
-        loader = RedisTopProgramsLoader(
-            source_host="localhost",
-            source_port=6379,
-            source_db=1,
-            key_prefix="test",
-            metric_key="fitness",
-            higher_is_better=True,
-            top_n=10,
-        )
-
         # One program with metric, one without
         prog_with = MagicMock()
         prog_with.id = uuid.uuid4()
@@ -592,18 +525,23 @@ class TestRedisTopProgramsLoader:
         prog_without.stage_results = {}
         prog_without.metadata = {}
 
-        with patch(
-            "gigaevo.problems.initial_loaders.RedisProgramStorage"
-        ) as MockStorage:
-            source = AsyncMock()
-            source.get_all = AsyncMock(return_value=[prog_with, prog_without])
-            source.close = AsyncMock()
-            MockStorage.return_value = source
+        source = AsyncMock()
+        source.get_all = AsyncMock(return_value=[prog_with, prog_without])
+        source.key_prefix = "test"
+        source.__aenter__ = AsyncMock(return_value=source)
+        source.__aexit__ = AsyncMock(return_value=None)
 
-            dest = AsyncMock()
-            dest.add = AsyncMock()
+        loader = TopProgramsLoader(
+            source=source,
+            metric_key="fitness",
+            higher_is_better=True,
+            top_n=10,
+        )
 
-            result = await loader.load(dest)
+        dest = AsyncMock()
+        dest.add = AsyncMock()
 
-            # Filters out prog_without since it has no metric
-            assert len(result) == 1
+        result = await loader.load(dest)
+
+        # Filters out prog_without since it has no metric
+        assert len(result) == 1

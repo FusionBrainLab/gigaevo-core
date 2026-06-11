@@ -463,3 +463,24 @@ class TestFrontierMultiRunAndLabel:
         assert result.exit_code != 0
         assert "BOGUS" in result.output
         assert mock_fetch.call_count == 0
+
+
+class TestExportDiskStorage:
+    def test_csv_export_from_disk_spec(self, seed_disk_run, tmp_path):
+        """`export csv` works against an on-disk storage path."""
+        from gigaevo.cli import main
+
+        root, _ = seed_disk_run(fitnesses=(0.5, 0.8))
+        out = tmp_path / "out.csv"
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", str(root), "export", "csv", "-o", str(out)],
+            obj={},
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        df = pd.read_csv(out)
+        assert len(df) == 2
+        assert "metric_fitness" in df.columns

@@ -263,7 +263,12 @@ async def _evolve(
     operator,
 ):
     s = _storage(server)
-    strat = MapElitesMultiIsland(island_configs=[_island()], program_storage=s)
+    from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
+
+    factory = RedisArchiveStorageFactory(s)
+    strat = MapElitesMultiIsland(
+        island_configs=[_island()], program_storage=s, archive_storage_factory=factory
+    )
     eng = SteadyStateEvolutionEngine(
         storage=s,
         strategy=strat,
@@ -289,7 +294,10 @@ async def _evolve(
         await runner.stop()
     # Get archive
     s2 = _storage(server)
-    strat2 = MapElitesMultiIsland(island_configs=[_island()], program_storage=s2)
+    factory2 = RedisArchiveStorageFactory(s2)
+    strat2 = MapElitesMultiIsland(
+        island_configs=[_island()], program_storage=s2, archive_storage_factory=factory2
+    )
     progs = await strat2.islands["main"].get_elites()
     await s2.close()
     await s.close()

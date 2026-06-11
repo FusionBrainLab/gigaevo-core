@@ -27,14 +27,14 @@ engine_config:
 
 metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   metrics_context: ${metrics_context}
   writer: ${writer}
 
 # Evolution engine
 evolution_engine:
   _target_: gigaevo.evolution.engine.SteadyStateEvolutionEngine
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   strategy: ${evolution_strategy}
   mutation_operator: ${mutation_operator}
   config: ${engine_config}

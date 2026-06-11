@@ -11,8 +11,11 @@ Architecture
 ------------
 
 The loop runs in a daemon thread, parallel to ``start_live_profiler``.
-It reads two series per metric from Redis (written by
-:class:`gigaevo.utils.metrics_tracker.MetricsTracker`):
+It reads three series per metric from the run's metrics backend
+(written by :class:`gigaevo.utils.metrics_tracker.MetricsTracker`,
+read back through
+:func:`gigaevo.utils.trackers.get_default_history_reader` — so it works
+with whichever backend the run's writer uses, Redis or disk):
 
 * ``valid/frontier/<metric>`` — best-so-far per iteration (the "HoF").
 * ``valid/iter/<metric>/mean`` — per-iteration mean over valid programs.
@@ -20,7 +23,7 @@ It reads two series per metric from Redis (written by
   current-iteration best.
 
 The thread is daemonic (no graceful shutdown is required) and every tick
-is fully self-contained — a Redis error on one tick never poisons the
+is fully self-contained — a backend error on one tick never poisons the
 next, mirroring the resilience pattern of the live profiler.
 
 Usage::
@@ -29,8 +32,6 @@ Usage::
         start_live_frontier_compare,
     )
     stop = start_live_frontier_compare(
-        redis_url="redis://localhost:6379/0",
-        key_prefix="heilbron:metrics",
         metrics=["fitness"],
         higher_is_better={"fitness": True},
         interval_s=60.0,
@@ -44,10 +45,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-import json
 from pathlib import Path
 import threading
 import time
+from typing import TYPE_CHECKING
 
 import matplotlib
 
@@ -56,6 +57,9 @@ from loguru import logger  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
 from gigaevo.utils.plotting import annotate_frontier_points  # noqa: E402
+
+if TYPE_CHECKING:
+    from gigaevo.utils.trackers.base import MetricsHistoryReader
 
 # ---------------------------------------------------------------------------
 # Pure data classes + compute helper (test-friendly, no I/O).
@@ -323,39 +327,27 @@ def _render_frontier_plot(
 
 
 # ---------------------------------------------------------------------------
-# Redis adapter — fetches the three series the snapshot needs.
+# Metrics-backend adapter — fetches the three series the snapshot needs.
 # ---------------------------------------------------------------------------
 
 
-def _history_key(key_prefix: str, tag: str) -> str:
-    """Redis key for a tracker tag, matching RedisMetricsBackend._k_history.
-
-    The backend sanitises ``/`` → ``:`` and `` `` → ``_`` when building
-    the history list key.
-    """
-    safe = tag.replace("/", ":").replace(" ", "_")
-    return f"{key_prefix}:history:{safe}"
-
-
-def _parse_series(raw_entries: list) -> list[tuple[int, float]]:
-    """Parse a Redis history list (JSON ``{"s": step, "v": value, ...}``)."""
+def _parse_series(entries: list[dict]) -> list[tuple[int, float]]:
+    """Parse backend history entries (``{"s": step, "v": value, ...}``)."""
     out: list[tuple[int, float]] = []
-    for raw in raw_entries:
+    for entry in entries:
         try:
-            entry = json.loads(raw)
             step = entry.get("s")
             value = entry.get("v")
             if step is None or value is None:
                 continue
             out.append((int(step), float(value)))
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError):
             continue
     return out
 
 
 def _fetch_histories(
-    client,
-    key_prefix: str,
+    reader: MetricsHistoryReader,
     metrics: Sequence[str],
 ) -> tuple[
     dict[str, list[tuple[int, float]]],
@@ -369,17 +361,18 @@ def _fetch_histories(
     for m in metrics:
         # See gigaevo/utils/trackers/core.py _render_tag: per-piece
         # sanitisation strips ``/`` to ``_`` within the metric name, then
-        # joins ``path`` + metric with ``/``. Then RedisMetricsBackend
-        # converts ``/`` to ``:``. Net key parts:
+        # joins ``path`` + metric with ``/``. Net tag for
         #   path = ["program_metrics"], metric = "valid/frontier/<m>"
-        #   → tag "program_metrics/valid_frontier_<m>"
-        #   → key "{prefix}:history:program_metrics:valid_frontier_<m>"
-        frontier_key = _history_key(key_prefix, f"program_metrics/valid_frontier_{m}")
-        iter_mean_key = _history_key(key_prefix, f"program_metrics/valid_iter_{m}_mean")
-        program_key = _history_key(key_prefix, f"program_metrics/valid_program_{m}")
-        frontier[m] = _parse_series(client.lrange(frontier_key, 0, -1))
-        iter_mean[m] = _parse_series(client.lrange(iter_mean_key, 0, -1))
-        program[m] = _parse_series(client.lrange(program_key, 0, -1))
+        #   → "program_metrics/valid_frontier_<m>"
+        frontier[m] = _parse_series(
+            reader.get_history(f"program_metrics/valid_frontier_{m}")
+        )
+        iter_mean[m] = _parse_series(
+            reader.get_history(f"program_metrics/valid_iter_{m}_mean")
+        )
+        program[m] = _parse_series(
+            reader.get_history(f"program_metrics/valid_program_{m}")
+        )
     return frontier, iter_mean, program
 
 
@@ -408,8 +401,6 @@ def _emit(
 
 def _loop(
     *,
-    redis_url: str,
-    key_prefix: str,
     metrics: Sequence[str],
     higher_is_better: dict[str, bool],
     interval_s: float,
@@ -420,18 +411,30 @@ def _loop(
     label: str,
     stop: threading.Event,
 ) -> None:
-    """Run-loop: open Redis (lazy), tick at ``interval_s`` until stopped."""
-    # Lazy import — Redis is a heavy dependency at module import time on
-    # constrained CI machines.
-    import redis as redis_lib
+    """Run-loop: tick at ``interval_s`` until stopped.
 
-    client = None
+    Each tick resolves the run's metrics backend lazily — the writer is
+    instantiated inside ``run_experiment`` *after* this thread starts, so
+    early ticks (no reader yet) are silent no-ops.
+    """
+    # Lazy import — the trackers package pulls in the Redis client library,
+    # which is a heavy dependency at module import time on constrained CI
+    # machines.
+    from gigaevo.utils.trackers import get_default_history_reader
+
     while not stop.is_set():
         t0 = time.monotonic()
         try:
-            if client is None:
-                client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
-            frontier, iter_mean, program = _fetch_histories(client, key_prefix, metrics)
+            reader = get_default_history_reader()
+            if reader is None:
+                logger.debug(
+                    "[live_frontier_compare] metrics writer not initialized "
+                    "yet — skipping tick"
+                )
+                if stop.wait(interval_s):
+                    break
+                continue
+            frontier, iter_mean, program = _fetch_histories(reader, metrics)
             snap = compute_snapshot(
                 metrics=metrics,
                 frontier_history=frontier,
@@ -470,9 +473,6 @@ def _loop(
             logger.opt(exception=True).warning(
                 "[live_frontier_compare] tick failed (will retry next tick)"
             )
-            # Drop the (possibly broken) Redis client so the next tick
-            # re-opens a fresh connection.
-            client = None
         if stop.wait(interval_s):
             break
 
@@ -484,8 +484,6 @@ def _loop(
 
 def start_live_frontier_compare(
     *,
-    redis_url: str,
-    key_prefix: str,
     metrics: Sequence[str],
     higher_is_better: dict[str, bool],
     interval_s: float = 60.0,
@@ -496,18 +494,19 @@ def start_live_frontier_compare(
 ) -> threading.Event:
     """Start a daemon thread emitting periodic frontier-comparison snapshots.
 
+    The loop reads metric histories through
+    :func:`gigaevo.utils.trackers.get_default_history_reader` — whichever
+    metrics backend the run's writer initialized (Redis or disk) — so it
+    is storage-agnostic and needs no connection settings.
+
     Parameters:
-        redis_url: Redis connection URL (e.g. ``redis://host:6379/0``).
-            Must point at the *same* DB as the run's metrics tracker.
-        key_prefix: prefix used by the metrics tracker
-            (``${problem.name}:metrics`` by default).
         metrics: list of metric names to compare (e.g. ``["fitness"]``).
             Names must match the keys written by
             :class:`gigaevo.utils.metrics_tracker.MetricsTracker`.
         higher_is_better: per-metric optimization direction. Pulled from
             the problem's ``metrics.yaml`` ``MetricSpec`` at wiring time.
         interval_s: seconds between snapshots. 60 s is a reasonable
-            default; the read is two ``LRANGE`` calls per metric.
+            default; the read is three history fetches per metric.
         emit_targets: subset of ``("log", "telegram", "file")``. ``log``
             writes via loguru at INFO; ``telegram`` calls
             :func:`tools.telegram_notify.notify`; ``file`` re-renders
@@ -546,8 +545,6 @@ def start_live_frontier_compare(
     thread = threading.Thread(
         target=_loop,
         kwargs=dict(
-            redis_url=redis_url,
-            key_prefix=key_prefix,
             metrics=list(metrics),
             higher_is_better=dict(higher_is_better),
             interval_s=float(interval_s),
@@ -563,9 +560,7 @@ def start_live_frontier_compare(
     )
     thread.start()
     logger.info(
-        "[live_frontier_compare] started "
-        "(prefix={}, metrics={}, every {:.0f}s, targets={})",
-        key_prefix,
+        "[live_frontier_compare] started (metrics={}, every {:.0f}s, targets={})",
         list(metrics),
         interval_s,
         sorted(emit_set),

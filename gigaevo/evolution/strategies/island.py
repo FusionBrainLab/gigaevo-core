@@ -5,9 +5,9 @@ import asyncio
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
-from gigaevo.database.redis_program_storage import RedisProgramStorage
+from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
-from gigaevo.evolution.storage.archive_storage import RedisArchiveStorage
+from gigaevo.evolution.storage.archive_storage import ArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import EliteSelector
 from gigaevo.evolution.strategies.migrant_selectors import MigrantSelector
 from gigaevo.evolution.strategies.models import BehaviorSpace, DynamicBehaviorSpace
@@ -52,7 +52,7 @@ class IslandConfig(BaseModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def redis_prefix(self) -> str:
+    def archive_prefix(self) -> str:
         return f"island_{self.island_id}"
 
     @field_validator("archive_remover")
@@ -66,12 +66,15 @@ class IslandConfig(BaseModel):
 class MapElitesIsland:
     """Single MAP-Elites island."""
 
-    def __init__(self, config: IslandConfig, program_storage: RedisProgramStorage):
+    def __init__(
+        self,
+        config: IslandConfig,
+        program_storage: ProgramStorage,
+        archive_storage_factory: ArchiveStorageFactory,
+    ):
         self.config = config
         self.program_storage = program_storage
-        self.archive_storage = RedisArchiveStorage(
-            program_storage=program_storage, key_prefix=config.redis_prefix
-        )
+        self.archive_storage = archive_storage_factory(config.archive_prefix)
         self.state_manager = ProgramStateManager(program_storage)
         logger.info("Island {} init (max_size={})", config.island_id, config.max_size)
 
@@ -223,7 +226,7 @@ class MapElitesIsland:
 
     async def __len__(self) -> int:
         """Number of elites in this island."""
-        return await self.archive_storage._hlen()
+        return await self.archive_storage.size()
 
     async def _enforce_size_limit(self) -> None:
         """If `max_size` is set, remove excess programs using the configured remover."""
@@ -268,7 +271,7 @@ class MapElitesIsland:
             [p.id for p in to_remove[:5]] + (["..."] if len(to_remove) > 5 else []),
         )
 
-        # Batch-remove from archive (2 Redis pipelines regardless of count)
+        # Batch-remove from archive (constant number of storage round-trips)
         await self.archive_storage.bulk_remove_elites_by_id([p.id for p in to_remove])
 
         # Per-program state work — run in parallel (each targets a different program/lock)

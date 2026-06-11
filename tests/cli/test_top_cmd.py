@@ -287,3 +287,35 @@ class TestTopManifestDefaultMetric:
             assert len(data) == 1
             assert "Quality" in data[0]
             assert data[0]["Quality"] == 0.95
+
+
+class TestTopDiskStorage:
+    def test_disk_spec_ranked_by_fitness(self, seed_disk_run):
+        """`-r /path/to/storage` reads programs from disk storage."""
+        root, _ = seed_disk_run(fitnesses=(0.5, 0.8, 0.65))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", str(root), "-f", "json", "top", "-n", "3"],
+            obj={},
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data) == 3
+        assert data[0]["Fitness"] == 0.8
+        assert data[0]["Label"] == "toy"
+
+    def test_disk_spec_show_code(self, seed_disk_run):
+        root, _ = seed_disk_run(fitnesses=(0.9,))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", str(root), "-f", "table", "top", "-n", "1", "--code"],
+            obj={},
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert "def solve(): return 0" in result.output

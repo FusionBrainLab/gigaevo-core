@@ -25,29 +25,24 @@ import sys
 PROJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJ))
 
-from gigaevo.database.redis_program_storage import (  # noqa: E402
-    RedisProgramStorage,
-    RedisProgramStorageConfig,
-)
+from gigaevo.database.factory import build_readonly_redis_storage  # noqa: E402
 from gigaevo.monitoring.run_spec import RunSpec  # noqa: E402
 from gigaevo.programs.program import Program  # noqa: E402
 
 
 async def _fetch_programs(url: str, prefix: str) -> list[Program]:
-    storage = RedisProgramStorage(
-        RedisProgramStorageConfig(
-            redis_url=url,
-            key_prefix=prefix,
-            max_connections=50,
-            connection_pool_timeout=30.0,
-            health_check_interval=60,
-            read_only=True,
-        )
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    db = int(parsed.path.lstrip("/")) if parsed.path else 0
+
+    storage = build_readonly_redis_storage(
+        host=host, port=port, db=db, key_prefix=prefix
     )
-    try:
+    async with storage:
         return await storage.get_all()
-    finally:
-        await storage.close()
 
 
 def _build_id_map(programs: list[Program]) -> dict[str, Program]:

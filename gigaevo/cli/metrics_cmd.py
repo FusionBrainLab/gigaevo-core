@@ -23,7 +23,7 @@ from typing import Any
 import click
 import redis as redis_lib
 
-from gigaevo.cli.run_resolver import RunResolver
+from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
 
 KIND_CHOICES = ("scalar", "hist", "text", "all")
 FORMAT_CHOICES = ("plain", "tsv", "json")
@@ -222,6 +222,7 @@ def metrics(
         redis_host=redis_host,
         redis_port=redis_port,
     )
+    reject_disk_specs(run_configs, "metrics")
 
     redis_factory = ctx.obj.get("redis_factory")
     include_label = len(run_configs) > 1

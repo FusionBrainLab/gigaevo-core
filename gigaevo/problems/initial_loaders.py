@@ -6,22 +6,19 @@ from typing import Protocol
 
 from tqdm import tqdm
 
-from gigaevo.database.redis_program_storage import (
-    RedisProgramStorage,
-    RedisProgramStorageConfig,
-)
+from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.programs.program import Program
 
 
 class InitialProgramLoader(Protocol):
-    async def load(self, storage: RedisProgramStorage) -> list[Program]: ...
+    async def load(self, storage: ProgramStorage) -> list[Program]: ...
 
 
 class DirectoryProgramLoader:
     def __init__(self, problem_dir: str | Path):
         self.problem_dir = Path(problem_dir)
 
-    async def load(self, storage: RedisProgramStorage) -> list[Program]:
+    async def load(self, storage: ProgramStorage) -> list[Program]:
         initial_dir = self.problem_dir / "initial_programs"
         if not initial_dir.exists():
             return []
@@ -43,44 +40,24 @@ class DirectoryProgramLoader:
         return programs
 
 
-class RedisTopProgramsLoader:
+class TopProgramsLoader:
+    """Seed a run with the top-N programs of another run's storage."""
+
     def __init__(
         self,
         *,
-        source_host: str,
-        source_port: int,
-        source_db: int,
-        key_prefix: str,
+        source: ProgramStorage,
         metric_key: str,
         higher_is_better: bool,
         top_n: int = 50,
-        max_connections: int = 50,
-        connection_pool_timeout: float = 30.0,
-        health_check_interval: int = 60,
     ):
-        self.source_host = source_host
-        self.source_port = source_port
-        self.source_db = source_db
-        self.key_prefix = key_prefix
+        self.source = source
         self.metric_key = metric_key
         self.higher_is_better = higher_is_better
         self.top_n = top_n
-        self.max_connections = max_connections
-        self.connection_pool_timeout = connection_pool_timeout
-        self.health_check_interval = health_check_interval
 
-    async def load(self, storage: RedisProgramStorage) -> list[Program]:
-        source = RedisProgramStorage(
-            RedisProgramStorageConfig(
-                redis_url=f"redis://{self.source_host}:{self.source_port}/{self.source_db}",  # type: ignore[arg-type]  # pydantic validates str -> AnyUrl
-                key_prefix=self.key_prefix,
-                max_connections=self.max_connections,
-                connection_pool_timeout=self.connection_pool_timeout,
-                health_check_interval=self.health_check_interval,
-                read_only=True,
-            )
-        )
-        try:
+    async def load(self, storage: ProgramStorage) -> list[Program]:
+        async with self.source as source:
             all_programs = await source.get_all()
             if not all_programs:
                 return []
@@ -101,8 +78,8 @@ class RedisTopProgramsLoader:
             ):
                 copy = Program(code=program.code, id=program.id, iteration=rank)
                 copy.metadata = {
-                    "source": "redis_selection",
-                    "source_db": self.source_db,
+                    "source": "top_programs",
+                    "source_prefix": source.key_prefix,
                     "selection_rank": rank + 1,
                     "original_id": program.id,
                 }
@@ -118,8 +95,3 @@ class RedisTopProgramsLoader:
                 await storage.add(copy)
                 added.append(copy)
             return added
-        finally:
-            try:
-                await source.close()
-            except Exception:
-                pass

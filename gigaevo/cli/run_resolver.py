@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePath
+from typing import TYPE_CHECKING
 
 import click
 import yaml
 
 from gigaevo.monitoring.experiment_monitor import RunConfig
 from gigaevo.monitoring.run_spec import RunSpec
+
+if TYPE_CHECKING:
+    from gigaevo.database.program_storage import ProgramStorage
+
+
+def build_readonly_storage(
+    spec: RunSpec, redis_host: str, redis_port: int
+) -> ProgramStorage:
+    """Read-only ProgramStorage for a resolved RunSpec (disk or Redis)."""
+    if spec.is_disk:
+        from gigaevo.database.factory import build_readonly_disk_storage
+
+        assert spec.path is not None
+        return build_readonly_disk_storage(root_dir=spec.path, key_prefix=spec.prefix)
+    from gigaevo.database.factory import build_readonly_redis_storage
+
+    return build_readonly_redis_storage(
+        host=redis_host, port=redis_port, db=spec.db, key_prefix=spec.prefix
+    )
+
+
+def reject_disk_specs(run_configs: list[RunConfig], command: str) -> None:
+    """Raise UsageError when a Redis-only command receives disk-path specs."""
+    disk = [rc.run_spec.label for rc in run_configs if rc.run_spec.is_disk]
+    if disk:
+        raise click.UsageError(
+            f"`{command}` requires Redis-backed runs; disk-path specs are "
+            f"not supported: {', '.join(disk)}"
+        )
 
 
 def _load_manifest(experiment: str):
@@ -87,10 +117,49 @@ class RunResolver:
                 spec = RunSpec.parse(raw)
             except ValueError as exc:
                 raise click.BadParameter(str(exc), param_hint="--run/-r") from exc
-            if spec.needs_prefix:
+            if spec.is_disk:
+                spec = RunResolver._resolve_disk(spec)
+            elif spec.needs_prefix:
                 spec = RunResolver._autodiscover_prefix(spec, redis_host, redis_port)
             configs.append(RunConfig(run_spec=spec))
         return configs
+
+    @staticmethod
+    def _resolve_disk(spec: RunSpec) -> RunSpec:
+        """Resolve a disk-path RunSpec by locating the storage prefix directory.
+
+        Accepts either the storage root (containing one prefix directory)
+        or the prefix directory itself (containing ``programs/``).
+        """
+        assert spec.path is not None
+        target = Path(spec.path).expanduser()
+        if not target.is_dir():
+            raise click.UsageError(f"Disk storage path is not a directory: {target}")
+        if (target / "programs").is_dir():
+            base = target
+        else:
+            candidates = sorted(
+                d for d in target.iterdir() if (d / "programs").is_dir()
+            )
+            if not candidates:
+                raise click.UsageError(
+                    f"No program storage found under {target} "
+                    f"(expected a <prefix>/programs/ directory)"
+                )
+            if len(candidates) > 1:
+                names = ", ".join(d.name for d in candidates)
+                raise click.UsageError(
+                    f"Multiple storage prefixes under {target}: {names}. "
+                    f"Point directly at one prefix directory."
+                )
+            base = candidates[0]
+        auto_label = spec.label == PurePath(spec.path).name
+        return RunSpec(
+            prefix=base.name,
+            db=-1,
+            label=base.name if auto_label else spec.label,
+            path=str(base.parent),
+        )
 
     @staticmethod
     def _autodiscover_prefix(

@@ -176,11 +176,18 @@ class RedisMetricsBackend(LoggerBackend):
     def get_history(
         self, tag: str, start: int = 0, end: int = -1
     ) -> list[dict[str, Any]]:
-        """Get history for a metric tag."""
-        client = self._client
-        if client is None:
-            return []
+        """Get history for a metric tag.
+
+        Works after close() too — the end-of-run finalizer reads history
+        once the writer is shut down, so a missing client falls back to
+        an ephemeral connection.
+        """
         try:
+            client = self._client or redis.Redis.from_url(
+                str(self.cfg.redis_url),
+                socket_timeout=self.cfg.socket_timeout,
+                decode_responses=True,
+            )
             entries = client.lrange(self._k_history(tag), start, end)
             return [json.loads(str(e)) for e in entries]
         except Exception as e:

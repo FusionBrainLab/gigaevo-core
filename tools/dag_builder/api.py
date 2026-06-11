@@ -701,7 +701,7 @@ def generate_yaml_config(dag_request: DAGRequest) -> str:
         "  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext",
         "  problem_ctx: ${problem_context}",
         "  llm_wrapper: ${ref:llm}",
-        "  storage: ${ref:redis_storage}",
+        "  storage: ${ref:program_storage}",
         "",
         "dag_blueprint:",
         "  _target_: gigaevo.runner.dag_blueprint.DAGBlueprint",

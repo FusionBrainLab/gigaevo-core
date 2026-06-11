@@ -16,6 +16,7 @@ from gigaevo.monitoring.live_frontier_compare import (
     FrontierCompareSnapshot,
     MetricComparison,
     _extend_frontier_to_axis,
+    _fetch_histories,
     _render_frontier_plot,
     compute_snapshot,
     format_snapshot,
@@ -253,13 +254,48 @@ class TestRenderFrontierAnnotates:
         assert captured["frontier_vals"] == [1.0, 0.5, 0.2]
 
 
+class TestFetchHistories:
+    def test_builds_tracker_tags_and_parses_entries(self) -> None:
+        calls: list[str] = []
+
+        class FakeReader:
+            def get_history(self, tag, start=0, end=-1):
+                calls.append(tag)
+                if "frontier" in tag:
+                    return [{"s": 1, "t": 0.0, "v": 0.5, "k": "scalar"}]
+                return []
+
+        frontier, iter_mean, program = _fetch_histories(FakeReader(), ["fitness"])
+        assert calls == [
+            "program_metrics/valid_frontier_fitness",
+            "program_metrics/valid_iter_fitness_mean",
+            "program_metrics/valid_program_fitness",
+        ]
+        assert frontier == {"fitness": [(1, 0.5)]}
+        assert iter_mean == {"fitness": []}
+        assert program == {"fitness": []}
+
+    def test_malformed_entries_skipped(self) -> None:
+        class FakeReader:
+            def get_history(self, tag, start=0, end=-1):
+                return [
+                    {"s": 1, "v": 0.5},
+                    {"s": None, "v": 0.6},
+                    {"v": 0.7},
+                    {"s": 2},
+                    {"s": 3, "v": [1.0, 2.0]},  # hist entry — not a scalar
+                    {"s": 4, "v": 0.9},
+                ]
+
+        frontier, _, _ = _fetch_histories(FakeReader(), ["m"])
+        assert frontier == {"m": [(1, 0.5), (4, 0.9)]}
+
+
 class TestStartLiveFrontierCompare:
     def test_returns_event_and_starts_daemon_thread(self) -> None:
-        # Bogus Redis URL — the thread will fail to connect, log a warning,
-        # and retry on the next tick. We only verify the bootstrap contract.
+        # No metrics writer is initialized in tests — the thread no-ops
+        # each tick. We only verify the bootstrap contract.
         stop = start_live_frontier_compare(
-            redis_url="redis://127.0.0.1:1/0",
-            key_prefix="test:metrics",
             metrics=["fitness"],
             higher_is_better={"fitness": True},
             interval_s=3600.0,
@@ -274,8 +310,6 @@ class TestStartLiveFrontierCompare:
 
     def test_file_target_accepts_output_dir(self, tmp_path) -> None:
         stop = start_live_frontier_compare(
-            redis_url="redis://127.0.0.1:1/0",
-            key_prefix="test:metrics",
             metrics=["fitness"],
             higher_is_better={"fitness": True},
             interval_s=3600.0,
@@ -293,8 +327,6 @@ class TestStartLiveFrontierCompare:
         # Resilient: file emit silently drops if no output_dir was wired.
         # The daemon must still start so log/telegram targets work.
         stop = start_live_frontier_compare(
-            redis_url="redis://127.0.0.1:1/0",
-            key_prefix="test:metrics",
             metrics=["fitness"],
             higher_is_better={"fitness": True},
             interval_s=3600.0,
@@ -311,8 +343,6 @@ class TestStartLiveFrontierCompare:
         # tests that may have started a still-shutting-down thread.
         before = {id(t) for t in threading.enumerate()}
         stop = start_live_frontier_compare(
-            redis_url="redis://127.0.0.1:1/0",
-            key_prefix="test:metrics",
             metrics=["fitness"],
             higher_is_better={"fitness": True},
             interval_s=3600.0,

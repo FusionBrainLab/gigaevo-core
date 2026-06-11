@@ -52,7 +52,7 @@ def get_redis() -> redis.Redis:
         REDIS_PORT (env): Redis port (default: 6379)
 
     Uses database 0 for locking and DB claims. This follows the same pattern
-    as gigaevo.utils.redis.RedisRunConfig for consistency.
+    as gigaevo.database.factory.RedisRunConfig for consistency.
 
     Returns:
         A Redis client configured with synchronous operations.

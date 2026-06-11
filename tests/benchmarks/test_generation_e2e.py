@@ -17,6 +17,7 @@ import pytest
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import MaxMutantsStopper
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -73,6 +74,7 @@ async def _run_engine(
     strategy = MapElitesMultiIsland(
         island_configs=[config],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     writer = _make_null_writer()
 

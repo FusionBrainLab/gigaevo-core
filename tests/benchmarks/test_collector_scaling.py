@@ -10,6 +10,7 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
+from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.programs.program import EXCLUDE_FOR_ANALYTICS
 from gigaevo.programs.stages.collector import EvolutionaryStatisticsCollector
@@ -33,6 +34,7 @@ async def _setup(n: int, redis_url: str | None = None):
     strategy = MapElitesMultiIsland(
         island_configs=[config],
         program_storage=storage,
+        archive_storage_factory=RedisArchiveStorageFactory(storage),
     )
     programs = await populate_archive(storage, strategy, n, heavy=True)
     return storage, strategy, programs

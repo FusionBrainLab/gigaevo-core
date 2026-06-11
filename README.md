@@ -221,7 +221,7 @@ files are in `config/`:
 | `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
 | `stopper/` | Stopping criteria | `max_mutants.yaml` (default), `wall_clock.yaml`, `fitness_plateau.yaml` |
 | `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml`, `runner.yaml`, `endpoints.yaml`, `redis.yaml`, `logging.yaml` |
-| `loader/` | Program loading | `directory.yaml`, `redis_selection.yaml` |
+| `loader/` | Program loading | `directory.yaml`, `top_programs.yaml` |
 | `logging/` | Backends | `tensorboard.yaml`, `wandb.yaml` |
 
 Override any setting via command line:

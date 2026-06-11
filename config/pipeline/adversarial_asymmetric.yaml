@@ -101,7 +101,7 @@ dg_tracker:
 composition_injection_hook:
   _target_: gigaevo.adversarial.composition_injection.CompositionInjectionHook
   d_provider: ${opponent_provider}
-  g_storage: ${ref:redis_storage}
+  g_storage: ${ref:program_storage}
   dg_tracker: ${dg_tracker}
 
 pipeline_builder:

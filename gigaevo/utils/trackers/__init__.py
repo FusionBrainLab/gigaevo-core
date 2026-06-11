@@ -1,11 +1,18 @@
 from gigaevo.utils.trackers.backends.redis import RedisMetricsBackend
+from gigaevo.utils.trackers.base import MetricsHistoryReader
 from gigaevo.utils.trackers.composite import CompositeLogger
-from gigaevo.utils.trackers.configs import RedisMetricsConfig, TBConfig, WBConfig
+from gigaevo.utils.trackers.configs import (
+    DiskMetricsConfig,
+    RedisMetricsConfig,
+    TBConfig,
+    WBConfig,
+)
 from gigaevo.utils.trackers.core import GenericLogger
 
 _tb_default: GenericLogger | None = None
 _wb_default: GenericLogger | None = None
 _redis_default: GenericLogger | None = None
+_disk_default: GenericLogger | None = None
 
 
 def init_tb(
@@ -78,6 +85,38 @@ def get_redis_backend() -> RedisMetricsBackend:
     return backend
 
 
+def init_disk(
+    cfg: DiskMetricsConfig, *, queue_size: int = 8192, flush_secs: float = 3.0
+) -> GenericLogger:
+    """Initialize disk (JSONL) metrics logger.
+
+    Returns a GenericLogger wrapping DiskMetricsBackend.
+    Access the backend directly via logger.backend for query methods.
+    """
+    global _disk_default
+    if _disk_default is not None:
+        return _disk_default
+    from gigaevo.utils.trackers.backends.disk import DiskMetricsBackend
+
+    backend = DiskMetricsBackend(cfg)
+    _disk_default = GenericLogger(backend, queue_size=queue_size, flush_secs=flush_secs)
+    return _disk_default
+
+
+def get_default_history_reader() -> MetricsHistoryReader | None:
+    """Backend of the run's default metrics logger, as a history reader.
+
+    Storage-agnostic read path for monitors (live_frontier_compare) and
+    the end-of-run finalizer: whichever metrics backend the run's writer
+    initialized (disk or Redis) serves the reads. ``None`` until a writer
+    is initialized — callers should no-op and retry.
+    """
+    for default in (_disk_default, _redis_default):
+        if default is not None and isinstance(default.backend, MetricsHistoryReader):
+            return default.backend
+    return None
+
+
 def init_composite(*loggers: GenericLogger) -> CompositeLogger:
     """Create a composite logger that writes to multiple backends.
 
@@ -108,6 +147,26 @@ def init_tb_redis(
     tb = init_tb(tb_cfg, queue_size=queue_size, flush_secs=flush_secs)
     redis_logger = init_redis(redis_cfg, queue_size=queue_size, flush_secs=flush_secs)
     return CompositeLogger([tb, redis_logger])
+
+
+def init_tb_disk(
+    tb_cfg: TBConfig,
+    disk_cfg: DiskMetricsConfig,
+    *,
+    queue_size: int = 8192,
+    flush_secs: float = 3.0,
+) -> CompositeLogger:
+    """Initialize composite logger with TensorBoard + disk backends.
+
+    Hydra usage:
+        writer:
+          _target_: gigaevo.utils.trackers.init_tb_disk
+          tb_cfg: ${tb_config}
+          disk_cfg: ${disk_metrics_config}
+    """
+    tb = init_tb(tb_cfg, queue_size=queue_size, flush_secs=flush_secs)
+    disk_logger = init_disk(disk_cfg, queue_size=queue_size, flush_secs=flush_secs)
+    return CompositeLogger([tb, disk_logger])
 
 
 def init_wandb_redis(

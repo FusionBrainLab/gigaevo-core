@@ -1,0 +1,21 @@
+# @package _global_
+
+defaults:
+  # Swap the metrics writer to the disk backend (JSONL per tag) so live
+  # monitors and the end-of-run frontier render stay Redis-free.
+  - override /logging: tensorboard_disk
+
+program_storage:
+  _target_: gigaevo.database.disk_program_storage.DiskProgramStorage
+  config:
+    _target_: gigaevo.database.disk_program_storage.DiskProgramStorageConfig
+    # Per-run by default — lands under the Hydra run dir, like checkpoint_dir.
+    # Override on the CLI (program_storage.config.root_dir=/abs/path) to
+    # persist/resume across runs.
+    root_dir: ${hydra:runtime.output_dir}/storage
+    key_prefix: ${problem.name}
+  writer: ${writer}
+
+archive_storage_factory:
+  _target_: gigaevo.evolution.storage.archive_storage.DiskArchiveStorageFactory
+  program_storage: ${ref:program_storage}

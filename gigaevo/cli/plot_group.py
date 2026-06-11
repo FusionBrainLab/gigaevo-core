@@ -11,7 +11,7 @@ import click
 import pandas as pd
 
 from gigaevo.cli.run_resolver import RunResolver
-from gigaevo.utils.redis import RedisRunConfig
+from gigaevo.database.factory import RedisRunConfig
 
 SmoothingMethod = Literal["lowess", "ema", "savgol", "gaussian", "rolling", "none"]
 
@@ -110,15 +110,25 @@ def _fetch_run_data(
         sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
             Rows matching this value are removed before computing statistics.
     """
-    from gigaevo.utils.dataframes import prepare_iteration_dataframe
-    from gigaevo.utils.redis import fetch_evolution_dataframe
+    from gigaevo.cli.run_resolver import build_readonly_storage
+    from gigaevo.utils.dataframes import (
+        fetch_evolution_dataframe,
+        prepare_iteration_dataframe,
+    )
 
     results: list[tuple[str, pd.DataFrame]] = []
     for rc in run_configs:
-        config = _build_redis_config(rc, redis_host, redis_port)
-        raw_df = asyncio.run(fetch_evolution_dataframe(config, add_stage_results=False))
+        spec = rc.run_spec
+        storage = build_readonly_storage(spec, redis_host, redis_port)
+
+        async def _fetch():
+            async with storage:
+                return await fetch_evolution_dataframe(storage, add_stage_results=False)
+
+        raw_df = asyncio.run(_fetch())
         if raw_df.empty:
             continue
+        config = _build_redis_config(rc, redis_host, redis_port)
         label = config.display_label()
         skip_frontier = no_frontier_labels is not None and label in no_frontier_labels
         prepared = prepare_iteration_dataframe(

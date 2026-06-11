@@ -208,7 +208,7 @@ evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${redis_storage}
+  storage: ${program_storage}
 
 pipeline_builder:
   _target_: gigaevo.entrypoint.default_pipelines.OptunaOptPipelineBuilder

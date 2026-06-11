@@ -52,7 +52,7 @@ class TestProfilerRender:
 
 
 class TestFrontierRender:
-    def test_frontier_ctx_none_skips_redis(self, tmp_log_and_out):
+    def test_frontier_ctx_none_skips_fetch(self, tmp_log_and_out):
         log, out = tmp_log_and_out
         with (
             patch.object(run, "_render_once", return_value=(0, 0)),
@@ -68,8 +68,6 @@ class TestFrontierRender:
     def test_frontier_renders_each_metric(self, tmp_log_and_out):
         log, out = tmp_log_and_out
         ctx = {
-            "redis_url": "redis://localhost:6379/0",
-            "key_prefix": "p:metrics",
             "metrics": ["fitness", "size"],
             "higher_is_better": {"fitness": True, "size": False},
         }
@@ -79,16 +77,19 @@ class TestFrontierRender:
         with (
             patch.object(run, "_render_once", return_value=(0, 0)),
             patch.object(
+                run, "get_default_history_reader", return_value=MagicMock()
+            ) as reader,
+            patch.object(
                 run, "_fetch_histories", return_value=(fake_frontier, fake_iter, {})
-            ),
+            ) as fh,
             patch.object(
                 run, "_render_frontier_plot", return_value=out / "frontier.png"
             ) as fp,
-            patch("redis.Redis.from_url", return_value=MagicMock()),
         ):
             run._finalize_live_artifacts(
                 log_file_path=log, output_dir=out, last_n=None, frontier_ctx=ctx
             )
+            fh.assert_called_once_with(reader.return_value, ["fitness", "size"])
             # one call per metric
             assert fp.call_count == 2
             kwargs = [c.kwargs for c in fp.call_args_list]
@@ -97,16 +98,34 @@ class TestFrontierRender:
             by_metric = {k["metric"]: k["higher_is_better"] for k in kwargs}
             assert by_metric == {"fitness": True, "size": False}
 
-    def test_redis_unreachable_skips_plot_without_raising(self, tmp_log_and_out):
+    def test_no_reader_skips_plot_without_raising(self, tmp_log_and_out):
+        # No metrics writer was initialized (e.g. crash before instantiate).
         log, out = tmp_log_and_out
         ctx = {
-            "redis_url": "redis://localhost:6379/0",
-            "key_prefix": "p:metrics",
             "metrics": ["fitness"],
             "higher_is_better": {"fitness": True},
         }
         with (
             patch.object(run, "_render_once", return_value=(0, 0)),
+            patch.object(run, "get_default_history_reader", return_value=None),
+            patch.object(run, "_fetch_histories") as fh,
+            patch.object(run, "_render_frontier_plot") as fp,
+        ):
+            run._finalize_live_artifacts(
+                log_file_path=log, output_dir=out, last_n=None, frontier_ctx=ctx
+            )
+            fh.assert_not_called()
+            fp.assert_not_called()
+
+    def test_backend_unreachable_skips_plot_without_raising(self, tmp_log_and_out):
+        log, out = tmp_log_and_out
+        ctx = {
+            "metrics": ["fitness"],
+            "higher_is_better": {"fitness": True},
+        }
+        with (
+            patch.object(run, "_render_once", return_value=(0, 0)),
+            patch.object(run, "get_default_history_reader", return_value=MagicMock()),
             patch.object(run, "_fetch_histories", side_effect=ConnectionError("nope")),
             patch.object(run, "_render_frontier_plot") as fp,
         ):
@@ -118,8 +137,6 @@ class TestFrontierRender:
     def test_per_metric_failure_is_isolated(self, tmp_log_and_out):
         log, out = tmp_log_and_out
         ctx = {
-            "redis_url": "redis://localhost:6379/0",
-            "key_prefix": "p:metrics",
             "metrics": ["fitness", "size"],
             "higher_is_better": {"fitness": True, "size": True},
         }
@@ -131,9 +148,9 @@ class TestFrontierRender:
 
         with (
             patch.object(run, "_render_once", return_value=(0, 0)),
+            patch.object(run, "get_default_history_reader", return_value=MagicMock()),
             patch.object(run, "_fetch_histories", return_value=({}, {}, {})),
             patch.object(run, "_render_frontier_plot", side_effect=side_effect) as fp,
-            patch("redis.Redis.from_url", return_value=MagicMock()),
         ):
             run._finalize_live_artifacts(
                 log_file_path=log, output_dir=out, last_n=None, frontier_ctx=ctx

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
 from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
 
 from loguru import logger
 from redis.exceptions import WatchError
 
+from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.programs.program import Program
+from gigaevo.utils.json import dumps as _dumps
+from gigaevo.utils.json import loads as _loads
 
 CellDescriptor = tuple[int, ...]
 
@@ -87,7 +93,7 @@ class RedisArchiveStorage(ArchiveStorage):
         self, program_storage: RedisProgramStorage, key_prefix: str | None = None
     ) -> None:
         self._storage = program_storage
-        prefix = key_prefix or program_storage.config.key_prefix
+        prefix = key_prefix or program_storage.key_prefix
         self._hash_key = f"{prefix}:archive"
         self._reverse_key = f"{prefix}:archive:reverse"
         # In-memory write-through cache: cell_field -> elite Program
@@ -106,25 +112,25 @@ class RedisArchiveStorage(ArchiveStorage):
         async def _op(r):
             return await r.hget(self._hash_key, field)
 
-        return await self._storage.with_redis("archive:hget", _op)
+        return await self._storage._with_redis("archive:hget", _op)
 
     async def _hvals(self) -> list[str]:
         async def _op(r):
             return await r.hvals(self._hash_key)
 
-        return await self._storage.with_redis("archive:hvals", _op) or []
+        return await self._storage._with_redis("archive:hvals", _op) or []
 
     async def _hlen(self) -> int:
         async def _op(r):
             return await r.hlen(self._hash_key)
 
-        return await self._storage.with_redis("archive:hlen", _op)
+        return await self._storage._with_redis("archive:hlen", _op)
 
     async def _hgetall(self) -> dict[str, str]:
         async def _op(r):
             return await r.hgetall(self._hash_key)
 
-        return await self._storage.with_redis("archive:hgetall", _op) or {}
+        return await self._storage._with_redis("archive:hgetall", _op) or {}
 
     async def _ensure_cache(self) -> None:
         """Lazily populate the in-memory elite cache from Redis."""
@@ -233,7 +239,7 @@ class RedisArchiveStorage(ArchiveStorage):
                     self._cache_remove_field(field)
                     continue
 
-        ok = await self._storage.with_redis("archive:add_elite", _op)
+        ok = await self._storage._with_redis("archive:add_elite", _op)
         if ok:
             self._cache_set(field, program)
             logger.debug("[Archive] cell {} -> {}", field, program.id)
@@ -254,7 +260,7 @@ class RedisArchiveStorage(ArchiveStorage):
             await pipe.execute()
             return True
 
-        removed = await self._storage.with_redis("archive:remove_elite", _op)
+        removed = await self._storage._with_redis("archive:remove_elite", _op)
         if removed:
             self._cache_remove_field(field)
             logger.debug("[Archive] removed cell {}", field)
@@ -283,7 +289,7 @@ class RedisArchiveStorage(ArchiveStorage):
             await pipe.execute()
             return True
 
-        removed = await self._storage.with_redis("archive:remove_elite_by_id", _op)
+        removed = await self._storage._with_redis("archive:remove_elite_by_id", _op)
         if removed:
             self._cache_remove_id(program_id)
             logger.debug("[Archive] removed id {}", program_id)
@@ -311,7 +317,7 @@ class RedisArchiveStorage(ArchiveStorage):
                 await pipe2.execute()
             return removed
 
-        count = await self._storage.with_redis("archive:bulk_remove_elites_by_id", _op)
+        count = await self._storage._with_redis("archive:bulk_remove_elites_by_id", _op)
         if count:
             for pid in program_ids:
                 self._cache_remove_id(pid)
@@ -331,7 +337,7 @@ class RedisArchiveStorage(ArchiveStorage):
             pipe.delete(self._reverse_key)
             await pipe.execute()
 
-        await self._storage.with_redis("archive:clear_all", _op)
+        await self._storage._with_redis("archive:clear_all", _op)
         self._cache_clear()
 
         logger.debug("[Archive] cleared {} elites", count)
@@ -355,3 +361,191 @@ class RedisArchiveStorage(ArchiveStorage):
                 added_count += 1
 
         return added_count
+
+
+class ArchiveStorageFactory(Protocol):
+    """Builds prefix-scoped ArchiveStorage instances (one per island)."""
+
+    def __call__(self, key_prefix: str | None = None) -> ArchiveStorage: ...
+
+
+class RedisArchiveStorageFactory:
+    """Default factory: archives share the program storage's Redis connection."""
+
+    def __init__(self, program_storage: RedisProgramStorage) -> None:
+        self._program_storage = program_storage
+
+    def __call__(self, key_prefix: str | None = None) -> RedisArchiveStorage:
+        return RedisArchiveStorage(
+            program_storage=self._program_storage, key_prefix=key_prefix
+        )
+
+
+class DiskArchiveStorage(ArchiveStorage):
+    """Dict-backed archive persisted write-through to a single JSON file.
+
+    Mirrors RedisArchiveStorage semantics: 1:1 cell↔program mapping with a
+    reverse index, idempotent re-add of programs already elite anywhere, and
+    existence verification against program storage before insert. Lives at
+    ``<storage dir>/archives/<prefix>.json`` so resume works.
+    """
+
+    def __init__(
+        self, program_storage: DiskProgramStorage, key_prefix: str | None = None
+    ) -> None:
+        self._storage = program_storage
+        prefix = key_prefix or program_storage.key_prefix
+        self._path: Path = (
+            program_storage.base_dir / "archives" / f"{prefix.replace('/', '_')}.json"
+        )
+        # cell_field -> program_id
+        self._elites: dict[str, str] = {}
+        # program_id -> cell_field
+        self._reverse: dict[str, str] = {}
+        self._loaded = False
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _field(cell: CellDescriptor) -> str:
+        return ",".join(map(str, cell))
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        if self._path.is_file():
+            self._elites = dict(_loads(self._path.read_text()))
+            self._reverse = {pid: field for field, pid in self._elites.items()}
+
+    def _persist(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(_dumps(self._elites))
+
+    def _set(self, field: str, program_id: str) -> None:
+        old_id = self._elites.get(field)
+        if old_id is not None and old_id != program_id:
+            self._reverse.pop(old_id, None)
+        self._elites[field] = program_id
+        self._reverse[program_id] = field
+
+    async def get_elite(self, cell: CellDescriptor) -> Program | None:
+        async with self._lock:
+            self._ensure_loaded()
+            program_id = self._elites.get(self._field(cell))
+        if program_id is None:
+            return None
+        return await self._storage.get(program_id)
+
+    async def add_elite(
+        self,
+        cell: CellDescriptor,
+        program: Program,
+        is_better: Callable[[Program, Program], bool],
+    ) -> bool:
+        async with self._lock:
+            self._ensure_loaded()
+            field = self._field(cell)
+
+            # Idempotent re-add: a program already elite anywhere stays put
+            # (re-evaluation paths feed the same id back in).
+            if program.id in self._reverse:
+                return True
+
+            current_id = self._elites.get(field)
+            if current_id is not None:
+                current = await self._storage.get(current_id)
+                if current is not None and not is_better(program, current):
+                    return False
+
+            if not await self._storage.exists(program.id):
+                logger.debug(
+                    "[Archive] add ignored: program {} not in storage", program.id
+                )
+                return False
+
+            self._set(field, program.id)
+            self._persist()
+            logger.debug("[Archive] cell {} -> {}", field, program.id)
+            return True
+
+    async def remove_elite(self, cell: CellDescriptor) -> bool:
+        async with self._lock:
+            self._ensure_loaded()
+            field = self._field(cell)
+            program_id = self._elites.pop(field, None)
+            if program_id is None:
+                return False
+            self._reverse.pop(program_id, None)
+            self._persist()
+            logger.debug("[Archive] removed cell {}", field)
+            return True
+
+    async def remove_elite_by_id(self, program_id: str) -> bool:
+        async with self._lock:
+            self._ensure_loaded()
+            field = self._reverse.pop(program_id, None)
+            if field is None:
+                return False
+            self._elites.pop(field, None)
+            self._persist()
+            logger.debug("[Archive] removed id {}", program_id)
+            return True
+
+    async def bulk_remove_elites_by_id(self, program_ids: list[str]) -> int:
+        async with self._lock:
+            self._ensure_loaded()
+            removed = 0
+            for pid in program_ids:
+                field = self._reverse.pop(pid, None)
+                if field is not None:
+                    self._elites.pop(field, None)
+                    removed += 1
+            if removed:
+                self._persist()
+                logger.debug("[Archive] bulk removed {} ids", removed)
+            return removed
+
+    async def get_all_elites(self) -> list[str]:
+        async with self._lock:
+            self._ensure_loaded()
+            return sorted(self._reverse)
+
+    async def clear_all_elites(self) -> int:
+        async with self._lock:
+            self._ensure_loaded()
+            count = len(self._elites)
+            if count == 0:
+                return 0
+            self._elites = {}
+            self._reverse = {}
+            self._persist()
+            logger.debug("[Archive] cleared {} elites", count)
+            return count
+
+    async def bulk_add_elites(
+        self,
+        placements: list[tuple[CellDescriptor, Program]],
+        is_better: Callable[[Program, Program], bool],
+    ) -> int:
+        added = 0
+        for cell, program in placements:
+            if await self.add_elite(cell, program, is_better):
+                added += 1
+        return added
+
+    async def size(self) -> int:
+        async with self._lock:
+            self._ensure_loaded()
+            return len(self._elites)
+
+
+class DiskArchiveStorageFactory:
+    """Factory: archives share the disk program storage's directory."""
+
+    def __init__(self, program_storage: DiskProgramStorage) -> None:
+        self._program_storage = program_storage
+
+    def __call__(self, key_prefix: str | None = None) -> DiskArchiveStorage:
+        return DiskArchiveStorage(
+            program_storage=self._program_storage, key_prefix=key_prefix
+        )

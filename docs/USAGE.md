@@ -89,8 +89,38 @@ python run.py problem.name=toy_example \
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
-| `loader` | `directory`, `redis_selection` |
+| `loader` | `directory`, `top_programs` (knobs: `loader.source_db` — Redis DB to read seeds from, default 0; `loader.top_n` — number of top programs to seed, default 50) |
 | `logging` | `tensorboard`, `wandb` |
+| `storage` | `redis` (default), `disk` |
+
+### Disk Storage Backend
+
+Programs and archives can be persisted to JSON files instead of Redis:
+
+```bash
+python run.py problem.name=toy_example storage=disk
+```
+
+Data lands under `<hydra run dir>/storage/<problem name>/` by default
+(per-run, like `checkpoint_dir`). Override the root on the CLI
+(`program_storage.config.root_dir=/abs/path`) to persist/resume across
+runs. Single-process only — the instance lock is a PID file, and there is
+no cross-process pub/sub. Metrics history also goes to disk (JSONL files
+under `<hydra run dir>/metrics/`), and live monitors
+(`live_frontier_compare`) read it through the same backend — `storage=disk`
+runs are fully Redis-free.
+
+Inspect a disk run with the CLI by passing the storage path as the run
+spec (read-only, safe while the run is live):
+
+```bash
+gigaevo -r outputs/<run dir>/storage top -n 5
+gigaevo -r outputs/<run dir>/storage:mylabel export csv -o out.csv
+```
+
+Supported by `top`, `export`, and `plot`; Redis-only commands (`status`,
+`trajectory`, `metrics`, `checkpoint`) reject disk specs — see
+[tools/README.md](../tools/README.md) for the full run-spec reference.
 
 ## Examples
 

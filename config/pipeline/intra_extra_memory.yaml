@@ -27,7 +27,7 @@ evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${redis_storage}
+  storage: ${program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${memory_provider}
@@ -60,6 +60,6 @@ dag_blueprint:
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
   tracker: ${ideas_tracker}
-  storage: ${ref:redis_storage}
+  storage: ${ref:program_storage}
   refresh_every: 10
   max_programs_per_sweep: 24
