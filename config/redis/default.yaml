@@ -8,23 +8,6 @@ redis:
   resume: false
   # Namespace for this run's Redis keys. Defaults to ${problem.name} so that
   # pipelines can write `${redis.prefix}` and get the same key-prefix used by
-  # program_storage.config.key_prefix below (I-12). Override per-run if a run
-  # needs a namespace that differs from its problem name.
+  # program_storage.config.key_prefix (see config/storage/redis.yaml, I-12).
+  # Override per-run if a run needs a namespace that differs from its problem name.
   prefix: ${problem.name}
-# Redis storage configuration
-program_storage:
-  _target_: gigaevo.database.redis_program_storage.RedisProgramStorage
-  config:
-    _target_: gigaevo.database.redis_program_storage.RedisProgramStorageConfig
-    redis_url: redis://${redis.host}:${redis.port}/${redis.db}
-    key_prefix: ${problem.name}
-    max_connections: ${redis_max_connections}
-    connection_pool_timeout: ${redis_connection_pool_timeout}
-    health_check_interval: ${redis_health_check_interval}
-    max_retries: ${redis_max_retries}
-    retry_delay: ${redis_retry_delay}
-  writer: ${writer}
-
-archive_storage_factory:
-  _target_: gigaevo.evolution.storage.archive_storage.RedisArchiveStorageFactory
-  program_storage: ${ref:program_storage}
