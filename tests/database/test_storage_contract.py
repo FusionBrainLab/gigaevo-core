@@ -132,3 +132,11 @@ async def test_count_by_status(backend):
 
         count = await storage.count_by_status(ProgramState.QUEUED.value)
         assert count == 3
+
+
+async def test_close_releases_instance_lock(backend):
+    """After close(), the instance lock is relinquished (renew must fail)."""
+    async with backend.make() as storage:
+        assert await storage.acquire_instance_lock()
+        await storage.close()
+        assert not await storage.renew_instance_lock()

@@ -1,0 +1,13 @@
+# @package _global_
+
+program_storage:
+  _target_: gigaevo.database.disk_program_storage.DiskProgramStorage
+  config:
+    _target_: gigaevo.database.disk_program_storage.DiskProgramStorageConfig
+    root_dir: ${oc.env:GIGAEVO_DISK_STORAGE,/tmp/gigaevo_disk_storage}
+    key_prefix: ${problem.name}
+  writer: ${writer}
+
+archive_storage_factory:
+  _target_: gigaevo.evolution.storage.archive_storage.DiskArchiveStorageFactory
+  program_storage: ${ref:program_storage}

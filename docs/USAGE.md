@@ -91,6 +91,23 @@ python run.py problem.name=toy_example \
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
 | `loader` | `directory`, `top_programs` (knobs: `loader.source_db` — Redis DB to read seeds from, default 0; `loader.top_n` — number of top programs to seed, default 50) |
 | `logging` | `tensorboard`, `wandb` |
+| `storage_backend` | `disk` (opt-in via `+storage_backend=disk`; default is Redis) |
+
+### Disk Storage Backend
+
+Programs and archives can be persisted to JSON files instead of Redis:
+
+```bash
+GIGAEVO_DISK_STORAGE=/path/to/storage \
+python run.py problem.name=toy_example +storage_backend=disk
+```
+
+Data lands under `$GIGAEVO_DISK_STORAGE/<problem name>/` (default root
+`/tmp/gigaevo_disk_storage`). Single-process only — the instance lock is a
+PID file, and there is no cross-process pub/sub. Live monitors that talk to
+Redis directly (`live_frontier_compare`) still use `redis.*` settings and can
+be disabled with `live_frontier_compare.enabled=false` for a fully
+Redis-free run.
 
 ## Examples
 
