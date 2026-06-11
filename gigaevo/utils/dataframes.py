@@ -35,7 +35,7 @@ async def fetch_evolution_dataframe(
     programs = await storage.get_all(exclude=exclude)
 
     if not programs:
-        logger.warning(f"No programs found for prefix='{storage.key_prefix}'")
+        logger.warning("No programs found for prefix='{}'", storage.key_prefix)
         return pd.DataFrame()
 
     rows: list[dict[str, Any]] = []
@@ -405,7 +405,7 @@ def add_frontier_from_redis_to_dataframe(
 
     df_copy = df.copy()
     df_copy["frontier_fitness"] = df_copy[iteration_col].map(frontier_series)
-    df_copy["frontier_fitness"] = df_copy["frontier_fitness"].fillna(method="ffill")
+    df_copy["frontier_fitness"] = df_copy["frontier_fitness"].ffill()
 
     logger.info(
         f"Loaded frontier from Redis for {redis_prefix}: {len(frontier_series)} iterations"
