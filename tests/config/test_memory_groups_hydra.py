@@ -70,6 +70,7 @@ class TestMemoryLocal:
         assert tracker._backend is provider._backend_factory
         assert tracker._backend.llm is cfg.memory_llm
         assert provider._reputation is cfg.memory.reputation
+        assert tracker._reputation is cfg.memory.reputation
         assert tracker._log._admitter is cfg.memory.admitter
         assert tracker._evictor is cfg.memory.evictor
         assert tracker._deduplicator is cfg.memory.dedup
@@ -104,6 +105,7 @@ class TestMemoryNone:
         assert cfg.ideas_tracker.admitter is None
         assert cfg.ideas_tracker.evictor is None
         assert cfg.ideas_tracker.deduplicator is None
+        assert cfg.ideas_tracker.reputation is None
 
 
 class TestLegacyApi:

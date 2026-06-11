@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.ideas_tracker.ideas_tracker import (
     _card_posterior_from_programs,
 )
@@ -183,3 +186,24 @@ def test_child_with_only_invalid_parent_has_no_baseline() -> None:
         programs, fitness_key="fitness", higher_is_better=True
     )
     assert post == {}
+
+
+def test_reputation_knobs_reach_computation() -> None:
+    # One success event -> Beta(2,1). Default quantile 0.20 reads sqrt(0.2)~0.447
+    # (not confident); an optimistic 0.90 quantile reads sqrt(0.9)~0.949
+    # (confident) — proving the injected reputation's knobs reach the math.
+    programs = [
+        _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+        _prog("c1", fitness=0.85, parents=["root"], selected=[]),
+    ]
+    default = _card_posterior_from_programs(
+        programs, fitness_key="fitness", higher_is_better=True
+    )
+    assert default["program-A"]["efficacy_confident"] is False
+
+    optimist = BetaBinomialReputation(confident_quantile=0.9)
+    post = _card_posterior_from_programs(
+        programs, fitness_key="fitness", higher_is_better=True, reputation=optimist
+    )
+    assert post["program-A"]["efficacy_confident"] is True
+    assert post["program-A"]["p_help_lo20"] == pytest.approx(0.9**0.5)

@@ -359,7 +359,7 @@ class TestIdeaTrackerPosteriorPopulation:
 
         captured: dict[str, list[str]] = {}
 
-        def _spy(programs, *, fitness_key, higher_is_better):
+        def _spy(programs, *, fitness_key, higher_is_better, reputation=None):
             captured["ids"] = [p.id for p in programs]
             return {}
 
@@ -383,7 +383,7 @@ class TestIdeaTrackerPosteriorPopulation:
 
         captured: dict[str, list[str]] = {}
 
-        def _spy(programs, *, fitness_key, higher_is_better):
+        def _spy(programs, *, fitness_key, higher_is_better, reputation=None):
             captured["ids"] = [p.id for p in programs]
             return {}
 

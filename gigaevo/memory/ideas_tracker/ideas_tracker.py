@@ -25,7 +25,13 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.backend_factory import MemoryBackendFactory
-from gigaevo.memory.core.protocols import Deduplicator, Evictor, MemoryAdmitter
+from gigaevo.memory.core.protocols import (
+    Deduplicator,
+    Evictor,
+    MemoryAdmitter,
+    ReputationModel,
+)
+from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
@@ -41,9 +47,6 @@ from gigaevo.memory.ideas_tracker.models import (
 from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryResponse
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
     analyse as _analyse_origins,
-)
-from gigaevo.memory.shared_memory.injection_posterior import (
-    compute_injection_posterior,
 )
 from gigaevo.memory.utils import to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
@@ -234,14 +237,16 @@ def _card_posterior_from_programs(
     *,
     fitness_key: str,
     higher_is_better: bool,
+    reputation: ReputationModel | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Injection-efficacy posterior per injected card id, from live programs.
 
     Extracts each program's id, parents, valid fitness, and the
     ``memory_selected_idea_ids`` stamped when that program was mutated — the cards
-    its children's prompts contained — then delegates to the pure
-    ``compute_injection_posterior``, which credits each card with its children's
-    outcomes. The result is keyed by the injected cards' own ids (idea and
+    its children's prompts contained — then delegates to ``reputation``'s
+    ``compute_injection_posteriors``, which credits each card with its children's
+    outcomes under the configured thresholds (defaults when no reputation is
+    wired). The result is keyed by the injected cards' own ids (idea and
     ``program-<uuid>`` alike) so every auction candidate draws a real downside
     posterior.
     """
@@ -255,7 +260,8 @@ def _card_posterior_from_programs(
         }
         for prog in programs
     ]
-    return compute_injection_posterior(rows, higher_is_better=higher_is_better)
+    rep = reputation if reputation is not None else BetaBinomialReputation()
+    return rep.compute_injection_posteriors(rows, higher_is_better=higher_is_better)
 
 
 def _run_write_pipeline(
@@ -586,6 +592,7 @@ class IdeaTracker(IncrementalPostRunHook):
         admitter: MemoryAdmitter | None = None,
         evictor: Evictor | None = None,
         deduplicator: Deduplicator | None = None,
+        reputation: ReputationModel | None = None,
         **extras: Any,
     ) -> None:
         if extras:
@@ -630,6 +637,9 @@ class IdeaTracker(IncrementalPostRunHook):
         self._checkpoint_dir = checkpoint_dir
         self._evictor = evictor
         self._deduplicator = deduplicator
+        self._reputation = (
+            reputation if reputation is not None else BetaBinomialReputation()
+        )
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
         self._last_entry_count: dict[str, int] = {}
@@ -731,6 +741,7 @@ class IdeaTracker(IncrementalPostRunHook):
             programs if posterior_programs is None else posterior_programs,
             fitness_key=self._fitness_key,
             higher_is_better=self._fitness_higher_is_better,
+            reputation=self._reputation,
         )
 
         _run_write_pipeline(
