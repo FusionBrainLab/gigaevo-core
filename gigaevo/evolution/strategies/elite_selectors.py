@@ -29,14 +29,14 @@ class EliteSelector(ABC):
 class RandomEliteSelector(EliteSelector):
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
-            "RandomEliteSelector: selecting {} from {} programs",
+            "[RandomEliteSelector] selecting {} from {} programs",
             total,
             len(programs),
         )
 
         if len(programs) <= total:
             logger.debug(
-                "RandomEliteSelector: returning all {} programs (≤ requested {})",
+                "[RandomEliteSelector] returning all {} programs (≤ requested {})",
                 len(programs),
                 total,
             )
@@ -44,7 +44,7 @@ class RandomEliteSelector(EliteSelector):
 
         selected = random.sample(programs, total)
         logger.debug(
-            "RandomEliteSelector: selected {} programs randomly",
+            "[RandomEliteSelector] selected {} programs randomly",
             len(selected),
         )
         return selected
@@ -111,7 +111,7 @@ class FitnessProportionalEliteSelector(EliteSelector):
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
-            "FitnessProportionalEliteSelector: selecting {} from {} programs "
+            "[FitnessProportionalEliteSelector] selecting {} from {} programs "
             "(key='{}', higher_is_better={}, temperature={})",
             total,
             len(programs),
@@ -122,7 +122,7 @@ class FitnessProportionalEliteSelector(EliteSelector):
 
         if len(programs) <= total:
             logger.debug(
-                "FitnessProportionalEliteSelector: returning all {} programs (≤ requested {})",
+                "[FitnessProportionalEliteSelector] returning all {} programs (≤ requested {})",
                 len(programs),
                 total,
             )
@@ -139,7 +139,7 @@ class FitnessProportionalEliteSelector(EliteSelector):
 
         if not all(np.isfinite(f) for f in fitnesses):
             logger.warning(
-                "FitnessProportionalEliteSelector: non-finite fitnesses detected; "
+                "[FitnessProportionalEliteSelector] non-finite fitnesses detected; "
                 "falling back to uniform sampling"
             )
             return random.sample(programs, min(total, len(programs)))
@@ -147,7 +147,7 @@ class FitnessProportionalEliteSelector(EliteSelector):
         min_fitness = min(fitnesses)
         max_fitness = max(fitnesses)
         logger.debug(
-            "FitnessProportionalEliteSelector: fitness range [{:.3f}, {:.3f}]",
+            "[FitnessProportionalEliteSelector] fitness range [{:.3f}, {:.3f}]",
             min_fitness,
             max_fitness,
         )
@@ -156,7 +156,7 @@ class FitnessProportionalEliteSelector(EliteSelector):
 
         selected = weighted_sample_without_replacement(programs, weights, total)
         logger.debug(
-            "FitnessProportionalEliteSelector: selected {} programs",
+            "[FitnessProportionalEliteSelector] selected {} programs",
             len(selected),
         )
         return selected
@@ -191,7 +191,7 @@ class FitnessProportionalTournamentEliteSelector(FitnessProportionalEliteSelecto
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
-            "FitnessProportionalTournamentEliteSelector: selecting {} from {} "
+            "[FitnessProportionalTournamentEliteSelector] selecting {} from {} "
             "programs (key='{}', higher_is_better={}, temperature={}, "
             "pool_multiplier={})",
             total,
@@ -218,7 +218,7 @@ class FitnessProportionalTournamentEliteSelector(FitnessProportionalEliteSelecto
 
         if not all(np.isfinite(f) for f in fitnesses):
             logger.warning(
-                "FitnessProportionalTournamentEliteSelector: non-finite "
+                "[FitnessProportionalTournamentEliteSelector] non-finite "
                 "fitnesses detected; falling back to uniform sampling"
             )
             return random.sample(programs, total)
@@ -302,7 +302,7 @@ class FitnessProportionalTournamentBoundedGapEliteSelector(
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
-            "FitnessProportionalTournamentBoundedGapEliteSelector: selecting {} "
+            "[FitnessProportionalTournamentBoundedGapEliteSelector] selecting {} "
             "from {} programs (gap_factor={})",
             total,
             len(programs),
@@ -329,7 +329,7 @@ class FitnessProportionalTournamentBoundedGapEliteSelector(
 
         if not all(np.isfinite(f) for f in fitnesses):
             logger.warning(
-                "FitnessProportionalTournamentBoundedGapEliteSelector: non-finite "
+                "[FitnessProportionalTournamentBoundedGapEliteSelector] non-finite "
                 "fitnesses; coupling disabled, uniform-sampling the remainder"
             )
             remaining = [p for p in programs if p is not p1]
@@ -347,7 +347,7 @@ class FitnessProportionalTournamentBoundedGapEliteSelector(
         ]
         if len(candidates) < total - 1:
             logger.debug(
-                "FitnessProportionalTournamentBoundedGapEliteSelector: only {} "
+                "[FitnessProportionalTournamentBoundedGapEliteSelector] only {} "
                 "candidates within delta={:.4g} of parent#1 (need {}); "
                 "falling back to full elite pool minus parent#1",
                 len(candidates),
@@ -384,7 +384,7 @@ class WeightedEliteSelector(EliteSelector):
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
-            "WeightedEliteSelector: selecting {} from {} programs (key='{}', higher_is_better={}, lambda={}, epsilon={})",
+            "[WeightedEliteSelector] selecting {} from {} programs (key='{}', higher_is_better={}, lambda={}, epsilon={})",
             total,
             len(programs),
             self.fitness_key,
@@ -395,7 +395,7 @@ class WeightedEliteSelector(EliteSelector):
 
         if len(programs) <= total:
             logger.debug(
-                "WeightedEliteSelector: returning all {} programs (≤ requested {})",
+                "[WeightedEliteSelector] returning all {} programs (≤ requested {})",
                 len(programs),
                 total,
             )
@@ -422,7 +422,7 @@ class WeightedEliteSelector(EliteSelector):
 
         selected = weighted_sample_without_replacement(programs, weights, total)
         logger.debug(
-            "WeightedEliteSelector: selected {} programs",
+            "[WeightedEliteSelector] selected {} programs",
             len(selected),
         )
         return selected
@@ -450,7 +450,7 @@ class ScalarTournamentEliteSelector(EliteSelector):
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         if len(programs) <= total:
             logger.warning(
-                f"Only {len(programs)} programs available, requested {total}. Returning all."
+                f"[ScalarTournamentEliteSelector] Only {len(programs)} programs available, requested {total}. Returning all."
             )
             return programs
 
@@ -507,7 +507,7 @@ class ParetoTournamentEliteSelector(EliteSelector):
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         if len(programs) <= total:
             logger.warning(
-                f"Only {len(programs)} programs available, requested {total}. Returning all."
+                f"[ParetoTournamentEliteSelector] Only {len(programs)} programs available, requested {total}. Returning all."
             )
             return programs
 

@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any
 import uuid
 
-from dotenv import load_dotenv
+from gigaevo_memory.embeddings import MemoryApiProvider
+from gigaevo_memory.platform_client import PlatformMemoryClient
+from gigaevo_memory.search_types import SearchType
+from loguru import logger
 
-from gigaevo.memory import config
-from gigaevo.memory.langchain_llm_service import LangChainLLMService
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
     QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
@@ -23,12 +24,6 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     parse_llm_card_decision,
 )
 from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
-
-load_dotenv()
-
-from gigaevo_memory.embeddings import MemoryApiProvider
-from gigaevo_memory.platform_client import PlatformMemoryClient
-from gigaevo_memory.search_types import SearchType
 
 _ALLOWED_STRATEGIES = {"exploration", "exploitation", "hybrid"}
 _VECTOR_GAM_TOOLS = {
@@ -180,6 +175,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         card_update_dedup_config: dict[str, Any] | None = None,
         remote_vector_search_type: str = "vector",
         remote_hybrid_weights: tuple[float, float] = (0.4, 0.6),
+        llm_service: Any | None = None,
+        embedding_model_name: str = "all-MiniLM-L6-v2",
     ):
         self.checkpoint_dir = Path(checkpoint_path)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -208,6 +205,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             str(remote_vector_search_type or "vector").strip().lower()
         )
         self.remote_hybrid_weights = remote_hybrid_weights
+        self.embedding_model_name = embedding_model_name
 
         if not use_api:
             print(
@@ -222,7 +220,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._build_retrievers_fn: Any | None = None
         self._agentic_import_error: Exception | None = None
         self._load_agentic_classes()
-        self.llm_service, self.generator = self._init_llm_service_and_generator()
+        self.llm_service = llm_service
+        self.generator = self._init_generator()
         self.memory_system = self._init_storage()
 
         self.memory_cards: dict[str, dict[str, Any]] = {}
@@ -307,38 +306,21 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._build_gam_store_fn = _build_gam_store
         self._build_retrievers_fn = _build_retrievers
 
-    def _init_llm_service_and_generator(self) -> tuple[Any | None, Any | None]:
-        if self._AMemGeneratorCls is None and not self.card_update_dedup_config.enabled:
-            return None, None
-        api_key = config.OPENAI_API_KEY
-        if not api_key and config.LLM_BASE_URL:
-            api_key = "EMPTY"
-        if not api_key:
-            return None, None
+    def _init_generator(self) -> Any | None:
+        if self.llm_service is None or self._AMemGeneratorCls is None:
+            return None
         try:
-            llm_service = LangChainLLMService(
-                model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
-                api_key=api_key,
-                base_url=config.LLM_BASE_URL,
-                temperature=0.0,
-                max_tokens=0,
-                reasoning=config.OPENROUTER_REASONING,
-                structured_output_method=config.STRUCTURED_OUTPUT_METHOD,
-            )
-            if self._AMemGeneratorCls is None:
-                return llm_service, None
-            generator = self._AMemGeneratorCls({"llm_service": llm_service})
-            return llm_service, generator
+            return self._AMemGeneratorCls({"llm_service": self.llm_service})
         except Exception as exc:
-            print(f"[MemoryPlatform] Could not initialize LLM/generator: {exc}")
-            return None, None
+            logger.warning("[MemoryPlatform] Could not initialize generator: {}", exc)
+            return None
 
     def _init_storage(self) -> Any | None:
         if self.llm_service is None or self._AgenticMemorySystemCls is None:
             return None
         try:
             return self._AgenticMemorySystemCls(
-                model_name=config.AMEM_EMBEDDING_MODEL_NAME,
+                model_name=self.embedding_model_name,
                 llm_backend="custom",
                 llm_service=self.llm_service,
                 chroma_persist_dir=self.checkpoint_dir / "chroma",
@@ -347,7 +329,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 enable_evolution=self.enable_memory_evolution,
             )
         except Exception as exc:
-            print(f"[MemoryPlatform] Could not initialize AgenticMemorySystem: {exc}")
+            logger.warning(
+                "[MemoryPlatform] Could not initialize AgenticMemorySystem: {}", exc
+            )
             return None
 
     def _load_index(self) -> None:
@@ -1060,6 +1044,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def get_card_write_stats(self) -> dict[str, int]:
         return dict(self.card_write_stats)
+
+    def sweep_harmful(self) -> list[str]:
+        # Legacy platform gates harm inline at save_card; no posterior evictor.
+        return []
 
     def delete(self, memory_id: str) -> bool:
         key = str(memory_id).strip()

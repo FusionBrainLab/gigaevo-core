@@ -1,6 +1,6 @@
 """Cycle 3: Deeper coverage for AmemGamMemory internals.
 
-Tests _apply_dedup_merge_updates, _insert_new_card rebuild trigger,
+Tests apply_merges, _insert_new_card rebuild trigger,
 _build_entity_meta, _concept_to_card, _ensure_card_id, and
 save_card branching logic.
 """
@@ -21,7 +21,7 @@ def _make_memory(tmp_path, **overrides):
 
 
 # ===========================================================================
-# _apply_dedup_merge_updates (via dedup.compute_card_merge_updates)
+# apply_merges (via dedup.compute_card_merge_updates)
 # ===========================================================================
 
 
@@ -29,7 +29,7 @@ class TestApplyUpdateActions:
     def _apply(self, mem, incoming, updates):
         """Compute merges and apply them — replaces deleted _apply_update_actions."""
         merges = mem.dedup.compute_card_merge_updates(incoming, updates)
-        return mem._apply_dedup_merge_updates(merges)
+        return mem.apply_merges(merges)
 
     def test_updates_existing_card(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -285,7 +285,7 @@ class TestSaveCardBranching:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
         mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.8}]
         )
@@ -299,12 +299,13 @@ class TestSaveCardBranching:
     def test_dedup_warning_only_once(self, tmp_path):
         """Missing LLM warning printed only once."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.llm_service = None  # force no-LLM path so warning fires
+        mem.dedup.llm_service = None  # force no-LLM path so warning fires
+        dedup = mem.write_pipeline._dedup
         mem.save_card({"id": "seed", "description": "seed"})
-        # First save with missing LLM triggers warning
-        assert not mem._warned_missing_card_update_llm
+        # First save lands in an empty bank — dedup not applicable, no warning
+        assert not dedup._warned_no_llm
         mem.save_card({"description": "new1"})
-        assert mem._warned_missing_card_update_llm
+        assert dedup._warned_no_llm
         # Subsequent saves don't re-warn (flag stays True)
         mem.save_card({"description": "new2"})
-        assert mem._warned_missing_card_update_llm
+        assert dedup._warned_no_llm

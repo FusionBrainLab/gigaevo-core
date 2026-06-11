@@ -25,6 +25,9 @@ from gigaevo.memory._vendor.GAM_root.gam.prompts import (
     Integrate_PROMPT,
     Planning_PROMPT,
 )
+from gigaevo.memory._vendor.GAM_root.gam.prompts.research_prompts import (
+    render_tool_section,
+)
 from gigaevo.memory._vendor.GAM_root.gam.schemas import (
     EXPERIMENTAL_DECISION_SCHEMA,
     GENERATE_REQUESTS_SCHEMA,
@@ -61,6 +64,14 @@ _DEFAULT_TOP_K_BY_TOOL = {
     "vector_explanation_summary": 5,
     "page_index": 5,
 }
+_TOOL_ORDER = [
+    "keyword",
+    "vector",
+    "vector_description",
+    "vector_task_description",
+    "vector_explanation_summary",
+    "page_index",
+]
 _PIPELINE_MODES = {"default", "experimental"}
 
 
@@ -91,6 +102,7 @@ class ResearchAgent:
         dir_path: str | None = None,  # 新增：文件系统存储路径
         system_prompts: dict[str, str] | None = None,  # 新增：system prompts字典
         pipeline_mode: str = "default",
+        max_cards: int = 3,
     ) -> None:
         if generator is None:
             raise ValueError("Generator instance is required for ResearchAgent")
@@ -103,6 +115,7 @@ class ResearchAgent:
         self._allowed_tools = self._normalize_allowed_tools(allowed_tools)
         self._top_k_by_tool = self._normalize_top_k_by_tool(top_k_by_tool)
         self.pipeline_mode = self._normalize_pipeline_mode(pipeline_mode)
+        self.max_cards = max(1, int(max_cards))
 
         # 初始化 system_prompts，默认值为空字符串
         default_system_prompts = {"planning": "", "integration": "", "reflection": ""}
@@ -155,7 +168,7 @@ class ResearchAgent:
                 value = int(raw_value)
             except (TypeError, ValueError):
                 continue
-            if value > 0:
+            if value >= 0:
                 normalized[tool] = value
         return normalized
 
@@ -190,24 +203,49 @@ class ResearchAgent:
             ) or self._normalize_query_list(plan.vector_queries)
         return []
 
+    def _active_tools(self) -> list[str]:
+        return [
+            tool
+            for tool in _TOOL_ORDER
+            if tool in self._allowed_tools and self._tool_top_k(tool) > 0
+        ]
+
     def _filter_tools(self, tools: list[str]) -> list[str]:
-        return [tool for tool in tools if tool in self._allowed_tools]
+        active = set(self._active_tools())
+        return [tool for tool in tools if tool in active]
 
     # ---- Public ----
-    def research(self, request: str, memory_state: str | None = None) -> ResearchOutput:
+    def research(
+        self,
+        request: str,
+        memory_state: str | None = None,
+        planning_request: str | None = None,
+    ) -> ResearchOutput:
         # 在开始研究前，确保检索器索引是最新的
         self._update_retrievers()
 
         if self.pipeline_mode == "experimental":
-            return self._research_experimental(request, memory_state=memory_state)
-        return self._research_default(request, memory_state=memory_state)
+            return self._research_experimental(
+                request,
+                memory_state=memory_state,
+                planning_request=planning_request,
+            )
+        return self._research_default(
+            request,
+            memory_state=memory_state,
+            planning_request=planning_request,
+        )
 
     def _research_default(
-        self, request: str, memory_state: str | None = None
+        self,
+        request: str,
+        memory_state: str | None = None,
+        planning_request: str | None = None,
     ) -> ResearchOutput:
         temp = Result()
         iterations: list[dict[str, Any]] = []
-        next_request = request
+        planning_base = planning_request or request
+        next_request = planning_base
 
         for step in range(self.max_iters):
             # Load current memory state dynamically
@@ -242,7 +280,7 @@ class ResearchAgent:
                 break
 
             if not decision.new_request:
-                next_request = request
+                next_request = planning_base
             else:
                 next_request = decision.new_request
 
@@ -254,10 +292,14 @@ class ResearchAgent:
         return ResearchOutput(integrated_memory=temp.content, raw_memory=raw)
 
     def _research_experimental(
-        self, request: str, memory_state: str | None = None
+        self,
+        request: str,
+        memory_state: str | None = None,
+        planning_request: str | None = None,
     ) -> ResearchOutput:
         iterations: list[dict[str, Any]] = []
-        next_request = request
+        planning_base = planning_request or request
+        next_request = planning_base
         retrieved_ideas_by_id: dict[str, dict[str, Any]] = {}
         final_decision: ExperimentalDecision | None = None
 
@@ -300,26 +342,19 @@ class ResearchAgent:
             )
 
             if decision.mode == "final":
-                final_decision = self._ensure_top_ideas(
-                    decision,
-                    available_card_ids=list(retrieved_ideas_by_id.keys()),
-                )
+                final_decision = decision
                 break
 
             next_request = self._next_request_from_queries(
-                original_request=request,
+                original_request=planning_base,
                 queries=decision.additional_queries,
             )
 
         if final_decision is None:
-            fallback_decision = ExperimentalDecision(
+            final_decision = ExperimentalDecision(
                 mode="final",
                 top_ideas=[],
                 additional_queries=[],
-            )
-            final_decision = self._ensure_top_ideas(
-                fallback_decision,
-                available_card_ids=list(retrieved_ideas_by_id.keys()),
             )
 
         final_output = self._format_top_ideas(final_decision.top_ideas)
@@ -456,22 +491,6 @@ class ResearchAgent:
             ideas.append(idea)
         return ideas
 
-    def _extract_original_list_field(
-        self,
-        card: dict[str, Any],
-        keys: list[str],
-    ) -> list[str]:
-        usage = card.get("usage")
-        usage_dict = usage if isinstance(usage, dict) else {}
-        for key in keys:
-            top_level = self._as_string_list(card.get(key))
-            if top_level:
-                return top_level
-            usage_value = self._as_string_list(usage_dict.get(key))
-            if usage_value:
-                return usage_value
-        return []
-
     def _reflection_experimental(
         self,
         request: str,
@@ -489,19 +508,31 @@ class ResearchAgent:
         template_prompt = ExperimentalDecision_PROMPT.format(
             request=request,
             retrieved_ideas=ideas_payload,
+            max_cards=self.max_cards,
         )
         if system_prompt:
             prompt = f"User Instructions: {system_prompt}\n\n System Prompt: {template_prompt}"
         else:
             prompt = template_prompt
 
+        response: dict[str, Any] | None = None
         try:
             response = self.generator.generate_single(
                 prompt=prompt, schema=EXPERIMENTAL_DECISION_SCHEMA
             )
             data = response.get("json") or json.loads(response["text"])
         except Exception as e:
-            logger.error(f"Error in experimental reflection: {e}")
+            if isinstance(response, dict):
+                text_head = str(response.get("text") or "")[:200]
+                response_ctx = f"response_keys={sorted(response)} text_head={text_head!r}"
+            else:
+                response_ctx = f"response={response!r} (LLM call itself failed)"
+            logger.opt(exception=True).error(
+                "[GAM][experimental] reflection LLM call failed — falling back to "
+                f"mode=continue, 0 ideas kept | {type(e).__name__}: {e} | "
+                f"schema=ExperimentalDecision prompt_chars={len(prompt)} "
+                f"retrieved_ideas={len(normalized_ideas)} | {response_ctx}"
+            )
             return ExperimentalDecision(
                 mode="continue", top_ideas=[], additional_queries=[]
             )
@@ -536,38 +567,12 @@ class ResearchAgent:
 
         if mode == "final":
             return ExperimentalDecision(
-                mode="final", top_ideas=top_ideas[:3], additional_queries=[]
+                mode="final",
+                top_ideas=top_ideas[: self.max_cards],
+                additional_queries=[],
             )
         return ExperimentalDecision(
             mode="continue", top_ideas=[], additional_queries=additional_queries[:5]
-        )
-
-    def _ensure_top_ideas(
-        self,
-        decision: ExperimentalDecision,
-        available_card_ids: list[str],
-    ) -> ExperimentalDecision:
-        if decision.mode != "final":
-            return ExperimentalDecision(
-                mode="final", top_ideas=[], additional_queries=[]
-            )
-
-        top_ideas = list(decision.top_ideas[:3])
-        selected_ids = {idea.card_id for idea in top_ideas}
-        for card_id in available_card_ids:
-            cid = str(card_id or "").strip()
-            if not cid or cid in selected_ids:
-                continue
-            top_ideas.append(
-                TopIdea(
-                    card_id=cid,
-                )
-            )
-            selected_ids.add(cid)
-            if len(top_ideas) >= 3:
-                break
-        return ExperimentalDecision(
-            mode="final", top_ideas=top_ideas[:3], additional_queries=[]
         )
 
     def _format_top_ideas(self, top_ideas: list[TopIdea]) -> str:
@@ -638,8 +643,14 @@ class ResearchAgent:
                 memory_context_lines.append(f"Page {i}: {abstract}")
             memory_context = "\n".join(memory_context_lines)
 
+        active_tools = self._active_tools()
         system_prompt = self.system_prompts.get("planning")
-        template_prompt = Planning_PROMPT.format(request=request, memory=memory_context)
+        template_prompt = Planning_PROMPT.format(
+            request=request,
+            memory=memory_context,
+            tool_names=",".join(f'"{tool}"' for tool in active_tools),
+            tool_section=render_tool_section(active_tools),
+        )
         if system_prompt:
             prompt = f"User Instructions: {system_prompt}\n\n System Prompt: {template_prompt}"
         else:

@@ -231,7 +231,6 @@ class TestDefaultPipelineBuilder:
             "LineageStage",
             "LineagesToDescendants",
             "LineagesFromAncestors",
-            "MemoryContextStage",
             "MutationContextStage",
             "ComputeComplexityStage",
             "MergeMetricsStage",
@@ -260,6 +259,7 @@ class TestDefaultPipelineBuilder:
         assert ("MergeMetricsStage", "EnsureMetricsStage") in edges
         assert ("EnsureMetricsStage", "MutationContextStage") in edges
         assert ("InsightsStage", "MutationContextStage") in edges
+        assert ("MemoryContextStage", "MutationContextStage") not in edges
 
     def test_lineage_data_flow(self):
         ctx = _make_ctx()
@@ -829,7 +829,7 @@ class TestDagConcurrencyThreading:
         assert builder._max_parallel == DEFAULT_DAG_CONCURRENCY
 
 
-_MAX_INSIGHTS_OVERRIDE = 21  # distinct from DEFAULT_MAX_INSIGHTS=8
+_MAX_INSIGHTS_OVERRIDE = 21  # distinct from DEFAULT_MAX_INSIGHTS=5
 
 
 class TestMaxInsightsThreading:

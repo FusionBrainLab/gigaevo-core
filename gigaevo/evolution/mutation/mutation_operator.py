@@ -165,6 +165,9 @@ class LLMMutationOperator(MutationOperator):
             prompt_id = result.get("prompt_id")
             if prompt_id is not None:
                 mutation_metadata[MutationSpec.META_PROMPT_ID] = prompt_id
+            citation_integrity = result.get("citation_integrity")
+            if citation_integrity is not None:
+                mutation_metadata["citation_integrity"] = citation_integrity
 
             mutation_spec = MutationSpec(
                 code=final_code,

@@ -4,7 +4,7 @@ This agent analyzes programs to generate actionable insights for evolution.
 ALL LLM-related logic lives here - stages are just thin wrappers.
 """
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -49,6 +49,30 @@ class ProgramInsight(BaseModel):
         default="",
         description="One-clause explanation of why the anchor moves the primary metric.",
     )
+    mechanism_source: Literal[
+        "",
+        "program",
+        "metrics",
+        "intra_memory",
+        "memory_cards",
+        "ancestral_trail",
+        "evolutionary_statistics",
+    ] = Field(
+        default="",
+        description=(
+            "Which input the LEVER IDEA (mechanism) came from — distinct from "
+            "evidence_source, which records where the anchor_quote came from. "
+            "Empty when the mechanism is the analyst's own synthesis."
+        ),
+    )
+    card_id: str = Field(
+        default="",
+        description=(
+            "When mechanism_source is memory_cards: the id of the card the "
+            "mechanism was transposed from (shown as `[card N] id=<id>`). "
+            "Empty otherwise."
+        ),
+    )
     substitute: str = Field(
         default="",
         description=(
@@ -80,8 +104,12 @@ class ProgramInsight(BaseModel):
             "structured fields above instead."
         ),
     )
-    tag: str = Field(description="Tag for the insight")
-    severity: str = Field(description="Severity of the insight")
+    tag: Literal["beneficial", "harmful", "fragile", "rigid", "neutral"] = Field(
+        description="Tag for the insight"
+    )
+    severity: Literal["high", "medium", "low"] = Field(
+        description="Severity of the insight"
+    )
 
 
 class ProgramInsights(BaseModel):
@@ -113,7 +141,6 @@ class InsightsState(TypedDict):
 
 
 class InsightsAgent(LangGraphAgent):
-    StateSchema = InsightsState
     """Agent for generating program insights.
 
     This agent does ALL the heavy lifting:

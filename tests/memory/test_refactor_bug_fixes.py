@@ -314,7 +314,7 @@ class TestDedupLLMRetryFallback:
         )
 
     def test_warning_logged_when_all_retries_fail(self, tmp_path):
-        """When all LLM retries fail, default action is add (warning logged to stderr)."""
+        """When all LLM retries fail, default action is discard (warning logged)."""
         dedup = self._make_dedup_with_failing_llm(tmp_path, num_retries=2)
         incoming = normalize_memory_card(
             {"id": "card-incoming", "description": "new idea", "category": "general"}
@@ -324,12 +324,11 @@ class TestDedupLLMRetryFallback:
 
         result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
 
-        # When all retries fail, should default to add
-        assert result["action"] == "add"
-        # Warning is logged to stderr (verified by pytest capture in test output)
+        assert result["action"] == "discard"
+        assert result["reason"] == "dedup llm unavailable"
 
-    def test_default_action_is_add_when_llm_returns_bad_json(self, tmp_path):
-        """When LLM returns invalid JSON every time, action defaults to add."""
+    def test_default_action_is_discard_when_llm_returns_bad_json(self, tmp_path):
+        """When LLM returns invalid JSON every time, action defaults to discard."""
         from gigaevo.memory.shared_memory.card_dedup import CardDedup
 
         store = CardStore(index_file=tmp_path / "index.json")
@@ -355,9 +354,8 @@ class TestDedupLLMRetryFallback:
 
         result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
 
-        # When all retries fail on bad JSON, should default to add
-        assert result["action"] == "add"
-        # Warning is logged to stderr (verified by pytest capture in test output)
+        assert result["action"] == "discard"
+        assert result["reason"] == "dedup llm unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +502,7 @@ def _make_invalid_program(pid: str = "p1") -> MagicMock:
 def test_no_llm_call_when_no_eligible_programs(tmp_path):
     """_run should not access _task_summary (LLM) when no eligible programs."""
     import asyncio
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock
 
     from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
@@ -516,24 +514,22 @@ def test_no_llm_call_when_no_eligible_programs(tmp_path):
             task_summary_accessed.append(True)
             return "summary"
 
-    with patch("gigaevo.memory.ideas_tracker.ideas_tracker.ClassifyingAnalyzer"):
-        tracker = TrackedTracker(
-            task_description="test task",
-            memory_write_enabled=False,
-            memory_usage_tracking_enabled=True,
-            logs_dir=tmp_path,
-        )
-        # Mock the analyzer
-        tracker._analyzer = MagicMock()
-        tracker._analyzer.analyze_async = AsyncMock(return_value=MagicMock(ideas=[]))
+    analyzer = MagicMock()
+    analyzer.analyze_async = AsyncMock(return_value=MagicMock(ideas=[]))
+    tracker = TrackedTracker(
+        analyzer=analyzer,
+        task_description="test task",
+        memory_write_enabled=False,
+        logs_dir=tmp_path,
+    )
 
-        # All programs are invalid — should be filtered out completely
-        programs = [_make_invalid_program(f"p{i}") for i in range(3)]
-        asyncio.run(tracker.run_increment(programs))
+    # All programs are invalid — should be filtered out completely
+    programs = [_make_invalid_program(f"p{i}") for i in range(3)]
+    asyncio.run(tracker.run_increment(programs))
 
-        assert task_summary_accessed == [], (
-            "_task_summary (LLM) must not be called when no eligible/valid programs exist"
-        )
+    assert task_summary_accessed == [], (
+        "_task_summary (LLM) must not be called when no eligible/valid programs exist"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -687,25 +683,3 @@ def test_card_loader_reads_jsonl_line_by_line(tmp_path, monkeypatch):
         "_load_from_export must not call Path.read_text(); use open() for streaming"
     )
     assert len(cards) == 2
-
-
-def test_extract_json_object_logs_debug_on_failure():
-    """_extract_json_object must log at debug level when JSON parse fails."""
-    import io
-
-    from loguru import logger as _logger
-
-    from gigaevo.memory.shared_memory.card_update_dedup import _extract_json_object
-
-    log_output = io.StringIO()
-    handler_id = _logger.add(log_output, level="DEBUG", format="{message}")
-    try:
-        result = _extract_json_object("not json at all !!!!")
-    finally:
-        _logger.remove(handler_id)
-
-    assert result is None
-    output = log_output.getvalue().lower()
-    assert "parse" in output or "json" in output, (
-        "_extract_json_object should log at DEBUG when it cannot parse JSON"
-    )

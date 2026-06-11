@@ -1,32 +1,15 @@
 """Tests for the analyzer factory that translates Hydra kwargs into
-ClassifyingAnalyzer instances."""
+analyzer instances wired to the memory LLM router."""
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import pytest
 
 from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
-
-
-@pytest.fixture(autouse=True)
-def _stub_llm_clients(monkeypatch):
-    """Stub the OpenAI client builder so factory tests don't need a real key.
-
-    These tests verify the factory wires Hydra kwargs into the right analyzer
-    type with the right fields. LLM construction is incidental — mock it.
-    """
-    import gigaevo.memory.ideas_tracker.llm as _llm_mod
-
-    def _fake_init_clients(base_url):
-        return MagicMock(), MagicMock(), False
-
-    monkeypatch.setattr(_llm_mod, "_init_clients", _fake_init_clients)
+from tests.fakes.llm_router import FakeMemoryRouter
 
 
 def _factory():
-    """Re-imported inside tests so RED phase surfaces a clean ImportError."""
     from gigaevo.memory.ideas_tracker.ideas_tracker import (
         _build_analyzer_from_hydra_fields,
     )
@@ -37,61 +20,43 @@ def _factory():
 class TestBuildAnalyzerDefault:
     def test_default_type_returns_classifying(self):
         build = _factory()
+        llm = FakeMemoryRouter()
         analyzer = build(
             analyzer_type="default",
-            analyzer_model="google/gemini-3-flash-preview",
-            analyzer_base_url="https://openrouter.ai/api/v1",
-            analyzer_reasoning={"effort": "minimal"},
+            llm=llm,
             analyzer_fast_settings=None,
             description_rewriting=True,
         )
         assert isinstance(analyzer, ClassifyingAnalyzer)
-        assert analyzer.model == "google/gemini-3-flash-preview"
-
-    def test_empty_base_url_becomes_none(self):
-        build = _factory()
-        analyzer = build(
-            analyzer_type="default",
-            analyzer_model="google/gemini-3-flash-preview",
-            analyzer_base_url="   ",
-            analyzer_reasoning=None,
-            analyzer_fast_settings=None,
-            description_rewriting=True,
-        )
-        assert isinstance(analyzer, ClassifyingAnalyzer)
-
-    def test_reasoning_passed_through(self):
-        build = _factory()
-        analyzer = build(
-            analyzer_type="default",
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning={"effort": "high", "extra": "x"},
-            analyzer_fast_settings=None,
-            description_rewriting=True,
-        )
-        assert analyzer._reasoning == {"effort": "high", "extra": "x"}
+        assert analyzer.llm is llm
 
     def test_description_rewriting_flag_propagates(self):
         build = _factory()
         analyzer_on = build(
             analyzer_type="default",
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning=None,
+            llm=FakeMemoryRouter(),
             analyzer_fast_settings=None,
             description_rewriting=True,
         )
         analyzer_off = build(
             analyzer_type="default",
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning=None,
+            llm=FakeMemoryRouter(),
             analyzer_fast_settings=None,
             description_rewriting=False,
         )
         assert analyzer_on._description_rewriting is True
         assert analyzer_off._description_rewriting is False
+
+    def test_max_concurrent_classifications_propagates(self):
+        build = _factory()
+        analyzer = build(
+            analyzer_type="default",
+            llm=FakeMemoryRouter(),
+            analyzer_fast_settings=None,
+            description_rewriting=True,
+            analyzer_max_concurrent_classifications=3,
+        )
+        assert analyzer._max_concurrent_classifications == 3
 
 
 class TestBuildAnalyzerNormalization:
@@ -110,9 +75,7 @@ class TestBuildAnalyzerNormalization:
         build = _factory()
         analyzer = build(
             analyzer_type=kind,  # type: ignore[arg-type]
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning=None,
+            llm=FakeMemoryRouter(),
             analyzer_fast_settings=None,
             description_rewriting=True,
         )
@@ -124,9 +87,7 @@ class TestBuildAnalyzerNormalization:
         build = _factory()
         analyzer = build(
             analyzer_type="wizardry",
-            analyzer_model="m",
-            analyzer_base_url="",
-            analyzer_reasoning=None,
+            llm=FakeMemoryRouter(),
             analyzer_fast_settings=None,
             description_rewriting=True,
         )

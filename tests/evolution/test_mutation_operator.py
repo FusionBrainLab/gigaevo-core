@@ -172,6 +172,28 @@ class TestMutateSingle:
             result.metadata[MUTATION_OUTPUT_METADATA_KEY]["archetype"] == "local_search"
         )
 
+    async def test_citation_integrity_forwarded_to_metadata(self):
+        """Agent result with citation_integrity → spec metadata carries it."""
+        agent = AsyncMock()
+        agent.arun.return_value = {
+            "code": "def f(): return 5",
+            "citation_integrity": {"cited": 2, "grounded": 1},
+        }
+        op = _make_operator(agent)
+
+        result = await op.mutate_single([_prog()])
+
+        assert result.metadata["citation_integrity"] == {"cited": 2, "grounded": 1}
+
+    async def test_citation_integrity_absent_when_not_reported(self):
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 6"}
+        op = _make_operator(agent)
+
+        result = await op.mutate_single([_prog()])
+
+        assert "citation_integrity" not in result.metadata
+
 
 # ---------------------------------------------------------------------------
 # TestCanonicalizeCode

@@ -84,7 +84,6 @@ def make_ideas_tracker_card(
         },
         "works_with": ["idea-2", "idea-3"],
         "links": ["related-concept-1"],
-        "usage": {"times_used": 7, "success_rate": 0.85},
     }
 
 
@@ -130,15 +129,6 @@ class TestNormalizeWithIdeasTrackerOutput:
 
         assert result.explanation.explanations == ["Found effective chunking strategy"]
         assert result.explanation.summary == "Improved retrieval via adaptive chunking"
-
-    def test_invalid_usage_dict_becomes_default(self):
-        """usage dict with arbitrary (non-matching) schema becomes default UsagePayload."""
-        card = make_ideas_tracker_card("idea-4", "Weighting", has_version_history=False)
-        result = normalize_memory_card(card)
-
-        # Invalid usage dict (arbitrary keys) becomes default UsagePayload
-        assert result.usage.entries == []
-        assert result.usage.total_used == 0
 
     def test_full_roundtrip_preserves_all_fields(self):
         """Complete card with all complex nested structures."""
@@ -305,14 +295,6 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
                 {"gen": 10, "delta": 25.0},
             ],
         }
-        complex_card["usage"] = {
-            "by_run": {
-                "run-1": {"count": 3, "success": True},
-                "run-2": {"count": 4, "success": False},
-            },
-            "aggregate": {"total": 7, "success_rate": 0.5},
-        }
-
         banks_path = tmp_path / "banks.json"
         _write_json(banks_path, [{"active_bank": [complex_card]}])
 
@@ -325,9 +307,6 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         # Verify deep nesting survived (for evolution_statistics, which is still a dict)
         assert card.evolution_statistics["by_generation"]["5"]["fitness"] == 50.0
         assert card.evolution_statistics["total_improvements"][1]["delta"] == 25.0
-        # usage with arbitrary nested keys becomes default UsagePayload
-        assert card.usage.entries == []
-        assert card.usage.total_used == 0
 
 
 # ===========================================================================
@@ -473,10 +452,10 @@ class TestMainLoopSimulation:
 def test_write_pipeline_main_full_loop(tmp_path):
     """Full-loop: write banks.json → call main() → memory gets cards."""
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
+    from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
     from gigaevo.memory.write_pipeline import main
-    from gigaevo.memory.write_pipeline_config import PipelineConfig
 
     # Use the same active_bank format that load_memory_cards expects
     banks_data = [
@@ -524,6 +503,9 @@ def test_write_pipeline_main_full_loop(tmp_path):
         def rebuild(self):
             pass
 
+        def sweep_harmful(self):
+            return []
+
         def close(self):
             pass
 
@@ -536,40 +518,19 @@ def test_write_pipeline_main_full_loop(tmp_path):
                 "updated_target_cards": 0,
             }
 
-    cfg = MagicMock(spec=PipelineConfig)
-    cfg.banks_path = banks_file
-    cfg.best_ideas_path = best_ideas_file
-    cfg.programs_path = None
-    cfg.usage_updates_path = None
-    cfg.use_api = False
-    cfg.memory_dir = memory_dir
-    cfg.search_limit = 5
-    cfg.rebuild_interval = 10
-    cfg.enable_llm_synthesis = False
-    cfg.should_evolve = False
-    cfg.fill_missing_fields_with_llm = False
-    cfg.enable_bm25 = False
-    cfg.allowed_gam_tools = []
-    cfg.gam_top_k_by_tool = {}
-    cfg.gam_pipeline_mode = "default"
-    cfg.card_update_dedup_config = {}
-    cfg.best_programs_percent = 5.0
-    cfg.sync_batch_size = 100
-    cfg.sync_on_init = True
-    cfg.channel = "latest"
-    cfg.author = None
-    cfg.namespace = "default"
-    cfg.enable_usage_tracking = False
-    cfg.settings_path = tmp_path / "settings.yaml"
+    factory = MagicMock(spec=LocalMemoryBackendFactory)
+    factory.build.return_value = FakeMemory()
 
-    with (
-        patch("gigaevo.memory.write_pipeline.load_config", return_value=cfg),
-        patch("gigaevo.memory.write_pipeline.AmemGamMemory", FakeMemory),
-    ):
-        result = main(
-            banks_path=banks_file,
-            best_ideas_path=best_ideas_file,
-        )
+    result = main(
+        banks_path=banks_file,
+        best_ideas_path=best_ideas_file,
+        backend=factory,
+        checkpoint_dir=memory_dir,
+    )
+
+    factory.build.assert_called_once_with(
+        checkpoint_dir=memory_dir, evictor=None, deduplicator=None
+    )
 
     assert len(saved_cards) >= 1, f"Expected at least 1 card written, got {saved_cards}"
     card_ids = [getattr(c, "id", None) for c in saved_cards]

@@ -35,6 +35,9 @@ class GamSearch:
         allowed_gam_tools: set[str],
         gam_top_k_by_tool: dict[str, int],
         gam_pipeline_mode: str,
+        embedding_model_name: str = "all-MiniLM-L6-v2",
+        max_iters: int = 3,
+        max_cards: int = 3,
     ):
         self._research_agent_cls = research_agent_cls
         self._generator = generator
@@ -46,6 +49,9 @@ class GamSearch:
         self._allowed_gam_tools = allowed_gam_tools
         self._gam_top_k_by_tool = gam_top_k_by_tool
         self._gam_pipeline_mode = gam_pipeline_mode
+        self._embedding_model_name = embedding_model_name
+        self._max_iters = max_iters
+        self._max_cards = max_cards
         self.agent: ResearchAgentProtocol | None = None
 
     def build_research_agent(self) -> None:
@@ -88,6 +94,7 @@ class GamSearch:
                 self._checkpoint_dir / "chroma",
                 enable_bm25=self._enable_bm25,
                 allowed_tools=sorted(self._allowed_gam_tools),
+                embedding_model_name=self._embedding_model_name,
             )
             retrievers = {
                 name: retriever
@@ -112,7 +119,8 @@ class GamSearch:
             memory_store=memory_store,
             retrievers=retrievers,
             generator=self._generator,
-            max_iters=3,
+            max_iters=self._max_iters,
+            max_cards=self._max_cards,
             allowed_tools=sorted(self._allowed_gam_tools),
             top_k_by_tool=self._gam_top_k_by_tool,
             pipeline_mode=self._gam_pipeline_mode,

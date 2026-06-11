@@ -131,7 +131,9 @@ class DagRunnerConfig(BaseModel):
         if v < 0.01:
             raise ValueError("poll_interval must be >= 0.01s")
         if v > 30.0:
-            logger.debug("Large poll_interval ({}s) may slow responsiveness", v)
+            logger.debug(
+                "[DagRunner] Large poll_interval ({}s) may slow responsiveness", v
+            )
         return v
 
     @field_validator("max_concurrent_dags")
@@ -139,7 +141,9 @@ class DagRunnerConfig(BaseModel):
     def _validate_concurrency(cls, v: int) -> int:
         cpu = os.cpu_count() or 4
         if v > cpu * 4:
-            logger.warning("max_concurrent_dags ({}) > 4x CPU count ({})", v, cpu)
+            logger.warning(
+                "[DagRunner] max_concurrent_dags ({}) > 4x CPU count ({})", v, cpu
+            )
         return v
 
 

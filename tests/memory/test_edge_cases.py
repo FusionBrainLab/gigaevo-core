@@ -9,10 +9,7 @@ from unittest.mock import MagicMock, patch
 import uuid
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_update_dedup import (
-    _extract_json_object,
-    append_unique_text,
-)
+from gigaevo.memory.shared_memory.card_update_dedup import append_unique_text
 from gigaevo.memory.shared_memory.models import ProgramCard
 from tests.fakes.agentic_memory import make_test_memory
 
@@ -126,39 +123,6 @@ class TestBug6IDCollision:
         # BUG: first card silently overwritten
         assert mem.get_card(id1).description == "second card"
         assert len(mem.card_store.cards) == 1  # Only one card exists
-
-
-# ===========================================================================
-# BUG 8 (MEDIUM): Greedy regex grabs wrong braces
-# ===========================================================================
-
-
-class TestBug8GreedyRegex:
-    def test_reasoning_with_braces_before_json(self):
-        """LLM reasoning contains literal braces before the actual JSON.
-        Greedy .* captures from first { to last }, yielding invalid JSON.
-        """
-        text = 'I considered {various factors}. My decision: {"action": "discard", "duplicate_of": "c1"}'
-        result = _extract_json_object(text)
-        # BUG: regex captures '{various factors}...{"action":...'
-        # json.loads fails on this, so result should be None or fall through
-        # Actually, the greedy regex captures from first { to last }:
-        # '{various factors}. My decision: {"action": "discard", "duplicate_of": "c1"}'
-        # This is invalid JSON, so json.loads fails → returns None
-        # Documenting actual behavior:
-        assert result is None  # The correct JSON is lost
-
-    def test_clean_json_in_prose_works(self):
-        """When JSON has no preceding braces, extraction works fine."""
-        text = 'My decision is: {"action": "add"}'
-        result = _extract_json_object(text)
-        assert result == {"action": "add"}
-
-    def test_nested_braces_in_json_works(self):
-        """Nested braces within the actual JSON are handled."""
-        text = '{"action": "update", "meta": {"key": "val"}}'
-        result = _extract_json_object(text)
-        assert result["action"] == "update"
 
 
 # ===========================================================================
@@ -286,7 +250,7 @@ class TestBug7UpdateFallthrough:
 
         # Now save a new card — dedup will try to update "existing" but it's gone
         mem.save_card({"description": "should be deduped"})
-        # BUG: Falls through to add because _apply_dedup_merge_updates returns []
+        # BUG: Falls through to add because apply_merges returns []
         stats = mem.get_card_write_stats()
         assert (
             stats["added"] >= 2

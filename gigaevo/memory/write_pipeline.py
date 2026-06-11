@@ -9,18 +9,11 @@ from typing import Any, Protocol
 from loguru import logger
 
 from gigaevo.exceptions import MemoryStorageError
-from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
+from gigaevo.memory.backend_factory import MemoryBackendFactory
+from gigaevo.memory.core.protocols import Deduplicator, Evictor
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
-from gigaevo.memory.shared_memory.memory_config import (
-    ApiConfig,
-    GamConfig,
-    MemoryConfig,
-)
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 from gigaevo.memory.utils import to_float
-from gigaevo.memory.write_pipeline_config import PipelineConfig, load_config
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
@@ -92,36 +85,6 @@ def _diff_write_stats(
     return {
         key: max(0, int(after.get(key, 0)) - int(before.get(key, 0))) for key in keys
     }
-
-
-def _load_usage_updates(path: Path | None) -> dict[str, dict[str, Any]]:
-    if path is None or not path.exists():
-        return {}
-
-    payload = _load_json(path)
-    if isinstance(payload, list):
-        snapshots = [
-            item
-            for item in payload
-            if isinstance(item, dict) and isinstance(item.get("usage_updates"), dict)
-        ]
-        if snapshots:
-            payload = snapshots[-1]["usage_updates"]
-        else:
-            return {}
-    elif isinstance(payload, dict) and "usage_updates" in payload:
-        payload = payload.get("usage_updates")
-
-    if not isinstance(payload, dict):
-        return {}
-
-    updates: dict[str, dict[str, Any]] = {}
-    for raw_card_id, usage_update in payload.items():
-        card_id = str(raw_card_id or "").strip()
-        if not card_id or not isinstance(usage_update, dict):
-            continue
-        updates[card_id] = usage_update
-    return updates
 
 
 def _parse_best_ideas(path: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
@@ -234,6 +197,7 @@ def _build_program_cards_from_top_programs(
     banks_path: Path,
     best_programs_percent: float,
     higher_is_better: bool = True,
+    card_posterior: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if (
         programs_path is None
@@ -277,6 +241,16 @@ def _build_program_cards_from_top_programs(
     )
     selected_count = _top_percent_count(len(eligible_programs), best_programs_percent)
     selected_programs = eligible_programs[:selected_count]
+
+    # A card accrues an injection posterior only after it is injected downstream,
+    # by which point it has usually dropped out of the top-fitness slice; build it
+    # anyway so its efficacy signal reaches the auction instead of being stranded.
+    if card_posterior:
+        selected_programs = selected_programs + [
+            program
+            for program in eligible_programs[selected_count:]
+            if f"program-{program['program_id']}" in card_posterior
+        ]
 
     connected_ideas_by_program: dict[str, list[dict[str, str]]] = {}
     for idea_card in _load_latest_bank_cards(banks_path):
@@ -324,62 +298,43 @@ def _build_program_cards_from_top_programs(
             description = ""
             keywords = ["pending_analysis:true", f"program_rank:{rank}"]
 
-        cards.append(
-            {
-                "id": f"program-{program_id}",
-                "category": "program",
-                "program_id": program_id,
-                "task_description": task_description,
-                "task_description_summary": task_description_summary,
-                "description": description,
-                "fitness": float(program["fitness"]),
-                "code": str(program.get("code") or ""),
-                "connected_ideas": connected_ideas,
-                "keywords": keywords,
-            }
-        )
+        card_id = f"program-{program_id}"
+        card: dict[str, Any] = {
+            "id": card_id,
+            "category": "program",
+            "program_id": program_id,
+            "task_description": task_description,
+            "task_description_summary": task_description_summary,
+            "description": description,
+            "fitness": float(program["fitness"]),
+            "code": str(program.get("code") or ""),
+            "connected_ideas": connected_ideas,
+            "keywords": keywords,
+        }
+        cards.append(card)
 
     return cards
 
 
-def _apply_usage_updates_to_card_list(
-    cards: list[dict[str, Any]],
-    *,
-    usage_updates: dict[str, dict[str, Any]],
-    memory: CardMemory,
-) -> list[dict[str, Any]]:
-    if not usage_updates:
-        return cards
+def stamp_card_posterior(
+    card: dict[str, Any], card_posterior: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Merge a card's injection posterior into ``evolution_statistics["ALL"]``.
 
-    cards_by_id: dict[str, dict[str, Any]] = {}
-    for card in cards:
-        card_id = str(card.get("id") or "").strip()
-        if card_id:
-            cards_by_id[card_id] = dict(card)
-
-    missing_card_ids: list[str] = []
-    for card_id, usage_update in usage_updates.items():
-        current_card = cards_by_id.get(card_id)
-        if current_card is None:
-            existing = memory.get_card(card_id)
-            if existing is None:
-                missing_card_ids.append(card_id)
-                continue
-            current_card = existing.model_dump()
-
-        current_card["usage"] = merge_usage_payloads(
-            current_card.get("usage"),
-            usage_update,
-        ).model_dump()
-        cards_by_id[card_id] = current_card
-
-    if missing_card_ids:
-        logger.warning(
-            "[Memory][WritePipeline] Skipped usage updates for {} card(s) not found in memory store.",
-            len(missing_card_ids),
-        )
-
-    return list(cards_by_id.values())
+    Applies to ANY card the selector can inject — idea and program cards alike —
+    keyed by the card's own id. Existing statistics (e.g. the
+    ``best_ideas_snapshot`` block) are preserved; cards without a posterior are
+    returned unchanged so the auction treats them as COLD.
+    """
+    posterior = card_posterior.get(str(card.get("id") or "").strip())
+    if not posterior:
+        return card
+    stats = card.get("evolution_statistics")
+    merged = dict(stats) if isinstance(stats, dict) else {}
+    merged["ALL"] = posterior
+    stamped = dict(card)
+    stamped["evolution_statistics"] = merged
+    return stamped
 
 
 def load_memory_cards(
@@ -388,13 +343,11 @@ def load_memory_cards(
     *,
     programs_path: Path | None = None,
     best_programs_percent: float = 0.0,
-    usage_updates_path: Path | None = None,
-    memory: CardMemory | None = None,
     higher_is_better: bool = True,
+    card_posterior: dict[str, dict[str, Any]] | None = None,
 ) -> list:
-    """Load idea and program cards from banks, apply usage updates and filters."""
+    """Load idea and program cards from banks, apply filters, stamp posteriors."""
     payload = _load_json(path)
-    usage_updates = _load_usage_updates(usage_updates_path)
 
     cards: list[dict]
     if isinstance(payload, dict) and "active_bank" in payload:
@@ -411,19 +364,15 @@ def load_memory_cards(
             "Invalid banks JSON format. Expected payload with 'active_bank'"
         )
 
-    if usage_updates and memory is not None:
-        cards = _apply_usage_updates_to_card_list(
-            cards,
-            usage_updates=usage_updates,
-            memory=memory,
-        )
-
     all_cards = cards + _build_program_cards_from_top_programs(
         programs_path=programs_path,
         banks_path=path,
         best_programs_percent=best_programs_percent,
         higher_is_better=higher_is_better,
+        card_posterior=card_posterior,
     )
+    if card_posterior:
+        all_cards = [stamp_card_posterior(c, card_posterior) for c in all_cards]
     return [normalize_memory_card(c) for c in all_cards]
 
 
@@ -467,106 +416,47 @@ def _write_memory_write_stats(
 
 def main(
     *,
-    banks_path: Path | None = None,
-    best_ideas_path: Path | None = None,
+    banks_path: Path,
+    best_ideas_path: Path,
     programs_path: Path | None = None,
-    usage_updates_path: Path | None = None,
-    config_path: Path | None = None,
+    backend: MemoryBackendFactory,
     checkpoint_dir: str | Path | None = None,
-    namespace: str | None = None,
+    best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
+    card_posterior: dict[str, dict[str, Any]] | None = None,
+    evictor: Evictor | None = None,
+    deduplicator: Deduplicator | None = None,
 ) -> dict[str, Any] | None:
-    """Load cards from banks, write to memory backend, report stats.
+    """Load cards from banks, write them into the card bank, report stats.
 
-    ``checkpoint_dir`` and ``namespace`` override the values loaded from
-    ``config_path`` so the engine can pin per-run memory artefacts under the
-    Hydra output directory regardless of the static fallback in
-    ``config/memory_backend.yaml``.
+    The bank is constructed via ``backend``, a required Hydra-composed
+    :class:`MemoryBackendFactory` (``memory/backend`` group) — there is no
+    implicit default. ``checkpoint_dir`` pins per-run memory artefacts under
+    the Hydra output directory. ``evictor``/``deduplicator`` are the shared
+    write-side components from the ``memory/evictor`` and ``memory/dedup``
+    groups; ``None`` keeps the backend's built-in defaults.
     """
-    cfg: PipelineConfig = load_config(config_path)
-
-    if checkpoint_dir is not None:
-        cfg.memory_dir = Path(checkpoint_dir)
-    if namespace is not None:
-        cfg.namespace = namespace
-
-    _banks_path = banks_path or cfg.banks_path
-    _best_ideas_path = best_ideas_path or cfg.best_ideas_path
-    _programs_path = programs_path or cfg.programs_path
-    _usage_updates_path = (
-        usage_updates_path if usage_updates_path is not None else cfg.usage_updates_path
-    )
-
-    # Build configuration based on use_api flag
-    api_config = None
-    if cfg.use_api:
-        api_config = ApiConfig(
-            base_url=str(cfg.memory_api_url or "http://localhost:8000"),
-            namespace=str(cfg.namespace or "default"),
-            channel=str(cfg.channel or "latest"),
-            author=cfg.author,
-            sync_batch_size=cfg.sync_batch_size,
-            sync_on_init=cfg.sync_on_init,
-        )
-
-    config = MemoryConfig(
-        checkpoint_path=cfg.memory_dir,
-        search_limit=cfg.search_limit,
-        rebuild_interval=cfg.rebuild_interval,
-        enable_llm_synthesis=cfg.enable_llm_synthesis,
-        enable_memory_evolution=cfg.should_evolve,
-        enable_llm_card_enrichment=cfg.fill_missing_fields_with_llm,
-        api=api_config,
-        gam=GamConfig(
-            enable_bm25=cfg.enable_bm25,
-            allowed_tools=cfg.allowed_gam_tools,
-            top_k_by_tool=cfg.gam_top_k_by_tool,
-            pipeline_mode=str(cfg.gam_pipeline_mode or "default"),
-        ),
-        dedup=CardUpdateDedupConfig.model_validate(cfg.card_update_dedup_config),
-    )
-
-    memory = AmemGamMemory(config=config)
-
-    logger.info("[Memory][WritePipeline] API Memory Demo: Card Write")
-    logger.info(
-        "[Memory][WritePipeline] Config: file={} evolution={} llm_fill={} usage_tracking={} dedup={}",
-        cfg.settings_path,
-        cfg.should_evolve,
-        cfg.fill_missing_fields_with_llm,
-        cfg.enable_usage_tracking,
-        bool(cfg.card_update_dedup_config.get("enabled")),
+    memory = backend.build(
+        checkpoint_dir=checkpoint_dir, evictor=evictor, deduplicator=deduplicator
     )
 
     try:
-        if not _banks_path.exists():
-            raise FileNotFoundError(f"Banks file not found: {_banks_path}")
+        if not banks_path.exists():
+            raise FileNotFoundError(f"Banks file not found: {banks_path}")
         memory_cards = load_memory_cards(
-            _banks_path,
-            best_ideas_path=_best_ideas_path,
-            programs_path=_programs_path,
-            best_programs_percent=cfg.best_programs_percent,
-            usage_updates_path=_usage_updates_path,
-            memory=memory,
+            banks_path,
+            best_ideas_path=best_ideas_path,
+            programs_path=programs_path,
+            best_programs_percent=best_programs_percent,
             higher_is_better=higher_is_better,
+            card_posterior=card_posterior,
         )
         logger.info(
             "[Memory][WritePipeline] Loaded {} cards from banks: {} (filtered by: {})",
             len(memory_cards),
-            _banks_path,
-            _best_ideas_path,
+            banks_path,
+            best_ideas_path,
         )
-        if cfg.use_api:
-            logger.info(
-                "[Memory][WritePipeline] Writing to API: {} (namespace={})",
-                cfg.memory_api_url,
-                cfg.namespace,
-            )
-        else:
-            logger.info(
-                "[Memory][WritePipeline] Writing in local-only mode (checkpoint={})",
-                cfg.memory_dir,
-            )
 
         write_stats_by_classify_card_type = {
             "ideas": _zero_write_stats(),
@@ -584,8 +474,10 @@ def main(
                         write_stats_by_classify_card_type[card_type].get(stat_name, 0)
                     ) + int(stat_value)
                 stored = memory.get_card(memory_id)
+                # memory_id is the ingest verdict's final id — possibly an existing
+                # duplicate, not a fresh save; the write ledger holds the verdict.
                 logger.debug(
-                    "[Memory][WritePipeline] [{:03d}] saved {}: {}",
+                    "[Memory][WritePipeline] [{:03d}] ingested → {}: {}",
                     idx,
                     memory_id,
                     (stored.description if stored is not None else "")[:110],
@@ -594,11 +486,15 @@ def main(
             logger.error("[Memory][WritePipeline] Write failed: {}", exc)
             return None
 
+        evicted = memory.sweep_harmful()
+        if evicted:
+            logger.info(
+                "[Memory][WritePipeline] Harm sweep evicted {} card(s): {}",
+                len(evicted),
+                evicted,
+            )
+
         memory.rebuild()
-        logger.info(
-            "[Memory][WritePipeline] Local API index saved in: {}",
-            cfg.memory_dir / "api_index.json",
-        )
 
         write_stats = memory.get_card_write_stats()
         input_classify_card_type_counts = {
@@ -628,7 +524,7 @@ def main(
             write_stats.get("updated_target_cards", 0),
         )
 
-        stats_path = _banks_path.parent / "memory_write_stats.json"
+        stats_path = banks_path.parent / "memory_write_stats.json"
         snapshot = _write_memory_write_stats(
             stats_path=stats_path,
             input_cards_count=len(memory_cards),
@@ -642,7 +538,3 @@ def main(
         return snapshot
     finally:
         memory.close()
-
-
-if __name__ == "__main__":
-    main()

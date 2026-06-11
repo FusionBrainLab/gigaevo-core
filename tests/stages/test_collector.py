@@ -331,6 +331,37 @@ class TestEvolutionaryStatisticsCollector:
         assert stats.valid_rate == 1.0
         assert stats.total_program_count == 3
 
+    async def test_significant_change_propagated_from_specs(self):
+        storage = AsyncMock()
+        p1 = _prog(score=60.0, generation=0, iteration=1)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1]
+
+        ctx = _ctx()
+        ctx.specs["score"].significant_change = 0.5
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=ctx, timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(p1)
+
+        assert result.output.significant_change == {"score": 0.5}
+
+    async def test_significant_change_empty_when_unset(self):
+        storage = AsyncMock()
+        p1 = _prog(score=60.0, generation=0, iteration=1)
+        storage.mget.return_value = []
+        storage.snapshot.get_all.return_value = [p1]
+
+        stage = EvolutionaryStatisticsCollector(
+            storage=storage, metrics_context=_ctx(), timeout=5.0
+        )
+        stage.attach_inputs({})
+        result = await stage.execute(p1)
+
+        assert result.output.significant_change == {}
+
     async def test_ancestor_stats(self):
         storage = AsyncMock()
         parent = _prog(score=90.0, generation=1, iteration=1)

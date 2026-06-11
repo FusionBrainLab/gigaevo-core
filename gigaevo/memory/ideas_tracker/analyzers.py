@@ -10,20 +10,26 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-import json
-import re
+import difflib
 import time
 from typing import Any, Protocol, runtime_checkable
 import uuid
 
 from loguru import logger
 import numpy as np
+from pydantic import ValidationError
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
-from tqdm import tqdm
 
+from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, enrich_with_verification
-from gigaevo.memory.ideas_tracker.llm import LLMClient
+from gigaevo.memory.ideas_tracker.llm import (
+    TSchema,
+    call_step,
+    call_step_async,
+    call_step_structured,
+    call_step_structured_async,
+)
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
     EmbeddedIdea,
@@ -31,6 +37,12 @@ from gigaevo.memory.ideas_tracker.models import (
     IdeaExplanation,
     IdeaUpdate,
     ProgramRecord,
+)
+from gigaevo.memory.ideas_tracker.schemas import (
+    ClassifyExtResponse,
+    ClusterPartitionResponse,
+    RepresentativeChoiceResponse,
+    SynthesisedDescription,
 )
 
 # ---------------------------------------------------------------------------
@@ -47,7 +59,7 @@ class Analyzer(Protocol):
     allowing IdeaTracker to use either without branching on type.
     """
 
-    model: str
+    llm: MultiModelRouter
 
     def analyze(self, records: list[ProgramRecord], bank: IdeaBank) -> AnalysisResult:
         """Extract and classify improvement ideas from a batch of program records."""
@@ -67,28 +79,17 @@ class Analyzer(Protocol):
         """Asynchronous LLM call — used by the enrichment step in IdeaTracker."""
         ...
 
+    def call_structured(
+        self, step: str, schema: type[TSchema], content: str | dict[str, str] = ""
+    ) -> TSchema:
+        """Synchronous structured LLM call returning a validated schema instance."""
+        ...
 
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
-def _split_id(idea_ref: str) -> tuple[str, int]:
-    """
-    Parse ``shortId:sequence`` from classify_ext LLM output.
-
-    If the model omits ``:sequence``, returns sequence 1 (best-effort).
-    Strips surrounding square brackets if present.
-    """
-    raw = idea_ref.strip()
-    if ":" not in raw:
-        return raw.strip("[]"), 1
-    left, right = raw.split(":", 1)
-    try:
-        seq = int(right.strip("[]"))
-    except ValueError:
-        seq = 1
-    return left.strip("[]"), seq
+    async def call_structured_async(
+        self, step: str, schema: type[TSchema], content: str | dict[str, str] = ""
+    ) -> TSchema:
+        """Asynchronous structured LLM call returning a validated schema instance."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -171,38 +172,44 @@ class ClassifyingAnalyzer:
     so the same analyser instance can serve multiple IdeaTracker sessions.
 
     Args:
-        model: LLM model identifier.
-        base_url: Optional OpenAI-compatible API base URL.
-        reasoning: Optional OpenRouter reasoning settings (e.g. {"effort": "low"}).
-        retry_attempts: LLM call retries on JSON parse failure.
+        llm: Memory LLM router (transport, credentials, token tracking).
+        retry_attempts: LLM call retries on structured-output validation failure.
         description_rewriting: If True, allow the LLM to rewrite idea descriptions.
     """
 
     def __init__(
         self,
-        model: str = "google/gemini-3-flash-preview",
-        base_url: str | None = None,
-        reasoning: dict[str, Any] | None = None,
+        llm: MultiModelRouter,
         retry_attempts: int = 10,
         description_rewriting: bool = True,
         max_concurrent_classifications: int = 8,
     ) -> None:
-        self.model = model
-        self._reasoning = reasoning or {}
+        self.llm = llm
         self._retry_attempts = retry_attempts
         self._description_rewriting = description_rewriting
-        self._llm = LLMClient(model=model, base_url=base_url)
         self._max_concurrent_classifications = max(
             1, int(max_concurrent_classifications)
         )
 
     def call(self, step: str, content: str | dict[str, str] = "") -> str:
         """Synchronous LLM call — used by IdeaTracker enrichment step."""
-        return self._llm.call(step, content, self._reasoning)
+        return call_step(self.llm, step, content)
 
     async def call_async(self, step: str, content: str | dict[str, str] = "") -> str:
         """Asynchronous LLM call — used by IdeaTracker enrichment step."""
-        return await self._llm.call_async(step, content, self._reasoning)
+        return await call_step_async(self.llm, step, content)
+
+    def call_structured(
+        self, step: str, schema: type[TSchema], content: str | dict[str, str] = ""
+    ) -> TSchema:
+        """Synchronous structured LLM call — used by IdeaTracker enrichment step."""
+        return call_step_structured(self.llm, step, schema, content)
+
+    async def call_structured_async(
+        self, step: str, schema: type[TSchema], content: str | dict[str, str] = ""
+    ) -> TSchema:
+        """Asynchronous structured LLM call — used by IdeaTracker enrichment step."""
+        return await call_step_structured_async(self.llm, step, schema, content)
 
     def analyze(self, records: list[ProgramRecord], bank: IdeaBank) -> AnalysisResult:
         """
@@ -211,7 +218,10 @@ class ClassifyingAnalyzer:
         Returns an AnalysisResult with new ideas to add and updates to apply.
         """
         result = AnalysisResult()
-        for record in tqdm(records, leave=False, desc="Classifying programs"):
+        logger.debug(
+            "[Memory][IdeaTracker] Classifying {} program records", len(records)
+        )
+        for record in records:
             pending = _PendingIdeas.from_improvements(record.improvements)
             if not pending.items:
                 continue
@@ -248,26 +258,17 @@ class ClassifyingAnalyzer:
         return result
 
     def _apply_classify_response(
-        self, parsed: dict[str, Any], pending: _PendingIdeas, chunk: Any
+        self, parsed: ClassifyExtResponse, pending: _PendingIdeas, chunk: Any
     ) -> None:
-        for ref in parsed.get("present_ideas", []):
-            if not isinstance(ref, str):
-                continue
-            short_id, seq = _split_id(ref)
-            full_id = self._resolve_id(short_id, chunk.short_ids)
+        for ref in parsed.present_ideas:
+            full_id = self._resolve_id(ref.idea_id, chunk.short_ids)
             if full_id:
-                pending.mark_classified(seq, full_id, False)
+                pending.mark_classified(ref.sequence, full_id, False)
 
-        for item in parsed.get("updated_ideas", []):
-            if not isinstance(item, dict):
-                continue
-            item_id = item.get("id")
-            if not isinstance(item_id, str):
-                continue
-            short_id, seq = _split_id(item_id)
-            full_id = self._resolve_id(short_id, chunk.short_ids)
+        for upd in parsed.updated_ideas:
+            full_id = self._resolve_id(upd.idea_id, chunk.short_ids)
             if full_id:
-                pending.mark_classified(seq, full_id, True)
+                pending.mark_classified(upd.sequence, full_id, True)
 
         pending.refresh_mapping()
 
@@ -277,19 +278,18 @@ class ClassifyingAnalyzer:
                 break
             unclassified_text = pending.as_numbered_text()
             prompt = f" Existing Ideas: \n {chunk.text} \n Incoming Ideas: \n {unclassified_text}"
-            parsed: dict[str, list[Any]] = {
-                "present_ideas": [],
-                "new_ideas": [],
-                "updated_ideas": [],
-            }
+            parsed = ClassifyExtResponse(
+                new_ideas=[], present_ideas=[], updated_ideas=[]
+            )
             for _ in range(self._retry_attempts):
                 try:
-                    raw = self._llm.call("classify_ext", prompt, self._reasoning)
-                    parsed = json.loads(raw)
+                    parsed = self.call_structured(
+                        "classify_ext", ClassifyExtResponse, prompt
+                    )
                     break
-                except json.JSONDecodeError as exc:
+                except ValidationError as exc:
                     logger.warning(
-                        "[Memory][Analyzer] ClassifyingAnalyzer: LLM returned invalid JSON (retrying): {}",
+                        "[Memory][Analyzer] ClassifyingAnalyzer: invalid structured output (retrying): {}",
                         exc,
                     )
                 except Exception as exc:
@@ -308,21 +308,18 @@ class ClassifyingAnalyzer:
                 break
             unclassified_text = pending.as_numbered_text()
             prompt = f" Existing Ideas: \n {chunk.text} \n Incoming Ideas: \n {unclassified_text}"
-            parsed: dict[str, list[Any]] = {
-                "present_ideas": [],
-                "new_ideas": [],
-                "updated_ideas": [],
-            }
+            parsed = ClassifyExtResponse(
+                new_ideas=[], present_ideas=[], updated_ideas=[]
+            )
             for _ in range(self._retry_attempts):
                 try:
-                    raw = await self._llm.call_async(
-                        "classify_ext", prompt, self._reasoning
+                    parsed = await self.call_structured_async(
+                        "classify_ext", ClassifyExtResponse, prompt
                     )
-                    parsed = json.loads(raw)
                     break
-                except json.JSONDecodeError as exc:
+                except ValidationError as exc:
                     logger.warning(
-                        "[Memory][Analyzer] ClassifyingAnalyzer: LLM returned invalid JSON (retrying): {}",
+                        "[Memory][Analyzer] ClassifyingAnalyzer: invalid structured output (retrying): {}",
                         exc,
                     )
                 except Exception as exc:
@@ -390,19 +387,6 @@ class ClassifyingAnalyzer:
 # ---------------------------------------------------------------------------
 # ClusteringAnalyzer  (was IdeaAnalyzerFast)
 # ---------------------------------------------------------------------------
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    """Parse a JSON object from model output, allowing surrounding prose or fences."""
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        return json.loads(m.group())
-    raise json.JSONDecodeError("No JSON object found", text, 0)
 
 
 def _validate_partition(
@@ -474,6 +458,32 @@ class IdeaCluster:
         return groups
 
 
+def _build_compact_diff(
+    parent_code: str, child_code: str, *, max_lines: int = 200
+) -> str:
+    """Unified parent→child diff for grounding the idea-card description.
+
+    Returns a sentinel when no diff can be formed so the synthesis prompt falls
+    back to the input descriptions instead of grounding on nothing.
+    """
+    if not parent_code or not child_code:
+        return "(diff unavailable)"
+    lines = list(
+        difflib.unified_diff(
+            parent_code.splitlines(),
+            child_code.splitlines(),
+            fromfile="parent",
+            tofile="child",
+            lineterm="",
+        )
+    )
+    if not lines:
+        return "(no code change)"
+    if len(lines) > max_lines:
+        lines = lines[:max_lines] + ["... (diff truncated)"]
+    return "\n".join(lines)
+
+
 class ClusteringAnalyzer:
     """
     Groups improvement ideas by semantic similarity using embeddings, DBSCAN,
@@ -484,10 +494,9 @@ class ClusteringAnalyzer:
     in analyze() is accepted for protocol compatibility but ignored.
 
     Args:
-        model: LLM model for refine and representative steps.
+        llm: Memory LLM router (transport, credentials, token tracking,
+            concurrency cap via the router's ``max_concurrent``).
         embeddings_model: sentence-transformers model id.
-        base_url: Optional API base URL override.
-        reasoning: Optional OpenRouter reasoning settings.
         batch_size: Encoding batch size.
         min_samples_for_dbscan: Below this count, skip DBSCAN and use one cluster.
         dbscan_eps: Cosine DBSCAN epsilon.
@@ -495,15 +504,12 @@ class ClusteringAnalyzer:
         max_attempts: LLM call retries per step.
         max_rounds: Refinement loop upper bound.
         refine_subgroup_size: Max ideas per refine LLM call.
-        llm_max_concurrent: Semaphore limit for async LLM calls.
     """
 
     def __init__(
         self,
-        model: str = "google/gemini-3-flash-preview",
+        llm: MultiModelRouter,
         embeddings_model: str = "sentence-transformers/all-mpnet-base-v2",
-        base_url: str | None = None,
-        reasoning: dict[str, Any] | None = None,
         batch_size: int = 32,
         min_samples_for_dbscan: int = 4,
         dbscan_eps: float = 0.25,
@@ -511,10 +517,8 @@ class ClusteringAnalyzer:
         max_attempts: int = 10,
         max_rounds: int = 20,
         refine_subgroup_size: int = 20,
-        llm_max_concurrent: int = 100,
     ) -> None:
-        self.model = model
-        self._reasoning = reasoning or {}
+        self.llm = llm
         self._batch_size = batch_size
         self._min_samples = min_samples_for_dbscan
         self._dbscan_eps = dbscan_eps
@@ -522,20 +526,29 @@ class ClusteringAnalyzer:
         self._max_attempts = max_attempts
         self._max_rounds = max_rounds
         self._subgroup_size = refine_subgroup_size
-        self._llm = LLMClient(
-            model=model, base_url=base_url, max_concurrent=llm_max_concurrent
-        )
         self._embed_model = SentenceTransformer(embeddings_model)
         self._benchmark_times: list[float] = []
         self._benchmark_clusters: list[int] = []
 
     def call(self, step: str, content: str | dict[str, str] = "") -> str:
         """Synchronous LLM call — used by IdeaTracker enrichment step."""
-        return self._llm.call(step, content, self._reasoning)
+        return call_step(self.llm, step, content)
 
     async def call_async(self, step: str, content: str | dict[str, str] = "") -> str:
         """Asynchronous LLM call — used by IdeaTracker enrichment step."""
-        return await self._llm.call_async(step, content, self._reasoning)
+        return await call_step_async(self.llm, step, content)
+
+    def call_structured(
+        self, step: str, schema: type[TSchema], content: str | dict[str, str] = ""
+    ) -> TSchema:
+        """Synchronous structured LLM call — used by IdeaTracker enrichment step."""
+        return call_step_structured(self.llm, step, schema, content)
+
+    async def call_structured_async(
+        self, step: str, schema: type[TSchema], content: str | dict[str, str] = ""
+    ) -> TSchema:
+        """Asynchronous structured LLM call — used by IdeaTracker enrichment step."""
+        return await call_step_structured_async(self.llm, step, schema, content)
 
     def analyze(self, records: list[ProgramRecord], _bank: IdeaBank) -> AnalysisResult:
         """
@@ -644,8 +657,7 @@ class ClusteringAnalyzer:
     async def _refine_loop(self, clusters: list[IdeaCluster], t0: float) -> None:
         self._benchmark_times.clear()
         self._benchmark_clusters.clear()
-        pbar = tqdm(total=self._max_rounds, desc="Refinement rounds")
-        for _ in range(self._max_rounds):
+        for round_idx in range(self._max_rounds):
             for c in clusters:
                 c.prune_stale()
             clusters[:] = [c for c in clusters if c.size > 0]
@@ -660,13 +672,16 @@ class ClusteringAnalyzer:
                 )
             )
             changed = self._apply_refinements(clusters, pairs)
-            pbar.update(1)
-            pbar.set_postfix(clusters=len(clusters))
+            logger.debug(
+                "[Memory][IdeaTracker] Refinement round {}/{} ({} clusters)",
+                round_idx + 1,
+                self._max_rounds,
+                len(clusters),
+            )
             self._benchmark_times.append(time.perf_counter() - t0)
             self._benchmark_clusters.append(len(clusters))
             if not changed:
                 break
-        pbar.close()
 
     async def _refine_cluster(
         self, cluster: IdeaCluster
@@ -684,15 +699,18 @@ class ClusteringAnalyzer:
             start, end = i0 + 1, i0 + min(sg, n - i0)
             for _ in range(self._max_attempts):
                 try:
-                    raw = await self._llm.call_async(
-                        "cluster_fast_refine", text, self._reasoning
+                    parsed = await self.call_structured_async(
+                        "cluster_fast_refine", ClusterPartitionResponse, text
                     )
-                    data = _extract_json_object(raw)
                     return _validate_partition(
-                        data.get("included", []), data.get("rejected", []), start, end
+                        parsed.included, parsed.rejected, start, end
                     )
-                except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+                except (ValueError, TypeError):
                     continue
+                except Exception as exc:
+                    logger.error(
+                        "[Memory][Analyzer] ClusteringAnalyzer refine failed: {}", exc
+                    )
             return None
 
         parts = await asyncio.gather(
@@ -763,6 +781,8 @@ class ClusteringAnalyzer:
         strategy = prog.strategy if prog else ""
         task_description = prog.task_description if prog else ""
         gen = prog.generation if prog else 0
+        child_code = prog.code if prog else ""
+        parent_code = prog.parent_code if prog else ""
 
         all_gens = [
             records_by_id[m.source_program_id].generation
@@ -779,9 +799,14 @@ class ClusteringAnalyzer:
             m.description for m in members if m is not rep and m.description
         ]
 
-        if len(members) > 1:
+        has_diff = bool(parent_code and child_code)
+        if len(members) > 1 or has_diff:
             desc = await self._synthesise_description(
-                rep.description, other_descriptions, motivations
+                rep.description,
+                other_descriptions,
+                motivations,
+                child_code=child_code,
+                parent_code=parent_code,
             )
             description = desc or rep.description
         else:
@@ -800,15 +825,19 @@ class ClusteringAnalyzer:
         text = cluster.numbered_text()
         for _ in range(self._max_attempts):
             try:
-                raw = await self._llm.call_async(
-                    "cluster_fast_representative", text, self._reasoning
+                parsed = await self.call_structured_async(
+                    "cluster_fast_representative", RepresentativeChoiceResponse, text
                 )
-                data = _extract_json_object(raw)
-                idx = int(data["representative_index"])
+                idx = parsed.representative_index
                 if 1 <= idx <= cluster.size:
                     return cluster.index_to_card.get(idx)
-            except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            except (ValueError, TypeError):
                 continue
+            except Exception as exc:
+                logger.error(
+                    "[Memory][Analyzer] ClusteringAnalyzer representative failed: {}",
+                    exc,
+                )
         return None
 
     async def _synthesise_description(
@@ -816,6 +845,9 @@ class ClusteringAnalyzer:
         rep_description: str,
         other_descriptions: list[str],
         motivations: list[str],
+        *,
+        child_code: str = "",
+        parent_code: str = "",
     ) -> str:
         all_desc = "".join(f"{k}) {d} \n" for k, d in enumerate(other_descriptions))
         all_motiv = "".join(f"{k}) {m} \n" for k, m in enumerate(motivations))
@@ -823,12 +855,14 @@ class ClusteringAnalyzer:
             "<INSERT_REP>": f"- {rep_description}",
             "<INSERT_DES>": all_desc,
             "<INSERT_EXPL>": all_motiv,
+            "<INSERT_DIFF>": _build_compact_diff(parent_code, child_code),
         }
         for _ in range(self._max_attempts):
             try:
-                return await self._llm.call_async(
-                    "cluster_desc_synth", prompt, self._reasoning
+                parsed = await self.call_structured_async(
+                    "cluster_desc_synth", SynthesisedDescription, prompt
                 )
+                return parsed.description
             except Exception as exc:
                 logger.error(
                     "[Memory][Analyzer] ClusteringAnalyzer desc_synth failed: {}", exc

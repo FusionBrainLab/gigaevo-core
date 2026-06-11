@@ -1,5 +1,4 @@
-"""Tests for JSON processing stages: MergeDictStage, MergeStrFloatDict,
-ParseJSONStage, StringifyJSONStage."""
+"""Tests for JSON processing stages: MergeDictStage, MergeStrFloatDict."""
 
 from __future__ import annotations
 
@@ -11,8 +10,6 @@ from gigaevo.programs.stages.common import Box
 from gigaevo.programs.stages.json_processing import (
     MergeDictStage,
     MergeStrFloatDict,
-    ParseJSONStage,
-    StringifyJSONStage,
 )
 
 # ---------------------------------------------------------------------------
@@ -88,160 +85,6 @@ class TestMergeStrFloatDict:
         result = await stage.execute(_prog())
 
         assert result.output.data == {}
-
-
-# ---------------------------------------------------------------------------
-# TestParseJSONStage
-# ---------------------------------------------------------------------------
-
-
-class TestParseJSONStage:
-    async def test_parse_object(self):
-        """Valid JSON object parsed correctly."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": '{"key": "value", "num": 42}'})
-        result = await stage.execute(_prog())
-
-        assert result.status == StageState.COMPLETED
-        assert result.output.data == {"key": "value", "num": 42}
-
-    async def test_parse_array(self):
-        """Valid JSON array parsed correctly."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": "[1, 2, 3]"})
-        result = await stage.execute(_prog())
-
-        assert result.output.data == [1, 2, 3]
-
-    async def test_parse_string(self):
-        """JSON string value."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": '"hello"'})
-        result = await stage.execute(_prog())
-
-        assert result.output.data == "hello"
-
-    async def test_parse_number(self):
-        """JSON number."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": "42.5"})
-        result = await stage.execute(_prog())
-
-        assert result.output.data == 42.5
-
-    async def test_parse_null(self):
-        """JSON null → Python None."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": "null"})
-        result = await stage.execute(_prog())
-
-        assert result.output.data is None
-
-    async def test_parse_boolean(self):
-        """JSON booleans."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": "true"})
-        result = await stage.execute(_prog())
-
-        assert result.output.data is True
-
-    async def test_invalid_json(self):
-        """Invalid JSON → stage FAILED."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": "{invalid json"})
-        result = await stage.execute(_prog())
-
-        assert result.status == StageState.FAILED
-        assert "Invalid JSON" in result.error.message
-
-    async def test_empty_string(self):
-        """Empty string → stage FAILED (json.loads('') raises)."""
-        stage = ParseJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": ""})
-        result = await stage.execute(_prog())
-
-        assert result.status == StageState.FAILED
-
-
-# ---------------------------------------------------------------------------
-# TestStringifyJSONStage
-# ---------------------------------------------------------------------------
-
-
-class TestStringifyJSONStage:
-    async def test_stringify_dict(self):
-        """Dict → JSON string."""
-        stage = StringifyJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": {"key": "value"}})
-        result = await stage.execute(_prog())
-
-        assert result.status == StageState.COMPLETED
-        assert '"key"' in result.output.data
-        assert '"value"' in result.output.data
-
-    async def test_stringify_list(self):
-        """List → JSON array string."""
-        stage = StringifyJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": [1, 2, 3]})
-        result = await stage.execute(_prog())
-
-        assert result.output.data == "[1, 2, 3]"
-
-    async def test_stringify_with_indent(self):
-        """indent=2 produces formatted output."""
-        stage = StringifyJSONStage(indent=2, timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": {"a": 1}})
-        result = await stage.execute(_prog())
-
-        assert "\n" in result.output.data  # Indented output has newlines
-
-    async def test_stringify_none(self):
-        """None → 'null'."""
-        stage = StringifyJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": None})
-        result = await stage.execute(_prog())
-
-        assert result.output.data == "null"
-
-    async def test_non_serializable_fails(self):
-        """Non-serializable object → stage FAILED."""
-        stage = StringifyJSONStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({"data": object()})
-        result = await stage.execute(_prog())
-
-        assert result.status == StageState.FAILED
-        assert "Cannot convert to JSON" in result.error.message
-
-    async def test_roundtrip(self):
-        """Stringify then parse gives back original."""
-        original = {"nested": {"a": [1, 2, 3]}, "key": "value"}
-        # Stringify
-        s_stage = StringifyJSONStage(timeout=5.0)
-        s_stage.__class__.cache_handler = NO_CACHE
-        s_stage.attach_inputs({"data": original})
-        s_result = await s_stage.execute(_prog())
-        json_str = s_result.output.data
-
-        # Parse
-        p_stage = ParseJSONStage(timeout=5.0)
-        p_stage.__class__.cache_handler = NO_CACHE
-        p_stage.attach_inputs({"data": json_str})
-        p_result = await p_stage.execute(_prog())
-
-        assert p_result.output.data == original
 
 
 # ---------------------------------------------------------------------------

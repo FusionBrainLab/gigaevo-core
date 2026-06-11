@@ -17,7 +17,7 @@ evolution_context:
   storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${memory_provider}
+  memory_provider: ${ref:memory.provider}
   archive_gate_provider: ${ref:archive_gate_provider}
 
 # Pipeline builder - automatically selects based on problem_context.is_contextual

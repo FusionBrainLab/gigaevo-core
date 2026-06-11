@@ -260,7 +260,12 @@ class FakeResearchAgent:
         self._retrievers = retrievers or {}
         self._generator = generator
 
-    def research(self, request: str, memory_state: str | None = None) -> ResearchOutput:
+    def research(
+        self,
+        request: str,
+        memory_state: str | None = None,
+        planning_request: str | None = None,
+    ) -> ResearchOutput:
         """Search all retrievers and format results."""
         all_results = []
         for name, retriever in self._retrievers.items():
@@ -462,7 +467,7 @@ def make_test_memory(
         gam=gam,
         dedup=dedup,
     )
-    return AmemGamMemory(config=config)
+    return AmemGamMemory(config=config, **overrides)
 
 
 def _get_fake_runtime() -> Any:

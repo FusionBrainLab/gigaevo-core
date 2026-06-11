@@ -50,7 +50,7 @@ class SumArchiveSelector(ArchiveSelector):
 
         result = new_sum > current_sum
         logger.debug(
-            "SumArchiveSelector: {} vs {} -> {} (new={:.3f}, current={:.3f}, keys={})",
+            "[SumArchiveSelector] {} vs {} -> {} (new={:.3f}, current={:.3f}, keys={})",
             new.id,
             current.id,
             "ACCEPT" if result else "REJECT",
@@ -93,7 +93,7 @@ class ParetoFrontSelector(ArchiveSelector):
         result = dominates(new_values, current_values)
 
         logger.debug(
-            "ParetoFrontSelector: {} vs {} -> {} (new={}, current={}, keys={})",
+            "[ParetoFrontSelector] {} vs {} -> {} (new={}, current={}, keys={})",
             new.id,
             current.id,
             "DOMINATES" if result else "DOES_NOT_DOMINATE",

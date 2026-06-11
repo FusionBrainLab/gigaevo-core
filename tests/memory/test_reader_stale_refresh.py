@@ -26,7 +26,7 @@ def shared_checkpoint(tmp_path: Path) -> Path:
 
 
 def _build_reader(checkpoint_path: Path) -> AmemGamMemory:
-    """Build a reader that mirrors what MemorySelectorAgent does in production."""
+    """Build a reader that mirrors what MemoryReadPipeline does in production."""
     cfg = MemoryConfig(
         checkpoint_path=checkpoint_path,
         search_limit=5,

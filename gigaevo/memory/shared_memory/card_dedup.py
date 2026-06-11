@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import StrEnum
 import json
 from pathlib import Path
 from threading import Lock
@@ -18,8 +19,10 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.card_loader import CardLoader
+from gigaevo.memory.shared_memory.card_search import format_card_efficacy
 from gigaevo.memory.shared_memory.card_store import CardStore
 from gigaevo.memory.shared_memory.card_update_dedup import (
+    DEDUP_DECISION_SCHEMA,
     QUERY_DESCRIPTION,
     QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
     QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY,
@@ -42,12 +45,20 @@ _MAX_SUMMARY_CHARS = 600
 _MAX_DESCRIPTION_CHARS = 1200
 
 
+class DedupAction(StrEnum):
+    """How an incoming card reconciles against the existing bank."""
+
+    ADD = "add"
+    DISCARD = "discard"
+    UPDATE = "update"
+
+
 class DedupDecision(BaseModel):
     """Result of deduplication analysis: whether to add, discard, or update."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
-    action: str  # "add" | "discard" | "update"
+    action: DedupAction
     reason: str
     duplicate_of: str  # card_id for discard (may be empty/phantom)
     merges: list[tuple[str, AnyCard]]  # (card_id, merged_card) for update
@@ -69,6 +80,7 @@ class CardDedup:
         gam_store_dir: Path,
         export_file: Path,
         checkpoint_dir: Path,
+        embedding_model_name: str = "all-MiniLM-L6-v2",
     ):
         self._card_store = card_store
         self.llm_service = llm_service
@@ -77,6 +89,7 @@ class CardDedup:
         self._gam_store_dir = gam_store_dir
         self._export_file = export_file
         self._checkpoint_dir = checkpoint_dir
+        self._embedding_model_name = embedding_model_name
         self._retrievers: dict[str, Any] | None = None
         self._retrievers_lock = Lock()
 
@@ -124,6 +137,7 @@ class CardDedup:
                     "vector_description_explanation_summary",
                     "vector_description_task_description_summary",
                 ],
+                embedding_model_name=self._embedding_model_name,
             )
         except (MemoryRetrieverError, OSError) as exc:
             logger.warning("[Memory][CardDedup]Dedup retriever build failed: {}", exc)
@@ -269,6 +283,8 @@ class CardDedup:
                         truncate_text(explanation, _MAX_DESCRIPTION_CHARS)
                         for explanation in explanations
                     ],
+                    "efficacy": format_card_efficacy(card)
+                    or "no measured track record",
                 }
             )
         return payload
@@ -314,6 +330,8 @@ class CardDedup:
                 truncate_text(explanation, _MAX_DESCRIPTION_CHARS)
                 for explanation in get_full_explanations(incoming_dict)
             ],
+            "efficacy": format_card_efficacy(incoming_card)
+            or "no measured track record",
         }
         prompt = (
             "You are a memory-card deduplication and update policy agent.\n"
@@ -322,24 +340,6 @@ class CardDedup:
             "- discard: one existing card already represents the same idea.\n"
             "- update: idea exists, but NEW_CARD adds a new task/use-case "
             "and/or new explanation details.\n\n"
-            "Return only JSON with this schema:\n"
-            "{\n"
-            '  "action": "add|discard|update",\n'
-            '  "reason": "short reason",\n'
-            '  "duplicate_of": "card_id or empty",\n'
-            '  "updates": [\n'
-            "    {\n"
-            '      "card_id": "candidate card id",\n'
-            '      "update_task_description": true|false,\n'
-            '      "task_description_append": "text to append or empty",\n'
-            '      "task_description_summary": "updated summary or empty",\n'
-            '      "update_explanation": true|false,\n'
-            '      "explanation_append": '
-            '"full explanation text to append or empty",\n'
-            '      "explanation_summary": "updated summary or empty"\n'
-            "    }\n"
-            "  ]\n"
-            "}\n\n"
             "Rules:\n"
             "- Use add when NEW_CARD is a genuinely new idea "
             "and should become its own card.\n"
@@ -358,6 +358,10 @@ class CardDedup:
             "- If action=discard, set duplicate_of to one candidate card_id.\n"
             "- If action=update, include one or more update objects "
             "with candidate card_ids.\n"
+            "- When two cards express the same idea, prefer keeping the variant "
+            "with the better measured track record (see each card's efficacy "
+            "field); merge parameter-sweep variants of one mechanism into a "
+            "single card with a value range instead of keeping near-duplicates.\n"
             "- Never invent card ids outside the candidate list.\n\n"
             f"NEW_CARD:\n"
             f"{json.dumps(incoming_payload, ensure_ascii=True, indent=2)}\n\n"
@@ -366,10 +370,18 @@ class CardDedup:
         )
 
         cfg = self._config
-        decision = default_decision
+        # An unreachable/flaky LLM must not flood the bank with unvetted cards.
+        decision: dict[str, Any] = {
+            "action": "discard",
+            "reason": "dedup llm unavailable",
+            "duplicate_of": "",
+            "updates": [],
+        }
         for attempt in range(cfg.llm_max_retries):
             try:
-                response_text, _, _, _ = self.llm_service.generate(prompt)
+                response_text, _, _, _ = self.llm_service.generate(
+                    prompt, schema=DEDUP_DECISION_SCHEMA
+                )
             except Exception as exc:
                 logger.warning(
                     "[Memory][CardDedup]Dedup LLM decision call failed: {}", exc
@@ -383,15 +395,14 @@ class CardDedup:
                 decision = parsed
                 break
             logger.warning(
-                "[Memory][CardDedup]Dedup LLM returned no valid JSON (attempt {}/{})",
+                "[Memory][CardDedup]Dedup LLM returned no valid decision (attempt {}/{})",
                 attempt + 1,
                 cfg.llm_max_retries,
             )
         else:
-            # All retries exhausted without a valid JSON response — fall back to add
             logger.warning(
-                "[Memory][CardDedup]Dedup LLM failed all {} attempts, defaulting to action=add "
-                "for card {!r}",
+                "[Memory][CardDedup]Dedup LLM failed all {} attempts, defaulting to "
+                "action=discard for card {!r}",
                 cfg.llm_max_retries,
                 _str_or_empty(incoming_card.id).strip(),
             )
@@ -406,7 +417,7 @@ class CardDedup:
         cfg = self._config
         if not cfg.enabled:
             return DedupDecision(
-                action="add",
+                action=DedupAction.ADD,
                 reason="dedup disabled",
                 duplicate_of="",
                 merges=[],
@@ -415,7 +426,7 @@ class CardDedup:
         scored = self.score_duplicate_candidates(card)
         if not scored:
             return DedupDecision(
-                action="add",
+                action=DedupAction.ADD,
                 reason="no candidates",
                 duplicate_of="",
                 merges=[],
@@ -424,10 +435,12 @@ class CardDedup:
         candidates = self.format_dedup_candidates_for_llm(scored)
         decision_dict = self.ask_llm_for_dedup_decision(card, candidates)
 
-        action = str(decision_dict.get("action") or "add").strip().lower()
+        action = DedupAction(
+            str(decision_dict.get("action") or DedupAction.ADD).strip().lower()
+        )
         merges: list[tuple[str, AnyCard]] = []
 
-        if action == "update":
+        if action is DedupAction.UPDATE:
             updates = decision_dict.get("updates")
             if isinstance(updates, list) and updates:
                 merges = self.compute_card_merge_updates(card, updates)

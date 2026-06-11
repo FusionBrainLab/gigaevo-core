@@ -28,6 +28,8 @@ class GamConfig(BaseModel):
     allowed_tools: list[str] = Field(default_factory=list)
     top_k_by_tool: dict[str, int] = Field(default_factory=dict)
     pipeline_mode: str = "default"
+    max_iters: int = Field(default=3, gt=0)
+    max_cards: int = Field(default=3, gt=0)
 
     @property
     def normalized_allowed_tools(self) -> set[str]:
@@ -65,6 +67,7 @@ class MemoryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     checkpoint_path: Path
+    embedding_model_name: str = "all-MiniLM-L6-v2"
     search_limit: int = Field(default=5, gt=0)
     rebuild_interval: int = Field(default=10, gt=0)
     enable_llm_synthesis: bool = True

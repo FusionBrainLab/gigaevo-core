@@ -38,7 +38,9 @@ async def check_storage_resume(
         )
         raise RuntimeError(f"{location} is not empty. Flush manually to proceed.")
     if has_data:
-        logger.info("Resuming experiment: {} has existing data", location)
+        logger.info("[Experiment] Resuming experiment: {} has existing data", location)
     elif resume:
-        logger.info("Resume requested but {} is empty. Starting fresh.", location)
+        logger.info(
+            "[Experiment] Resume requested but {} is empty. Starting fresh.", location
+        )
     return has_data

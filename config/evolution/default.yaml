@@ -29,7 +29,7 @@ metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker
   storage: ${ref:program_storage}
   metrics_context: ${metrics_context}
-  writer: ${writer}
+  writer: ${ref:writer}
 
 # Evolution engine
 evolution_engine:
@@ -38,8 +38,8 @@ evolution_engine:
   strategy: ${evolution_strategy}
   mutation_operator: ${mutation_operator}
   config: ${engine_config}
-  writer: ${writer}
+  writer: ${ref:writer}
   metrics_tracker: ${metrics_tracker}
   pre_step_hook: ${pre_step_hook}
-  post_run_hook: ${ideas_tracker}
+  post_run_hook: ${ref:ideas_tracker}
   post_step_hook: ${post_step_hook}

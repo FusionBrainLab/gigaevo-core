@@ -324,7 +324,7 @@ class TestDedup:
     def test_dedup_enabled_no_llm_falls_back_to_add(self, tmp_path):
         """When dedup is enabled but LLM is unavailable, cards are still added."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.llm_service = None  # force no-LLM path
+        mem.dedup.llm_service = None  # force no-LLM path
         mem.save_card(_make_card(id="seed"))
         mem.save_card(_make_card(description="new"))
         stats = mem.get_card_write_stats()
@@ -344,7 +344,7 @@ class TestDedup:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         # Mock dedup.score_duplicate_candidates to return a synthetic candidate
         mem.dedup.score_duplicate_candidates = MagicMock(
@@ -368,7 +368,7 @@ class TestDedup:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
         mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "existing", "score": 0.3}]
         )
@@ -381,7 +381,7 @@ class TestDedup:
         """Dedup requires card_store.cards to be non-empty."""
         mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
         mock_llm = MagicMock()
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         # First card — card_store.cards is empty, should NOT call LLM
         mem.save_card(_make_card(id="first"))
@@ -521,9 +521,13 @@ class TestStaticHelpers:
         result = normalize_gam_top_k_by_tool({"keyword": "abc"})
         assert result["keyword"] == 5  # default preserved
 
-    def test_normalize_gam_top_k_zero_ignored(self):
+    def test_normalize_gam_top_k_zero_disables_tool(self):
         result = normalize_gam_top_k_by_tool({"keyword": 0})
-        assert result["keyword"] == 5  # zero is not > 0
+        assert result["keyword"] == 0
+
+    def test_normalize_gam_top_k_negative_ignored(self):
+        result = normalize_gam_top_k_by_tool({"keyword": -1})
+        assert result["keyword"] == 5
 
 
 # ===========================================================================

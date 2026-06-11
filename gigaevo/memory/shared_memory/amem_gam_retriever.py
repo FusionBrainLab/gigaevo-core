@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,7 @@ from gigaevo.memory._vendor.GAM_root.gam import (
 )
 from gigaevo.memory._vendor.GAM_root.gam.generator import AMemGenerator
 from gigaevo.memory._vendor.GAM_root.gam.schemas import Page
-import gigaevo.memory.config as config
-from gigaevo.memory.langchain_llm_service import LangChainLLMService
+from gigaevo.memory.shared_memory.card_search import format_card_efficacy
 
 
 def load_amem_records(path: Path) -> list[dict[str, Any]]:
@@ -54,8 +54,6 @@ def make_card_text(record: dict[str, Any]) -> str:
     explanation_summary = (
         explanation.get("summary", "") if isinstance(explanation, dict) else ""
     )
-    evolution_statistics = record.get("evolution_statistics", {}) or {}
-    usage = record.get("usage", {}) or {}
     parts = [
         f"description: {description}",
         f"task_description_summary: {task_description_summary}",
@@ -68,13 +66,14 @@ def make_card_text(record: dict[str, Any]) -> str:
         f"programs: {programs}",
         f"aliases: {aliases}",
         f"keywords: {keywords}",
-        f"evolution_statistics: {evolution_statistics}",
         f"explanation_summary: {explanation_summary}",
         f"works_with: {works_with}",
         f"links: {links}",
         f"connected_ideas: {connected_ideas}",
-        f"usage: {usage}",
     ]
+    efficacy = format_card_efficacy(record)
+    if efficacy:
+        parts.append(efficacy)
     return "\n".join(parts)
 
 
@@ -127,6 +126,7 @@ def build_retrievers(
     chroma_collection: str = "memories",
     enable_bm25: bool = False,
     allowed_tools: list[str] | set[str] | tuple[str, ...] | None = None,
+    embedding_model_name: str = "all-MiniLM-L6-v2",
 ) -> dict[str, Any]:
     """Build retriever index from a page store.
 
@@ -191,7 +191,7 @@ def build_retrievers(
             chroma_config = {
                 "persist_dir": str(chroma_dir),
                 "collection_name": chroma_collection,
-                "model_name": config.AMEM_EMBEDDING_MODEL_NAME,
+                "model_name": embedding_model_name,
                 **extra,
             }
             retrievers[tool_name] = ChromaRetriever(chroma_config)
@@ -225,45 +225,70 @@ def build_retrievers(
 
 
 def main():
-    export_file = Path("amem_exports/amem_memories.jsonl")
+    from langchain_openai import ChatOpenAI
 
-    if not export_file.exists():
-        raise FileNotFoundError(f"A-mem export not found: {export_file}")
+    from gigaevo.llm.models import MultiModelRouter
 
-    records = load_amem_records(export_file)
+    parser = argparse.ArgumentParser(
+        description="Run a GAM research query over an A-mem export."
+    )
+    parser.add_argument(
+        "--export-file", type=Path, default=Path("amem_exports/amem_memories.jsonl")
+    )
+    parser.add_argument("--model", default="google/gemini-3-flash-preview")
+    parser.add_argument("--base-url", default="https://openrouter.ai/api/v1")
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("OPENROUTER_API_KEY"),
+        help="Defaults to $OPENROUTER_API_KEY.",
+    )
+    parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
+    parser.add_argument(
+        "--question",
+        default="What changes improved the primary fitness metric the most and why?",
+    )
+    args = parser.parse_args()
+
+    if not args.api_key:
+        parser.error("--api-key not given and OPENROUTER_API_KEY is not set")
+    if not args.export_file.exists():
+        raise FileNotFoundError(f"A-mem export not found: {args.export_file}")
+
+    records = load_amem_records(args.export_file)
     if not records:
         raise RuntimeError("A-mem export is empty.")
 
     store_dir = Path(__file__).resolve().parents[1] / "gam_shared" / "amem_store"
     store_dir.mkdir(parents=True, exist_ok=True)
     memory_store, page_store, added = build_gam_store(records, store_dir)
-    logger.info("Loaded {} A-mem records, added {} new pages.", len(records), added)
+    logger.info(
+        "[Memory][AmemGamRetriever] Loaded {} A-mem records, added {} new pages.",
+        len(records),
+        added,
+    )
+    logger.info("[Memory][AmemGamRetriever] LLM: {} at {}", args.model, args.base_url)
 
-    api_key = config.OPENAI_API_KEY
-    if not api_key and config.LLM_BASE_URL:
-        api_key = "EMPTY"
-
-    if not api_key:
-        raise RuntimeError(
-            "Missing OPENAI_API_KEY/OPENROUTER_API_KEY env var. "
-            "Set one before running this retriever."
-        )
-
-    base_url = config.LLM_BASE_URL
-
-    llm_service = LangChainLLMService(
-        model_name=config.OPENROUTER_MODEL_NAME or "openai/gpt-4.1-mini",
-        api_key=api_key,
-        base_url=base_url,
-        temperature=0.0,
-        max_tokens=2048,
-        reasoning=config.OPENROUTER_REASONING,
-        structured_output_method=config.STRUCTURED_OUTPUT_METHOD,
+    llm_service = MultiModelRouter(
+        models=[
+            ChatOpenAI(
+                model=args.model,
+                api_key=args.api_key,
+                base_url=args.base_url,
+                temperature=0.0,
+            )
+        ],
+        probabilities=[1.0],
+        name="memory",
     )
     generator = AMemGenerator({"llm_service": llm_service})
 
     chroma_dir = Path(__file__).resolve().parents[1] / "chroma"
-    retrievers = build_retrievers(page_store, store_dir / "indexes", chroma_dir)
+    retrievers = build_retrievers(
+        page_store,
+        store_dir / "indexes",
+        chroma_dir,
+        embedding_model_name=args.embedding_model,
+    )
     research_agent = ResearchAgent(
         page_store=page_store,
         memory_store=memory_store,
@@ -272,12 +297,11 @@ def main():
         max_iters=3,
     )
 
-    question = os.getenv(
-        "AMEM_QUESTION", "What changes improved min_area the most and why?"
+    logger.info("[Memory][AmemGamRetriever] Research question: {}", args.question)
+    result = research_agent.research(args.question)
+    logger.info(
+        "[Memory][AmemGamRetriever] Research result:\n{}", result.integrated_memory
     )
-    logger.info("Research question: {}", question)
-    result = research_agent.research(question)
-    logger.info("Research result:\n{}", result.integrated_memory)
 
 
 if __name__ == "__main__":

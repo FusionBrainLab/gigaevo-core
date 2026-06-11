@@ -1204,7 +1204,7 @@ def find_active_experiments() -> list[ExperimentManifest]:
             continue
         except (ManifestValidationError, ValueError, yaml.YAMLError) as exc:
             logger.warning(
-                "find_active_experiments: skipping {} — {}: {}",
+                "[Manifest] find_active_experiments: skipping {} — {}: {}",
                 experiment,
                 type(exc).__name__,
                 exc,

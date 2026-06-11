@@ -13,7 +13,6 @@ from typing import Any, Protocol
 
 from loguru import logger
 
-from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     ConnectedIdea,
@@ -102,22 +101,6 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 # ---------------------------------------------------------------------------
 
 
-def _normalize_usage(raw_usage: Any) -> UsagePayload:
-    """Convert raw usage data to UsagePayload, with graceful fallback."""
-    if isinstance(raw_usage, UsagePayload):
-        return raw_usage
-    if not isinstance(raw_usage, dict):
-        return UsagePayload()
-    try:
-        return UsagePayload.model_validate(raw_usage)
-    except Exception as exc:
-        logger.warning(
-            "[Memory][CardConversion]UsagePayload validation failed, using empty payload: {}",
-            exc,
-        )
-        return UsagePayload()
-
-
 def _normalize_connected_ideas(raw_list: Any) -> list[ConnectedIdea]:
     """Convert raw connected_ideas to typed ConnectedIdea list."""
     items = _to_list(raw_list)
@@ -172,6 +155,9 @@ def normalize_memory_card(
             keywords=_to_list(raw.get("keywords")),
             strategy=str(raw.get("strategy") or ""),
             links=_to_list(raw.get("links")),
+            evolution_statistics=_evo_stats
+            if isinstance((_evo_stats := raw.get("evolution_statistics")), dict)
+            else {},
         )
 
     explanation = raw.get("explanation")
@@ -200,7 +186,6 @@ def normalize_memory_card(
         ),
         works_with=_to_list(raw.get("works_with")),
         links=_to_list(raw.get("links")),
-        usage=_normalize_usage(raw.get("usage")),
     )
 
 
@@ -326,7 +311,6 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         else None,
         "works_with": dedupe_keep_order(list(card.works_with)),
         "links": dedupe_keep_order(list(card.links)),
-        "usage": card.usage.model_dump(),
     }
 
 
@@ -402,7 +386,7 @@ def normalize_gam_top_k_by_tool(
             value = int(raw_value)
         except (TypeError, ValueError):
             continue
-        if value > 0:
+        if value >= 0:
             normalized[tool] = value
     return normalized
 
@@ -443,7 +427,6 @@ def concept_to_card(concept_content: dict[str, Any], fallback_id: str) -> AnyCar
             },
             "works_with": concept_content.get("works_with") or [],
             "links": concept_content.get("links") or [],
-            "usage": concept_content.get("usage") or {},
         },
         fallback_id=fallback_id,
     )

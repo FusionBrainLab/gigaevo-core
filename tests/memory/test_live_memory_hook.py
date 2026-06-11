@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 
+from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.memory.live_memory_hook import LiveMemoryRefreshHook
 from gigaevo.programs.program import Program
 
@@ -19,12 +20,24 @@ class _StubStorage:
         return list(self._programs)
 
 
-class _RecordingTracker:
+class _RecordingTracker(IncrementalPostRunHook):
     def __init__(self) -> None:
         self.calls: list[list[Program]] = []
+        self.posterior_calls: list[list[Program] | None] = []
 
-    async def run_increment(self, programs):  # type: ignore[no-untyped-def]
+    async def on_run_complete(self, storage) -> None:  # type: ignore[no-untyped-def]
+        pass
+
+    async def run_increment(
+        self,
+        programs: list[Program],
+        *,
+        posterior_programs: list[Program] | None = None,
+    ) -> None:
         self.calls.append(list(programs))
+        self.posterior_calls.append(
+            None if posterior_programs is None else list(posterior_programs)
+        )
 
 
 def _make_program(idx: int, created_at: datetime) -> Program:
@@ -74,6 +87,42 @@ async def test_bounded_sweep_passes_only_newest_n(five_programs):
 
 
 @pytest.mark.asyncio
+async def test_bounded_sweep_posterior_gets_full_pool(five_programs):
+    """Capping the analyzer window must NOT starve the injection posterior:
+    the full program pool (parent lineage intact) is passed as posterior_programs."""
+    tracker = _RecordingTracker()
+    storage = _StubStorage(five_programs)
+    hook = LiveMemoryRefreshHook(
+        tracker=tracker,
+        storage=storage,
+        refresh_every=1,
+        max_programs_per_sweep=2,
+    )
+
+    await hook()
+
+    # Analyzer window stays capped to the 2 newest.
+    assert {p.id for p in tracker.calls[0]} == {
+        five_programs[3].id,
+        five_programs[4].id,
+    }
+    # Posterior population is the FULL pool, regardless of the analyzer cap.
+    assert {p.id for p in tracker.posterior_calls[0]} == {p.id for p in five_programs}
+
+
+@pytest.mark.asyncio
+async def test_unbounded_posterior_gets_full_pool(five_programs):
+    """Unbounded sweep also routes the full pool to the posterior channel."""
+    tracker = _RecordingTracker()
+    storage = _StubStorage(five_programs)
+    hook = LiveMemoryRefreshHook(tracker=tracker, storage=storage, refresh_every=1)
+
+    await hook()
+
+    assert {p.id for p in tracker.posterior_calls[0]} == {p.id for p in five_programs}
+
+
+@pytest.mark.asyncio
 async def test_bounded_sweep_larger_than_pool_passes_all(five_programs):
     """max_programs_per_sweep > pool size returns the full pool, no error."""
     tracker = _RecordingTracker()
@@ -115,3 +164,16 @@ async def test_empty_storage_skips_without_error():
     await hook()
 
     assert tracker.calls == []
+
+
+def test_plain_post_run_hook_rejected_at_init():
+    """`pipeline=intra_extra_memory` without `ideas_tracker=default` hands the
+    hook a NullPostRunHook; that must fail at startup, not mid-run."""
+    from gigaevo.evolution.engine.hooks import NullPostRunHook
+
+    with pytest.raises(TypeError, match="ideas_tracker=default"):
+        LiveMemoryRefreshHook(
+            tracker=NullPostRunHook(),  # type: ignore[arg-type]
+            storage=_StubStorage([]),
+            refresh_every=1,
+        )

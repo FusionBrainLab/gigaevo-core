@@ -3,17 +3,12 @@
 
 from __future__ import annotations
 
-from gigaevo.memory.ideas_tracker.idea_bank import (
-    IdeaBank,
-    build_usage_payload,
-    merge_usage_payloads,
-)
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
     Idea,
     IdeaExplanation,
     IdeaUpdate,
-    UsagePayload,
 )
 
 
@@ -155,77 +150,3 @@ class TestIdeaBankChunks:
         assert "Cache calls" in chunk.text
         assert len(chunk.short_ids) == 1
         assert "short_id" in chunk.short_ids[0]
-
-
-class TestBuildUsagePayload:
-    def test_empty_input_produces_empty_used(self) -> None:
-        result = build_usage_payload({})
-        assert isinstance(result, UsagePayload)
-        assert result.entries == []
-        assert result.total_used == 0
-        assert result.median_delta_fitness is None
-
-    def test_single_task_flat_structure(self) -> None:
-        result = build_usage_payload({"task A": [1.0, 3.0]})
-        assert isinstance(result, UsagePayload)
-        assert result.total_used == 2
-        assert result.median_delta_fitness == 2.0
-        entry = result.entries[0]
-        assert entry.task_description_summary == "task A"
-        assert entry.used_count == 2
-        assert sorted(entry.fitness_delta_per_use) == [1.0, 3.0]
-
-    def test_output_is_usage_payload(self) -> None:
-        result = build_usage_payload({"task": [0.5, 1.5]})
-        assert isinstance(result, UsagePayload)
-        assert result.total_used == 2
-        assert len(result.entries) == 1
-        assert result.entries[0].task_description_summary == "task"
-
-    def test_nan_and_inf_filtered(self) -> None:
-        result = build_usage_payload({"task": [float("nan"), float("inf"), 1.0]})
-        assert isinstance(result, UsagePayload)
-        assert result.total_used == 1
-        assert result.entries[0].fitness_delta_per_use == [1.0]
-
-    def test_tasks_sorted_alphabetically(self) -> None:
-        result = build_usage_payload({"zzz": [1.0], "aaa": [2.0]})
-        assert isinstance(result, UsagePayload)
-        summaries = [e.task_description_summary for e in result.entries]
-        assert summaries == ["aaa", "zzz"]
-
-
-class TestMergeUsagePayloads:
-    def test_merge_combines_deltas(self) -> None:
-        existing = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task",
-                        "fitness_delta_per_use": [2.0],
-                        "used_count": 1,
-                        "median_delta_fitness": 2.0,
-                    }
-                ],
-                "total_used": 1,
-                "median_delta_fitness": 2.0,
-            }
-        }
-        incoming = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task",
-                        "fitness_delta_per_use": [4.0],
-                        "used_count": 1,
-                        "median_delta_fitness": 4.0,
-                    }
-                ],
-                "total_used": 1,
-                "median_delta_fitness": 4.0,
-            }
-        }
-        merged = merge_usage_payloads(existing, incoming)
-        assert isinstance(merged, UsagePayload)
-        deltas = merged.entries[0].fitness_delta_per_use
-        assert sorted(deltas) == [2.0, 4.0]

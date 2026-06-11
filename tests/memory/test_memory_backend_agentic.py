@@ -282,7 +282,7 @@ class TestFullDedupPipeline:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         result_id = mem.save_card(
             {
@@ -328,7 +328,7 @@ class TestFullDedupPipeline:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         result_id = mem.save_card(
             {
@@ -363,7 +363,7 @@ class TestFullDedupPipeline:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
 
         result_id = mem.save_card(
             {

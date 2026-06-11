@@ -10,7 +10,7 @@ from gigaevo.memory.shared_memory.card_conversion import MemoryNoteProtocol
 
 
 class LLMServiceProtocol(Protocol):
-    """Structural type for LangChainLLMService."""
+    """Structural type for the memory LLM (``MultiModelRouter`` satisfies it)."""
 
     def generate(
         self,
@@ -47,7 +47,10 @@ class ResearchAgentProtocol(Protocol):
     """Structural type for GAM ResearchAgent."""
 
     def research(
-        self, request: str, memory_state: str | None = None
+        self,
+        request: str,
+        memory_state: str | None = None,
+        planning_request: str | None = None,
     ) -> ResearchOutput: ...
 
 

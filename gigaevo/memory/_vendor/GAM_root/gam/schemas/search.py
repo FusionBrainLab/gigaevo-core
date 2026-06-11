@@ -9,29 +9,50 @@ class SearchPlan(BaseModel):
     """Search planning structure"""
 
     tools: list[str] = Field(
-        default_factory=list, description="Tools to use for searching"
+        default_factory=list,
+        description="Retrieval tools to run for this plan, chosen from the available tool names",
     )
     keyword_collection: list[str] = Field(
-        default_factory=list, description="Keywords to search for"
+        default_factory=list,
+        description=(
+            "Short high-signal exact-match keywords, max 5. "
+            "Empty when the keyword tool is not selected"
+        ),
     )
     vector_queries: list[str] = Field(
         default_factory=list,
-        description="Semantic search queries across all vector fields",
+        description=(
+            "Semantic search queries across all vector fields combined, max 2. "
+            "Empty when the vector tool is not selected"
+        ),
     )
     vector_description_queries: list[str] = Field(
         default_factory=list,
-        description="Semantic queries for description field vector search",
+        description=(
+            "Semantic queries over only the description field, max 2. "
+            "Empty when the vector_description tool is not selected"
+        ),
     )
     vector_task_description_queries: list[str] = Field(
         default_factory=list,
-        description="Semantic queries for task_description field vector search",
+        description=(
+            "Semantic queries over only the task_description field, max 2. "
+            "Empty when the vector_task_description tool is not selected"
+        ),
     )
     vector_explanation_summary_queries: list[str] = Field(
         default_factory=list,
-        description="Semantic queries for explanation.summary field vector search",
+        description=(
+            "Semantic queries over only the explanation.summary field, max 2. "
+            "Empty when the vector_explanation_summary tool is not selected"
+        ),
     )
     page_index: list[int] = Field(
-        default_factory=list, description="Specific page indices to retrieve"
+        default_factory=list,
+        description=(
+            "Known integer page indices to re-read in full, max 5. "
+            "Never guessed; empty when no concrete indices are known"
+        ),
     )
 
     @classmethod

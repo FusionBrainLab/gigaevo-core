@@ -14,16 +14,17 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import csv
 import math
 from pathlib import Path
 
 from loguru import logger
-import pandas as pd
 
+from gigaevo.memory.core.admitter import TieredAdmitter
+from gigaevo.memory.core.idea_stats import IdeaStats
+from gigaevo.memory.core.protocols import MemoryAdmitter
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.aggregation import (
-    _EMPTY_EVENTS_COLUMNS,
     aggregate_idea_rows,
-    filter_best_ideas,
 )
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.events import (
     compute_descendant_metrics,
@@ -58,6 +59,18 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.types import (
 )
 
 
+def _negate_fitness(programs: dict[str, dict]) -> dict[str, dict]:
+    flipped: dict[str, dict] = {}
+    for pid, p in programs.items():
+        q = dict(p)
+        try:
+            q["fitness"] = -float(p["fitness"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        flipped[pid] = q
+    return flipped
+
+
 def analyse(
     banks_path: str,
     programs_path: str,
@@ -66,10 +79,19 @@ def analyse(
     desc_k: int = 10,
     sibling_mode: str = "best_parent",
     sibling_gen_window: int = 0,
+    admitter: MemoryAdmitter | None = None,
+    higher_is_better: bool = True,
 ) -> AnalysisResult:
-    """Run origin-based evolutionary statistics analysis."""
+    """Run origin-based evolutionary statistics analysis.
+
+    When ``higher_is_better`` is False, fitness values are negated on ingestion
+    so every downstream gain / elite / percentile statistic reads as
+    "positive = improvement" regardless of the metric's direction.
+    """
     idea_to_origin_programs, idea_desc = load_ideas(banks_path)
     programs = load_programs(programs_path)
+    if not higher_is_better:
+        programs = _negate_fitness(programs)
     parents_of = build_parents(programs)
     children_of = build_children(parents_of)
     roots_memo = compute_roots_memoized(parents_of)
@@ -289,6 +311,7 @@ def analyse(
                 "idea_id": ev.idea_id,
                 "quartile": ev.quartile,
                 "child_id": ev.child_id,
+                "best_parent_fit": ev.best_parent_fit,
                 "IntroGain_best": gain_best,
                 "IntroGain_mean": gain_mean,
                 "IntroGain_best_rel": gain_best_rel,
@@ -314,12 +337,8 @@ def analyse(
             }
         )
 
-    df_events = pd.DataFrame(event_rows)
-    if df_events.empty and "idea_id" not in df_events.columns:
-        df_events = pd.DataFrame(columns=_EMPTY_EVENTS_COLUMNS)
-
-    df_out = aggregate_idea_rows(
-        df_events=df_events,
+    summary = aggregate_idea_rows(
+        events=event_rows,
         idea_to_origin_programs=idea_to_origin_programs,
         idea_desc=idea_desc,
         programs=programs,
@@ -331,8 +350,24 @@ def analyse(
         gens_by_quartile=gens_by_quartile,
         total_distinct_gens=total_distinct_gens,
     )
-    df_best = filter_best_ideas(df_out)
-    return AnalysisResult(summary_df=df_out, best_ideas_df=df_best)
+    gate = admitter if admitter is not None else TieredAdmitter()
+    best_ideas = gate.select(summary)
+    return AnalysisResult(summary=summary, best_ideas=best_ideas)
+
+
+def _write_csv(path: Path, rows: list[IdeaStats]) -> None:
+    dicts = [r.as_row() for r in rows]
+    fieldnames = list(dicts[0].keys()) if dicts else list(IdeaStats.model_fields)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for d in dicts:
+            writer.writerow(
+                {
+                    k: ("" if isinstance(v, float) and math.isnan(v) else v)
+                    for k, v in d.items()
+                }
+            )
 
 
 def main() -> None:
@@ -374,11 +409,11 @@ def main() -> None:
     )
 
     out_csv = out_dir / args.output_name
-    result.summary_df.to_csv(out_csv, index=False)
+    _write_csv(out_csv, result.summary)
     best_csv = out_dir / (Path(args.output_name).stem + "_best_ideas.csv")
-    result.best_ideas_df.to_csv(best_csv, index=False)
-    logger.info("Wrote: {}", out_csv)
-    logger.info("Wrote (best ideas): {}", best_csv)
+    _write_csv(best_csv, result.best_ideas)
+    logger.info("[Memory][OriginAnalysis] Wrote: {}", out_csv)
+    logger.info("[Memory][OriginAnalysis] Wrote (best ideas): {}", best_csv)
 
 
 if __name__ == "__main__":

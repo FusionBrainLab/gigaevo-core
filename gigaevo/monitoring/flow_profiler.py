@@ -35,11 +35,13 @@ MUT_RE = re.compile(
     r"\[mutation\] Task (\d+): \[(.*?)\] [-→]+>?\s*([0-9a-f]{8})"
     r"(?:\s*\(model=([^,)]+?),\s*archetype=([^,)]+?)(?:,\s*prompt_id=[^)]+)?\))?"
 )
-ADD_RE = re.compile(r"MultiIsland: adding program ([0-9a-f]{8})")
+ADD_RE = re.compile(r"(?:\[MultiIsland\]|MultiIsland:) adding program ([0-9a-f]{8})")
 ADD_OK_RE = re.compile(r"successfully added to island")
 REJECT_RE = re.compile(r"\[ingestor\] ([0-9a-f]{8}) REJECTED")
 ENGINE_REJECT_RE = re.compile(r"Program ([0-9a-f]{8}) REJECTED")
-REFRESH_RE = re.compile(r"ParentRefresher: flipped (\d+) parents DONE->QUEUED")
+REFRESH_RE = re.compile(
+    r"(?:\[ParentRefresher\]|ParentRefresher:) flipped (\d+) parents DONE->QUEUED"
+)
 STAGE_EXEC_RE = re.compile(r"\[STAGE_EXEC\] (\{.*\})$")
 LLM_CALL_RE = re.compile(r"\[LLM_CALL\] (\{.*\})$")
 BACKPRESSURE_RE = re.compile(r"\[BACKPRESSURE_SAMPLE\] (\{.*\})$")

@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.memory.provider import MemoryProvider
@@ -57,16 +58,27 @@ class MemoryContextStage(Stage):
             metrics_description=self._metrics_description,
         )
 
+        if selection.slate:
+            program.set_metadata(
+                MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, selection.slate
+            )
+
         if selection.cards:
             program.set_metadata(
                 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, selection.card_ids
             )
             logger.info(
-                "[MemoryContextStage] Selected {} card(s) for {} (ids={})",
+                "[Memory][ContextStage] Selected {} card(s) for {} (ids={})",
                 len(selection.cards),
                 program.id[:8],
                 selection.card_ids,
             )
-            return StringContainer(data="\n\n".join(selection.cards))
+            numbered = [
+                f"[card {i}] id={cid}\n{text}"
+                for i, (text, cid) in enumerate(
+                    zip(selection.cards, selection.card_ids), start=1
+                )
+            ]
+            return StringContainer(data="\n\n".join(numbered))
 
         return StringContainer(data="")

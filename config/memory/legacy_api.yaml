@@ -1,0 +1,25 @@
+# DEPRECATED: memory selection over the legacy HTTP API backend.
+# Kept only for reproducing historical experiments; prefer memory=local.
+defaults:
+  - retriever: gam
+  - selector: llm
+  - auction: thompson
+  - budget: top_theta
+  - reputation: beta_binomial
+  - admitter: sign_based
+  - dedup: llm
+  - evictor: harm
+  - _self_
+  - override /memory/backend@_global_.memory.backend: legacy_api
+  - override /llms@_global_.memory_llm: gemini_flash_openrouter
+
+provider:
+  _target_: gigaevo.memory.provider.SelectorMemoryProvider
+  max_cards: 1
+  checkpoint_dir: ${checkpoint_dir}
+  backend: ${ref:memory.backend}
+  retriever: ${ref:memory.retriever}
+  selector: ${ref:memory.selector}
+  auctioneer: ${ref:memory.auction}
+  budgeter: ${ref:memory.budget}
+  reputation: ${ref:memory.reputation}

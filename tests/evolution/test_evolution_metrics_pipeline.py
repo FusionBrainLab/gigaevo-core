@@ -1,25 +1,22 @@
 """Integration test: evolution loop with a full metrics pipeline.
 
 Combines the HalvingMutationOperator from test_resume_e2e.py with a
-FakeDagRunner that runs EnsureMetrics + NormalizeMetrics, verifying that:
+FakeDagRunner that runs EnsureMetrics, verifying that:
 
 1. Fitness values from the metrics pipeline are correctly read by the archive.
-2. Normalized metrics (score_norm) accumulate on programs in the archive.
-3. The evolution makes progress (lower values → higher fitness over generations).
-4. NormalizeMetrics operates correctly when metrics come from the pipeline
-   (not hardcoded), i.e. the full EnsureMetrics → NormalizeMetrics chain works.
+2. The evolution makes progress (lower values → higher fitness over generations).
 
 Setup
 -----
 - Mutation:    FloatHalvingOperator — return N → return N/2  (same as resume_e2e)
-- Validation:  FakeMetricsDagRunner — runs EnsureMetrics then NormalizeMetrics
+- Validation:  FakeMetricsDagRunner — runs EnsureMetrics
                fitness = (MAX - value) / MAX  so fitness ∈ (0, 1], higher = better
                x = halving depth (0, 1, 2, ...)  — each depth gets its own bin
 - BehaviorSpace: x ∈ [0, 5), 5 bins, no eviction
 - Fitness metric: "fitness" ∈ [0, 1]
 
 Expected: after 5 generations the archive has 5 programs (values 1024, 512, 256, 128, 64),
-each with computed fitness and score_norm metrics.
+each with computed fitness metrics.
 """
 
 from __future__ import annotations
@@ -52,7 +49,7 @@ from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import FloatDictContainer
-from gigaevo.programs.stages.metrics import EnsureMetricsStage, NormalizeMetricsStage
+from gigaevo.programs.stages.metrics import EnsureMetricsStage
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -139,17 +136,16 @@ class FloatHalvingOperator(MutationOperator):
 
 
 # ---------------------------------------------------------------------------
-# Fake DAG runner that runs EnsureMetrics + NormalizeMetrics
+# Fake DAG runner that runs EnsureMetrics
 # ---------------------------------------------------------------------------
 
 
 class FakeMetricsDagRunner:
-    """Evaluates QUEUED programs by running the full metrics pipeline.
+    """Evaluates QUEUED programs by running the metrics pipeline.
 
     This simulates a real DAG runner that:
     1. Computes raw metrics (like a validate.py call)
     2. Runs EnsureMetricsStage to validate/clamp them
-    3. Runs NormalizeMetricsStage to normalize to [0,1]
     """
 
     def __init__(
@@ -170,12 +166,6 @@ class FakeMetricsDagRunner:
             timeout=5.0,
         )
         self._ensure_stage.__class__.cache_handler = NO_CACHE
-
-        self._normalize_stage = NormalizeMetricsStage(
-            metrics_context=metrics_ctx,
-            timeout=5.0,
-        )
-        self._normalize_stage.__class__.cache_handler = NO_CACHE
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="fake-metrics-dag-runner")
@@ -205,10 +195,6 @@ class FakeMetricsDagRunner:
             {"candidate": FloatDictContainer(data=raw_metrics)}
         )
         await self._ensure_stage.compute(prog)
-
-        # Step 3: run NormalizeMetrics (reads from prog.metrics populated by EnsureMetrics)
-        # NormalizeMetrics has VoidInput — no inputs to attach
-        await self._normalize_stage.compute(prog)
 
         # RUNNING → DONE
         await self._sm.set_program_state(prog, ProgramState.DONE)
@@ -326,8 +312,8 @@ async def _get_archive_programs(server: fakeredis.FakeServer) -> list[Program]:
 
 
 class TestEvolutionWithMetricsPipeline:
-    async def test_archive_has_normalized_metrics_after_evolution(self) -> None:
-        """After 5 generations, all archive programs have fitness_norm from the metrics pipeline."""
+    async def test_archive_has_pipeline_metrics_after_evolution(self) -> None:
+        """After 5 generations, all archive programs have fitness from the metrics pipeline."""
         server = fakeredis.FakeServer()
         storage = _make_fakeredis_storage(server)
         metrics_ctx = _make_metrics_ctx()
@@ -346,7 +332,7 @@ class TestEvolutionWithMetricsPipeline:
         # parent and two mutants can collide on the same cell. Archive size is
         # therefore bounded by [seed-cell, seed+all-distinct-halvings] = [2, 6]
         # under max_in_flight=1, not a fixed 6. The point of this test is the
-        # normalization-pipeline contract below, not the exact cell count.
+        # metrics-pipeline contract below, not the exact cell count.
         assert 2 <= len(programs) <= 6, (
             f"archive size {len(programs)} outside expected [2, 6] window"
         )
@@ -356,15 +342,9 @@ class TestEvolutionWithMetricsPipeline:
             assert "fitness" in prog.metrics, (
                 f"Program {prog.id[:8]} missing 'fitness' metric"
             )
-            assert "fitness_norm" in prog.metrics, (
-                f"Program {prog.id[:8]} missing 'fitness_norm' from NormalizeMetrics"
-            )
-            assert "x_norm" in prog.metrics, (
-                f"Program {prog.id[:8]} missing 'x_norm' from NormalizeMetrics"
-            )
-            # fitness ∈ [0, 1] → fitness_norm must also be in [0, 1]
-            assert 0.0 <= prog.metrics["fitness_norm"] <= 1.0, (
-                f"fitness_norm={prog.metrics['fitness_norm']} out of [0,1]"
+            assert "x" in prog.metrics, f"Program {prog.id[:8]} missing 'x' metric"
+            assert 0.0 <= prog.metrics["fitness"] <= 1.0, (
+                f"fitness={prog.metrics['fitness']} out of [0,1]"
             )
 
     async def test_fitness_increases_with_halving_depth(self) -> None:
@@ -420,21 +400,3 @@ class TestEvolutionWithMetricsPipeline:
             f"Unexpected archive values (not on halving trajectory): "
             f"{sorted(values - expected)}"
         )
-
-    async def test_normalized_score_aggregate_present(self) -> None:
-        """The 'normalized_score' aggregate metric is present on all archive programs."""
-        server = fakeredis.FakeServer()
-        storage = _make_fakeredis_storage(server)
-        metrics_ctx = _make_metrics_ctx()
-
-        seed = Program(code=SEED_CODE, state=ProgramState.QUEUED)
-        await storage.add(seed)
-
-        await _run_with_metrics(storage, metrics_ctx, max_generations=3)
-        programs = await _get_archive_programs(server)
-
-        for prog in programs:
-            assert "normalized_score" in prog.metrics, (
-                f"Program {prog.id[:8]} missing 'normalized_score' aggregate metric"
-            )
-            assert 0.0 <= prog.metrics["normalized_score"] <= 1.0

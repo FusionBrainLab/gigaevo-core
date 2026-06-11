@@ -144,6 +144,10 @@ class EvolutionaryStatistics(StageIO):
         description="Average fitness per metric (valid only)"
     )
     valid_rate: float = Field(description="Valid rate")
+    significant_change: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-metric meaningful-change quantum from MetricSpec.significant_change",
+    )
     total_program_count: int = Field(description="Total number of programs")
     avg_num_children: float = Field(
         description="Average number of children per program"
@@ -698,6 +702,11 @@ class EvolutionaryStatisticsCollector(RelatedCollectorBase):
             worst_fitness=worst,
             average_fitness=avg,
             valid_rate=valid_rate,
+            significant_change={
+                k: spec.significant_change
+                for k, spec in self.metrics_context.specs.items()
+                if spec.significant_change
+            },
             total_program_count=total_count,
             avg_num_children=global_avg_children,
             max_num_children=global_max_children,

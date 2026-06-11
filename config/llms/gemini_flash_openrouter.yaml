@@ -1,0 +1,21 @@
+# Memory-subsystem LLM router (OpenRouter Gemini Flash). Composed once at
+# top-level `memory_llm`; all consumers share the instance via `${ref:memory_llm}`
+# (memory.backend.llm also accepts null).
+_target_: gigaevo.llm.models.MultiModelRouter
+_convert_: all
+name: memory
+models:
+  - _target_: langchain_openai.ChatOpenAI
+    model: google/gemini-3-flash-preview
+    api_key: ${oc.env:OPENROUTER_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+    temperature: 0.0
+    max_tokens: null
+    extra_body:
+      reasoning:
+        effort: minimal
+probabilities:
+  - 1.0
+max_concurrent: 100
+writer: ${ref:writer}
+structured_output_method: null

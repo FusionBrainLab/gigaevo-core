@@ -6,10 +6,13 @@ import json
 import math
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
+from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import AnalysisResult, analyse
+from gigaevo.memory.ideas_tracker.utils.origin_analysis.aggregation import (
+    aggregate_idea_rows,
+)
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.events import (
     compute_descendant_metrics,
     compute_intro_events,
@@ -418,8 +421,8 @@ class TestPipelineEndToEnd:
         result = analyse(str(banks_file), str(progs_file))
 
         assert isinstance(result, AnalysisResult)
-        assert isinstance(result.summary_df, pd.DataFrame)
-        assert isinstance(result.best_ideas_df, pd.DataFrame)
+        assert all(isinstance(s, IdeaStats) for s in result.summary)
+        assert all(isinstance(s, IdeaStats) for s in result.best_ideas)
 
     def test_summary_has_five_rows_per_idea(self, tmp_path):
         banks_file = tmp_path / "banks.json"
@@ -430,9 +433,9 @@ class TestPipelineEndToEnd:
         result = analyse(str(banks_file), str(progs_file))
 
         # 2 ideas × 5 quartile rows each = 10 rows
-        assert len(result.summary_df) == 10
+        assert len(result.summary) == 10
 
-    def test_summary_has_expected_columns(self, tmp_path):
+    def test_summary_rows_have_expected_keys(self, tmp_path):
         banks_file = tmp_path / "banks.json"
         progs_file = tmp_path / "programs.json"
         _write_json(banks_file, BANKS_FIXTURE)
@@ -440,11 +443,223 @@ class TestPipelineEndToEnd:
 
         result = analyse(str(banks_file), str(progs_file))
 
-        for col in [
+        row = result.summary[0].as_row()
+        for key in [
             "idea_id",
             "quartile",
             "intro_events",
             "IntroGain_best_median",
+            "IntroGain_best_adj_median",
             "description",
         ]:
-            assert col in result.summary_df.columns
+            assert key in row
+
+
+class TestHigherIsBetterDirection:
+    def test_lower_is_better_negates_gains_on_ingestion(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+
+        up = analyse(str(banks_file), str(progs_file))
+        down = analyse(str(banks_file), str(progs_file), higher_is_better=False)
+
+        def all_row(result, idea_id):
+            return next(
+                s
+                for s in result.summary
+                if s.idea_id == idea_id and s.quartile == "ALL"
+            )
+
+        # idea_b is introduced by p3 (fit 0.7) from parent p2 (fit 0.6):
+        # gain +0.1 when maximizing, -0.1 when minimizing (fitness negated
+        # on ingestion so "positive gain" always means improvement).
+        assert all_row(up, "idea_b").IntroGain_best_median == pytest.approx(0.1)
+        assert all_row(down, "idea_b").IntroGain_best_median == pytest.approx(-0.1)
+
+
+def _make_events(
+    rows: list[tuple[str, str, float, float]],
+) -> list[dict]:
+    """Build minimal event rows from (idea_id, quartile, IntroGain_best,
+    best_parent_fit) tuples.
+
+    All other event fields are absent — only the fields the posterior reads
+    matter; aggregation treats missing keys as NaN.
+    """
+    return [
+        {
+            "idea_id": idea_id,
+            "quartile": quartile,
+            "child_id": f"child_{i}",
+            "IntroGain_best": gain,
+            "best_parent_fit": best_parent_fit,
+        }
+        for i, (idea_id, quartile, gain, best_parent_fit) in enumerate(rows, start=1)
+    ]
+
+
+# Neutral counterfactual population: a spread of equally-fit (best_parent_fit=0)
+# mutations whose gains are centred on zero. Harm is judged relative to this
+# base-rate, so a card is only penalised when its children fall below it by more
+# than the population's robust noise scale.
+_BG = [
+    ("bg", "Q4", g, 0.0)
+    for g in (-0.04, -0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03, 0.04)
+]
+
+
+class TestPosteriorFields:
+    """Beta-Binomial downside posterior per (idea, quartile) row.
+
+    Harm is parent-fitness-local and noise-aware: a child counts as harmful only
+    when its gain falls below the typical gain of equally-fit parents' mutations
+    (``_BG``) by more than the robust noise band. A bare ``< 0`` test would
+    mislabel sub-noise jitter and plateau regression as harm.
+    """
+
+    def _aggregate(self, rows, idea_ids):
+        return aggregate_idea_rows(
+            events=_make_events(rows),
+            idea_to_origin_programs={i: set() for i in idea_ids},
+            idea_desc={i: i for i in idea_ids},
+            programs={},
+            elite_pids=set(),
+            roots_memo={},
+            b1=0.5,
+            b2=1.5,
+            b3=2.5,
+            gens_by_quartile={"Q1": set(), "Q2": set(), "Q3": set(), "Q4": set()},
+            total_distinct_gens=1,
+        )
+
+    @staticmethod
+    def _all_row(stats: list[IdeaStats], idea_id: str) -> dict:
+        return next(
+            s for s in stats if s.idea_id == idea_id and s.quartile == "ALL"
+        ).as_row()
+
+    def test_within_noise_regressions_are_not_harm(self):
+        # Small negative gains, all within the population's noise band -> no harm,
+        # so the card stays confident. A bare ``< 0`` test would penalise four of
+        # the five and break confidence.
+        card = [
+            ("noisy", "Q4", g, 0.0) for g in (-0.005, -0.003, -0.004, 0.002, -0.001)
+        ]
+        row = self._all_row(self._aggregate(_BG + card, ["bg", "noisy"]), "noisy")
+        assert row["intro_events"] == 5
+        assert row["posterior_a"] == 6.0
+        assert row["posterior_b"] == 1.0
+        assert row["DownsideRate_best"] == pytest.approx(0.0)
+        assert bool(row["efficacy_confident"]) is True
+
+    def test_consistent_regression_below_baseline_is_not_confident(self):
+        # Children consistently far below the local base-rate (beyond the noise
+        # band) -> genuine harm survives: no false negative.
+        card = [("bad", "Q4", -0.2, 0.0) for _ in range(4)]
+        row = self._all_row(self._aggregate(_BG + card, ["bg", "bad"]), "bad")
+        assert row["intro_events"] == 4
+        assert row["posterior_a"] == 1.0
+        assert row["posterior_b"] == 5.0
+        assert row["p_help_mean"] == pytest.approx(1 / 6)
+        assert row["DownsideRate_best"] == pytest.approx(1.0)
+        assert bool(row["efficacy_confident"]) is False
+
+    def test_cold_card_with_no_events_is_not_confident(self):
+        out = self._aggregate(_BG + [("good", "Q4", 0.05, 0.0)], ["bg", "good", "cold"])
+        row = self._all_row(out, "cold")
+        assert row["intro_events"] == 0
+        assert row["posterior_a"] == 1.0
+        assert row["posterior_b"] == 1.0
+        assert math.isnan(row["p_help_lo20"])
+        assert bool(row["efficacy_confident"]) is False
+
+
+# Frontier-regression cohort: every event jumps weak parents (+0.07-ish), so the
+# typical child gains ~+0.07 regardless of which idea it carries.
+_FRONTIER_BG = [
+    ("fbg", "Q4", g, 0.59)
+    for g in (0.062, 0.064, 0.066, 0.068, 0.070, 0.072, 0.074, 0.076, 0.078)
+]
+
+
+class TestAdjustedMedian:
+    """``IntroGain_best_adj_median``: the displayed median must be measured against
+    the parent-fitness-local counterfactual the posterior already uses, not raw
+    child-minus-parent. A card whose children merely regress weak parents to the
+    population frontier shows a large raw median but contributes nothing beyond
+    the cohort baseline."""
+
+    _aggregate = TestPosteriorFields._aggregate
+    _all_row = staticmethod(TestPosteriorFields._all_row)
+
+    def test_frontier_regression_card_has_zero_adjusted_median(self):
+        card = [("rtf", "Q4", 0.070, 0.59) for _ in range(5)]
+        row = self._all_row(self._aggregate(_FRONTIER_BG + card, ["fbg", "rtf"]), "rtf")
+        assert row["IntroGain_best_median"] == pytest.approx(0.070)
+        assert row["IntroGain_best_adj_median"] == pytest.approx(0.0, abs=1e-9)
+
+    def test_genuinely_better_card_keeps_positive_adjusted_median(self):
+        card = [("gen", "Q4", 0.100, 0.59) for _ in range(3)]
+        row = self._all_row(self._aggregate(_FRONTIER_BG + card, ["fbg", "gen"]), "gen")
+        assert row["IntroGain_best_adj_median"] == pytest.approx(0.030, abs=0.005)
+
+    def test_cold_card_adjusted_median_is_nan(self):
+        out = self._aggregate(_FRONTIER_BG, ["fbg", "cold"])
+        row = self._all_row(out, "cold")
+        assert math.isnan(row["IntroGain_best_adj_median"])
+
+
+class _MarkerAdmitter:
+    def __init__(self) -> None:
+        self.seen: list[IdeaStats] | None = None
+
+    def select(self, stats: list[IdeaStats]) -> list[IdeaStats]:
+        self.seen = stats
+        return stats[:1]
+
+
+class TestAdmitterInjection:
+    def test_analyse_uses_injected_admitter(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+
+        marker = _MarkerAdmitter()
+        result = analyse(str(banks_file), str(progs_file), admitter=marker)
+
+        assert marker.seen is not None
+        assert result.best_ideas == marker.seen[:1]
+
+    def test_default_admitter_matches_tiered(self, tmp_path):
+        from gigaevo.memory.core.admitter import TieredAdmitter
+
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        _write_json(progs_file, PROGRAMS_FIXTURE)
+
+        default = analyse(str(banks_file), str(progs_file)).best_ideas
+        tiered = analyse(
+            str(banks_file), str(progs_file), admitter=TieredAdmitter()
+        ).best_ideas
+        # NaN-bearing models from separate runs never compare equal; pin identity
+        # by (idea_id, quartile) instead.
+        assert [(s.idea_id, s.quartile) for s in default] == [
+            (s.idea_id, s.quartile) for s in tiered
+        ]
+
+
+class TestWriteCsv:
+    def test_empty_rows_still_write_canonical_header(self, tmp_path):
+        from gigaevo.memory.ideas_tracker.utils.origin_analysis.pipeline import (
+            _write_csv,
+        )
+
+        path = tmp_path / "out.csv"
+        _write_csv(path, [])
+
+        header = path.read_text(encoding="utf-8").splitlines()[0]
+        assert header.split(",") == list(IdeaStats.model_fields)

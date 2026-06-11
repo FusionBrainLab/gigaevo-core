@@ -1,5 +1,5 @@
 """Tests for complexity stages: compute_numerical_complexity, compute_complexity_score,
-GetCodeLengthStage, and ComputeComplexityStage."""
+and ComputeComplexityStage."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from gigaevo.programs.stages.complexity import (
     _COMPLEXITY_CAPS,
     _COMPLEXITY_WEIGHTS,
     ComputeComplexityStage,
-    GetCodeLengthStage,
     compute_complexity_score,
     compute_numerical_complexity,
 )
@@ -178,37 +177,6 @@ class TestComputeComplexityScore:
         """None feature values treated as 0 via `or 0` pattern."""
         features = {"loop_count": None}
         assert compute_complexity_score(features) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# TestGetCodeLengthStage
-# ---------------------------------------------------------------------------
-
-
-class TestGetCodeLengthStage:
-    async def test_code_length_matches(self):
-        """Output contains code_length equal to len(program.code)."""
-        code = "def solve(): return 42"
-        stage = GetCodeLengthStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({})
-        prog = _prog(code)
-        result = await stage.execute(prog)
-
-        assert result.status == StageState.COMPLETED
-        assert result.output.data["code_length"] == float(len(code))
-
-    async def test_short_code(self):
-        """Short code → code_length matches len(code)."""
-        code = "x"
-        stage = GetCodeLengthStage(timeout=5.0)
-        stage.__class__.cache_handler = NO_CACHE
-        stage.attach_inputs({})
-        prog = _prog(code)
-        result = await stage.execute(prog)
-
-        assert result.status == StageState.COMPLETED
-        assert result.output.data["code_length"] == float(len(code))
 
 
 # ---------------------------------------------------------------------------

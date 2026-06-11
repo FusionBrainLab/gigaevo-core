@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
+from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
@@ -26,38 +26,6 @@ from tests.fakes.agentic_memory import (
 # ===========================================================================
 # Helpers
 # ===========================================================================
-
-
-def _make_pipeline_cfg(
-    tmp_path: Path, banks_path: Path, best_ideas_path: Path
-) -> MagicMock:
-    """Build a PipelineConfig mock pointing all I/O to tmp_path."""
-    cfg = MagicMock()
-    cfg.banks_path = banks_path
-    cfg.best_ideas_path = best_ideas_path
-    cfg.programs_path = tmp_path / "programs.json"
-    cfg.usage_updates_path = None
-    cfg.use_api = False
-    cfg.memory_dir = tmp_path / "pipeline_mem"
-    cfg.search_limit = 5
-    cfg.rebuild_interval = 10
-    cfg.enable_llm_synthesis = False
-    cfg.should_evolve = False
-    cfg.fill_missing_fields_with_llm = False
-    cfg.enable_bm25 = False
-    cfg.allowed_gam_tools = []
-    cfg.gam_top_k_by_tool = {}
-    cfg.gam_pipeline_mode = "default"
-    cfg.card_update_dedup_config = {}
-    cfg.best_programs_percent = 100.0  # include every idea
-    cfg.sync_batch_size = 100
-    cfg.sync_on_init = True
-    cfg.channel = "latest"
-    cfg.author = None
-    cfg.namespace = "default"
-    cfg.enable_usage_tracking = False
-    cfg.settings_path = tmp_path / "settings.yaml"
-    return cfg
 
 
 # ===========================================================================
@@ -313,13 +281,12 @@ class TestFullPipelineE2E:
             best_ideas_path, ["pipeline-idea-001", "pipeline-idea-002"]
         )
 
-        cfg = _make_pipeline_cfg(tmp_path, banks_path, best_ideas_path)
-
-        with patch("gigaevo.memory.write_pipeline.load_config", return_value=cfg):
-            stats = pipeline_main(
-                banks_path=banks_path,
-                best_ideas_path=best_ideas_path,
-            )
+        stats = pipeline_main(
+            banks_path=banks_path,
+            best_ideas_path=best_ideas_path,
+            backend=LocalMemoryBackendFactory(),
+            checkpoint_dir=tmp_path / "pipeline_mem",
+        )
 
         # Write pipeline should return stats
         assert stats is not None, "write_pipeline.main() must return stats dict"
@@ -369,12 +336,12 @@ class TestFullPipelineE2E:
         # Only reference idea-001 in best_ideas
         self._write_best_ideas(best_ideas_path, ["filtered-001"])
 
-        cfg = _make_pipeline_cfg(tmp_path, banks_path, best_ideas_path)
-        # Set best_programs_percent to 0 to avoid any program card logic
-        cfg.best_programs_percent = 5.0
-
-        with patch("gigaevo.memory.write_pipeline.load_config", return_value=cfg):
-            pipeline_main(banks_path=banks_path, best_ideas_path=best_ideas_path)
+        pipeline_main(
+            banks_path=banks_path,
+            best_ideas_path=best_ideas_path,
+            backend=LocalMemoryBackendFactory(),
+            checkpoint_dir=tmp_path / "pipeline_mem",
+        )
 
         mem = AmemGamMemory(
             config=MemoryConfig(

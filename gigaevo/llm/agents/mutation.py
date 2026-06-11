@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
-    MUTATION_MEMORY_METADATA_KEY,
     ArchetypeName,
 )
 from gigaevo.llm.agents.base import LangGraphAgent
@@ -382,9 +381,6 @@ class MutationAgent(LangGraphAgent):
     def build_user_prompt(self, parents: list[Program]) -> str:
         """Build the mutation user prompt for a set of parents."""
         parent_blocks = self._build_parent_blocks(parents)
-        memory_block = self._build_memory_block(parents)
-        if memory_block:
-            parent_blocks = f"{parent_blocks}\n\n{memory_block}"
         prompt_fields = MutationPromptFields(
             count=len(parents), parent_blocks=parent_blocks
         )
@@ -406,16 +402,6 @@ class MutationAgent(LangGraphAgent):
             blocks.append(block)
 
         return "\n\n".join(blocks)
-
-    def _build_memory_block(self, parents: list[Program]) -> str:
-        """Build a single memory block from any parent metadata."""
-        for parent in parents:
-            memory_text = str(
-                parent.metadata.get(MUTATION_MEMORY_METADATA_KEY, "")
-            ).strip()
-            if memory_text:
-                return f"## Memory Instructions\n{memory_text}"
-        return ""
 
     def parse_response(self, state: MutationState) -> MutationState:
         """Parse LLM structured response to extract code and metadata.
@@ -478,6 +464,17 @@ class MutationAgent(LangGraphAgent):
             # Convert structured output to dict for storage
             structured_dict = structured_output.model_dump()
 
+            citation_integrity = self._citation_integrity(
+                structured_output.insights_used, state.get("messages", [])
+            )
+            if citation_integrity["grounded"] < citation_integrity["cited"]:
+                logger.info(
+                    "[MutationAgent] Citation integrity: {}/{} cited insights "
+                    "found verbatim in the prompt",
+                    citation_integrity["grounded"],
+                    citation_integrity["cited"],
+                )
+
             state["parsed_output"] = {
                 "code": final_code,
                 "structured_output": structured_dict,
@@ -485,6 +482,7 @@ class MutationAgent(LangGraphAgent):
                 "justification": structured_output.justification,
                 "insights_used": structured_output.insights_used,
                 "changes": structured_output.changes,
+                "citation_integrity": citation_integrity,
                 "model_used": model_used,
             }
 
@@ -506,6 +504,24 @@ class MutationAgent(LangGraphAgent):
             }
 
         return state
+
+    @staticmethod
+    def _citation_integrity(
+        insights_used: list[str], messages: list[BaseMessage]
+    ) -> dict[str, int]:
+        """Count cited insights that appear verbatim in the rendered prompt.
+
+        Whitespace-normalized substring match; purely observational (the
+        counts land in child metadata, nothing is gated on them).
+        """
+
+        def _norm(s: str) -> str:
+            return " ".join(s.split())
+
+        rendered = _norm(" ".join(str(m.content) for m in messages))
+        cited = [_norm(s) for s in insights_used if s.strip()]
+        grounded = sum(1 for s in cited if s in rendered)
+        return {"cited": len(cited), "grounded": grounded}
 
     @staticmethod
     def _fix_json_escaped_code(code: str) -> str:

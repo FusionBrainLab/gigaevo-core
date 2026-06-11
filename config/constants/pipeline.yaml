@@ -18,7 +18,7 @@ optimization_time_budget: null
 enable_optuna_stage: false
 dag_concurrency: 16
 max_code_length: 30000
-max_insights: 8
+max_insights: 5
 # ArchivePotentialGateStage: skip InsightsStage (and downstream) for
 # programs that would be dominated in every island. ON by default
 # (lazy insights). For pipelines without a MAP-Elites archive the gate

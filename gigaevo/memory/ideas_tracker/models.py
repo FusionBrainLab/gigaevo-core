@@ -119,39 +119,6 @@ class IdeaExplanation(BaseModel):
     summary: str = ""
 
 
-class UsageEntry(BaseModel):
-    """Single per-task entry in a memory card's usage payload."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    task_description_summary: str
-    """Human-readable task summary this entry belongs to."""
-
-    used_count: int
-    """Number of times this card was used in this task."""
-
-    fitness_delta_per_use: list[float] = Field(default_factory=list)
-    """Fitness deltas for each use: child_fitness - max(parent_fitness)."""
-
-    median_delta_fitness: float | None = None
-    """Median fitness delta across all uses for this task."""
-
-
-class UsagePayload(BaseModel):
-    """Aggregated usage statistics for a single memory card."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    entries: list[UsageEntry] = Field(default_factory=list)
-    """Per-task usage entries, sorted by task_description_summary."""
-
-    total_used: int = 0
-    """Total use count across all tasks."""
-
-    median_delta_fitness: float | None = None
-    """Median fitness delta across all uses and all tasks."""
-
-
 class Idea(BaseModel):
     """
     A tracked improvement idea extracted from evolutionary programs.
@@ -172,7 +139,6 @@ class Idea(BaseModel):
     programs: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     explanation: IdeaExplanation = Field(default_factory=IdeaExplanation)
-    usage: UsagePayload = Field(default_factory=UsagePayload)
     aliases: list[dict[str, Any]] = Field(default_factory=list)
 
 

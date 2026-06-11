@@ -18,9 +18,10 @@ Two related builders share most of their DAG structure:
 
 * :class:`IntraExtraMemoryPipelineBuilder` (used by
   ``pipeline=intra_extra_memory``) is a subclass that re-adds the extra
-  channel: re-introduces ``MemoryContextStage``, adds ``ConcatMemoryStage``,
-  and rewires so the joined intra-card + memory-cards block feeds
-  ``MutationContextStage.memory``. The matching YAML also wires
+  channel: re-introduces ``MemoryContextStage`` and feeds the selected
+  cross-population cards ONLY to ``MutationSuggestionStage`` — the suggester
+  is the single source of hints for the mutator; cards never reach the
+  mutation prompt verbatim. The matching YAML also wires
   ``LiveMemoryRefreshHook`` so the extra cards are refreshed mid-run.
 
 DAG-native layout (shared):
@@ -79,10 +80,7 @@ from gigaevo.programs.dag.automata import ExecutionOrderDependency
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.collector import DescendantProgramIds
-from gigaevo.programs.stages.lineage_memory import (
-    ConcatMemoryStage,
-    IntraMemoryStage,
-)
+from gigaevo.programs.stages.lineage_memory import IntraMemoryStage
 from gigaevo.programs.stages.memory_context import MemoryContextStage
 from gigaevo.programs.stages.mutation_suggestions import MutationSuggestionStage
 
@@ -109,7 +107,7 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
         max_parallel: int | None = None,
-        max_insights: int = 7,
+        max_insights: int = 5,
         max_code_length: int = MAX_CODE_LENGTH,
         archive_gate_enabled: bool = False,
         intra_max_children: int = DEFAULT_INTRA_MAX_CHILDREN,
@@ -188,20 +186,14 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
         # (prescriptive insights). DescendantProgramIds is INTENTIONALLY kept;
         # it now feeds IntraMemoryStage instead of LineagesToDescendants.
         # ``remove_stage`` drops the node, every edge touching it, and any
-        # deps referencing it.
-        #
-        # MemoryContextStage is also removed: the intra-only DAG has no
-        # consumer for cross-population cards (the suggester takes only the
-        # intra card here, and the mutator's ``memory`` slot is fed directly
-        # by the intra card). The IntraExtraMemoryPipelineBuilder subclass
-        # re-adds it when the extra channel is needed.
+        # deps referencing it. The IntraExtraMemoryPipelineBuilder subclass
+        # adds MemoryContextStage when the extra channel is needed.
         for legacy in (
             "AncestorProgramIds",
             "LineageStage",
             "LineagesToDescendants",
             "LineagesFromAncestors",
             "InsightsStage",
-            "MemoryContextStage",
         ):
             self.remove_stage(legacy)
 
@@ -304,10 +296,12 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     """Intra base + extra (cross-population) memory channel.
 
     Used by ``pipeline=intra_extra_memory``. Re-adds the
-    :class:`MemoryContextStage` that the intra-only base strips, plus
-    :class:`ConcatMemoryStage` to join intra card + memory cards, and reroutes
-    so the joined block (rather than the bare intra card) feeds
-    ``MutationContextStage.memory``. The matching YAML wires
+    :class:`MemoryContextStage` that the intra-only base strips and wires its
+    selected cards into ``MutationSuggestionStage.memory_cards`` ONLY — the
+    suggester digests them into structured ``ProgramInsights``; the mutator
+    never sees card text verbatim. ``MutationContextStage.memory`` keeps the
+    bare intra card via the base class's direct edge, identical to
+    ``pipeline=standard``. The matching YAML wires
     :class:`LiveMemoryRefreshHook` into the engine's ``post_step_hook`` so the
     extra cards are refreshed mid-run.
 
@@ -315,7 +309,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     the ``pipeline/`` config group):
 
         ideas_tracker=default   — IdeaTracker is what LiveMemoryRefreshHook calls.
-        memory=local            — MemorySelectorAgent reads the local card store
+        memory=local            — MemoryReadPipeline reads the local card store
                                   that IdeaTracker writes to between refreshes.
         OPENROUTER_API_KEY=...  — GAM extra-memory agents call OpenRouter directly.
 
@@ -331,7 +325,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         dag_timeout: float = 3600.0,
         stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
         max_parallel: int | None = None,
-        max_insights: int = 7,
+        max_insights: int = 5,
         max_code_length: int = MAX_CODE_LENGTH,
         archive_gate_enabled: bool = False,
         intra_max_children: int = DEFAULT_INTRA_MAX_CHILDREN,
@@ -372,31 +366,11 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
             ),
         )
 
-        self.add_stage(
-            "ConcatMemoryStage",
-            lambda: ConcatMemoryStage(timeout=stage_timeout),
-        )
-
-        # Replace the intra-only base's direct IntraMemoryStage → MutationContextStage.memory
-        # edge with the joined intra+memory_cards block via ConcatMemoryStage.
-        self.remove_data_flow_edge("IntraMemoryStage", "MutationContextStage")
         self.add_data_flow_edge(
             "MemoryContextStage", "MutationSuggestionStage", "memory_cards"
         )
-        self.add_data_flow_edge("IntraMemoryStage", "ConcatMemoryStage", "intra")
-        self.add_data_flow_edge("MemoryContextStage", "ConcatMemoryStage", "cards")
-        self.add_data_flow_edge("ConcatMemoryStage", "MutationContextStage", "memory")
 
-        # Exec deps for the re-introduced stages.
         self.add_exec_dep(
             "MutationSuggestionStage",
-            ExecutionOrderDependency.always_after("MemoryContextStage"),
-        )
-        self.add_exec_dep(
-            "ConcatMemoryStage",
-            ExecutionOrderDependency.always_after("IntraMemoryStage"),
-        )
-        self.add_exec_dep(
-            "ConcatMemoryStage",
             ExecutionOrderDependency.always_after("MemoryContextStage"),
         )

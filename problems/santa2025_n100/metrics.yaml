@@ -7,7 +7,7 @@ specs:
     lower_bound: 0.1
     upper_bound: 2.0
     include_in_prompts: true
-    significant_change: 0.0001
+    significant_change: 0.01
     sentinel_value: 1000.0
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)
@@ -27,7 +27,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 1.0
     include_in_prompts: true
-    significant_change: 0.0001
+    significant_change: 0.01
     sentinel_value: 0.0
   min_tree_spacing:
     description: Minimum center-to-center distance between trees
@@ -37,5 +37,5 @@ specs:
     lower_bound: 0.0
     upper_bound: 10.0
     include_in_prompts: true
-    significant_change: 0.0005
+    significant_change: 0.01
     sentinel_value: 0.0

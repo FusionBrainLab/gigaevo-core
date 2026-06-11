@@ -1,14 +1,12 @@
 """
 IdeaBank: stores and manages Idea objects for an IdeaTracker session.
 
-Also contains usage-payload helpers (build, merge) previously in utils/helpers.py,
-and CARD_STRUCTURE_v4_FINAL §2 helpers (canonical keys, packed-grammar parser,
-verification predicates, mechanism-gate decision tree).
+Also contains CARD_STRUCTURE_v4_FINAL §2 helpers (canonical keys, packed-grammar
+parser, verification predicates, mechanism-gate decision tree).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import re
@@ -21,10 +19,7 @@ from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     IdeaUpdate,
-    UsageEntry,
-    UsagePayload,
 )
-from gigaevo.memory.utils import median, to_float
 
 # ---------------------------------------------------------------------------
 # CARD_STRUCTURE_v4_FINAL §2: Canonical-key derivation + packed grammar
@@ -430,104 +425,6 @@ def enrich_with_verification(
     }
 
 
-# ---------------------------------------------------------------------------
-# Usage-payload helpers  (was utils/helpers.py)
-# ---------------------------------------------------------------------------
-
-
-def build_usage_payload(task_to_deltas: dict[str, list[float]]) -> UsagePayload:
-    usage_entries: list[UsageEntry] = []
-    total_deltas: list[float] = []
-    for task_summary in sorted(task_to_deltas):
-        deltas = [
-            d
-            for raw in task_to_deltas[task_summary]
-            if (d := to_float(raw)) is not None
-        ]
-        if not deltas:
-            continue
-        usage_entries.append(
-            UsageEntry(
-                task_description_summary=task_summary,
-                used_count=len(deltas),
-                fitness_delta_per_use=deltas,
-                median_delta_fitness=median(deltas),
-            )
-        )
-        total_deltas.extend(deltas)
-    return UsagePayload(
-        entries=usage_entries,
-        total_used=len(total_deltas),
-        median_delta_fitness=median(total_deltas) if total_deltas else None,
-    )
-
-
-def _extract_task_deltas(usage: UsagePayload | Any) -> dict[str, list[float]]:
-    if isinstance(usage, UsagePayload):
-        result: dict[str, list[float]] = {}
-        for entry in usage.entries:
-            deltas = [d for d in entry.fitness_delta_per_use if d is not None]
-            if deltas:
-                result.setdefault(entry.task_description_summary, []).extend(deltas)
-        return result
-    if not isinstance(usage, dict):
-        return {}
-    entries = usage.get("entries")
-    if isinstance(entries, list):
-        result = {}
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            task = str(entry.get("task_description_summary") or "").strip()
-            if not task:
-                continue
-            raw_deltas = entry.get("fitness_delta_per_use") or entry.get(
-                "fitness_deltas"
-            )
-            if not isinstance(raw_deltas, list):
-                continue
-            deltas = [d for raw in raw_deltas if (d := to_float(raw)) is not None]
-            if deltas:
-                result.setdefault(task, []).extend(deltas)
-        return result
-    used = usage.get("used")
-    if not isinstance(used, dict):
-        return {}
-    entries = used.get("entries")
-    if not isinstance(entries, list):
-        return {}
-    result = {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        task = str(entry.get("task_description_summary") or "").strip()
-        if not task:
-            continue
-        raw_deltas = entry.get("fitness_delta_per_use") or entry.get("fitness_deltas")
-        if not isinstance(raw_deltas, list):
-            continue
-        deltas = [d for raw in raw_deltas if (d := to_float(raw)) is not None]
-        if deltas:
-            result.setdefault(task, []).extend(deltas)
-    return result
-
-
-def merge_usage_payloads(existing: Any, incoming: Any) -> UsagePayload:
-    """Merge two usage payloads, combining per-task fitness-delta lists."""
-    existing_deltas = _extract_task_deltas(existing)
-    incoming_deltas = _extract_task_deltas(incoming)
-    if not existing_deltas and not incoming_deltas:
-        if isinstance(existing, UsagePayload):
-            return existing
-        if isinstance(incoming, UsagePayload):
-            return incoming
-        return UsagePayload()
-    merged: dict[str, list[float]] = {k: list(v) for k, v in existing_deltas.items()}
-    for task, deltas in incoming_deltas.items():
-        merged.setdefault(task, []).extend(deltas)
-    return build_usage_payload(merged)
-
-
 def _canonical_keyword(idea: Idea) -> str | None:
     for kw in idea.keywords or []:
         if isinstance(kw, str) and kw.startswith("canonical:"):
@@ -662,17 +559,6 @@ class IdeaBank:
             }
         )
         return True
-
-    def apply_usage_updates(
-        self, usage_updates: Mapping[str, UsagePayload | dict[str, Any]]
-    ) -> None:
-        """Merge per-card usage payloads into matching ideas."""
-        for i, idea in enumerate(self._ideas):
-            update = usage_updates.get(str(idea.id or ""))
-            if update:
-                self._ideas[i] = idea.model_copy(
-                    update={"usage": merge_usage_payloads(idea.usage, update)}
-                )
 
     # ------------------------------------------------------------------
     # Reads

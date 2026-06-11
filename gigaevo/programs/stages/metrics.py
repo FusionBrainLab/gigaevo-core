@@ -7,7 +7,7 @@ from typing import cast
 
 from loguru import logger
 
-from gigaevo.programs.core_types import StageIO, VoidInput
+from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
@@ -130,65 +130,3 @@ class EnsureMetricsStage(Stage):
         if hi is not None and value > hi:
             value = hi
         return value
-
-
-@StageRegistry.register(
-    description="Normalize metrics to [0,1] using bounds & orientation; optional aggregate"
-)
-class NormalizeMetricsStage(Stage):
-    """
-    For each metric that has finite (lo, hi) in MetricsContext:
-      norm = clamp01((value - lo) / (hi - lo)), flipped if higher_is_better=False.
-    Optionally emits an aggregate mean under `aggregate_key` if at least one normalized metric exists.
-    """
-
-    InputsModel = VoidInput
-    OutputModel = FloatDictContainer
-
-    def __init__(
-        self,
-        *,
-        metrics_context: MetricsContext,
-        aggregate_key: str = "normalized_score",
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.ctx = metrics_context
-        self.aggregate_key = aggregate_key
-
-    async def compute(self, program: Program) -> StageIO:
-        normalized: dict[str, float] = {}
-
-        for key, _spec in self.ctx.specs.items():
-            bounds = self.ctx.get_bounds(key)
-            if bounds is None:
-                continue
-            lo, hi = bounds
-            if lo is None or hi is None or hi <= lo:
-                continue
-
-            v = program.metrics.get(key)
-            if v is None:
-                continue
-
-            # Sentinel values carry the "failed run" signal. Normalising them would
-            # map -1e5 → 0.0, making a failed run indistinguishable from a zero-score
-            # run. Skip normalization so the sentinel is preserved downstream.
-            if _spec.is_sentinel(v):
-                continue
-
-            ratio = (v - lo) / (hi - lo)
-            # clamp
-            ratio = 0.0 if ratio < 0.0 else 1.0 if ratio > 1.0 else ratio
-            if not self.ctx.is_higher_better(key):
-                ratio = 1.0 - ratio
-
-            normalized[f"{key}_norm"] = ratio
-
-        # Optional aggregate
-        result = dict(normalized)
-        if normalized:
-            result[self.aggregate_key] = sum(normalized.values()) / len(normalized)
-
-        program.add_metrics(result)
-        return FloatDictContainer(data=result)

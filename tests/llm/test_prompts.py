@@ -9,8 +9,6 @@ import pytest
 from gigaevo.prompts import (
     InsightsPrompts,
     LineagePrompts,
-    MutationPrompts,
-    ScoringPrompts,
     load_prompt,
 )
 
@@ -24,7 +22,7 @@ class TestLoadPrompt:
         "agent,prompt_type",
         [
             (agent, ptype)
-            for agent in ("mutation", "insights", "lineage", "scoring")
+            for agent in ("mutation", "insights", "lineage")
             for ptype in ("system", "user")
         ],
     )
@@ -86,31 +84,6 @@ class TestLoadPrompt:
 
 
 # ---------------------------------------------------------------------------
-# MutationPrompts accessor class
-# ---------------------------------------------------------------------------
-
-
-class TestMutationPrompts:
-    def test_system_returns_non_empty_string(self):
-        s = MutationPrompts.system()
-        assert isinstance(s, str) and len(s) > 0
-
-    def test_user_returns_non_empty_string(self):
-        u = MutationPrompts.user()
-        assert isinstance(u, str) and len(u) > 0
-
-    def test_system_custom_dir(self, tmp_path: Path):
-        (tmp_path / "mutation").mkdir()
-        (tmp_path / "mutation" / "system.txt").write_text("override")
-        assert MutationPrompts.system(prompts_dir=tmp_path) == "override"
-
-    def test_user_custom_dir(self, tmp_path: Path):
-        (tmp_path / "mutation").mkdir()
-        (tmp_path / "mutation" / "user.txt").write_text("user override")
-        assert MutationPrompts.user(prompts_dir=tmp_path) == "user override"
-
-
-# ---------------------------------------------------------------------------
 # InsightsPrompts
 # ---------------------------------------------------------------------------
 
@@ -150,21 +123,3 @@ class TestLineagePrompts:
         (tmp_path / "lineage").mkdir()
         (tmp_path / "lineage" / "user.txt").write_text("lineage user override")
         assert LineagePrompts.user(prompts_dir=tmp_path) == "lineage user override"
-
-
-# ---------------------------------------------------------------------------
-# ScoringPrompts
-# ---------------------------------------------------------------------------
-
-
-class TestScoringPrompts:
-    def test_system_returns_non_empty_string(self):
-        assert isinstance(ScoringPrompts.system(), str)
-
-    def test_user_returns_non_empty_string(self):
-        assert isinstance(ScoringPrompts.user(), str)
-
-    def test_custom_dir_override(self, tmp_path: Path):
-        (tmp_path / "scoring").mkdir()
-        (tmp_path / "scoring" / "system.txt").write_text("scoring override")
-        assert ScoringPrompts.system(prompts_dir=tmp_path) == "scoring override"

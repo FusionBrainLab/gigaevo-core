@@ -10,9 +10,10 @@ Two related pipeline builders share most of their DAG structure:
       ``MutationContextStage.memory``
 
 * ``IntraExtraMemoryPipelineBuilder`` (intra + extra; used by
-  ``pipeline=intra_extra_memory``) is a subclass that re-adds the extra
-  channel: ``MemoryContextStage`` + ``ConcatMemoryStage`` joining both
-  blocks into ``MutationContextStage.memory``.
+  ``pipeline=intra_extra_memory``) is a subclass that re-adds
+  ``MemoryContextStage`` and feeds the cross-population cards ONLY to
+  ``MutationSuggestionStage`` (``memory_cards`` slot). The mutator's
+  ``memory`` slot keeps the bare intra card, identical to the base.
 
 Both drop all legacy lineage stages (``InsightsStage``, ``LineageStage``,
 ``AncestorProgramIds``, ``LineagesFromAncestors``, ``LineagesToDescendants``).
@@ -232,10 +233,11 @@ class TestIntraExtraMemoryPipelineBuilder:
         bp = self._build()
         assert "MutationSuggestionStage" in bp.nodes
 
-    def test_concat_memory_stage_present(self):
-        """Intra+extra variant keeps ``ConcatMemoryStage`` to join both channels."""
+    def test_concat_memory_stage_absent(self):
+        """Cards reach the LLMs only via the suggester — there is no second
+        verbatim channel to join, so ``ConcatMemoryStage`` must not exist."""
         bp = self._build()
-        assert "ConcatMemoryStage" in bp.nodes
+        assert "ConcatMemoryStage" not in bp.nodes
 
     def test_memory_context_stage_present(self):
         bp = self._build()
@@ -254,40 +256,25 @@ class TestIntraExtraMemoryPipelineBuilder:
             "memory_cards",
         ) in _edge_triples(bp)
 
-    def test_intra_feeds_concat(self):
+    def test_memory_cards_feed_only_suggestion_stage(self):
+        """``MemoryContextStage`` has exactly one consumer: the suggester.
+        Cards must never reach the mutator verbatim."""
         bp = self._build()
-        assert (
-            "IntraMemoryStage",
-            "ConcatMemoryStage",
-            "intra",
-        ) in _edge_triples(bp)
+        consumers = {
+            dest for src, dest in _edge_src_dest(bp) if src == "MemoryContextStage"
+        }
+        assert consumers == {"MutationSuggestionStage"}
 
-    def test_memory_cards_feed_concat(self):
-        bp = self._build()
-        assert (
-            "MemoryContextStage",
-            "ConcatMemoryStage",
-            "cards",
-        ) in _edge_triples(bp)
-
-    def test_concat_feeds_mutation_context_memory(self):
-        bp = self._build()
-        assert (
-            "ConcatMemoryStage",
-            "MutationContextStage",
-            "memory",
-        ) in _edge_triples(bp)
-
-    def test_no_direct_intra_to_mutation_context_memory(self):
-        """The intra+extra variant routes through ``ConcatMemoryStage`` — the
-        direct ``IntraMemoryStage → MutationContextStage.memory`` edge that the
-        intra-only base wires must be removed in the subclass."""
+    def test_intra_card_feeds_mutation_context_memory_directly(self):
+        """The mutator's ``memory`` slot carries the bare intra card, exactly
+        like the intra-only base — cards are digested by the suggester into
+        the ``insights`` slot instead of being concatenated verbatim."""
         bp = self._build()
         assert (
             "IntraMemoryStage",
             "MutationContextStage",
             "memory",
-        ) not in _edge_triples(bp)
+        ) in _edge_triples(bp)
 
     def test_no_memory_context_to_mutation_context_direct_edge(self):
         """The default builder wires ``MemoryContextStage → MutationContextStage.memory``.

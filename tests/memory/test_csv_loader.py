@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +12,7 @@ from gigaevo.memory.ideas_tracker.csv_loader import load_programs_from_csv
 import gigaevo.memory.ideas_tracker.run_ideas_tracker_from_csv as run_from_csv_mod
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
+from tests.fakes.llm_router import FakeMemoryRouter
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
@@ -172,11 +173,13 @@ class TestCliCsvPath:
                 return_value="s",
             ),
             patch(
-                "gigaevo.memory.ideas_tracker.llm._init_clients",
-                return_value=(MagicMock(), MagicMock(), False),
+                "gigaevo.memory.ideas_tracker.cli.build_router",
+                return_value=FakeMemoryRouter(),
             ),
         ):
-            cli_main(["--csv-path", str(csv_path), "--no-memory-write"])
+            cli_main(
+                ["--csv-path", str(csv_path), "--no-memory-write", "--api-key", "k"]
+            )
 
         mock_run.assert_called_once()
         programs_arg = mock_run.call_args[0][0]
@@ -194,8 +197,8 @@ class TestCliCsvPath:
                 return_value="s",
             ),
             patch(
-                "gigaevo.memory.ideas_tracker.llm._init_clients",
-                return_value=(MagicMock(), MagicMock(), False),
+                "gigaevo.memory.ideas_tracker.cli.build_router",
+                return_value=FakeMemoryRouter(),
             ),
             patch(
                 "gigaevo.memory.ideas_tracker.cli.load_programs_from_redis",
@@ -209,6 +212,8 @@ class TestCliCsvPath:
                     "--redis-prefix",
                     "chains/test",
                     "--no-memory-write",
+                    "--api-key",
+                    "k",
                 ]
             )
 
@@ -216,6 +221,40 @@ class TestCliCsvPath:
             host="localhost", port=6379, db=5, prefix="chains/test"
         )
         mock_run.assert_called_once_with(fake_programs)
+
+    @pytest.mark.parametrize(
+        ("flag", "expected"),
+        [
+            ([], True),
+            (["--higher-is-better"], True),
+            (["--no-higher-is-better"], False),
+        ],
+    )
+    def test_cli_forwards_fitness_direction(
+        self, tmp_path: Path, flag: list[str], expected: bool
+    ) -> None:
+        csv_path = tmp_path / "data.csv"
+        _write_csv(csv_path, [_make_row()])
+        with (
+            patch("gigaevo.memory.ideas_tracker.cli.IdeaTracker") as mock_cls,
+            patch(
+                "gigaevo.memory.ideas_tracker.cli.build_router",
+                return_value=FakeMemoryRouter(),
+            ),
+        ):
+            cli_main(
+                ["--csv-path", str(csv_path), "--no-memory-write", "--api-key", "k"]
+                + flag
+            )
+        assert mock_cls.call_args.kwargs["fitness_higher_is_better"] is expected
+
+    def test_cli_requires_checkpoint_dir_when_memory_write_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        csv_path = tmp_path / "data.csv"
+        _write_csv(csv_path, [_make_row()])
+        with pytest.raises(SystemExit):
+            cli_main(["--csv-path", str(csv_path), "--api-key", "k"])
 
 
 class TestRunFromCsvEntryPoint:

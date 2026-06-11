@@ -242,17 +242,17 @@ class TestPersistenceDivergence:
         assert "orphan" not in mem.note_sync.memory_system.memories
 
     def test_rebuild_triggered_skips_redundant_persist(self, tmp_path):
-        """B3: When _insert_new_card triggers periodic rebuild, _save_new_card_and_flush
+        """B3: When _insert_new_card triggers periodic rebuild, save_card_direct
         correctly skips the extra persist() call."""
         mem = _make_memory(tmp_path, rebuild_interval=1)
 
         with patch.object(
             mem.card_store, "persist", wraps=mem.card_store.persist
         ) as spy:
-            mem._save_new_card_and_flush(
+            mem.save_card_direct(
                 normalize_memory_card({"id": "c1", "description": "test"})
             )
-            # rebuild() calls persist once, _save_new_card_and_flush should NOT call again
+            # rebuild() calls persist once, save_card_direct should NOT call again
             # persist is called inside rebuild() via card_store.persist(serialized=...)
             assert spy.call_count == 1
 

@@ -44,7 +44,7 @@ def weighted_sample_without_replacement(
         total_weight = sum(remaining_weights)
         if total_weight == 0:
             logger.warning(
-                "weighted_sample_without_replacement: all remaining weights "
+                "[weighted_sample_without_replacement] all remaining weights "
                 "are zero; falling back to uniform sampling "
                 "(remaining={}, already_selected={}, requested_total={})",
                 len(remaining_items),

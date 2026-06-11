@@ -3,7 +3,6 @@
 Subpackages:
     shared_memory/  — Core orchestrator: card storage, search, sync, dedup
     _vendor/        — Vendored MIT libs: A_mem (vector store), GAM_root (research agent)
-    examples/       — Standalone demo scripts (not imported by production code)
     ideas_tracker/  — Self-contained subsystem: analyze programs -> extract ideas -> write to memory
 
 Public API:

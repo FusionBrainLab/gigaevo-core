@@ -1,7 +1,28 @@
-# @package _global_
-# Memory selection via local backend (config/memory_backend.yaml controls backend details).
-memory_provider:
+# Memory selection over the local card-bank backend.
+# Components nest under `memory.<group>`; swap stages via e.g.
+# `memory/admitter=tiered`, tune via `memory.auction.baseline_prior=[5,2]`.
+# The card-bank backend (`memory.backend`) and the memory LLM (`memory_llm`)
+# are root-registered singletons shared with ideas_tracker via ${ref:...}.
+defaults:
+  - retriever: gam
+  - selector: llm
+  - auction: thompson
+  - budget: top_theta
+  - reputation: beta_binomial
+  - admitter: sign_based
+  - dedup: llm
+  - evictor: harm
+  - _self_
+  - override /memory/backend@_global_.memory.backend: local
+  - override /llms@_global_.memory_llm: gemini_flash_openrouter
+
+provider:
   _target_: gigaevo.memory.provider.SelectorMemoryProvider
-  max_cards: 3
+  max_cards: 1
   checkpoint_dir: ${checkpoint_dir}
-  namespace: ${namespace}
+  backend: ${ref:memory.backend}
+  retriever: ${ref:memory.retriever}
+  selector: ${ref:memory.selector}
+  auctioneer: ${ref:memory.auction}
+  budgeter: ${ref:memory.budget}
+  reputation: ${ref:memory.reputation}

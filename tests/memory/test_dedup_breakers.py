@@ -39,9 +39,9 @@ def _make_full_memory(tmp_path, **overrides):
 class TestDedupLLMFailures:
     """Tests for LLM response parsing and retry logic in dedup decisions."""
 
-    def test_all_retries_exhausted_defaults_to_add(self, tmp_path):
+    def test_all_retries_exhausted_defaults_to_discard(self, tmp_path):
         """F1: When LLM returns unparseable text on all retries, ask_llm_for_dedup_decision
-        returns default {"action": "add"}."""
+        defaults to {"action": "discard"} — an outage must not flood the bank."""
         mem = _make_full_memory(
             tmp_path,
             card_update_dedup_config={"enabled": True, "llm_max_retries": 2},
@@ -59,13 +59,13 @@ class TestDedupLLMFailures:
             normalize_memory_card({"description": "new card"}), candidates
         )
 
-        assert decision["action"] == "add"
+        assert decision["action"] == "discard"
         # LLM was called max_retries times
         assert mock_llm.generate.call_count == 2
 
-    def test_llm_exception_on_every_call_defaults_to_add(self, tmp_path):
+    def test_llm_exception_on_every_call_defaults_to_discard(self, tmp_path):
         """F2: When LLM raises an exception on every call, ask_llm_for_dedup_decision
-        returns default {"action": "add"} without propagating exception."""
+        defaults to {"action": "discard"} without propagating exception."""
         mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
         mem.save_card({"id": "existing", "description": "original"})
 
@@ -78,7 +78,7 @@ class TestDedupLLMFailures:
             normalize_memory_card({"description": "new"}), candidates
         )
 
-        assert decision["action"] == "add"
+        assert decision["action"] == "discard"
         # Exception did not propagate
         assert mock_llm.generate.call_count > 0
 
@@ -109,6 +109,75 @@ class TestDedupLLMFailures:
         assert decision["action"] == "discard"
         assert mock_llm.generate.call_count == 2
 
+    def test_llm_called_with_decision_schema(self, tmp_path):
+        """F5: The dedup LLM call passes a structured-output schema mirroring the
+        prompt's JSON spec, so providers enforce valid JSON instead of relying on
+        retry-on-garbage."""
+        mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
+
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = (
+            json.dumps(
+                {"action": "add", "reason": "", "duplicate_of": "", "updates": []}
+            ),
+            {},
+            None,
+            None,
+        )
+        mem.dedup.llm_service = mock_llm
+
+        mem.dedup.ask_llm_for_dedup_decision(
+            normalize_memory_card({"description": "new"}),
+            [{"card_id": "existing", "final_score": 0.8}],
+        )
+
+        schema = mock_llm.generate.call_args.kwargs.get("schema")
+        assert isinstance(schema, dict)
+        assert {"action", "reason", "duplicate_of", "updates"} <= set(
+            schema.get("properties", {})
+        )
+
+    def test_dedup_prompt_carries_efficacy_context(self, tmp_path):
+        """F6: The dedup prompt surfaces each card's measured track record and
+        instructs the LLM to prefer the better-evidenced variant."""
+        mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
+        mem.save_card(
+            {
+                "id": "existing",
+                "description": "original",
+                "evolution_statistics": {
+                    "ALL": {
+                        "intro_events": 3,
+                        "IntroGain_best_median": 0.012,
+                        "DownsideRate_best": 0.0,
+                        "efficacy_confident": True,
+                    }
+                },
+            }
+        )
+
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = (
+            json.dumps(
+                {"action": "add", "reason": "", "duplicate_of": "", "updates": []}
+            ),
+            {},
+            None,
+            None,
+        )
+        mem.dedup.llm_service = mock_llm
+
+        candidates = mem.dedup.format_dedup_candidates_for_llm(
+            [{"card_id": "existing", "final_score": 0.8}]
+        )
+        mem.dedup.ask_llm_for_dedup_decision(
+            normalize_memory_card({"description": "new"}), candidates
+        )
+
+        prompt = mock_llm.generate.call_args.args[0]
+        assert "track record" in prompt
+        assert "efficacy: introduced in 3 children" in prompt
+
     def test_empty_candidates_returns_default_without_llm(self, tmp_path):
         """F4: When candidates_for_llm is empty, ask_llm_for_dedup_decision returns default
         without calling the LLM."""
@@ -133,7 +202,7 @@ class TestDedupLLMFailures:
 
 
 class TestMergeEdgeCases:
-    """Tests for CardDedup.compute_card_merge_updates and _apply_dedup_merge_updates."""
+    """Tests for CardDedup.compute_card_merge_updates and apply_merges."""
 
     def test_compute_card_merge_updates_skips_deleted_card(self, tmp_path):
         """G1: If an update targets a card_id that's no longer in store.cards,
@@ -208,7 +277,7 @@ class TestMergeEdgeCases:
         mem._insert_new_card = failing_on_first
 
         # Try to apply pre-computed merges, first fails
-        updated_ids = mem._apply_dedup_merge_updates(merges)
+        updated_ids = mem.apply_merges(merges)
 
         # c1 failed, c2 succeeded
         assert "c1" not in updated_ids
@@ -409,7 +478,7 @@ class TestNoteSyncExceptions:
 
 
 class TestMergeApiError:
-    """Tests for X3: partial merge failure during _apply_dedup_merge_updates."""
+    """Tests for X3: partial merge failure during apply_merges."""
 
     def test_merge_api_error_continues_remaining_merges(self, tmp_path):
         """X3: If _insert_new_card raises on first merge, second merge should
@@ -446,7 +515,7 @@ class TestMergeApiError:
 
         mem._insert_new_card = failing_on_first
 
-        updated_ids = mem._apply_dedup_merge_updates(merges)
+        updated_ids = mem.apply_merges(merges)
 
         # c2 should still be updated even though c1 failed
         assert "c2" in updated_ids

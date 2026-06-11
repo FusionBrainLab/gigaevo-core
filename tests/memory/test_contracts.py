@@ -7,13 +7,15 @@ behavioral contract. Each test documents WHY the contract matters.
 
 import json
 
+from pydantic import ValidationError
+import pytest
+
 from gigaevo.evolution.mutation.constants import (
-    MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
-from gigaevo.llm.agents.memory_selector import MemorySelection
-from gigaevo.memory.ideas_tracker.models import UsagePayload
+from gigaevo.memory.core import MemorySelection
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.card_dedup import DedupAction, DedupDecision
 from gigaevo.memory.shared_memory.card_update_dedup import (
     parse_llm_card_decision,
 )
@@ -69,7 +71,6 @@ class TestNormalizeCardContract:
         assert isinstance(card.explanation.summary, str)
         assert isinstance(card.works_with, list)
         assert isinstance(card.links, list)
-        assert isinstance(card.usage, UsagePayload)
 
     def test_program_card_field_types(self):
         card = normalize_memory_card(
@@ -308,6 +309,15 @@ class TestDedupDecisionContract:
             result = parse_llm_card_decision(text, candidate_ids={"c1"})
             assert result["action"] == action
 
+    def test_action_field_coerces_strings_to_strict_enum(self):
+        decision = DedupDecision(action="add", reason="", duplicate_of="", merges=[])
+        assert decision.action is DedupAction.ADD
+        assert decision.action == "add"
+
+    def test_action_field_rejects_unknown_values(self):
+        with pytest.raises(ValidationError):
+            DedupDecision(action="bogus", reason="", duplicate_of="", merges=[])
+
 
 # ===========================================================================
 # Contract 7: MemorySelection shape
@@ -328,5 +338,4 @@ class TestMemorySelectionContract:
 
 class TestMutationMetadataKeysContract:
     def test_metadata_key_values(self):
-        assert MUTATION_MEMORY_METADATA_KEY == "mutation_memory"
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY == "memory_selected_idea_ids"

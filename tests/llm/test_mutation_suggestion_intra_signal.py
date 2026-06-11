@@ -198,6 +198,42 @@ def test_block_does_not_contain_hard_constraint_language():
         )
 
 
+def test_intra_block_does_not_duplicate_self_headed_card():
+    """IntraMemoryStage cards begin with their own ``## Intra Memory — …``
+    header; build_prompt must not wrap a second identical header around it."""
+    card = "## Intra Memory — Per-Parent Lineage Card\n\n- cluster_a (improved, n=2)"
+    block = MutationSuggestionAgent._format_intra_block(card)
+    assert block.count("## Intra Memory") == 1
+    assert "cluster_a" in block
+
+
+def test_intra_block_adds_header_for_bare_card():
+    block = MutationSuggestionAgent._format_intra_block("- cluster_a (improved, n=2)")
+    assert block.count("## Intra Memory") == 1
+    assert "cluster_a" in block
+
+
+def test_intra_block_empty_collapses():
+    assert MutationSuggestionAgent._format_intra_block("") == ""
+    assert MutationSuggestionAgent._format_intra_block(None) == ""
+
+
+def test_memory_cards_block_header_describes_levers_not_programs():
+    """Cards are mechanism levers from the global bank, not program dumps —
+    the old 'Top Evolved Programs' label primed the LLM to expect code."""
+    block = MutationSuggestionAgent._format_memory_cards_block(
+        "[card 1] id=card-abc\nlever text"
+    )
+    assert "## Memory Cards" in block
+    assert "Top Evolved Programs" not in block
+    assert "[card 1] id=card-abc" in block
+
+
+def test_memory_cards_block_empty_collapses():
+    assert MutationSuggestionAgent._format_memory_cards_block("") == ""
+    assert MutationSuggestionAgent._format_memory_cards_block(None) == ""
+
+
 def test_old_exhaustion_block_helper_is_removed():
     """The old regex-based helper must no longer exist on the agent."""
     assert not hasattr(MutationSuggestionAgent, "_format_exhaustion_block"), (

@@ -1,27 +1,30 @@
-"""Integration tests: MemorySelectorAgent with real AmemGamMemory.
+"""Integration tests: MemoryReadPipeline with real AmemGamMemory.
 
 Memory injection into mutation prompts is now handled by the DAG pipeline
 (MemoryContextStage → MutationContextStage), not by LLMMutationOperator.
-These tests verify the MemorySelectorAgent search/parse/ID-extraction logic.
+These tests verify the read pipeline's search/parse/ID-extraction logic.
 """
 
 from __future__ import annotations
-
-import asyncio
 
 import pytest
 
 from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
 )
-from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
+from gigaevo.memory.core import LLMCardSelector
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.fakes.agentic_memory import make_test_memory
+from tests.fakes.read_pipeline import make_read_pipeline
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+_SEED = 20260604
+_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
 
 
 def _make_program(code="def solve(): return 1", **metadata):
@@ -49,27 +52,22 @@ def _final_raw(card_ids):
 
 
 # ===========================================================================
-# MemorySelectorAgent with real AmemGamMemory
+# MemoryReadPipeline with real AmemGamMemory
 # ===========================================================================
 
 
 class TestSelectorWithRealMemory:
-    """Wire MemorySelectorAgent with pre-filled local AmemGamMemory."""
+    """Wire MemoryReadPipeline with pre-filled local AmemGamMemory."""
 
-    def _make_selector(self, tmp_path, ideas):
+    def _make_pipeline(self, tmp_path, ideas):
         mem = make_test_memory(tmp_path)
         for idea in ideas:
             mem.save_card(idea)
-
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = mem
-        return selector
+        return make_read_pipeline(mem, seed=_SEED), mem
 
     @pytest.mark.asyncio
     async def test_search_returns_relevant_cards(self, tmp_path):
-        selector = self._make_selector(
+        pipeline, mem = self._make_pipeline(
             tmp_path,
             [
                 {
@@ -83,6 +81,7 @@ class TestSelectorWithRealMemory:
                         "multi",
                     ],
                     "task_description": "Multi-hop fact verification",
+                    "evolution_statistics": _PROVEN_STATS,
                 },
                 {
                     "id": "idea-2",
@@ -92,17 +91,14 @@ class TestSelectorWithRealMemory:
                 },
             ],
         )
-        selector.memory.research = lambda *a, **k: _FakeResearchResult(
-            _final_raw(["idea-1"])
-        )
+        mem.research = lambda *a, **k: _FakeResearchResult(_final_raw(["idea-1"]))
         parent = _make_program(code="def solve(x):\n    return x\n")
 
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="Multi-hop fact verification",
             metrics_description="fitness: accuracy",
-            memory_text="",
             max_cards=3,
         )
 
@@ -111,10 +107,9 @@ class TestSelectorWithRealMemory:
 
     @pytest.mark.asyncio
     async def test_build_request_contains_parent_code(self, tmp_path):
-        selector = self._make_selector(tmp_path, [])
         parent = _make_program(code="def solve(x):\n    return sorted(x)\n")
 
-        query = selector._build_request(
+        query = LLMCardSelector().build_query(
             parents=[parent],
             mutation_mode="rewrite",
             task_description="Multi-hop fact verification",
@@ -137,13 +132,12 @@ class TestSelectorWithRealMemory:
     @pytest.mark.asyncio
     async def test_build_request_includes_mutation_context(self, tmp_path):
         """Parent with mutation_context metadata → appears in request."""
-        selector = self._make_selector(tmp_path, [])
         parent = _make_program(code="def f(): pass")
         parent.metadata[MUTATION_CONTEXT_METADATA_KEY] = (
             "Previous mutation improved sorting"
         )
 
-        query = selector._build_request(
+        query = LLMCardSelector().build_query(
             parents=[parent],
             mutation_mode="diff",
             task_description="test task",
@@ -157,27 +151,25 @@ class TestSelectorWithRealMemory:
     @pytest.mark.asyncio
     async def test_select_resolves_card_text_from_structured_top_ideas(self, tmp_path):
         """select() pulls card.description for each id in final_decision.top_ideas."""
-        selector = self._make_selector(
+        pipeline, mem = self._make_pipeline(
             tmp_path,
             [
                 {
                     "id": "idea-abc-123",
                     "description": "Use simulated annealing for local search",
                     "keywords": ["annealing"],
+                    "evolution_statistics": _PROVEN_STATS,
                 },
             ],
         )
-        selector.memory.research = lambda *a, **k: _FakeResearchResult(
-            _final_raw(["idea-abc-123"])
-        )
+        mem.research = lambda *a, **k: _FakeResearchResult(_final_raw(["idea-abc-123"]))
         parent = _make_program(code="def solve(x):\n    return x\n")
 
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="search task",
             metrics_description="fitness",
-            memory_text="",
             max_cards=3,
         )
 
@@ -187,21 +179,20 @@ class TestSelectorWithRealMemory:
     @pytest.mark.asyncio
     async def test_select_invalid_raw_memory_returns_empty(self, tmp_path):
         """raw_memory shape that fails Pydantic validation yields empty selection."""
-        selector = self._make_selector(tmp_path, [])
+        pipeline, mem = self._make_pipeline(tmp_path, [])
 
         class _BadRaw:
             integrated_memory = ""
             raw_memory = {"final_decision": {"mode": "nope", "top_ideas": "not-a-list"}}
 
-        selector.memory.research = lambda *a, **k: _BadRaw()  # type: ignore[method-assign]
+        mem.research = lambda *a, **k: _BadRaw()  # type: ignore[method-assign]
 
         parent = _make_program(code="def f(): pass")
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="t",
             metrics_description="m",
-            memory_text="",
             max_cards=3,
         )
 

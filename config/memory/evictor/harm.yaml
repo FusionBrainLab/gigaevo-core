@@ -1,0 +1,2 @@
+_target_: gigaevo.memory.core.evictor.HarmEvictor
+reputation: ${ref:memory.reputation}

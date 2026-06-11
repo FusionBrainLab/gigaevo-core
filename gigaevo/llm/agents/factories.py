@@ -20,7 +20,6 @@ from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
 from gigaevo.llm.agents.mutation import MutationAgent
 from gigaevo.llm.agents.mutation_suggestions import MutationSuggestionAgent
-from gigaevo.llm.agents.scoring import ScoringAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -28,11 +27,9 @@ from gigaevo.prompts import (
     InsightsPrompts,
     LineagePrompts,
     MutationSuggestionsPrompts,
-    ScoringPrompts,
 )
 
 if TYPE_CHECKING:
-    from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
     from gigaevo.prompts.fetcher import PromptFetcher
 
 
@@ -117,7 +114,7 @@ def create_insights_agent(
     llm: ChatOpenAI | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
-    max_insights: int = 7,
+    max_insights: int = 5,
     prompts_dir: str | Path | None = None,
 ) -> InsightsAgent:
     """Create a fully configured insights agent.
@@ -172,7 +169,7 @@ def create_mutation_suggestion_agent(
     llm: ChatOpenAI | MultiModelRouter,
     task_description: str,
     metrics_context: MetricsContext,
-    max_insights: int = 7,
+    max_insights: int = 5,
     prompts_dir: str | Path | None = None,
 ) -> MutationSuggestionAgent:
     """Create a fully configured mutation-suggestion agent.
@@ -258,54 +255,3 @@ def create_lineage_agent(
         task_description=task_description,
         metrics_formatter=metrics_formatter,
     )
-
-
-def create_scoring_agent(
-    llm: ChatOpenAI | MultiModelRouter,
-    trait_description: str,
-    max_score: float,
-    prompts_dir: str | Path | None = None,
-) -> ScoringAgent:
-    """Create a fully configured scoring agent.
-
-    This factory does ALL the setup:
-    - Loads prompts from files
-    - Returns ready-to-use agent
-
-    Args:
-        llm: LangChain chat model or multi-model router
-        prompts_dir: Optional prompts directory (e.g. config.prompts.dir). If None, package defaults are used.
-
-    Returns:
-        Ready-to-use ScoringAgent
-
-    Example:
-        >>> agent = create_scoring_agent(
-        ...     llm=llm,
-        ...     trait_description="code novelty",
-        ...     max_score=1.0
-        ... )
-        >>> score = await agent.arun(program)
-    """
-    # Load prompts from files
-    system_prompt = ScoringPrompts.system(prompts_dir=prompts_dir)
-    user_template = ScoringPrompts.user(prompts_dir=prompts_dir)
-
-    # Return configured agent
-    return ScoringAgent(
-        llm=llm,
-        system_prompt=system_prompt,
-        user_prompt_template=user_template,
-        trait_description=trait_description,
-        max_score=max_score,
-    )
-
-
-def create_memory_selector_agent(
-    llm: ChatOpenAI | MultiModelRouter,
-) -> MemorySelectorAgent:
-    """Create a red-agent-backed memory selector for filtering memory ideas."""
-    _ = llm  # kept for API compatibility with existing call sites
-    from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-
-    return MemorySelectorAgent()

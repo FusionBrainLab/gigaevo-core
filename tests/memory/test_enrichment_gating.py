@@ -62,7 +62,6 @@ def _build_tracker(analyzer: _StubAnalyzer, logs_dir) -> IdeaTracker:
     return IdeaTracker(
         analyzer=analyzer,
         memory_write_enabled=False,
-        memory_usage_tracking_enabled=False,
         task_description="t",
         logs_dir=logs_dir,
     )

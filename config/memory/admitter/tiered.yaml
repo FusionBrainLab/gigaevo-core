@@ -1,0 +1,10 @@
+# Legacy tiered gate (filter_best_ideas semantics minus the descendant-popularity
+# disjunct: single-event ideas need BornInElite, popularity alone no longer admits).
+_target_: gigaevo.memory.core.admitter.TieredAdmitter
+min_intro_events: 1
+min_rel_median: 0.01
+max_downside: 0.4
+min_sibling_win_ge3: 0.5
+confident_tier_events: 3
+pair_tier_events: 2
+eps: 1.0e-12

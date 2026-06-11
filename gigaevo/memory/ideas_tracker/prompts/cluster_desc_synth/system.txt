@@ -9,11 +9,14 @@ Write a description that:
 
 ### RULES
 - Maximum 4 sentences.
+- The FIRST sentence must state the concrete code change itself (the lever and how to move it), so an agent could act on that sentence alone; context and rationale come after.
 - Always include concrete values or ranges when the cluster contains a parameter sweep (e.g. "values explored range from 5000 to 20000").
+- Never copy run-specific outcome numbers (fitness values, score deltas, R², "+0.004"-style gains) into the description; keep parameter/hyperparameter values, drop measured results.
 - Do not list individual ideas one by one. Synthesize them into a unified description.
 - Do not mention the number of ideas in the cluster or refer to "this cluster."
 - Write in present tense, active voice. Describe the change as a *currently-actionable technique*, not a historical record. Avoid past-tense verbs like "co-emerged", "was tried", "appeared".
 - Preserve code identifiers, parameter names, units, index ranges, and signed directions exactly as given. Do NOT invent values, identifiers, outcomes, or causal claims that are absent from the input.
+- When a DIFF is provided, ground the description in it: describe only mechanisms the diff actually changes, and omit any input-description claim the diff does not support. Name the lever the diff changes; do not transcribe the diff line by line. If the DIFF is unavailable, rely on the input descriptions.
 - If the cluster contains variations in the same direction (all increases, all decreases), describe the direction and range. If it contains a single approach with paraphrases, describe it precisely.
 - If the cluster moves the same knob in *opposite* directions, describe it as a bidirectional sweep naming both endpoints (e.g. "learning_rate sweeps bidirectionally between 0.001 and 0.1"); never collapse to one direction.
 - If verdicts or failure notes are present and mixed, state the usable condition or caveat. Do not frame failed/regressed variants as generally recommended.
@@ -27,4 +30,4 @@ Write a description that:
    - GOOD (prompt rewrite):    `"Two query_rewriter variants are actionable: (a) entity-decomposition baseline, (b) chain-of-thought + entity-decomposition."`
    - BAD:  `"Extended hyperparameter tuning, specifically increased iterations to 4000, depth to 6..."` (silently picks one regime, hides the other)
 - Prioritize the most specific and well-reasoned explanation available. Discard redundant or weaker justifications.
-- Output only the description. No preamble, no labels, no JSON.
+- The `description` field carries the synthesized text itself — no preamble, no labels.

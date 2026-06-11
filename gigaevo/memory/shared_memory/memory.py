@@ -8,18 +8,20 @@ if TYPE_CHECKING:
 from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
-import gigaevo.memory.config as _env_config  # noqa: F401
+from gigaevo.memory.core.deduplicator import LLMDeduplicator
+from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.core.protocols import Deduplicator, Evictor
+from gigaevo.memory.core.write_ledger import WriteLedger
+from gigaevo.memory.core.write_pipeline import MemoryWritePipeline
 from gigaevo.memory.shared_memory.agentic_runtime import (
     AgenticRuntime,
     init_agentic_storage,
-    init_llm_and_generator,
     load_agentic_runtime,
 )
 from gigaevo.memory.shared_memory.api_sync import ApiSync
 from gigaevo.memory.shared_memory.base import GigaEvoMemoryBase
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
-    is_program_card,
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.card_dedup import CardDedup
@@ -67,13 +69,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
         runtime: AgenticRuntime | None = None,
         llm_service: LLMServiceProtocol | None = None,
         generator: GeneratorProtocol | None = None,
+        evictor: Evictor | None = None,
+        deduplicator: Deduplicator | None = None,
     ) -> None:
         self.config = config
 
         cfg = self.config
         cfg.checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-        self._warned_missing_card_update_llm = False
         self._iters_after_rebuild = 0
         self._gam_build_failed = False
         self._state = MemoryState()
@@ -98,22 +101,21 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         self.card_store = CardStore(index_file=cfg.index_file)
 
-        # --- LLM + generator (DI or environment-based) ---
-        self.llm_service: LLMServiceProtocol | None
-        self.generator: GeneratorProtocol | None
-        if llm_service is not None or generator is not None:
-            self.llm_service = llm_service
-            self.generator = generator
-        else:
-            self.llm_service, self.generator = init_llm_and_generator(
-                generator_cls=_gen_cls,
-                dedup_enabled=cfg.dedup.enabled,
+        # --- LLM + generator (injected; no LLM means agentic features stay off) ---
+        self.llm_service: LLMServiceProtocol | None = llm_service
+        if generator is None and llm_service is not None and _gen_cls is not None:
+            generator = _gen_cls({"llm_service": llm_service})
+        self.generator: GeneratorProtocol | None = generator
+        if self.llm_service is None:
+            logger.info(
+                "[Memory][Store] No LLM injected — synthesis/dedup-scoring/GAM off."
             )
         self.memory_system: AgenticMemoryProtocol | None = init_agentic_storage(
             llm_service=self.llm_service,
             system_cls=_system_cls,
             checkpoint_dir=cfg.checkpoint_path,
             enable_evolution=cfg.enable_memory_evolution,
+            embedding_model_name=cfg.embedding_model_name,
         )
         self.note_sync: NoteSync | None = None
         if self.memory_system is not None and _note_cls is not None:
@@ -125,14 +127,34 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self.research_agent: ResearchAgentProtocol | None = None
 
         # --- Card dedup (always created; config.enabled gates scoring) ---
+        # An injected LLMDeduplicator carries its own config, which must drive
+        # the engine — reconcile() consults engine.config, not wrapper config.
+        engine_dedup_cfg = (
+            deduplicator.config
+            if isinstance(deduplicator, LLMDeduplicator)
+            else cfg.dedup
+        )
         self.dedup = CardDedup(
             card_store=self.card_store,
             llm_service=self.llm_service,
-            config=cfg.dedup,
+            config=engine_dedup_cfg,
             allowed_gam_tools=cfg.gam.normalized_allowed_tools,
             gam_store_dir=cfg.gam_store_dir,
             export_file=cfg.export_file,
             checkpoint_dir=cfg.checkpoint_path,
+            embedding_model_name=cfg.embedding_model_name,
+        )
+        if deduplicator is None:
+            deduplicator = LLMDeduplicator(config=cfg.dedup, engine=self.dedup)
+        elif isinstance(deduplicator, LLMDeduplicator):
+            # Always rebind: the write path builds a fresh backend per sweep,
+            # so a shared singleton must not stay bound to a stale engine.
+            deduplicator.engine = self.dedup
+        self.write_pipeline = MemoryWritePipeline(
+            store=self,
+            evictor=evictor if evictor is not None else HarmEvictor(),
+            deduplicator=deduplicator,
+            ledger=WriteLedger(cfg.checkpoint_path / "write_ledger.jsonl"),
         )
 
         # --- GAM search ---
@@ -149,6 +171,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 allowed_gam_tools=cfg.gam.normalized_allowed_tools,
                 gam_top_k_by_tool=cfg.gam.normalized_top_k_by_tool,
                 gam_pipeline_mode=cfg.gam.normalized_pipeline_mode,
+                embedding_model_name=cfg.embedding_model_name,
+                max_iters=cfg.gam.max_iters,
+                max_cards=cfg.gam.max_cards,
             )
 
         # --- API sync (after note_sync so it can upsert notes) ---
@@ -217,10 +242,21 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self._persist_index()
         return changed
 
-    def _apply_dedup_merge_updates(
-        self, merges: list[tuple[str, AnyCard]]
-    ) -> list[str]:
-        """Apply pre-computed merges from dedup decision."""
+    def apply_merges(self, merges: list[tuple[str, AnyCard]]) -> list[str]:
+        """Apply pre-computed dedup merges, replacing each target card in place.
+
+        Each ``(card_id, merged_card)`` pair overwrites the existing card with
+        the merged variant (re-running enrichment and API/A-mem sync, same as a
+        fresh save). Failures on individual targets are logged and skipped, so
+        the returned list may be shorter than ``merges``. The bank index is
+        persisted once at the end iff at least one merge landed.
+
+        Called by ``MemoryWritePipeline`` after the dedup LLM returns an
+        ``update`` decision; the pipeline owns write_stats and ledger rows.
+
+        Returns:
+            The card ids that were successfully updated, in input order.
+        """
         updated_ids: list[str] = []
         for card_id, merged_card in merges:
             try:
@@ -270,15 +306,28 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         return card_id, rebuilt
 
-    def _save_new_card_and_flush(self, card: AnyCard) -> str:
-        """Save card and persist index unless a periodic rebuild already did."""
+    def save_card_direct(self, card: AnyCard) -> str:
+        """Persist one already-normalized card, bypassing the write pipeline.
+
+        Skips the harm gate, dedup reconciliation, write_stats, and the write
+        ledger — the card is inserted as-is (with optional LLM enrichment and
+        API/A-mem sync) and the bank index is flushed to disk, unless the
+        insert already triggered a periodic rebuild (which persists itself).
+
+        Use only when the ingest verdict is already decided: the pipeline's
+        known-id update, program fast-path, and post-dedup add branches.
+        External callers should go through ``save_card`` instead.
+
+        Returns:
+            The id the card was stored under (minted if the card had none).
+        """
         card_id, rebuilt = self._insert_new_card(card)
         if not rebuilt:
             self._persist_index()
         return card_id
 
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
-        """Save a memory card, with optional dedup against existing cards.
+        """Save a memory card via the modular write pipeline.
 
         Args:
             card: Raw dict or Pydantic card to save. Normalized internally.
@@ -286,47 +335,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
         Returns:
             Card ID of the saved (or deduplicated) card.
         """
-        normalized_card = normalize_memory_card(card)
-        store = self.card_store
-        store.write_stats["processed"] += 1
-        incoming_card_id = str(normalized_card.id or "").strip()
+        return self.write_pipeline.ingest(card)
 
-        if incoming_card_id and incoming_card_id in store.cards:
-            store.write_stats["updated"] += 1
-            return self._save_new_card_and_flush(normalized_card)
-
-        if is_program_card(normalized_card):
-            store.write_stats["added"] += 1
-            return self._save_new_card_and_flush(normalized_card)
-
-        dedup_ready = self.config.dedup.enabled and store.cards
-        if dedup_ready and self.llm_service is None:
-            if not self._warned_missing_card_update_llm:
-                logger.warning(
-                    "[Memory][Store] card_update_dedup enabled but LLM unavailable; "
-                    "falling back to regular save_card."
-                )
-                self._warned_missing_card_update_llm = True
-
-        if dedup_ready and self.llm_service is not None:
-            self.dedup.llm_service = self.llm_service
-            decision = self.dedup.run_dedup_on_incoming_card(normalized_card)
-
-            if decision.action == "discard":
-                store.write_stats["rejected"] += 1
-                if decision.duplicate_of and decision.duplicate_of in store.cards:
-                    return decision.duplicate_of
-                return store.ensure_id(normalized_card)
-
-            if decision.action == "update" and decision.merges:
-                updated_ids = self._apply_dedup_merge_updates(decision.merges)
-                if updated_ids:
-                    store.write_stats["updated"] += 1
-                    store.write_stats["updated_target_cards"] += len(updated_ids)
-                    return updated_ids[0]
-
-        store.write_stats["added"] += 1
-        return self._save_new_card_and_flush(normalized_card)
+    def sweep_harmful(self) -> list[str]:
+        """Evict every card whose injection posterior is confidently harmful."""
+        return self.write_pipeline.sweep()
 
     def save(self, data: str, category: str = "general") -> str:
         """Save a text description as a new memory card."""
@@ -427,7 +440,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         self._last_seen_index_mtime = mtime
 
-    def research(self, query: str, memory_state: str | None = None) -> ResearchOutput:
+    def research(
+        self,
+        query: str,
+        memory_state: str | None = None,
+        planning_request: str | None = None,
+    ) -> ResearchOutput:
         """Self-healing structured search.
 
         Refreshes from disk if a separate writer instance has advanced the
@@ -437,7 +455,11 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._refresh_from_disk_if_stale()
         if self.research_agent is not None:
             try:
-                return self.research_agent.research(query, memory_state=memory_state)
+                return self.research_agent.research(
+                    query,
+                    memory_state=memory_state,
+                    planning_request=planning_request,
+                )
             except Exception as exc:
                 logger.warning(
                     "[Memory][Store] GAM research failed, falling back to local cards: {}",

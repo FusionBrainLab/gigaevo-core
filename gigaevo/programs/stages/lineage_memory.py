@@ -29,7 +29,6 @@ from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import StageIO, StringContainer, StringList
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
@@ -805,53 +804,6 @@ class IntraMemoryInputs(StageIO):
     children_ids: StringList | None = None
 
 
-class _ConcatMemoryInputs(StageIO):
-    """Optional inputs combined into a single memory block."""
-
-    intra: StringContainer | None
-    extra: StringContainer | None
-    cards: StringContainer | None
-
-
-_SECTION_HEADERS = {
-    "intra": "## PARENT LINEAGE CARD",
-    "extra": "## EXTRA EVIDENCE",
-    "cards": "## CROSS-POP MEMORY CARDS",
-}
-
-
-@StageRegistry.register(
-    description="Concat intra/extra/cards memory blocks into a single memory string"
-)
-class ConcatMemoryStage(Stage):
-    """Joins intra/extra/cards memory blocks into a single ``memory`` string.
-
-    Each present slot is rendered under an explicit provenance header so the
-    downstream mutator can tell parent-lineage evidence from cross-population
-    memory cards (preserves the distinction the v2 architecture review flagged
-    as lost by a raw ``\\n\\n`` join). Empty inputs are dropped; if everything
-    is empty the output is an empty string (which MutationContextStage already
-    skips).
-    """
-
-    InputsModel: type[StageIO] = _ConcatMemoryInputs
-    OutputModel: type[StageIO] = StringContainer
-    cache_handler = NO_CACHE
-
-    async def compute(self, program: Program) -> StageIO:  # noqa: ARG002 — program unused
-        params = cast(_ConcatMemoryInputs, self.params)
-        sections: list[str] = []
-        for slot_name, slot in (
-            ("intra", params.intra),
-            ("extra", params.extra),
-            ("cards", params.cards),
-        ):
-            if slot is not None and slot.data.strip():
-                header = _SECTION_HEADERS[slot_name]
-                sections.append(f"{header}\n\n{slot.data.strip()}")
-        return StringContainer(data="\n\n".join(sections))
-
-
 @StageRegistry.register(description="Per-program lineage card (intra memory)")
 class IntraMemoryStage(Stage):
     """Build a per-program lineage card from this program's evaluated children.
@@ -868,8 +820,8 @@ class IntraMemoryStage(Stage):
     changes, and this stage re-renders the card.
 
     Writes the rendered card to ``program.metadata['intra_memory_card']`` and
-    emits a ``StringContainer`` so ``ConcatMemoryStage`` / ``MutationContextStage``
-    can splice it into the next mutation prompt for X's future children.
+    emits a ``StringContainer`` so ``MutationContextStage`` can splice it into
+    the next mutation prompt for X's future children.
     """
 
     InputsModel: type[StageIO] = IntraMemoryInputs

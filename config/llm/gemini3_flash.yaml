@@ -20,4 +20,4 @@ llm:
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
   probabilities: [1.0]
-  writer: ${writer}
+  writer: ${ref:writer}

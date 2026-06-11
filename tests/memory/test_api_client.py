@@ -233,7 +233,17 @@ def _make_memory(tmp_path, **overrides):
 
 
 class TestDecideCardAction:
-    def test_no_llm_returns_add(self, tmp_path):
+    def test_unreachable_llm_defaults_to_discard(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.dedup.llm_service = MagicMock()
+        mem.dedup.llm_service.generate.side_effect = RuntimeError("unreachable")
+        result = mem.dedup.ask_llm_for_dedup_decision(
+            normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
+        )
+        assert result["action"] == "discard"
+        assert result["reason"] == "dedup llm unavailable"
+
+    def test_no_llm_configured_defaults_to_add(self, tmp_path):
         mem = _make_memory(tmp_path)
         result = mem.dedup.ask_llm_for_dedup_decision(
             normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]

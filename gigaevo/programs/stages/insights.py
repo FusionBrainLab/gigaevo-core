@@ -44,7 +44,7 @@ class InsightsStage(LangGraphStage):
         llm: ChatOpenAI | MultiModelRouter,
         task_description: str,
         metrics_context: MetricsContext,
-        max_insights: int = 7,
+        max_insights: int = 5,
         prompts_dir: str | Path | None = None,
         **kwargs: Any,
     ) -> None:

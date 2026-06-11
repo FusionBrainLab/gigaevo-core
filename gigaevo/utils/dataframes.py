@@ -215,11 +215,11 @@ def prepare_iteration_dataframe(
     sentinel_value: float | None = None,
 ) -> pd.DataFrame:
     if fitness_col not in df.columns:
-        logger.warning("No fitness metric found in dataframe")
+        logger.warning("[DataFrames] No fitness metric found in dataframe")
         return pd.DataFrame()
 
     if iteration_col not in df.columns:
-        logger.warning("No iteration metadata found in dataframe")
+        logger.warning("[DataFrames] No iteration metadata found in dataframe")
         return pd.DataFrame()
 
     df = df.copy()
@@ -239,12 +239,12 @@ def prepare_iteration_dataframe(
             df = df[~sentinel_mask]
             pct_sentinel = 100.0 * n_sentinel / n_before
             logger.info(
-                f"Sentinel removal: removed {n_sentinel}/{n_before} "
+                f"[DataFrames] Sentinel removal: removed {n_sentinel}/{n_before} "
                 f"({pct_sentinel:.1f}%) points with fitness == {sentinel_value}"
             )
             n_before = len(df)
             if df.empty:
-                logger.warning("All data points were sentinel values")
+                logger.warning("[DataFrames] All data points were sentinel values")
                 return pd.DataFrame()
 
     if extreme_value_cutoff is None:
@@ -262,12 +262,12 @@ def prepare_iteration_dataframe(
             pct_extreme = 100.0 * n_extreme / n_before
             direction = ">=" if minimize else "<="
             logger.info(
-                f"Extreme value removal: removed {n_extreme}/{n_before} "
+                f"[DataFrames] Extreme value removal: removed {n_extreme}/{n_before} "
                 f"({pct_extreme:.1f}%) points with fitness {direction} {extreme_value_cutoff}"
             )
             n_before = len(df)
             if df.empty:
-                logger.warning("All data points were extreme values")
+                logger.warning("[DataFrames] All data points were extreme values")
                 return pd.DataFrame()
 
     if remove_outliers:
@@ -285,11 +285,11 @@ def prepare_iteration_dataframe(
             pct = 100.0 * n_outliers / n_before
             bound_desc = f"above {upper:.4g}" if minimize else f"below {lower:.4g}"
             logger.info(
-                f"Outlier removal ({outlier_method}, side={outlier_side}): "
+                f"[DataFrames] Outlier removal ({outlier_method}, side={outlier_side}): "
                 f"removed {n_outliers}/{n_before} ({pct:.1f}%) points {bound_desc}"
             )
         if df.empty:
-            logger.warning("All data points were classified as outliers")
+            logger.warning("[DataFrames] All data points were classified as outliers")
             return pd.DataFrame()
 
     df = df[df[iteration_col].notna()].copy()
@@ -373,14 +373,14 @@ def fetch_frontier_from_redis(
                 frontier[iteration] = value
             except (json.JSONDecodeError, ValueError, TypeError):
                 logger.warning(
-                    f"Failed to parse frontier entry for {redis_prefix}/{metric_key}: {entry_json}"
+                    f"[DataFrames] Failed to parse frontier entry for {redis_prefix}/{metric_key}: {entry_json}"
                 )
                 continue
 
         return frontier if frontier else None
     except Exception as e:
         logger.warning(
-            f"Failed to fetch frontier from Redis {redis_prefix}@{redis_db}:{metric_key}: {e}"
+            f"[DataFrames] Failed to fetch frontier from Redis {redis_prefix}@{redis_db}:{metric_key}: {e}"
         )
         return None
 
@@ -399,7 +399,7 @@ def add_frontier_from_redis_to_dataframe(
     )
     if frontier_series is None:
         logger.info(
-            f"Frontier not available in Redis for {redis_prefix}; using computed frontier"
+            f"[DataFrames] Frontier not available in Redis for {redis_prefix}; using computed frontier"
         )
         return df
 
@@ -408,6 +408,6 @@ def add_frontier_from_redis_to_dataframe(
     df_copy["frontier_fitness"] = df_copy["frontier_fitness"].ffill()
 
     logger.info(
-        f"Loaded frontier from Redis for {redis_prefix}: {len(frontier_series)} iterations"
+        f"[DataFrames] Loaded frontier from Redis for {redis_prefix}: {len(frontier_series)} iterations"
     )
     return df_copy

@@ -2,15 +2,14 @@
 
 Tests the complete end-to-end flow:
 1. Create memory backend, save idea cards (simulating IdeaTracker output)
-2. Search memory with queries (simulating MemorySelectorAgent)
+2. Search memory with queries (simulating the memory read pipeline)
 3. Verify memory cards influence mutation context
 4. Test the write → persist → reload → search roundtrip
-5. Test MemorySelectorAgent directly with mocked backend
+5. Test MemoryReadPipeline directly with mocked backend
 
 All tests run without OPENAI_API_KEY, Redis, Chroma, or network.
 """
 
-import asyncio
 import copy
 from dataclasses import dataclass, field
 import json
@@ -19,7 +18,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
+from gigaevo.memory.core import LLMCardSelector
 from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
     parse_llm_card_decision,
@@ -28,6 +27,7 @@ from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.memory.write_pipeline import load_memory_cards
 from tests.fakes.agentic_memory import make_test_memory
+from tests.fakes.read_pipeline import make_read_pipeline
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,6 +41,10 @@ def _make_memory(tmp_path, **overrides):
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+_SEED = 20260604
+_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
 
 
 def _make_idea_card(idea_id, description, task="Solve the task", **extra):
@@ -311,7 +315,7 @@ class TestMemoryWritePipeline:
 
 
 # ===========================================================================
-# INTEGRATION TEST 3: MemorySelectorAgent with mocked backend
+# INTEGRATION TEST 3: MemoryReadPipeline with mocked backend
 # ===========================================================================
 
 
@@ -334,19 +338,14 @@ def _final_raw(card_ids):
 
 
 class TestMemorySelectorIntegration:
-    """Test MemorySelectorAgent.select() with a real AmemGamMemory backend."""
+    """Test MemoryReadPipeline.select() with a real AmemGamMemory backend."""
 
-    def _make_selector_with_memory(self, tmp_path, ideas):
-        """Create a MemorySelectorAgent with pre-filled local memory."""
+    def _make_pipeline_with_memory(self, tmp_path, ideas):
+        """Create a MemoryReadPipeline with pre-filled local memory."""
         mem = _make_memory(tmp_path)
         for idea in ideas:
             mem.save_card(idea)
-
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = mem
-        return selector
+        return make_read_pipeline(mem, seed=_SEED), mem
 
     @pytest.mark.asyncio
     async def test_select_returns_relevant_cards(self, tmp_path):
@@ -355,23 +354,21 @@ class TestMemorySelectorIntegration:
                 "idea-1",
                 "Use simulated annealing for optimization",
                 keywords=["annealing", "optimization"],
+                evolution_statistics=_PROVEN_STATS,
             ),
             _make_idea_card(
                 "idea-2", "Apply crossover for diversity", keywords=["crossover"]
             ),
         ]
-        selector = self._make_selector_with_memory(tmp_path, ideas)
-        selector.memory.research = lambda *a, **k: _FakeResearchResult(
-            _final_raw(["idea-1"])
-        )
+        pipeline, mem = self._make_pipeline_with_memory(tmp_path, ideas)
+        mem.research = lambda *a, **k: _FakeResearchResult(_final_raw(["idea-1"]))
         parent = FakeProgram(code="def solve(): return sum(x)")
 
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="Optimize the function using annealing",
             metrics_description="fitness: accuracy",
-            memory_text="",
             max_cards=3,
         )
 
@@ -381,18 +378,14 @@ class TestMemorySelectorIntegration:
 
     @pytest.mark.asyncio
     async def test_select_with_no_memory_returns_empty(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = "test: no backend"
-        selector.memory = None
+        pipeline = make_read_pipeline(None, seed=_SEED)
 
         parent = FakeProgram()
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="test",
             metrics_description="fitness",
-            memory_text="",
             max_cards=3,
         )
 
@@ -402,15 +395,14 @@ class TestMemorySelectorIntegration:
     @pytest.mark.asyncio
     async def test_select_max_cards_zero_returns_empty(self, tmp_path):
         ideas = [_make_idea_card("idea-1", "test idea")]
-        selector = self._make_selector_with_memory(tmp_path, ideas)
+        pipeline, _ = self._make_pipeline_with_memory(tmp_path, ideas)
         parent = FakeProgram()
 
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="test",
             metrics_description="fitness",
-            memory_text="",
             max_cards=0,
         )
 
@@ -418,13 +410,8 @@ class TestMemorySelectorIntegration:
         assert selection.card_ids == []
 
     def test_build_request_format(self, tmp_path):
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = None
-
         parent = FakeProgram(code="def solve(x):\n    return x + 1")
-        query = selector._build_request(
+        query = LLMCardSelector().build_query(
             parents=[parent],
             mutation_mode="rewrite",
             task_description="Solve the optimization problem",
@@ -444,7 +431,7 @@ class TestMemorySelectorIntegration:
         assert "pick up to 3 card(s)" in query
 
     def test_parse_final_decision_extracts_card_ids(self, tmp_path):
-        """_parse_final_decision turns raw_memory.final_decision into ExperimentalDecision."""
+        """shortlist() turns raw_memory.final_decision into an ordered id list."""
         raw_memory = {
             "final_decision": {
                 "mode": "final",
@@ -452,15 +439,12 @@ class TestMemorySelectorIntegration:
                 "additional_queries": [],
             },
         }
-        decision = MemorySelectorAgent._parse_final_decision(raw_memory)
-        ids = [idea.card_id for idea in decision.top_ideas]
-        assert ids == ["idea-1", "idea-2"]
+        assert LLMCardSelector().shortlist(raw_memory) == ["idea-1", "idea-2"]
 
     def test_parse_final_decision_handles_invalid_shape(self, tmp_path):
         """Non-dict or missing final_decision returns an empty decision."""
         for raw in (None, "not-a-dict", {}, {"final_decision": "not-a-dict"}):
-            decision = MemorySelectorAgent._parse_final_decision(raw)
-            assert decision.top_ideas == []
+            assert LLMCardSelector().shortlist(raw) == []
 
 
 # ===========================================================================
@@ -515,7 +499,7 @@ class TestFullMemoryCycle:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
         mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.9}]
         )
@@ -568,7 +552,7 @@ class TestFullMemoryCycle:
 
 
 class TestSearchFallbackPaths:
-    """Test memory-side failure handling exposed through MemorySelectorAgent.select()
+    """Test memory-side failure handling exposed through MemoryReadPipeline.select()
     and other top-level parse/API helpers."""
 
     @pytest.mark.asyncio
@@ -584,18 +568,14 @@ class TestSearchFallbackPaths:
 
         mem.research = _boom  # type: ignore[method-assign]
 
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = mem
+        pipeline = make_read_pipeline(mem, seed=_SEED)
 
         parent = FakeProgram(code="def solve(x):\n    return x\n")
-        selection = await selector.select(
-            input=[parent],
+        selection = await pipeline.select(
+            parents=[parent],
             mutation_mode="rewrite",
             task_description="annealing",
             metrics_description="fitness",
-            memory_text="",
             max_cards=3,
         )
         assert selection.cards == []

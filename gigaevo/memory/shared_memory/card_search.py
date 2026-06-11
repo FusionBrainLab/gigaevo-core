@@ -6,7 +6,9 @@ results via an LLM service.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import re
+from typing import Any
 
 from loguru import logger
 
@@ -14,97 +16,117 @@ from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
 from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
 
 
-def _overlap_ratio(a: str, b: str) -> float:
-    if not a or not b:
-        return 0.0
-    short, long_s = (a, b) if len(a) <= len(b) else (b, a)
-    matches = sum(
-        1 for i in range(len(short)) if i < len(long_s) and short[i] == long_s[i]
-    )
-    return matches / max(len(short), 1)
+def _card_field(card: Any, name: str, default: Any = None) -> Any:
+    if isinstance(card, Mapping):
+        return card.get(name, default)
+    return getattr(card, name, default)
 
 
-def apply_render_filters(cards: list[AnyCard]) -> list[AnyCard]:
-    mem_cards: list[MemoryCard] = []
-    prog_cards: list[ProgramCard] = []
-    for c in cards:
-        if isinstance(c, ProgramCard):
-            prog_cards.append(c)
-        elif isinstance(c, MemoryCard):
-            mem_cards.append(c)
-
-    def _stats(card: MemoryCard) -> dict[str, float]:
-        es = card.evolution_statistics or {}
-        return {
-            "support": int(es.get("support", 0)),
-            "delta_best": float(es.get("delta_best", 0.0)),
-        }
-
-    def _has_keyword(card: AnyCard, key: str) -> bool:
-        return any(kw == key for kw in (card.keywords or []))
-
-    def _canonical(card: MemoryCard) -> str | None:
-        for kw in card.keywords or []:
-            if isinstance(kw, str) and kw.startswith("canonical:"):
-                return kw
-        return None
-
-    filtered_mem: list[MemoryCard] = []
-    for c in mem_cards:
-        s = _stats(c)
-        if _has_keyword(c, "verified:false") and s["support"] < 3:
-            continue
-        filtered_mem.append(c)
-
-    seen: dict[str, MemoryCard] = {}
-    for c in filtered_mem:
-        ck = _canonical(c)
-        if ck is None:
-            seen[c.id] = c
-            continue
-        prev = seen.get(ck)
-        if prev is None or _stats(c)["delta_best"] > _stats(prev)["delta_best"]:
-            seen[ck] = c
-    filtered_mem = list(seen.values())
-
-    def _first60(card: MemoryCard) -> str:
-        return (card.description or "").strip()[:60].lower()
-
-    with_canon: list[MemoryCard] = [c for c in filtered_mem if _canonical(c)]
-    without_canon: list[MemoryCard] = [c for c in filtered_mem if not _canonical(c)]
-
-    dedup_no_canon: list[MemoryCard] = []
-    for c in without_canon:
-        prefix = _first60(c)
-        if any(_overlap_ratio(prefix, _first60(d)) > 0.7 for d in dedup_no_canon):
-            continue
-        dedup_no_canon.append(c)
-
-    dedup_mem = with_canon + dedup_no_canon
-
-    dedup_mem.sort(
-        key=lambda c: _stats(c)["support"] * max(_stats(c)["delta_best"], 0.0),
-        reverse=True,
-    )
-
-    def _filter_prog(c: ProgramCard) -> bool:
-        if _has_keyword(c, "pending_analysis:true"):
-            return False
-        if not (c.description or "").strip() and not c.connected_ideas:
-            return False
+def _is_program_card(card: Any) -> bool:
+    if isinstance(card, ProgramCard):
         return True
-
-    filtered_prog = [c for c in prog_cards if _filter_prog(c)]
-    filtered_prog.sort(
-        key=lambda c: c.fitness if c.fitness is not None else 0.0,
-        reverse=True,
+    if isinstance(card, MemoryCard):
+        return False
+    cid = str(_card_field(card, "id", "") or "")
+    cat = str(_card_field(card, "category", "") or "")
+    return (
+        cat == "program"
+        or cid.startswith("program-")
+        or bool(_card_field(card, "program_id"))
     )
 
-    return dedup_mem + filtered_prog
+
+def format_card_efficacy(card: Any) -> str | None:
+    """One legible per-card endorsement line for the mutator, or None.
+
+    MemoryCard: rendered only when the Beta-Binomial downside posterior is
+    confident (``evolution_statistics["ALL"].efficacy_confident``) — non-confident
+    and no-signal cards stay silent (description only). ProgramCard: exemplar fitness.
+    """
+    if card is None:
+        return None
+    if _is_program_card(card):
+        fitness = _card_field(card, "fitness")
+        if fitness is None:
+            return None
+        return f"efficacy: exemplar fitness {float(fitness):.4f}"
+
+    stats = _card_field(card, "evolution_statistics") or {}
+    if not isinstance(stats, Mapping):
+        return None
+    all_block = stats.get("ALL") or {}
+    intros = int(all_block.get("intro_events") or 0)
+    # Raw child-minus-parent medians are dominated by weak parents regressing to
+    # the frontier; the cohort-adjusted median (gain minus the parent-local
+    # counterfactual the posterior already uses) is the honest effect size.
+    # Legacy banks without the field fall back to the raw median.
+    adj_median = all_block.get("IntroGain_best_adj_median")
+    median = (
+        adj_median if adj_median is not None else all_block.get("IntroGain_best_median")
+    )
+    if intros <= 0 or median is None:
+        return None
+    if not all_block.get("efficacy_confident"):
+        return None
+    scale = " vs cohort" if adj_median is not None else ""
+    # Gains are stored in "positive = improvement" space regardless of metric
+    # direction (analyse() negates for minimize metrics), so the wording must be
+    # direction-neutral — "fitness change +x" would read inverted on minimize.
+    line = (
+        f"efficacy: introduced in {intros} children; "
+        f"median improvement{scale} {float(median):+.4f}"
+    )
+    downside = all_block.get("DownsideRate_best")
+    if downside is not None:
+        line += f"; downside {float(downside):.0%}"
+    # A noise-band-confident posterior with a losing median must never read as
+    # an endorsement.
+    if float(median) <= 0:
+        return line + " (caution: non-positive median)"
+    return line + " (confident)"
+
+
+def run_card_auction(
+    candidates: list[tuple[str, float, float]],
+    rng: Any,
+    baseline: tuple[float, float] = (3.0, 3.0),
+) -> tuple[list[str], list[dict]]:
+    """Thompson auction: each card's posterior draw competes against a no-card arm.
+
+    For each ``(card_id, a, b)`` draw ``theta ~ Beta(a, b)`` and a fresh no-card
+    ``base ~ Beta(*baseline)``; select the card iff ``theta > base``. Winners are the
+    emergent 0..N subset; ``records`` keep the per-candidate draws for offline audit.
+
+    Retained as the seed-exactness golden oracle for ``ThompsonAuctioneer``
+    (tests/memory/test_core_efficacy.py pins draw-order equality); production
+    selection goes through the core auctioneer.
+    """
+    base_a, base_b = baseline
+    winners: list[str] = []
+    records: list[dict] = []
+    for card_id, a, b in candidates:
+        theta = float(rng.beta(a, b))
+        base_theta = float(rng.beta(base_a, base_b))
+        selected = theta > base_theta
+        if selected:
+            winners.append(card_id)
+        records.append(
+            {
+                "card_id": card_id,
+                "a": float(a),
+                "b": float(b),
+                "theta": theta,
+                "baseline_a": float(base_a),
+                "baseline_b": float(base_b),
+                "baseline_theta": base_theta,
+                "selected": selected,
+            }
+        )
+    return winners, records
 
 
 def format_search_results(query: str, cards: list[AnyCard]) -> str:
-    """Format search results as numbered card list for MemorySelectorAgent parsing."""
+    """Format search results as numbered card list for LLM card-selector parsing."""
     lines = [f"Query: {query}", "", "Top relevant memory cards:"]
     for idx, card in enumerate(cards, start=1):
         lines.append(f"{idx}. {card.id} [{card.category}] {card.description.strip()}")

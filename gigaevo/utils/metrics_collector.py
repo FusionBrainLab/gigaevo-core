@@ -52,7 +52,7 @@ def start_metrics_collector(
                             continue
                         writer.scalar(k, float(v))
             except Exception as e:
-                logger.debug("Error collecting metrics: {}", e)
+                logger.debug("[MetricsCollector] Error collecting metrics: {}", e)
                 await asyncio.sleep(interval)
                 continue
 

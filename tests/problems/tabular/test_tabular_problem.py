@@ -126,6 +126,57 @@ def test_k_folds_env_validation(monkeypatch):
     assert tabular_problem._k_folds() == 5
 
 
+def test_aggregate_fitness_defaults_to_mean(monkeypatch):
+    monkeypatch.delenv("GIGAEVO_TABULAR_FITNESS", raising=False)
+    assert tabular_problem._aggregate_fitness(0.7, 0.03, 5) == 0.7
+
+
+def test_aggregate_fitness_lcb_subtracts_standard_error(monkeypatch):
+    monkeypatch.setenv("GIGAEVO_TABULAR_FITNESS", "lcb")
+    monkeypatch.delenv("GIGAEVO_TABULAR_LCB_LAMBDA", raising=False)
+    got = tabular_problem._aggregate_fitness(0.7, 0.03, 5)
+    assert got == pytest.approx(0.7 - 0.03 / np.sqrt(5))
+
+
+def test_aggregate_fitness_lcb_lambda_scales_penalty(monkeypatch):
+    monkeypatch.setenv("GIGAEVO_TABULAR_FITNESS", "lcb")
+    monkeypatch.setenv("GIGAEVO_TABULAR_LCB_LAMBDA", "2.0")
+    got = tabular_problem._aggregate_fitness(0.7, 0.03, 5)
+    assert got == pytest.approx(0.7 - 2.0 * 0.03 / np.sqrt(5))
+
+
+def test_aggregate_fitness_lcb_single_fold_no_penalty(monkeypatch):
+    monkeypatch.setenv("GIGAEVO_TABULAR_FITNESS", "lcb")
+    assert tabular_problem._aggregate_fitness(0.7, 0.0, 1) == 0.7
+
+
+def test_aggregate_fitness_invalid_mode_raises(monkeypatch):
+    monkeypatch.setenv("GIGAEVO_TABULAR_FITNESS", "bogus")
+    with pytest.raises(ValueError):
+        tabular_problem._aggregate_fitness(0.7, 0.03, 5)
+
+
+def test_lcb_lambda_env_must_be_float(monkeypatch):
+    monkeypatch.setenv("GIGAEVO_TABULAR_FITNESS", "lcb")
+    monkeypatch.setenv("GIGAEVO_TABULAR_LCB_LAMBDA", "notafloat")
+    with pytest.raises(ValueError):
+        tabular_problem._aggregate_fitness(0.7, 0.03, 5)
+
+
+def test_validate_lcb_fitness_is_mean_minus_se(data_root, monkeypatch):
+    # public-API contract: same deterministic split -> lcb fitness == mean fitness - SE
+    monkeypatch.delenv("GIGAEVO_TABULAR_FITNESS", raising=False)
+    base = tabular_problem.build("california").validate(lambda: _RidgeReg())
+    monkeypatch.setenv("GIGAEVO_TABULAR_FITNESS", "lcb")
+    lcb = tabular_problem.build("california").validate(lambda: _RidgeReg())
+    k = tabular_problem._k_folds()
+    assert lcb["cv_score_std"] == pytest.approx(base["cv_score_std"])
+    assert lcb["fitness"] == pytest.approx(
+        base["fitness"] - base["cv_score_std"] / np.sqrt(k)
+    )
+    assert lcb["fitness"] <= base["fitness"]
+
+
 def _yaml_keys(fname):
     p = Path(__file__).resolve().parents[3] / "problems" / "tabular" / "_common" / fname
     return set(yaml.safe_load(p.read_text())["specs"].keys())

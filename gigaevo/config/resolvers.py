@@ -22,6 +22,11 @@ def _ref_resolver(path, *, _root_):
     # Instantiate if node is a config object
     if isinstance(node, (DictConfig, ListConfig)):
         instantiated_node = instantiate(node, _recursive_=True)
+        # The write-back stores an arbitrary python object in the tree;
+        # outside hydra.utils.instantiate (which sets it implicitly) the
+        # parent must allow objects or OmegaConf raises UnsupportedValueType.
+        if isinstance(parent, (DictConfig, ListConfig)):
+            parent._set_flag("allow_objects", True)
         parent[base] = instantiated_node
     else:
         instantiated_node = node

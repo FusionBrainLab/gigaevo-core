@@ -12,34 +12,40 @@ import asyncio
 from datetime import datetime
 from functools import cached_property
 import json
+import math
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
-import pandas as pd
 
-from gigaevo.evolution.engine.hooks import PostRunHook
+from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.llm.models import MultiModelRouter
+from gigaevo.memory.backend_factory import MemoryBackendFactory
+from gigaevo.memory.core.protocols import Deduplicator, Evictor, MemoryAdmitter
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
     ClusteringAnalyzer,
 )
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank, build_usage_payload
+from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     ProgramRecord,
-    UsagePayload,
     program_to_record,
 )
+from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryResponse
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
     analyse as _analyse_origins,
 )
-from gigaevo.memory.utils import parse_string_list, to_float
+from gigaevo.memory.shared_memory.injection_posterior import (
+    compute_injection_posterior,
+)
+from gigaevo.memory.utils import to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
@@ -49,6 +55,12 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _nan_to_none(value: Any) -> Any:
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
 
 
 def _hf_cache_dir_usable(path: Path) -> bool:
@@ -129,9 +141,10 @@ def _summarise_task_description(analyzer: Analyzer, task_description: str) -> st
     if not text:
         return "Task summary unavailable"
     try:
-        raw = analyzer.call("task_description_summary", text)
-        parsed = json.loads(raw)
-        summary = str(parsed.get("summary", "")).strip()
+        parsed = analyzer.call_structured(
+            "task_description_summary", SummaryResponse, text
+        )
+        summary = parsed.summary.strip()
         return summary or text[:240].strip()
     except Exception as exc:
         logger.warning(
@@ -139,64 +152,6 @@ def _summarise_task_description(analyzer: Analyzer, task_description: str) -> st
             exc,
         )
         return text[:240].strip()
-
-
-def _compute_usage_updates_from_program_selection(
-    programs: list[Program],
-    task_summary: str,
-    fitness_key: str,
-    *,
-    higher_is_better: bool = True,
-) -> dict[str, UsagePayload]:
-    """Build per-memory-card usage payloads from program fitness deltas.
-
-    Delta is always improvement-positive: positive = card helped, negative = hurt.
-    For lower-is-better tasks, the best parent is the min-fitness parent and
-    improvement is parent - child."""
-    fitness_by_id: dict[str, float] = {}
-    for prog in programs:
-        is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
-        if is_valid is None or is_valid <= 0:
-            continue
-        f = to_float(prog.metrics.get(fitness_key))
-        if f is not None:
-            fitness_by_id[prog.id] = f
-
-    best_parent_op = max if higher_is_better else min
-
-    usage_by_card: dict[str, dict[str, list[float]]] = {}
-    for prog in programs:
-        is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
-        if is_valid is None or is_valid <= 0:
-            continue
-        selected = parse_string_list(
-            prog.metadata.get(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
-        )
-        if not selected:
-            continue
-        child_fitness = to_float(prog.metrics.get(fitness_key))
-        if child_fitness is None:
-            continue
-        parent_fitnesses = [
-            fitness_by_id[pid] for pid in prog.lineage.parents if pid in fitness_by_id
-        ]
-        if not parent_fitnesses:
-            continue
-        best_parent = best_parent_op(parent_fitnesses)
-        delta = (
-            child_fitness - best_parent
-            if higher_is_better
-            else best_parent - child_fitness
-        )
-        for card_id in list(dict.fromkeys(selected)):
-            usage_by_card.setdefault(card_id, {}).setdefault(task_summary, []).append(
-                delta
-            )
-
-    return {
-        card_id: build_usage_payload(task_deltas)
-        for card_id, task_deltas in usage_by_card.items()
-    }
 
 
 def _select_ideas_needing_enrichment(
@@ -217,8 +172,10 @@ async def _enrich_ideas_with_keywords_and_summaries(
     async def _enrich_one(idea: Idea) -> Idea:
         keywords: list[str] = []
         try:
-            kw_raw = await analyzer.call_async("keywords", idea.description)
-            keywords = json.loads(kw_raw).get("keywords", [])
+            kw_parsed = await analyzer.call_structured_async(
+                "keywords", KeywordsResponse, idea.description
+            )
+            keywords = kw_parsed.keywords
         except Exception as exc:
             logger.warning(
                 "[Memory][IdeaTracker] Keyword extraction failed for idea {!r}: {}",
@@ -233,8 +190,10 @@ async def _enrich_ideas_with_keywords_and_summaries(
         elif len(entries) > 1:
             explanations_text = "\n".join(f"- {e}" for e in entries)
             try:
-                sum_raw = await analyzer.call_async("usage_summary", explanations_text)
-                summary = json.loads(sum_raw).get("summary", "")
+                sum_parsed = await analyzer.call_structured_async(
+                    "usage_summary", SummaryResponse, explanations_text
+                )
+                summary = sum_parsed.summary
             except Exception as exc:
                 logger.warning(
                     "[Memory][IdeaTracker] Summary generation failed for idea {!r}: {}",
@@ -253,26 +212,80 @@ async def _enrich_ideas_with_keywords_and_summaries(
     return list(await asyncio.gather(*[_enrich_one(idea) for idea in ideas]))
 
 
+def _valid_fitness(prog: Program, fitness_key: str) -> float | None:
+    """Fitness under ``fitness_key``, or ``None`` for invalid / non-finite programs.
+
+    Invalid programs carry a sentinel floor fitness; treating it as a real value
+    would manufacture catastrophic harm (invalid child) or phantom improvement
+    (invalid parent baseline). Mirrors the offline lifecycle reconstruction so the
+    live posterior equals the validated one.
+    """
+    is_valid = prog.metrics.get(VALIDITY_KEY)
+    if is_valid is not None and is_valid <= 0:
+        return None
+    fit = prog.metrics.get(fitness_key)
+    if fit is None or not math.isfinite(fit):
+        return None
+    return float(fit)
+
+
+def _card_posterior_from_programs(
+    programs: list[Program],
+    *,
+    fitness_key: str,
+    higher_is_better: bool,
+) -> dict[str, dict[str, Any]]:
+    """Injection-efficacy posterior per injected card id, from live programs.
+
+    Extracts each program's id, parents, valid fitness, and the
+    ``memory_selected_idea_ids`` stamped when that program was mutated — the cards
+    its children's prompts contained — then delegates to the pure
+    ``compute_injection_posterior``, which credits each card with its children's
+    outcomes. The result is keyed by the injected cards' own ids (idea and
+    ``program-<uuid>`` alike) so every auction candidate draws a real downside
+    posterior.
+    """
+    rows = [
+        {
+            "id": prog.id,
+            "parents": prog.lineage.parents,
+            "fitness": _valid_fitness(prog, fitness_key),
+            "selected_ids": prog.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+            or [],
+        }
+        for prog in programs
+    ]
+    return compute_injection_posterior(rows, higher_is_better=higher_is_better)
+
+
 def _run_write_pipeline(
     enabled: bool,
     banks_path: Path | None,
     best_ideas_path: Path | None,
     programs_path: Path | None,
-    usage_updates_path: Path | None,
-    memory_usage_tracking_enabled: bool,
-    config_path: Path | None = None,
+    backend: MemoryBackendFactory | None,
     checkpoint_dir: str | Path | None = None,
-    namespace: str | None = None,
+    best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
+    card_posterior: dict[str, dict[str, Any]] | None = None,
+    evictor: Evictor | None = None,
+    deduplicator: Deduplicator | None = None,
 ) -> None:
     """Optionally trigger the downstream memory write pipeline.
 
-    ``checkpoint_dir`` and ``namespace`` (when set) override the values from
-    ``config_path`` so per-run artefacts land under the Hydra output dir
-    instead of the static fallback in ``config/memory_backend.yaml``.
+    ``backend`` (a Hydra-composed ``memory/backend`` factory) builds the card
+    bank; it must be non-None whenever ``enabled`` is True (IdeaTracker
+    enforces this at construction). ``checkpoint_dir`` pins per-run artefacts
+    under the Hydra output dir.
     """
     if not enabled:
         return
+    if backend is None:
+        raise ValueError(
+            "memory write pipeline enabled but no backend factory provided; "
+            "compose one via the Hydra `memory/backend` group "
+            "(ideas_tracker configs override the shared `memory.backend` singleton to `local`)."
+        )
     if banks_path is None or best_ideas_path is None:
         logger.warning(
             "[Memory][IdeaTracker] write pipeline skipped: log paths unavailable."
@@ -302,15 +315,6 @@ def _run_write_pipeline(
     effective_programs_path = (
         programs_path if (programs_path and programs_path.exists()) else None
     )
-    effective_usage_updates_path = (
-        usage_updates_path
-        if (
-            memory_usage_tracking_enabled
-            and usage_updates_path
-            and usage_updates_path.exists()
-        )
-        else None
-    )
 
     from gigaevo.memory.write_pipeline import main as _write_main
 
@@ -318,11 +322,13 @@ def _run_write_pipeline(
         banks_path=banks_path,
         best_ideas_path=best_ideas_path,
         programs_path=effective_programs_path,
-        usage_updates_path=effective_usage_updates_path,
-        config_path=config_path,
+        backend=backend,
         checkpoint_dir=checkpoint_dir,
-        namespace=namespace,
+        best_programs_percent=best_programs_percent,
         higher_is_better=higher_is_better,
+        card_posterior=card_posterior,
+        evictor=evictor,
+        deduplicator=deduplicator,
     )
     if isinstance(snapshot, dict):
         stats = snapshot.get("stats", {})
@@ -347,15 +353,20 @@ class _SessionLog:
     files to a timestamped session directory in a single flush() call.
 
     Replaces the per-event read-modify-write pattern of IdeasTrackerLogger.
-    Files written: log.txt, banks.json, programs.json, best_ideas.json,
-    memory_usage_updates.json.
+    Files written: log.txt, banks.json, programs.json, best_ideas.json.
     """
 
-    def __init__(self, logs_dir: Path) -> None:
+    def __init__(
+        self,
+        logs_dir: Path,
+        admitter: MemoryAdmitter | None = None,
+        higher_is_better: bool = True,
+    ) -> None:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.session_dir: Path = logs_dir / ts
         self._entries: list[str] = []
-        self._usage_updates: dict[str, UsagePayload] = {}
+        self._admitter = admitter
+        self._higher_is_better = higher_is_better
 
     # ------ file paths ------
     @property
@@ -370,10 +381,6 @@ class _SessionLog:
     def best_ideas_file(self) -> Path:
         return self.session_dir / "best_ideas.json"
 
-    @property
-    def usage_updates_file(self) -> Path:
-        return self.session_dir / "memory_usage_updates.json"
-
     # ------ recording ------
 
     def record(self, action: str, **params: Any) -> None:
@@ -382,9 +389,6 @@ class _SessionLog:
         for k, v in params.items():
             lines.append(f"  {k}: {v}")
         self._entries.append("\n".join(lines))
-
-    def record_usage_updates(self, updates: dict[str, UsagePayload]) -> None:
-        self._usage_updates = updates
 
     # ------ flush ------
 
@@ -420,22 +424,6 @@ class _SessionLog:
             json.dumps(programs_data, indent=2), encoding="utf-8"
         )
 
-        self.usage_updates_file.write_text(
-            json.dumps(
-                [
-                    {
-                        "timestamp": ts,
-                        "usage_updates": {
-                            card_id: payload.model_dump()
-                            for card_id, payload in self._usage_updates.items()
-                        },
-                    }
-                ],
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-
         self._compute_and_write_statistics()
 
     def _compute_and_write_statistics(self) -> None:
@@ -446,9 +434,9 @@ class _SessionLog:
             _result = _analyse_origins(
                 banks_path=str(self.banks_file),
                 programs_path=str(self.programs_file),
+                admitter=self._admitter,
+                higher_is_better=self._higher_is_better,
             )
-            df_summary = _result.summary_df
-            df_best_ideas = _result.best_ideas_df
         except RuntimeError as exc:
             if "No valid programs" in str(exc):
                 return
@@ -460,19 +448,20 @@ class _SessionLog:
             )
             return
 
-        if df_summary.empty:
+        if not _result.summary:
             return
 
         # Inject per-idea stats into banks.json
         stats_by_idea: dict[str, dict] = {}
-        for _, row in df_summary.iterrows():
-            idea_id = str(row["idea_id"])
-            quartile = str(row["quartile"])
+        for stats_row in _result.summary:
             metrics = {
-                k: (v if pd.notna(v) else None)
-                for k, v in row.drop(["idea_id", "quartile", "description"]).items()
+                k: _nan_to_none(v)
+                for k, v in stats_row.as_row().items()
+                if k not in ("idea_id", "quartile", "description")
             }
-            stats_by_idea.setdefault(idea_id, {})[quartile] = metrics
+            stats_by_idea.setdefault(stats_row.idea_id, {})[stats_row.quartile] = (
+                metrics
+            )
 
         banks_data = json.loads(self.banks_file.read_text(encoding="utf-8"))
         for snapshot in banks_data:
@@ -485,8 +474,8 @@ class _SessionLog:
 
         # Write best_ideas.json
         best_ideas = [
-            {k: (v if pd.notna(v) else None) for k, v in row.items()}
-            for _, row in df_best_ideas.iterrows()
+            {k: _nan_to_none(v) for k, v in stats_row.as_row().items()}
+            for stats_row in _result.best_ideas
         ]
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.best_ideas_file.write_text(
@@ -509,7 +498,6 @@ _CLUSTERING_ANALYZER_KEYS = frozenset(
         "max_attempts",
         "max_rounds",
         "refine_subgroup_size",
-        "llm_max_concurrent",
     }
 )
 
@@ -517,33 +505,22 @@ _CLUSTERING_ANALYZER_KEYS = frozenset(
 def _build_analyzer_from_hydra_fields(
     *,
     analyzer_type: str,
-    analyzer_model: str,
-    analyzer_base_url: str,
-    analyzer_reasoning: dict[str, Any] | None,
+    llm: MultiModelRouter,
     analyzer_fast_settings: dict[str, Any] | None,
     description_rewriting: bool,
     analyzer_max_concurrent_classifications: int = 8,
 ) -> ClassifyingAnalyzer | ClusteringAnalyzer:
     """Construct ClassifyingAnalyzer or ClusteringAnalyzer from flat Hydra kwargs."""
-    base_url = (analyzer_base_url or "").strip() or None
-    reasoning = analyzer_reasoning
     kind = (analyzer_type or "default").strip().lower()
 
     if kind == "fast":
         fast = dict(analyzer_fast_settings or {})
         fast.pop("recompute_center", None)
         extra = {k: v for k, v in fast.items() if k in _CLUSTERING_ANALYZER_KEYS}
-        return ClusteringAnalyzer(
-            model=analyzer_model,
-            base_url=base_url,
-            reasoning=reasoning,
-            **extra,
-        )
+        return ClusteringAnalyzer(llm=llm, **extra)
 
     return ClassifyingAnalyzer(
-        model=analyzer_model,
-        base_url=base_url,
-        reasoning=reasoning,
+        llm=llm,
         description_rewriting=description_rewriting,
         max_concurrent_classifications=analyzer_max_concurrent_classifications,
     )
@@ -554,7 +531,7 @@ def _build_analyzer_from_hydra_fields(
 # ---------------------------------------------------------------------------
 
 
-class IdeaTracker(PostRunHook):
+class IdeaTracker(IncrementalPostRunHook):
     """
     PostRunHook that extracts, classifies, enriches, and stores improvement
     ideas from a completed evolutionary run.
@@ -563,27 +540,25 @@ class IdeaTracker(PostRunHook):
     both implement the Analyzer protocol, so the pipeline is identical for both.
 
     Args:
-        analyzer: Explicit analyser instance. When omitted, one is built from the
-            Hydra-style fields below (``analyzer_type``, ``analyzer_model``, …).
+        analyzer: Explicit analyser instance. When omitted, one is built from
+            ``llm`` and the Hydra-style fields below.
+        llm: Memory LLM router for the analyser (Hydra ``llms`` group, composed
+            via ``/llms@ideas_tracker.llm``). Required when ``analyzer`` is None.
         analyzer_type: ``"default"`` → ClassifyingAnalyzer; ``"fast"`` → ClusteringAnalyzer.
-        analyzer_model / analyzer_base_url / analyzer_reasoning: Passed to the analyser.
         analyzer_fast_settings: Extra kwargs for ClusteringAnalyzer when ``fast``.
-        list_max_ideas, postprocessing_type, record_conversion_type,
-        memory_write_best_programs_percent: Accepted for YAML compatibility;
-            the refactored pipeline does not use all of them yet.
-        checkpoint_dir: Overrides the ``paths.checkpoint_dir`` value loaded
-            from ``config/memory_backend.yaml`` so per-run cards land under
-            the Hydra output dir. When ``None``, the YAML default is used.
-        namespace: Overrides the ``api.namespace`` value loaded from
-            ``config/memory_backend.yaml``. When ``None``, the YAML default
-            is used.
+        memory_write_best_programs_percent: Share of top-fitness programs
+            converted into program cards by the write pipeline.
+        backend: Memory backend factory (Hydra ``memory/backend`` group) used
+            by the write pipeline to build the card bank. Required whenever
+            ``memory_write_enabled`` is True — ideas_tracker configs share the
+            top-level ``memory.backend`` singleton via ``${ref:memory.backend}``.
+        checkpoint_dir: Pins per-run memory cards under the Hydra output dir.
         task_description: Human-readable description of the current task. If empty,
             loaded from the matching problems/ directory using redis_prefix.
         redis_prefix: Redis key prefix (e.g. "chains/hotpotqa/static") used to
             locate the task_description.txt file when task_description is empty.
         chunk_size: Number of ideas per LLM classification batch.
         memory_write_enabled: If True, trigger the downstream memory write pipeline.
-        memory_usage_tracking_enabled: If True, compute fitness deltas for memory cards.
         fitness_key: Metric key to use as fitness (default "fitness").
         logs_dir: Directory for timestamped session logs. Defaults to
             gigaevo/memory/ideas_tracker/logs/.
@@ -593,44 +568,52 @@ class IdeaTracker(PostRunHook):
         self,
         *,
         analyzer: Analyzer | None = None,
+        llm: MultiModelRouter | None = None,
         analyzer_type: str = "default",
-        analyzer_model: str = "google/gemini-3-flash-preview",
-        analyzer_base_url: str = "https://openrouter.ai/api/v1",
-        analyzer_reasoning: dict[str, Any] | None = None,
         analyzer_fast_settings: dict[str, Any] | None = None,
         analyzer_max_concurrent_classifications: int = 8,
-        list_max_ideas: int = 20,
-        postprocessing_type: str = "default",
         description_rewriting: bool = True,
-        record_conversion_type: str = "default",
         memory_write_enabled: bool = True,
         memory_write_best_programs_percent: float = 5.0,
-        memory_usage_tracking_enabled: bool = True,
+        backend: MemoryBackendFactory | None = None,
         checkpoint_dir: str | Path | None = None,
-        namespace: str | None = None,
         task_description: str = "",
         redis_prefix: str = "",
         chunk_size: int = 5,
         fitness_key: str = "fitness",
         fitness_higher_is_better: bool = True,
         logs_dir: str | Path | None = None,
-        config_path: Path | None = None,
+        admitter: MemoryAdmitter | None = None,
+        evictor: Evictor | None = None,
+        deduplicator: Deduplicator | None = None,
         **extras: Any,
     ) -> None:
         if extras:
-            logger.debug(
+            logger.warning(
                 "[Memory][IdeaTracker] ignoring extra instantiate kwargs: {}", extras
+            )
+        if memory_write_enabled and backend is None:
+            raise ValueError(
+                "IdeaTracker: memory_write_enabled=True requires an explicit "
+                "backend factory; wire the shared `memory.backend` node (`${ref:memory.backend}`) "
+                "(ideas_tracker configs do this by default) or pass "
+                "memory_write_enabled=False."
             )
 
         _ensure_writable_hf_cache()
         if analyzer is None:
+            if llm is None:
+                raise ValueError(
+                    "IdeaTracker: building an analyzer requires an LLM router; "
+                    "compose `/llms@ideas_tracker.llm: gemini_flash_openrouter` "
+                    "(ideas_tracker configs do this by default) or pass an "
+                    "explicit analyzer."
+                )
             analyzer = cast(
                 Analyzer,
                 _build_analyzer_from_hydra_fields(
                     analyzer_type=analyzer_type,
-                    analyzer_model=analyzer_model,
-                    analyzer_base_url=analyzer_base_url,
-                    analyzer_reasoning=analyzer_reasoning,
+                    llm=llm,
                     analyzer_fast_settings=analyzer_fast_settings,
                     description_rewriting=description_rewriting,
                     analyzer_max_concurrent_classifications=analyzer_max_concurrent_classifications,
@@ -642,10 +625,11 @@ class IdeaTracker(PostRunHook):
         self._fitness_key = fitness_key
         self._fitness_higher_is_better = fitness_higher_is_better
         self._memory_write_enabled = memory_write_enabled
-        self._memory_usage_tracking_enabled = memory_usage_tracking_enabled
-        self._config_path = config_path
+        self._best_programs_percent = memory_write_best_programs_percent
+        self._backend = backend
         self._checkpoint_dir = checkpoint_dir
-        self._namespace = namespace
+        self._evictor = evictor
+        self._deduplicator = deduplicator
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
         self._last_entry_count: dict[str, int] = {}
@@ -663,7 +647,11 @@ class IdeaTracker(PostRunHook):
             else Path(__file__).resolve().parent / "logs"
         )
         resolved_logs.mkdir(parents=True, exist_ok=True)
-        self._log = _SessionLog(resolved_logs)
+        self._log = _SessionLog(
+            resolved_logs,
+            admitter=admitter,
+            higher_is_better=fitness_higher_is_better,
+        )
 
     @cached_property
     def _task_summary(self) -> str:
@@ -696,32 +684,25 @@ class IdeaTracker(PostRunHook):
     # Core pipeline
     # ------------------------------------------------------------------
 
-    async def run_increment(self, programs: list[Program]) -> None:
-        """Full pipeline: filter → analyse → enrich → log → write."""
-        records = self._eligible_records(programs)
+    async def run_increment(
+        self,
+        programs: list[Program],
+        *,
+        posterior_programs: list[Program] | None = None,
+    ) -> None:
+        """Full pipeline: filter → analyse → enrich → log → write.
 
-        # Only access _task_summary (LLM) when there's actual work to do
-        _has_valid_fitness = any(
-            to_float(p.metrics.get(VALIDITY_KEY))
-            and to_float(p.metrics.get(self._fitness_key)) is not None
-            for p in programs
-        )
-        if self._memory_usage_tracking_enabled and _has_valid_fitness:
-            usage_updates = _compute_usage_updates_from_program_selection(
-                programs,
-                self._task_summary,
-                self._fitness_key,
-                higher_is_better=self._fitness_higher_is_better,
-            )
-            self._log.record_usage_updates(usage_updates)
-        else:
-            usage_updates = {}
+        ``programs`` feeds the expensive LLM analyzer and may be a bounded
+        window (the live hook caps it to keep each sweep inside the engine's
+        time budget). ``posterior_programs`` feeds the cheap, pure injection
+        posterior, which needs the full program set so child→parent lineage
+        resolves; a capped window would sever lineage and collapse the
+        intro-event population. Defaults to ``programs`` when not supplied.
+        """
+        records = self._eligible_records(programs)
 
         result = await self._analyzer.analyze_async(records, self._bank)
         self._bank.apply(result)
-
-        if self._memory_usage_tracking_enabled and usage_updates:
-            self._bank.apply_usage_updates(usage_updates)
 
         if records:
             stale_ideas = _select_ideas_needing_enrichment(
@@ -746,17 +727,24 @@ class IdeaTracker(PostRunHook):
         self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
         self._log.flush(self._bank, records=self._all_records)
 
+        card_posterior = _card_posterior_from_programs(
+            programs if posterior_programs is None else posterior_programs,
+            fitness_key=self._fitness_key,
+            higher_is_better=self._fitness_higher_is_better,
+        )
+
         _run_write_pipeline(
             self._memory_write_enabled,
             self._log.banks_file,
             self._log.best_ideas_file,
             self._log.programs_file,
-            self._log.usage_updates_file,
-            self._memory_usage_tracking_enabled,
-            config_path=self._config_path,
+            backend=self._backend,
             checkpoint_dir=self._checkpoint_dir,
-            namespace=self._namespace,
+            best_programs_percent=self._best_programs_percent,
             higher_is_better=self._fitness_higher_is_better,
+            card_posterior=card_posterior,
+            evictor=self._evictor,
+            deduplicator=self._deduplicator,
         )
 
     def _eligible_records(self, programs: list[Program]) -> list[ProgramRecord]:

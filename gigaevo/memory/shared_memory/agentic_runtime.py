@@ -3,25 +3,28 @@
 Replaces the try/except lazy-import pattern in AmemGamMemory._load_agentic_classes()
 with a clean factory that returns a typed bundle of resolved classes, or None.
 
-Also provides factory functions for LLM/generator and A-MEM storage init.
+Also provides the A-MEM storage init factory.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
-import gigaevo.memory.config as env_config
-from gigaevo.memory.langchain_llm_service import LangChainLLMService
-from gigaevo.memory.shared_memory.card_conversion import DEFAULT_MODEL_NAME
 from gigaevo.memory.shared_memory.protocols import (
     AgenticMemoryProtocol,
-    GeneratorProtocol,
     LLMServiceProtocol,
 )
+
+
+def configure_huggingface_timeouts() -> None:
+    # HF hub's 10s defaults flake when pulling embedding models on shared NFS boxes.
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
 
 
 class AgenticRuntime(BaseModel):
@@ -72,54 +75,13 @@ def load_agentic_runtime() -> AgenticRuntime | None:
     )
 
 
-def init_llm_and_generator(
-    *,
-    generator_cls: type[Any] | None,
-    dedup_enabled: bool,
-) -> tuple[LLMServiceProtocol | None, GeneratorProtocol | None]:
-    """Create LLM service + generator from environment config.
-
-    Returns ``(None, None)`` when deps are unavailable.
-    """
-    if generator_cls is None and not dedup_enabled:
-        return None, None
-
-    api_key = env_config.OPENAI_API_KEY
-    if not api_key and env_config.LLM_BASE_URL:
-        api_key = "EMPTY"
-
-    if not api_key:
-        logger.info(
-            "[Memory][Runtime] OPENAI_API_KEY/OPENROUTER_API_KEY is not set. "
-            "Agentic retrieval is disabled; API full-text fallback is available."
-        )
-        return None, None
-
-    try:
-        llm_service: LLMServiceProtocol = LangChainLLMService(
-            model_name=env_config.OPENROUTER_MODEL_NAME or DEFAULT_MODEL_NAME,
-            api_key=api_key,
-            base_url=env_config.LLM_BASE_URL,
-            temperature=0.0,
-            max_tokens=None,
-            reasoning=env_config.OPENROUTER_REASONING,
-            structured_output_method=env_config.STRUCTURED_OUTPUT_METHOD,
-        )
-        if generator_cls is None:
-            return llm_service, None
-        generator: GeneratorProtocol = generator_cls({"llm_service": llm_service})
-        return llm_service, generator
-    except Exception as exc:
-        logger.warning("[Memory][Runtime] Could not initialize LLM/generator: {}", exc)
-        return None, None
-
-
 def init_agentic_storage(
     *,
     llm_service: LLMServiceProtocol | None,
     system_cls: type[Any] | None,
     checkpoint_dir: Path,
     enable_evolution: bool,
+    embedding_model_name: str,
 ) -> AgenticMemoryProtocol | None:
     """Create the A-MEM agentic memory system (Chroma vector store).
 
@@ -127,9 +89,10 @@ def init_agentic_storage(
     """
     if llm_service is None or system_cls is None:
         return None
+    configure_huggingface_timeouts()
     try:
         return system_cls(
-            model_name=env_config.AMEM_EMBEDDING_MODEL_NAME,
+            model_name=embedding_model_name,
             llm_backend="custom",
             llm_service=llm_service,
             chroma_persist_dir=checkpoint_dir / "chroma",

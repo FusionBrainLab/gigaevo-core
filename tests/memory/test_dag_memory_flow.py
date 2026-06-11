@@ -33,7 +33,8 @@ from gigaevo.evolution.mutation.context import (
     MetricsMutationContext,
 )
 from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
-from gigaevo.llm.agents.memory_selector import MemorySelection
+from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
+from gigaevo.memory.core import MemorySelection
 from gigaevo.memory.provider import NullMemoryProvider, SelectorMemoryProvider
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -107,13 +108,15 @@ def _mutation_ctx_inputs(**overrides) -> dict:
 def _make_selector_provider(
     cards: list[str], card_ids: list[str], max_cards: int = 3
 ) -> SelectorMemoryProvider:
-    mock_selector = AsyncMock()
-    mock_selector.select.return_value = MemorySelection(
+    mock_pipeline = AsyncMock()
+    mock_pipeline.select.return_value = MemorySelection(
         cards=cards,
         card_ids=card_ids,
     )
-    provider = SelectorMemoryProvider(max_cards=max_cards)
-    provider._selector = mock_selector
+    provider = SelectorMemoryProvider(
+        backend=LocalMemoryBackendFactory(), max_cards=max_cards
+    )
+    provider._pipeline = mock_pipeline
     return provider
 
 
@@ -154,13 +157,12 @@ class TestMemoryFlowsThroughMutationContext:
 
         # Step 3: Verify memory appears in final context
         context_str = cast(StringContainer, ctx_output).data
-        assert "Memory Instructions" in context_str
         assert "Sort evidence" in context_str
         assert "Filter low-confidence" in context_str
 
         # Step 4: Verify context written to program metadata
         assert MUTATION_CONTEXT_METADATA_KEY in program.metadata
-        assert "Memory Instructions" in program.metadata[MUTATION_CONTEXT_METADATA_KEY]
+        assert "Sort evidence" in program.metadata[MUTATION_CONTEXT_METADATA_KEY]
 
     @pytest.mark.asyncio
     async def test_null_provider_produces_no_memory_section(self) -> None:
@@ -175,8 +177,9 @@ class TestMemoryFlowsThroughMutationContext:
         ctx_stage._params_obj = None
         ctx_output = await ctx_stage.compute(program)
 
+        assert memory_output.data == ""
         context_str = cast(StringContainer, ctx_output).data
-        assert "Memory Instructions" not in context_str
+        assert context_str == "No context available."
 
     @pytest.mark.asyncio
     async def test_memory_combines_with_metrics_context(self) -> None:
@@ -200,7 +203,6 @@ class TestMemoryFlowsThroughMutationContext:
 
         context_str = cast(StringContainer, ctx_output).data
         # Both sections present
-        assert "Memory Instructions" in context_str
         assert "Use BFS over DFS" in context_str
         assert "fitness" in context_str.lower()
 
@@ -529,8 +531,7 @@ class TestMemoryInCompositeContext:
             contexts=[MemoryMutationContext(memory_block="1. Sort by relevance")]
         )
         result = ctx.format()
-        assert "Memory Instructions" in result
-        assert "Sort by relevance" in result
+        assert result == "1. Sort by relevance"
 
     def test_memory_with_metrics(self) -> None:
         metrics_ctx = _make_metrics_context()
@@ -546,7 +547,6 @@ class TestMemoryInCompositeContext:
         result = ctx.format()
         # Both sections present
         assert "fitness" in result.lower()
-        assert "Memory Instructions" in result
         assert "simulated annealing" in result
 
     def test_empty_memory_excluded(self) -> None:
@@ -554,14 +554,14 @@ class TestMemoryInCompositeContext:
             contexts=[MemoryMutationContext(memory_block="")]
         )
         result = ctx.format()
-        assert "Memory Instructions" not in result
+        assert result == "No context available."
 
     def test_whitespace_only_memory_excluded(self) -> None:
         ctx = CompositeMutationContext(
             contexts=[MemoryMutationContext(memory_block="   \n\t  ")]
         )
         result = ctx.format()
-        assert "Memory Instructions" not in result
+        assert result == "No context available."
 
     def test_multiple_cards_joined_with_double_newline(self) -> None:
         """MemoryContextStage joins cards with double newline."""
@@ -624,7 +624,7 @@ class TestMemoryEdgeCases:
         stage = _make_memory_stage(provider=provider)
         program = _make_program()
         result = await stage.compute(program)
-        assert len(cast(StringContainer, result).data) == 10000
+        assert long_text in cast(StringContainer, result).data
 
     @pytest.mark.asyncio
     async def test_special_characters_in_cards(self) -> None:
@@ -654,26 +654,6 @@ class TestMemoryEdgeCases:
         with pytest.raises(RuntimeError, match="Memory backend unavailable"):
             await stage.compute(_make_program())
 
-    @pytest.mark.asyncio
-    async def test_cards_with_ids_but_empty_card_ids_list(self) -> None:
-        """Cards present but card_ids empty — still produces output, no metadata."""
-        mock_selector = AsyncMock()
-        mock_selector.select.return_value = MemorySelection(
-            cards=["1. Try BFS"],
-            card_ids=[],  # empty IDs (edge case)
-        )
-        provider = SelectorMemoryProvider(max_cards=1)
-        provider._selector = mock_selector
-
-        stage = _make_memory_stage(provider=provider)
-        program = _make_program()
-        result = await stage.compute(program)
-
-        # Cards present → text returned
-        assert "Try BFS" in cast(StringContainer, result).data
-        # But card_ids stored is empty list
-        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
-
 
 # ===========================================================================
 # 8. Hydra config group contracts
@@ -690,7 +670,9 @@ class TestHydraConfigContracts:
 
     def test_selector_provider_target_with_max_cards(self) -> None:
         """SelectorMemoryProvider accepts max_cards kwarg (from config/memory/local.yaml)."""
-        provider = SelectorMemoryProvider(max_cards=5)
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=5
+        )
         assert provider._max_cards == 5
 
     def test_selector_provider_target_with_all_params(self) -> None:
@@ -698,29 +680,24 @@ class TestHydraConfigContracts:
         provider = SelectorMemoryProvider(
             max_cards=3,
             checkpoint_dir="/tmp/test",
-            namespace="hover-memory-exp",
+            backend=LocalMemoryBackendFactory(),
         )
         assert provider._max_cards == 3
         assert provider._checkpoint_dir == "/tmp/test"
-        assert provider._namespace == "hover-memory-exp"
+        assert isinstance(provider._backend_factory, LocalMemoryBackendFactory)
 
-    def test_selector_provider_passes_checkpoint_dir_to_agent(self) -> None:
-        """checkpoint_dir flows to MemorySelectorAgent constructor."""
-        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
-            mock_instance = AsyncMock()
-            mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
-            mock_cls.return_value = mock_instance
-
+    def test_selector_provider_passes_checkpoint_dir_to_backend(self) -> None:
+        """checkpoint_dir flows to the backend factory's build()."""
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
             provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(),
                 max_cards=3,
                 checkpoint_dir="/data/memory",
-                namespace="test-ns",
             )
             # Trigger lazy creation
-            provider._get_selector()
+            provider._get_pipeline()
 
-            mock_cls.assert_called_once_with(
-                checkpoint_dir="/data/memory",
-                namespace="test-ns",
-                use_api=False,
-            )
+            mock_build.assert_called_once()
+            assert mock_build.call_args.kwargs["checkpoint_dir"] == "/data/memory"

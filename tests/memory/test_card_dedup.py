@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_update_dedup import (
     QUERY_DESCRIPTION,
     QUERY_DESCRIPTION_EXPLANATION_SUMMARY,
@@ -10,7 +9,6 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     build_dedup_queries,
     compute_weighted_candidates,
     merge_updated_card,
-    merge_usage_payloads,
     parse_llm_card_decision,
 )
 
@@ -38,9 +36,9 @@ def test_compute_weighted_candidates_uses_all_query_scores() -> None:
     assert ranked[0]["final_score"] > ranked[1]["final_score"]
 
 
-def test_parse_llm_card_decision_supports_fenced_json() -> None:
-    raw = """```json
-{
+def test_parse_llm_card_decision_strict_json_contract() -> None:
+    """Strict contract: a bare JSON payload parses; fenced JSON is invalid → None."""
+    payload = """{
   "action": "update",
   "reason": "same core idea, new task and extra explanation",
   "duplicate_of": "",
@@ -55,15 +53,17 @@ def test_parse_llm_card_decision_supports_fenced_json() -> None:
       "explanation_summary": "robust clipping for noisy cases"
     }
   ]
-}
-```"""
-    decision = parse_llm_card_decision(raw, candidate_ids={"card-1", "card-2"})
+}"""
+    decision = parse_llm_card_decision(payload, candidate_ids={"card-1", "card-2"})
 
     assert decision["action"] == "update"
     assert len(decision["updates"]) == 1
     assert decision["updates"][0]["card_id"] == "card-2"
     assert decision["updates"][0]["update_task_description"] is True
     assert decision["updates"][0]["update_explanation"] is True
+
+    fenced = f"```json\n{payload}\n```"
+    assert parse_llm_card_decision(fenced, candidate_ids={"card-1", "card-2"}) is None
 
 
 def test_merge_updated_card_appends_context_and_explanations() -> None:
@@ -152,52 +152,3 @@ def test_build_dedup_queries_skip_full_task_description_fallback() -> None:
         queries[QUERY_DESCRIPTION_TASK_DESCRIPTION_SUMMARY]
         == "IDEA_DESCRIPTION: Apply adaptive clipping"
     )
-
-
-def test_merge_usage_payloads_accumulates_per_task_and_total() -> None:
-    existing_usage = {
-        "used": {
-            "entries": [
-                {
-                    "task_description_summary": "task A",
-                    "used_count": 1,
-                    "fitness_delta_per_use": [0.1],
-                    "median_delta_fitness": 0.1,
-                }
-            ],
-            "total_used": 1,
-            "median_delta_fitness": 0.1,
-        }
-    }
-    incoming_usage = {
-        "used": {
-            "entries": [
-                {
-                    "task_description_summary": "task A",
-                    "used_count": 1,
-                    "fitness_delta_per_use": [0.3],
-                    "median_delta_fitness": 0.3,
-                },
-                {
-                    "task_description_summary": "task B",
-                    "used_count": 1,
-                    "fitness_delta_per_use": [-0.2],
-                    "median_delta_fitness": -0.2,
-                },
-            ],
-            "total_used": 2,
-            "median_delta_fitness": 0.05,
-        }
-    }
-
-    merged = merge_usage_payloads(existing_usage, incoming_usage)
-    assert isinstance(merged, UsagePayload)
-    assert merged.total_used == 3
-    assert merged.median_delta_fitness == 0.1
-
-    entries = {entry.task_description_summary: entry for entry in merged.entries}
-    assert entries["task A"].used_count == 2
-    assert entries["task A"].fitness_delta_per_use == [0.1, 0.3]
-    assert entries["task A"].median_delta_fitness == 0.2
-    assert entries["task B"].used_count == 1
-    assert entries["task B"].fitness_delta_per_use == [-0.2]

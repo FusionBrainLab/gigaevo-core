@@ -6,18 +6,15 @@ Complements test_memory_card_update_dedup.py with adversarial inputs.
 import json
 
 # Also test private helpers that are critical to correctness
-from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_update_dedup import (
     CardUpdateDedupConfig,
     RetrievalWeights,
-    _extract_json_object,
     append_unique_text,
     compute_weighted_candidates,
     dedupe_keep_order,
     get_explanation_summary,
     get_full_explanations,
     merge_updated_card,
-    merge_usage_payloads,
     parse_llm_card_decision,
 )
 from gigaevo.memory.utils import to_float
@@ -187,42 +184,6 @@ class TestComputeWeightedCandidatesEdgeCases:
 
 
 # ===========================================================================
-# _extract_json_object
-# ===========================================================================
-
-
-class TestExtractJsonObject:
-    def test_plain_json(self):
-        assert _extract_json_object('{"key": "value"}') == {"key": "value"}
-
-    def test_fenced_json(self):
-        text = '```json\n{"key": "value"}\n```'
-        assert _extract_json_object(text) == {"key": "value"}
-
-    def test_json_embedded_in_text(self):
-        text = 'Here is my answer: {"action": "add"} end'
-        result = _extract_json_object(text)
-        assert result == {"action": "add"}
-
-    def test_empty(self):
-        assert _extract_json_object("") is None
-
-    def test_none(self):
-        assert _extract_json_object(None) is None
-
-    def test_non_dict_json(self):
-        assert _extract_json_object("[1, 2, 3]") is None
-
-    def test_garbage(self):
-        assert _extract_json_object("not json at all") is None
-
-    def test_nested_braces(self):
-        text = '{"a": {"b": 1}}'
-        result = _extract_json_object(text)
-        assert result == {"a": {"b": 1}}
-
-
-# ===========================================================================
 # parse_llm_card_decision edge cases
 # ===========================================================================
 
@@ -236,10 +197,11 @@ class TestParseLlmCardDecisionEdgeCases:
         result = parse_llm_card_decision("garbage text", candidate_ids={"c1"})
         assert result is None
 
-    def test_unknown_action_falls_back(self):
+    def test_unknown_action_returns_none(self):
+        """Strict contract: an action outside the Literal is invalid → retry."""
         text = json.dumps({"action": "destroy"})
         result = parse_llm_card_decision(text, candidate_ids={"c1"})
-        assert result["action"] == "add"
+        assert result is None
 
     def test_discard_without_duplicate_of_falls_back_to_add(self):
         text = json.dumps({"action": "discard"})
@@ -304,10 +266,11 @@ class TestParseLlmCardDecisionEdgeCases:
         result = parse_llm_card_decision(text, candidate_ids={"c1"})
         assert result["action"] == "discard"
 
-    def test_json_in_prose(self):
+    def test_json_in_prose_returns_none(self):
+        """Strict contract: JSON embedded in prose is invalid → retry."""
         text = 'Based on my analysis, the result is: {"action": "discard", "duplicate_of": "c1"} thank you.'
         result = parse_llm_card_decision(text, candidate_ids={"c1"})
-        assert result["action"] == "discard"
+        assert result is None
 
 
 # ===========================================================================
@@ -411,93 +374,6 @@ class TestDedupeKeepOrder:
 
     def test_all_same(self):
         assert dedupe_keep_order(["x", "x", "x"]) == ["x"]
-
-
-# ===========================================================================
-# merge_usage_payloads
-# ===========================================================================
-
-
-class TestMergeUsagePayloads:
-    def test_both_empty(self):
-        assert merge_usage_payloads({}, {}) == UsagePayload()
-
-    def test_existing_only(self):
-        existing = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task1",
-                        "fitness_delta_per_use": [0.1, 0.2],
-                    }
-                ]
-            }
-        }
-        result = merge_usage_payloads(existing, {})
-        assert isinstance(result, UsagePayload)
-        assert len(result.entries) == 1
-        assert result.entries[0].task_description_summary == "task1"
-
-    def test_incoming_only(self):
-        incoming = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task2",
-                        "fitness_delta_per_use": [0.3],
-                    }
-                ]
-            }
-        }
-        result = merge_usage_payloads({}, incoming)
-        assert isinstance(result, UsagePayload)
-        assert len(result.entries) == 1
-
-    def test_merge_same_task(self):
-        existing = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task1",
-                        "fitness_delta_per_use": [0.1],
-                    }
-                ]
-            }
-        }
-        incoming = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task1",
-                        "fitness_delta_per_use": [0.2],
-                    }
-                ]
-            }
-        }
-        result = merge_usage_payloads(existing, incoming)
-        assert isinstance(result, UsagePayload)
-        assert len(result.entries) == 1
-        assert result.entries[0].fitness_delta_per_use == [0.1, 0.2]
-
-    def test_nan_and_inf_filtered(self):
-        existing = {
-            "used": {
-                "entries": [
-                    {
-                        "task_description_summary": "task1",
-                        "fitness_delta_per_use": [float("nan"), float("inf"), 0.5],
-                    }
-                ]
-            }
-        }
-        result = merge_usage_payloads(existing, {})
-        assert isinstance(result, UsagePayload)
-        assert len(result.entries) == 1
-        assert result.entries[0].fitness_delta_per_use == [0.5]
-
-    def test_non_dict_inputs(self):
-        assert merge_usage_payloads(None, None) == UsagePayload()
-        assert merge_usage_payloads("bad", "bad") == UsagePayload()
 
 
 # ===========================================================================

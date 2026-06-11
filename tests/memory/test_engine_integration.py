@@ -1,6 +1,6 @@
 """Tests for how gigaevo core machinery interacts with the memory system.
 
-Tests the mutate_single → MemorySelectorAgent pipeline and memory metadata flow.
+Tests the mutate_single → MemoryReadPipeline flow and memory metadata flow.
 Memory instructions are now injected via the DAG pipeline (MemoryContextStage),
 not via explicit parameters on generate_mutations.
 """
@@ -12,7 +12,6 @@ import pytest
 from gigaevo.evolution.engine.mutation import generate_mutations
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.constants import (
-    MUTATION_MEMORY_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.programs.program import Program
@@ -52,13 +51,11 @@ class TestProgramMetadataRoundtrip:
         parent = Program(
             code="def f(): return 1",
             metadata={
-                MUTATION_MEMORY_METADATA_KEY: "1. Sort by relevance",
                 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY: ["idea-1", "idea-2"],
             },
         )
 
         # Verify the metadata is accessible
-        assert parent.metadata[MUTATION_MEMORY_METADATA_KEY] == "1. Sort by relevance"
         assert parent.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == [
             "idea-1",
             "idea-2",
@@ -66,7 +63,10 @@ class TestProgramMetadataRoundtrip:
 
         # Deep copy preserves metadata
         clone = parent.model_copy(deep=True)
-        assert clone.metadata[MUTATION_MEMORY_METADATA_KEY] == "1. Sort by relevance"
+        assert clone.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == [
+            "idea-1",
+            "idea-2",
+        ]
         # Modifying clone doesn't affect original
         clone.metadata["extra"] = "test"
         assert "extra" not in parent.metadata

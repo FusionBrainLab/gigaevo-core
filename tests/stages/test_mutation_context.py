@@ -289,7 +289,6 @@ class TestMutationContextStage:
         result = await stage.execute(prog)
 
         assert result.status == StageState.COMPLETED
-        assert "Memory Instructions" in result.output.data
         assert "Sort evidence" in result.output.data
         assert "Filter noise" in result.output.data
 
@@ -311,7 +310,7 @@ class TestMutationContextStage:
         result = await stage.execute(prog)
 
         assert result.status == StageState.COMPLETED
-        assert "Memory Instructions" not in result.output.data
+        assert result.output.data == "No context available."
 
     async def test_memory_combined_with_metrics(self):
         """Memory + metrics → both appear in composite context."""
@@ -332,7 +331,6 @@ class TestMutationContextStage:
 
         assert result.status == StageState.COMPLETED
         context = result.output.data
-        assert "Memory Instructions" in context
         assert "simulated annealing" in context
         assert "75" in context or "score" in context
 

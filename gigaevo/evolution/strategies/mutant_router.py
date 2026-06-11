@@ -49,13 +49,15 @@ class RandomMutantRouter(MutantRouter, IslandCompatibilityMixin):
         compatible_islands = await self._get_compatible_islands(mutant, islands)
 
         if not compatible_islands:
-            logger.debug(f"🚫 No compatible islands found for mutant {mutant.id}")
+            logger.debug(
+                f"[MutantRouter] 🚫 No compatible islands found for mutant {mutant.id}"
+            )
             return None
 
         selected = random.choice(compatible_islands)
 
         logger.debug(
-            f"🏝️ Routed mutant {mutant.id} to {selected.config.island_id} (random selection)"
+            f"[MutantRouter] 🏝️ Routed mutant {mutant.id} to {selected.config.island_id} (random selection)"
         )
 
         return selected

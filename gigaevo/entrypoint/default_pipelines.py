@@ -16,7 +16,6 @@ from gigaevo.entrypoint.constants import (
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.problems.layout import ProblemLayout
 from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
-from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.archive_gate import ArchivePotentialGateStage
 from gigaevo.programs.stages.base import Stage
@@ -34,7 +33,6 @@ from gigaevo.programs.stages.insights_lineage import (
     LineagesToDescendants,
 )
 from gigaevo.programs.stages.json_processing import MergeDictStage
-from gigaevo.programs.stages.memory_context import MemoryContextStage
 from gigaevo.programs.stages.metrics import EnsureMetricsStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.python_executors.execution import (
@@ -288,13 +286,10 @@ class DefaultPipelineBuilder(PipelineBuilder):
         problem_ctx = self.ctx.problem_ctx
         llm_wrapper = self.ctx.llm_wrapper
         storage = self.ctx.storage
-        memory_provider = self.ctx.memory_provider
         task_description = self.ctx.problem_ctx.task_description
         prompts_dir = self.ctx.prompts_dir
         stage_timeout = self._stage_timeout
         max_code_length = self._max_code_length
-        metrics_formatter = MetricsFormatter(metrics_context)
-        metrics_description = metrics_formatter.format_metrics_description()
 
         # ValidateCompiles
         self.add_stage(
@@ -432,16 +427,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
         self.add_stage(
-            "MemoryContextStage",
-            lambda: MemoryContextStage(
-                memory_provider=memory_provider,
-                task_description=task_description,
-                metrics_description=metrics_description,
-                timeout=stage_timeout,
-            ),
-        )
-
-        self.add_stage(
             "MutationContextStage",
             lambda: MutationContextStage(
                 metrics_context=metrics_context,
@@ -514,7 +499,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
         self.add_data_flow_edge("FetchArtifact", "FormatterStage", "data")
         self.add_data_flow_edge("FormatterStage", "MutationContextStage", "formatted")
-        self.add_data_flow_edge("MemoryContextStage", "MutationContextStage", "memory")
 
     def _contribute_default_deps(self) -> None:
         self._deps = {
@@ -551,9 +535,6 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 ExecutionOrderDependency.always_after("LineageStage"),
             ],
             "EvolutionaryStatisticsCollector": [
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ],
-            "MemoryContextStage": [
                 ExecutionOrderDependency.always_after("EnsureMetricsStage"),
             ],
         }

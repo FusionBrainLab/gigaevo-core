@@ -5,10 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 from GAM_root.gam import InMemoryMemoryStore, InMemoryPageStore
 from GAM_root.gam.retriever.base import AbsRetriever
 from GAM_root.gam.schemas import Hit, Page

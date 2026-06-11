@@ -2,7 +2,7 @@
 
 Each test simulates a realistic multi-step workflow:
   Run 1: evolution produces programs → IdeaTracker extracts ideas → write to memory
-  Run 2: memory loaded → MemorySelectorAgent queries → cards injected into mutation
+  Run 2: memory loaded → MemoryReadPipeline queries → cards injected into mutation
 
 All tests use local-only mode (no API, no network, no Redis).
 """
@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 import json
 from unittest.mock import MagicMock
 
-from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import Idea
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -20,10 +19,15 @@ from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.memory.write_pipeline import load_memory_cards
 from tests.fakes.agentic_memory import make_test_memory
+from tests.fakes.read_pipeline import make_read_pipeline
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+_SEED = 20260604
+_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
 
 
 def _make_memory(tmp_path, **overrides):
@@ -192,13 +196,14 @@ class TestScenarioTwoRunCycle:
         )
 
     def test_memory_guides_mutation(self, tmp_path):
-        """Full cycle: fill memory → MemorySelectorAgent.select() → cards in mutation."""
+        """Full cycle: fill memory → MemoryReadPipeline.select() → cards in mutation."""
         banks, best_ideas, _, _ = self._create_ideas_from_programs(tmp_path)
         cards = load_memory_cards(banks, best_ideas)
 
-        # Fill memory
+        # Fill memory; PROVEN posterior so the auction passes them deterministically.
         mem = _make_memory(tmp_path)
         for card in cards:
+            card.evolution_statistics = _PROVEN_STATS
             mem.save_card(card)
 
         # Reload (simulating new process)
@@ -219,11 +224,7 @@ class TestScenarioTwoRunCycle:
 
         mem2.research = lambda *a, **k: _FakeRaw()
 
-        # Create selector with real memory
-        selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-        selector._search_lock = asyncio.Lock()
-        selector._backend_error = None
-        selector.memory = mem2
+        pipeline = make_read_pipeline(mem2, seed=_SEED)
 
         # Simulate mutation query
         parent = FakeProgram(
@@ -234,12 +235,11 @@ class TestScenarioTwoRunCycle:
         loop = asyncio.new_event_loop()
         try:
             selection = loop.run_until_complete(
-                selector.select(
-                    input=[parent],
+                pipeline.select(
+                    parents=[parent],
                     mutation_mode="rewrite",
                     task_description="Multi-hop fact verification for HoVer dataset",
                     metrics_description="fitness: label accuracy on validation set",
-                    memory_text="",
                     max_cards=3,
                 )
             )
@@ -402,7 +402,7 @@ class TestScenarioDedup:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
         mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.9}]
         )
@@ -444,7 +444,7 @@ class TestScenarioDedup:
             None,
             None,
         )
-        mem.llm_service = mock_llm
+        mem.dedup.llm_service = mock_llm
         mem.dedup.score_duplicate_candidates = MagicMock(
             return_value=[{"card_id": "idea-1", "final_score": 0.85}]
         )

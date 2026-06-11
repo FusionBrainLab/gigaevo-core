@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import types
 from typing import Any, Generic, TypeVar, cast
 
@@ -9,7 +8,7 @@ from loguru import logger
 from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.common import AnyContainer, Box, StringContainer
+from gigaevo.programs.stages.common import Box
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
 K = TypeVar("K")
@@ -137,44 +136,3 @@ class MergeStrFloatDict(Stage):
             )
 
         return Box[dict[str, float]](data=merged)
-
-
-@StageRegistry.register(description="Parse JSON string into Python value")
-class ParseJSONStage(Stage):
-    InputsModel = StringContainer
-    OutputModel = AnyContainer
-
-    async def compute(self, program: Program) -> StageIO:
-        s = cast(StringContainer, self.params).data
-        try:
-            parsed = json.loads(s)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON: {e.msg} at pos {e.pos}") from e
-        logger.debug(
-            "[{}] parsed JSON -> {}", type(self).__name__, type(parsed).__name__
-        )
-        return AnyContainer(data=parsed)
-
-
-@StageRegistry.register(description="Stringify Python value to JSON")
-class StringifyJSONStage(Stage):
-    InputsModel = AnyContainer
-    OutputModel = StringContainer
-
-    def __init__(self, *, indent: int | None = None, **kwargs: Any):
-        super().__init__(**kwargs)
-        self.indent = indent
-
-    async def compute(self, program: Program) -> StageIO:
-        obj = cast(AnyContainer, self.params).data
-        try:
-            s = json.dumps(obj, indent=self.indent)
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"Cannot convert to JSON: {e}") from e
-        logger.debug(
-            "[{}] stringified {} -> {} chars",
-            type(self).__name__,
-            type(obj).__name__,
-            len(s),
-        )
-        return StringContainer(data=s)

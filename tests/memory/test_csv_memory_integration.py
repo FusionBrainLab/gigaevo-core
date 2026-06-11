@@ -10,13 +10,14 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 import uuid
 
 from gigaevo.memory.ideas_tracker.csv_loader import load_programs_from_csv
 from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 from gigaevo.memory.ideas_tracker.models import AnalysisResult
 from gigaevo.programs.program_state import ProgramState
+from tests.fakes.llm_router import FakeMemoryRouter
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,10 +76,6 @@ def _make_row(
     return row
 
 
-_LLM_PATCH = patch(
-    "gigaevo.memory.ideas_tracker.llm._init_clients",
-    return_value=(MagicMock(), MagicMock(), False),
-)
 _TASK_PATCH = patch(
     "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
     return_value="test task summary",
@@ -88,13 +85,12 @@ _TASK_PATCH = patch(
 def _make_tracker(tmp_path: Path, **kwargs) -> IdeaTracker:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    with _LLM_PATCH:
-        tracker = IdeaTracker(
-            logs_dir=logs_dir,
-            memory_write_enabled=False,
-            memory_usage_tracking_enabled=False,
-            **kwargs,
-        )
+    tracker = IdeaTracker(
+        llm=FakeMemoryRouter(),
+        logs_dir=logs_dir,
+        memory_write_enabled=False,
+        **kwargs,
+    )
     # Stub out the analyzer's async methods so no real LLM calls are made
     tracker._analyzer.analyze_async = AsyncMock(return_value=AnalysisResult())
     tracker._analyzer.call_async = AsyncMock(

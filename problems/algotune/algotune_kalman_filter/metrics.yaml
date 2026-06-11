@@ -11,7 +11,7 @@ specs:
     lower_bound: 1.0e-9
     upper_bound: 1000000.0
     include_in_prompts: true
-    significant_change: 1.0e-6
+    significant_change: 0.01
     sentinel_value: 0.0
   execution_time_sec:
     description: Median runtime of the full fixed-case entrypoint batch in seconds after warm-up, lower is better
@@ -21,7 +21,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 1000.0
     include_in_prompts: true
-    significant_change: 1.0e-6
+    significant_change: 0.01
     sentinel_value: 1000000.0
   timing_repetitions:
     description: Number of timed full-batch runs used to compute the median execution_time_sec
@@ -51,7 +51,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 1.0
     include_in_prompts: true
-    significant_change: 1.0e-6
+    significant_change: 0.01
     sentinel_value: 1.0
   exact_case_fraction:
     description: Fraction of fixed Kalman-filter cases whose trajectories are feasible and objective-optimal
@@ -61,7 +61,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 1.0
     include_in_prompts: true
-    significant_change: 1.0e-6
+    significant_change: 0.01
     sentinel_value: 0.0
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)

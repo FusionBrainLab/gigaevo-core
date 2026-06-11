@@ -8,9 +8,16 @@ from pydantic import BaseModel, Field
 class Result(BaseModel):
     """Search and integration result"""
 
-    content: str = Field("", description="Integrated content about the question")
+    content: str = Field(
+        "",
+        description=(
+            "Integrated relevance summary for the request. "
+            "Empty string when no useful information exists"
+        ),
+    )
     sources: list[str | None] = Field(
-        default_factory=list, description="List of page IDs of sources used"
+        default_factory=list,
+        description="Page IDs of the snippets that supported the included facts",
     )
 
     @classmethod
@@ -61,7 +68,13 @@ class ResearchOutput(BaseModel):
 class GenerateRequests(BaseModel):
     """Generate new requests"""
 
-    new_requests: list[str] = Field(..., description="List of new search requests")
+    new_requests: list[str] = Field(
+        ...,
+        description=(
+            "0-5 standalone retrieval questions, ranked most-critical first. "
+            "Empty when nothing important is missing"
+        ),
+    )
 
     @classmethod
     def model_json_schema(cls) -> dict[str, Any]:
@@ -89,13 +102,25 @@ class ExperimentalDecision(BaseModel):
     """Decision output for experimental reflection pipeline."""
 
     mode: Literal["final", "continue"] = Field(
-        ..., description="Pipeline decision mode"
+        ...,
+        description=(
+            "final = evidence is sufficient to select the top ideas; "
+            "continue = more retrieval is needed"
+        ),
     )
     top_ideas: list[TopIdea] = Field(
-        default_factory=list, description="Top ideas when mode=final"
+        default_factory=list,
+        description=(
+            "Selected ideas when mode=final, never padded with weak ideas. "
+            "Empty when mode=continue"
+        ),
     )
     additional_queries: list[str] = Field(
-        default_factory=list, description="Follow-up queries when mode=continue"
+        default_factory=list,
+        description=(
+            "1-5 concrete follow-up retrieval queries when mode=continue. "
+            "Empty when mode=final"
+        ),
     )
 
     @classmethod

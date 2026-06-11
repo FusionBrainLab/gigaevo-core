@@ -1,0 +1,13 @@
+# Canonical local card-bank backend; all knobs are LocalMemoryBackendFactory fields.
+# The memory LLM is the shared top-level `memory_llm` router (cheaper model than
+# evolution's); switch off via `memory.backend.llm=null`.
+_target_: gigaevo.memory.backend_factory.LocalMemoryBackendFactory
+llm: ${ref:memory_llm}
+checkpoint_dir: ${checkpoint_dir}
+embedding_model_name: all-MiniLM-L6-v2
+# Write-side LLM dedup on card ingest; scoring is skipped when llm is null.
+dedup:
+  enabled: true
+  top_k_per_query: 10
+  final_top_n: 10
+  min_final_score: 0.05

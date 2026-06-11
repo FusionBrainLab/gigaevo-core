@@ -2,7 +2,8 @@
 
 The provider is a strategy object injected into the DAG pipeline via Hydra.
 - ``NullMemoryProvider`` — no-op, returns empty selection (default: ``memory=none``)
-- ``SelectorMemoryProvider`` — delegates to ``MemorySelectorAgent`` (``memory=local`` or ``memory=api``)
+- ``SelectorMemoryProvider`` — assembles a ``MemoryReadPipeline`` over the shared
+  card bank (``memory=local`` or ``memory=legacy_api``)
 """
 
 from __future__ import annotations
@@ -11,7 +12,23 @@ from abc import ABC, abstractmethod
 
 from loguru import logger
 
-from gigaevo.llm.agents.memory_selector import MemorySelection, MemorySelectorAgent
+from gigaevo.memory.backend_factory import MemoryBackendFactory
+from gigaevo.memory.core import (
+    Auctioneer,
+    BetaBinomialReputation,
+    Budgeter,
+    CardRenderer,
+    CardShortlister,
+    EfficacyCardRenderer,
+    GamRetriever,
+    LLMCardSelector,
+    MemoryReadPipeline,
+    MemorySelection,
+    ReputationModel,
+    ThompsonAuctioneer,
+    TopThetaBudgeter,
+)
+from gigaevo.memory.shared_memory.memory_config import GamConfig
 from gigaevo.programs.program import Program
 
 
@@ -43,42 +60,91 @@ class NullMemoryProvider(MemoryProvider):
 
 
 class SelectorMemoryProvider(MemoryProvider):
-    """Delegates to ``MemorySelectorAgent``. Supports all backends (API, local, GAM).
+    """Assembles the modular ``MemoryReadPipeline`` lazily on first use.
 
-    The selector agent is created lazily on first use to avoid heavy initialization
-    at Hydra config resolution time.
+    The backend factory is required and Hydra-composed (``memory/backend``
+    group; ``config/memory/local.yaml`` wires it). Every other stage except
+    the renderer is Hydra-injectable (config/memory/<group>/; the renderer is
+    constructor-injectable only) and defaults to the production stack: GAM
+    retriever, LLM shortlist, Thompson auction, top-theta budget, efficacy
+    renderer. Backend construction is deferred to first use to avoid heavy
+    initialization at Hydra config resolution time.
 
-    Optional ``checkpoint_dir`` and ``namespace`` override the corresponding
-    values in ``config/memory_backend.yaml`` at runtime, passed directly
-    to ``MemorySelectorAgent`` — no environment variable hacks needed.
+    Optional ``checkpoint_dir`` overrides the backend factory's configured
+    checkpoint dir at runtime (the engine pins per-run artefacts under the
+    Hydra output dir).
     """
 
     def __init__(
         self,
         *,
+        backend: MemoryBackendFactory,
         max_cards: int = 3,
         checkpoint_dir: str | None = None,
-        namespace: str | None = None,
+        retriever: GamRetriever | None = None,
+        selector: CardShortlister | None = None,
+        auctioneer: Auctioneer | None = None,
+        budgeter: Budgeter | None = None,
+        renderer: CardRenderer | None = None,
+        reputation: ReputationModel | None = None,
     ) -> None:
         self._max_cards = max_cards
         self._checkpoint_dir = checkpoint_dir
-        self._namespace = namespace
-        self._selector: MemorySelectorAgent | None = None
+        self._backend_factory = backend
+        self._retriever = retriever
+        self._selector = selector if selector is not None else LLMCardSelector()
+        self._auctioneer = (
+            auctioneer if auctioneer is not None else ThompsonAuctioneer()
+        )
+        self._budgeter = budgeter if budgeter is not None else TopThetaBudgeter()
+        self._renderer = renderer if renderer is not None else EfficacyCardRenderer()
+        self._reputation = (
+            reputation if reputation is not None else BetaBinomialReputation()
+        )
+        self._pipeline: MemoryReadPipeline | None = None
 
-    def _get_selector(self) -> MemorySelectorAgent:
-        if self._selector is None:
+    def _build_retriever(self) -> GamRetriever:
+        retriever = self._retriever if self._retriever is not None else GamRetriever()
+        if retriever.backend is not None:
+            return retriever
+        gam = GamConfig(
+            enable_bm25=retriever.enable_bm25,
+            allowed_tools=list(retriever.allowed_tools),
+            top_k_by_tool=dict(retriever.top_k_by_tool),
+            pipeline_mode=retriever.pipeline_mode or "default",
+            max_cards=self._max_cards,
+            **(
+                {"max_iters": retriever.max_iters}
+                if retriever.max_iters is not None
+                else {}
+            ),
+        )
+        # Read-side backend never ingests; evictor/dedup are write-path
+        # components plumbed through IdeaTracker into the write pipeline.
+        backend = self._backend_factory.build(
+            checkpoint_dir=self._checkpoint_dir,
+            gam=gam,
+        )
+        return retriever.bind(backend)
+
+    def _get_pipeline(self) -> MemoryReadPipeline:
+        if self._pipeline is None:
+            retriever = self._build_retriever()
             logger.info(
-                "[Memory][Provider] Creating MemorySelectorAgent "
-                "(checkpoint_dir={}, namespace={}, use_api=False)",
+                "[Memory][Provider] Assembled MemoryReadPipeline "
+                "(checkpoint_dir={}, backend={})",
                 self._checkpoint_dir,
-                self._namespace,
+                type(retriever.backend).__module__,
             )
-            self._selector = MemorySelectorAgent(
-                checkpoint_dir=self._checkpoint_dir,
-                namespace=self._namespace,
-                use_api=False,
+            self._pipeline = MemoryReadPipeline(
+                retriever=retriever,
+                selector=self._selector,
+                auctioneer=self._auctioneer,
+                budgeter=self._budgeter,
+                renderer=self._renderer,
+                reputation=self._reputation,
             )
-        return self._selector
+        return self._pipeline
 
     async def select_cards(
         self,
@@ -87,12 +153,11 @@ class SelectorMemoryProvider(MemoryProvider):
         task_description: str,
         metrics_description: str,
     ) -> MemorySelection:
-        selector = self._get_selector()
-        return await selector.select(
-            input=[program],
+        pipeline = self._get_pipeline()
+        return await pipeline.select(
+            parents=[program],
             mutation_mode="rewrite",
             task_description=task_description,
             metrics_description=metrics_description,
-            memory_text="",
             max_cards=self._max_cards,
         )

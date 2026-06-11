@@ -195,15 +195,8 @@ class AgenticMemorySystem:
             f"task_description: {note.context}",
             f"category: {note.category}",
             f"strategy: {note.strategy}",
-            "last_generation: 0",
-            "programs: []",
-            "aliases: []",
             f"keywords: {keywords}",
-            "evolution_statistics: {}",
-            "explanation_summary: ",
-            "works_with: []",
             f"links: {links}",
-            "usage: {}",
         ]
         return "\n".join(parts)
 

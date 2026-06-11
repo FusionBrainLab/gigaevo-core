@@ -33,4 +33,4 @@ llm:
         reasoning:
           effort: high
   probabilities: [1.0]
-  writer: ${writer}
+  writer: ${ref:writer}

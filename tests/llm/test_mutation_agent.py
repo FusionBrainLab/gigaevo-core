@@ -7,10 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gigaevo.evolution.mutation.constants import (
-    MUTATION_CONTEXT_METADATA_KEY,
-    MUTATION_MEMORY_METADATA_KEY,
-)
+from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,
@@ -309,6 +306,84 @@ class TestParseResponse:
 
         assert result["parsed_output"]["code"] == ""
         assert "exactly 1 parent" in result["parsed_output"]["error"]
+
+
+# ---------------------------------------------------------------------------
+# TestCitationIntegrity
+# ---------------------------------------------------------------------------
+
+
+class TestCitationIntegrity:
+    """parse_response counts how many insights_used are grounded in the prompt.
+
+    Passive observability only: counts land in parsed_output, nothing is
+    gated or rejected.
+    """
+
+    def _state_with_prompt(self, prompt_text: str, output) -> MutationState:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        return _make_state(
+            structured_output=output,
+            messages=[SystemMessage(content="sys"), HumanMessage(content=prompt_text)],
+        )
+
+    def test_grounded_citation_counted(self):
+        agent = _make_agent()
+        output = _make_structured_output(insights_used=["insight_a"])
+        state = self._state_with_prompt("PROGRAM INSIGHTS:\n- insight_a", output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["citation_integrity"] == {
+            "cited": 1,
+            "grounded": 1,
+        }
+
+    def test_ungrounded_citation_counted(self):
+        agent = _make_agent()
+        output = _make_structured_output(insights_used=["never rendered anywhere"])
+        state = self._state_with_prompt("PROGRAM INSIGHTS:\n- insight_a", output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["citation_integrity"] == {
+            "cited": 1,
+            "grounded": 0,
+        }
+
+    def test_whitespace_differences_still_grounded(self):
+        agent = _make_agent()
+        output = _make_structured_output(insights_used=["use   caching\nfor speed"])
+        state = self._state_with_prompt("- use caching for speed", output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["citation_integrity"]["grounded"] == 1
+
+    def test_empty_insights_used(self):
+        agent = _make_agent()
+        output = _make_structured_output(insights_used=[])
+        state = self._state_with_prompt("any prompt", output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["citation_integrity"] == {
+            "cited": 0,
+            "grounded": 0,
+        }
+
+    def test_blank_citations_ignored(self):
+        agent = _make_agent()
+        output = _make_structured_output(insights_used=["  ", "insight_a"])
+        state = self._state_with_prompt("- insight_a", output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["citation_integrity"] == {
+            "cited": 1,
+            "grounded": 1,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -648,73 +723,6 @@ class TestFixJsonEscapedCode:
         """Code that remains invalid even after unescaping is returned as-is."""
         broken = "\\n!!! not valid python !!!\\n"
         assert MutationAgent._fix_json_escaped_code(broken) == broken
-
-
-# ---------------------------------------------------------------------------
-# TestBuildMemoryBlock
-# ---------------------------------------------------------------------------
-
-
-class TestBuildMemoryBlock:
-    """Tests for MutationAgent._build_memory_block."""
-
-    def setup_method(self):
-        self.agent = _make_agent()
-
-    def test_no_memory_key_returns_empty_string(self):
-        """Parents with no memory metadata key produce an empty string."""
-        parents = [_make_program(metadata={}), _make_program(metadata={})]
-        assert self.agent._build_memory_block(parents) == ""
-
-    def test_first_parent_with_memory_key_wins(self):
-        """The first parent that has a non-empty memory key is used; later parents ignored."""
-        parents = [
-            _make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "Use caching."}),
-            _make_program(
-                metadata={MUTATION_MEMORY_METADATA_KEY: "Should be ignored."}
-            ),
-        ]
-        result = self.agent._build_memory_block(parents)
-        assert result == "## Memory Instructions\nUse caching."
-        assert "ignored" not in result
-
-    def test_whitespace_only_memory_value_treated_as_absent(self):
-        """A memory value that is all whitespace is skipped (treated as no memory)."""
-        parents = [_make_program(metadata={MUTATION_MEMORY_METADATA_KEY: "   "})]
-        assert self.agent._build_memory_block(parents) == ""
-
-
-# ---------------------------------------------------------------------------
-# TestBuildUserPromptWithMemory
-# ---------------------------------------------------------------------------
-
-
-class TestBuildUserPromptWithMemory:
-    """Tests for build_user_prompt — memory block integration."""
-
-    def test_memory_block_appended_when_present(self):
-        """When a parent has memory instructions, they appear in the user prompt."""
-        agent = _make_agent()
-        parent = _make_program(
-            code="def solve(): return 1",
-            metadata={
-                MUTATION_CONTEXT_METADATA_KEY: "score=0.9",
-                MUTATION_MEMORY_METADATA_KEY: "Prefer vectorised ops.",
-            },
-        )
-        result = agent.build_user_prompt([parent])
-        assert "## Memory Instructions" in result
-        assert "Prefer vectorised ops." in result
-
-    def test_no_memory_block_when_absent(self):
-        """When no parent has memory instructions, the memory section is absent."""
-        agent = _make_agent()
-        parent = _make_program(
-            code="def solve(): return 1",
-            metadata={MUTATION_CONTEXT_METADATA_KEY: "score=0.9"},
-        )
-        result = agent.build_user_prompt([parent])
-        assert "## Memory Instructions" not in result
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
 from loguru import logger
+from pydantic import BaseModel
 
 from gigaevo.llm.token_tracking import TokenTracker, TokenUsage
 from gigaevo.utils.trackers.base import LogWriter
@@ -54,6 +55,24 @@ def _remember_token_usage(response: Any) -> None:
     usage = TokenUsage.from_response(response)
     if usage is not None:
         _last_token_usage_var.set(usage)
+
+
+def _extract_content_text(content: str | list[str | dict]) -> str:
+    if isinstance(content, str):
+        return content
+    return "".join(
+        part if isinstance(part, str) else part.get("text") or "" for part in content
+    )
+
+
+def _parsed_to_text(parsed: Any) -> str:
+    if isinstance(parsed, BaseModel):
+        return parsed.model_dump_json()
+    if isinstance(parsed, (dict, list)):
+        return json.dumps(parsed)
+    if parsed is None:
+        return ""
+    return str(parsed)
 
 
 def _create_langfuse_handler() -> CallbackHandler | None:
@@ -349,6 +368,29 @@ class MultiModelRouter(Runnable):
         if last:
             self._tracker.track(last, name)
             _remember_token_usage(last)
+
+    def generate(
+        self,
+        data: str,
+        *,
+        schema: dict[str, Any] | None = None,
+    ) -> tuple[str, Any, int | None, float | None]:
+        """LLMServiceProtocol entrypoint for the memory subsystem (A-MEM/GAM).
+
+        Returns ``(content, raw_response, total_tokens, cost)``. Token usage
+        is booked by the router's :class:`TokenTracker` on both paths, so the
+        trailing tuple slots are always ``None`` — they exist only for the
+        vendor protocol shape, and no consumer reads them. With a ``schema``
+        the call delegates to :meth:`with_structured_output`, so a parse
+        failure raises ``ValueError`` like the rest of the stack — memory
+        callers retry (dedup) or absorb via the read-path guard.
+        """
+        if schema is None:
+            raw = self.invoke(data)
+            return _extract_content_text(raw.content), raw, None, None
+
+        parsed = self.with_structured_output(schema).invoke(data)
+        return _parsed_to_text(parsed), parsed, None, None
 
     def with_structured_output(self, schema: Any, **kwargs) -> _StructuredOutputRouter:
         """Create a router that returns parsed Pydantic models with token tracking.

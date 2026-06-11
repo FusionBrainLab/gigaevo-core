@@ -8,12 +8,12 @@ LLM boundary:
     → Ideas saved to AmemGamMemory as cards
 
   **Run B** (idea consumption):
-    MemorySelectorAgent reads cards from AmemGamMemory
+    MemoryReadPipeline reads cards from AmemGamMemory
     → MemoryProvider selects cards → MemoryContextStage sets card IDs
-    → MutationContextStage includes "## Memory Instructions"
+    → MutationContextStage includes the card text verbatim
     → generate_mutations auto-derives memory_used=True on children
 
-Real objects: AmemGamMemory, MemorySelectorAgent, EvolutionEngine (fakeredis),
+Real objects: AmemGamMemory, MemoryReadPipeline, EvolutionEngine (fakeredis),
   IdeaTracker (mocked LLM), MemoryContextStage, MutationContextStage.
 """
 
@@ -47,10 +47,7 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
-from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
-from gigaevo.memory.ideas_tracker.ideas_tracker import (
-    _compute_usage_updates_from_program_selection as build_memory_usage_updates_from_programs,
-)
+from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.ideas_tracker.models import (
     programs_to_records,
 )
@@ -63,10 +60,15 @@ from gigaevo.programs.stages.common import StringContainer
 from gigaevo.programs.stages.memory_context import MemoryContextStage
 from gigaevo.programs.stages.mutation_context import MutationContextStage
 from tests.fakes.agentic_memory import make_test_memory
+from tests.fakes.llm_router import FakeMemoryRouter
+from tests.fakes.read_pipeline import make_read_pipeline
 
 # ---------------------------------------------------------------------------
 # Helpers: deterministic mutation + code templates
 # ---------------------------------------------------------------------------
+
+_SEED = 20260604
+_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
 
 _RETURN_RE = re.compile(
     r'return\s*\{\s*"fitness":\s*([\d.]+)\s*,\s*"x":\s*([\d.]+)\s*\}',
@@ -255,10 +257,8 @@ def _make_memory(tmp_path, **overrides) -> AmemGamMemory:
     return make_test_memory(tmp_path, **overrides)
 
 
-def _make_selector(
-    memory: AmemGamMemory, *, mock_card_ids: list[str] | None = None
-) -> MemorySelectorAgent:
-    """Create a MemorySelectorAgent wired to the given memory (no __init__ side effects).
+def _make_pipeline(memory: AmemGamMemory, *, mock_card_ids: list[str] | None = None):
+    """Create a MemoryReadPipeline wired to the given memory.
 
     When ``mock_card_ids`` is provided, ``memory.research`` is stubbed to return
     those ids via ``final_decision.top_ideas`` — the same structured-output shape
@@ -279,11 +279,7 @@ def _make_selector(
             }
 
         memory.research = lambda *a, **k: _FakeRaw()
-    selector = MemorySelectorAgent.__new__(MemorySelectorAgent)
-    selector._search_lock = asyncio.Lock()
-    selector._backend_error = None
-    selector.memory = memory
-    return selector
+    return make_read_pipeline(memory, seed=_SEED)
 
 
 def _make_run_a_programs() -> list[Program]:
@@ -375,22 +371,16 @@ class TestTwoRunMemoryLifecycle:
         run_a_programs = _make_run_a_programs()
 
         # 1. IdeaTracker filters programs and converts to records
-        with (
-            patch(
-                "gigaevo.memory.ideas_tracker.llm._init_clients",
-                return_value=(MagicMock(), MagicMock(), False),
-            ),
-            patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-                return_value="Multi-hop fact verification",
-            ),
+        with patch(
+            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
+            return_value="Multi-hop fact verification",
         ):
             from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
             tracker = IdeaTracker(
+                llm=FakeMemoryRouter(),
                 task_description="Verify multi-hop claims using evidence chains",
                 memory_write_enabled=False,
-                memory_usage_tracking_enabled=False,
             )
 
         records = tracker._eligible_records(run_a_programs)
@@ -403,13 +393,6 @@ class TestTwoRunMemoryLifecycle:
         assert best_record.fitness == 9.0
         assert best_record.strategy == "exploitation"
 
-        # 2. Memory usage tracking works with real programs
-        usage = build_memory_usage_updates_from_programs(
-            run_a_programs, "HoVer", "fitness"
-        )
-        # No memory cards were used in Run A, so usage is empty
-        assert usage == {}
-
         # === BRIDGE: Save extracted ideas as memory cards ===
         memory = _make_memory(tmp_path)
 
@@ -419,16 +402,19 @@ class TestTwoRunMemoryLifecycle:
                 "id": "idea-sort",
                 "description": "Sort evidence by relevance score before chain building",
                 "keywords": ["sort", "relevance", "evidence", "chain"],
+                "evolution_statistics": _PROVEN_STATS,
             },
             {
                 "id": "idea-bfs",
                 "description": "Use BFS instead of DFS for multi-hop traversal",
                 "keywords": ["bfs", "traversal", "multi-hop", "graph"],
+                "evolution_statistics": _PROVEN_STATS,
             },
             {
                 "id": "idea-cache",
                 "description": "Cache intermediate retrieval results to reduce latency",
                 "keywords": ["cache", "retrieval", "latency", "performance"],
+                "evolution_statistics": _PROVEN_STATS,
             },
         ]
         for card in idea_cards:
@@ -438,29 +424,30 @@ class TestTwoRunMemoryLifecycle:
         assert memory.get_card("idea-sort") is not None
 
         # === RUN B: Use memory during evolution ===
-        selector = _make_selector(
+        pipeline = _make_pipeline(
             memory, mock_card_ids=["idea-sort", "idea-bfs", "idea-cache"]
         )
 
-        # MemorySelectorAgent.select() finds relevant cards
+        # MemoryReadPipeline.select() finds relevant cards
         seed_prog = Program(
             code="def entrypoint():\n    return evidence",
             metadata={},
         )
-        selection = await selector.select(
-            input=[seed_prog],
+        selection = await pipeline.select(
+            parents=[seed_prog],
             mutation_mode="rewrite",
             task_description="Multi-hop fact verification",
             metrics_description="fitness: accuracy on validation set",
-            memory_text="",
             max_cards=3,
         )
-        assert len(selection.cards) > 0, "Selector found no cards from populated memory"
+        assert len(selection.cards) > 0, "Pipeline found no cards from populated memory"
         assert len(selection.card_ids) > 0
 
-        # Wire selector into SelectorMemoryProvider
-        provider = SelectorMemoryProvider(max_cards=3)
-        provider._selector = selector
+        # Wire pipeline into SelectorMemoryProvider
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=3
+        )
+        provider._pipeline = pipeline
 
         # Run actual evolution with memory-aware DAG
         server = fakeredis.FakeServer()
@@ -510,14 +497,17 @@ class TestTwoRunMemoryLifecycle:
                 "id": "idea-relevance",
                 "description": "Sort evidence by relevance score",
                 "keywords": ["sort", "relevance", "evidence"],
+                "evolution_statistics": _PROVEN_STATS,
             }
         )
 
-        selector = _make_selector(memory, mock_card_ids=["idea-relevance"])
+        pipeline = _make_pipeline(memory, mock_card_ids=["idea-relevance"])
 
         # MemoryContextStage produces card text
-        provider = SelectorMemoryProvider(max_cards=3)
-        provider._selector = selector
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=3
+        )
+        provider._pipeline = pipeline
 
         memory_stage = MemoryContextStage(
             memory_provider=provider,
@@ -534,7 +524,7 @@ class TestTwoRunMemoryLifecycle:
         # Card IDs written to program metadata
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY in program.metadata
 
-        # MutationContextStage wraps it as "## Memory Instructions"
+        # MutationContextStage passes the card text through verbatim
         ctx_stage = MutationContextStage(
             metrics_context=MetricsContext(
                 specs={
@@ -563,40 +553,8 @@ class TestTwoRunMemoryLifecycle:
         ctx_output = await ctx_stage.compute(program)
         context_str = ctx_output.data
 
-        assert "Memory Instructions" in context_str
+        assert memory_output.data.strip() in context_str
         assert MUTATION_CONTEXT_METADATA_KEY in program.metadata
-
-    @pytest.mark.asyncio
-    async def test_memory_usage_tracking_across_runs(self, tmp_path) -> None:
-        """Run B programs that used memory cards have correct usage deltas."""
-        # Simulate Run B output: child used memory cards and improved
-        parent = Program(
-            code="def f(): pass",
-            state=ProgramState.DONE,
-            metrics={"fitness": 3.0, "is_valid": 1.0},
-            metadata={},
-            lineage=Lineage(parents=[], generation=1),
-        )
-
-        child = Program(
-            code="def f(): return sorted(x)",
-            state=ProgramState.DONE,
-            metrics={"fitness": 8.0, "is_valid": 1.0},
-            metadata={"memory_selected_idea_ids": ["idea-sort", "idea-bfs"]},
-            lineage=Lineage(parents=[parent.id], generation=2),
-        )
-
-        usage = build_memory_usage_updates_from_programs(
-            [parent, child], "HoVer verification", "fitness"
-        )
-
-        # Both cards get attributed the same delta (8.0 - 3.0 = 5.0)
-        assert "idea-sort" in usage
-        assert "idea-bfs" in usage
-
-        sort_payload = usage["idea-sort"]
-        assert sort_payload.total_used == 1
-        assert sort_payload.median_delta_fitness == 5.0
 
     @pytest.mark.asyncio
     async def test_post_run_hook_fires_after_run_b(self, tmp_path) -> None:
@@ -664,22 +622,16 @@ class TestRunAIdeaTrackerProgramNative:
 
     def test_idea_tracker_filters_correctly(self) -> None:
         """IdeaTracker._get_new_programs filters roots and zero-fitness."""
-        with (
-            patch(
-                "gigaevo.memory.ideas_tracker.llm._init_clients",
-                return_value=(MagicMock(), MagicMock(), False),
-            ),
-            patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-                return_value="Summary",
-            ),
+        with patch(
+            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
+            return_value="Summary",
         ):
             from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
             tracker = IdeaTracker(
+                llm=FakeMemoryRouter(),
                 task_description="Test",
                 memory_write_enabled=False,
-                memory_usage_tracking_enabled=False,
             )
 
         programs = _make_run_a_programs()
@@ -695,22 +647,16 @@ class TestRunAIdeaTrackerProgramNative:
     @pytest.mark.asyncio
     async def test_on_run_complete_calls_pipeline(self) -> None:
         """on_run_complete fetches programs from storage and runs pipeline."""
-        with (
-            patch(
-                "gigaevo.memory.ideas_tracker.llm._init_clients",
-                return_value=(MagicMock(), MagicMock(), False),
-            ),
-            patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-                return_value="Summary",
-            ),
+        with patch(
+            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
+            return_value="Summary",
         ):
             from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
             tracker = IdeaTracker(
+                llm=FakeMemoryRouter(),
                 task_description="Test",
                 memory_write_enabled=False,
-                memory_usage_tracking_enabled=False,
             )
 
         tracker.run_increment = AsyncMock()

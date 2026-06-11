@@ -90,5 +90,5 @@ def setup_logger(
 
     install_exception_sink()
 
-    logger.info(f"Logging to console and file: {log_file}")
+    logger.info(f"[LoggerSetup] Logging to console and file: {log_file}")
     return log_file

@@ -371,7 +371,7 @@ class ParentRefresher:
                 ProgramState.QUEUED.value,
             )
             logger.debug(
-                "ParentRefresher: flipped {} parents DONE->QUEUED",
+                "[ParentRefresher] flipped {} parents DONE->QUEUED",
                 len(done_ids),
             )
 

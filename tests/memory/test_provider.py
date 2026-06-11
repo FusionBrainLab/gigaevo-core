@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gigaevo.llm.agents.memory_selector import MemorySelection
+from gigaevo.exceptions import MemoryStorageError
+from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
+from gigaevo.memory.core import (
+    GamRetriever,
+    MemoryReadPipeline,
+    MemorySelection,
+    ThompsonAuctioneer,
+)
 from gigaevo.memory.provider import (
     MemoryProvider,
     NullMemoryProvider,
     SelectorMemoryProvider,
 )
+from gigaevo.memory.shared_memory.memory_config import GamConfig
 from gigaevo.programs.program import Program
 
 
@@ -44,16 +53,18 @@ class TestNullMemoryProvider:
 
 class TestSelectorMemoryProvider:
     @pytest.mark.asyncio
-    async def test_delegates_to_selector_agent(self) -> None:
-        mock_selector = AsyncMock()
+    async def test_delegates_to_pipeline(self) -> None:
+        mock_pipeline = AsyncMock()
         expected = MemorySelection(
             cards=["1. Use caching for repeated lookups"],
             card_ids=["card-abc-123"],
         )
-        mock_selector.select.return_value = expected
+        mock_pipeline.select.return_value = expected
 
-        provider = SelectorMemoryProvider(max_cards=3)
-        provider._selector = mock_selector
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=3
+        )
+        provider._pipeline = mock_pipeline
 
         program = _make_program()
         result = await provider.select_cards(
@@ -63,20 +74,22 @@ class TestSelectorMemoryProvider:
         )
 
         assert result is expected
-        mock_selector.select.assert_called_once()
-        call_kwargs = mock_selector.select.call_args.kwargs
-        assert call_kwargs["input"] == [program]
+        mock_pipeline.select.assert_called_once()
+        call_kwargs = mock_pipeline.select.call_args.kwargs
+        assert call_kwargs["parents"] == [program]
         assert call_kwargs["task_description"] == "multi-hop QA"
         assert call_kwargs["metrics_description"] == "fitness: fraction correct"
         assert call_kwargs["max_cards"] == 3
 
     @pytest.mark.asyncio
     async def test_passes_max_cards(self) -> None:
-        mock_selector = AsyncMock()
-        mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
+        mock_pipeline = AsyncMock()
+        mock_pipeline.select.return_value = MemorySelection(cards=[], card_ids=[])
 
-        provider = SelectorMemoryProvider(max_cards=7)
-        provider._selector = mock_selector
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=7
+        )
+        provider._pipeline = mock_pipeline
 
         await provider.select_cards(
             program=_make_program(),
@@ -84,15 +97,17 @@ class TestSelectorMemoryProvider:
             metrics_description="m",
         )
 
-        assert mock_selector.select.call_args.kwargs["max_cards"] == 7
+        assert mock_pipeline.select.call_args.kwargs["max_cards"] == 7
 
     @pytest.mark.asyncio
     async def test_passes_mutation_mode_rewrite(self) -> None:
-        mock_selector = AsyncMock()
-        mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
+        mock_pipeline = AsyncMock()
+        mock_pipeline.select.return_value = MemorySelection(cards=[], card_ids=[])
 
-        provider = SelectorMemoryProvider(max_cards=1)
-        provider._selector = mock_selector
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=1
+        )
+        provider._pipeline = mock_pipeline
 
         await provider.select_cards(
             program=_make_program(),
@@ -100,46 +115,138 @@ class TestSelectorMemoryProvider:
             metrics_description="m",
         )
 
-        assert mock_selector.select.call_args.kwargs["mutation_mode"] == "rewrite"
+        assert mock_pipeline.select.call_args.kwargs["mutation_mode"] == "rewrite"
 
     @pytest.mark.asyncio
-    async def test_init_creates_selector_lazily(self) -> None:
-        """SelectorMemoryProvider defers MemorySelectorAgent creation to first use."""
-        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
-            mock_instance = AsyncMock()
-            mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
-            mock_cls.return_value = mock_instance
-
-            provider = SelectorMemoryProvider(max_cards=3)
-            # Not created yet at construction
-            mock_cls.assert_not_called()
+    async def test_backend_built_lazily_and_reused(self) -> None:
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=3
+            )
+            mock_build.assert_not_called()
 
             await provider.select_cards(
                 program=_make_program(),
                 task_description="t",
                 metrics_description="m",
             )
-            # Created on first use
-            mock_cls.assert_called_once()
+            mock_build.assert_called_once()
+
+            await provider.select_cards(
+                program=_make_program(),
+                task_description="t2",
+                metrics_description="m2",
+            )
+            mock_build.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_selector_reused_across_calls(self) -> None:
-        """Once created, the same selector instance is reused."""
-        with patch("gigaevo.memory.provider.MemorySelectorAgent") as mock_cls:
-            mock_instance = AsyncMock()
-            mock_instance.select.return_value = MemorySelection(cards=[], card_ids=[])
-            mock_cls.return_value = mock_instance
+    async def test_backend_failure_propagates(self) -> None:
+        # Fail-fast contract: a misconfigured backend aborts the run instead of
+        # silently degrading to a no-memory run.
+        with patch.object(
+            LocalMemoryBackendFactory,
+            "build",
+            side_effect=MemoryStorageError("backend init failed"),
+        ):
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=3
+            )
+            with pytest.raises(MemoryStorageError):
+                await provider.select_cards(
+                    program=_make_program(),
+                    task_description="t",
+                    metrics_description="m",
+                )
 
-            provider = SelectorMemoryProvider(max_cards=1)
-            await provider.select_cards(
-                program=_make_program(), task_description="t", metrics_description="m"
+    def test_checkpoint_dir_flows_to_backend_factory(self) -> None:
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(),
+                max_cards=3,
+                checkpoint_dir="/data/memory",
             )
-            await provider.select_cards(
-                program=_make_program(), task_description="t2", metrics_description="m2"
+            provider._get_pipeline()
+            assert mock_build.call_args.kwargs["checkpoint_dir"] == "/data/memory"
+
+    def test_injected_backend_factory_is_used(self) -> None:
+        factory = LocalMemoryBackendFactory()
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(max_cards=3, backend=factory)
+            provider._get_pipeline()
+            mock_build.assert_called_once()
+        assert provider._backend_factory is factory
+
+    def test_read_backend_receives_no_write_components(self) -> None:
+        """The read-side backend never ingests; evictor/deduplicator are
+        write-path components plumbed via IdeaTracker, not the provider."""
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(),
+                max_cards=3,
             )
-            # Only one instance created
-            mock_cls.assert_called_once()
-            assert mock_instance.select.call_count == 2
+            provider._get_pipeline()
+            assert "evictor" not in mock_build.call_args.kwargs
+            assert "deduplicator" not in mock_build.call_args.kwargs
+
+    def test_unbound_retriever_research_raises(self) -> None:
+        with pytest.raises(RuntimeError, match="bind"):
+            GamRetriever().research("query")
+
+    def test_injected_retriever_knobs_flow_into_gam_config(self) -> None:
+        retriever = GamRetriever(
+            enable_bm25=True,
+            pipeline_mode="default",
+            allowed_tools=["vector"],
+            top_k_by_tool={"vector": 7},
+            max_iters=5,
+        )
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(),
+                max_cards=1,
+                checkpoint_dir="/data/memory",
+                retriever=retriever,
+            )
+            provider._get_pipeline()
+            assert mock_build.call_args.kwargs["gam"] == GamConfig(
+                enable_bm25=True,
+                pipeline_mode="default",
+                allowed_tools=["vector"],
+                top_k_by_tool={"vector": 7},
+                max_iters=5,
+                max_cards=1,
+            )
+
+    def test_prebound_retriever_skips_backend_build(self) -> None:
+        retriever = GamRetriever(backend=MagicMock())
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=1, retriever=retriever
+            )
+            provider._get_pipeline()
+            mock_build.assert_not_called()
+
+    def test_pipeline_uses_injected_components(self) -> None:
+        auctioneer = ThompsonAuctioneer(baseline_prior=(5.0, 2.0))
+        with patch.object(LocalMemoryBackendFactory, "build", return_value=MagicMock()):
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=1, auctioneer=auctioneer
+            )
+            pipeline = provider._get_pipeline()
+        assert isinstance(pipeline, MemoryReadPipeline)
+        assert pipeline._auctioneer is auctioneer
 
 
 class TestMemoryProviderIsABC:
@@ -148,23 +255,12 @@ class TestMemoryProviderIsABC:
             MemoryProvider()  # type: ignore[abstract]
 
 
-# ---------------------------------------------------------------------------
-# Task 9: SelectorMemoryProvider select_cards calls underlying selector
-# ---------------------------------------------------------------------------
-
-
-def test_selector_memory_provider_select_cards_calls_selector():
-    """SelectorMemoryProvider.select_cards lazy-inits selector and delegates select."""
-    import asyncio
-
-    mock_selector = AsyncMock()
-    mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
-
-    with patch(
-        "gigaevo.memory.provider.MemorySelectorAgent",
-        return_value=mock_selector,
-    ):
-        provider = SelectorMemoryProvider(max_cards=3)
+def test_selector_memory_provider_select_cards_returns_selection():
+    """select_cards lazy-assembles the pipeline and returns a MemorySelection."""
+    with patch.object(LocalMemoryBackendFactory, "build", return_value=MagicMock()):
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=3
+        )
         prog = _make_program()
         result = asyncio.run(
             provider.select_cards(
@@ -174,5 +270,4 @@ def test_selector_memory_provider_select_cards_calls_selector():
             )
         )
 
-    mock_selector.select.assert_called_once()
     assert isinstance(result, MemorySelection)

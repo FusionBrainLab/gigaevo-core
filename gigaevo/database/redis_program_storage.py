@@ -731,7 +731,7 @@ class RedisProgramStorage(ProgramStorage):
         ``SET NX``: the id is content-derived, so an existing entry already holds
         identical bytes — never rewrite it (dedup across sibling children).
         """
-        self._check_write_allowed("put_stage_output")
+        self.require_writable("put_stage_output")
 
         async def _set(r: aioredis.Redis) -> None:
             await r.set(self._keys.stage_output(cache_id), blob, nx=True)

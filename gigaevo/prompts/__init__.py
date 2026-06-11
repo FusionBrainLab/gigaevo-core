@@ -25,7 +25,7 @@ def load_prompt(
     the package default directory.
 
     Args:
-        agent_name: Agent type directory (insights, lineage, scoring, mutation)
+        agent_name: Agent type directory (insights, lineage, mutation, mutation_suggestions, memory_selector)
         prompt_type: Prompt file type (system, user)
         prompts_dir: Optional directory for prompts (e.g. config.prompts.dir).
             Same layout as package: subdirs per agent with system.txt / user.txt.
@@ -73,20 +73,6 @@ def load_prompt(
 
 
 # Simple accessors for common prompts
-class MutationPrompts:
-    """Mutation agent prompt templates."""
-
-    @staticmethod
-    def system(prompts_dir: str | Path | None = None) -> str:
-        """System prompt for mutation."""
-        return load_prompt("mutation", "system", prompts_dir=prompts_dir)
-
-    @staticmethod
-    def user(prompts_dir: str | Path | None = None) -> str:
-        """User prompt template for mutation."""
-        return load_prompt("mutation", "user", prompts_dir=prompts_dir)
-
-
 class InsightsPrompts:
     """Insights agent prompt templates."""
 
@@ -115,20 +101,6 @@ class LineagePrompts:
         return load_prompt("lineage", "user", prompts_dir=prompts_dir)
 
 
-class ScoringPrompts:
-    """Scoring agent prompt templates."""
-
-    @staticmethod
-    def system(prompts_dir: str | Path | None = None) -> str:
-        """System prompt for scoring."""
-        return load_prompt("scoring", "system", prompts_dir=prompts_dir)
-
-    @staticmethod
-    def user(prompts_dir: str | Path | None = None) -> str:
-        """User prompt template for scoring."""
-        return load_prompt("scoring", "user", prompts_dir=prompts_dir)
-
-
 class MutationSuggestionsPrompts:
     """Mutation-suggestion analyst prompt templates."""
 
@@ -150,8 +122,3 @@ class MemorySelectorPrompts:
     def system(prompts_dir: str | Path | None = None) -> str:
         """System prompt for memory selector."""
         return load_prompt("memory_selector", "system", prompts_dir=prompts_dir)
-
-    @staticmethod
-    def user(prompts_dir: str | Path | None = None) -> str:
-        """User prompt template for memory selector."""
-        return load_prompt("memory_selector", "user", prompts_dir=prompts_dir)

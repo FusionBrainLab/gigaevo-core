@@ -25,9 +25,9 @@ LOG_FIXTURE = """\
 2026-05-13 00:00:00.000 INFO [mutation] Task 1: ['aaaaaaaa'] -> bbbbbbbb
 2026-05-13 00:00:00.100 INFO [DAG][bbbbbbbb] Run started
 2026-05-13 00:00:01.000 INFO [DagScheduler] DAG completed for bbbbbbbb
-2026-05-13 00:00:01.100 INFO MultiIsland: adding program bbbbbbbb
+2026-05-13 00:00:01.100 INFO [MultiIsland] adding program bbbbbbbb
 2026-05-13 00:00:01.110 INFO bbbbbbbb successfully added to island
-2026-05-13 00:00:01.500 INFO ParentRefresher: flipped 1 parents DONE->QUEUED
+2026-05-13 00:00:01.500 INFO [ParentRefresher] flipped 1 parents DONE->QUEUED
 2026-05-13 00:00:02.000 INFO [mutation] Task 2: ['bbbbbbbb'] -> cccccccc
 2026-05-13 00:00:02.100 INFO [DAG][cccccccc] Run started
 2026-05-13 00:00:03.000 INFO [DagScheduler] DAG completed for cccccccc

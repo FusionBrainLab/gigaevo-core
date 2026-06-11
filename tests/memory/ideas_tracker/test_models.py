@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock
 
-from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer, _split_id
+from pydantic import ValidationError
+
+from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
 from gigaevo.memory.ideas_tracker.models import (
     AnalysisResult,
     ClassificationChunk,
@@ -17,6 +18,8 @@ from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
     programs_to_records,
 )
+from gigaevo.memory.ideas_tracker.schemas import ClassifyExtResponse, PresentIdeaRef
+from tests.fakes.llm_router import FakeMemoryRouter
 
 
 class TestNormalizeImprovementItem:
@@ -168,45 +171,19 @@ class TestProgramToRecord:
         assert ids == {"id-0", "id-1", "id-2"}
 
 
-class TestSplitId:
-    """Tests for analyzers._split_id — protects the most fragile LLM-output parser."""
+class TestClassifyAgainstBankStructuredOutput:
+    """Classification resilience under the structured-output contract.
 
-    def test_valid_sequence(self) -> None:
-        assert _split_id("abc123:2") == ("abc123", 2)
-
-    def test_no_sequence_defaults_to_one(self) -> None:
-        assert _split_id("[abc123]") == ("abc123", 1)
-
-    def test_strips_brackets(self) -> None:
-        assert _split_id("[abc123:3]") == ("abc123", 3)
-
-    def test_malformed_sequence_defaults_to_one(self) -> None:
-        """LLM returns non-integer sequence — must not raise ValueError."""
-        assert _split_id("abc123:invalid") == ("abc123", 1)
-
-    def test_empty_sequence_defaults_to_one(self) -> None:
-        assert _split_id("abc123:") == ("abc123", 1)
-
-
-class TestClassifyAgainstBankMalformedLLMOutput:
-    """Regression tests for graceful handling of malformed LLM JSON responses.
-
-    Bug: present_ideas may contain non-strings; updated_ideas may contain
-    non-dicts or dicts without "id". Both caused KeyError / AttributeError
-    before the defensive guards were added.
+    Malformed payloads now surface as ValidationError from call_structured;
+    after retries exhaust, items must simply remain unclassified — no crash.
     """
 
-    def _make_analyzer_with_response(self, raw_json: str) -> ClassifyingAnalyzer:
-        """Create a ClassifyingAnalyzer whose LLM always returns raw_json."""
-        analyzer = ClassifyingAnalyzer.__new__(ClassifyingAnalyzer)
-        analyzer.model = "mock"
-        analyzer._reasoning = {}
-        analyzer._retry_attempts = 1
-        analyzer._description_rewriting = False
-        llm = MagicMock()
-        llm.call.return_value = raw_json
-        analyzer._llm = llm
-        return analyzer
+    def _make_analyzer(self, respond) -> tuple[ClassifyingAnalyzer, FakeMemoryRouter]:
+        llm = FakeMemoryRouter(respond=respond)
+        analyzer = ClassifyingAnalyzer(
+            llm=llm, retry_attempts=2, description_rewriting=False
+        )
+        return analyzer, llm
 
     def _make_chunk(self, short_id: str = "abc123") -> ClassificationChunk:
         return ClassificationChunk(
@@ -221,75 +198,72 @@ class TestClassifyAgainstBankMalformedLLMOutput:
         )
 
     def _make_pending(self) -> object:
-        """Create a _PendingIdeas from one improvement."""
         from gigaevo.memory.ideas_tracker.analyzers import _PendingIdeas
 
         return _PendingIdeas.from_improvements(
             [{"description": "Add cache", "explanation": "faster"}]
         )
 
-    def test_present_ideas_with_none_entries_does_not_crash(self) -> None:
-        """present_ideas: [null, 123] should be silently skipped (not crash)."""
-        raw = json.dumps(
-            {
-                "present_ideas": [None, 123, {"nested": "dict"}],
-                "new_ideas": [],
-                "updated_ideas": [],
-            }
-        )
-        analyzer = self._make_analyzer_with_response(raw)
+    def test_validation_error_leaves_items_unclassified(self) -> None:
+        try:
+            ClassifyExtResponse.model_validate_json("not json at all")
+        except ValidationError as exc:
+            validation_error = exc
+
+        def raise_validation(schema, messages):
+            raise validation_error
+
+        analyzer, llm = self._make_analyzer(raise_validation)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
-        # No exception raised; all entries were silently skipped
+        assert pending.items[0]["classified"] is False
+        assert len(llm.calls) == 2
 
-    def test_updated_ideas_with_non_dict_entries_does_not_crash(self) -> None:
-        """updated_ideas: [null, "abc123:1", 42] should be skipped (not crash)."""
-        raw = json.dumps(
-            {
-                "present_ideas": [],
-                "new_ideas": [],
-                "updated_ideas": [None, "abc123:1", 42],
-            }
-        )
-        analyzer = self._make_analyzer_with_response(raw)
+    def test_transport_error_leaves_items_unclassified(self) -> None:
+        def raise_transport(schema, messages):
+            raise RuntimeError("connection reset")
+
+        analyzer, _ = self._make_analyzer(raise_transport)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
+        assert pending.items[0]["classified"] is False
 
-    def test_updated_ideas_with_missing_id_key_does_not_crash(self) -> None:
-        """updated_ideas: [{"not_id": "abc123:1"}] should be skipped."""
-        raw = json.dumps(
-            {
-                "present_ideas": [],
-                "new_ideas": [],
-                "updated_ideas": [{"not_id": "abc123:1"}],
-            }
-        )
-        analyzer = self._make_analyzer_with_response(raw)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [self._make_chunk()])
-
-    def test_updated_ideas_with_non_string_id_does_not_crash(self) -> None:
-        """updated_ideas: [{"id": null}] should be skipped."""
-        raw = json.dumps(
-            {
-                "present_ideas": [],
-                "new_ideas": [],
-                "updated_ideas": [{"id": None}, {"id": 123}],
-            }
-        )
-        analyzer = self._make_analyzer_with_response(raw)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [self._make_chunk()])
-
-    def test_valid_present_idea_still_classifies(self) -> None:
-        """Ensure the fix doesn't break the happy path."""
+    def test_valid_present_idea_classifies(self) -> None:
         chunk = self._make_chunk("abc123")
         full_id = chunk.short_ids[0]["id"]
-        raw = json.dumps(
-            {"present_ideas": ["abc123:1"], "new_ideas": [], "updated_ideas": []}
+        response = ClassifyExtResponse(
+            new_ideas=[],
+            present_ideas=[PresentIdeaRef(idea_id="abc123", sequence=1)],
+            updated_ideas=[],
         )
-        analyzer = self._make_analyzer_with_response(raw)
+        analyzer, _ = self._make_analyzer(lambda schema, messages: response)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [chunk])
         assert pending.items[0]["classified"] is True
         assert pending.items[0]["target_id"] == full_id
+
+    def test_bracketed_idea_id_normalized_by_schema(self) -> None:
+        """LLM echoing "[abc123]" instead of "abc123" still resolves."""
+        chunk = self._make_chunk("abc123")
+        full_id = chunk.short_ids[0]["id"]
+        response = ClassifyExtResponse(
+            new_ideas=[],
+            present_ideas=[PresentIdeaRef(idea_id="[abc123]", sequence=1)],
+            updated_ideas=[],
+        )
+        analyzer, _ = self._make_analyzer(lambda schema, messages: response)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [chunk])
+        assert pending.items[0]["classified"] is True
+        assert pending.items[0]["target_id"] == full_id
+
+    def test_unknown_idea_id_skipped(self) -> None:
+        response = ClassifyExtResponse(
+            new_ideas=[],
+            present_ideas=[PresentIdeaRef(idea_id="zzz999", sequence=1)],
+            updated_ideas=[],
+        )
+        analyzer, _ = self._make_analyzer(lambda schema, messages: response)
+        pending = self._make_pending()
+        analyzer._classify_against_bank(pending, [self._make_chunk()])
+        assert pending.items[0]["classified"] is False

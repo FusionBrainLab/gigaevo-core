@@ -1,4 +1,4 @@
-"""Tests for InsightsAgent.build_prompt/parse_response and ScoringAgent.build_prompt/parse_response.
+"""Tests for InsightsAgent.build_prompt/parse_response.
 
 These tests exercise the prompt-building and response-parsing logic without
 calling a real LLM.  The graph is NOT invoked — nodes are called directly.
@@ -9,10 +9,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from langchain_core.messages import HumanMessage, SystemMessage
-import pytest
 
 from gigaevo.llm.agents.insights import InsightsAgent, ProgramInsight, ProgramInsights
-from gigaevo.llm.agents.scoring import ProgramScore, ScoringAgent
 from gigaevo.programs.core_types import ProgramStageResult, StageError, StageState
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -188,7 +186,7 @@ class TestInsightsAgentParseResponse:
                 ProgramInsight(
                     type="performance",
                     insight="Use caching",
-                    tag="cache",
+                    tag="beneficial",
                     severity="low",
                 )
             ]
@@ -215,147 +213,3 @@ class TestInsightsAgentParseResponse:
         }
         result = agent.parse_response(state)
         assert result["insights"].insights == []
-
-
-# ---------------------------------------------------------------------------
-# ScoringAgent
-# ---------------------------------------------------------------------------
-
-
-def _make_scoring_agent(
-    system_prompt: str = "Score this program",
-    user_template: str = "Code: {code}\nTrait: {trait_description}\nMax: {max_score}",
-    trait_description: str = "novelty",
-    max_score: float = 1.0,
-) -> ScoringAgent:
-    return ScoringAgent(
-        llm=_mock_llm(),
-        system_prompt=system_prompt,
-        user_prompt_template=user_template,
-        trait_description=trait_description,
-        max_score=max_score,
-    )
-
-
-class TestScoringAgentBuildPrompt:
-    def test_two_messages_created(self):
-        agent = _make_scoring_agent()
-        prog = _make_program()
-        state = {
-            "program": prog,
-            "trait_description": "novelty",
-            "max_score": 1.0,
-            "messages": [],
-            "llm_response": None,
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.build_prompt(state)
-        assert len(result["messages"]) == 2
-        assert isinstance(result["messages"][0], SystemMessage)
-        assert isinstance(result["messages"][1], HumanMessage)
-
-    def test_system_message_verbatim(self):
-        agent = _make_scoring_agent(system_prompt="MY_SCORING_SYSTEM")
-        prog = _make_program()
-        state = {
-            "program": prog,
-            "trait_description": "t",
-            "max_score": 1.0,
-            "messages": [],
-            "llm_response": None,
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.build_prompt(state)
-        assert result["messages"][0].content == "MY_SCORING_SYSTEM"
-
-    def test_user_message_includes_code(self):
-        agent = _make_scoring_agent()
-        prog = _make_program(code="def unique_impl(): pass")
-        state = {
-            "program": prog,
-            "trait_description": "novelty",
-            "max_score": 1.0,
-            "messages": [],
-            "llm_response": None,
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.build_prompt(state)
-        assert "unique_impl" in result["messages"][1].content
-
-    def test_user_message_includes_trait_and_max_score(self):
-        agent = _make_scoring_agent()
-        prog = _make_program()
-        state = {
-            "program": prog,
-            "trait_description": "MY_TRAIT",
-            "max_score": 7.5,
-            "messages": [],
-            "llm_response": None,
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.build_prompt(state)
-        content = result["messages"][1].content
-        assert "MY_TRAIT" in content
-        assert "7.5" in content
-
-
-class TestScoringAgentParseResponse:
-    def test_score_extracted_from_program_score(self):
-        agent = _make_scoring_agent(max_score=1.0)
-        state = {
-            "program": MagicMock(),
-            "trait_description": "t",
-            "max_score": 1.0,
-            "messages": [],
-            "llm_response": ProgramScore(score=0.8),
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.parse_response(state)
-        assert result["score"] == pytest.approx(0.8)
-
-    def test_score_clipped_to_max_score(self):
-        agent = _make_scoring_agent(max_score=1.0)
-        state = {
-            "program": MagicMock(),
-            "trait_description": "t",
-            "max_score": 1.0,
-            "messages": [],
-            "llm_response": ProgramScore(score=5.0),  # exceeds max
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.parse_response(state)
-        assert result["score"] == pytest.approx(1.0)
-
-    def test_score_below_max_not_clipped(self):
-        agent = _make_scoring_agent(max_score=10.0)
-        state = {
-            "program": MagicMock(),
-            "trait_description": "t",
-            "max_score": 10.0,
-            "messages": [],
-            "llm_response": ProgramScore(score=7.3),
-            "score": 0.0,
-            "metadata": {},
-        }
-        result = agent.parse_response(state)
-        assert result["score"] == pytest.approx(7.3)
-
-    def test_non_program_score_raises(self):
-        agent = _make_scoring_agent()
-        state = {
-            "program": MagicMock(),
-            "trait_description": "t",
-            "max_score": 1.0,
-            "messages": [],
-            "llm_response": "not a ProgramScore",
-            "score": 0.0,
-            "metadata": {},
-        }
-        with pytest.raises(ValueError, match="Expected ProgramScore"):
-            agent.parse_response(state)

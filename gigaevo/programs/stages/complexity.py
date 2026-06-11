@@ -5,8 +5,6 @@ from collections import Counter
 import math
 from typing import Any
 
-from loguru import logger
-
 from gigaevo.programs.core_types import VoidInput
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
@@ -144,17 +142,6 @@ def compute_complexity_score(features: dict[str, Any]) -> float:
         v = min(int(features.get(k, 0) or 0), _COMPLEXITY_CAPS[k])
         score += v * w
     return float(score)
-
-
-@StageRegistry.register(description="Get the length of program code")
-class GetCodeLengthStage(Stage):
-    InputsModel = VoidInput
-    OutputModel = FloatDictContainer
-
-    async def compute(self, program: Program) -> FloatDictContainer:
-        length = float(len(program.code))
-        logger.debug("[{}] code_length={}", self.stage_name, length)
-        return FloatDictContainer(data={"code_length": length})
 
 
 @StageRegistry.register(description="Compute code complexity metrics")

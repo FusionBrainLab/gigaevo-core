@@ -11,5 +11,5 @@ dag_runner:
   storage: ${ref:program_storage}
   dag_blueprint: ${dag_blueprint}
   config: ${runner_config}
-  writer: ${writer}
+  writer: ${ref:writer}
   prioritizer: ${prioritizer}

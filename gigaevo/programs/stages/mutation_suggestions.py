@@ -20,24 +20,32 @@ separate stage lets us:
 * Plug in different prescribers (e.g. an exploit-mode vs. explore-mode
   variant) without touching the history-summary stage.
 
-**Caching.** ``intra_card`` and ``memory_cards`` are first-class
-``InputsModel`` fields, so the framework's ``InputHashCache`` folds them
-into the cache key. Re-running on the same parent yields a cache HIT
-whenever both cards are unchanged. The ancestral trail is computed
-internally from storage; trail changes ride on the children-id change that
-already invalidates the intra card upstream, so the chain stays consistent.
+**Caching.** ``intra_card``, ``memory_cards``, and
+``evolutionary_statistics`` are first-class ``InputsModel`` fields, so the
+framework's ``InputHashCache`` folds all three into the cache key. The
+stats snapshot changes on nearly every collector refresh, so the stage
+overrides ``compute_hash`` to fold in only a *quantized* stats signature
+(rounded fitnesses, bucketed plateau/population counts, trend label):
+noise-level churn keeps the cached prescription, meaningful momentum
+shifts re-fire the LLM. The agent itself still receives the full stats.
+The ancestral trail is computed internally from storage; trail changes
+ride on the children-id change that already invalidates the intra card
+upstream, so the chain stays consistent.
 
 **Soft-fail.** When the LLM call raises, the stage returns an empty
 ``ProgramInsights(insights=[])`` so the downstream mutator still receives
 a valid (but empty) structured input — the mutation prompt's PROGRAM
-INSIGHTS section just collapses to "(none)" without breaking the run.
+INSIGHTS section renders "<No insights available>" without breaking the
+run.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, cast
 
+import cloudpickle
 from langchain_openai import ChatOpenAI
 from loguru import logger
 
@@ -86,6 +94,45 @@ class MutationSuggestionInputs(StageIO):
     evolutionary_statistics: EvolutionaryStatistics | None = None
 
 
+_FITNESS_DECIMALS = 2
+_VALID_RATE_DECIMALS = 1
+_POPULATION_BUCKET = 10
+_PLATEAU_BUCKET = 5
+
+
+def _quantized_stats_signature(stats: EvolutionaryStatistics) -> dict[str, Any]:
+    """Coarse, cache-key-only view of the stats snapshot.
+
+    Fitness values are bucketed by the task's per-metric
+    ``MetricSpec.significant_change`` quantum when one is configured
+    (``round(v / quantum)``); metrics without a quantum fall back to
+    ``_FITNESS_DECIMALS`` rounding. Fields not listed here are deliberately
+    excluded: they either churn on every collector refresh (archive
+    snapshot, window ranks/medians) or ride on the intra-card invalidation
+    (descendant stats).
+    """
+
+    def _round(d: dict[str, float]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for k, v in sorted(d.items()):
+            quantum = stats.significant_change.get(k)
+            out[k] = round(v / quantum) if quantum else round(v, _FITNESS_DECIMALS)
+        return out
+
+    return {
+        "generation": stats.generation,
+        "iteration": stats.iteration,
+        "current_program_metrics": _round(stats.current_program_metrics),
+        "best_fitness": _round(stats.best_fitness),
+        "average_fitness": _round(stats.average_fitness),
+        "valid_rate": round(stats.valid_rate, _VALID_RATE_DECIMALS),
+        "population_bucket": stats.total_program_count // _POPULATION_BUCKET,
+        "plateau_bucket": stats.iters_since_last_new_best // _PLATEAU_BUCKET,
+        "invalid_streak": stats.iter_window_invalid_streak_max,
+        "trend": stats.iter_window_trend,
+    }
+
+
 # Output is ``InsightsOutput`` (not a separate class) so the same
 # ``MutationContextInputs.insights`` slot accepts suggestions interchangeably
 # with the legacy ``InsightsStage`` output — no changes needed downstream.
@@ -117,7 +164,7 @@ class MutationSuggestionStage(LangGraphStage):
         storage: ProgramStorage,
         metrics_context: MetricsContext,
         task_description: str,
-        max_insights: int = 7,
+        max_insights: int = 5,
         trail_max_depth: int = DEFAULT_TRAIL_MAX_DEPTH,
         trail_max_ancestors: int = DEFAULT_TRAIL_MAX_ANCESTORS,
         prompts_dir: str | Path | None = None,
@@ -143,6 +190,17 @@ class MutationSuggestionStage(LangGraphStage):
             program_kwarg="program",
             **kwargs,
         )
+
+    @classmethod
+    def compute_hash(cls, params: StageIO) -> str | None:
+        p = cast(MutationSuggestionInputs, params)
+        payload = p.model_dump()
+        payload["evolutionary_statistics"] = (
+            _quantized_stats_signature(p.evolutionary_statistics)
+            if p.evolutionary_statistics is not None
+            else None
+        )
+        return hashlib.sha256(cloudpickle.dumps(payload)).hexdigest()[:16]
 
     async def preprocess(
         self, program: Program, params: StageIO

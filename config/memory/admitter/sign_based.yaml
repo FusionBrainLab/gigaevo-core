@@ -1,0 +1,7 @@
+# Variant-C gate: ALL-block evidence + positive raw median (IntroGain_best_median,
+# validated by the offline median-gate vs posterior-admission replay study)
+# + not confidently harmful.
+_target_: gigaevo.memory.core.admitter.SignBasedAdmitter
+min_intro_events: 1
+min_median: 0.0
+reputation: ${ref:memory.reputation}

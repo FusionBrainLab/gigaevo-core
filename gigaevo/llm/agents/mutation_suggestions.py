@@ -110,17 +110,8 @@ class MutationSuggestionAgent(LangGraphAgent):
         )
         error_section = f"\n\n## ERRORS\n\n{errors}" if errors else ""
 
-        intra = (state.get("intra_card") or "").strip()
-        intra_block = (
-            f"\n\n## Intra Memory — Per-Parent Lineage Card\n\n{intra}" if intra else ""
-        )
-
-        cards = (state.get("memory_cards") or "").strip()
-        memory_cards_block = (
-            f"\n\n## Memory Cards — Top Evolved Programs from the Global Bank\n\n{cards}"
-            if cards
-            else ""
-        )
+        intra_block = self._format_intra_block(state.get("intra_card"))
+        memory_cards_block = self._format_memory_cards_block(state.get("memory_cards"))
 
         trail_block = self._format_trail_block(state.get("ancestral_trail"))
         stats_block = self._format_stats_block(
@@ -155,6 +146,31 @@ class MutationSuggestionAgent(LangGraphAgent):
             HumanMessage(content=user_prompt),
         ]
         return state
+
+    @staticmethod
+    def _format_intra_block(intra_card: str | None) -> str:
+        """Render the intra-memory slot.
+
+        ``IntraMemoryStage`` cards begin with their own ``## Intra Memory``
+        header, so only bare text (legacy producers, tests) gets wrapped —
+        wrapping unconditionally rendered a duplicate header.
+        """
+        intra = (intra_card or "").strip()
+        if not intra:
+            return ""
+        if intra.startswith("#"):
+            return f"\n\n{intra}"
+        return f"\n\n## Intra Memory — Per-Parent Lineage Card\n\n{intra}"
+
+    @staticmethod
+    def _format_memory_cards_block(memory_cards: str | None) -> str:
+        cards = (memory_cards or "").strip()
+        if not cards:
+            return ""
+        return (
+            "\n\n## Memory Cards — Cross-Population Mechanism Levers "
+            f"(global bank)\n\n{cards}"
+        )
 
     @staticmethod
     def _format_trail_block(trail: list[dict[str, Any]] | None) -> str:

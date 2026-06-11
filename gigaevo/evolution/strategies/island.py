@@ -76,7 +76,9 @@ class MapElitesIsland:
         self.program_storage = program_storage
         self.archive_storage = archive_storage_factory(config.archive_prefix)
         self.state_manager = ProgramStateManager(program_storage)
-        logger.info("Island {} init (max_size={})", config.island_id, config.max_size)
+        logger.info(
+            "[Island][{}] init (max_size={})", config.island_id, config.max_size
+        )
 
     # -------------------------- Public API --------------------------
 
@@ -85,7 +87,7 @@ class MapElitesIsland:
         missing = set(self.config.behavior_space.behavior_keys) - program.metrics.keys()
         if missing:
             logger.debug(
-                "Island {}: program {} missing behavior keys: {}",
+                "[Island][{}] program {} missing behavior keys: {}",
                 self.config.island_id,
                 program.id,
                 missing,
@@ -97,7 +99,7 @@ class MapElitesIsland:
         if isinstance(self.config.behavior_space, DynamicBehaviorSpace):
             if self.config.behavior_space.check_and_expand(program.metrics):
                 logger.info(
-                    "Island {}: behavior space expanded by program {}, triggering re-indexing",
+                    "[Island][{}] behavior space expanded by program {}, triggering re-indexing",
                     self.config.island_id,
                     program.id,
                 )
@@ -108,7 +110,7 @@ class MapElitesIsland:
             k: program.metrics[k] for k in self.config.behavior_space.behavior_keys
         }
         logger.debug(
-            "Island {}: program {} -> cell {} (behavior: {})",
+            "[Island][{}] program {} -> cell {} (behavior: {})",
             self.config.island_id,
             program.id,
             cell,
@@ -124,7 +126,7 @@ class MapElitesIsland:
         if not improved:
             if current_elite:
                 logger.debug(
-                    "Island {}: program {} rejected (cell {} occupied by {})",
+                    "[Island][{}] program {} rejected (cell {} occupied by {})",
                     self.config.island_id,
                     program.id,
                     cell,
@@ -132,7 +134,7 @@ class MapElitesIsland:
                 )
             else:
                 logger.debug(
-                    "Island {}: program {} rejected (failed archive criteria)",
+                    "[Island][{}] program {} rejected (failed archive criteria)",
                     self.config.island_id,
                     program.id,
                 )
@@ -140,7 +142,7 @@ class MapElitesIsland:
 
         if current_elite:
             logger.info(
-                "Island {}: FRONTIER IMPROVED | {} replaced {} in cell {}"
+                "[Island][{}] FRONTIER IMPROVED | {} replaced {} in cell {}"
                 " | old_metrics={} new_metrics={}",
                 self.config.island_id,
                 program.short_id,
@@ -151,7 +153,7 @@ class MapElitesIsland:
             )
         else:
             logger.info(
-                "Island {}: FRONTIER NEW CELL | {} filled cell {} (metrics={})",
+                "[Island][{}] FRONTIER NEW CELL | {} filled cell {} (metrics={})",
                 self.config.island_id,
                 program.short_id,
                 cell,
@@ -175,19 +177,19 @@ class MapElitesIsland:
         archive_size = len(elites)
 
         logger.debug(
-            "Island {}: selecting elites (requested={}, archive_size={})",
+            "[Island][{}] selecting elites (requested={}, archive_size={})",
             self.config.island_id,
             total,
             archive_size,
         )
 
         if not elites or total <= 0:
-            logger.debug("Island {}: no elites to select", self.config.island_id)
+            logger.debug("[Island][{}] no elites to select", self.config.island_id)
             return []
 
         if len(elites) <= total:
             logger.debug(
-                "Island {}: returning all {} elites (≤ requested {})",
+                "[Island][{}] returning all {} elites (≤ requested {})",
                 self.config.island_id,
                 len(elites),
                 total,
@@ -199,7 +201,7 @@ class MapElitesIsland:
         selected = self.config.elite_selector(elites, total)
 
         logger.debug(
-            "Island {}: selected {} / {} elites using {}",
+            "[Island][{}] selected {} / {} elites using {}",
             self.config.island_id,
             len(selected),
             len(elites),
@@ -236,7 +238,7 @@ class MapElitesIsland:
         current = await self.__len__()
         if current <= self.config.max_size:
             logger.debug(
-                "Island {}: size check OK ({}/{})",
+                "[Island][{}] size check OK ({}/{})",
                 self.config.island_id,
                 current,
                 self.config.max_size,
@@ -245,7 +247,7 @@ class MapElitesIsland:
 
         excess = current - self.config.max_size
         logger.warning(
-            "Island {}: size limit exceeded! {} programs over limit ({}/{})",
+            "[Island][{}] size limit exceeded! {} programs over limit ({}/{})",
             self.config.island_id,
             excess,
             current,
@@ -254,7 +256,7 @@ class MapElitesIsland:
 
         remover_type = type(self.config.archive_remover).__name__
         logger.debug(
-            "Island {}: using {} to remove {} programs",
+            "[Island][{}] using {} to remove {} programs",
             self.config.island_id,
             remover_type,
             excess,
@@ -265,7 +267,7 @@ class MapElitesIsland:
         )
 
         logger.debug(
-            "Island {}: remover selected {} programs for removal: {}",
+            "[Island][{}] remover selected {} programs for removal: {}",
             self.config.island_id,
             len(to_remove),
             [p.id for p in to_remove[:5]] + (["..."] if len(to_remove) > 5 else []),
@@ -288,7 +290,7 @@ class MapElitesIsland:
 
         final_count = await self.__len__()
         logger.info(
-            "Island {}: size enforcement complete. {} → {} (target: {}, removed: {})",
+            "[Island][{}] size enforcement complete. {} → {} (target: {}, removed: {})",
             self.config.island_id,
             current,
             final_count,
@@ -327,7 +329,7 @@ class MapElitesIsland:
                 placements.append((cell, p))
             except Exception as e:
                 logger.warning(
-                    "Island {}: failed to map program {} during re-index: {}",
+                    "[Island][{}] failed to map program {} during re-index: {}",
                     self.config.island_id,
                     p.id,
                     e,
@@ -339,7 +341,7 @@ class MapElitesIsland:
         )
 
         logger.info(
-            "Island {}: re-indexed {} elites ({} preserved)",
+            "[Island][{}] re-indexed {} elites ({} preserved)",
             self.config.island_id,
             len(elites),
             readded,
@@ -378,7 +380,7 @@ class MapElitesIsland:
                     )
 
             logger.info(
-                "Island {}: optimized behavior space bounds:\n  {}",
+                "[Island][{}] optimized behavior space bounds:\n  {}",
                 self.config.island_id,
                 "\n  ".join(changes),
             )

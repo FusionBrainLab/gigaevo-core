@@ -8,6 +8,7 @@ from gigaevo.evolution.mutation.context import (
     EvolutionaryStatisticsMutationContext,
     FamilyTreeMutationContext,
     InsightsMutationContext,
+    MemoryMutationContext,
     MetricsMutationContext,
     PreformattedMutationContext,
 )
@@ -72,7 +73,7 @@ class TestInsightsMutationContext:
                 ProgramInsight(
                     type="perf",
                     insight="Loop is slow",
-                    tag="optimization",
+                    tag="rigid",
                     severity="medium",
                 )
             ]
@@ -82,11 +83,92 @@ class TestInsightsMutationContext:
         assert "## Program Insights" in result
         assert "Loop is slow" in result
 
+    def test_format_numbers_insights_in_priority_order(self) -> None:
+        # The mutator prompt says "act on insight 1" — the renderer must make
+        # that reference well-defined.
+        insights = ProgramInsights(
+            insights=[
+                ProgramInsight(
+                    type="perf",
+                    insight="Top recommendation",
+                    tag="harmful",
+                    severity="high",
+                ),
+                ProgramInsight(
+                    type="guard",
+                    insight="Second recommendation",
+                    tag="fragile",
+                    severity="medium",
+                ),
+            ]
+        )
+        result = InsightsMutationContext(insights=insights).format()
+        assert "1. **[perf][harmful][high]**" in result
+        assert "2. **[guard][fragile][medium]**" in result
+
+    def test_format_renders_mechanism_source(self) -> None:
+        insights = ProgramInsights(
+            insights=[
+                ProgramInsight(
+                    type="threshold_tuning",
+                    anchor_quote="threshold = 0.5",
+                    evidence_source="program",
+                    mechanism="tight threshold prunes boundary moves",
+                    mechanism_source="memory_cards",
+                    card_id="card-abc",
+                    substitute="threshold = 0.35",
+                    tag="rigid",
+                    severity="medium",
+                )
+            ]
+        )
+        result = InsightsMutationContext(insights=insights).format()
+        assert "mechanism(memory_cards): tight threshold prunes boundary moves" in (
+            result
+        )
+
     def test_format_empty_insights(self) -> None:
         insights = ProgramInsights(insights=[])
         ctx = InsightsMutationContext(insights=insights)
         result = ctx.format()
         assert "No insights available" in result
+
+    def test_format_empty_insights_renders_under_section_header(self) -> None:
+        result = InsightsMutationContext(insights=ProgramInsights(insights=[])).format()
+        assert result.startswith("## Program Insights")
+
+    def test_format_renders_card_id(self) -> None:
+        insights = ProgramInsights(
+            insights=[
+                ProgramInsight(
+                    type="threshold_tuning",
+                    anchor_quote="threshold = 0.5",
+                    evidence_source="program",
+                    mechanism="tight threshold prunes boundary moves",
+                    mechanism_source="memory_cards",
+                    card_id="card-abc",
+                    tag="rigid",
+                    severity="medium",
+                )
+            ]
+        )
+        result = InsightsMutationContext(insights=insights).format()
+        assert "card: card-abc" in result
+
+
+class TestMemoryMutationContext:
+    def test_self_headed_card_passes_through_without_wrapper(self) -> None:
+        card = "## Intra Memory — Per-Parent Lineage Card\n\n- cluster A: improved"
+        result = MemoryMutationContext(memory_block=card).format()
+        assert result == card
+        assert "## Memory Instructions" not in result
+
+    def test_bare_text_passes_through_unchanged(self) -> None:
+        result = MemoryMutationContext(memory_block="1. Sort evidence first").format()
+        assert result == "1. Sort evidence first"
+
+    def test_empty_collapses(self) -> None:
+        assert MemoryMutationContext(memory_block="  \n").format() == ""
 
 
 # ---------------------------------------------------------------------------

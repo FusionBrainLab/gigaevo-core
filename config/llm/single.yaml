@@ -18,5 +18,5 @@ llm:
       request_timeout: 600
       max_retries: 2
   probabilities: [1.0]
-  writer: ${writer}
+  writer: ${ref:writer}
   max_concurrent: ${llm_max_concurrent}

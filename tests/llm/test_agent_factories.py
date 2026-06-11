@@ -11,18 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from gigaevo.llm.agents.factories import (
     create_insights_agent,
     create_lineage_agent,
     create_mutation_agent,
-    create_scoring_agent,
 )
 from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
 from gigaevo.llm.agents.mutation import MutationAgent
-from gigaevo.llm.agents.scoring import ScoringAgent
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 # ---------------------------------------------------------------------------
@@ -129,13 +125,13 @@ class TestCreateInsightsAgent:
         )
         assert isinstance(agent, InsightsAgent)
 
-    def test_default_max_insights_is_7(self):
+    def test_default_max_insights_is_5(self):
         agent = create_insights_agent(
             llm=_mock_llm(),
             task_description="task",
             metrics_context=_make_ctx(),
         )
-        assert agent.max_insights == 7
+        assert agent.max_insights == 5
 
     def test_custom_max_insights_passed_through(self):
         agent = create_insights_agent(
@@ -214,47 +210,3 @@ class TestCreateLineageAgent:
             prompts_dir=tmp_path,
         )
         assert isinstance(agent, LineageAgent)
-
-
-# ---------------------------------------------------------------------------
-# create_scoring_agent
-# ---------------------------------------------------------------------------
-
-
-class TestCreateScoringAgent:
-    def test_returns_scoring_agent(self):
-        agent = create_scoring_agent(
-            llm=_mock_llm(),
-            trait_description="code novelty",
-            max_score=1.0,
-        )
-        assert isinstance(agent, ScoringAgent)
-
-    def test_trait_description_passed_through(self):
-        agent = create_scoring_agent(
-            llm=_mock_llm(),
-            trait_description="MY_TRAIT",
-            max_score=5.0,
-        )
-        assert agent.trait_description == "MY_TRAIT"
-
-    def test_max_score_passed_through(self):
-        agent = create_scoring_agent(
-            llm=_mock_llm(),
-            trait_description="trait",
-            max_score=10.0,
-        )
-        assert agent.max_score == pytest.approx(10.0)
-
-    def test_custom_prompts_dir(self, tmp_path: Path):
-        custom_dir = tmp_path / "scoring"
-        custom_dir.mkdir()
-        (custom_dir / "system.txt").write_text("scoring system")
-        (custom_dir / "user.txt").write_text("scoring user")
-        agent = create_scoring_agent(
-            llm=_mock_llm(),
-            trait_description="trait",
-            max_score=1.0,
-            prompts_dir=tmp_path,
-        )
-        assert isinstance(agent, ScoringAgent)

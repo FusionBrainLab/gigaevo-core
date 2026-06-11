@@ -14,9 +14,10 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 4. [How Memory Flows Through the Pipeline](#how-memory-flows-through-the-pipeline)
 5. [Architecture: The Provider Pattern](#architecture-the-provider-pattern)
 6. [Configuration Reference](#configuration-reference)
-   - [Hydra Config Group (memory=...)](#hydra-config-group)
-   - [SelectorMemoryProvider Parameters](#selectormemoryprovider-parameters)
-   - [Backend Config (memory_backend.yaml)](#backend-config-memory_backendyaml)
+   - [Provider selection (memory=...)](#provider-selection-memoryname)
+   - [Component groups](#component-groups)
+   - [Backend factories](#backend-factories)
+   - [The memory LLM (config/llms/)](#the-memory-llm-configllms)
 7. [The Ideas Tracker (Write Phase)](#the-ideas-tracker-write-phase)
    - [What It Does](#what-it-does)
    - [Two Entry Points: PostRunHook vs CLI](#two-entry-points-postrunhook-vs-cli)
@@ -26,7 +27,6 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
    - [Pipeline Internals](#pipeline-internals)
    - [Analyzer Types](#analyzer-types)
    - [Memory Write Pipeline](#memory-write-pipeline)
-   - [Usage Tracking](#usage-tracking)
    - [What a Memory Card Looks Like](#what-a-memory-card-looks-like)
    - [Logs and Checkpoints](#logs-and-checkpoints)
 8. [The Memory Search (Read Phase)](#the-memory-search-read-phase)
@@ -45,7 +45,7 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 ```bash
 python run.py memory=none  ...   # No memory (default)
 python run.py memory=local ...   # Memory from local backend
-python run.py memory=api   ...   # Memory from remote API service
+python run.py memory=legacy_api ...  # DEPRECATED: remote API backend
 ```
 
 One Hydra override. Everything else is automatic.
@@ -60,16 +60,24 @@ Without memory, the LLM mutation agent sees:
 - Insights (what changed in recent mutations)
 - Lineage (ancestor/descendant analysis)
 
-With memory, it ALSO sees **memory cards** — short, actionable ideas extracted
-from previous experiments:
+With memory, the pipeline ALSO surfaces **memory cards** — short, actionable
+mechanism levers extracted from previous experiments:
 
 ```
-## Memory Instructions
+[card 1] id=idea-abc123
+Sort evidence by relevance score before chain traversal
+efficacy: introduced in 9 children; median improvement +0.012; downside 11% (confident)
 
-1. Sort evidence by relevance score before chain traversal
-2. Filter low-confidence hops using a threshold of 0.3
-3. Limit retrieval depth to 3 hops maximum
+[card 2] id=idea-def456
+Filter low-confidence hops using a learned threshold
 ```
+
+In the LEGACY default pipeline this card text lands in the mutator prompt
+verbatim (numbered `[card N] id=…` blocks, no wrapper header). In the current
+experiment pipelines
+(`pipeline=standard` / `intra_extra_memory`) the cards go to the
+**mutation-suggestion analyst** instead, which transposes them into structured
+suggestions — the mutator never sees raw card text.
 
 These ideas come from a **memory database** that accumulates knowledge across
 evolution runs. The hypothesis: if you tell the LLM "here are techniques that
@@ -118,6 +126,15 @@ completes (or at checkpoints), and the next evolution reads from the database.
 
 ## How Memory Flows Through the Pipeline
 
+> **Pipeline-dependent routing.** The flow below shows the LEGACY default
+> pipeline, where `MemoryContextStage` output feeds the mutator directly via
+> `MutationContextStage.memory`. Under `pipeline=standard` /
+> `pipeline=intra_extra_memory` (the current experiment pipelines) the cards
+> instead feed ONLY `MutationSuggestionStage.memory_cards` — the suggester
+> digests them into structured `ProgramInsights` and is the mutator's single
+> source of hints; `MutationContextStage.memory` carries the per-parent intra
+> lineage card. See [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md).
+
 Memory flows through the DAG pipeline just like metrics, insights, and lineage.
 Here is the exact data flow:
 
@@ -149,7 +166,7 @@ ValidateCodeStage ──(success)──► MemoryContextStage
                                        │
                                        ▼
                                  program.metadata["mutation_context"] =
-                                   "## Metrics\n...\n## Memory Instructions\n1. Sort evidence..."
+                                   "## Metrics\n...\n\n---\n\n[card 1] id=idea-abc\nSort evidence..."
                                        │
                                        ▼
                                  LLM Mutation Agent reads mutation_context
@@ -162,7 +179,7 @@ When `memory=none`:
 - MutationContextStage skips the empty memory section
 - Everything works exactly as if the stage didn't exist
 
-When `memory=local` or `memory=api`:
+When `memory=local` or `memory=legacy_api`:
 - MemoryContextStage uses SelectorMemoryProvider
 - Queries the memory database for relevant cards
 - Returns formatted card text
@@ -189,7 +206,7 @@ Two implementations:
 | Provider | Config | What it does |
 |----------|--------|-------------|
 | `NullMemoryProvider` | `memory=none` | Returns empty. Zero overhead. Default. |
-| `SelectorMemoryProvider` | `memory=local` or `memory=api` | Queries memory DB via `MemorySelectorAgent` |
+| `SelectorMemoryProvider` | `memory=local` or `memory=legacy_api` | Queries memory DB via a `MemoryReadPipeline` (retrieve → shortlist → auction → budget → render) |
 
 ### Why a provider instead of a flag?
 
@@ -210,260 +227,135 @@ flag that gates code paths. Benefits:
 
 ## Configuration Reference
 
-There are two layers of configuration:
+Memory is configured entirely through Hydra — there is no side-loaded YAML and
+no environment-variable cascade. Three pieces compose together:
 
-1. **Hydra config group** (`config/memory/*.yaml`) — which provider to use
-2. **Backend config** (`config/memory_backend.yaml`) — how the memory backend itself works
+1. **Provider selection** (`config/memory/{none,local,legacy_api}.yaml`) —
+   selected via `memory=<name>` on the command line.
+2. **Per-component groups** (`config/memory/<group>/*.yaml`) — one group per
+   pipeline stage; each nests under `memory.<group>` (Hydra's natural
+   packaging, no `@package` splats) and is injected into the provider via
+   `${ref:...}` so every consumer shares one instance per component.
+3. **The memory LLM** (`config/llms/*.yaml`) — a `MultiModelRouter` composed
+   ONCE at the root-registered `memory_llm` entry and shared by every
+   consumer via `${ref:memory_llm}`.
 
-### Hydra Config Group
+Two singletons are registered as null base entries in `config/config.yaml`
+(`llms@memory_llm: null`, `memory/backend: null`); the `memory=` and
+`ideas_tracker=` groups override them, so the read side and the write side
+share ONE router and ONE card-bank backend factory. The `${ref:...}` resolver
+instantiates a node on first access and writes the instance back into the
+config tree, so later refs return the same object.
 
-Located in `config/memory/`. Selected via `memory=<name>` on the command line.
+### Provider selection (`memory=<name>`)
 
 ```
 config/memory/
-  none.yaml    →  NullMemoryProvider (default)
-  local.yaml   →  SelectorMemoryProvider (local backend)
-  api.yaml     →  SelectorMemoryProvider (API backend)
+  none.yaml        →  NullMemoryProvider (default)
+  local.yaml       →  SelectorMemoryProvider over the local card bank
+  legacy_api.yaml  →  DEPRECATED: SelectorMemoryProvider over the HTTP API backend
 ```
 
-The default is set in `config/config.yaml`:
+`local.yaml` wires every stage explicitly — what you see in the config is
+exactly what the provider receives:
+
 ```yaml
 defaults:
-  - memory: none
-```
+  - retriever: gam
+  - selector: llm
+  - auction: thompson
+  - budget: top_theta
+  - reputation: beta_binomial
+  - admitter: sign_based
+  - dedup: llm
+  - evictor: harm
+  - _self_
+  - override /memory/backend@_global_.memory.backend: local
+  - override /llms@_global_.memory_llm: gemini_flash_openrouter
 
-#### `config/memory/none.yaml`
-```yaml
-# @package _global_
-memory_provider:
-  _target_: gigaevo.memory.provider.NullMemoryProvider
-```
-
-#### `config/memory/local.yaml`
-```yaml
-# @package _global_
-memory_provider:
+provider:
   _target_: gigaevo.memory.provider.SelectorMemoryProvider
-  max_cards: 3
+  max_cards: 1
   checkpoint_dir: ${checkpoint_dir}
-  namespace: ${namespace}
+  backend: ${ref:memory.backend}
+  retriever: ${ref:memory.retriever}
+  selector: ${ref:memory.selector}
+  auctioneer: ${ref:memory.auction}
+  budgeter: ${ref:memory.budget}
+  reputation: ${ref:memory.reputation}
 ```
 
-#### `config/memory/api.yaml`
-Same as `local.yaml`. The difference between local and API is controlled by
-`config/memory_backend.yaml` → `api.use_api`, not by the Hydra config group.
-(Both use `SelectorMemoryProvider`; the agent decides local vs API internally.)
+The `dedup`/`evictor` singletons composed here are write-side components: the
+provider's read backend never ingests, so `config/ideas_tracker/*.yaml` picks
+them up (`evictor: ${ref:memory.evictor}`, `deduplicator: ${ref:memory.dedup}`)
+and IdeaTracker threads them into the write pipeline, which sweeps confidently
+harmful cards after each ingest pass.
 
-### SelectorMemoryProvider Parameters
+Swap a stage by overriding its group, tune a knob by path:
 
-These are the constructor parameters of `SelectorMemoryProvider`, set in the
-Hydra YAML:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `max_cards` | int | 3 | Maximum number of memory cards to return per mutation |
-| `checkpoint_dir` | str or None | None | Local disk path where memory cards are cached. Overrides `memory_backend.yaml` → `paths.checkpoint_dir`. Pass via Hydra override: `checkpoint_dir=/path/to/store` |
-| `namespace` | str or None | None | Isolation key for the memory API. Different experiments use different namespaces so their cards don't mix. Like a database schema. Overrides `memory_backend.yaml` → `api.namespace`. Pass via: `namespace=hover-memory-exp-1` |
-
-Example command line:
 ```bash
-python run.py \
-  memory=local \
-  checkpoint_dir=/workspace/experiments/hover/memory/memory_store \
-  namespace=hover-memory-exp-1 \
-  problem.name=chains/hover/static \
-  ...
+python run.py memory=local \
+  memory/admitter=tiered \
+  memory.auction.baseline_prior=[5,2] \
+  memory.retriever.pipeline_mode=experimental \
+  checkpoint_dir=/workspace/experiments/hover/memory_store \
+  problem.name=chains/hover/static
 ```
 
-### Backend Config (`memory_backend.yaml`)
+### Component groups
 
-Located at `config/memory_backend.yaml`. This is NOT a Hydra config group — it's
-loaded directly by `MemorySelectorAgent` via `runtime_config.py`. You rarely
-need to edit this for normal experiments.
+| Group | Variants | Class | Role |
+|-------|----------|-------|------|
+| `memory/backend` | `local`, `legacy_api` | `LocalMemoryBackendFactory` / `LegacyApiMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
+| `memory/retriever` | `gam` | `GamRetriever` | Agentic GAM search (tools, top-k, `pipeline_mode`) |
+| `memory/selector` | `llm` | `LLMCardSelector` | Picks cards from retrieval hits |
+| `memory/auction` | `thompson` | `ThompsonAuctioneer` | Thompson-sampling card auction |
+| `memory/budget` | `top_theta` | `TopThetaBudgeter` | Caps cards per injection |
+| `memory/reputation` | `beta_binomial` | `BetaBinomialReputation` | Per-card efficacy posterior |
+| `memory/admitter` | `sign_based`, `tiered` | `SignBasedAdmitter` / `TieredAdmitter` | Write-side admission gate |
+| `memory/dedup` | `llm`, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (via `ideas_tracker` → write pipeline) |
+| `memory/evictor` | `harm` | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (via `ideas_tracker` → write pipeline) |
 
-#### Full reference with explanations:
+### Backend factories
 
-```yaml
-# ═══════════════════════════════════════════════
-# Paths
-# ═══════════════════════════════════════════════
-paths:
-  # Default local directory for memory card storage.
-  # Overridden by SelectorMemoryProvider's checkpoint_dir param.
-  checkpoint_dir: memory_usage_store/api_exp4
+`config/memory/backend/local.yaml` instantiates
+`gigaevo.memory.backend_factory.LocalMemoryBackendFactory`; the deprecated
+`legacy_api.yaml` instantiates `LegacyApiMemoryBackendFactory` (emits a
+`DeprecationWarning`; kept only so historical experiments reproduce). Factories
+are plain pydantic models — every knob (`checkpoint_dir`,
+`embedding_model_name`, `search_limit`, `rebuild_interval`, legacy
+`base_url`/`namespace`/`channel`/`sync_*`) is a Hydra field. `build()` runs
+lazily on first card selection and raises `MemoryStorageError` on failure
+rather than degrading to a no-memory run.
 
-  # Path to ideas_tracker output banks (used by ideas_tracker CLI).
-  banks_dir: ../gigaevo/memory/ideas_tracker/logs/2026-02-19_19-51-02
+### The memory LLM (`config/llms/`)
 
-# ═══════════════════════════════════════════════
-# API Connection
-# ═══════════════════════════════════════════════
-api:
-  # Base URL of the memory API service (Concept API).
-  base_url: http://localhost:8000
+The router composes ONCE at the root-registered `memory_llm` entry (the
+`memory=` and `ideas_tracker=` groups both override
+`/llms@_global_.memory_llm: gemini_flash_openrouter`); the backend factory
+points at it via `llm: ${ref:memory_llm}`. The node is a
+`gigaevo.llm.models.MultiModelRouter` with `name: memory`, so its token usage
+is tracked separately from the evolution LLM under
+`llm/tokens/memory/<model>/...`. The only environment variable involved is the
+credential, read as `${oc.env:OPENROUTER_API_KEY}` — model id, endpoint,
+temperature, reasoning effort, and `structured_output_method` are all YAML
+fields. Switch the memory LLM off with `memory.backend.llm=null`.
 
-  # Default namespace for card isolation.
-  # Overridden by SelectorMemoryProvider's namespace param.
-  namespace: exp9
-
-  # true = use remote API service for memory storage/search
-  # false = use local disk only (no network calls)
-  # This is the actual switch between local and API backends.
-  use_api: false
-
-  # Card version channel (latest, draft, etc.)
-  channel: latest
-
-  # Author tag attached to saved cards (null = anonymous).
-  author: null
-
-# ═══════════════════════════════════════════════
-# Runtime Behavior
-# ═══════════════════════════════════════════════
-runtime:
-  # Use an LLM to synthesize/summarize search results.
-  # false = return raw card text (faster, no LLM cost).
-  enable_llm_synthesis: false
-
-  # Run A-MEM evolution flow when writing new cards.
-  # Evolves card descriptions and merges similar cards.
-  should_evolve: false
-
-  # Use LLM to fill missing card metadata (keywords, etc.)
-  fill_missing_fields_with_llm: false
-
-  # Max cards returned per search query.
-  search_limit: 5
-
-  # Rebuild search index every N card writes.
-  rebuild_interval: 30
-
-  # Number of cards to sync per API page (pagination batch size).
-  sync_batch_size: 100
-
-  # Sync cards from API on memory backend initialization.
-  sync_on_init: true
-
-# ═══════════════════════════════════════════════
-# GAM (Generative Agentic Memory) Search Pipeline
-# ═══════════════════════════════════════════════
-gam:
-  # Enable BM25 keyword matching in addition to vector search.
-  enable_bm25: false
-
-  # GAM pipeline mode.
-  # "default" = standard retrieval
-  # "experimental" = multi-tool agentic retrieval
-  pipeline_mode: experimental
-
-  # Which retrieval tools the GAM agent can use.
-  # Each tool searches a different index/representation:
-  #   page_index       - page-level index search
-  #   keyword          - BM25 keyword search
-  #   vector           - dense vector search on card content
-  #   vector_description            - search by description embedding
-  #   vector_task_description       - search by task description embedding
-  #   vector_explanation_summary    - search by explanation summary embedding
-  #   vector_description_explanation_summary
-  #   vector_description_task_description_summary
-  allowed_tools:
-    - page_index
-    - vector
-
-  # Maximum hits (top_k) per retrieval tool.
-  top_k_by_tool:
-    keyword: 5
-    vector: 3
-    vector_description: 3
-    vector_task_description: 0
-    vector_explanation_summary: 3
-    vector_description_explanation_summary: 3
-    vector_description_task_description_summary: 3
-    page_index: 5
-
-# ═══════════════════════════════════════════════
-# Card Deduplication
-# ═══════════════════════════════════════════════
-card_update_dedup:
-  # Use LLM to deduplicate/merge similar cards during writes.
-  enabled: true
-  retrieval:
-    top_k_per_query: 10
-    final_top_n: 10
-    min_final_score: 0.05
-    weights:
-      description: 0.35
-      explanation_summary: 0.2
-      description_explanation_summary: 0.3
-      description_task_description_summary: 0.15
-  llm:
-    max_retries: 2
-
-# ═══════════════════════════════════════════════
-# Models
-# ═══════════════════════════════════════════════
-models:
-  # LLM for card enrichment and synthesis.
-  openai_base_url: https://openrouter.ai/api/v1
-  openrouter_model_name: google/gemini-3-flash-preview
-
-  # Embedding model for A-MEM card indexing.
-  amem_embedding_model_name: all-MiniLM-L6-v2
-
-  # Dense retriever model for GAM search.
-  gam_dense_retriever_model_name: BAAI/bge-m3
-
-# ═══════════════════════════════════════════════
-# Ideas Tracker (Write Phase)
-# ═══════════════════════════════════════════════
-ideas_tracker:
-  # Max ideas per RecordList (batching for LLM analysis).
-  list_max_ideas: 20
-
-  # LLM model for idea extraction.
-  analyzer:
-    type: default       # "default" or "fast"
-    model: google/gemini-3-flash-preview
-    base_url: "https://openrouter.ai/api/v1"
-    reasoning:
-      effort: "minimal"
-
-  # Redis connection for reading evolution run data.
-  redis:
-    redis_host: "localhost"
-    redis_port: 6379
-    redis_db: 1
-    redis_prefix: "heilbron"
-    label: ""
-
-  # Statistics extraction from evolution runs.
-  statistics:
-    enabled: false
-    mode: "top_k"       # "top_k", "top_fitness", "delta_fitness"
-
-  # Write extracted ideas back into the memory database.
-  memory_write_pipeline:
-    enabled: true
-    best_programs_percent: 5.0  # Extract ideas from top 5% programs
-
-  # Track which memory cards are used and their fitness impact.
-  usage_tracking:
-    enabled: true
-```
+The ideas-tracker analyzer shares the SAME router instance
+(`llm: ${ref:memory_llm}` in `config/ideas_tracker/*.yaml`), so analyzer
+traffic is also booked under `llm/tokens/memory/<model>/...`. Standalone CLI
+runs build an equivalent router from `--model`/`--base-url`/`--api-key`.
 
 #### Which settings matter most?
 
-For a typical experiment, you only care about:
-
 | Setting | Where | Why it matters |
 |---------|-------|---------------|
-| `api.use_api` | `memory_backend.yaml` | Local-only vs remote API |
-| `runtime.enable_llm_synthesis` | `memory_backend.yaml` | false = faster, cheaper search |
-| `runtime.search_limit` | `memory_backend.yaml` | How many candidate cards to retrieve |
-| `gam.pipeline_mode` | `memory_backend.yaml` | "default" = simple, "experimental" = multi-tool |
-| `max_cards` | `config/memory/local.yaml` | How many cards to include in the prompt |
-| `checkpoint_dir` | Command line override | Where cards are stored on disk |
-| `namespace` | Command line override | Isolation between experiments |
+| `memory.provider.max_cards` | `config/memory/local.yaml` | How many cards reach the prompt per mutation |
+| `memory.retriever.pipeline_mode` | `memory/retriever/gam.yaml` | `experimental` = multi-tool agentic retrieval (required by the selector) |
+| `memory.retriever.allowed_tools` | `memory/retriever/gam.yaml` | Which GAM search tools the agent may call |
+| `memory.dedup.config.enabled` | `memory/dedup/llm.yaml` | LLM dedup on card writes |
+| `checkpoint_dir` | command line | Where the card bank lives on disk |
+| `memory/backend` | command line | `local` (canonical) vs `legacy_api` (deprecated) |
 
 Everything else has sane defaults.
 
@@ -547,39 +439,40 @@ defaults:
 
 #### `config/ideas_tracker/none.yaml`
 ```yaml
-# @package _global_
-ideas_tracker:
-  _target_: gigaevo.evolution.engine.hooks.NullPostRunHook
+_target_: gigaevo.evolution.engine.hooks.NullPostRunHook
 ```
 
 #### `config/ideas_tracker/default.yaml`
 ```yaml
-# @package _global_
-ideas_tracker:
-  _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
-  analyzer_type: default
-  analyzer_model: google/gemini-3-flash-preview
-  analyzer_base_url: "https://openrouter.ai/api/v1"
-  analyzer_reasoning:
-    effort: "minimal"
-  list_max_ideas: 20
-  postprocessing_type: default
-  description_rewriting: true
-  record_conversion_type: default
-  memory_write_enabled: true
-  memory_write_best_programs_percent: 5.0
-  memory_usage_tracking_enabled: true
-  checkpoint_dir: ${checkpoint_dir}
-  namespace: ${namespace}
-  redis_prefix: ${problem.name}
+defaults:
+  - _self_
+  - override /memory/backend@_global_.memory.backend: local
+  - override /llms@_global_.memory_llm: gemini_flash_openrouter
+
+_target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
+llm: ${ref:memory_llm}
+backend: ${ref:memory.backend}
+analyzer_type: default
+analyzer_max_concurrent_classifications: 8
+description_rewriting: true
+memory_write_enabled: true
+memory_write_best_programs_percent: 5.0
+fitness_higher_is_better: ${higher_is_better}
+checkpoint_dir: ${checkpoint_dir}
+redis_prefix: ${problem.name}
+admitter: ${ref:memory.admitter}
 ```
+
+The tracker shares the SAME `memory_llm` router and `memory.backend` factory
+as the `memory=` read side — both are root-registered singletons resolved via
+`${ref:...}`. With `memory=none` the `admitter` ref resolves to null
+(`TieredAdmitter` fallback inside the tracker); with `memory=local` the
+tracker rides the composed admitter (sign-based by default).
 
 #### `config/ideas_tracker/fast.yaml`
 
 Same structure as `default.yaml` but with:
 - `analyzer_type: fast` — uses sentence embeddings + DBSCAN clustering
-- `postprocessing_type: fast` — async postprocessing
-- `record_conversion_type: fast` — async record conversion
 - `analyzer_fast_settings:` — embedding model, DBSCAN parameters, batch sizes
 
 #### Parameter reference
@@ -587,18 +480,14 @@ Same structure as `default.yaml` but with:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `analyzer_type` | str | `"default"` | `"default"` = LLM-based sequential analysis. `"fast"` = embedding+DBSCAN batched analysis. |
-| `analyzer_model` | str | `"google/gemini-3-flash-preview"` | LLM model for idea classification and enrichment |
-| `analyzer_base_url` | str | `"https://openrouter.ai/api/v1"` | LLM API endpoint |
-| `analyzer_reasoning` | dict | `{effort: "minimal"}` | Reasoning config passed to the LLM |
-| `list_max_ideas` | int | `20` | Maximum ideas per RecordList batch |
-| `postprocessing_type` | str | `"default"` | `"default"` = sync enrichment. `"fast"` = async enrichment. |
+| `llm` | MultiModelRouter | `${ref:memory_llm}` | Shared analyzer LLM router (model, endpoint, credential, reasoning all live in `config/llms/gemini_flash_openrouter.yaml`) |
+| `analyzer_max_concurrent_classifications` | int | `8` | Max concurrent classification LLM calls inside `ClassifyingAnalyzer` |
 | `description_rewriting` | bool | `true` | Allow the LLM to rewrite idea descriptions |
-| `record_conversion_type` | str | `"default"` | `"default"` = sync conversion. `"fast"` = async conversion. |
 | `memory_write_enabled` | bool | `true` | Write extracted ideas to the memory database |
-| `memory_write_best_programs_percent` | float | `5.0` | Only extract ideas from the top N% of programs by fitness |
-| `memory_usage_tracking_enabled` | bool | `true` | Track fitness deltas for each card that was used |
-| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). When `null`, falls back to `memory_backend.yaml` → `paths.checkpoint_dir`. The same path must be used in Phase A (write) and Phase B (read) so the memory bank persists between phases. |
-| `namespace` | str | `${namespace}` | Isolation key for the memory API |
+| `memory_write_best_programs_percent` | float | `5.0` | Share of top programs (by fitness) the write pipeline converts into program cards |
+| `fitness_higher_is_better` | bool | `${higher_is_better}` | Metric direction; gains are stored in "positive = improvement" space |
+| `admitter` | MemoryAdmitter or null | from `memory=` group | Admission gate for `best_ideas.json` (null → `TieredAdmitter`) |
+| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). The same path must be used in Phase A (write) and Phase B (read) so the memory bank persists between phases. |
 | `redis_prefix` | str | `${problem.name}` | Redis key prefix for loading programs |
 
 ### CLI Reference
@@ -609,17 +498,19 @@ python -m gigaevo.memory.ideas_tracker.cli [OPTIONS]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--source` | `redis` or `csv` | `redis` | Where to load programs from |
-| `--csv-path` | PATH | (required if `--source csv`) | Path to CSV exported by `tools/redis2pd.py` |
-| `--config-path` | PATH | `config/memory.yaml` | YAML config (full memory config or tracker-only section) |
-| `--checkpoint-dir` | PATH | from config | Override `paths.checkpoint_dir` for memory write output |
+| `--api-key` | str | `$OPENROUTER_API_KEY` | Analyzer LLM API key (required: flag or env var) |
+| `--model` | str | `google/gemini-3-flash-preview` | Analyzer LLM model id |
+| `--base-url` | str | `https://openrouter.ai/api/v1` | Analyzer LLM API endpoint |
+| `--csv-path` | PATH | none | CSV exported by `tools/redis2pd.py`; when given, programs load from the CSV instead of Redis |
+| `--higher-is-better` / `--no-higher-is-better` | bool | higher | Fitness direction of the analyzed run |
+| `--checkpoint-dir` | PATH | none | Card-bank directory for the memory write pipeline (required unless `--no-memory-write`) |
 | `--logs-dir` | PATH | `ideas_tracker/logs/` | Directory for session logs (timestamped subdir created) |
-| `--memory-write` / `--no-memory-write` | bool | from config | Override `memory_write_pipeline.enabled` |
-| `--redis-host` | str | from config | Redis host override |
-| `--redis-port` | int | from config (6379) | Redis port override |
-| `--redis-db` | int | from config | Redis DB override |
-| `--redis-prefix` | str | from config | Redis key prefix (usually matches `problem.name`) |
-| `--redis-label` | str | from config | Optional label for logging/debugging |
+| `--memory-write` / `--no-memory-write` | bool | enabled | Toggle the final memory write pipeline |
+| `--redis-host` | str | `localhost` | Redis host |
+| `--redis-port` | int | `6379` | Redis port |
+| `--redis-db` | int | `0` | Redis DB |
+| `--redis-prefix` | str | `""` | Redis key prefix (usually matches `problem.name`) |
+| `--redis-label` | str | none | Optional label for logging/debugging |
 
 ### CLI Examples
 
@@ -633,15 +524,8 @@ PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
 
 # Extract from a CSV export (offline analysis)
 PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --source csv \
   --csv-path experiments/hover/memory/archives/M0/evolution_data.csv \
   --checkpoint-dir experiments/hover/memory/memory_store
-
-# Use custom config file
-PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --config-path experiments/hover/memory/custom_memory.yaml \
-  --redis-db 3 \
-  --redis-prefix "chains/hover/static_soft"
 
 # Dry run: extract ideas but don't write to memory DB
 PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
@@ -671,10 +555,10 @@ The core pipeline runs the same sequence regardless of entry point:
    │  Remove: fitness <= 0
    │  Remove: already-processed (tracked in programs_ids set)
    │
-3. Build memory usage updates (if usage tracking enabled)
+3. Compute injection-efficacy posteriors
    │  For each child with memory_selected_idea_ids:
-   │    delta = child_fitness - max(parent_fitnesses)
-   │    Record delta per card per task
+   │    gain = child_fitness - parent-local baseline (sign-normalized
+   │    so positive = improvement) → Beta-Binomial posterior per card
    │
 4. Convert to ProgramRecords
    │  Extract: id, fitness, generation, parents, code
@@ -688,8 +572,8 @@ The core pipeline runs the same sequence regardless of entry point:
    │    Classify as: NEW idea | UPDATE existing | REWRITE existing
    │    Apply to active/inactive idea banks via RecordManager
    │
-6. Apply memory usage updates to idea banks
-   │  Merge fitness deltas into each card's usage statistics
+6. Attach efficacy statistics to idea banks
+   │  Merge per-card posteriors into evolution_statistics["ALL"]
    │
 7. Enrich ideas (postprocessing)
    │  For each idea in record bank:
@@ -701,7 +585,7 @@ The core pipeline runs the same sequence regardless of entry point:
    │
 9. Memory write pipeline (if enabled)
    │  Load cards from idea banks
-   │  Apply usage updates
+   │  Harm-gate (admitter) + dedup, then ingest
    │  Write to memory backend (local disk or API)
 ```
 
@@ -728,36 +612,16 @@ When `memory_write_enabled=true`, after idea extraction completes:
 
 1. The best ideas (from top `memory_write_best_programs_percent`% of programs)
    are selected from the idea banks
-2. Usage statistics are merged into each card (if tracking is enabled)
+2. Per-idea efficacy statistics (Beta-Binomial injection posterior) are
+   carried in each card's `evolution_statistics`
 3. Cards are written to the memory backend:
    - **Local**: JSON files in `checkpoint_dir` with a search index
    - **API**: Posted to the memory API service via the configured namespace
 
-The write pipeline uses `EVO_MEMORY_CONFIG_PATH` to find backend configuration.
-The CLI sets this env var automatically; the PostRunHook path inherits it from
-the run's environment.
-
-### Usage Tracking
-
-When `memory_usage_tracking_enabled=true`, the tracker computes fitness deltas
-for every memory card that was used during evolution:
-
-```
-For each child program with memory_selected_idea_ids:
-  parent_fitness = max(fitness of all parents)
-  delta = child_fitness - parent_fitness
-
-  For each card_id in memory_selected_idea_ids:
-    Record: (card_id, task_summary, delta)
-```
-
-These deltas are aggregated per card per task, producing:
-- `total_used` — how many times the card was used
-- `median_delta_fitness` — median fitness delta when used
-- `fitness_delta_per_use` — full list of deltas
-
-This data is stored in the card's `usage` field and used to rank cards in
-future searches (cards that consistently improve fitness rank higher).
+The write pipeline receives its backend factory by injection: the PostRunHook
+path gets the run's shared `memory.backend` singleton (the same factory the
+read-side provider uses), and the ideas-tracker CLI constructs a
+`LocalMemoryBackendFactory` directly.
 
 ### What a Memory Card Looks Like
 
@@ -774,17 +638,16 @@ Internally, a memory card is a structured object with these fields:
         "explanations": ["Sorting evidence before traversal ensures high-quality..."],
         "summary": "Pre-sort evidence to avoid low-quality chain hops",
     },
-    "usage": {
-        "used": {
-            "entries": [
-                {
-                    "task_description_summary": "HoVer fact verification",
-                    "used_count": 5,
-                    "fitness_delta_per_use": [0.03, -0.01, 0.05, 0.02, 0.04],
-                    "median_delta_fitness": 0.03,
-                }
-            ],
-            "total": {"total_used": 5, "median_delta_fitness": 0.03},
+    "evolution_statistics": {
+        "ALL": {
+            "intro_events": 5,
+            "IntroGain_best_median": 0.03,
+            "IntroGain_best_adj_median": 0.012,
+            "DownsideRate_best": 0.1,
+            "posterior_a": 5.0,
+            "posterior_b": 2.0,
+            "p_help_lo20": 0.55,
+            "efficacy_confident": True,
         }
     },
     "programs": ["prog-1", "prog-2"],       # programs that produced this idea
@@ -794,7 +657,7 @@ Internally, a memory card is a structured object with these fields:
 ```
 
 The `description` is the core idea. Everything else is metadata for search
-ranking, deduplication, and usage tracking.
+ranking, deduplication, and efficacy-aware selection.
 
 ### Logs and Checkpoints
 
@@ -816,22 +679,27 @@ of the specified directory.
 
 ## The Memory Search (Read Phase)
 
-When `memory=local` or `memory=api`, here's what happens on each program
+When `memory=local` or `memory=legacy_api`, here's what happens on each program
 evaluation:
 
 1. **`MemoryContextStage`** calls `SelectorMemoryProvider.select_cards()`
-2. The provider delegates to **`MemorySelectorAgent`** (created lazily on first call)
-3. The agent builds a query from the parent code, task description, and metrics
+2. The provider assembles a **`MemoryReadPipeline`** lazily on first call
+   (retriever → shortlister → auctioneer → budgeter → renderer)
+3. `LLMCardSelector` builds a query from the parent code, task description, and metrics
 4. The query is sent to the memory backend (local `AmemGamMemory` or remote API)
 5. The **GAM (Generative Agentic Memory) pipeline** runs:
    - Multiple retrieval tools search different indices (vector, keyword, etc.)
-   - Results are ranked and deduplicated
-   - The top-N cards are selected
-6. Card text is returned as a numbered list
-7. Card IDs are stored in program metadata for tracking
+   - The selector LLM emits an ordered `final_decision` shortlist of card ids
+6. The shortlist goes through a **Thompson auction** on each card's
+   Beta-Binomial efficacy posterior, then a top-theta budget cap (`max_cards`)
+7. Card text is rendered as numbered blocks headed `[card N] id=<card-id>`
+   (selection-rank order), each with a mechanism description and — when the
+   bank has confident evidence — a trailing `efficacy:` line
+8. Card IDs are stored in program metadata for tracking
 
-The GAM pipeline is configurable via `memory_backend.yaml` → `gam.*` settings.
-The `allowed_tools` list controls which retrieval strategies are used.
+The GAM pipeline is configurable via the `memory/retriever` Hydra group
+(`config/memory/retriever/gam.yaml`). The `allowed_tools` list controls which
+retrieval strategies are used.
 
 ---
 
@@ -977,26 +845,28 @@ gigaevo top \
 | `gigaevo/memory/provider.py` | `MemoryProvider` ABC, `NullMemoryProvider`, `SelectorMemoryProvider` |
 | `config/memory/none.yaml` | Hydra config: NullMemoryProvider (default) |
 | `config/memory/local.yaml` | Hydra config: SelectorMemoryProvider (local) |
-| `config/memory/api.yaml` | Hydra config: SelectorMemoryProvider (API) |
+| `config/memory/legacy_api.yaml` | Hydra config: SelectorMemoryProvider (legacy API backend) |
 
 ### DAG Pipeline (Read Phase)
 
 | File | What it does |
 |------|-------------|
-| `gigaevo/programs/stages/memory_context.py` | `MemoryContextStage` — calls provider, returns card text |
-| `gigaevo/evolution/mutation/context.py` | `MemoryMutationContext` — wraps cards for mutation prompt |
+| `gigaevo/programs/stages/memory_context.py` | `MemoryContextStage` — calls provider, returns numbered `[card N] id=…` blocks |
+| `gigaevo/evolution/mutation/context.py` | `MemoryMutationContext` — wraps the memory slot (intra card in current pipelines) for the mutation prompt |
 | `gigaevo/programs/stages/mutation_context.py` | `MutationContextStage` — composes all context types |
-| `gigaevo/entrypoint/default_pipelines.py` | Wires MemoryContextStage into all pipelines |
+| `gigaevo/entrypoint/default_pipelines.py` | Wires MemoryContextStage → mutator (LEGACY default pipeline only) |
+| `gigaevo/entrypoint/lineage_memory_pipeline.py` | Wires MemoryContextStage → MutationSuggestionStage (`pipeline=intra_extra_memory`) |
 | `gigaevo/evolution/engine/mutation.py` | Auto-derives `memory_used` from parent metadata |
 
 ### Memory Backend
 
 | File | What it does |
 |------|-------------|
-| `gigaevo/llm/agents/memory_selector.py` | `MemorySelectorAgent` — builds queries, parses results |
+| `gigaevo/memory/provider.py` | `SelectorMemoryProvider` — assembles the read pipeline lazily |
+| `gigaevo/memory/core/read_pipeline.py` | `MemoryReadPipeline` — retrieve → shortlist → auction → budget → render |
+| `gigaevo/memory/backend_factory.py` | Lazy fail-fast backend factories (`LocalMemoryBackendFactory`, `LegacyApiMemoryBackendFactory`) |
 | `gigaevo/memory/shared_memory/memory.py` | `AmemGamMemory` — local memory backend with GAM search |
-| `gigaevo/memory/runtime_config.py` | Loads `memory_backend.yaml` settings |
-| `config/memory_backend.yaml` | All backend settings (API, GAM, models, etc.) |
+| `config/memory/backend/` | Hydra configs for the backend factories (checkpoint dir, embedding model, memory LLM) |
 
 ### Shared Memory Module (`gigaevo/memory/shared_memory/`)
 
@@ -1038,29 +908,31 @@ through on failure or empty result.
 | `config/ideas_tracker/true.yaml` | Backward compat alias for `default.yaml` |
 | `config/memory.yaml` | Unified memory config (backend + ideas_tracker sections) |
 
-### Ideas Tracker Components
+### Ideas Tracker Modules
 
 | File | What it does |
 |------|-------------|
-| `components/analyzer.py` | `IdeaAnalyzer` — LLM-based sequential idea classification |
-| `components/analyzer_f.py` | `IdeaAnalyzerFast` — embedding+DBSCAN batched classification |
-| `components/data_components.py` | Data structures: `RecordCardExtended`, `RecordBank`, `IncomingIdeas`, `ProgramRecord` |
-| `components/records_manager.py` | `RecordManager` — active/inactive idea bank management |
-| `components/memory_pipeline.py` | Memory write pipeline: banks → memory backend |
-| `components/postprocessing.py` | Enrichment: keywords, explanation summaries |
-| `components/statistics.py` | Evolutionary statistics (origin analysis) |
-| `components/summary.py` | Task description summarization via LLM |
+| `analyzers.py` | LLM / embedding+DBSCAN idea classification |
+| `idea_bank.py` | Active/inactive idea bank management |
+| `models.py` | Data structures: `ProgramRecord`, banks, incoming ideas |
+| `schemas.py` | Structured-output schemas for tracker LLM calls |
+| `llm.py` | Tracker-side LLM service wiring |
+| `redis_loader.py` | Load programs from `ProgramStorage` (Redis) |
+| `csv_loader.py` | Load archived program dumps from CSV |
+| `run_ideas_tracker_from_csv.py` | Offline tracker replay over a CSV dump |
 
-### Ideas Tracker Utilities
+### Origin Analysis (`utils/origin_analysis/`)
 
 | File | What it does |
 |------|-------------|
-| `utils/cfg_loader.py` | Config loading from YAML / `EVO_MEMORY_CONFIG_PATH` |
-| `utils/dataframe_loader.py` | Load programs from Redis/CSV into DataFrames |
-| `utils/records_converter.py` | DataFrame rows → `ProgramRecord` conversion |
-| `utils/helpers.py` | `build_memory_usage_updates()`, `sort_ideas()`, usage payload builders |
-| `utils/it_logger.py` | Timestamped session logging for ideas tracker |
-| `utils/task_description_loader.py` | Load task description from Redis problem dir |
+| `pipeline.py` | `analyse()` entry point: banks+programs JSON → `AnalysisResult` (lists of `IdeaStats`), CSV writer |
+| `events.py` | Intro-event detection (child introduces idea absent from parents) |
+| `aggregation.py` | Per idea×quartile `IdeaStats` rows (gains, posteriors via `injection_posterior`) |
+| `loader.py` | Banks/programs JSON loading |
+| `quartiles.py` | Generation → quartile bucketing |
+| `siblings.py` | Sibling win-rate computation |
+| `statistics.py` | NaN-aware medians/quantiles/rates (pure python) |
+| `types.py` | Event/row type definitions |
 
 ### Tests
 
@@ -1081,7 +953,7 @@ through on failure or empty result.
 
 **Q: Does memory add latency?**
 With `memory=none`, zero. With `memory=local`, search runs on local disk
-(~50-200ms depending on card count and GAM tools). With `memory=api`, depends
+(~50-200ms depending on card count and GAM tools). With `memory=legacy_api`, depends
 on network latency. The search runs in parallel with other DAG stages
 (insights, lineage), so the wall-clock impact is often hidden.
 
@@ -1091,7 +963,7 @@ broken in steady-state because memory was hardcoded in the generational engine
 loop. Now both engines use the same DAG pipeline.
 
 **Q: What if the memory backend is unavailable?**
-`MemorySelectorAgent` catches backend errors and returns an empty selection
+`MemoryReadPipeline` fails to an empty selection on every error path
 (behaves like `NullMemoryProvider`). A warning is logged. The mutation proceeds
 without memory guidance.
 
@@ -1099,17 +971,18 @@ without memory guidance.
 Configurable via `max_cards` in the Hydra config (default: 3). The memory
 agent searches the database and returns the most relevant cards.
 
-**Q: What's the difference between `memory=local` and `memory=api`?**
-Both use `SelectorMemoryProvider`. The actual backend switch (`use_api`) is in
-`memory_backend.yaml`. `local` is for experiments where you pre-populate cards
-on disk; `api` is for when you have a running memory API service. In practice,
-both configs are identical — the distinction is cosmetic for experiment clarity.
+**Q: What's the difference between `memory=local` and `memory=legacy_api`?**
+Both use `SelectorMemoryProvider`; they differ only in the composed backend
+factory (`config/memory/backend/local.yaml` vs `legacy_api.yaml`). `local`
+builds an on-disk `AmemGamMemory` bank; `legacy_api` builds the deprecated
+remote-API client and additionally needs `base_url`/`namespace`.
 
 **Q: How does the system decide which cards are "relevant"?**
 The GAM pipeline sends the parent code + task description as a query, then
 runs the configured retrieval tools (vector search, keyword search, etc.) to
-find matching cards. The `gam.allowed_tools` and `gam.top_k_by_tool` settings
-control which tools run and how many results each returns.
+find matching cards. The `allowed_tools` and `top_k_by_tool` settings in
+`config/memory/retriever/gam.yaml` control which tools run and how many
+results each returns.
 
 ### Ideas Tracker (Write Phase)
 
@@ -1136,7 +1009,7 @@ You can re-run the tracker via CLI afterward.
 **Q: Can I run the IdeaTracker on a run that's already finished?**
 Yes, that's what the CLI is for. Point it at the Redis DB/prefix of the
 completed run, and it extracts ideas just as the PostRunHook would have.
-You can also use `--source csv` to run on a CSV export from `redis2pd.py`.
+You can also pass `--csv-path` to run on a CSV export from `redis2pd.py`.
 
 **Q: What's `best_programs_percent` and why is it 5%?**
 The memory write pipeline only extracts ideas from the top N% of programs by
@@ -1146,7 +1019,8 @@ default — for a run with 200 programs, only the top 10 contribute ideas.
 **Q: How do I check what ideas were extracted?**
 Look at the logs directory (default: `gigaevo/memory/ideas_tracker/logs/`).
 The `active_ideas.json` file contains the final idea bank with all extracted
-cards. Each card has `description`, `keywords`, `programs`, and `usage` fields.
+cards. Each card has `description`, `keywords`, `programs`, and
+`evolution_statistics` fields.
 
 **Q: Can I disable memory write but still extract ideas?**
 Yes. Use `--no-memory-write` in the CLI, or set

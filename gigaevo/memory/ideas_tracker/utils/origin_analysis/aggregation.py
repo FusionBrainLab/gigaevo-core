@@ -1,11 +1,11 @@
-"""Aggregation: per-idea summary rows and best-ideas filter."""
+"""Aggregation: per-idea summary rows."""
 
 from __future__ import annotations
 
 import math
+from typing import Any
 
-import pandas as pd
-
+from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
     generation_to_quartile,
 )
@@ -14,42 +14,23 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.statistics import (
     nanquantile,
     nanrate_bool,
 )
+from gigaevo.memory.shared_memory.injection_posterior import (
+    beta_binomial_posterior,
+    noise_band,
+    parent_local_baseline,
+)
 
-_EMPTY_EVENTS_COLUMNS = [
-    "idea_id",
-    "quartile",
-    "child_id",
-    "child_gen",
-    "child_fit",
-    "best_parent_fit",
-    "mean_parent_fit",
-    "IntroGain_best",
-    "IntroGain_best_rel",
-    "IntroGain_mean",
-    "IntroGain_percentile_in_quartile",
-    "IntroGain_percentile_overall",
-    "IntroGain_z_in_quartile",
-    "IntroGain_z_overall",
-    "SiblingWin",
-    "SiblingPercentile",
-    "SiblingDelta",
-    "SiblingWin_allgens",
-    "SiblingPercentile_allgens",
-    "SiblingDelta_allgens",
-    "DescMaxLift_k_best",
-    "ReachesElite_k",
-    "TimeToElite_k",
-    "LineageReachesFinal",
-    "DescendantCount_k",
-    "BranchingFactor",
-    "TimeToPeak_k",
-    "ParentFitnessPercentile_within_gen",
-    "BornInElite",
-]
+_NAN = float("nan")
+_QUARTILE_SORT_RANK = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "ALL": 5}
+_MISSING_SORT_RANK = 99
+
+
+def _column(events: list[dict[str, Any]], key: str) -> list[float]:
+    return [e.get(key, _NAN) for e in events]
 
 
 def aggregate_idea_rows(
-    df_events: pd.DataFrame,
+    events: list[dict[str, Any]],
     idea_to_origin_programs: dict[str, set[str]],
     idea_desc: dict[str, str],
     programs: dict[str, dict],
@@ -60,9 +41,18 @@ def aggregate_idea_rows(
     b3: float,
     gens_by_quartile: dict[str, set[int]],
     total_distinct_gens: int,
-) -> pd.DataFrame:
+) -> list[IdeaStats]:
     quartile_order = ["Q1", "Q2", "Q3", "Q4", "ALL"]
-    out_rows = []
+    out_rows: list[IdeaStats] = []
+
+    population: list[tuple[float, float]] = []
+    for ev in events:
+        ref = ev.get("best_parent_fit", _NAN)
+        gain = ev.get("IntroGain_best", _NAN)
+        if math.isfinite(float(ref)) and math.isfinite(float(gain)):
+            population.append((float(ref), float(gain)))
+    baseline = parent_local_baseline(population)
+    epsilon = noise_band([g - baseline(ref) for ref, g in population])
 
     for idea_id, origin_pids in idea_to_origin_programs.items():
         origin_pids_valid = [
@@ -116,9 +106,9 @@ def aggregate_idea_rows(
                 "reinvention_rate_origins_per_distinct_gen": float(reinvention_rate),
             }
 
-        sub_all = df_events[df_events["idea_id"] == idea_id].copy()
+        sub_all = [ev for ev in events if ev.get("idea_id") == idea_id]
         sub_by_q = {
-            q: sub_all[sub_all["quartile"] == q].copy()
+            q: [ev for ev in sub_all if ev.get("quartile") == q]
             for q in ["Q1", "Q2", "Q3", "Q4"]
         }
 
@@ -126,138 +116,122 @@ def aggregate_idea_rows(
             sub = sub_all if q == "ALL" else sub_by_q[q]
             om = origin_metrics(origin_pids_valid if q == "ALL" else origin_by_q[q], q)
 
-            gains = [
-                float(x)
-                for x in sub["IntroGain_best"].tolist()
-                if math.isfinite(float(x))
+            paired = [
+                (float(ref), float(gain))
+                for ref, gain in zip(
+                    _column(sub, "best_parent_fit"),
+                    _column(sub, "IntroGain_best"),
+                )
+                if math.isfinite(float(ref)) and math.isfinite(float(gain))
             ]
+            gains = [g for _, g in paired]
             intro_events_ct = len(gains)
-            downside_rate = (
-                (sum(1 for x in gains if x < 0) / len(gains)) if gains else float("nan")
-            )
             tail_risk = (
-                nanmedian([min(x, 0.0) for x in gains]) if gains else float("nan")
+                nanmedian([min(g, 0.0) for g in gains]) if gains else float("nan")
+            )
+
+            adj_gains = [g - baseline(ref) for ref, g in paired]
+            post = beta_binomial_posterior(adj_gains, threshold=-epsilon)
+            k_harm = post["k_harm"]
+            posterior_a = post["posterior_a"]
+            posterior_b = post["posterior_b"]
+            p_help_mean = post["p_help_mean"]
+            p_help_lo20 = post["p_help_lo20"]
+            efficacy_confident = post["efficacy_confident"]
+            downside_rate = (
+                (k_harm / intro_events_ct) if intro_events_ct else float("nan")
             )
 
             pct_in_q = (
-                nanmedian(sub["IntroGain_percentile_in_quartile"].tolist())
+                nanmedian(_column(sub, "IntroGain_percentile_in_quartile"))
                 if q != "ALL"
                 else float("nan")
             )
-            pct_overall = nanmedian(sub["IntroGain_percentile_overall"].tolist())
+            pct_overall = nanmedian(_column(sub, "IntroGain_percentile_overall"))
             z_in_q = (
-                nanmedian(sub["IntroGain_z_in_quartile"].tolist())
+                nanmedian(_column(sub, "IntroGain_z_in_quartile"))
                 if q != "ALL"
                 else float("nan")
             )
-            z_overall = nanmedian(sub["IntroGain_z_overall"].tolist())
+            z_overall = nanmedian(_column(sub, "IntroGain_z_overall"))
 
             out_rows.append(
-                {
-                    "idea_id": idea_id,
-                    "quartile": q,
-                    "intro_events": int(intro_events_ct),
-                    "IntroGain_best_p10": nanquantile(gains, 0.10),
-                    "IntroGain_best_median": nanquantile(gains, 0.50),
-                    "IntroGain_best_rel_median": nanmedian(
-                        sub["IntroGain_best_rel"].tolist()
-                    ),
-                    "IntroGain_best_p90": nanquantile(gains, 0.90),
-                    "DownsideRate_best": downside_rate,
-                    "TailRisk_best_median(min(gain,0))": tail_risk,
-                    "IntroGain_percentile_median_in_quartile": pct_in_q,
-                    "IntroGain_percentile_median_overall": pct_overall,
-                    "IntroGain_z_median_in_quartile": z_in_q,
-                    "IntroGain_z_median_overall": z_overall,
-                    "SiblingWinRate": nanrate_bool(sub["SiblingWin"].tolist()),
-                    "SiblingPercentile_median": nanmedian(
-                        sub["SiblingPercentile"].tolist()
-                    ),
-                    "SiblingDelta_median": nanmedian(sub["SiblingDelta"].tolist()),
-                    "SiblingWinRate_allgens": nanrate_bool(
-                        sub["SiblingWin_allgens"].tolist()
-                    ),
-                    "SiblingPercentile_allgens_median": nanmedian(
-                        sub["SiblingPercentile_allgens"].tolist()
-                    ),
-                    "SiblingDelta_allgens_median": nanmedian(
-                        sub["SiblingDelta_allgens"].tolist()
-                    ),
-                    "DescMaxLift_k_best_median": nanmedian(
-                        sub["DescMaxLift_k_best"].tolist()
-                    ),
-                    "ReachesElite_k_rate": nanrate_bool(sub["ReachesElite_k"].tolist()),
-                    "TimeToElite_k_median": nanmedian(sub["TimeToElite_k"].tolist()),
-                    "LineageReachesFinal_rate": nanrate_bool(
-                        sub["LineageReachesFinal"].tolist()
-                    ),
-                    "DescendantCount_k_median": nanmedian(
-                        sub["DescendantCount_k"].tolist()
-                    ),
-                    "BranchingFactor_median": nanmedian(
-                        sub["BranchingFactor"].tolist()
-                    ),
-                    "TimeToPeak_k_median": nanmedian(sub["TimeToPeak_k"].tolist()),
-                    "ParentFitnessPercentile_within_gen_median": nanmedian(
-                        sub["ParentFitnessPercentile_within_gen"].tolist()
-                    ),
-                    "BornInElite_rate": nanrate_bool(sub["BornInElite"].tolist()),
-                    "origin_programs": int(om["origin_programs"]),
-                    "origin_in_elite_rate": om["origin_in_elite_rate"],
-                    "origin_generation_span": om["origin_generation_span"],
-                    "origin_root_diversity": om["origin_root_diversity"],
-                    "reinvention_rate_origins_per_distinct_gen": om[
-                        "reinvention_rate_origins_per_distinct_gen"
-                    ],
-                    "description": idea_desc.get(idea_id, ""),
-                }
+                IdeaStats.model_validate(
+                    {
+                        "idea_id": idea_id,
+                        "quartile": q,
+                        "intro_events": int(intro_events_ct),
+                        "IntroGain_best_p10": nanquantile(gains, 0.10),
+                        "IntroGain_best_median": nanquantile(gains, 0.50),
+                        "IntroGain_best_adj_median": nanquantile(adj_gains, 0.50),
+                        "IntroGain_best_rel_median": nanmedian(
+                            _column(sub, "IntroGain_best_rel")
+                        ),
+                        "IntroGain_best_p90": nanquantile(gains, 0.90),
+                        "DownsideRate_best": downside_rate,
+                        "TailRisk_best_median(min(gain,0))": tail_risk,
+                        "posterior_a": posterior_a,
+                        "posterior_b": posterior_b,
+                        "p_help_mean": p_help_mean,
+                        "p_help_lo20": p_help_lo20,
+                        "efficacy_confident": efficacy_confident,
+                        "IntroGain_percentile_median_in_quartile": pct_in_q,
+                        "IntroGain_percentile_median_overall": pct_overall,
+                        "IntroGain_z_median_in_quartile": z_in_q,
+                        "IntroGain_z_median_overall": z_overall,
+                        "SiblingWinRate": nanrate_bool(_column(sub, "SiblingWin")),
+                        "SiblingPercentile_median": nanmedian(
+                            _column(sub, "SiblingPercentile")
+                        ),
+                        "SiblingDelta_median": nanmedian(_column(sub, "SiblingDelta")),
+                        "SiblingWinRate_allgens": nanrate_bool(
+                            _column(sub, "SiblingWin_allgens")
+                        ),
+                        "SiblingPercentile_allgens_median": nanmedian(
+                            _column(sub, "SiblingPercentile_allgens")
+                        ),
+                        "SiblingDelta_allgens_median": nanmedian(
+                            _column(sub, "SiblingDelta_allgens")
+                        ),
+                        "DescMaxLift_k_best_median": nanmedian(
+                            _column(sub, "DescMaxLift_k_best")
+                        ),
+                        "ReachesElite_k_rate": nanrate_bool(
+                            _column(sub, "ReachesElite_k")
+                        ),
+                        "TimeToElite_k_median": nanmedian(
+                            _column(sub, "TimeToElite_k")
+                        ),
+                        "LineageReachesFinal_rate": nanrate_bool(
+                            _column(sub, "LineageReachesFinal")
+                        ),
+                        "DescendantCount_k_median": nanmedian(
+                            _column(sub, "DescendantCount_k")
+                        ),
+                        "BranchingFactor_median": nanmedian(
+                            _column(sub, "BranchingFactor")
+                        ),
+                        "TimeToPeak_k_median": nanmedian(_column(sub, "TimeToPeak_k")),
+                        "ParentFitnessPercentile_within_gen_median": nanmedian(
+                            _column(sub, "ParentFitnessPercentile_within_gen")
+                        ),
+                        "BornInElite_rate": nanrate_bool(_column(sub, "BornInElite")),
+                        "origin_programs": int(om["origin_programs"]),
+                        "origin_in_elite_rate": om["origin_in_elite_rate"],
+                        "origin_generation_span": om["origin_generation_span"],
+                        "origin_root_diversity": om["origin_root_diversity"],
+                        "reinvention_rate_origins_per_distinct_gen": om[
+                            "reinvention_rate_origins_per_distinct_gen"
+                        ],
+                        "description": idea_desc.get(idea_id, ""),
+                    }
+                )
             )
 
-    df_out = pd.DataFrame(out_rows)
-    q_rank = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "ALL": 5}
-    df_out["_qrank"] = df_out["quartile"].map(q_rank).fillna(99).astype(int)
-    df_out = df_out.sort_values(["idea_id", "_qrank"]).drop(columns=["_qrank"])
-    return df_out
-
-
-def filter_best_ideas(df_out: pd.DataFrame) -> pd.DataFrame:
-    df_sel = df_out.copy()
-    df_sel["DescCount_rank_in_quartile"] = df_sel.groupby("quartile")[
-        "DescendantCount_k_median"
-    ].rank(method="min", ascending=False)
-    top50_desc_mask = df_sel["DescCount_rank_in_quartile"] <= 50
-
-    eps = 1e-12
-    base_ok = (
-        (df_sel["intro_events"] >= 1)
-        & (pd.to_numeric(df_sel["IntroGain_best_rel_median"], errors="coerce") > 0.01)
-        & (pd.to_numeric(df_sel["DownsideRate_best"], errors="coerce") < 0.4)
-    )
-
-    sib_win_all = pd.to_numeric(df_sel["SiblingWinRate_allgens"], errors="coerce")
-    p10 = pd.to_numeric(df_sel["IntroGain_best_p10"], errors="coerce")
-    born_rate = pd.to_numeric(df_sel["BornInElite_rate"], errors="coerce")
-    reaches_elite_rate = pd.to_numeric(df_sel["ReachesElite_k_rate"], errors="coerce")
-
-    cond_ge3 = (df_sel["intro_events"] >= 3) & (sib_win_all >= 0.5)
-    cond_eq2 = (df_sel["intro_events"] == 2) & (p10 > 0) & (sib_win_all >= 1.0 - eps)
-    cond_eq1 = (df_sel["intro_events"] == 1) & (
-        (born_rate >= 1.0 - eps) | (top50_desc_mask & (reaches_elite_rate >= 1.0 - eps))
-    )
-
-    keep_mask = base_ok & (cond_ge3 | cond_eq2 | cond_eq1)
-    df_filtered = df_sel[keep_mask].copy()
-
-    pref_rank = {"ALL": 0, "Q4": 1, "Q3": 2, "Q2": 3, "Q1": 4}
-    df_filtered["_pref"] = df_filtered["quartile"].map(pref_rank).fillna(99).astype(int)
-    score = pd.to_numeric(df_filtered["IntroGain_best_median"], errors="coerce")
-    df_filtered["_score"] = score.fillna(-1e18)
-
-    return (
-        df_filtered.sort_values(
-            ["idea_id", "_pref", "_score"], ascending=[True, True, False]
+    out_rows.sort(
+        key=lambda s: (
+            s.idea_id,
+            _QUARTILE_SORT_RANK.get(s.quartile, _MISSING_SORT_RANK),
         )
-        .drop_duplicates(subset=["idea_id"], keep="first")
-        .drop(columns=["_pref", "_score", "DescCount_rank_in_quartile"])
-        .reset_index(drop=True)
     )
+    return out_rows

@@ -3,7 +3,6 @@
 Pin down the exact normalization behavior so refactoring can be validated.
 """
 
-from gigaevo.memory.ideas_tracker.models import UsagePayload
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.models import (
     MemoryCard,
@@ -175,15 +174,6 @@ class TestNormalizeGeneralCard:
         result = normalize_memory_card({"evolution_statistics": stats})
         assert result.evolution_statistics == stats
 
-    def test_usage_non_dict_becomes_default(self):
-        result = normalize_memory_card({"usage": [1, 2]})
-        assert result.usage == UsagePayload()
-
-    def test_usage_invalid_dict_becomes_default(self):
-        usage = {"count": 3}
-        result = normalize_memory_card({"usage": usage})
-        assert result.usage == UsagePayload()
-
     def test_lists_coerced_via_to_list(self):
         result = normalize_memory_card({"programs": "single"})
         assert result.programs == ["single"]
@@ -224,7 +214,6 @@ class TestNormalizeGeneralCard:
             "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
             "works_with": ["idea-2"],
             "links": ["idea-3"],
-            "usage": {"times_used": 7},
         }
         result = normalize_memory_card(card)
         assert result.id == "test-1"

@@ -1,20 +1,27 @@
-# @package _global_
-ideas_tracker:
-  _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
-  analyzer_type: default
-  analyzer_model: google/gemini-3-flash-preview
-  analyzer_base_url: "https://openrouter.ai/api/v1"
-  analyzer_reasoning:
-    effort: "minimal"
-  analyzer_max_concurrent_classifications: 8
-  list_max_ideas: 20
-  postprocessing_type: default
-  description_rewriting: true
-  record_conversion_type: default
-  memory_write_enabled: true
-  memory_write_best_programs_percent: 5.0
-  memory_usage_tracking_enabled: true
-  fitness_higher_is_better: ${higher_is_better}
-  checkpoint_dir: ${checkpoint_dir}
-  namespace: ${namespace}
-  redis_prefix: ${problem.name}
+# IdeaTracker as engine post-run hook + live-refresh tracker. Shares the
+# card-bank backend (`memory.backend`) and memory LLM (`memory_llm`)
+# singletons with the memory= read side.
+defaults:
+  - _self_
+  - override /memory/backend@_global_.memory.backend: local
+  - override /llms@_global_.memory_llm: gemini_flash_openrouter
+
+_target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
+llm: ${ref:memory_llm}
+backend: ${ref:memory.backend}
+analyzer_type: default
+analyzer_max_concurrent_classifications: 8
+description_rewriting: true
+memory_write_enabled: true
+memory_write_best_programs_percent: 5.0
+fitness_higher_is_better: ${higher_is_better}
+checkpoint_dir: ${checkpoint_dir}
+redis_prefix: ${problem.name}
+# Rides the read-side memory= group: memory=local injects its admitter
+# (sign_based by default), memory=none leaves it null (TieredAdmitter
+# fallback) — so best_ideas.json contents depend on the chosen read backend.
+admitter: ${ref:memory.admitter}
+# Same riding for the write-side dedup/evictor singletons (memory=none → null,
+# backend defaults apply).
+evictor: ${ref:memory.evictor}
+deduplicator: ${ref:memory.dedup}

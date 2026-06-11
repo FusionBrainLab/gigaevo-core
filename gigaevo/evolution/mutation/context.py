@@ -7,11 +7,6 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
-from gigaevo.evolution.mutation.constants import (  # noqa: F401 — re-export
-    MUTATION_CONTEXT_METADATA_KEY,
-    MUTATION_MEMORY_METADATA_KEY,
-    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
-)
 from gigaevo.llm.agents.insights import ProgramInsight, ProgramInsights
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
@@ -95,11 +90,11 @@ class InsightsMutationContext(MutationContext):
 
     def format(self) -> str:
         if not self.insights.insights:
-            return "<No insights available>"
+            return "## Program Insights\n\n<No insights available>"
 
         lines = ["## Program Insights", ""]
-        for insight in self.insights.insights:
-            header = f"- **[{insight.type}][{insight.tag}][{insight.severity}]**"
+        for i, insight in enumerate(self.insights.insights, start=1):
+            header = f"{i}. **[{insight.type}][{insight.tag}][{insight.severity}]**"
             structured_body = self._render_structured(insight)
             if structured_body:
                 lines.append(f"{header} {structured_body}")
@@ -130,7 +125,15 @@ class InsightsMutationContext(MutationContext):
                 f"anchor `{anchor}` ({source})" if source else f"anchor `{anchor}`"
             )
         if mechanism:
-            parts.append(f"mechanism: {mechanism}")
+            mech_source = (insight.mechanism_source or "").strip()
+            parts.append(
+                f"mechanism({mech_source}): {mechanism}"
+                if mech_source
+                else f"mechanism: {mechanism}"
+            )
+        card_id = (insight.card_id or "").strip()
+        if card_id:
+            parts.append(f"card: {card_id}")
         if substitute:
             parts.append(f"substitute: {substitute}")
         relation = (insight.relation_to_lineage or "").strip()
@@ -408,14 +411,14 @@ class ArtifactMutationContext(MutationContext):
 
 
 class MemoryMutationContext(MutationContext):
-    """Context with memory-selected idea cards."""
+    """Memory block (e.g. the intra lineage card) included verbatim; blocks carry their own headers."""
 
     memory_block: str
 
     def format(self) -> str:
         if not self.memory_block.strip():
             return ""
-        return f"## Memory Instructions\n{self.memory_block}"
+        return self.memory_block
 
 
 class PreformattedMutationContext(MutationContext):

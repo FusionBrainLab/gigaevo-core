@@ -7,7 +7,7 @@ specs:
     lower_bound: 60.0
     upper_bound: 500.0
     include_in_prompts: true
-    significant_change: 0.001
+    significant_change: 0.01
     sentinel_value: 1000.0
   is_valid:
     description: Whether the program is valid (1 valid, 0 invalid)
@@ -27,7 +27,7 @@ specs:
     lower_bound: 3.0
     upper_bound: 500.0
     include_in_prompts: true
-    significant_change: 0.001
+    significant_change: 0.01
     sentinel_value: 1000.0
   sum_score_medium:
     description: Sum of s_n^2/n for medium configurations (n=21 to 100)
@@ -37,7 +37,7 @@ specs:
     lower_bound: 18.0
     upper_bound: 500.0
     include_in_prompts: true
-    significant_change: 0.001
+    significant_change: 0.01
     sentinel_value: 1000.0
   sum_score_large:
     description: Sum of s_n^2/n for large configurations (n=101 to 200)
@@ -47,7 +47,7 @@ specs:
     lower_bound: 24.0
     upper_bound: 500.0
     include_in_prompts: true
-    significant_change: 0.001
+    significant_change: 0.01
     sentinel_value: 1000.0
   avg_rotation_variance:
     description: Average rotation variance across all configurations
@@ -57,7 +57,7 @@ specs:
     lower_bound: 0.0
     upper_bound: 180.0
     include_in_prompts: false
-    significant_change: 1.0
+    significant_change: 0.01
     sentinel_value: 1000.0
   avg_centroid_distance:
     description: Average distance from origin across all tree centroids
@@ -67,5 +67,5 @@ specs:
     lower_bound: 0.0
     upper_bound: 100.0
     include_in_prompts: false
-    significant_change: 0.1
+    significant_change: 0.01
     sentinel_value: 1000.0

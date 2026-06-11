@@ -71,5 +71,7 @@ async def load_engine_snapshot(storage: _SnapshotStorage) -> EngineSnapshot:
     try:
         return EngineSnapshot.model_validate_json(raw)
     except Exception as exc:
-        logger.warning("engine:snapshot JSON corrupt ({}); returning defaults", exc)
+        logger.warning(
+            "[EngineSnapshot] snapshot JSON corrupt ({}); returning defaults", exc
+        )
         return EngineSnapshot()

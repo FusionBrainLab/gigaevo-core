@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
-import re
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from gigaevo.memory.ideas_tracker.idea_bank import merge_usage_payloads
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order
 
 QUERY_DESCRIPTION = "description"
@@ -290,39 +287,54 @@ def compute_weighted_candidates(
     return ranked[: max(1, int(final_top_n))]
 
 
-def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
-    """Extract the first JSON object from *raw_text*, stripping markdown fences."""
-    text = str(raw_text or "").strip()
-    if not text:
-        return None
+class _DedupUpdateSpec(BaseModel):
+    """One merge instruction targeting an existing candidate card."""
 
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-        text = text.strip()
+    model_config = ConfigDict(extra="forbid")
 
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        logger.debug("[CardUpdateDedup] Failed to parse JSON from text: {}", text[:100])
-        pass
+    card_id: str = Field(
+        description="Id of the candidate card to merge into; must come from the candidate list."
+    )
+    update_task_description: bool = Field(
+        False, description="Whether the card's task-description should change."
+    )
+    task_description_append: str = Field(
+        "", description="New task/use-case text to append; empty if none."
+    )
+    task_description_summary: str = Field(
+        "", description="Replacement task-description summary; empty to keep current."
+    )
+    update_explanation: bool = Field(
+        False, description="Whether the card's explanation should change."
+    )
+    explanation_append: str = Field(
+        "", description="Full explanation text to append; empty if none."
+    )
+    explanation_summary: str = Field(
+        "", description="Replacement explanation summary; empty to keep current."
+    )
 
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        return None
-    try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        logger.debug(
-            "[CardUpdateDedup] Failed to parse JSON from extracted match: {}",
-            match.group(0)[:100],
-        )
-        return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+
+class _DedupLLMDecision(BaseModel):
+    """Dedup policy decision for an incoming card against retrieved candidates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["add", "discard", "update"] = Field(
+        description="add = genuinely new card; discard = duplicate of an existing card; update = merge new details into existing card(s)."
+    )
+    reason: str = Field("", description="Short justification for the chosen action.")
+    duplicate_of: str = Field(
+        "",
+        description="When action=discard, the candidate card_id that already covers the idea; otherwise empty.",
+    )
+    updates: list[_DedupUpdateSpec] = Field(
+        default_factory=list,
+        description="When action=update, one entry per candidate card to merge into; otherwise empty.",
+    )
+
+
+DEDUP_DECISION_SCHEMA = _DedupLLMDecision.model_json_schema()
 
 
 def parse_llm_card_decision(
@@ -330,68 +342,59 @@ def parse_llm_card_decision(
     *,
     candidate_ids: set[str],
 ) -> dict[str, Any] | None:
-    """Parse an LLM-generated JSON decision into a validated action dict.
+    """Validate an LLM dedup decision and normalise it into an action dict.
 
-    Returns ``None`` if the text contains no parseable JSON.  Otherwise
-    normalises the ``action`` to one of ``add`` / ``discard`` / ``update``
-    and validates ``duplicate_of`` and ``updates`` against *candidate_ids*.
+    Returns ``None`` when *raw_text* is not a valid ``_DedupLLMDecision``
+    JSON document (the caller retries).  Otherwise validates
+    ``duplicate_of`` and ``updates`` against *candidate_ids* and resolves
+    inconsistent action/payload combinations.
     """
-    payload = _extract_json_object(raw_text)
-    if payload is None:
+    try:
+        decision = _DedupLLMDecision.model_validate_json(str(raw_text or ""))
+    except ValidationError as exc:
+        logger.debug("[CardUpdateDedup] Invalid dedup decision payload: {}", exc)
         return None
-    action = str(payload.get("action") or "add").strip().lower()
-    if action not in {"add", "discard", "update"}:
-        action = "add"
+    action = decision.action
 
-    duplicate_of = str(payload.get("duplicate_of") or "").strip()
+    duplicate_of = decision.duplicate_of.strip()
     if duplicate_of and duplicate_of not in candidate_ids:
         duplicate_of = ""
 
-    updates_raw = payload.get("updates")
     updates: list[dict[str, Any]] = []
-    if isinstance(updates_raw, list):
-        for item in updates_raw:
-            if not isinstance(item, dict):
-                continue
-            card_id = str(item.get("card_id") or "").strip()
-            if not card_id or card_id not in candidate_ids:
-                continue
-            update_task_description = bool(item.get("update_task_description"))
-            update_explanation = bool(item.get("update_explanation"))
-            task_description_append = str(
-                item.get("task_description_append") or ""
-            ).strip()
-            task_description_summary = str(
-                item.get("task_description_summary") or ""
-            ).strip()
-            explanation_append = str(item.get("explanation_append") or "").strip()
-            explanation_summary = str(item.get("explanation_summary") or "").strip()
-            if not (
-                update_task_description
-                or update_explanation
-                or task_description_append
-                or explanation_append
-                or task_description_summary
-                or explanation_summary
-            ):
-                continue
-            updates.append(
-                {
-                    "card_id": card_id,
-                    "update_task_description": update_task_description
-                    or bool(task_description_append)
-                    or bool(task_description_summary),
-                    "task_description_append": task_description_append,
-                    "task_description_summary": task_description_summary,
-                    "update_explanation": update_explanation
-                    or bool(explanation_append)
-                    or bool(explanation_summary),
-                    "explanation_append": explanation_append,
-                    "explanation_summary": explanation_summary,
-                }
-            )
+    for spec in decision.updates:
+        card_id = spec.card_id.strip()
+        if not card_id or card_id not in candidate_ids:
+            continue
+        task_description_append = spec.task_description_append.strip()
+        task_description_summary = spec.task_description_summary.strip()
+        explanation_append = spec.explanation_append.strip()
+        explanation_summary = spec.explanation_summary.strip()
+        if not (
+            spec.update_task_description
+            or spec.update_explanation
+            or task_description_append
+            or explanation_append
+            or task_description_summary
+            or explanation_summary
+        ):
+            continue
+        updates.append(
+            {
+                "card_id": card_id,
+                "update_task_description": spec.update_task_description
+                or bool(task_description_append)
+                or bool(task_description_summary),
+                "task_description_append": task_description_append,
+                "task_description_summary": task_description_summary,
+                "update_explanation": spec.update_explanation
+                or bool(explanation_append)
+                or bool(explanation_summary),
+                "explanation_append": explanation_append,
+                "explanation_summary": explanation_summary,
+            }
+        )
 
-    reason = str(payload.get("reason") or "").strip()
+    reason = decision.reason.strip()
 
     if action == "update" and not updates:
         if duplicate_of:
@@ -455,8 +458,8 @@ def merge_updated_card(
 ) -> dict[str, Any]:
     """Merge *incoming_card* into *existing_card* using an LLM *update* spec.
 
-    Handles programs dedup, generation bumping, task description / explanation
-    appending, and usage payload merging.
+    Handles programs dedup, generation bumping, and task description /
+    explanation appending.
     """
     merged = dict(existing_card)
     merged["id"] = str(existing_card.get("id") or merged.get("id") or "").strip()
@@ -519,8 +522,4 @@ def merge_updated_card(
         "explanations": dedupe_keep_order(explanation_items),
         "summary": explanation_summary,
     }
-    merged["usage"] = merge_usage_payloads(
-        existing_card.get("usage"),
-        incoming_card.get("usage"),
-    ).model_dump()
     return merged

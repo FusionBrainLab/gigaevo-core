@@ -2,81 +2,33 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from pathlib import Path
-import tempfile
+import os
 from typing import Any
 
-import yaml
+from loguru import logger
+from pydantic import SecretStr
 
+from gigaevo.llm.models import ChatOpenAI, MultiModelRouter
+from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.ideas_tracker.csv_loader import load_programs_from_csv
 from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 from gigaevo.memory.ideas_tracker.redis_loader import load_programs_from_redis
 
 
-def _project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
-def _default_config_path() -> Path:
-    return _project_root() / "config" / "memory.yaml"
-
-
-def _load_yaml_mapping(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-
-    with path.open("r", encoding="utf-8") as file_obj:
-        payload = yaml.safe_load(file_obj) or {}
-
-    if not isinstance(payload, dict):
-        raise ValueError(f"Invalid YAML mapping in {path}")
-
-    return payload
-
-
-def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _merge_dicts(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _ensure_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
-    value = payload.get(key)
-    if not isinstance(value, dict):
-        value = {}
-        payload[key] = value
-    return value
-
-
-def _resolve_project_relative_path(path_value: str | Path) -> Path:
-    path = Path(path_value)
-    if path.is_absolute():
-        return path
-    return _project_root() / path
-
-
-def _build_runtime_memory_payload(config_path: Path | None) -> dict[str, Any]:
-    default_payload = _load_yaml_mapping(_default_config_path())
-    if config_path is None:
-        return default_payload
-
-    custom_payload = _load_yaml_mapping(config_path)
-    if isinstance(custom_payload.get("ideas_tracker"), dict):
-        return _merge_dicts(default_payload, custom_payload)
-
-    return _merge_dicts(default_payload, {"ideas_tracker": custom_payload})
-
-
-def _write_runtime_memory_config(payload: dict[str, Any]) -> Path:
-    runtime_dir = Path(tempfile.mkdtemp(prefix="ideas-tracker-", dir="/tmp"))
-    runtime_path = runtime_dir / "memory.runtime.yaml"
-    with runtime_path.open("w", encoding="utf-8") as file_obj:
-        yaml.safe_dump(payload, file_obj, sort_keys=False)
-    return runtime_path
+def build_router(model: str, base_url: str, api_key: str) -> MultiModelRouter:
+    """Memory LLM router for standalone CLI runs (run.py composes it via Hydra)."""
+    return MultiModelRouter(
+        models=[
+            ChatOpenAI(
+                model=model,
+                api_key=SecretStr(api_key),
+                base_url=base_url,
+                temperature=0.0,
+            )
+        ],
+        probabilities=[1.0],
+        name="memory",
+    )
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
@@ -84,19 +36,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         description="Run the ideas tracker independently from run.py using an existing Redis run database."
     )
     parser.add_argument(
-        "--config-path",
-        default=None,
-        help=(
-            "Optional YAML config path. May be a full unified memory config or "
-            "a tracker-only config. Defaults to config/memory.yaml."
-        ),
-    )
-    parser.add_argument(
         "--checkpoint-dir",
         default=None,
         help=(
-            "Override paths.checkpoint_dir for the final memory write pipeline. "
-            "Useful when running the tracker after run.py."
+            "Directory for the final memory write pipeline's card-bank artefacts. "
+            "Required unless --no-memory-write is given."
         ),
     )
     parser.add_argument(
@@ -111,7 +55,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "--memory-write",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Override ideas_tracker.memory_write_pipeline.enabled.",
+        help="Enable/disable the final memory write pipeline (default: enabled).",
     )
     parser.add_argument("--redis-host", default=None, help="Redis host override.")
     parser.add_argument(
@@ -129,6 +73,21 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Optional Redis label override for logging/debugging.",
     )
     parser.add_argument(
+        "--api-key",
+        default=os.getenv("OPENROUTER_API_KEY"),
+        help="Analyzer LLM API key. Defaults to $OPENROUTER_API_KEY.",
+    )
+    parser.add_argument(
+        "--model",
+        default="google/gemini-3-flash-preview",
+        help="Analyzer LLM model identifier.",
+    )
+    parser.add_argument(
+        "--base-url",
+        default="https://openrouter.ai/api/v1",
+        help="OpenAI-compatible API base URL for the analyzer LLM.",
+    )
+    parser.add_argument(
         "--csv-path",
         default=None,
         help=(
@@ -136,74 +95,42 @@ def _build_argument_parser() -> argparse.ArgumentParser:
             "When provided, programs are loaded from the CSV instead of Redis."
         ),
     )
+    parser.add_argument(
+        "--higher-is-better",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fitness direction of the analyzed run (default: higher is better).",
+    )
     return parser
-
-
-def _apply_cli_overrides(
-    payload: dict[str, Any],
-    *,
-    checkpoint_dir: str | None,
-    memory_write: bool | None,
-    redis_host: str | None,
-    redis_port: int | None,
-    redis_db: int | None,
-    redis_prefix: str | None,
-    redis_label: str | None,
-) -> dict[str, Any]:
-    result = dict(payload)
-
-    if checkpoint_dir is not None:
-        paths_cfg = _ensure_mapping(result, "paths")
-        paths_cfg["checkpoint_dir"] = str(
-            _resolve_project_relative_path(checkpoint_dir)
-        )
-
-    ideas_tracker_cfg = _ensure_mapping(result, "ideas_tracker")
-    redis_cfg = _ensure_mapping(ideas_tracker_cfg, "redis")
-
-    if redis_host is not None:
-        redis_cfg["redis_host"] = redis_host
-    if redis_port is not None:
-        redis_cfg["redis_port"] = int(redis_port)
-    if redis_db is not None:
-        redis_cfg["redis_db"] = int(redis_db)
-    if redis_prefix is not None:
-        redis_cfg["redis_prefix"] = redis_prefix
-    if redis_label is not None:
-        redis_cfg["label"] = redis_label
-
-    if memory_write is not None:
-        memory_write_cfg = ideas_tracker_cfg.get("memory_write_pipeline")
-        if not isinstance(memory_write_cfg, dict):
-            memory_write_cfg = {}
-            ideas_tracker_cfg["memory_write_pipeline"] = memory_write_cfg
-        memory_write_cfg["enabled"] = bool(memory_write)
-
-    return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_argument_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if not args.api_key:
+        parser.error("--api-key not given and OPENROUTER_API_KEY is not set")
+    memory_write_enabled = args.memory_write is None or bool(args.memory_write)
+    if memory_write_enabled and args.checkpoint_dir is None:
+        parser.error("--checkpoint-dir is required unless --no-memory-write is given")
 
-    config_path = Path(args.config_path) if args.config_path else None
-    runtime_payload = _build_runtime_memory_payload(config_path)
-    runtime_payload = _apply_cli_overrides(
-        runtime_payload,
-        checkpoint_dir=args.checkpoint_dir,
-        memory_write=args.memory_write,
-        redis_host=args.redis_host,
-        redis_port=args.redis_port,
-        redis_db=args.redis_db,
-        redis_prefix=args.redis_prefix,
-        redis_label=args.redis_label,
+    backend = LocalMemoryBackendFactory()
+    logger.info(
+        "[Memory][IdeaTracker][CLI] using local memory backend (checkpoint_dir={})",
+        args.checkpoint_dir,
     )
-    runtime_config_path = _write_runtime_memory_config(runtime_payload)
+
+    tracker_kwargs: dict[str, Any] = {}
+    if args.memory_write is not None:
+        tracker_kwargs["memory_write_enabled"] = bool(args.memory_write)
 
     tracker = IdeaTracker(
+        llm=build_router(args.model, args.base_url, args.api_key),
         logs_dir=args.logs_dir,
         redis_prefix=args.redis_prefix or "",
-        config_path=runtime_config_path,
+        checkpoint_dir=args.checkpoint_dir,
+        backend=backend,
+        fitness_higher_is_better=args.higher_is_better,
+        **tracker_kwargs,
     )
     if args.csv_path is not None:
         programs = load_programs_from_csv(args.csv_path)

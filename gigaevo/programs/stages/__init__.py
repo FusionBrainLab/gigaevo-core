@@ -18,7 +18,6 @@ _SUBMODULES = {
     "insights",
     "insights_lineage",
     "json_processing",
-    "llm_score",
     "metrics",
     "mutation_suggestions",
     "optimization",
@@ -37,10 +36,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "gigaevo.programs.stages.complexity",
         "ComputeComplexityStage",
     ),
-    "GetCodeLengthStage": (
-        "gigaevo.programs.stages.complexity",
-        "GetCodeLengthStage",
-    ),
     "FormatterStage": ("gigaevo.programs.stages.formatter", "FormatterStage"),
     "InsightsStage": ("gigaevo.programs.stages.insights", "InsightsStage"),
     "LineagesFromAncestors": (
@@ -56,22 +51,9 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "gigaevo.programs.stages.json_processing",
         "MergeDictStage",
     ),
-    "ParseJSONStage": (
-        "gigaevo.programs.stages.json_processing",
-        "ParseJSONStage",
-    ),
-    "StringifyJSONStage": (
-        "gigaevo.programs.stages.json_processing",
-        "StringifyJSONStage",
-    ),
-    "LLMScoreStage": ("gigaevo.programs.stages.llm_score", "LLMScoreStage"),
     "EnsureMetricsStage": (
         "gigaevo.programs.stages.metrics",
         "EnsureMetricsStage",
-    ),
-    "NormalizeMetricsStage": (
-        "gigaevo.programs.stages.metrics",
-        "NormalizeMetricsStage",
     ),
     "MutationSuggestionInputs": (
         "gigaevo.programs.stages.mutation_suggestions",

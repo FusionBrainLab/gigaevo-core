@@ -1,8 +1,8 @@
 # Intra/Extra Memory Pipeline (`pipeline=intra_extra_memory`)
 
-> Live, dual-track LLM memory for MAP-Elites: a **per-parent lineage card** (intra) and a **live global idea bank** (extra), both refreshed mid-run and consumed by the mutator on every iteration.
+> Live, dual-track LLM memory for MAP-Elites: a **per-parent lineage card** (intra) and a **live global idea bank** (extra), both refreshed mid-run. The intra card reaches the mutator verbatim; the global cards reach it ONLY as suggester output — `MutationSuggestionStage` is the single source of hints.
 
-This mode replaces the legacy lineage / insights stages with a single strong-LLM analyst stage that reads the framework's existing per-program ancestry and the global memory bank, and emits a compact card that goes straight into the mutation prompt.
+This mode replaces the legacy lineage / insights stages with two strong-LLM analyst stages: a **descriptive** `IntraMemoryStage` (per-parent lineage card) and a **prescriptive** `MutationSuggestionStage` that digests the intra card, the cross-population memory cards, the ancestral-momentum trail, and run statistics into structured `ProgramInsights` for the mutation prompt.
 
 - **Pipeline config:** [`config/pipeline/intra_extra_memory.yaml`](../config/pipeline/intra_extra_memory.yaml)
 - **Builder:** [`gigaevo/entrypoint/lineage_memory_pipeline.py`](../gigaevo/entrypoint/lineage_memory_pipeline.py)
@@ -23,16 +23,16 @@ Default GigaEvo passes the mutator a flat list of "insights" derived from a pare
 
 | Track | Scope | Stage | Trigger |
 |-------|-------|-------|---------|
-| **Intra** (per-parent lineage card) | One parent's evaluated children | `IntraMemoryStage` | Cache-invalidated when a new child completes or the global cards change |
+| **Intra** (per-parent lineage card) | One parent's evaluated children | `IntraMemoryStage` | Cache-invalidated when a new child completes |
 | **Extra** (live global ideas) | All evaluated programs across runs | `LiveMemoryRefreshHook` → `IdeaTracker.run_increment` | Every `refresh_every` ingestor sweeps that landed ≥ 1 program (default `10`) |
 
-The mutator sees both, concatenated, on every call.
+The mutator sees the intra card verbatim (`MutationContextStage.memory`) plus the suggester's `ProgramInsights` (`MutationContextStage.insights`). The global cards are consumed only by the suggester — the mutator never sees card text.
 
 ---
 
 ## 2. Pipeline architecture
 
-The builder inherits from `DefaultPipelineBuilder`, **rewires four edges**, and **strips five legacy stages**:
+The builder (`IntraExtraMemoryPipelineBuilder`, subclassing the intra-only `IntraMemoryPipelineBuilder`) inherits from `DefaultPipelineBuilder` and **strips five legacy stages**:
 
 ```
                             ┌───────────────────────┐
@@ -40,32 +40,34 @@ The builder inherits from `DefaultPipelineBuilder`, **rewires four edges**, and 
                             └──────────┬────────────┘
                                        │ (exec dep)
                                        ▼
- ┌────────────────────────┐   ┌──────────────────────┐
- │ DescendantProgramIds   │   │  MemoryContextStage  │  ← reload-on-read selector,
- │ (max_selected=24,      │   │  (live global cards) │    refreshed by hook
- │  strategy=best_fitness)│   └──────────┬───────────┘
- └──────────┬─────────────┘              │
-            │ "children_ids"             │ "memory_cards"
-            ▼                            ▼
- ┌────────────────────────────────────────────────────┐
- │             IntraMemoryStage (strong LLM)          │
- │   structured output → IntraCardStructuredOutput    │
- │   InputHashCache: skips LLM if neither input moved │
- └─────────────────────────┬──────────────────────────┘
-                           │ "intra"
-                           ▼               ┌──────────────────────┐
-                ┌────────────────────┐    │  MemoryContextStage  │
-                │ ConcatMemoryStage  │◀───┤  (same node, "cards" │
-                │ joins intra+cards  │    │   port)              │
-                └──────────┬─────────┘    └──────────────────────┘
-                           │ "memory"
-                           ▼
-                ┌────────────────────────┐
-                │ MutationContextStage   │  ← gets one flat "memory" string
-                └────────────────────────┘
+ ┌────────────────────────┐
+ │ DescendantProgramIds   │
+ │ (max_selected=24,      │
+ │  strategy=best_fitness)│
+ └──────────┬─────────────┘
+            │ "children_ids"
+            ▼
+ ┌────────────────────────────────────┐
+ │   IntraMemoryStage (strong LLM)    │  DESCRIPTIVE: what was tried, how it fared
+ │   → IntraCardStructuredOutput      │
+ └───────┬───────────────────┬────────┘
+         │ "intra_card"      │ "memory"  (card text, verbatim)
+         ▼                   │
+ ┌────────────────────────┐  │   ┌──────────────────────┐
+ │ MutationSuggestionStage│◀─┼───┤  MemoryContextStage  │ ← live global cards,
+ │ (strong LLM,           │  │   │  "memory_cards"      │   numbered [card N] id=…,
+ │  PRESCRIPTIVE)         │  │   └──────────────────────┘   refreshed by hook
+ └──────────┬─────────────┘  │
+            │ "insights"     │
+            ▼                ▼
+ ┌─────────────────────────────────┐
+ │      MutationContextStage       │  memory = intra card; insights = ProgramInsights
+ └─────────────────────────────────┘
 ```
 
-**Stages stripped** (superseded by `IntraMemoryStage` + live global cards):
+`MutationSuggestionStage` also consumes `EvolutionaryStatisticsCollector` output (`evolutionary_statistics`) and walks the ancestral-momentum trail from storage internally. **The `MemoryContextStage → MutationSuggestionStage` edge is the ONLY consumer of cross-population cards** — a card mechanism reaches the mutator only if the suggester transposes it into a suggestion (`mechanism_source: memory_cards`, `card_id` set).
+
+**Stages stripped** (superseded by `IntraMemoryStage` + `MutationSuggestionStage`):
 
 - `AncestorProgramIds`, `LineageStage`, `LineagesToDescendants`, `LineagesFromAncestors`, `InsightsStage`
 
@@ -135,15 +137,15 @@ Both new stages are pure cache-aware nodes — the LLM only runs when an input a
 
 | Stage | Input that invalidates cache |
 |-------|------------------------------|
-| `IntraMemoryStage` | `children_ids` (`DescendantProgramIds` output) **or** `memory_cards` (`MemoryContextStage` block) |
-| `ConcatMemoryStage` | `intra` or `cards` |
+| `IntraMemoryStage` | `children_ids` (`DescendantProgramIds` output) |
+| `MutationSuggestionStage` | `intra_card`, `memory_cards` (`MemoryContextStage` block), or `evolutionary_statistics` |
 
-The smoke run saw **78 stage invocations, 11 distinct cards rendered** — the rest were cache hits. See [`tests/stages/test_intra_memory_cache.py`](../tests/stages/test_intra_memory_cache.py) and [`tests/stages/test_extra_memory_cache.py`](../tests/stages/test_extra_memory_cache.py) for the contract.
+See [`tests/stages/test_intra_memory_cache.py`](../tests/stages/test_intra_memory_cache.py) for the contract.
 
 **Cache-miss triggers in practice:**
 
-1. A new child of parent X finishes evaluating → `ParentRefresher` flips X `DONE → QUEUED` → `DescendantProgramIds` returns a new id list → intra invalidates for X.
-2. `LiveMemoryRefreshHook` writes new global cards → `MemoryContextStage` block changes → intra invalidates for **all** parents on their next visit.
+1. A new child of parent X finishes evaluating → `ParentRefresher` flips X `DONE → QUEUED` → `DescendantProgramIds` returns a new id list → intra invalidates for X (and the new intra card invalidates the suggester).
+2. `LiveMemoryRefreshHook` writes new global cards → `MemoryContextStage` block changes → the suggester invalidates for **all** parents on their next visit (the intra card itself does not).
 
 ---
 
@@ -153,7 +155,7 @@ The mode depends on two upstream config nodes that Hydra's defaults-list cannot 
 
 ```
 ideas_tracker=default    # LiveMemoryRefreshHook calls IdeaTracker.run_increment
-memory=local             # MemorySelectorAgent reads the local card store that
+memory=local             # MemoryReadPipeline reads the local card store that
                          # IdeaTracker writes to between refreshes
 ```
 
@@ -243,7 +245,7 @@ Pair with `tools/telegram_notify.notify(...)` from your monitoring shell for mil
 | `refresh_every` | `post_step_hook` block | `10` | Ingestor sweeps between live refreshes. Lower = fresher cards, more LLM calls. |
 | `max_insights` | top-level | inherited | Bound on memory-card count `MemoryContextStage` surfaces. |
 | `max_code_length` | top-level | inherited | Truncation guard for parent code in the intra prompt. |
-| `stage_timeout` | top-level | inherited | Per-stage timeout; respected by `IntraMemoryStage` and `ConcatMemoryStage`. |
+| `stage_timeout` | top-level | inherited | Per-stage timeout; respected by `IntraMemoryStage` and `MutationSuggestionStage`. |
 
 To override at launch:
 
@@ -267,10 +269,10 @@ After a run finishes, four artefacts should all be non-empty:
    assert p.metadata.get("intra_memory_card", "").startswith("# Intra Memory")
    ```
 2. **Chroma embedding count** — should grow from 0 → ~5 × card-count by end of run.
-3. **Mutation context** — at least one parent's `metadata["mutation_context"]["memory"]` contains both an `## Intra Memory` block and a `## Memory Cards` block.
-4. **Captured prompts** — `MutationAgent` request payloads contain both blocks under `EVIDENCE INPUTS`.
+3. **Mutation context** — at least one parent's `metadata["mutation_context"]["memory"]` contains the `## Intra Memory` lineage card, and `["insights"]` carries the suggester's `ProgramInsights` (cards reach the mutator only through these).
+4. **Captured prompts** — `MutationSuggestionStage` request payloads contain a `## Memory Cards` block with `[card N] id=<card-id>` headers; `MutationAgent` payloads contain the intra card and numbered `## Program Insights`, and NO card text.
 
-The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) hit all four and produced a top fitness of `0.02487` (≈15× the best seed) with **0 `IntraMemoryStage` failures** over 78 invocations.
+The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) — run on the pre-split wiring — produced a top fitness of `0.02487` (≈15× the best seed) with **0 `IntraMemoryStage` failures** over 78 invocations.
 
 ---
 
@@ -295,4 +297,4 @@ The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) hit all four and pr
 
 ---
 
-*Last updated: 2026-05-15. Pipeline introduced in commit `89f01be5`.*
+*Last updated: 2026-06-09 (single-source hint wiring: cards → suggester only). Pipeline introduced in commit `89f01be5`.*

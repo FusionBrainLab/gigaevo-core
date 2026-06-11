@@ -1,0 +1,2 @@
+_target_: gigaevo.memory.core.auctioneer.ThompsonAuctioneer
+baseline_prior: [3.0, 3.0]
