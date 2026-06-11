@@ -9,6 +9,7 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
+from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.monitoring.emit import (
@@ -46,9 +47,13 @@ async def run_experiment(cfg: DictConfig) -> None:
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
         writer: LogWriter = config_with_instances.writer
 
-        logger.info(
-            "Redis DB {} at {}:{}", cfg.redis.db, cfg.redis.host, cfg.redis.port
-        )
+        if isinstance(storage, DiskProgramStorage):
+            location = f"disk storage at {storage.config.root_dir}"
+            flush_hint = f"rm -rf {storage.config.root_dir}"
+        else:
+            location = f"Redis DB {cfg.redis.db} at {cfg.redis.host}:{cfg.redis.port}"
+            flush_hint = f"gigaevo flush --db {cfg.redis.db} --confirm"
+        logger.info("Program storage: {}", location)
         configure_event_counters_from_cfg(cfg)
 
         await storage.acquire_instance_lock()
@@ -56,8 +61,8 @@ async def run_experiment(cfg: DictConfig) -> None:
         resume = await check_storage_resume(
             storage,
             resume=bool(cfg.redis.get("resume", False)),
-            location=f"Redis DB {cfg.redis.db} at {cfg.redis.host}:{cfg.redis.port}",
-            flush_hint=f"gigaevo flush --db {cfg.redis.db} --confirm",
+            location=location,
+            flush_hint=flush_hint,
         )
         if resume:
             recovered = await storage.recover_stranded_programs()

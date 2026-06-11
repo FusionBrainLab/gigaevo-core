@@ -41,6 +41,11 @@ class DiskProgramStorage(ProgramStorage):
     ``root_dir/<prefix>`` so a later process can resume. Atomicity here means
     single-process atomicity: all mutations run under one ``asyncio.Lock``,
     not cross-process transactions.
+
+    The ``exclude`` field-pruning hint on ``get_all``/``mget``/
+    ``get_all_by_status`` is accepted but ignored: it is a Redis
+    deserialization optimization, and returning full programs is a correct
+    superset.
     """
 
     def __init__(
@@ -86,13 +91,11 @@ class DiskProgramStorage(ProgramStorage):
                     continue
                 self._programs[program.id] = program
                 self._counter = max(self._counter, program.atomic_counter)
-        status_path = self.base_dir / STATUS_SETS_FILE
-        if status_path.is_file():
-            raw = _loads(status_path.read_text())
-            self._status_sets = {s: set(ids) for s, ids in raw.items()}
-        else:
-            for program in self._programs.values():
-                self._status_sets.setdefault(program.state.value, set()).add(program.id)
+        # status_sets.json can lag program files after a crash; program state
+        # is the durable truth, so sets are rebuilt from it on every load
+        # (the persisted file is a write-through inspection artifact only).
+        for program in self._programs.values():
+            self._status_sets.setdefault(program.state.value, set()).add(program.id)
         run_state_path = self.base_dir / RUN_STATE_FILE
         if run_state_path.is_file():
             self._run_state = dict(_loads(run_state_path.read_text()))

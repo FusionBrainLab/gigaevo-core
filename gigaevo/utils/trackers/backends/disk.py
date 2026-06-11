@@ -27,6 +27,8 @@ class DiskMetricsBackend(LoggerBackend):
 
     @staticmethod
     def _safe_tag(tag: str) -> str:
+        # Same sanitization as the Redis backend; tags containing ":" are
+        # unsupported (they would collide with a sanitized "/").
         return tag.replace("/", ":").replace(" ", "_")
 
     def _path(self, tag: str) -> Path:
