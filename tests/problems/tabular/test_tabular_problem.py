@@ -86,6 +86,31 @@ def test_score_on_test_binclass(data_root):
     assert set(res) == {"test_accuracy", "test_auc"}
 
 
+class _InPlaceMutator:
+    def fit_predict(self, X_train, y_train, X_val, y_val, X_query):
+        X_train[:, 0] = y_train
+        y_train[:] = 0.0
+        X_val[:, 0] = y_val
+        y_val[:] = 0.0
+        return np.full(X_query.shape[0], 1.0)
+
+
+def test_program_cannot_poison_cached_dataset(data_root):
+    import tabular_data
+
+    ds = tabular_data.load_dataset("california")
+    snapshot = {
+        k: getattr(ds, k).copy()
+        for k in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")
+    }
+    prob = tabular_problem.build("california")
+    prob.validate(lambda: _InPlaceMutator())
+    prob.score_on_test(lambda: _InPlaceMutator())
+    cached = tabular_data.load_dataset("california")
+    for k, v in snapshot.items():
+        np.testing.assert_array_equal(getattr(cached, k), v, err_msg=k)
+
+
 def test_bad_factory_marks_invalid_via_exception(data_root):
     # a factory returning a non-model raises inside validate -> caller (framework)
     # turns it into sentinels; here we assert validate raises so the stage catches it

@@ -71,10 +71,10 @@ class TabularProblem:
         try:
             return tabular_bd.compute_bd_axes(
                 model_factory,
-                ds.X_train,
-                ds.y_train,
-                ds.X_val,
-                ds.y_val,
+                ds.X_train.copy(),
+                ds.y_train.copy(),
+                ds.X_val.copy(),
+                ds.y_val.copy(),
                 task_type=ds.task_type,
                 sd_y=sd_y,
                 bd_max=_env_int(BD_MAX_ENV, _DEFAULT_BD_MAX),
@@ -119,7 +119,11 @@ class TabularProblem:
         ds = self._dataset()
         instance = tabular_metrics.instantiate(model_factory)
         pred = instance.fit_predict(
-            ds.X_train, ds.y_train, ds.X_val, ds.y_val, ds.X_test
+            ds.X_train.copy(),
+            ds.y_train.copy(),
+            ds.X_val.copy(),
+            ds.y_val.copy(),
+            ds.X_test.copy(),
         )
         if ds.task_type == tabular_data.REGRESSION:
             m = tabular_metrics.regression_fold_metrics(ds.y_test, pred)

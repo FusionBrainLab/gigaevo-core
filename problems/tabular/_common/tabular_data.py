@@ -152,6 +152,8 @@ def load_dataset(name: str) -> Dataset:
     y_val = np.asarray(_load_npy(folder, "Y_val"), dtype=ycast)
     y_test = np.asarray(_load_npy(folder, "Y_test"), dtype=ycast)
 
+    for arr in (X_train, X_val, X_test, y_train, y_val, y_test):
+        arr.setflags(write=False)
     ds = Dataset(
         name=name,
         task_type=task_type,
