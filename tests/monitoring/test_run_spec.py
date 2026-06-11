@@ -125,7 +125,7 @@ _prefix_strategy = st.text(
     alphabet=st.sampled_from(list("abcdefghijklmnopqrstuvwxyz/_-0123456789")),
     min_size=1,
     max_size=50,
-)
+).filter(lambda s: not s.startswith("/"))  # leading "/" is reserved for disk paths
 _db_strategy = st.integers(min_value=0, max_value=15)
 _label_strategy = st.text(
     alphabet=st.sampled_from(
@@ -197,3 +197,41 @@ def test_display_name_with_auto_label() -> None:
         label="chains/synthetic/static@4",
     )
     assert spec.display_name == "chains/synthetic/static@4"
+
+
+# ---------------------------------------------------------------------------
+# g) Disk-path spec tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected_path, expected_label",
+    [
+        ("/tmp/run1/storage", "/tmp/run1/storage", "storage"),
+        ("/tmp/run1/storage:mylabel", "/tmp/run1/storage", "mylabel"),
+        ("./outputs/run/storage", "./outputs/run/storage", "storage"),
+        ("../other/storage:X", "../other/storage", "X"),
+    ],
+)
+def test_disk_spec_parsing(raw: str, expected_path: str, expected_label: str) -> None:
+    spec = RunSpec.parse(raw)
+    assert spec.is_disk
+    assert spec.path == expected_path
+    assert spec.label == expected_label
+    assert spec.prefix == ""
+
+
+def test_redis_spec_is_not_disk() -> None:
+    spec = RunSpec.parse("prefix@4:O")
+    assert not spec.is_disk
+    assert spec.path is None
+
+
+def test_bare_db_spec_is_not_disk() -> None:
+    spec = RunSpec.parse("2")
+    assert not spec.is_disk
+
+
+def test_disk_spec_does_not_need_prefix_autodiscovery() -> None:
+    spec = RunSpec.parse("/tmp/run1/storage")
+    assert not spec.needs_prefix

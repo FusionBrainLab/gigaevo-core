@@ -8,7 +8,7 @@ import click
 import redis as redis_lib
 
 from gigaevo.cli.output_formatter import OutputFormatter
-from gigaevo.cli.run_resolver import RunResolver
+from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
 
 
 def _fetch_trajectory(
@@ -111,6 +111,7 @@ def trajectory(
         redis_host=redis_host,
         redis_port=redis_port,
     )
+    reject_disk_specs(run_configs, "trajectory")
 
     # Auto-discover metrics from run_configs when none explicitly specified
     if not metric:

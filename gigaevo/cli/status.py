@@ -8,7 +8,7 @@ import click
 import yaml
 
 from gigaevo.cli.output_formatter import OutputFormatter
-from gigaevo.cli.run_resolver import RunResolver
+from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
 from gigaevo.monitoring.snapshot import RunSnapshot
 
@@ -170,6 +170,7 @@ def status(ctx: click.Context, format_name: str | None) -> None:
         redis_host=redis_host,
         redis_port=redis_port,
     )
+    reject_disk_specs(run_configs, "status")
 
     metric_specs = _load_metric_specs(experiment)
 

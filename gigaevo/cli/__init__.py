@@ -81,8 +81,9 @@ class LazyGroup(click.Group):
     type=str,
     multiple=True,
     help=(
-        "Run spec 'prefix@db[:label]' (e.g. 'adv_k5_1_G@1:K5_1_G'). "
-        "Repeatable — pass multiple times to target several runs."
+        "Run spec 'prefix@db[:label]' (e.g. 'adv_k5_1_G@1:K5_1_G') or a "
+        "disk storage path '/path/to/storage[:label]' for storage=disk "
+        "runs. Repeatable — pass multiple times to target several runs."
     ),
 )
 @click.option(
@@ -166,7 +167,8 @@ def main(
 
     Target selection: pass `-e/--experiment` to auto-discover all runs
     from the manifest, OR `-r/--run` (repeatable) to target specific
-    prefix@db pairs. Some commands (flush, inspect) ignore both.
+    prefix@db pairs or disk storage paths (storage=disk runs; supported
+    by top/export/plot). Some commands (flush, inspect) ignore both.
     """
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = OutputFormatter(format_name=format_name, quiet=quiet)

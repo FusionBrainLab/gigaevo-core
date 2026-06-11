@@ -54,6 +54,22 @@ def build_readonly_redis_storage(
     )
 
 
+def build_readonly_disk_storage(*, root_dir: str, key_prefix: str) -> ProgramStorage:
+    """Read-only disk storage for analytics/CLI paths. Skips the instance lock."""
+    from gigaevo.database.disk_program_storage import (
+        DiskProgramStorage,
+        DiskProgramStorageConfig,
+    )
+
+    return DiskProgramStorage(
+        DiskProgramStorageConfig(
+            root_dir=root_dir,
+            key_prefix=key_prefix,
+            read_only=True,
+        )
+    )
+
+
 def build_writable_redis_storage(
     *,
     host: str,

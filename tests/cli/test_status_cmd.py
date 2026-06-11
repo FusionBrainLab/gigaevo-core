@@ -296,3 +296,16 @@ class TestStatusNoRunFlag:
         runner = CliRunner()
         result = runner.invoke(main, ["status"])
         assert result.exit_code != 0
+
+
+class TestStatusRejectsDiskSpecs:
+    def test_disk_spec_gives_clear_usage_error(self, seed_disk_run):
+        from click.testing import CliRunner
+
+        from gigaevo.cli import main
+
+        root, _ = seed_disk_run()
+        runner = CliRunner()
+        result = runner.invoke(main, ["-r", str(root), "status"], obj={})
+        assert result.exit_code != 0
+        assert "Redis-backed" in result.output

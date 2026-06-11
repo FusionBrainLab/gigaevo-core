@@ -105,9 +105,22 @@ Data lands under `<hydra run dir>/storage/<problem name>/` by default
 (per-run, like `checkpoint_dir`). Override the root on the CLI
 (`program_storage.config.root_dir=/abs/path`) to persist/resume across
 runs. Single-process only — the instance lock is a PID file, and there is
-no cross-process pub/sub. Live monitors that talk to Redis directly
-(`live_frontier_compare`) still use `redis.*` settings and can be disabled
-with `live_frontier_compare.enabled=false` for a fully Redis-free run.
+no cross-process pub/sub. Metrics history also goes to disk (JSONL files
+under `<hydra run dir>/metrics/`), and live monitors
+(`live_frontier_compare`) read it through the same backend — `storage=disk`
+runs are fully Redis-free.
+
+Inspect a disk run with the CLI by passing the storage path as the run
+spec (read-only, safe while the run is live):
+
+```bash
+gigaevo -r outputs/<run dir>/storage top -n 5
+gigaevo -r outputs/<run dir>/storage:mylabel export csv -o out.csv
+```
+
+Supported by `top`, `export`, and `plot`; Redis-only commands (`status`,
+`trajectory`, `metrics`, `checkpoint`) reject disk specs — see
+[tools/README.md](../tools/README.md) for the full run-spec reference.
 
 ## Examples
 

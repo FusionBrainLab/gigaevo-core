@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from gigaevo.cli.output_formatter import OutputFormatter
-from gigaevo.cli.run_resolver import RunResolver
+from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
 from gigaevo.cli.status import _format_metric_value, _load_metric_specs
 from gigaevo.monitoring.experiment_monitor import ExperimentMonitor
 
@@ -88,6 +88,7 @@ def checkpoint(
         redis_host=redis_host,
         redis_port=redis_port,
     )
+    reject_disk_specs(run_configs, "checkpoint")
 
     metric_specs = _load_metric_specs(experiment)
 

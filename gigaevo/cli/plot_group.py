@@ -110,7 +110,7 @@ def _fetch_run_data(
         sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
             Rows matching this value are removed before computing statistics.
     """
-    from gigaevo.database.factory import build_readonly_redis_storage
+    from gigaevo.cli.run_resolver import build_readonly_storage
     from gigaevo.utils.dataframes import (
         fetch_evolution_dataframe,
         prepare_iteration_dataframe,
@@ -119,9 +119,7 @@ def _fetch_run_data(
     results: list[tuple[str, pd.DataFrame]] = []
     for rc in run_configs:
         spec = rc.run_spec
-        storage = build_readonly_redis_storage(
-            host=redis_host, port=redis_port, db=spec.db, key_prefix=spec.prefix
-        )
+        storage = build_readonly_storage(spec, redis_host, redis_port)
 
         async def _fetch():
             async with storage:

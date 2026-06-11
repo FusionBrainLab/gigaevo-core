@@ -98,3 +98,109 @@ class TestResolveErrors:
                 redis_host="localhost",
                 redis_port=6379,
             )
+
+
+class TestResolveDiskRuns:
+    def _make_storage_dir(self, tmp_path, prefix: str = "toy"):
+        base = tmp_path / "storage" / prefix
+        (base / "programs").mkdir(parents=True)
+        return tmp_path / "storage"
+
+    def test_root_with_single_prefix_autodiscovers(self, tmp_path):
+        root = self._make_storage_dir(tmp_path, "toy")
+        configs = RunResolver.resolve(
+            experiment=None,
+            runs=[str(root)],
+            redis_host="localhost",
+            redis_port=6379,
+        )
+        spec = configs[0].run_spec
+        assert spec.is_disk
+        assert spec.prefix == "toy"
+        assert spec.path == str(root)
+        assert spec.label == "toy"
+
+    def test_direct_prefix_dir(self, tmp_path):
+        root = self._make_storage_dir(tmp_path, "toy")
+        configs = RunResolver.resolve(
+            experiment=None,
+            runs=[str(root / "toy")],
+            redis_host="localhost",
+            redis_port=6379,
+        )
+        spec = configs[0].run_spec
+        assert spec.is_disk
+        assert spec.prefix == "toy"
+        assert spec.path == str(root)
+
+    def test_explicit_label_preserved(self, tmp_path):
+        root = self._make_storage_dir(tmp_path, "toy")
+        configs = RunResolver.resolve(
+            experiment=None,
+            runs=[f"{root}:mylabel"],
+            redis_host="localhost",
+            redis_port=6379,
+        )
+        assert configs[0].run_spec.label == "mylabel"
+
+    def test_missing_dir_raises(self, tmp_path):
+        with pytest.raises(click.UsageError, match="not a directory"):
+            RunResolver.resolve(
+                experiment=None,
+                runs=[str(tmp_path / "nope")],
+                redis_host="localhost",
+                redis_port=6379,
+            )
+
+    def test_no_storage_raises(self, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        with pytest.raises(click.UsageError, match="No program storage"):
+            RunResolver.resolve(
+                experiment=None,
+                runs=[str(empty)],
+                redis_host="localhost",
+                redis_port=6379,
+            )
+
+    def test_multiple_prefixes_raises(self, tmp_path):
+        self._make_storage_dir(tmp_path, "alpha")
+        root = self._make_storage_dir(tmp_path, "beta")
+        with pytest.raises(click.UsageError, match="alpha.*beta"):
+            RunResolver.resolve(
+                experiment=None,
+                runs=[str(root)],
+                redis_host="localhost",
+                redis_port=6379,
+            )
+
+
+class TestRejectDiskSpecs:
+    def test_rejects_disk_specs_with_command_name(self, tmp_path):
+        from gigaevo.cli.run_resolver import reject_disk_specs
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+
+        spec = RunSpec(prefix="toy", db=-1, label="toy", path=str(tmp_path))
+        with pytest.raises(click.UsageError, match="status.*Redis"):
+            reject_disk_specs([RunConfig(run_spec=spec)], "status")
+
+    def test_passes_redis_specs(self):
+        from gigaevo.cli.run_resolver import reject_disk_specs
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+
+        spec = RunSpec(prefix="p", db=4, label="A")
+        reject_disk_specs([RunConfig(run_spec=spec)], "status")
+
+
+class TestVerifyPrefixesSkipsDisk:
+    def test_verify_prefixes_skips_disk_specs(self, tmp_path):
+        """export's Redis existence probe must ignore disk-backed specs."""
+        from unittest.mock import MagicMock
+
+        from gigaevo.cli.export import _verify_prefixes_exist
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+
+        ctx = MagicMock()
+        ctx.obj = {}
+        spec = RunSpec(prefix="toy", db=-1, label="toy", path=str(tmp_path))
+        _verify_prefixes_exist(ctx, [RunConfig(run_spec=spec)], "localhost", 6379)

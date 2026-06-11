@@ -34,14 +34,11 @@ def _build_redis_config(run_config, redis_host: str, redis_port: int):
 
 
 def _fetch_dataframe(run_config, redis_host: str, redis_port: int) -> pd.DataFrame:
-    """Fetch evolution DataFrame for a single run."""
-    from gigaevo.database.factory import build_readonly_redis_storage
+    """Fetch evolution DataFrame for a single run (disk or Redis)."""
+    from gigaevo.cli.run_resolver import build_readonly_storage
     from gigaevo.utils.dataframes import fetch_evolution_dataframe
 
-    spec = run_config.run_spec
-    storage = build_readonly_redis_storage(
-        host=redis_host, port=redis_port, db=spec.db, key_prefix=spec.prefix
-    )
+    storage = build_readonly_storage(run_config.run_spec, redis_host, redis_port)
 
     async def _fetch():
         async with storage:
@@ -118,6 +115,8 @@ def _verify_prefixes_exist(
     missing: list[tuple[str, int, list[str]]] = []
     for rc in run_configs:
         spec = rc.run_spec
+        if spec.is_disk:
+            continue  # existence already verified during disk-path resolution
         try:
             available = discover_prefixes(redis_host, redis_port, spec.db)
         except RedisError:

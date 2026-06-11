@@ -34,8 +34,11 @@ The `-r/--run` flag accepts several shorthand forms. Prefix is auto-discovered f
 | `db` | `4` | Bare DB number — prefix auto-discovered from `:__instance_lock__` |
 | `@db` | `@4` | Same as bare `db` |
 | `db:label` | `4:O` | Bare DB with custom label |
+| `/path/to/storage[:label]` | `outputs/run/storage:disk1` | Disk storage path (`storage=disk` runs) — must start with `/`, `./`, `../`, or `~` |
 
 The auto-discover path fails if the DB is empty or contains multiple prefixes. Run `gigaevo inspect --db N` first to see what's there.
+
+**Disk-path specs** point at the storage root written by a `storage=disk` run (Hydra default: `<output_dir>/storage`). Accepts either the root (its single `<prefix>/programs/` subdirectory is auto-discovered; errors if there are zero or several) or the prefix directory itself. The label defaults to the resolved prefix directory name. Disk specs are read-only and lock-free, so it's safe to inspect a live run. Supported by program-reading commands: `top`, `export csv/frontier`, `plot`. Redis-only commands (`status`, `trajectory`, `metrics`, `checkpoint`) reject disk specs with a usage error — their data (live PIDs, metric history) lives in the disk run's `metrics/*.jsonl` and log files instead.
 
 ### Commands
 
