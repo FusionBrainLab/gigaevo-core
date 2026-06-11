@@ -19,6 +19,14 @@ class WBConfig(BaseModel):
     resume: bool = False
 
 
+class DiskMetricsConfig(BaseModel):
+    """Configuration for the JSONL disk metrics backend."""
+
+    root_dir: Path
+
+    model_config = {"extra": "forbid"}
+
+
 class RedisMetricsConfig(BaseModel):
     """Configuration for Redis metrics backend."""
 

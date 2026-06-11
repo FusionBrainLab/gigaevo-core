@@ -476,6 +476,8 @@ Backends are selected via the `storage` Hydra group (`config/storage/redis.yaml`
 
 Archive storage (MAP-Elites elite cells) is accessed via `ArchiveStorageFactory` protocol, wired to Hydra and passed to strategies. Contract tests are backend-parametrized (`tests/database/storage_backends.py` registry) — every backend runs the same suite.
 
+Metrics history follows the same pattern: the run's writer (Hydra `writer` node) feeds a metrics backend (`RedisMetricsBackend` or `DiskMetricsBackend`, both under `gigaevo/utils/trackers/backends/`), and readers — `live_frontier_compare` and the end-of-run frontier render — go through the `MetricsHistoryReader` protocol via `gigaevo.utils.trackers.get_default_history_reader()`, so monitors are storage-agnostic.
+
 ## Quick Reference: Key Files
 
 | File | Purpose |

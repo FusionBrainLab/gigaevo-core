@@ -1,5 +1,10 @@
 # @package _global_
 
+defaults:
+  # Swap the metrics writer to the disk backend (JSONL per tag) so live
+  # monitors and the end-of-run frontier render stay Redis-free.
+  - override /logging: tensorboard_disk
+
 program_storage:
   _target_: gigaevo.database.disk_program_storage.DiskProgramStorage
   config:

@@ -1,0 +1,22 @@
+# @package _global_
+
+logging:
+  level: DEBUG
+  log_dir: ${log_dir}
+  rotation: ${log_rotation}
+  retention: ${log_retention}
+
+tb_config:
+  _target_: gigaevo.utils.trackers.configs.TBConfig
+  logdir: ${log_dir}/tb_logs
+
+# Metrics history goes to disk (JSONL per tag) so live monitors and the
+# end-of-run frontier render stay Redis-free.
+disk_metrics_config:
+  _target_: gigaevo.utils.trackers.configs.DiskMetricsConfig
+  root_dir: ${hydra:runtime.output_dir}/metrics
+
+writer:
+  _target_: gigaevo.utils.trackers.init_tb_disk
+  tb_cfg: ${tb_config}
+  disk_cfg: ${disk_metrics_config}
