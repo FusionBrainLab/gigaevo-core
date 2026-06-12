@@ -19,7 +19,9 @@ from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     IdeaUpdate,
+    ShortIdEntry,
 )
+from gigaevo.memory.shared_memory.models import CardAlias
 
 # ---------------------------------------------------------------------------
 # CARD_STRUCTURE_v4_FINAL §2: Canonical-key derivation + packed grammar
@@ -125,7 +127,22 @@ _PACKED_RE = re.compile(
 )
 
 
-def parse_packed_description(desc: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class PackedLever:
+    """Parsed packed-grammar description: `<VERB> <target>[ <old>→<new>]: <mechanism>; …`."""
+
+    verified: bool
+    verb: str
+    target: str
+    old: str | None
+    new: str | None
+    mechanism: str
+    support: int
+    delta_best: float
+    co: list[str]
+
+
+def parse_packed_description(desc: str) -> PackedLever:
     if desc.count(":") != 1:
         raise ValueError(
             f"single-`:` invariant violated: description contains "
@@ -168,23 +185,42 @@ def parse_packed_description(desc: str) -> dict[str, Any]:
     co_raw = m.group("co").strip()
     co = [t.strip() for t in co_raw.split(",") if t.strip()] if co_raw else []
 
-    return {
-        "verified": m.group("unverified") is None and not parenthetical_unverified,
-        "verb": m.group("verb"),
-        "target": target,
-        "old": old,
-        "new": new,
-        "mechanism": m.group("mechanism").strip(),
-        "support": int(m.group("support")),
-        "delta_best": float(m.group("delta_best")),
-        "co": co,
-    }
+    return PackedLever(
+        verified=m.group("unverified") is None and not parenthetical_unverified,
+        verb=m.group("verb"),
+        target=target,
+        old=old,
+        new=new,
+        mechanism=m.group("mechanism").strip(),
+        support=int(m.group("support")),
+        delta_best=float(m.group("delta_best")),
+        co=co,
+    )
 
 
 @dataclass(frozen=True)
 class VerificationResult:
     verified: bool
     method: str  # "ast_diff" | "regex_diff" | "absent"
+
+
+@dataclass(frozen=True)
+class VerificationVerdict:
+    """Outcome of the mechanism-gate decision tree for one lever."""
+
+    verb_prefix: str
+    keywords: list[str]
+    parent_diff_verified: bool
+    verification_method: str
+
+
+@dataclass(frozen=True)
+class EnrichedDescription:
+    """A card description after the verification gate, with derived tags."""
+
+    description: str
+    keywords: list[str]
+    parent_diff_verified: bool
 
 
 def _value_present(code: str, target: str, value: Any) -> bool:
@@ -324,15 +360,15 @@ def decide_verification(
     old: Any,
     new: Any,
     mechanism: str,
-) -> dict[str, Any]:
+) -> VerificationVerdict:
     lever = verify_lever(parent_code, child_code, verb, target, old, new)
     if not lever.verified:
-        return {
-            "verb_prefix": "UNVERIFIED_",
-            "keywords": ["verified:false"],
-            "parent_diff_verified": False,
-            "verification_method": lever.method,
-        }
+        return VerificationVerdict(
+            verb_prefix="UNVERIFIED_",
+            keywords=["verified:false"],
+            parent_diff_verified=False,
+            verification_method=lever.method,
+        )
     extra_tokens: set[str] = set()
     if (
         verb.strip().upper() in {"UPDATE", "SWAP"}
@@ -349,18 +385,18 @@ def decide_verification(
         extra_changed_tokens=extra_tokens,
     )
     if target_ok and passed and strength == "code":
-        return {
-            "verb_prefix": "",
-            "keywords": ["verified:true"],
-            "parent_diff_verified": True,
-            "verification_method": lever.method,
-        }
-    return {
-        "verb_prefix": "UNVERIFIED_",
-        "keywords": ["verified:true", "mechanism_unverified:true"],
-        "parent_diff_verified": True,
-        "verification_method": lever.method,
-    }
+        return VerificationVerdict(
+            verb_prefix="",
+            keywords=["verified:true"],
+            parent_diff_verified=True,
+            verification_method=lever.method,
+        )
+    return VerificationVerdict(
+        verb_prefix="UNVERIFIED_",
+        keywords=["verified:true", "mechanism_unverified:true"],
+        parent_diff_verified=True,
+        verification_method=lever.method,
+    )
 
 
 def _coerce_value(s: str | None) -> Any:
@@ -378,51 +414,51 @@ def enrich_with_verification(
     description: str,
     parent_code: str,
     child_code: str,
-) -> dict[str, Any]:
+) -> EnrichedDescription:
     """Run the v4-FINAL verification gate on a packed-grammar description.
 
-    Returns dict with keys: description (possibly UNVERIFIED_-prefixed),
-    keywords (list[str] of verification tags), parent_diff_verified (bool).
+    Returns an EnrichedDescription: the description (possibly
+    UNVERIFIED_-prefixed), verification-tag keywords, and whether the lever
+    was verified against the parent→child code diff.
 
     Falls back to passthrough when description does not match packed grammar,
     or when parent_code is empty (insufficient context for verification).
     """
     if not parent_code or not child_code:
-        return {
-            "description": description,
-            "keywords": [],
-            "parent_diff_verified": False,
-        }
+        return EnrichedDescription(
+            description=description,
+            keywords=[],
+            parent_diff_verified=False,
+        )
 
     try:
         parsed = parse_packed_description(description)
     except (ValueError, KeyError):
-        return {
-            "description": description,
-            "keywords": [],
-            "parent_diff_verified": False,
-        }
+        return EnrichedDescription(
+            description=description,
+            keywords=[],
+            parent_diff_verified=False,
+        )
 
     verdict = decide_verification(
         parent_code=parent_code,
         child_code=child_code,
-        verb=parsed["verb"],
-        target=parsed["target"],
-        old=_coerce_value(parsed.get("old")),
-        new=_coerce_value(parsed.get("new")),
-        mechanism=parsed["mechanism"],
+        verb=parsed.verb,
+        target=parsed.target,
+        old=_coerce_value(parsed.old),
+        new=_coerce_value(parsed.new),
+        mechanism=parsed.mechanism,
     )
 
     new_desc = description
-    verb_prefix = verdict["verb_prefix"]
-    if verb_prefix and not new_desc.startswith(verb_prefix):
-        new_desc = verb_prefix + new_desc.lstrip()
+    if verdict.verb_prefix and not new_desc.startswith(verdict.verb_prefix):
+        new_desc = verdict.verb_prefix + new_desc.lstrip()
 
-    return {
-        "description": new_desc,
-        "keywords": list(verdict["keywords"]),
-        "parent_diff_verified": bool(verdict["parent_diff_verified"]),
-    }
+    return EnrichedDescription(
+        description=new_desc,
+        keywords=list(verdict.keywords),
+        parent_diff_verified=verdict.parent_diff_verified,
+    )
 
 
 def _canonical_keyword(idea: Idea) -> str | None:
@@ -465,12 +501,11 @@ class IdeaBank:
                     merged_programs = list(
                         dict.fromkeys(list(existing.programs) + list(idea.programs))
                     )
-                    archive_entry = {
-                        f"{existing.id}-canonical-merge": {
-                            "description": idea.description,
-                            "programs": list(idea.programs),
-                        }
-                    }
+                    archive_entry = CardAlias(
+                        key=f"{existing.id}-canonical-merge",
+                        description=idea.description,
+                        programs=list(idea.programs),
+                    )
                     merged_entries = list(existing.explanation.entries) + list(
                         idea.explanation.entries
                     )
@@ -514,13 +549,12 @@ class IdeaBank:
             patches["last_generation"] = upd.generation
 
         if upd.new_description is not None:
-            archive_entry = {
-                f"{upd.idea_id}-update": {
-                    "description": idea.description,
-                    "programs": list(idea.programs),
-                    "explanations": list(idea.explanation.entries),
-                }
-            }
+            archive_entry = CardAlias(
+                key=f"{upd.idea_id}-update",
+                description=idea.description,
+                programs=list(idea.programs),
+                explanations=list(idea.explanation.entries),
+            )
             patches["aliases"] = idea.aliases + [archive_entry]
             patches["description"] = upd.new_description
 
@@ -586,16 +620,14 @@ class IdeaBank:
         for i in range(0, len(self._ideas), self._chunk_size):
             batch = self._ideas[i : i + self._chunk_size]
             short_ids = [
-                {
-                    "id": idea.id,
-                    "short_id": idea.id.split("-")[0],
-                    "description": idea.description,
-                }
+                ShortIdEntry(
+                    id=idea.id,
+                    short_id=idea.id.split("-")[0],
+                    description=idea.description,
+                )
                 for idea in batch
             ]
-            text = "".join(
-                f"[{s['short_id']}]: {s['description']} \n " for s in short_ids
-            )
+            text = "".join(f"[{s.short_id}]: {s.description} \n " for s in short_ids)
             chunks.append(ClassificationChunk(text=text, short_ids=short_ids))
         return chunks
 

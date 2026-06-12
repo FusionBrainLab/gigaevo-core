@@ -8,12 +8,12 @@ End-to-end goldens were frozen from the legacy ``MemorySelectorAgent.select()``
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from gigaevo.memory.core import (
+    AuctionBid,
     BetaBinomialReputation,
     EfficacyCardRenderer,
     GamRetriever,
@@ -21,6 +21,8 @@ from gigaevo.memory.core import (
     MemorySelection,
     TopThetaBudgeter,
 )
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.fakes.read_pipeline import make_read_pipeline
@@ -69,13 +71,17 @@ class _ExplodingGetCardBackend(_StubBackend):
         raise RuntimeError("get_card boom")
 
 
-def _card(description: str, posterior: tuple[float, float] | None = None) -> dict:
-    card: dict = {"description": description}
-    if posterior is not None:
-        card["evolution_statistics"] = {
-            "ALL": {"posterior_a": posterior[0], "posterior_b": posterior[1]}
-        }
-    return card
+def _card(description: str, posterior: tuple[float, float] | None = None) -> MemoryCard:
+    stats = (
+        {"ALL": {"posterior_a": posterior[0], "posterior_b": posterior[1]}}
+        if posterior is not None
+        else {}
+    )
+    return MemoryCard(
+        id=f"card-{description or 'blank'}",
+        description=description,
+        evolution_statistics=stats,
+    )
 
 
 def _make_program(code: str = "def solve(): return 1") -> Program:
@@ -139,38 +145,69 @@ class TestGamRetriever:
         assert retriever.get_card("x") is None
 
     def test_get_card_passthrough(self):
-        retriever = GamRetriever(
-            _StubBackend(raw_memory=None, cards={"a": {"description": "d"}})
-        )
-        assert retriever.get_card("a") == {"description": "d"}
+        card = MemoryCard(id="a", description="d")
+        retriever = GamRetriever(_StubBackend(raw_memory=None, cards={"a": card}))
+        assert retriever.get_card("a") == card
         assert retriever.get_card("missing") is None
+
+    def test_get_card_normalizes_legacy_dict_backend(self):
+        # The legacy_api backend still hands back raw dicts; the retriever is
+        # the typed boundary for them.
+        raw = {
+            "description": "legacy idea",
+            "evolution_statistics": {"ALL": {"posterior_a": 3.0, "posterior_b": 1.0}},
+        }
+        retriever = GamRetriever(_StubBackend(raw_memory=None, cards={"a": raw}))
+        card = retriever.get_card("a")
+        assert isinstance(card, MemoryCard)
+        assert card.id == "a"
+        assert card.description == "legacy idea"
+        assert card.evolution_statistics.ALL.posterior_a == 3.0
+
+    def test_get_card_corrupt_legacy_dict_fails_to_none(self):
+        raw = {
+            "description": "corrupt legacy",
+            "evolution_statistics": {"ALL": {"posterior_a": "corrupt"}},
+        }
+        retriever = GamRetriever(_StubBackend(raw_memory=None, cards={"a": raw}))
+        assert retriever.get_card("a") is None
+
+
+def _bid(card_id: str, theta: float) -> AuctionBid:
+    return AuctionBid(
+        card_id=card_id,
+        posterior_a=1.0,
+        posterior_b=1.0,
+        theta=theta,
+        baseline_a=3.0,
+        baseline_b=3.0,
+        baseline_theta=0.5,
+        selected=True,
+    )
 
 
 class TestTopThetaBudgeter:
     def test_within_cap_preserves_auction_order(self):
-        slate = [{"card_id": "a", "theta": 0.1}, {"card_id": "b", "theta": 0.9}]
+        slate = [_bid("a", 0.1), _bid("b", 0.9)]
         assert TopThetaBudgeter().cap(["a", "b"], slate, 3) == ["a", "b"]
 
     def test_over_cap_keeps_top_theta(self):
-        slate = [
-            {"card_id": "a", "theta": 0.2},
-            {"card_id": "b", "theta": 0.9},
-            {"card_id": "c", "theta": 0.5},
-        ]
+        slate = [_bid("a", 0.2), _bid("b", 0.9), _bid("c", 0.5)]
         assert TopThetaBudgeter().cap(["a", "b", "c"], slate, 2) == ["b", "c"]
 
     def test_missing_theta_defaults_to_zero(self):
-        slate = [{"card_id": "b", "theta": 0.4}]
+        slate = [_bid("b", 0.4)]
         assert TopThetaBudgeter().cap(["a", "b"], slate, 1) == ["b"]
 
 
 _RENDER_GOLDENS = [
     (None, ""),
     (
-        {
-            "description": "Use pairwise ratios",
-            "explanation": {"summary": "exposes scale-free structure"},
-            "evolution_statistics": {
+        MemoryCard(
+            id="m-ratios",
+            description="Use pairwise ratios",
+            explanation={"summary": "exposes scale-free structure"},
+            evolution_statistics={
                 "ALL": {
                     "intro_events": 4,
                     "IntroGain_best_median": 0.05,
@@ -178,20 +215,25 @@ _RENDER_GOLDENS = [
                     "efficacy_confident": True,
                 }
             },
-        },
+        ),
         "Use pairwise ratios\n"
         "mechanism: exposes scale-free structure\n"
         "efficacy: introduced in 4 children; median improvement +0.0500; "
         "downside 10% (confident)",
     ),
     (
-        {"description": "Same text", "explanation": {"summary": "Same text"}},
+        MemoryCard(
+            id="m-same",
+            description="Same text",
+            explanation={"summary": "Same text"},
+        ),
         "Same text",
     ),
     (
-        {
-            "description": "Adjusted median wins",
-            "evolution_statistics": {
+        MemoryCard(
+            id="m-adj",
+            description="Adjusted median wins",
+            evolution_statistics={
                 "ALL": {
                     "intro_events": 2,
                     "IntroGain_best_median": 0.5,
@@ -199,35 +241,41 @@ _RENDER_GOLDENS = [
                     "efficacy_confident": True,
                 }
             },
-        },
+        ),
         "Adjusted median wins\n"
         "efficacy: introduced in 2 children; median improvement vs cohort "
         "-0.0100 (caution: non-positive median)",
     ),
     (
-        {
-            "description": "Not confident stays silent",
-            "evolution_statistics": {
+        MemoryCard(
+            id="m-quiet",
+            description="Not confident stays silent",
+            evolution_statistics={
                 "ALL": {
                     "intro_events": 5,
                     "IntroGain_best_median": 0.2,
                     "efficacy_confident": False,
                 }
             },
-        },
+        ),
         "Not confident stays silent",
     ),
     (
-        {"id": "program-1", "description": "Exemplar", "fitness": 0.8123},
+        ProgramCard(
+            id="program-1",
+            program_id="1",
+            description="Exemplar",
+            fitness=0.8123,
+        ),
         "Exemplar\nefficacy: exemplar fitness 0.8123",
     ),
     (
-        SimpleNamespace(
-            description="Attr card",
-            explanation=SimpleNamespace(summary="attr mechanism"),
-            evolution_statistics=None,
+        MemoryCard(
+            id="m-mech",
+            description="Mechanism only",
+            explanation={"summary": "attr mechanism"},
         ),
-        "Attr card\nmechanism: attr mechanism",
+        "Mechanism only\nmechanism: attr mechanism",
     ),
 ]
 
@@ -242,37 +290,43 @@ class TestCardPosterior:
     @pytest.mark.parametrize(
         "card, expected",
         [
-            (None, (1.0, 1.0)),
-            ({}, (1.0, 1.0)),
+            (MemoryCard(id="m-cold"), (1.0, 1.0)),
             (
-                {
-                    "evolution_statistics": {
+                MemoryCard(
+                    id="m-stamped",
+                    evolution_statistics={
                         "ALL": {"posterior_a": 4.0, "posterior_b": 2.0}
-                    }
-                },
+                    },
+                ),
                 (4.0, 2.0),
             ),
-            ({"evolution_statistics": {"ALL": {"posterior_a": 4.0}}}, (1.0, 1.0)),
-            ({"evolution_statistics": "malformed"}, (1.0, 1.0)),
             (
-                SimpleNamespace(
+                MemoryCard(
+                    id="m-half",
+                    evolution_statistics={"ALL": {"posterior_a": 4.0}},
+                ),
+                (1.0, 1.0),
+            ),
+            (
+                ProgramCard(
+                    id="program-7",
+                    program_id="7",
                     evolution_statistics={
                         "ALL": {"posterior_a": 7.0, "posterior_b": 3.0}
-                    }
+                    },
                 ),
                 (7.0, 3.0),
             ),
-            (SimpleNamespace(evolution_statistics=None), (1.0, 1.0)),
+            (ProgramCard(id="program-cold", program_id="c"), (1.0, 1.0)),
         ],
     )
     def test_card_posterior_golden(self, card, expected):
         assert BetaBinomialReputation().card_posterior(card) == expected
 
     def test_cold_prior_configurable(self):
-        assert BetaBinomialReputation(cold_prior=(2.0, 5.0)).card_posterior({}) == (
-            2.0,
-            5.0,
-        )
+        assert BetaBinomialReputation(cold_prior=(2.0, 5.0)).card_posterior(
+            MemoryCard(id="m-cold")
+        ) == (2.0, 5.0)
 
 
 def _mk_backend() -> _StubBackend:
@@ -303,8 +357,8 @@ class TestMemoryReadPipeline:
         assert got.card_ids == ["idea-2", "idea-4"]
         assert got.cards == ["Card 2", "Card 4"]
         assert len(got.slate) == 5
-        by_id = {e["card_id"]: e for e in got.slate}
-        assert [by_id[f"idea-{i}"]["selected"] for i in range(5)] == [
+        by_id = {bid.card_id: bid for bid in got.slate}
+        assert [by_id[f"idea-{i}"].selected for i in range(5)] == [
             True,
             False,
             True,
@@ -357,17 +411,23 @@ class TestMemoryReadPipeline:
         assert got.cards == ["Good card"]
 
     @pytest.mark.asyncio
-    async def test_empty_when_card_posterior_malformed(self):
-        # A corrupt persisted posterior must degrade to an empty selection,
-        # never an exception that sinks the mutation.
-        bad = _card("Bad card")
-        bad["evolution_statistics"] = {
-            "ALL": {"posterior_a": "corrupt", "posterior_b": 1.0}
-        }
-        backend = _StubBackend(
-            raw_memory=_decision(["idea-bad"]),
-            cards={"idea-bad": bad},
-        )
+    async def test_empty_when_persisted_posterior_corrupt(self):
+        # A corrupt persisted posterior fails typed validation at the backend
+        # boundary; the read path must degrade to an empty selection, never an
+        # exception that sinks the mutation.
+        class _CorruptCardBackend(_StubBackend):
+            def get_card(self, card_id):
+                return normalize_memory_card(
+                    {
+                        "id": card_id,
+                        "description": "Bad card",
+                        "evolution_statistics": {
+                            "ALL": {"posterior_a": "corrupt", "posterior_b": 1.0}
+                        },
+                    }
+                )
+
+        backend = _CorruptCardBackend(raw_memory=_decision(["idea-bad"]))
         got = await make_read_pipeline(backend, seed=_SEED).select(
             parents=[_make_program()], **_SELECT_KWARGS
         )

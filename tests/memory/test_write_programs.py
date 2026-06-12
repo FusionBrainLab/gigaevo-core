@@ -9,8 +9,12 @@ from gigaevo.memory.core.deduplicator import NullDeduplicator
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.injection_posterior import beta_binomial_posterior
-from gigaevo.memory.shared_memory.models import ProgramCard
-from gigaevo.memory.write_pipeline import load_memory_cards
+from gigaevo.memory.shared_memory.models import (
+    CardStatsBlock,
+    EvolutionStatistics,
+    ProgramCard,
+)
+from gigaevo.memory.write_pipeline import WriteStatsSnapshot, load_memory_cards
 from gigaevo.memory.write_pipeline import main as write_main
 from tests.fakes.agentic_memory import make_test_memory
 
@@ -106,7 +110,8 @@ def test_main_passes_components_to_write_backend_and_sweeps(tmp_path):
         deduplicator=deduplicator,
     )
 
-    assert snapshot is not None
+    assert isinstance(snapshot, WriteStatsSnapshot)
+    assert snapshot.input_cards_count >= 1
     assert factory.recorded["evictor"] is evictor
     assert factory.recorded["deduplicator"] is deduplicator
     assert factory.memory.swept
@@ -156,7 +161,11 @@ def test_load_memory_cards_adds_top_program_cards(tmp_path):
             {
                 "timestamp": "2026-03-23 00:00:00",
                 "best_ideas": [
-                    {"idea_id": "idea-1", "description": "Use simulated annealing."}
+                    {
+                        "idea_id": "idea-1",
+                        "quartile": "ALL",
+                        "description": "Use simulated annealing.",
+                    }
                 ],
             }
         ],
@@ -278,7 +287,9 @@ def test_normalize_program_card_is_minimal_shape():
 
 def test_load_memory_cards_stamps_posterior_on_program_card(tmp_path):
     banks_path, best_ideas_path, programs_path = _minimal_corpus(tmp_path)
-    harm_post = beta_binomial_posterior([-0.01, -0.02, -0.03])
+    harm_post = CardStatsBlock.model_validate(
+        beta_binomial_posterior([-0.01, -0.02, -0.03])
+    )
 
     cards = load_memory_cards(
         banks_path,
@@ -290,16 +301,18 @@ def test_load_memory_cards_stamps_posterior_on_program_card(tmp_path):
 
     program_card = next(c for c in cards if c.category == "program")
     assert program_card.program_id == "prog-9"
-    all_block = program_card.evolution_statistics["ALL"]
-    assert (all_block["posterior_a"], all_block["posterior_b"]) == (1.0, 4.0)
-    assert all_block["k_harm"] == 3
+    all_block = program_card.evolution_statistics.ALL
+    assert (all_block.posterior_a, all_block.posterior_b) == (1.0, 4.0)
+    assert all_block.k_harm == 3
 
 
 def test_card_posterior_reads_stamped_program_card(tmp_path):
     # End-to-end seam: the auction's _card_posterior must draw the stamped
     # downside posterior off a minted ProgramCard (not COLD Beta(1, 1)).
     banks_path, best_ideas_path, programs_path = _minimal_corpus(tmp_path)
-    harm_post = beta_binomial_posterior([-0.01, -0.02, -0.03])
+    harm_post = CardStatsBlock.model_validate(
+        beta_binomial_posterior([-0.01, -0.02, -0.03])
+    )
 
     cards = load_memory_cards(
         banks_path,
@@ -318,7 +331,9 @@ def test_posterior_bearing_program_outside_top_slice_is_still_built(tmp_path):
     # downstream, by which point it has usually fallen out of the top-fitness
     # slice; build it anyway so its signal reaches the auction.
     banks_path, best_ideas_path, programs_path = _minimal_corpus(tmp_path)
-    harm_post = beta_binomial_posterior([-0.01, -0.02, -0.03])
+    harm_post = CardStatsBlock.model_validate(
+        beta_binomial_posterior([-0.01, -0.02, -0.03])
+    )
 
     cards = load_memory_cards(
         banks_path,
@@ -331,8 +346,8 @@ def test_posterior_bearing_program_outside_top_slice_is_still_built(tmp_path):
     program_cards = {c.program_id: c for c in cards if c.category == "program"}
     assert "prog-9" in program_cards
     assert "prog-3" in program_cards
-    stamped = program_cards["prog-3"].evolution_statistics["ALL"]
-    assert (stamped["posterior_a"], stamped["posterior_b"]) == (1.0, 4.0)
+    stamped = program_cards["prog-3"].evolution_statistics.ALL
+    assert (stamped.posterior_a, stamped.posterior_b) == (1.0, 4.0)
 
 
 def test_program_card_without_posterior_is_cold(tmp_path):
@@ -346,7 +361,7 @@ def test_program_card_without_posterior_is_cold(tmp_path):
     )
     program_card = next(c for c in cards if c.category == "program")
 
-    assert program_card.evolution_statistics == {}
+    assert program_card.evolution_statistics == EvolutionStatistics()
     assert BetaBinomialReputation().card_posterior(program_card) == (1.0, 1.0)
 
 
@@ -380,8 +395,9 @@ def _idea_corpus(tmp_path):
                 "best_ideas": [
                     {
                         "idea_id": "idea-1",
+                        "quartile": "ALL",
                         "description": "Use simulated annealing.",
-                        "intro_gain_median": 0.01,
+                        "IntroGain_best_median": 0.01,
                     }
                 ],
             }
@@ -394,7 +410,9 @@ def test_load_memory_cards_stamps_idea_card_posterior(tmp_path):
     # The selector injects idea cards too; their ids accrue injection events
     # exactly like program-<uuid> ids, so their posterior must not be dropped.
     banks_path, best_ideas_path = _idea_corpus(tmp_path)
-    harm_post = beta_binomial_posterior([-0.01, -0.02, -0.03])
+    harm_post = CardStatsBlock.model_validate(
+        beta_binomial_posterior([-0.01, -0.02, -0.03])
+    )
 
     cards = load_memory_cards(
         banks_path,
@@ -404,8 +422,8 @@ def test_load_memory_cards_stamps_idea_card_posterior(tmp_path):
 
     idea_card = next(c for c in cards if c.category != "program")
     assert idea_card.id == "idea-1"
-    all_block = idea_card.evolution_statistics["ALL"]
-    assert (all_block["posterior_a"], all_block["posterior_b"]) == (1.0, 4.0)
+    all_block = idea_card.evolution_statistics.ALL
+    assert (all_block.posterior_a, all_block.posterior_b) == (1.0, 4.0)
     assert BetaBinomialReputation().card_posterior(idea_card) == (1.0, 4.0)
 
 
@@ -413,7 +431,9 @@ def test_idea_posterior_stamp_preserves_best_ideas_snapshot(tmp_path):
     # The "ALL" posterior merges alongside the best_ideas_snapshot metrics
     # already living in evolution_statistics, never replacing them.
     banks_path, best_ideas_path = _idea_corpus(tmp_path)
-    harm_post = beta_binomial_posterior([-0.01, -0.02, -0.03])
+    harm_post = CardStatsBlock.model_validate(
+        beta_binomial_posterior([-0.01, -0.02, -0.03])
+    )
 
     cards = load_memory_cards(
         banks_path,
@@ -423,8 +443,9 @@ def test_idea_posterior_stamp_preserves_best_ideas_snapshot(tmp_path):
 
     idea_card = next(c for c in cards if c.category != "program")
     stats = idea_card.evolution_statistics
-    assert stats["best_ideas_snapshot"] == {"intro_gain_median": 0.01}
-    assert stats["ALL"]["k_harm"] == 3
+    assert isinstance(stats.best_ideas_snapshot, CardStatsBlock)
+    assert stats.best_ideas_snapshot.IntroGain_best_median == 0.01
+    assert stats.ALL.k_harm == 3
 
 
 def test_idea_card_without_posterior_keeps_stats_untouched(tmp_path):
@@ -433,9 +454,11 @@ def test_idea_card_without_posterior_keeps_stats_untouched(tmp_path):
     cards = load_memory_cards(
         banks_path,
         best_ideas_path=best_ideas_path,
-        card_posterior={"idea-other": beta_binomial_posterior([0.01])},
+        card_posterior={
+            "idea-other": CardStatsBlock.model_validate(beta_binomial_posterior([0.01]))
+        },
     )
 
     idea_card = next(c for c in cards if c.category != "program")
-    assert "ALL" not in idea_card.evolution_statistics
+    assert idea_card.evolution_statistics.ALL is None
     assert BetaBinomialReputation().card_posterior(idea_card) == (1.0, 1.0)

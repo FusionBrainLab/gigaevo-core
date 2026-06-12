@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,17 @@ from loguru import logger
 
 from gigaevo.memory.shared_memory.card_conversion import AnyCard, normalize_memory_card
 from gigaevo.memory.shared_memory.utils import _str_or_empty
+
+
+class WriteStatKey(StrEnum):
+    """Counter keys of ``CardStore.write_stats``; values are the on-disk
+    memory_write_stats.json keys (the ``WriteStats`` model field names)."""
+
+    PROCESSED = "processed"
+    ADDED = "added"
+    REJECTED = "rejected"
+    UPDATED = "updated"
+    UPDATED_TARGET_CARDS = "updated_target_cards"
 
 
 class CardStore:
@@ -29,13 +41,7 @@ class CardStore:
         self.card_id_by_entity: dict[str, str] = {}
         self.entity_version: dict[str, str] = {}
         self.note_ids: set[str] = set()
-        self.write_stats: dict[str, int] = {
-            "processed": 0,
-            "added": 0,
-            "rejected": 0,
-            "updated": 0,
-            "updated_target_cards": 0,
-        }
+        self.write_stats: dict[str, int] = {key: 0 for key in WriteStatKey}
         self._lock = threading.RLock()
         self._load()
 

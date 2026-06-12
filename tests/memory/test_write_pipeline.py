@@ -7,11 +7,27 @@ import json
 
 import pytest
 
+from gigaevo.memory.core.idea_stats import IdeaStats
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.models import (
+    CardAlias,
+    CardStatsBlock,
+    ConnectedIdea,
+    MemoryCard,
+    ProgramCard,
+    Quartile,
+)
 from gigaevo.memory.write_pipeline import (
-    _classify_card_type,
-    _extract_latest_snapshot,
-    _top_percent_count,
+    ProgramRow,
+    WriteStats,
+    build_program_cards_from_top_programs,
+    classify_card_type,
+    extract_latest_snapshot,
+    load_best_idea_bank_cards,
     load_memory_cards,
+    parse_best_ideas,
+    parse_programs,
+    top_percent_count,
 )
 
 
@@ -38,13 +54,13 @@ def _make_programs(tmp_path, programs=None):
 
 
 # ===========================================================================
-# _extract_latest_snapshot
+# extract_latest_snapshot
 # ===========================================================================
 
 
 class TestLatestSnapshot:
     def test_dict_with_key(self):
-        result = _extract_latest_snapshot({"active_bank": [1]}, "active_bank")
+        result = extract_latest_snapshot({"active_bank": [1]}, "active_bank")
         assert result == {"active_bank": [1]}
 
     def test_list_takes_last(self):
@@ -52,61 +68,64 @@ class TestLatestSnapshot:
             {"active_bank": [1]},
             {"active_bank": [2]},
         ]
-        result = _extract_latest_snapshot(payload, "active_bank")
+        result = extract_latest_snapshot(payload, "active_bank")
         assert result["active_bank"] == [2]
 
     def test_missing_key_raises(self):
         with pytest.raises(ValueError, match="Missing key"):
-            _extract_latest_snapshot({"other": 1}, "active_bank")
+            extract_latest_snapshot({"other": 1}, "active_bank")
 
     def test_list_no_matching_key_raises(self):
         with pytest.raises(ValueError, match="No snapshot"):
-            _extract_latest_snapshot([{"other": 1}], "active_bank")
+            extract_latest_snapshot([{"other": 1}], "active_bank")
 
     def test_invalid_type_raises(self):
         with pytest.raises(ValueError, match="Invalid snapshot"):
-            _extract_latest_snapshot("string", "active_bank")
+            extract_latest_snapshot("string", "active_bank")
 
 
 # ===========================================================================
-# _top_percent_count
+# top_percent_count
 # ===========================================================================
 
 
 class TestTopPercentCount:
     def test_basic(self):
-        assert _top_percent_count(100, 5.0) == 5
+        assert top_percent_count(100, 5.0) == 5
 
     def test_rounds_up(self):
-        assert _top_percent_count(10, 5.0) == 1  # ceil(0.5) = 1
+        assert top_percent_count(10, 5.0) == 1  # ceil(0.5) = 1
 
     def test_minimum_one(self):
-        assert _top_percent_count(1000, 0.01) >= 1
+        assert top_percent_count(1000, 0.01) >= 1
 
     def test_zero_total(self):
-        assert _top_percent_count(0, 5.0) == 0
+        assert top_percent_count(0, 5.0) == 0
 
     def test_zero_percent(self):
-        assert _top_percent_count(100, 0.0) == 0
+        assert top_percent_count(100, 0.0) == 0
 
 
 # ===========================================================================
-# _classify_card_type
+# classify_card_type
 # ===========================================================================
 
 
 class TestCardType:
     def test_program_by_category(self):
-        assert _classify_card_type({"category": "program"}) == "programs"
+        card = normalize_memory_card({"id": "program-p1", "category": "program"})
+        assert classify_card_type(card) == "programs"
 
     def test_program_by_program_id(self):
-        assert _classify_card_type({"program_id": "p1"}) == "programs"
+        card = normalize_memory_card({"id": "program-p1", "program_id": "p1"})
+        assert classify_card_type(card) == "programs"
 
     def test_idea(self):
-        assert _classify_card_type({"category": "general"}) == "ideas"
+        card = normalize_memory_card({"id": "idea-1", "category": "general"})
+        assert classify_card_type(card) == "ideas"
 
     def test_empty(self):
-        assert _classify_card_type({}) == "ideas"
+        assert classify_card_type(normalize_memory_card({})) == "ideas"
 
 
 # ===========================================================================
@@ -128,7 +147,7 @@ class TestLoadMemoryCardsEdgeCases:
         )
         best = _make_best_ideas(
             tmp_path,
-            best_ideas=[{"idea_id": "i1"}],
+            best_ideas=[{"idea_id": "i1", "quartile": "ALL"}],
         )
         cards = load_memory_cards(banks, best, programs_path=None)
         # Should return ideas only, no program cards
@@ -142,7 +161,7 @@ class TestLoadMemoryCardsEdgeCases:
         )
         best = _make_best_ideas(
             tmp_path,
-            best_ideas=[{"idea_id": "i1"}],
+            best_ideas=[{"idea_id": "i1", "quartile": "ALL"}],
         )
         programs = _make_programs(
             tmp_path,
@@ -160,7 +179,9 @@ class TestLoadMemoryCardsEdgeCases:
         banks = _make_banks(tmp_path, active_bank=[])
         best = _make_best_ideas(
             tmp_path,
-            best_ideas=[{"idea_id": "missing-1", "description": "desc"}],
+            best_ideas=[
+                {"idea_id": "missing-1", "quartile": "ALL", "description": "desc"}
+            ],
         )
         cards = load_memory_cards(banks, best)
         assert cards == []
@@ -173,7 +194,7 @@ class TestLoadMemoryCardsEdgeCases:
         )
         best = _make_best_ideas(
             tmp_path,
-            best_ideas=[{"idea_id": "real-1", "fitness": 0.9}],
+            best_ideas=[{"idea_id": "real-1", "quartile": "ALL"}],
         )
         cards = load_memory_cards(banks, best)
         assert len(cards) == 1
@@ -395,20 +416,15 @@ class TestProgramSelectionDirection:
         assert len(program_cards) == 1
         assert program_cards[0].program_id == "p-no-validity"
 
-    def test_ideas_tracker_dict_aliases_preserved(self, tmp_path):
-        """Integration: ideas_tracker writes aliases as list[dict] version history.
-
-        This is the boundary where ideas_tracker output enters Pydantic land.
-        Bug #2 (PR #161): MemoryCard.aliases was list[str], crashed on list[dict].
-        Fixed by changing to list[Any].
-        """
+    def test_ideas_tracker_aliases_preserved(self, tmp_path):
+        """Integration: alias version history written by ideas_tracker loads
+        back as typed CardAlias entries."""
         aliases = [
             {
-                "exp1-prog1": {
-                    "description": "old description",
-                    "programs": ["p1"],
-                    "explanations": ["initial"],
-                }
+                "key": "idea-1-update",
+                "description": "old description",
+                "programs": ["p1"],
+                "explanations": ["initial"],
             },
         ]
         banks = _make_banks(
@@ -424,13 +440,13 @@ class TestProgramSelectionDirection:
         )
         best = _make_best_ideas(
             tmp_path,
-            best_ideas=[{"idea_id": "idea-1"}],
+            best_ideas=[{"idea_id": "idea-1", "quartile": "ALL"}],
         )
         cards = load_memory_cards(banks, best)
         assert len(cards) == 1
         assert cards[0].id == "idea-1"
-        assert cards[0].aliases == aliases
-        assert isinstance(cards[0].aliases[0], dict)
+        assert isinstance(cards[0].aliases[0], CardAlias)
+        assert cards[0].aliases[0].key == "idea-1-update"
 
     def test_missing_banks_file_raises(self, tmp_path):
         best = _make_best_ideas(tmp_path)
@@ -443,3 +459,166 @@ class TestProgramSelectionDirection:
         best = _make_best_ideas(tmp_path)
         with pytest.raises(ValueError):
             load_memory_cards(path, best)
+
+
+# ===========================================================================
+# Typed snapshot rows
+# ===========================================================================
+
+
+class TestBestIdeasRows:
+    def test_parse_returns_typed_rows(self, tmp_path):
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[
+                {
+                    "idea_id": "i1",
+                    "quartile": Quartile.ALL,
+                    "description": "d",
+                    "IntroGain_best_median": 0.5,
+                }
+            ],
+        )
+        idea_ids, by_id = parse_best_ideas(best)
+        assert idea_ids == ["i1"]
+        row = by_id["i1"]
+        assert isinstance(row, IdeaStats)
+        assert row.description == "d"
+        assert row.IntroGain_best_median == 0.5
+
+    def test_duplicate_and_blank_ids_skipped(self, tmp_path):
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[
+                {"idea_id": "i1", "quartile": Quartile.ALL},
+                {"idea_id": "i1", "quartile": Quartile.ALL},
+                {"idea_id": " ", "quartile": Quartile.ALL},
+            ],
+        )
+        idea_ids, _ = parse_best_ideas(best)
+        assert idea_ids == ["i1"]
+
+
+class TestProgramRow:
+    def test_parse_returns_typed_rows(self, tmp_path):
+        programs = _make_programs(
+            tmp_path,
+            programs=[{"id": "p1", "fitness": "0.5", "code": "x", "extra_metric": 1}],
+        )
+        rows = parse_programs(programs)
+        assert len(rows) == 1
+        row = rows[0]
+        assert isinstance(row, ProgramRow)
+        assert row.resolved_program_id == "p1"
+        assert row.fitness == 0.5
+        assert row.code == "x"
+
+    def test_program_id_key_fallback(self, tmp_path):
+        programs = _make_programs(
+            tmp_path, programs=[{"program_id": "p9", "fitness": 1.0}]
+        )
+        rows = parse_programs(programs)
+        assert rows[0].resolved_program_id == "p9"
+
+    def test_unparseable_fitness_is_none(self, tmp_path):
+        programs = _make_programs(
+            tmp_path, programs=[{"id": "p1", "fitness": "not-a-number"}]
+        )
+        rows = parse_programs(programs)
+        assert rows[0].fitness is None
+
+
+class TestTypedCardBuilders:
+    def test_build_program_cards_returns_program_cards(self, tmp_path):
+        banks = _make_banks(
+            tmp_path,
+            active_bank=[{"id": "i1", "description": "idea desc", "programs": ["p1"]}],
+        )
+        programs = _make_programs(
+            tmp_path,
+            programs=[
+                {"id": "p1", "fitness": 1.0, "code": "x", "task_description": "t"}
+            ],
+        )
+        cards = build_program_cards_from_top_programs(
+            programs_path=programs,
+            banks_path=banks,
+            best_programs_percent=100.0,
+        )
+        assert len(cards) == 1
+        card = cards[0]
+        assert isinstance(card, ProgramCard)
+        assert card.id == "program-p1"
+        assert card.connected_ideas == [
+            ConnectedIdea(idea_id="i1", description="idea desc")
+        ]
+        assert card.description == "idea desc"
+
+    def test_load_best_idea_bank_cards_returns_typed(self, tmp_path):
+        banks = _make_banks(tmp_path, active_bank=[{"id": "i1", "description": "d"}])
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[
+                {
+                    "idea_id": "i1",
+                    "quartile": Quartile.ALL,
+                    "IntroGain_best_median": 0.25,
+                }
+            ],
+        )
+        cards = load_best_idea_bank_cards(banks, best)
+        assert len(cards) == 1
+        assert isinstance(cards[0], MemoryCard)
+        snapshot = cards[0].evolution_statistics.best_ideas_snapshot
+        assert isinstance(snapshot, CardStatsBlock)
+        assert snapshot.IntroGain_best_median == 0.25
+
+    def test_best_idea_description_fills_missing_card_description(self, tmp_path):
+        banks = _make_banks(tmp_path, active_bank=[{"id": "i1"}])
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[
+                {"idea_id": "i1", "quartile": Quartile.ALL, "description": "from best"}
+            ],
+        )
+        cards = load_best_idea_bank_cards(banks, best)
+        assert cards[0].description == "from best"
+
+    def test_best_idea_description_does_not_overwrite(self, tmp_path):
+        banks = _make_banks(
+            tmp_path, active_bank=[{"id": "i1", "description": "original"}]
+        )
+        best = _make_best_ideas(
+            tmp_path,
+            best_ideas=[
+                {"idea_id": "i1", "quartile": Quartile.ALL, "description": "from best"}
+            ],
+        )
+        cards = load_best_idea_bank_cards(banks, best)
+        assert cards[0].description == "original"
+
+
+class TestWriteStats:
+    def test_delta_to(self):
+        before = WriteStats(processed=2, added=1)
+        after = WriteStats(processed=5, added=1, rejected=1)
+        assert before.delta_to(after) == WriteStats(processed=3, rejected=1)
+
+    def test_delta_clamps_at_zero(self):
+        assert WriteStats(processed=5).delta_to(WriteStats(processed=2)).processed == 0
+
+    def test_accumulate(self):
+        total = (
+            WriteStats()
+            .accumulate(WriteStats(added=2))
+            .accumulate(WriteStats(added=3, rejected=1))
+        )
+        assert total.added == 5
+        assert total.rejected == 1
+
+    def test_validates_backend_dict_ignoring_unknown_counters(self):
+        stats = WriteStats.model_validate(
+            {"processed": 3, "added": 1, "unknown_counter": 9}
+        )
+        assert stats.processed == 3
+        assert stats.added == 1

@@ -97,48 +97,48 @@ class TestParsePackedDescription:
     def test_parse_add(self) -> None:
         desc = "ADD log1p_population: log-transform stabilises tails; support=3; Δbest=-0.041; co=[a*,b*]"
         parsed = parse_packed_description(desc)
-        assert parsed["verb"] == "ADD"
-        assert parsed["target"] == "log1p_population"
-        assert parsed["old"] is None
-        assert parsed["new"] is None
-        assert "log-transform stabilises" in parsed["mechanism"]
-        assert parsed["support"] == 3
-        assert parsed["delta_best"] == pytest.approx(-0.041)
-        assert parsed["co"] == ["a*", "b*"]
+        assert parsed.verb == "ADD"
+        assert parsed.target == "log1p_population"
+        assert parsed.old is None
+        assert parsed.new is None
+        assert "log-transform stabilises" in parsed.mechanism
+        assert parsed.support == 3
+        assert parsed.delta_best == pytest.approx(-0.041)
+        assert parsed.co == ["a*", "b*"]
 
     def test_parse_update(self) -> None:
         desc = "UPDATE depth 6→7: shallower trees underfitting; support=2; Δbest=-0.012; co=[]"
         parsed = parse_packed_description(desc)
-        assert parsed["verb"] == "UPDATE"
-        assert parsed["target"] == "depth"
-        assert parsed["old"] == "6"
-        assert parsed["new"] == "7"
-        assert parsed["co"] == []
+        assert parsed.verb == "UPDATE"
+        assert parsed.target == "depth"
+        assert parsed.old == "6"
+        assert parsed.new == "7"
+        assert parsed.co == []
 
     def test_parse_use_with_equals(self) -> None:
         desc = "USE early_stopping_rounds = 100: convergence aid; support=1; Δbest=-0.015; co=[]"
         parsed = parse_packed_description(desc)
-        assert parsed["verb"] == "USE"
-        assert parsed["target"] == "early_stopping_rounds"
-        assert parsed["new"] == "100"
+        assert parsed.verb == "USE"
+        assert parsed.target == "early_stopping_rounds"
+        assert parsed.new == "100"
 
     def test_parse_remove(self) -> None:
         desc = "REMOVE target_log_transform: floor at 0.15 penalty; support=5; Δbest=-0.018; co=[depth,early*]"
         parsed = parse_packed_description(desc)
-        assert parsed["verb"] == "REMOVE"
-        assert parsed["target"] == "target_log_transform"
+        assert parsed.verb == "REMOVE"
+        assert parsed.target == "target_log_transform"
 
     def test_parse_unverified_marker(self) -> None:
         # Per v2 §1.1 + v2_claude_voice amendment: (UNVERIFIED) parenthetical, single-`:` preserved
         desc = "USE early_stopping_rounds = 100 (UNVERIFIED): convergence not derivable; support=1; Δbest=-0.015; co=[]"
         parsed = parse_packed_description(desc)
-        assert parsed["verified"] is False
-        assert parsed["verb"] == "USE"
+        assert parsed.verified is False
+        assert parsed.verb == "USE"
 
     def test_parse_verified_default(self) -> None:
         desc = "ADD foo: bar; support=1; Δbest=0; co=[]"
         parsed = parse_packed_description(desc)
-        assert parsed["verified"] is True
+        assert parsed.verified is True
 
     def test_parse_rejects_double_colon(self) -> None:
         # v2 §1.1 single-`:` invariant
@@ -154,4 +154,4 @@ class TestParsePackedDescription:
     def test_parse_truncated_targets_in_co_list(self) -> None:
         desc = "ADD x: y; support=1; Δbest=0; co=[room_occup*,target_log*]"
         parsed = parse_packed_description(desc)
-        assert parsed["co"] == ["room_occup*", "target_log*"]
+        assert parsed.co == ["room_occup*", "target_log*"]

@@ -48,6 +48,12 @@ from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryRespon
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
     analyse as _analyse_origins,
 )
+from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
+from gigaevo.memory.shared_memory.models import (
+    CardStatsBlock,
+    EvolutionStatistics,
+    Quartile,
+)
 from gigaevo.memory.utils import to_float
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
@@ -58,12 +64,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
-
-
-def _nan_to_none(value: Any) -> Any:
-    if isinstance(value, float) and math.isnan(value):
-        return None
-    return value
 
 
 def _hf_cache_dir_usable(path: Path) -> bool:
@@ -238,7 +238,7 @@ def _card_posterior_from_programs(
     fitness_key: str,
     higher_is_better: bool,
     reputation: ReputationModel | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, CardStatsBlock]:
     """Injection-efficacy posterior per injected card id, from live programs.
 
     Extracts each program's id, parents, valid fitness, and the
@@ -251,13 +251,13 @@ def _card_posterior_from_programs(
     posterior.
     """
     rows = [
-        {
-            "id": prog.id,
-            "parents": prog.lineage.parents,
-            "fitness": _valid_fitness(prog, fitness_key),
-            "selected_ids": prog.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+        InjectionOutcome(
+            id=prog.id,
+            parents=prog.lineage.parents,
+            fitness=_valid_fitness(prog, fitness_key),
+            selected_ids=prog.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
             or [],
-        }
+        )
         for prog in programs
     ]
     rep = reputation if reputation is not None else BetaBinomialReputation()
@@ -273,7 +273,7 @@ def _run_write_pipeline(
     checkpoint_dir: str | Path | None = None,
     best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
-    card_posterior: dict[str, dict[str, Any]] | None = None,
+    card_posterior: dict[str, CardStatsBlock] | None = None,
     evictor: Evictor | None = None,
     deduplicator: Deduplicator | None = None,
 ) -> None:
@@ -336,16 +336,14 @@ def _run_write_pipeline(
         evictor=evictor,
         deduplicator=deduplicator,
     )
-    if isinstance(snapshot, dict):
-        stats = snapshot.get("stats", {})
-        if isinstance(stats, dict):
-            logger.info(
-                "[Memory][IdeaTracker] write: processed={}, added={}, updated={}, rejected={}",
-                stats.get("processed", 0),
-                stats.get("added", 0),
-                stats.get("updated", 0),
-                stats.get("rejected", 0),
-            )
+    if snapshot is not None:
+        logger.info(
+            "[Memory][IdeaTracker] write: processed={}, added={}, updated={}, rejected={}",
+            snapshot.stats.processed,
+            snapshot.stats.added,
+            snapshot.stats.updated,
+            snapshot.stats.rejected,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -412,13 +410,8 @@ class _SessionLog:
             "\n\n".join(self._entries), encoding="utf-8"
         )
 
-        banks_data = [
-            {
-                "active_bank": [i.model_dump() for i in bank.all_ideas()],
-                "timestamp": ts,
-            }
-        ]
-        self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
+        ideas = bank.all_ideas()
+        self.write_bank_snapshot(ideas, ts)
 
         programs_data = [
             {
@@ -430,10 +423,21 @@ class _SessionLog:
             json.dumps(programs_data, indent=2), encoding="utf-8"
         )
 
-        self._compute_and_write_statistics()
+        self.write_evolution_statistics(ideas, ts)
 
-    def _compute_and_write_statistics(self) -> None:
-        """Run origin analysis and inject per-idea statistics into banks.json."""
+    def write_bank_snapshot(self, ideas: list[Idea], timestamp: str) -> None:
+        """Write banks.json as a single active-bank snapshot of typed ideas."""
+        banks_data = [
+            {
+                "active_bank": [idea.model_dump() for idea in ideas],
+                "timestamp": timestamp,
+            }
+        ]
+        self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
+
+    def write_evolution_statistics(self, ideas: list[Idea], timestamp: str) -> None:
+        """Run origin analysis and rewrite the bank snapshot with per-idea
+        ``evolution_statistics`` stamped onto copies of the matching ideas."""
         if not self.banks_file.exists() or not self.programs_file.exists():
             return
         try:
@@ -457,35 +461,27 @@ class _SessionLog:
         if not _result.summary:
             return
 
-        # Inject per-idea stats into banks.json
-        stats_by_idea: dict[str, dict] = {}
+        blocks_by_idea: dict[str, dict[Quartile, CardStatsBlock]] = {}
         for stats_row in _result.summary:
-            metrics = {
-                k: _nan_to_none(v)
-                for k, v in stats_row.as_row().items()
-                if k not in ("idea_id", "quartile", "description")
-            }
-            stats_by_idea.setdefault(stats_row.idea_id, {})[stats_row.quartile] = (
-                metrics
+            blocks_by_idea.setdefault(stats_row.idea_id, {})[stats_row.quartile] = (
+                stats_row.to_stats_block()
             )
+        stats_by_idea = {
+            idea_id: EvolutionStatistics.from_blocks(blocks)
+            for idea_id, blocks in blocks_by_idea.items()
+        }
 
-        banks_data = json.loads(self.banks_file.read_text(encoding="utf-8"))
-        for snapshot in banks_data:
-            if not isinstance(snapshot, dict):
-                continue
-            for idea in snapshot.get("active_bank", []):
-                if isinstance(idea, dict) and idea.get("id") in stats_by_idea:
-                    idea["evolution_statistics"] = stats_by_idea[idea["id"]]
-        self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
-
-        # Write best_ideas.json
-        best_ideas = [
-            {k: _nan_to_none(v) for k, v in stats_row.as_row().items()}
-            for stats_row in _result.best_ideas
+        enriched = [
+            idea.model_copy(update={"evolution_statistics": stats_by_idea[idea.id]})
+            if idea.id in stats_by_idea
+            else idea
+            for idea in ideas
         ]
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.write_bank_snapshot(enriched, timestamp)
+
+        best_ideas = [stats_row.as_json_row() for stats_row in _result.best_ideas]
         self.best_ideas_file.write_text(
-            json.dumps([{"timestamp": ts, "best_ideas": best_ideas}], indent=2),
+            json.dumps([{"timestamp": timestamp, "best_ideas": best_ideas}], indent=2),
             encoding="utf-8",
         )
 

@@ -233,8 +233,7 @@ class TestFullPipelineE2E:
                 [
                     {
                         "best_ideas": [
-                            {"id": iid, "idea_id": iid, "fitness": 0.85}
-                            for iid in idea_ids
+                            {"idea_id": iid, "quartile": "ALL"} for iid in idea_ids
                         ],
                         "timestamp": "2026-04-09 12:00:00",
                     }

@@ -9,6 +9,10 @@ from typing import Literal
 MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
 
+#: Structured mutation output (archetype, changes) stamped on a child program's
+#: metadata by the mutation operator (``MutationSpec.META_OUTPUT``).
+MUTATION_OUTPUT_METADATA_KEY = "mutation_output"
+
 #: Per-mutation Thompson-auction record: one entry per candidate card offered to
 #: the auction (card_id, posterior a/b, draws, baseline arm, selected). Written
 #: even when zero cards win, so the offline lifecycle analysis can see which

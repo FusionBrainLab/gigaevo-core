@@ -99,6 +99,8 @@ class TestIdeaBankUpdate:
         updated = bank.get(idea.id)
         assert updated.description == "New description"
         assert len(updated.aliases) == 1
+        assert updated.aliases[0].key == f"{idea.id}-update"
+        assert updated.aliases[0].description == "Old description"
 
     def test_update_appends_motivation_to_explanation(self) -> None:
         bank = IdeaBank()
@@ -145,8 +147,10 @@ class TestIdeaBankChunks:
 
     def test_chunk_text_contains_short_ids(self) -> None:
         bank = IdeaBank(chunk_size=5)
-        bank.add(_idea("Cache calls"))
+        idea = _idea("Cache calls")
+        bank.add(idea)
         chunk = bank.classification_chunks()[0]
         assert "Cache calls" in chunk.text
         assert len(chunk.short_ids) == 1
-        assert "short_id" in chunk.short_ids[0]
+        assert chunk.short_ids[0].short_id == idea.id.split("-")[0]
+        assert chunk.short_ids[0].id == idea.id

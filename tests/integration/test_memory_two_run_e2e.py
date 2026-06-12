@@ -618,7 +618,7 @@ class TestRunAIdeaTrackerProgramNative:
         assert best.task_description_summary == "Multi-hop verification"
         assert best.strategy == "exploitation"
         assert len(best.improvements) > 0
-        assert "Combine BFS" in best.improvements[0]["description"]
+        assert "Combine BFS" in best.improvements[0].description
 
     def test_idea_tracker_filters_correctly(self) -> None:
         """IdeaTracker._get_new_programs filters roots and zero-fitness."""

@@ -20,6 +20,7 @@ from gigaevo.memory.shared_memory.card_update_dedup import (
     parse_llm_card_decision,
 )
 from gigaevo.memory.shared_memory.models import (
+    EvolutionStatistics,
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
@@ -65,7 +66,7 @@ class TestNormalizeCardContract:
         assert isinstance(card.programs, list)
         assert isinstance(card.aliases, list)
         assert isinstance(card.keywords, list)
-        assert isinstance(card.evolution_statistics, dict)
+        assert isinstance(card.evolution_statistics, EvolutionStatistics)
         assert isinstance(card.explanation, MemoryCardExplanation)
         assert isinstance(card.explanation.explanations, list)
         assert isinstance(card.explanation.summary, str)

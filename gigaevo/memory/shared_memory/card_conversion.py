@@ -12,16 +12,18 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
+    CardAlias,
     ConnectedIdea,
+    EvolutionStatistics,
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
 )
 from gigaevo.memory.shared_memory.utils import (
-    _safe_get,
     _str_or_empty,
     _to_int,
     _to_list,
@@ -101,24 +103,235 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 # ---------------------------------------------------------------------------
 
 
-def _normalize_connected_ideas(raw_list: Any) -> list[ConnectedIdea]:
-    """Convert raw connected_ideas to typed ConnectedIdea list."""
-    items = _to_list(raw_list)
-    result: list[ConnectedIdea] = []
-    for item in items:
-        if isinstance(item, ConnectedIdea):
-            result.append(item)
-        elif isinstance(item, dict):
-            try:
-                result.append(ConnectedIdea.model_validate(item))
-            except Exception as exc:
-                logger.debug(
-                    "[card_conversion] Skipping invalid ConnectedIdea item {!r}: {}",
-                    item,
-                    exc,
-                )
-        # else: skip non-dict, non-ConnectedIdea items
-    return result
+class RawExplanationRecord(BaseModel):
+    """Boundary shape of a card explanation as found in raw payloads.
+
+    Accepts the dict form ({"explanations": [...], "summary": "..."}) and the
+    bare-string form (string becomes the summary); anything else is dropped.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    explanations: list[str] = Field(
+        default_factory=list,
+        description="Explanation entries from the raw payload, oldest first.",
+    )
+    summary: str = Field(
+        default="", description="Explanation summary from the raw payload."
+    )
+
+    @field_validator("explanations", mode="before")
+    @classmethod
+    def coerce_explanations(cls, value: Any) -> list[Any]:
+        return _to_list(value)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def coerce_summary(cls, value: Any) -> str:
+        return str(value or "")
+
+
+class RawCardRecord(BaseModel):
+    """Boundary envelope for one raw card payload (JSON, API concept, Redis).
+
+    Validates and coerces every loosely-typed field once, at the boundary;
+    `to_card()` is the only raw-payload → AnyCard path. Legacy alias keys
+    (content/context/context_summary) are kept as separate fields and
+    resolved against their canonical counterparts in `to_card()`.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(
+        default="",
+        description="Card id from the payload; empty defers to to_card()'s fallback_id.",
+    )
+    category: str = Field(
+        default="general",
+        description="Card category; 'program' dispatches to ProgramCard.",
+    )
+    program_id: str = Field(
+        default="",
+        description="Source program id; non-empty dispatches to ProgramCard.",
+    )
+    description: str = Field(
+        default="", description="Card text — the idea or program summary."
+    )
+    content: str = Field(
+        default="", description="Legacy alias of description; loses ties to it."
+    )
+    task_description: str = Field(
+        default="", description="Task description active when the card was produced."
+    )
+    context: str = Field(
+        default="", description="Legacy alias of task_description; loses ties to it."
+    )
+    task_description_summary: str = Field(
+        default="", description="Condensed form of the task description."
+    )
+    context_summary: str = Field(
+        default="",
+        description="Legacy alias of task_description_summary; loses ties to it.",
+    )
+    code: str = Field(
+        default="", description="Program source code (program cards only)."
+    )
+    strategy: str = Field(
+        default="", description="Mutation archetype the card originated from."
+    )
+    fitness: float | None = Field(
+        default=None,
+        description="Program fitness; None when absent or unparsable.",
+    )
+    last_generation: int = Field(
+        default=0, description="Latest generation at which the card was observed."
+    )
+    programs: list[Any] = Field(
+        default_factory=list,
+        description="Ids of programs that exhibited the idea.",
+    )
+    aliases: list[CardAlias] = Field(
+        default_factory=list,
+        description="Alternative phrasings merged into the card.",
+    )
+    keywords: list[Any] = Field(default_factory=list, description="Search keywords.")
+    works_with: list[Any] = Field(
+        default_factory=list,
+        description="Ids of cards observed to combine well.",
+    )
+    links: list[Any] = Field(
+        default_factory=list, description="Ids of semantically related cards."
+    )
+    connected_ideas: list[ConnectedIdea] = Field(
+        default_factory=list,
+        description="Idea references attached to a program card.",
+    )
+    evolution_statistics: EvolutionStatistics = Field(
+        default_factory=EvolutionStatistics,
+        description="Per-quartile efficacy blocks stamped on the card.",
+    )
+    explanation: RawExplanationRecord = Field(
+        default_factory=RawExplanationRecord,
+        description="Explanation payload; a bare string becomes the summary.",
+    )
+
+    @field_validator(
+        "id",
+        "description",
+        "content",
+        "task_description",
+        "context",
+        "task_description_summary",
+        "context_summary",
+        "code",
+        "strategy",
+        mode="before",
+    )
+    @classmethod
+    def coerce_text(cls, value: Any) -> str:
+        return str(value or "")
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def coerce_category(cls, value: Any) -> str:
+        return str(value or "general")
+
+    @field_validator("program_id", mode="before")
+    @classmethod
+    def coerce_program_id(cls, value: Any) -> str:
+        return _str_or_empty(value)
+
+    @field_validator("fitness", mode="before")
+    @classmethod
+    def coerce_fitness(cls, value: Any) -> float | None:
+        return to_float(value, default=None)
+
+    @field_validator("last_generation", mode="before")
+    @classmethod
+    def coerce_last_generation(cls, value: Any) -> int:
+        return _to_int(value, default=0)
+
+    @field_validator(
+        "programs", "aliases", "keywords", "works_with", "links", mode="before"
+    )
+    @classmethod
+    def coerce_list(cls, value: Any) -> list[Any]:
+        return _to_list(value)
+
+    @field_validator("connected_ideas", mode="before")
+    @classmethod
+    def coerce_connected_ideas(cls, value: Any) -> list[ConnectedIdea]:
+        result: list[ConnectedIdea] = []
+        for item in _to_list(value):
+            if isinstance(item, ConnectedIdea):
+                result.append(item)
+            elif isinstance(item, dict):
+                try:
+                    result.append(ConnectedIdea.model_validate(item))
+                except Exception as exc:
+                    logger.debug(
+                        "[card_conversion] Skipping invalid ConnectedIdea item {!r}: {}",
+                        item,
+                        exc,
+                    )
+        return result
+
+    @field_validator("evolution_statistics", mode="before")
+    @classmethod
+    def coerce_evolution_statistics(cls, value: Any) -> Any:
+        return value or {}
+
+    @field_validator("explanation", mode="before")
+    @classmethod
+    def coerce_explanation(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return {"summary": value} if value else {}
+        if isinstance(value, (dict, RawExplanationRecord)):
+            return value
+        return {}
+
+    def to_card(self, fallback_id: str | None = None) -> AnyCard:
+        """Build the typed card, resolving alias keys and program dispatch."""
+        card_id = self.id or fallback_id or ""
+        description = self.description or self.content
+        task_description = self.task_description or self.context
+        task_description_summary = self.task_description_summary or self.context_summary
+
+        if self.category == "program" or self.program_id:
+            return ProgramCard(
+                id=card_id,
+                program_id=self.program_id,
+                task_description=task_description,
+                task_description_summary=task_description_summary,
+                description=description,
+                fitness=self.fitness,
+                code=self.code,
+                connected_ideas=self.connected_ideas,
+                keywords=self.keywords,
+                strategy=self.strategy,
+                links=self.links,
+                evolution_statistics=self.evolution_statistics,
+            )
+
+        return MemoryCard(
+            id=card_id,
+            category=self.category,
+            description=description,
+            task_description=task_description,
+            task_description_summary=task_description_summary,
+            strategy=self.strategy,
+            last_generation=self.last_generation,
+            programs=self.programs,
+            aliases=self.aliases,
+            keywords=self.keywords,
+            evolution_statistics=self.evolution_statistics,
+            explanation=MemoryCardExplanation(
+                explanations=self.explanation.explanations,
+                summary=self.explanation.summary,
+            ),
+            works_with=self.works_with,
+            links=self.links,
+        )
 
 
 def normalize_memory_card(
@@ -133,60 +346,7 @@ def normalize_memory_card(
     """
     if isinstance(card, (MemoryCard, ProgramCard)):
         return card
-
-    raw = dict(card or {})
-    category = str(raw.get("category") or "general")
-    program_id = _str_or_empty(raw.get("program_id"))
-
-    if category == "program" or program_id:
-        return ProgramCard(
-            id=str(raw.get("id") or fallback_id or ""),
-            program_id=program_id,
-            task_description=str(
-                raw.get("task_description") or raw.get("context") or ""
-            ),
-            task_description_summary=str(
-                raw.get("task_description_summary") or raw.get("context_summary") or ""
-            ),
-            description=str(raw.get("description") or raw.get("content") or ""),
-            fitness=to_float(raw.get("fitness"), default=None),
-            code=str(raw.get("code") or ""),
-            connected_ideas=_normalize_connected_ideas(raw.get("connected_ideas")),
-            keywords=_to_list(raw.get("keywords")),
-            strategy=str(raw.get("strategy") or ""),
-            links=_to_list(raw.get("links")),
-            evolution_statistics=_evo_stats
-            if isinstance((_evo_stats := raw.get("evolution_statistics")), dict)
-            else {},
-        )
-
-    explanation = raw.get("explanation")
-    if not isinstance(explanation, dict):
-        explanation = {}
-
-    return MemoryCard(
-        id=str(raw.get("id") or fallback_id or ""),
-        category=category,
-        description=str(raw.get("description") or raw.get("content") or ""),
-        task_description=str(raw.get("task_description") or raw.get("context") or ""),
-        task_description_summary=str(
-            raw.get("task_description_summary") or raw.get("context_summary") or ""
-        ),
-        strategy=str(raw.get("strategy") or ""),
-        last_generation=_to_int(raw.get("last_generation"), default=0),
-        programs=_to_list(raw.get("programs")),
-        aliases=_to_list(raw.get("aliases")),
-        keywords=_to_list(raw.get("keywords")),
-        evolution_statistics=_evo_stats
-        if isinstance((_evo_stats := raw.get("evolution_statistics")), dict)
-        else {},
-        explanation=MemoryCardExplanation(
-            explanations=_to_list(explanation.get("explanations")),
-            summary=str(explanation.get("summary") or ""),
-        ),
-        works_with=_to_list(raw.get("works_with")),
-        links=_to_list(raw.get("links")),
-    )
+    return RawCardRecord.model_validate(card or {}).to_card(fallback_id)
 
 
 # ---------------------------------------------------------------------------
@@ -194,44 +354,35 @@ def normalize_memory_card(
 # ---------------------------------------------------------------------------
 
 
-def _memory_to_card(
+def memory_note_to_card(
     memory_note: MemoryNoteProtocol | None,
     base_card: dict[str, Any] | None = None,
     memory_id: str | None = None,
 ) -> AnyCard:
-    """Convert an A-MEM MemoryNote into a normalized card model."""
-    mem_id = _safe_get(memory_note, "id", None) or memory_id
+    """Convert an A-MEM MemoryNote into a normalized card model.
+
+    The base_card payload wins field-by-field; the note only fills gaps.
+    """
+    mem_id = (memory_note.id if memory_note is not None else None) or memory_id
     card = normalize_memory_card(base_card, fallback_id=mem_id)
     if memory_note is None:
         return card
 
-    updates: dict[str, Any] = {}
-    updates["id"] = str(mem_id or card.id)
-    updates["category"] = str(
-        card.category or _safe_get(memory_note, "category", None) or "general"
-    )
-    updates["description"] = str(
-        card.description or _safe_get(memory_note, "content", "")
-    )
-    updates["task_description"] = str(
-        card.task_description or _safe_get(memory_note, "context", "")
-    )
+    updates: dict[str, Any] = {
+        "id": str(mem_id or card.id),
+        "category": str(card.category or memory_note.category or "general"),
+        "description": str(card.description or memory_note.content or ""),
+        "task_description": str(card.task_description or memory_note.context or ""),
+    }
 
     if isinstance(card, ProgramCard):
         return card.model_copy(update=updates)
 
-    updates["strategy"] = str(card.strategy or _safe_get(memory_note, "strategy", ""))
-    updates["keywords"] = _to_list(_safe_get(memory_note, "keywords", []) or [])
+    updates["strategy"] = str(card.strategy or memory_note.strategy or "")
+    updates["keywords"] = _to_list(memory_note.keywords or [])
 
     if not card.links:
-        links = (
-            _safe_get(memory_note, "links", None)
-            or _safe_get(memory_note, "linked_memories", None)
-            or _safe_get(memory_note, "linked_ids", None)
-            or _safe_get(memory_note, "relations", None)
-            or []
-        )
-        updates["links"] = _to_list(links)
+        updates["links"] = _to_list(memory_note.links or [])
 
     return card.model_copy(update=updates)
 
@@ -255,7 +406,7 @@ def export_memories_jsonl(
             base_card = card_overrides.get(memory_id)
             if memory_note is None and base_card is None:
                 continue
-            record = _memory_to_card(
+            record = memory_note_to_card(
                 memory_note, base_card=base_card, memory_id=memory_id
             )
             file_obj.write(json.dumps(record.model_dump(), ensure_ascii=True) + "\n")
@@ -306,9 +457,7 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         "explanation": explanation_text,
         "strategy": strategy,
         "keywords": dedupe_keep_order(list(card.keywords)),
-        "evolution_statistics": card.evolution_statistics
-        if isinstance(card.evolution_statistics, dict)
-        else None,
+        "evolution_statistics": card.evolution_statistics.model_dump(),
         "works_with": dedupe_keep_order(list(card.works_with)),
         "links": dedupe_keep_order(list(card.links)),
     }
@@ -405,31 +554,13 @@ def normalize_gam_pipeline_mode(gam_pipeline_mode: str | None) -> str:
 
 
 def concept_to_card(concept_content: dict[str, Any], fallback_id: str) -> AnyCard:
-    """Convert an API concept content dict to a normalized memory card."""
-    return normalize_memory_card(
-        {
-            "id": concept_content.get("id") or fallback_id,
-            "category": concept_content.get("category") or "general",
-            "program_id": concept_content.get("program_id") or "",
-            "fitness": concept_content.get("fitness"),
-            "description": concept_content.get("description") or "",
-            "task_description": concept_content.get("task_description") or "",
-            "task_description_summary": concept_content.get("task_description_summary")
-            or "",
-            "code": concept_content.get("code") or "",
-            "connected_ideas": concept_content.get("connected_ideas") or [],
-            "strategy": concept_content.get("strategy") or "",
-            "keywords": concept_content.get("keywords") or [],
-            "evolution_statistics": concept_content.get("evolution_statistics") or {},
-            "explanation": {
-                "explanations": [],
-                "summary": concept_content.get("explanation") or "",
-            },
-            "works_with": concept_content.get("works_with") or [],
-            "links": concept_content.get("links") or [],
-        },
-        fallback_id=fallback_id,
-    )
+    """Convert an API concept content dict to a normalized memory card.
+
+    The concept payload uses the same field names as raw card payloads
+    (string `explanation` becomes the explanation summary), so the
+    RawCardRecord envelope handles it directly.
+    """
+    return normalize_memory_card(concept_content, fallback_id=fallback_id)
 
 
 def note_metadata(note: MemoryNoteProtocol) -> dict[str, Any]:

@@ -65,7 +65,7 @@ def test_credits_card_injected_into_child() -> None:
         programs, fitness_key="fitness", higher_is_better=True
     )
     assert set(post) == {"program-A"}
-    assert (post["program-A"]["posterior_a"], post["program-A"]["posterior_b"]) == (
+    assert (post["program-A"].posterior_a, post["program-A"].posterior_b) == (
         2.0,
         1.0,
     )
@@ -88,8 +88,8 @@ def test_harm_event_lowers_posterior() -> None:
     post = _card_posterior_from_programs(
         programs, fitness_key="fitness", higher_is_better=True
     )
-    assert post["program-A"]["k_harm"] == 2
-    assert (post["program-A"]["posterior_a"], post["program-A"]["posterior_b"]) == (
+    assert post["program-A"].k_harm == 2
+    assert (post["program-A"].posterior_a, post["program-A"].posterior_b) == (
         1.0,
         3.0,
     )
@@ -109,7 +109,7 @@ def test_uses_configured_fitness_key() -> None:
     post = _card_posterior_from_programs(
         programs, fitness_key="r2_mean", higher_is_better=True
     )
-    assert post["program-A"]["posterior_a"] == 2.0
+    assert post["program-A"].posterior_a == 2.0
 
 
 def test_missing_fitness_key_treated_as_none() -> None:
@@ -132,8 +132,8 @@ def test_direction_flip_lower_is_better() -> None:
     post = _card_posterior_from_programs(
         programs, fitness_key="fitness", higher_is_better=False
     )
-    assert post["program-A"]["k_harm"] == 0
-    assert post["program-A"]["posterior_a"] == 2.0
+    assert post["program-A"].k_harm == 0
+    assert post["program-A"].posterior_a == 2.0
 
 
 def test_program_without_selected_metadata_contributes_nothing() -> None:
@@ -199,11 +199,11 @@ def test_reputation_knobs_reach_computation() -> None:
     default = _card_posterior_from_programs(
         programs, fitness_key="fitness", higher_is_better=True
     )
-    assert default["program-A"]["efficacy_confident"] is False
+    assert default["program-A"].efficacy_confident is False
 
     optimist = BetaBinomialReputation(confident_quantile=0.9)
     post = _card_posterior_from_programs(
         programs, fitness_key="fitness", higher_is_better=True, reputation=optimist
     )
-    assert post["program-A"]["efficacy_confident"] is True
-    assert post["program-A"]["p_help_lo20"] == pytest.approx(0.9**0.5)
+    assert post["program-A"].efficacy_confident is True
+    assert post["program-A"].p_help_lo20 == pytest.approx(0.9**0.5)

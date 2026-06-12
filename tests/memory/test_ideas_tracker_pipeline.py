@@ -593,3 +593,76 @@ class TestAdmitterWiring:
     def test_default_admitter_is_none(self) -> None:
         tracker = _make_tracker()
         assert tracker._log._admitter is None
+
+
+# ---------------------------------------------------------------------------
+# Typed evolution-statistics stamping (banks.json snapshot)
+# ---------------------------------------------------------------------------
+
+
+class TestTypedStatsInjection:
+    def test_idea_model_carries_typed_statistics(self) -> None:
+        from gigaevo.memory.ideas_tracker.models import Idea
+        from gigaevo.memory.shared_memory.models import EvolutionStatistics
+
+        idea = Idea(
+            description="use BFS",
+            evolution_statistics={"ALL": {"intro_events": 3}},
+        )
+        assert isinstance(idea.evolution_statistics, EvolutionStatistics)
+        assert idea.evolution_statistics.ALL is not None
+        assert idea.evolution_statistics.ALL.intro_events == 3
+        assert Idea(description="bare").model_dump()["evolution_statistics"] == {}
+
+    def test_flush_stamps_typed_statistics_into_banks_snapshot(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from gigaevo.memory.core.idea_stats import IdeaStats
+        import gigaevo.memory.ideas_tracker.ideas_tracker as it
+        from gigaevo.memory.ideas_tracker.models import Idea
+
+        stamped = Idea(id="idea-1", description="use BFS")
+        cold = Idea(id="idea-2", description="never analysed")
+        bank = MagicMock()
+        bank.all_ideas.return_value = [stamped, cold]
+
+        rows = [
+            IdeaStats.model_validate(
+                {
+                    "idea_id": "idea-1",
+                    "quartile": "ALL",
+                    "description": "use BFS",
+                    "intro_events": 5,
+                    "posterior_a": 4.0,
+                    "posterior_b": 2.0,
+                    "p_help_mean": 0.6667,
+                    "p_help_lo20": 0.51,
+                    "efficacy_confident": True,
+                }
+            ),
+            IdeaStats.model_validate(
+                {"idea_id": "idea-1", "quartile": "Q1", "intro_events": 2}
+            ),
+        ]
+        monkeypatch.setattr(
+            it,
+            "_analyse_origins",
+            lambda **kwargs: SimpleNamespace(summary=rows, best_ideas=rows[:1]),
+        )
+
+        log = it._SessionLog(tmp_path)
+        log.flush(bank, records=[])
+
+        data = json.loads(log.banks_file.read_text(encoding="utf-8"))
+        by_id = {idea["id"]: idea for idea in data[0]["active_bank"]}
+        all_block = by_id["idea-1"]["evolution_statistics"]["ALL"]
+        assert all_block["posterior_a"] == 4.0
+        assert all_block["efficacy_confident"] is True
+        assert by_id["idea-1"]["evolution_statistics"]["Q1"]["intro_events"] == 2
+        assert by_id["idea-2"]["evolution_statistics"] == {}
+        assert stamped.evolution_statistics.ALL is None
+        assert log.best_ideas_file.exists()

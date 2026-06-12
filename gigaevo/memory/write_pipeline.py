@@ -7,14 +7,22 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.backend_factory import MemoryBackendFactory
+from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
+from gigaevo.memory.shared_memory.models import (
+    AnyCard,
+    CardStatsBlock,
+    ConnectedIdea,
+    MemoryCard,
+    ProgramCard,
+    Quartile,
+)
 from gigaevo.memory.utils import to_float
-from gigaevo.programs.metrics.context import VALIDITY_KEY
 
 _MAX_CONNECTED_DESCRIPTIONS = 5
 
@@ -23,7 +31,8 @@ class CardMemory(Protocol):
     def get_card(self, card_id: str) -> AnyCard | None: ...
 
 
-def _load_json(path: Path) -> Any:
+def load_json(path: Path) -> Any:
+    """Read a JSON document, failing loudly when the file is absent."""
     if not path.exists():
         raise FileNotFoundError(f"Cards file not found: {path}")
 
@@ -31,7 +40,12 @@ def _load_json(path: Path) -> Any:
         return json.load(f)
 
 
-def _extract_latest_snapshot(payload: Any, required_key: str) -> dict[str, Any]:
+def extract_latest_snapshot(payload: Any, required_key: str) -> dict[str, Any]:
+    """Return the newest snapshot dict containing ``required_key``.
+
+    Tracker logs are append-only lists of snapshots; a bare dict is accepted as
+    a single-snapshot document.
+    """
     if isinstance(payload, dict):
         if required_key in payload:
             return payload
@@ -50,128 +64,293 @@ def _extract_latest_snapshot(payload: Any, required_key: str) -> dict[str, Any]:
     )
 
 
-def _top_percent_count(total: int, percent: float) -> int:
+def top_percent_count(total: int, percent: float) -> int:
+    """How many items a top-``percent`` slice of ``total`` selects (>=1 when any qualify)."""
     if total <= 0 or percent <= 0:
         return 0
     return max(1, ceil(total * (percent / 100.0)))
 
 
-def _classify_card_type(card: dict[str, Any] | AnyCard) -> str:
-    if isinstance(card, ProgramCard):
-        return "programs"
-    if isinstance(card, dict):
-        if str(card.get("category") or "").strip().lower() == "program":
-            return "programs"
-        if str(card.get("program_id") or "").strip():
-            return "programs"
-    return "ideas"
+def classify_card_type(card: AnyCard) -> str:
+    """Bucket a typed card for write-stats reporting: ``programs`` or ``ideas``."""
+    return "programs" if isinstance(card, ProgramCard) else "ideas"
 
 
-def _zero_write_stats() -> dict[str, int]:
-    return {
-        "processed": 0,
-        "added": 0,
-        "updated": 0,
-        "rejected": 0,
-        "updated_target_cards": 0,
-    }
+# ---------------------------------------------------------------------------
+# Typed snapshot rows (boundary envelopes for tracker JSON files)
+# ---------------------------------------------------------------------------
 
 
-def _diff_write_stats(
-    before: dict[str, int],
-    after: dict[str, int],
-) -> dict[str, int]:
-    keys = set(before) | set(after)
-    return {
-        key: max(0, int(after.get(key, 0)) - int(before.get(key, 0))) for key in keys
-    }
+class BankSnapshot(BaseModel):
+    """Latest banks.json snapshot: the active idea bank."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    active_bank: list[Any] = Field(
+        description="Raw card payloads of the active idea bank."
+    )
 
 
-def _parse_best_ideas(path: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
-    payload = _load_json(path)
-    snapshot = _extract_latest_snapshot(payload, "best_ideas")
-    best_ideas = snapshot.get("best_ideas")
-    if not isinstance(best_ideas, list):
-        raise ValueError(
-            f"Invalid best ideas format in {path}: expected list under 'best_ideas'"
+class BestIdeasSnapshot(BaseModel):
+    """Latest best_ideas.json snapshot: ranked idea metric rows."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    best_ideas: list[Any] = Field(
+        description="IdeaStats.as_json_row() dumps, best ideas first."
+    )
+
+
+class ProgramsSnapshot(BaseModel):
+    """Latest programs.json snapshot: exported program rows."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    programs: list[Any] = Field(description="Raw exported program rows.")
+
+
+class ProgramRow(BaseModel):
+    """One row of programs.json's latest snapshot."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Program id (ideas_tracker export key).")
+    program_id: str = Field(
+        default="", description="Program id (raw Redis export key)."
+    )
+    fitness: float | None = Field(
+        default=None, description="Program fitness; None when absent or unparsable."
+    )
+    is_valid: float | None = Field(
+        default=None,
+        description="Validity flag from the raw export; None when pre-filtered.",
+    )
+    task_description: str = Field(
+        default="", description="Task description active for the run."
+    )
+    task_description_summary: str = Field(
+        default="", description="Condensed form of the task description."
+    )
+    code: str = Field(default="", description="Program source code.")
+
+    @field_validator(
+        "id",
+        "program_id",
+        "task_description",
+        "task_description_summary",
+        "code",
+        mode="before",
+    )
+    @classmethod
+    def coerce_text(cls, value: Any) -> str:
+        return str(value or "")
+
+    @field_validator("fitness", "is_valid", mode="before")
+    @classmethod
+    def coerce_float(cls, value: Any) -> float | None:
+        return to_float(value, default=None)
+
+    @property
+    def resolved_program_id(self) -> str:
+        return (self.id or self.program_id).strip()
+
+    @property
+    def passes_validity_gate(self) -> bool:
+        """Absent is_valid means ideas_tracker already pre-filtered (valid-only);
+        explicit 0 comes from the raw Redis export path."""
+        return self.is_valid is None or self.is_valid > 0
+
+
+# ---------------------------------------------------------------------------
+# Write-stats counters
+# ---------------------------------------------------------------------------
+
+
+class WriteStats(BaseModel):
+    """Card-store write counters as reported by the backend's write ledger."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    processed: int = Field(default=0, description="Cards submitted to the store.")
+    added: int = Field(default=0, description="Cards added as new bank entries.")
+    updated: int = Field(default=0, description="Cards that updated an existing entry.")
+    rejected: int = Field(default=0, description="Cards rejected by a write gate.")
+    updated_target_cards: int = Field(
+        default=0, description="Existing cards modified as merge targets."
+    )
+
+    def delta_to(self, after: WriteStats) -> WriteStats:
+        """Non-negative per-counter change from this snapshot to ``after``."""
+        return WriteStats(
+            processed=max(0, after.processed - self.processed),
+            added=max(0, after.added - self.added),
+            updated=max(0, after.updated - self.updated),
+            rejected=max(0, after.rejected - self.rejected),
+            updated_target_cards=max(
+                0, after.updated_target_cards - self.updated_target_cards
+            ),
         )
 
+    def accumulate(self, delta: WriteStats) -> WriteStats:
+        """New counters with ``delta`` added on top of this snapshot."""
+        return WriteStats(
+            processed=self.processed + delta.processed,
+            added=self.added + delta.added,
+            updated=self.updated + delta.updated,
+            rejected=self.rejected + delta.rejected,
+            updated_target_cards=self.updated_target_cards + delta.updated_target_cards,
+        )
+
+
+class CardTypeCounts(BaseModel):
+    """Input card tally per write-stats bucket."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ideas: int = Field(default=0, description="Idea cards in the input batch.")
+    programs: int = Field(default=0, description="Program cards in the input batch.")
+
+
+class CardTypeWriteStats(BaseModel):
+    """Write counters split per card-type bucket."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ideas: WriteStats = Field(
+        default_factory=WriteStats, description="Write counters for idea cards."
+    )
+    programs: WriteStats = Field(
+        default_factory=WriteStats, description="Write counters for program cards."
+    )
+
+
+class WriteStatsSnapshot(BaseModel):
+    """One timestamped entry of memory_write_stats.json.
+
+    Field names are the on-disk JSON keys — keep them stable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp_utc: str = Field(
+        description="ISO-8601 UTC time the snapshot was recorded."
+    )
+    input_cards_count: int = Field(description="Cards in the input batch.")
+    input_classify_card_type_counts: CardTypeCounts = Field(
+        description="Input batch tally split by card type."
+    )
+    stats: WriteStats = Field(description="Combined write counters for the batch.")
+    stats_by_classify_card_type: CardTypeWriteStats = Field(
+        description="Write counters split by card type."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Snapshot parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_best_ideas(path: Path) -> tuple[list[str], dict[str, IdeaStats]]:
+    """Read best_ideas.json into (ordered unique idea ids, per-id stats rows).
+
+    Rows are the ``IdeaStats.as_json_row()`` dumps the tracker writes, so they
+    validate back into :class:`IdeaStats` directly.
+    """
+    payload = load_json(path)
+    try:
+        snapshot = BestIdeasSnapshot.model_validate(
+            extract_latest_snapshot(payload, "best_ideas")
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid best ideas format in {path}: expected list under 'best_ideas'"
+        ) from exc
+
     idea_ids: list[str] = []
-    best_by_id: dict[str, dict[str, Any]] = {}
-    seen_ids: set[str] = set()
-    for item in best_ideas:
+    best_by_id: dict[str, IdeaStats] = {}
+    for item in snapshot.best_ideas:
         if not isinstance(item, dict):
             continue
-        idea_id = str(item.get("idea_id") or item.get("id") or "").strip()
-        if not idea_id or idea_id in seen_ids:
+        row = IdeaStats.model_validate(item)
+        idea_id = row.idea_id.strip()
+        if not idea_id or idea_id in best_by_id:
             continue
-        seen_ids.add(idea_id)
         idea_ids.append(idea_id)
-        best_by_id[idea_id] = item
+        best_by_id[idea_id] = row
 
     return idea_ids, best_by_id
 
 
-def _parse_programs(path: Path) -> list[dict[str, Any]]:
-    payload = _load_json(path)
-    snapshot = _extract_latest_snapshot(payload, "programs")
-    programs = snapshot.get("programs")
-    if not isinstance(programs, list):
+def parse_programs(path: Path) -> list[ProgramRow]:
+    """Read programs.json's latest snapshot into typed program rows."""
+    payload = load_json(path)
+    try:
+        snapshot = ProgramsSnapshot.model_validate(
+            extract_latest_snapshot(payload, "programs")
+        )
+    except ValidationError as exc:
         raise ValueError(
             f"Invalid programs format in {path}: expected list under 'programs'"
+        ) from exc
+    return [
+        ProgramRow.model_validate(program)
+        for program in snapshot.programs
+        if isinstance(program, dict)
+    ]
+
+
+def fold_best_idea_metrics(card: AnyCard, row: IdeaStats) -> AnyCard:
+    """Fold a best_ideas stats row into a typed bank card.
+
+    Fills a missing description from the row and stamps the row's metric
+    vocabulary under ``evolution_statistics.best_ideas_snapshot``. The input
+    card is never mutated.
+    """
+    updates: dict[str, Any] = {
+        "evolution_statistics": card.evolution_statistics.model_copy(
+            update={"best_ideas_snapshot": row.to_stats_block()}
         )
-    return [program for program in programs if isinstance(program, dict)]
-
-
-def _merge_best_idea_metrics_into_card(
-    card: dict[str, Any], best_entry: dict[str, Any]
-) -> dict[str, Any]:
-    merged = dict(card)
-    if not merged.get("description"):
-        merged["description"] = str(best_entry.get("description") or "")
-
-    best_metrics = {
-        key: value
-        for key, value in best_entry.items()
-        if key not in {"idea_id", "id", "description"}
     }
-    if best_metrics:
-        evolution_stats = merged.get("evolution_statistics")
-        if not isinstance(evolution_stats, dict):
-            evolution_stats = {}
-        evolution_stats["best_ideas_snapshot"] = best_metrics
-        merged["evolution_statistics"] = evolution_stats
+    if not card.description:
+        updates["description"] = row.description
 
-    return merged
+    return card.model_copy(update=updates)
 
 
-def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
+def load_best_idea_bank_cards(path: Path, best_ideas_path: Path) -> list[AnyCard]:
+    """Select the banks.json cards named by best_ideas.json, metrics folded in."""
     if not best_ideas_path.exists():
         raise FileNotFoundError(f"Best ideas file not found: {best_ideas_path}")
 
-    payload = _load_json(path)
-    snapshot = _extract_latest_snapshot(payload, "active_bank")
-    active_bank = snapshot.get("active_bank")
-    if not isinstance(active_bank, list):
-        raise ValueError(f"Invalid banks format in {path}: expected 'active_bank' list")
+    payload = load_json(path)
+    try:
+        snapshot = BankSnapshot.model_validate(
+            extract_latest_snapshot(payload, "active_bank")
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid banks format in {path}: expected 'active_bank' list"
+        ) from exc
 
-    all_cards = [card for card in active_bank if isinstance(card, dict)]
-    cards_by_id = {
-        str(card.get("id")).strip(): card
-        for card in all_cards
-        if str(card.get("id") or "").strip()
-    }
-    best_idea_ids, best_by_id = _parse_best_ideas(best_ideas_path)
+    all_cards = [
+        normalize_memory_card(entry)
+        for entry in snapshot.active_bank
+        if isinstance(entry, dict)
+    ]
+    cards_by_id = {card.id.strip(): card for card in all_cards if card.id.strip()}
+    best_idea_ids, best_by_id = parse_best_ideas(best_ideas_path)
 
-    selected_cards: list[dict] = []
+    selected_cards: list[AnyCard] = []
     missing_cards: list[str] = []
     for idea_id in best_idea_ids:
         bank_card = cards_by_id.get(idea_id)
-        best_entry = best_by_id.get(idea_id, {})
         if bank_card is None:
             missing_cards.append(idea_id)
             continue
-        selected_cards.append(_merge_best_idea_metrics_into_card(bank_card, best_entry))
+        row = best_by_id.get(idea_id)
+        selected_cards.append(
+            fold_best_idea_metrics(bank_card, row) if row is not None else bank_card
+        )
 
     if missing_cards:
         logger.warning(
@@ -182,23 +361,38 @@ def _load_banks_cards(path: Path, best_ideas_path: Path) -> list[dict]:
     return selected_cards
 
 
-def _load_latest_bank_cards(path: Path) -> list[dict[str, Any]]:
-    payload = _load_json(path)
-    snapshot = _extract_latest_snapshot(payload, "active_bank")
-    active_bank = snapshot.get("active_bank")
-    if not isinstance(active_bank, list):
-        raise ValueError(f"Invalid banks format in {path}: expected 'active_bank' list")
-    return [card for card in active_bank if isinstance(card, dict)]
+def load_latest_bank_cards(path: Path) -> list[AnyCard]:
+    """Read the newest ``active_bank`` snapshot from banks.json as typed cards."""
+    payload = load_json(path)
+    try:
+        snapshot = BankSnapshot.model_validate(
+            extract_latest_snapshot(payload, "active_bank")
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid banks format in {path}: expected 'active_bank' list"
+        ) from exc
+    return [
+        normalize_memory_card(entry)
+        for entry in snapshot.active_bank
+        if isinstance(entry, dict)
+    ]
 
 
-def _build_program_cards_from_top_programs(
+def build_program_cards_from_top_programs(
     *,
     programs_path: Path | None,
     banks_path: Path,
     best_programs_percent: float,
     higher_is_better: bool = True,
-    card_posterior: dict[str, dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
+    card_posterior: dict[str, CardStatsBlock] | None = None,
+) -> list[ProgramCard]:
+    """Turn the top-fitness slice of programs.json into typed program cards.
+
+    Each card links back to the bank ideas that produced the program; cards
+    that already carry an injection posterior are kept even when they drop out
+    of the top slice, so their efficacy signal still reaches the auction.
+    """
     if (
         programs_path is None
         or not programs_path.exists()
@@ -206,66 +400,48 @@ def _build_program_cards_from_top_programs(
     ):
         return []
 
-    programs = _parse_programs(programs_path)
-    if not programs:
-        return []
-
-    eligible_programs: list[dict[str, Any]] = []
-    for program in programs:
-        program_id = str(program.get("id") or program.get("program_id") or "").strip()
-        fitness = to_float(program.get("fitness"))
-        if not program_id or fitness is None:
-            continue
-        # Absent is_valid means ideas_tracker already pre-filtered (valid-only).
-        # Only skip when is_valid is explicitly 0 (raw Redis export path).
-        is_valid = to_float(program.get(VALIDITY_KEY))
-        if is_valid is not None and is_valid <= 0:
-            continue
-        enriched = dict(program)
-        enriched["program_id"] = program_id
-        enriched["fitness"] = fitness
-        eligible_programs.append(enriched)
-
-    if not eligible_programs:
+    rows = parse_programs(programs_path)
+    eligible_rows = [
+        row
+        for row in rows
+        if row.resolved_program_id
+        and row.fitness is not None
+        and row.passes_validity_gate
+    ]
+    if not eligible_rows:
         return []
 
     # When higher_is_better=True the best programs sit at the top of a
     # descending sort; for lower-is-better tasks (vartodd_ham_high, loss-style
     # metrics) the best programs are the LOWEST fitness, so we flip the sort.
-    eligible_programs.sort(
-        key=lambda program: (
-            float(program.get("fitness", 0.0)),
-            str(program["program_id"]),
-        ),
+    eligible_rows.sort(
+        key=lambda row: (row.fitness, row.resolved_program_id),
         reverse=higher_is_better,
     )
-    selected_count = _top_percent_count(len(eligible_programs), best_programs_percent)
-    selected_programs = eligible_programs[:selected_count]
+    selected_count = top_percent_count(len(eligible_rows), best_programs_percent)
+    selected_rows = eligible_rows[:selected_count]
 
     # A card accrues an injection posterior only after it is injected downstream,
     # by which point it has usually dropped out of the top-fitness slice; build it
     # anyway so its efficacy signal reaches the auction instead of being stranded.
     if card_posterior:
-        selected_programs = selected_programs + [
-            program
-            for program in eligible_programs[selected_count:]
-            if f"program-{program['program_id']}" in card_posterior
+        selected_rows = selected_rows + [
+            row
+            for row in eligible_rows[selected_count:]
+            if f"program-{row.resolved_program_id}" in card_posterior
         ]
 
-    connected_ideas_by_program: dict[str, list[dict[str, str]]] = {}
-    for idea_card in _load_latest_bank_cards(banks_path):
-        idea_id = str(idea_card.get("id") or "").strip()
-        idea_description = str(idea_card.get("description") or "").strip()
+    connected_ideas_by_program: dict[str, list[ConnectedIdea]] = {}
+    for idea_card in load_latest_bank_cards(banks_path):
+        if not isinstance(idea_card, MemoryCard):
+            continue
+        idea_id = idea_card.id.strip()
         if not idea_id:
             continue
-        programs_for_idea = idea_card.get("programs")
-        if not isinstance(programs_for_idea, list):
-            continue
-        linked_idea = {
-            "idea_id": idea_id,
-            "description": idea_description,
-        }
-        for raw_program_id in programs_for_idea:
+        linked_idea = ConnectedIdea(
+            idea_id=idea_id, description=idea_card.description.strip()
+        )
+        for raw_program_id in idea_card.programs:
             linked_program_id = str(raw_program_id or "").strip()
             if not linked_program_id:
                 continue
@@ -273,24 +449,18 @@ def _build_program_cards_from_top_programs(
                 linked_idea
             )
 
-    cards: list[dict[str, Any]] = []
-    for rank, program in enumerate(selected_programs, start=1):
-        program_id = str(program["program_id"])
-        task_description = str(program.get("task_description") or "").strip()
-        task_description_summary = str(
-            program.get("task_description_summary") or ""
-        ).strip()
+    cards: list[ProgramCard] = []
+    for rank, row in enumerate(selected_rows, start=1):
+        program_id = row.resolved_program_id
         connected_ideas = connected_ideas_by_program.get(program_id, [])
         connected_descriptions = [
-            str(item.get("description") or "").strip()
-            for item in connected_ideas
-            if isinstance(item, dict)
+            idea.description.strip()
+            for idea in connected_ideas
+            if idea.description.strip()
         ]
-        connected_descriptions = [text for text in connected_descriptions if text]
         connected_summary = "; ".join(
             connected_descriptions[:_MAX_CONNECTED_DESCRIPTIONS]
-        )
-        connected_summary = connected_summary.strip()
+        ).strip()
         if connected_summary:
             description = connected_summary
             keywords = [f"program_rank:{rank}"]
@@ -298,43 +468,39 @@ def _build_program_cards_from_top_programs(
             description = ""
             keywords = ["pending_analysis:true", f"program_rank:{rank}"]
 
-        card_id = f"program-{program_id}"
-        card: dict[str, Any] = {
-            "id": card_id,
-            "category": "program",
-            "program_id": program_id,
-            "task_description": task_description,
-            "task_description_summary": task_description_summary,
-            "description": description,
-            "fitness": float(program["fitness"]),
-            "code": str(program.get("code") or ""),
-            "connected_ideas": connected_ideas,
-            "keywords": keywords,
-        }
-        cards.append(card)
+        cards.append(
+            ProgramCard(
+                id=f"program-{program_id}",
+                program_id=program_id,
+                task_description=row.task_description.strip(),
+                task_description_summary=row.task_description_summary.strip(),
+                description=description,
+                fitness=row.fitness,
+                code=row.code,
+                connected_ideas=connected_ideas,
+                keywords=keywords,
+            )
+        )
 
     return cards
 
 
 def stamp_card_posterior(
-    card: dict[str, Any], card_posterior: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """Merge a card's injection posterior into ``evolution_statistics["ALL"]``.
+    card: AnyCard, card_posterior: dict[str, CardStatsBlock]
+) -> AnyCard:
+    """Stamp a card's injection posterior into ``evolution_statistics.ALL``.
 
     Applies to ANY card the selector can inject — idea and program cards alike —
-    keyed by the card's own id. Existing statistics (e.g. the
-    ``best_ideas_snapshot`` block) are preserved; cards without a posterior are
-    returned unchanged so the auction treats them as COLD.
+    keyed by the card's own id. Other statistics blocks (e.g.
+    ``best_ideas_snapshot``) are preserved; cards without a posterior are
+    returned unchanged so the auction treats them as COLD. The input card is
+    never mutated.
     """
-    posterior = card_posterior.get(str(card.get("id") or "").strip())
-    if not posterior:
+    posterior = card_posterior.get(str(card.id or "").strip())
+    if posterior is None:
         return card
-    stats = card.get("evolution_statistics")
-    merged = dict(stats) if isinstance(stats, dict) else {}
-    merged["ALL"] = posterior
-    stamped = dict(card)
-    stamped["evolution_statistics"] = merged
-    return stamped
+    stamped_stats = card.evolution_statistics.with_block(Quartile.ALL, posterior)
+    return card.model_copy(update={"evolution_statistics": stamped_stats})
 
 
 def load_memory_cards(
@@ -344,58 +510,65 @@ def load_memory_cards(
     programs_path: Path | None = None,
     best_programs_percent: float = 0.0,
     higher_is_better: bool = True,
-    card_posterior: dict[str, dict[str, Any]] | None = None,
-) -> list:
-    """Load idea and program cards from banks, apply filters, stamp posteriors."""
-    payload = _load_json(path)
+    card_posterior: dict[str, CardStatsBlock] | None = None,
+) -> list[AnyCard]:
+    """Load idea and program cards from banks as typed cards, posteriors stamped.
 
-    cards: list[dict]
+    Raw JSON dicts cross into typed models inside the loaders called here;
+    everything downstream operates on typed cards only.
+    """
+    payload = load_json(path)
+
     if isinstance(payload, dict) and "active_bank" in payload:
-        cards = _load_banks_cards(path, best_ideas_path)
+        idea_cards = load_best_idea_bank_cards(path, best_ideas_path)
     elif (
         isinstance(payload, list)
         and payload
         and isinstance(payload[0], dict)
         and "active_bank" in payload[0]
     ):
-        cards = _load_banks_cards(path, best_ideas_path)
+        idea_cards = load_best_idea_bank_cards(path, best_ideas_path)
     else:
         raise ValueError(
             "Invalid banks JSON format. Expected payload with 'active_bank'"
         )
 
-    all_cards = cards + _build_program_cards_from_top_programs(
-        programs_path=programs_path,
-        banks_path=path,
-        best_programs_percent=best_programs_percent,
-        higher_is_better=higher_is_better,
-        card_posterior=card_posterior,
-    )
+    typed_cards: list[AnyCard] = [
+        *idea_cards,
+        *build_program_cards_from_top_programs(
+            programs_path=programs_path,
+            banks_path=path,
+            best_programs_percent=best_programs_percent,
+            higher_is_better=higher_is_better,
+            card_posterior=card_posterior,
+        ),
+    ]
     if card_posterior:
-        all_cards = [stamp_card_posterior(c, card_posterior) for c in all_cards]
-    return [normalize_memory_card(c) for c in all_cards]
+        typed_cards = [stamp_card_posterior(c, card_posterior) for c in typed_cards]
+    return typed_cards
 
 
-def _write_memory_write_stats(
+def append_write_stats_snapshot(
     *,
     stats_path: Path,
     input_cards_count: int,
-    input_classify_card_type_counts: dict[str, int],
-    write_stats: dict[str, int],
-    write_stats_by_classify_card_type: dict[str, dict[str, int]],
-) -> dict[str, Any]:
-    snapshot = {
-        "timestamp_utc": datetime.now(UTC).isoformat(),
-        "input_cards_count": int(input_cards_count),
-        "input_classify_card_type_counts": input_classify_card_type_counts,
-        "stats": write_stats,
-        "stats_by_classify_card_type": write_stats_by_classify_card_type,
-    }
+    input_card_type_counts: CardTypeCounts,
+    write_stats: WriteStats,
+    write_stats_by_card_type: CardTypeWriteStats,
+) -> WriteStatsSnapshot:
+    """Append one timestamped write-stats snapshot to memory_write_stats.json."""
+    snapshot = WriteStatsSnapshot(
+        timestamp_utc=datetime.now(UTC).isoformat(),
+        input_cards_count=int(input_cards_count),
+        input_classify_card_type_counts=input_card_type_counts,
+        stats=write_stats,
+        stats_by_classify_card_type=write_stats_by_card_type,
+    )
 
     existing: list[dict[str, Any]] = []
     if stats_path.exists():
         try:
-            raw = _load_json(stats_path)
+            raw = load_json(stats_path)
             if isinstance(raw, list):
                 existing = [item for item in raw if isinstance(item, dict)]
             elif isinstance(raw, dict):
@@ -408,7 +581,7 @@ def _write_memory_write_stats(
             )
             existing = []
 
-    existing.append(snapshot)
+    existing.append(snapshot.model_dump())
     with stats_path.open("w", encoding="utf-8") as f:
         json.dump(existing, f, ensure_ascii=True, indent=2)
     return snapshot
@@ -423,10 +596,10 @@ def main(
     checkpoint_dir: str | Path | None = None,
     best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
-    card_posterior: dict[str, dict[str, Any]] | None = None,
+    card_posterior: dict[str, CardStatsBlock] | None = None,
     evictor: Evictor | None = None,
     deduplicator: Deduplicator | None = None,
-) -> dict[str, Any] | None:
+) -> WriteStatsSnapshot | None:
     """Load cards from banks, write them into the card bank, report stats.
 
     The bank is constructed via ``backend``, a required Hydra-composed
@@ -458,21 +631,18 @@ def main(
             best_ideas_path,
         )
 
-        write_stats_by_classify_card_type = {
-            "ideas": _zero_write_stats(),
-            "programs": _zero_write_stats(),
-        }
+        idea_write_stats = WriteStats()
+        program_write_stats = WriteStats()
         try:
             for idx, card in enumerate(memory_cards, start=1):
-                card_type = _classify_card_type(card)
-                before_stats = memory.get_card_write_stats()
+                before_stats = WriteStats.model_validate(memory.get_card_write_stats())
                 memory_id = memory.save_card(card)
-                after_stats = memory.get_card_write_stats()
-                stat_diff = _diff_write_stats(before_stats, after_stats)
-                for stat_name, stat_value in stat_diff.items():
-                    write_stats_by_classify_card_type[card_type][stat_name] = int(
-                        write_stats_by_classify_card_type[card_type].get(stat_name, 0)
-                    ) + int(stat_value)
+                after_stats = WriteStats.model_validate(memory.get_card_write_stats())
+                stat_delta = before_stats.delta_to(after_stats)
+                if isinstance(card, ProgramCard):
+                    program_write_stats = program_write_stats.accumulate(stat_delta)
+                else:
+                    idea_write_stats = idea_write_stats.accumulate(stat_delta)
                 stored = memory.get_card(memory_id)
                 # memory_id is the ingest verdict's final id — possibly an existing
                 # duplicate, not a fresh save; the write ledger holds the verdict.
@@ -496,41 +666,40 @@ def main(
 
         memory.rebuild()
 
-        write_stats = memory.get_card_write_stats()
-        input_classify_card_type_counts = {
-            "ideas": sum(
-                1 for card in memory_cards if _classify_card_type(card) == "ideas"
-            ),
-            "programs": sum(
-                1 for card in memory_cards if _classify_card_type(card) == "programs"
-            ),
-        }
+        write_stats = WriteStats.model_validate(memory.get_card_write_stats())
+        write_stats_by_card_type = CardTypeWriteStats(
+            ideas=idea_write_stats, programs=program_write_stats
+        )
+        input_card_type_counts = CardTypeCounts(
+            ideas=sum(1 for card in memory_cards if not isinstance(card, ProgramCard)),
+            programs=sum(1 for card in memory_cards if isinstance(card, ProgramCard)),
+        )
         logger.info(
             "[Memory][WritePipeline] Write stats: processed={} added={} updated={} rejected={} "
             "ideas(proc={} add={} upd={} rej={}) "
             "programs(proc={} add={} upd={} rej={}) updated_target_cards={}",
-            write_stats.get("processed", 0),
-            write_stats.get("added", 0),
-            write_stats.get("updated", 0),
-            write_stats.get("rejected", 0),
-            write_stats_by_classify_card_type["ideas"].get("processed", 0),
-            write_stats_by_classify_card_type["ideas"].get("added", 0),
-            write_stats_by_classify_card_type["ideas"].get("updated", 0),
-            write_stats_by_classify_card_type["ideas"].get("rejected", 0),
-            write_stats_by_classify_card_type["programs"].get("processed", 0),
-            write_stats_by_classify_card_type["programs"].get("added", 0),
-            write_stats_by_classify_card_type["programs"].get("updated", 0),
-            write_stats_by_classify_card_type["programs"].get("rejected", 0),
-            write_stats.get("updated_target_cards", 0),
+            write_stats.processed,
+            write_stats.added,
+            write_stats.updated,
+            write_stats.rejected,
+            idea_write_stats.processed,
+            idea_write_stats.added,
+            idea_write_stats.updated,
+            idea_write_stats.rejected,
+            program_write_stats.processed,
+            program_write_stats.added,
+            program_write_stats.updated,
+            program_write_stats.rejected,
+            write_stats.updated_target_cards,
         )
 
         stats_path = banks_path.parent / "memory_write_stats.json"
-        snapshot = _write_memory_write_stats(
+        snapshot = append_write_stats_snapshot(
             stats_path=stats_path,
             input_cards_count=len(memory_cards),
-            input_classify_card_type_counts=input_classify_card_type_counts,
+            input_card_type_counts=input_card_type_counts,
             write_stats=write_stats,
-            write_stats_by_classify_card_type=write_stats_by_classify_card_type,
+            write_stats_by_card_type=write_stats_by_card_type,
         )
         logger.info(
             "[Memory][WritePipeline] Memory write stats saved to: {}", stats_path

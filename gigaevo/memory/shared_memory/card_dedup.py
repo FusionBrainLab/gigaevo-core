@@ -10,7 +10,7 @@ from threading import Lock
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import (
@@ -58,10 +58,14 @@ class DedupDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
-    action: DedupAction
-    reason: str
-    duplicate_of: str  # card_id for discard (may be empty/phantom)
-    merges: list[tuple[str, AnyCard]]  # (card_id, merged_card) for update
+    action: DedupAction = Field(description="Verdict: add, discard, or update.")
+    reason: str = Field(description="LLM rationale behind the verdict.")
+    duplicate_of: str = Field(
+        description="Id of the duplicated card on discard; may be empty or phantom."
+    )
+    merges: list[tuple[str, AnyCard]] = Field(
+        description="(card_id, merged_card) pairs to apply on update."
+    )
 
 
 class CardDedup:
@@ -139,7 +143,7 @@ class CardDedup:
                 ],
                 embedding_model_name=self._embedding_model_name,
             )
-        except (MemoryRetrieverError, OSError) as exc:
+        except (MemoryRetrieverError, OSError, ValidationError) as exc:
             logger.warning("[Memory][CardDedup]Dedup retriever build failed: {}", exc)
             return {}
 
@@ -298,7 +302,7 @@ class CardDedup:
     ) -> dict[str, Any]:
         """Ask LLM to decide: add, discard, or update."""
         default_decision: dict[str, Any] = {
-            "action": "add",
+            "action": DedupAction.ADD,
             "reason": "",
             "duplicate_of": "",
             "updates": [],
@@ -372,7 +376,7 @@ class CardDedup:
         cfg = self._config
         # An unreachable/flaky LLM must not flood the bank with unvetted cards.
         decision: dict[str, Any] = {
-            "action": "discard",
+            "action": DedupAction.DISCARD,
             "reason": "dedup llm unavailable",
             "duplicate_of": "",
             "updates": [],

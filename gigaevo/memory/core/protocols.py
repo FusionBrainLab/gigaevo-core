@@ -3,7 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from gigaevo.memory.core.auctioneer import AuctionBid, AuctionCandidate
 from gigaevo.memory.core.idea_stats import IdeaStats
+from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
+from gigaevo.memory.shared_memory.models import (
+    AnyCard,
+    CardStatsBlock,
+    EvolutionStatistics,
+)
 
 
 @runtime_checkable
@@ -12,20 +19,20 @@ class ReputationModel(Protocol):
 
     def posterior(
         self, gains: Sequence[float], *, threshold: float = 0.0
-    ) -> dict[str, Any]: ...
+    ) -> CardStatsBlock: ...
 
-    def card_posterior(self, card: Any) -> tuple[float, float]: ...
+    def card_posterior(self, card: AnyCard) -> tuple[float, float]: ...
 
     def is_confidently_harmful(
-        self, evolution_statistics: Mapping[str, Any] | None
+        self, evolution_statistics: EvolutionStatistics | None
     ) -> bool: ...
 
     def compute_injection_posteriors(
         self,
-        programs: Sequence[Mapping[str, Any]],
+        programs: Sequence[InjectionOutcome],
         *,
         higher_is_better: bool = True,
-    ) -> dict[str, dict[str, Any]]: ...
+    ) -> dict[str, CardStatsBlock]: ...
 
 
 @runtime_checkable
@@ -41,8 +48,8 @@ class Auctioneer(Protocol):
     """Decides which candidate cards are injected into a mutation prompt."""
 
     def run(
-        self, candidates: list[tuple[str, float, float]], rng: Any
-    ) -> tuple[list[str], list[dict]]: ...
+        self, candidates: list[AuctionCandidate], rng: Any
+    ) -> tuple[list[str], list[AuctionBid]]: ...
 
 
 @runtime_checkable
@@ -51,7 +58,7 @@ class CardRetriever(Protocol):
 
     def research(self, query: str, *, planning_request: str | None = None) -> Any: ...
 
-    def get_card(self, card_id: str) -> Any: ...
+    def get_card(self, card_id: str) -> AnyCard | None: ...
 
 
 @runtime_checkable
@@ -87,7 +94,7 @@ class Budgeter(Protocol):
     """Caps the auction's emergent winner set to the mutator-facing budget."""
 
     def cap(
-        self, card_ids: list[str], slate: list[dict], max_cards: int
+        self, card_ids: list[str], slate: list[AuctionBid], max_cards: int
     ) -> list[str]: ...
 
 
@@ -95,7 +102,7 @@ class Budgeter(Protocol):
 class CardRenderer(Protocol):
     """Renders one card into its mutator-facing text block."""
 
-    def render(self, card: Any) -> str: ...
+    def render(self, card: AnyCard | None) -> str: ...
 
 
 @runtime_checkable
@@ -103,13 +110,13 @@ class Deduplicator(Protocol):
     """Reconciles an incoming card against the existing bank into a
     DedupDecision (add / discard / update-with-merges)."""
 
-    def reconcile(self, card: Any, bank: Mapping[str, Any]) -> Any: ...
+    def reconcile(self, card: AnyCard, bank: Mapping[str, AnyCard]) -> Any: ...
 
 
 @runtime_checkable
 class Evictor(Protocol):
     """Decides which cards must leave the bank based on their reputation."""
 
-    def should_evict(self, card: Any) -> bool: ...
+    def should_evict(self, card: AnyCard) -> bool: ...
 
-    def sweep(self, bank: Mapping[str, Any]) -> Sequence[str]: ...
+    def sweep(self, bank: Mapping[str, AnyCard]) -> Sequence[str]: ...

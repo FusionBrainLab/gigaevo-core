@@ -7,10 +7,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.memory.core.idea_stats import IdeaStats, coerce_metric
 from gigaevo.memory.core.reputation import BetaBinomialReputation
+from gigaevo.memory.shared_memory.models import EvolutionStatistics, Quartile
 
-_QUARTILE_PREF_RANK = {"ALL": 0, "Q4": 1, "Q3": 2, "Q2": 3, "Q1": 4}
-_MISSING_PREF_RANK = 99
+_QUARTILE_PREF_RANK = {
+    q: rank for rank, q in enumerate((Quartile.ALL, *reversed(Quartile.quarters())))
+}
 _MISSING_SCORE = -1e18
+
+
+def harm_statistics(stats: IdeaStats) -> EvolutionStatistics:
+    """Lift one origin-analysis row into the typed statistics shape the
+    reputation harm predicate reads (the row becomes the ALL block)."""
+    return EvolutionStatistics(ALL=stats.to_stats_block())
 
 
 def _log_admission(admitter: BaseModel, kept: list[IdeaStats], total: int) -> None:
@@ -32,7 +40,7 @@ def _dedup_sorted_by_idea(stats: list[IdeaStats]) -> list[IdeaStats]:
         score = coerce_metric(s.IntroGain_best_median)
         return (
             s.idea_id,
-            _QUARTILE_PREF_RANK.get(s.quartile, _MISSING_PREF_RANK),
+            _QUARTILE_PREF_RANK[s.quartile],
             -(score if score is not None else _MISSING_SCORE),
         )
 
@@ -57,13 +65,32 @@ class TieredAdmitter(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    min_intro_events: int = 1
-    min_rel_median: float = 0.01
-    max_downside: float = 0.4
-    min_sibling_win_ge3: float = 0.5
-    confident_tier_events: int = 3
-    pair_tier_events: int = 2
-    eps: float = 1e-12
+    min_intro_events: int = Field(
+        default=1, description="Minimum intro events for any row to be considered."
+    )
+    min_rel_median: float = Field(
+        default=0.01,
+        description="Floor on the relative median IntroGain (base condition).",
+    )
+    max_downside: float = Field(
+        default=0.4, description="Cap on the downside rate (base condition)."
+    )
+    min_sibling_win_ge3: float = Field(
+        default=0.5,
+        description="Sibling win-rate floor for the confident tier.",
+    )
+    confident_tier_events: int = Field(
+        default=3,
+        description="Intro-event count at which the confident tier applies.",
+    )
+    pair_tier_events: int = Field(
+        default=2,
+        description="Intro-event count at which the pair tier applies.",
+    )
+    eps: float = Field(
+        default=1e-12,
+        description="Tolerance when comparing rates against exactly 1.0.",
+    )
 
     def select(self, stats: Sequence[IdeaStats]) -> list[IdeaStats]:
         kept = _dedup_sorted_by_idea([s for s in stats if self._keep(s)])
@@ -113,22 +140,30 @@ class SignBasedAdmitter(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    min_intro_events: int = 1
-    min_median: float = 0.0
-    reputation: BetaBinomialReputation = Field(default_factory=BetaBinomialReputation)
+    min_intro_events: int = Field(
+        default=1, description="Minimum ALL-block intro events to consider an idea."
+    )
+    min_median: float = Field(
+        default=0.0,
+        description="Median IntroGain must strictly exceed this to admit.",
+    )
+    reputation: BetaBinomialReputation = Field(
+        default_factory=BetaBinomialReputation,
+        description="Posterior model deciding the confidently-harmful veto.",
+    )
 
     def select(self, stats: Sequence[IdeaStats]) -> list[IdeaStats]:
         out: list[IdeaStats] = []
         seen: set[str] = set()
         for s in stats:
-            if s.quartile != "ALL" or s.idea_id in seen:
+            if s.quartile is not Quartile.ALL or s.idea_id in seen:
                 continue
             if s.intro_events < self.min_intro_events:
                 continue
             median = coerce_metric(s.IntroGain_best_median)
             if median is None or not median > self.min_median:
                 continue
-            if self.reputation.is_confidently_harmful({"ALL": s.as_row()}):
+            if self.reputation.is_confidently_harmful(harm_statistics(s)):
                 continue
             seen.add(s.idea_id)
             out.append(s)
@@ -142,18 +177,23 @@ class PermissiveAdmitter(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    min_intro_events: int = 1
-    reputation: BetaBinomialReputation = Field(default_factory=BetaBinomialReputation)
+    min_intro_events: int = Field(
+        default=1, description="Minimum ALL-block intro events to consider an idea."
+    )
+    reputation: BetaBinomialReputation = Field(
+        default_factory=BetaBinomialReputation,
+        description="Posterior model deciding the confidently-harmful veto.",
+    )
 
     def select(self, stats: Sequence[IdeaStats]) -> list[IdeaStats]:
         out: list[IdeaStats] = []
         seen: set[str] = set()
         for s in stats:
-            if s.quartile != "ALL" or s.idea_id in seen:
+            if s.quartile is not Quartile.ALL or s.idea_id in seen:
                 continue
             if s.intro_events < self.min_intro_events:
                 continue
-            if self.reputation.is_confidently_harmful({"ALL": s.as_row()}):
+            if self.reputation.is_confidently_harmful(harm_statistics(s)):
                 continue
             seen.add(s.idea_id)
             out.append(s)

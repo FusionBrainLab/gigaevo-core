@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.programs.program import Program
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ class MutationSpec(BaseModel):
 
     # Canonical metadata key names — use these instead of bare strings.
     META_MODEL: ClassVar[str] = "mutation_model"
-    META_OUTPUT: ClassVar[str] = "mutation_output"
+    META_OUTPUT: ClassVar[str] = MUTATION_OUTPUT_METADATA_KEY
     META_PROMPT_ID: ClassVar[str] = "prompt_id"
 
     code: str = Field(description="The code of the mutated program")

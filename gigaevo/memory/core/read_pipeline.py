@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger
 import numpy as np
 
+from gigaevo.memory.core.auctioneer import AuctionCandidate
 from gigaevo.memory.core.protocols import (
     Auctioneer,
     Budgeter,
@@ -113,12 +114,19 @@ class MemoryReadPipeline:
             )
 
         candidate_ids = self._selector.shortlist(result.raw_memory)
-        fetched = {cid: retriever.get_card(cid) for cid in candidate_ids}
-        auction_input = [
-            (cid, *self._reputation.card_posterior(fetched[cid]))
+        fetched = {
+            cid: card
             for cid in candidate_ids
-            if fetched[cid] is not None
-        ]
+            if (card := retriever.get_card(cid)) is not None
+        }
+        auction_input: list[AuctionCandidate] = []
+        for cid, card in fetched.items():
+            posterior_a, posterior_b = self._reputation.card_posterior(card)
+            auction_input.append(
+                AuctionCandidate(
+                    card_id=cid, posterior_a=posterior_a, posterior_b=posterior_b
+                )
+            )
 
         card_ids, slate = self._auctioneer.run(auction_input, self._rng)
         card_ids = self._budgeter.cap(card_ids, slate, max_cards)

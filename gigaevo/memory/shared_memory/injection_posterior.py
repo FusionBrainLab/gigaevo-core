@@ -1,6 +1,6 @@
 """Per-program-card injection-efficacy posterior (Fix B bridge).
 
-The Thompson auction (``run_card_auction``) draws each candidate's downside
+The Thompson auction (``ThompsonAuctioneer``) draws each candidate's downside
 Beta-Binomial posterior, but its candidates are ``program-<uuid>`` cards. Their
 posterior must therefore be keyed in that id-space and derived from how a card
 performed *when injected into a mutation prompt*. Card selection is stamped on
@@ -25,13 +25,15 @@ configured thresholds to these primitives.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 import math
 import statistics
-from typing import Any
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import beta
+
+from gigaevo.memory.shared_memory.models import CardStatsBlock
 
 _BASELINE_NEIGHBORS = 15
 _NOISE_BAND_K = 1.0
@@ -40,19 +42,41 @@ _CONFIDENT_THRESHOLD = 0.5
 _MAD_TO_SIGMA = 1.4826
 
 
+class InjectionOutcome(BaseModel):
+    """One program's injection-relevant facts, extracted at the tracker seam.
+
+    ``selected_ids`` are the cards stamped on THIS program at mutation time —
+    they feed its future children's prompts. ``fitness`` must already be the
+    validated signal (``None`` for invalid or missing fitness).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(default="", description="Program id.")
+    parents: list[str] = Field(default_factory=list, description="Parent program ids.")
+    fitness: float | None = Field(
+        default=None,
+        description="Validated fitness signal; None for invalid or missing.",
+    )
+    selected_ids: list[str] = Field(
+        default_factory=list,
+        description="Card ids stamped on this program at mutation time.",
+    )
+
+
 def beta_binomial_posterior(
     gains: Sequence[float],
     *,
     threshold: float = 0.0,
     confident_quantile: float = _CONFIDENT_QUANTILE,
     confident_threshold: float = _CONFIDENT_THRESHOLD,
-) -> dict[str, Any]:
+) -> CardStatsBlock:
     """Downside Beta-Binomial posterior on P(not harmful) from per-event gains.
 
     ``a = 1 + (n - k_harm)``, ``b = 1 + k_harm`` with ``k_harm`` the count of
     events whose gain is below ``threshold`` (default 0); ``efficacy_confident``
     iff the ``confident_quantile`` of Beta(a, b) exceeds ``confident_threshold``.
-    The ``p_help_lo20`` key name is part of the banks.json contract regardless
+    The ``p_help_lo20`` field name is part of the banks.json contract regardless
     of the configured quantile.
     """
     finite = [float(g) for g in gains if g is not None and math.isfinite(float(g))]
@@ -61,15 +85,15 @@ def beta_binomial_posterior(
     a = 1.0 + (n - k_harm)
     b = 1.0 + k_harm
     lo = float(beta.ppf(confident_quantile, a, b)) if n else float("nan")
-    return {
-        "posterior_a": a,
-        "posterior_b": b,
-        "intro_events": n,
-        "k_harm": k_harm,
-        "p_help_mean": a / (a + b),
-        "p_help_lo20": lo,
-        "efficacy_confident": bool(n and lo > confident_threshold),
-    }
+    return CardStatsBlock(
+        posterior_a=a,
+        posterior_b=b,
+        intro_events=n,
+        k_harm=k_harm,
+        p_help_mean=a / (a + b),
+        p_help_lo20=lo,
+        efficacy_confident=bool(n and lo > confident_threshold),
+    )
 
 
 def _median(values: Sequence[float]) -> float:
@@ -109,14 +133,14 @@ def noise_band(centered: Sequence[float]) -> float:
 
 
 def compute_injection_posterior(
-    programs: Sequence[Mapping[str, Any]],
+    programs: Sequence[InjectionOutcome],
     *,
     higher_is_better: bool = True,
     baseline_neighbors: int = _BASELINE_NEIGHBORS,
     noise_band_k: float = _NOISE_BAND_K,
     confident_quantile: float = _CONFIDENT_QUANTILE,
     confident_threshold: float = _CONFIDENT_THRESHOLD,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, CardStatsBlock]:
     """Map each injected card id to its injection posterior.
 
     For each child program, every card in the union of its resolvable parents'
@@ -127,31 +151,25 @@ def compute_injection_posterior(
     never injected into a child with a valid parent baseline are absent from the
     result, which the auction treats as COLD Beta(1, 1).
     """
-    by_id = {
-        str(p["id"]): p for p in programs if isinstance(p, Mapping) and p.get("id")
-    }
+    by_id = {p.id: p for p in programs if p.id}
     population: list[tuple[float, float]] = []
     events: dict[str, list[tuple[float, float]]] = {}
     for p in programs:
-        if not isinstance(p, Mapping):
-            continue
-        fitness = p.get("fitness")
-        if fitness is None:
+        if p.fitness is None:
             continue
         parent_union: set[str] = set()
         parent_fits: list[float] = []
-        for par_id in p.get("parents") or []:
-            parent = by_id.get(str(par_id))
+        for par_id in p.parents:
+            parent = by_id.get(par_id)
             if parent is None:
                 continue
-            parent_union |= {str(c) for c in (parent.get("selected_ids") or []) if c}
-            par_fit = parent.get("fitness")
-            if par_fit is not None:
-                parent_fits.append(float(par_fit))
+            parent_union |= {c for c in parent.selected_ids if c}
+            if parent.fitness is not None:
+                parent_fits.append(parent.fitness)
         if not parent_fits:
             continue
         ref = max(parent_fits) if higher_is_better else min(parent_fits)
-        gain = float(fitness) - ref if higher_is_better else ref - float(fitness)
+        gain = p.fitness - ref if higher_is_better else ref - p.fitness
         population.append((ref, gain))
         for card_id in parent_union:
             events.setdefault(card_id, []).append((gain, ref))
@@ -176,6 +194,6 @@ def compute_injection_posterior(
         len(posteriors),
         len(population),
         epsilon,
-        sum(1 for p in posteriors.values() if p["efficacy_confident"]),
+        sum(1 for block in posteriors.values() if block.efficacy_confident),
     )
     return posteriors

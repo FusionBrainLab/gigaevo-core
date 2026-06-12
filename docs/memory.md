@@ -573,7 +573,7 @@ The core pipeline runs the same sequence regardless of entry point:
    │    Apply to active/inactive idea banks via RecordManager
    │
 6. Attach efficacy statistics to idea banks
-   │  Merge per-card posteriors into evolution_statistics["ALL"]
+   │  Merge per-card posteriors into evolution_statistics.ALL
    │
 7. Enrich ideas (postprocessing)
    │  For each idea in record bank:

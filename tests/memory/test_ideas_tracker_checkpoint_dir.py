@@ -67,7 +67,7 @@ class TestRunWritePipelineForwardsOverrides:
 
         def fake_main(**kwargs):
             captured.update(kwargs)
-            return {"stats": {"processed": 0, "added": 0, "updated": 0, "rejected": 0}}
+            return None
 
         import gigaevo.memory.write_pipeline as wp
 
@@ -154,7 +154,7 @@ class TestMainBuildsBackendViaFactory:
         factory.build.assert_called_once_with(
             checkpoint_dir=run_dir, evictor=None, deduplicator=None
         )
-        assert isinstance(snapshot, dict)
+        assert isinstance(snapshot, wp.WriteStatsSnapshot)
         assert fake.closed is True
 
     def test_backend_is_required_with_no_default(self):
@@ -187,8 +187,8 @@ class TestMainBuildsBackendViaFactory:
 
         stats_path = tmp_path / "memory_write_stats.json"
         assert stats_path.exists()
-        assert snapshot is not None
-        assert "stats" in snapshot
+        assert isinstance(snapshot, wp.WriteStatsSnapshot)
+        assert snapshot.stats == wp.WriteStats()
 
 
 class TestIdeaTrackerRequiresBackendForWrites:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gigaevo.memory._vendor.GAM_root.gam import (
     ChromaRetriever,
@@ -19,7 +20,24 @@ from gigaevo.memory._vendor.GAM_root.gam import (
 )
 from gigaevo.memory._vendor.GAM_root.gam.generator import AMemGenerator
 from gigaevo.memory._vendor.GAM_root.gam.schemas import Page
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_search import format_card_efficacy
+from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
+
+
+class GamPageMeta(BaseModel):
+    """Our slice of the vendor ``Page.meta`` payload; extra keys stay vendor-owned."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    amem_id: str = Field(
+        default="", description="Bank card id the vendor page was built from."
+    )
+
+    @field_validator("amem_id", mode="before")
+    @classmethod
+    def coerce_to_string(cls, value: Any) -> str:
+        return str(value or "")
 
 
 def load_amem_records(path: Path) -> list[dict[str, Any]]:
@@ -35,43 +53,36 @@ def load_amem_records(path: Path) -> list[dict[str, Any]]:
 
 
 def make_card_text(record: dict[str, Any]) -> str:
-    """Format a card record as multi-line text for the GAM page store."""
-    description = record.get("description") or record.get("content") or ""
-    task_description = record.get("task_description") or record.get("context") or ""
-    task_description_summary = record.get("task_description_summary") or ""
-    category = record.get("category") or ""
-    strategy = record.get("strategy") or ""
-    keywords = ", ".join(record.get("keywords", []) or [])
-    links = record.get("links", []) or []
-    program_id = record.get("program_id") or ""
-    fitness = record.get("fitness", "")
-    connected_ideas = record.get("connected_ideas", []) or []
-    last_generation = record.get("last_generation", "")
-    programs = record.get("programs", []) or []
-    aliases = record.get("aliases", []) or []
-    works_with = record.get("works_with", []) or []
-    explanation = record.get("explanation", {}) or {}
-    explanation_summary = (
-        explanation.get("summary", "") if isinstance(explanation, dict) else ""
-    )
+    """Format one exported card record as multi-line text for the GAM page store."""
+    return render_card_text(normalize_memory_card(record))
+
+
+def render_card_text(card: AnyCard) -> str:
+    """Render a typed card as the GAM corpus text (one ``field: value`` per line)."""
     parts = [
-        f"description: {description}",
-        f"task_description_summary: {task_description_summary}",
-        f"task_description: {task_description}",
-        f"category: {category}",
-        f"program_id: {program_id}",
-        f"fitness: {fitness}",
-        f"strategy: {strategy}",
-        f"last_generation: {last_generation}",
-        f"programs: {programs}",
-        f"aliases: {aliases}",
-        f"keywords: {keywords}",
-        f"explanation_summary: {explanation_summary}",
-        f"works_with: {works_with}",
-        f"links: {links}",
-        f"connected_ideas: {connected_ideas}",
+        f"description: {card.description}",
+        f"task_description_summary: {card.task_description_summary}",
+        f"task_description: {card.task_description}",
+        f"category: {card.category}",
+        f"strategy: {card.strategy}",
+        f"keywords: {', '.join(card.keywords)}",
     ]
-    efficacy = format_card_efficacy(record)
+    if isinstance(card, ProgramCard):
+        parts += [
+            f"program_id: {card.program_id}",
+            f"fitness: {card.fitness if card.fitness is not None else ''}",
+            f"connected_ideas: {[idea.model_dump() for idea in card.connected_ideas]}",
+        ]
+    else:
+        parts += [
+            f"last_generation: {card.last_generation}",
+            f"programs: {card.programs}",
+            f"aliases: {card.aliases}",
+            f"explanation_summary: {card.explanation.summary}",
+            f"works_with: {card.works_with}",
+        ]
+    parts.append(f"links: {card.links}")
+    efficacy = format_card_efficacy(card)
     if efficacy:
         parts.append(efficacy)
     return "\n".join(parts)
@@ -90,7 +101,7 @@ def build_gam_store(
 
     existing_pages = page_store.load()
     existing_ids = {
-        str((p.meta or {}).get("amem_id") or "").strip()
+        GamPageMeta.model_validate(p.meta).amem_id.strip()
         for p in existing_pages
         if isinstance(p.meta, dict)
     }
@@ -100,15 +111,17 @@ def build_gam_store(
     next_pages: list[Page] = []
     seen_ids: set[str] = set()
     for rec in records:
-        rid = str(rec.get("id") or "").strip()
+        typed = normalize_memory_card(rec)
+        rid = typed.id.strip()
         if rid and rid in seen_ids:
             continue
         if rid:
             seen_ids.add(rid)
-        card = make_card_text(rec)
-        abstract = rec.get("description") or rec.get("content") or card
+        card = render_card_text(typed)
+        abstract = typed.description or card
         memory_store.add(abstract)
         header = f"[A-MEM] {rid}" if rid else "[A-MEM]"
+        # Page meta keeps the raw record: the vendor GAM page contract.
         next_pages.append(
             Page(header=header, content=card, meta={"amem_id": rid, "amem": rec})
         )

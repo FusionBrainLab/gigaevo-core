@@ -22,8 +22,8 @@ from gigaevo.memory.ideas_tracker.models import (
 class TestNormalizeImprovementItem:
     def test_string_input(self):
         result = normalize_improvement_item("Use SA for local search")
-        assert result["description"] == "Use SA for local search"
-        assert result["explanation"] == ""
+        assert result.description == "Use SA for local search"
+        assert result.explanation == ""
 
     def test_dict_with_description_and_explanation(self):
         result = normalize_improvement_item(
@@ -32,8 +32,8 @@ class TestNormalizeImprovementItem:
                 "explanation": "Improves convergence",
             }
         )
-        assert result["description"] == "SA refinement"
-        assert result["explanation"] == "Improves convergence"
+        assert result.description == "SA refinement"
+        assert result.explanation == "Improves convergence"
 
     def test_dict_with_alternative_keys(self):
         result = normalize_improvement_item(
@@ -42,24 +42,24 @@ class TestNormalizeImprovementItem:
                 "rationale": "Better convergence",
             }
         )
-        assert result["description"] == "SA method"
-        assert result["explanation"] == "Better convergence"
+        assert result.description == "SA method"
+        assert result.explanation == "Better convergence"
 
     def test_non_dict_non_string(self):
         result = normalize_improvement_item(42)
-        assert result["description"] == "42"
+        assert result.description == "42"
 
     def test_none_input(self):
         result = normalize_improvement_item(None)
-        assert result["description"] == "Unspecified change"
+        assert result.description == "Unspecified change"
 
     def test_empty_dict(self):
         result = normalize_improvement_item({})
-        assert result["description"] == "Unspecified change"
+        assert result.description == "Unspecified change"
 
     def test_dict_with_only_unknown_keys(self):
         result = normalize_improvement_item({"custom_field": "value"})
-        assert "custom_field: value" in result["description"]
+        assert "custom_field: value" in result.description
 
     def test_nested_dict_stringified(self):
         result = normalize_improvement_item(
@@ -67,7 +67,7 @@ class TestNormalizeImprovementItem:
                 "description": {"nested": "value", "other": "data"},
             }
         )
-        assert "nested: value" in result["description"]
+        assert "nested: value" in result.description
 
 
 class TestNormalizeImprovements:
@@ -77,9 +77,9 @@ class TestNormalizeImprovements:
     def test_list_of_strings(self):
         result = normalize_improvements(["idea A", "idea B"])
         assert len(result) == 2
-        assert result[0]["description"] == "idea A"
+        assert result[0].description == "idea A"
 
     def test_single_value_wrapped(self):
         result = normalize_improvements("single idea")
         assert len(result) == 1
-        assert result[0]["description"] == "single idea"
+        assert result[0].description == "single idea"

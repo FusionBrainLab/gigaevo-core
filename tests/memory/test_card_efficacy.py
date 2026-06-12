@@ -231,12 +231,13 @@ class TestMutatorFacingRender:
         rendered = EfficacyCardRenderer().render(_mcard(mechanism=_DESC))
         assert rendered == _DESC
 
-    def test_render_card_dict_explanation_summary(self) -> None:
+    def test_render_card_coerced_explanation_summary(self) -> None:
         rendered = EfficacyCardRenderer().render(
-            {
-                "description": _DESC,
-                "explanation": {"summary": "smooths sparse categories"},
-            }
+            MemoryCard(
+                id="m-expl",
+                description=_DESC,
+                explanation={"summary": "smooths sparse categories"},
+            )
         )
         assert "mechanism: smooths sparse categories" in rendered
 
@@ -303,3 +304,39 @@ class TestRetrievalCorpusRender:
         assert "efficacy:" not in text
         assert "usage:" not in text
         assert "evolution_statistics:" not in text
+
+    def test_content_alias_resolves_into_description_line(self) -> None:
+        text = make_card_text({"id": "m1", "content": "alias body"})
+        assert "description: alias body" in text
+
+    def test_string_explanation_renders_as_summary(self) -> None:
+        text = make_card_text(
+            {"id": "m2", "description": _DESC, "explanation": "why it works"}
+        )
+        assert "explanation_summary: why it works" in text
+
+    def test_program_record_renders_program_fields_only(self) -> None:
+        text = make_card_text(
+            {
+                "id": "program-abc",
+                "category": "program",
+                "program_id": "abc",
+                "fitness": 0.852,
+            }
+        )
+        assert "program_id: abc" in text
+        assert "explanation_summary:" not in text
+
+
+class TestGamPageMetaEnvelope:
+    def test_reads_amem_id_and_ignores_vendor_payload(self) -> None:
+        from gigaevo.memory.shared_memory.amem_gam_retriever import GamPageMeta
+
+        meta = GamPageMeta.model_validate({"amem_id": "m1", "amem": {"id": "m1"}})
+        assert meta.amem_id == "m1"
+
+    def test_missing_or_null_amem_id_reads_as_empty(self) -> None:
+        from gigaevo.memory.shared_memory.amem_gam_retriever import GamPageMeta
+
+        assert GamPageMeta.model_validate({}).amem_id == ""
+        assert GamPageMeta.model_validate({"amem_id": None}).amem_id == ""

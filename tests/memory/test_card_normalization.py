@@ -3,8 +3,15 @@
 Pin down the exact normalization behavior so refactoring can be validated.
 """
 
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from pydantic import ValidationError
+import pytest
+
+from gigaevo.memory.shared_memory.card_conversion import (
+    RawCardRecord,
+    normalize_memory_card,
+)
 from gigaevo.memory.shared_memory.models import (
+    CardAlias,
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
@@ -149,10 +156,10 @@ class TestNormalizeGeneralCard:
         result = normalize_memory_card({"context_summary": "s"})
         assert result.task_description_summary == "s"
 
-    def test_explanation_non_dict_becomes_empty(self):
+    def test_explanation_string_becomes_summary(self):
         result = normalize_memory_card({"explanation": "just a string"})
         assert result.explanation.explanations == []
-        assert result.explanation.summary == ""
+        assert result.explanation.summary == "just a string"
 
     def test_explanation_list_becomes_empty(self):
         result = normalize_memory_card({"explanation": [1, 2, 3]})
@@ -165,14 +172,21 @@ class TestNormalizeGeneralCard:
         assert result.explanation.explanations == ["a", "b"]
         assert result.explanation.summary == "sum"
 
-    def test_evolution_statistics_non_dict_becomes_empty(self):
-        result = normalize_memory_card({"evolution_statistics": "bad"})
-        assert result.evolution_statistics == {}
+    def test_evolution_statistics_non_dict_rejected(self):
+        with pytest.raises(ValidationError):
+            normalize_memory_card({"evolution_statistics": "bad"})
 
-    def test_evolution_statistics_dict_preserved(self):
-        stats = {"gen": 5, "improved": True}
+    def test_evolution_statistics_dict_validated_into_typed_blocks(self):
+        stats = {"ALL": {"intro_events": 5, "efficacy_confident": True}}
         result = normalize_memory_card({"evolution_statistics": stats})
-        assert result.evolution_statistics == stats
+        assert result.evolution_statistics.model_dump() == stats
+        assert result.evolution_statistics.ALL.intro_events == 5
+
+    def test_evolution_statistics_undeclared_keys_rejected(self):
+        with pytest.raises(ValidationError):
+            normalize_memory_card({"evolution_statistics": {"gen": 5}})
+        with pytest.raises(ValidationError):
+            normalize_memory_card({"evolution_statistics": {"ALL": {"improved": 1}}})
 
     def test_lists_coerced_via_to_list(self):
         result = normalize_memory_card({"programs": "single"})
@@ -208,9 +222,9 @@ class TestNormalizeGeneralCard:
             "strategy": "exploitation",
             "last_generation": 15,
             "programs": ["p1", "p2"],
-            "aliases": ["SA"],
+            "aliases": [{"key": "test-1-update", "description": "SA (initial)"}],
             "keywords": ["annealing", "local-search"],
-            "evolution_statistics": {"improved_count": 3},
+            "evolution_statistics": {"ALL": {"intro_events": 3}},
             "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
             "works_with": ["idea-2"],
             "links": ["idea-3"],
@@ -280,7 +294,7 @@ class TestNormalizeProgramCard:
                 "links": ["l1"],
                 "strategy": "hybrid",
                 "keywords": ["k1"],
-                "aliases": ["a1"],
+                "aliases": [{"key": "a1", "description": "d1"}],
             }
         )
         assert "links" not in result
@@ -344,44 +358,83 @@ class TestNormalizeEdgeCases:
         # Only explanations and summary are extracted
         assert "extra" not in MemoryCardExplanation.model_fields
 
-    def test_aliases_with_ideas_tracker_dict_format(self):
-        """Ideas tracker stores aliases as list[dict] version history, not list[str].
-
-        RecordCardExtended.aliases appends dicts like:
-            {"exp1-prog1": {"description": "old", "programs": ["p1"], "explanations": ["e"]}}
-        This must pass through normalize_memory_card without crashing (Bug #2, PR #161).
-        """
+    def test_aliases_validate_into_card_alias(self):
+        """Alias version history validates into typed CardAlias entries."""
         aliases = [
             {
-                "exp1-prog1": {
-                    "description": "old description",
-                    "programs": ["p1", "p2"],
-                    "explanations": ["initial explanation"],
-                }
+                "key": "idea-1-update",
+                "description": "old description",
+                "programs": ["p1", "p2"],
+                "explanations": ["initial explanation"],
             },
             {
-                "exp2-prog3": {
-                    "description": "updated description",
-                    "programs": ["p3"],
-                    "explanations": ["revised"],
-                }
+                "key": "idea-1-canonical-merge",
+                "description": "updated description",
+                "programs": ["p3"],
+                "explanations": ["revised"],
             },
         ]
         result = normalize_memory_card(
             {"id": "idea-1", "description": "current", "aliases": aliases}
         )
         assert isinstance(result, MemoryCard)
-        assert result.aliases == aliases
         assert len(result.aliases) == 2
-        assert isinstance(result.aliases[0], dict)
+        assert all(isinstance(a, CardAlias) for a in result.aliases)
+        assert result.aliases[0].key == "idea-1-update"
+        assert result.aliases[1].programs == ["p3"]
 
-    def test_aliases_mixed_types(self):
-        """Aliases can mix strings and dicts (legacy + ideas_tracker)."""
-        aliases = ["simple-alias", {"exp1-prog1": {"description": "old"}}]
-        result = normalize_memory_card({"id": "idea-2", "aliases": aliases})
-        assert result.aliases == aliases
-
-    def test_nested_dict_in_evolution_statistics(self):
-        stats = {"nested": {"deep": True}}
+    def test_quartile_blocks_in_evolution_statistics(self):
+        stats = {"Q2": {"posterior_a": 2.0, "posterior_b": 1.0}}
         result = normalize_memory_card({"evolution_statistics": stats})
-        assert result.evolution_statistics["nested"]["deep"] is True
+        assert result.evolution_statistics.Q2.posterior_a == 2.0
+
+
+# ===========================================================================
+# RawCardRecord — boundary envelope
+# ===========================================================================
+
+
+class TestRawCardRecord:
+    def test_unknown_keys_ignored(self):
+        record = RawCardRecord.model_validate({"id": "x", "totally_unknown": 1})
+        assert record.id == "x"
+
+    def test_alias_keys_resolve_on_to_card(self):
+        record = RawCardRecord.model_validate(
+            {"content": "c", "context": "ctx", "context_summary": "cs"}
+        )
+        card = record.to_card()
+        assert card.description == "c"
+        assert card.task_description == "ctx"
+        assert card.task_description_summary == "cs"
+
+    def test_canonical_keys_win_over_aliases(self):
+        record = RawCardRecord.model_validate(
+            {
+                "description": "d",
+                "content": "c",
+                "task_description": "t",
+                "context": "x",
+            }
+        )
+        card = record.to_card()
+        assert card.description == "d"
+        assert card.task_description == "t"
+
+    def test_to_card_fallback_id(self):
+        card = RawCardRecord.model_validate({}).to_card(fallback_id="fb")
+        assert card.id == "fb"
+
+    def test_program_dispatch_by_category(self):
+        card = RawCardRecord.model_validate({"category": "program"}).to_card()
+        assert isinstance(card, ProgramCard)
+
+    def test_program_dispatch_by_program_id(self):
+        card = RawCardRecord.model_validate({"program_id": 0}).to_card()
+        assert isinstance(card, ProgramCard)
+        assert card.program_id == "0"
+
+    def test_string_explanation_becomes_summary(self):
+        record = RawCardRecord.model_validate({"explanation": "why it works"})
+        assert record.explanation.summary == "why it works"
+        assert record.explanation.explanations == []

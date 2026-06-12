@@ -3,6 +3,8 @@ from __future__ import annotations
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
+from gigaevo.memory.core.auctioneer import AuctionBid
+
 
 class TopThetaBudgeter(BaseModel):
     """Hard ceiling on what reaches the mutator. The auction is an emergent 0..N
@@ -12,10 +14,12 @@ class TopThetaBudgeter(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    def cap(self, card_ids: list[str], slate: list[dict], max_cards: int) -> list[str]:
+    def cap(
+        self, card_ids: list[str], slate: list[AuctionBid], max_cards: int
+    ) -> list[str]:
         if len(card_ids) <= max_cards:
             return list(card_ids)
-        theta = {r["card_id"]: r["theta"] for r in slate}
+        theta = {bid.card_id: bid.theta for bid in slate}
         kept = sorted(card_ids, key=lambda c: theta.get(c, 0.0), reverse=True)[
             :max_cards
         ]

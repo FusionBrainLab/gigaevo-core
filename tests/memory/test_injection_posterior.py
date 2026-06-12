@@ -13,40 +13,54 @@ from __future__ import annotations
 
 import math
 
+from pydantic import ValidationError
 import pytest
 
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.shared_memory.injection_posterior import (
+    InjectionOutcome,
     beta_binomial_posterior,
     compute_injection_posterior,
 )
+from gigaevo.memory.shared_memory.models import EvolutionStatistics
 
 is_confidently_harmful = BetaBinomialReputation().is_confidently_harmful
 
 
+def _stats(gains: list[float]) -> EvolutionStatistics:
+    return EvolutionStatistics(ALL=beta_binomial_posterior(gains))
+
+
 class TestIsConfidentlyHarmful:
     def test_three_all_harm_events_is_harmful(self) -> None:
-        stats = {"ALL": beta_binomial_posterior([-0.01, -0.02, -0.03])}
-        assert is_confidently_harmful(stats) is True
+        assert is_confidently_harmful(_stats([-0.01, -0.02, -0.03])) is True
 
     def test_two_all_harm_events_too_thin_to_exclude(self) -> None:
-        stats = {"ALL": beta_binomial_posterior([-0.01, -0.02])}
-        assert is_confidently_harmful(stats) is False
+        assert is_confidently_harmful(_stats([-0.01, -0.02])) is False
 
     def test_mostly_helpful_card_not_harmful(self) -> None:
-        stats = {"ALL": beta_binomial_posterior([0.01, 0.02, 0.03, -0.01])}
-        assert is_confidently_harmful(stats) is False
+        assert is_confidently_harmful(_stats([0.01, 0.02, 0.03, -0.01])) is False
 
     def test_mixed_thin_evidence_not_harmful(self) -> None:
-        stats = {"ALL": beta_binomial_posterior([0.01, -0.02, -0.03])}
-        assert is_confidently_harmful(stats) is False
+        assert is_confidently_harmful(_stats([0.01, -0.02, -0.03])) is False
 
-    def test_missing_or_malformed_stats_not_harmful(self) -> None:
+    def test_missing_or_thin_stats_not_harmful(self) -> None:
         assert is_confidently_harmful(None) is False
-        assert is_confidently_harmful({}) is False
-        assert is_confidently_harmful({"ALL": {}}) is False
-        assert is_confidently_harmful({"ALL": {"intro_events": 5}}) is False
-        assert is_confidently_harmful({"ALL": "garbage"}) is False
+        assert is_confidently_harmful(EvolutionStatistics()) is False
+        assert (
+            is_confidently_harmful(EvolutionStatistics.model_validate({"ALL": {}}))
+            is False
+        )
+        assert (
+            is_confidently_harmful(
+                EvolutionStatistics.model_validate({"ALL": {"intro_events": 5}})
+            )
+            is False
+        )
+
+    def test_malformed_stats_rejected_at_validation_boundary(self) -> None:
+        with pytest.raises(ValidationError):
+            EvolutionStatistics.model_validate({"ALL": "garbage"})
 
 
 def _prog(
@@ -55,68 +69,68 @@ def _prog(
     fitness: float | None,
     parents: list[str] | None = None,
     selected: list[str] | None = None,
-) -> dict:
-    return {
-        "id": pid,
-        "fitness": fitness,
-        "parents": parents or [],
-        "selected_ids": selected or [],
-    }
+) -> InjectionOutcome:
+    return InjectionOutcome(
+        id=pid,
+        fitness=fitness,
+        parents=parents or [],
+        selected_ids=selected or [],
+    )
 
 
 class TestBetaBinomialPosterior:
     def test_empty_gains_is_cold(self) -> None:
         post = beta_binomial_posterior([])
-        assert post["posterior_a"] == 1.0
-        assert post["posterior_b"] == 1.0
-        assert post["intro_events"] == 0
-        assert post["k_harm"] == 0
-        assert math.isnan(post["p_help_lo20"])
-        assert post["efficacy_confident"] is False
+        assert post.posterior_a == 1.0
+        assert post.posterior_b == 1.0
+        assert post.intro_events == 0
+        assert post.k_harm == 0
+        assert math.isnan(post.p_help_lo20)
+        assert post.efficacy_confident is False
 
     def test_single_help_event_not_yet_confident(self) -> None:
         post = beta_binomial_posterior([0.01])
-        assert (post["posterior_a"], post["posterior_b"]) == (2.0, 1.0)
-        assert post["k_harm"] == 0
-        assert post["p_help_lo20"] == pytest.approx(0.4472, abs=1e-3)
-        assert post["efficacy_confident"] is False
+        assert (post.posterior_a, post.posterior_b) == (2.0, 1.0)
+        assert post.k_harm == 0
+        assert post.p_help_lo20 == pytest.approx(0.4472, abs=1e-3)
+        assert post.efficacy_confident is False
 
     def test_two_help_events_confident(self) -> None:
         post = beta_binomial_posterior([0.01, 0.02])
-        assert (post["posterior_a"], post["posterior_b"]) == (3.0, 1.0)
-        assert post["p_help_lo20"] == pytest.approx(0.5848, abs=1e-3)
-        assert post["efficacy_confident"] is True
+        assert (post.posterior_a, post.posterior_b) == (3.0, 1.0)
+        assert post.p_help_lo20 == pytest.approx(0.5848, abs=1e-3)
+        assert post.efficacy_confident is True
 
     def test_mixed_events_count_harm(self) -> None:
         post = beta_binomial_posterior([0.01, -0.02])
-        assert (post["posterior_a"], post["posterior_b"]) == (2.0, 2.0)
-        assert post["k_harm"] == 1
-        assert post["p_help_mean"] == pytest.approx(0.5)
-        assert post["efficacy_confident"] is False
+        assert (post.posterior_a, post.posterior_b) == (2.0, 2.0)
+        assert post.k_harm == 1
+        assert post.p_help_mean == pytest.approx(0.5)
+        assert post.efficacy_confident is False
 
     def test_all_harm_is_suspect(self) -> None:
         post = beta_binomial_posterior([-0.01, -0.02, -0.03])
-        assert (post["posterior_a"], post["posterior_b"]) == (1.0, 4.0)
-        assert post["k_harm"] == 3
-        assert post["efficacy_confident"] is False
+        assert (post.posterior_a, post.posterior_b) == (1.0, 4.0)
+        assert post.k_harm == 3
+        assert post.efficacy_confident is False
 
     def test_zero_gain_is_not_harm(self) -> None:
         # delta == 0 (no change) is not strictly harmful.
         post = beta_binomial_posterior([0.0, 0.0])
-        assert post["k_harm"] == 0
-        assert (post["posterior_a"], post["posterior_b"]) == (3.0, 1.0)
+        assert post.k_harm == 0
+        assert (post.posterior_a, post.posterior_b) == (3.0, 1.0)
 
     def test_nan_and_none_gains_filtered(self) -> None:
         post = beta_binomial_posterior([0.01, float("nan"), None, -0.02])  # type: ignore[list-item]
-        assert post["intro_events"] == 2
-        assert post["k_harm"] == 1
+        assert post.intro_events == 2
+        assert post.k_harm == 1
 
     def test_threshold_shifts_harm_count(self) -> None:
         # A negative threshold is a downside dead-band: only events below it count
         # as harm. Default threshold (0.0) preserves the strict < 0 behaviour.
         gains = [0.01, -0.001, -0.05]
-        assert beta_binomial_posterior(gains)["k_harm"] == 2
-        assert beta_binomial_posterior(gains, threshold=-0.01)["k_harm"] == 1
+        assert beta_binomial_posterior(gains).k_harm == 2
+        assert beta_binomial_posterior(gains, threshold=-0.01).k_harm == 1
 
 
 class TestComputeInjectionPosterior:
@@ -128,11 +142,11 @@ class TestComputeInjectionPosterior:
         ]
         post = compute_injection_posterior(programs, higher_is_better=True)
         assert set(post) == {"program-A"}
-        assert (post["program-A"]["posterior_a"], post["program-A"]["posterior_b"]) == (
+        assert (post["program-A"].posterior_a, post["program-A"].posterior_b) == (
             2.0,
             1.0,
         )
-        assert post["program-A"]["k_harm"] == 0
+        assert post["program-A"].k_harm == 0
 
     def test_childs_own_selected_ids_credit_nothing(self) -> None:
         # A child's own selected_ids feed its FUTURE children's prompts, not its
@@ -150,8 +164,8 @@ class TestComputeInjectionPosterior:
             _prog("c1", fitness=0.10, parents=["root"], selected=[]),
         ]
         post = compute_injection_posterior(programs, higher_is_better=False)
-        assert post["program-A"]["k_harm"] == 0
-        assert post["program-A"]["posterior_a"] == 2.0
+        assert post["program-A"].k_harm == 0
+        assert post["program-A"].posterior_a == 2.0
 
     def test_uses_best_parent_among_multiple(self) -> None:
         # Child sits between two far-apart parents: vs the BEST parent (0.90) it is a
@@ -169,7 +183,7 @@ class TestComputeInjectionPosterior:
             _prog("c1", fitness=0.70, parents=["lo", "hi"], selected=[]),
         ]
         post = compute_injection_posterior(programs, higher_is_better=True)
-        assert post["program-A"]["k_harm"] == 1
+        assert post["program-A"].k_harm == 1
 
     def test_accumulates_events_across_children(self) -> None:
         programs = [
@@ -178,8 +192,8 @@ class TestComputeInjectionPosterior:
             _prog("c2", fitness=0.86, parents=["root"], selected=[]),
         ]
         post = compute_injection_posterior(programs, higher_is_better=True)
-        assert post["program-A"]["intro_events"] == 2
-        assert post["program-A"]["efficacy_confident"] is True
+        assert post["program-A"].intro_events == 2
+        assert post["program-A"].efficacy_confident is True
 
     def test_child_without_resolvable_parent_skipped(self) -> None:
         # Parent id not present in the program set -> no baseline -> skipped.
@@ -238,8 +252,8 @@ class TestRedesignedHarmDefinition:
             ],
             higher_is_better=True,
         )
-        assert post["program-A"]["k_harm"] == 0
-        assert post["program-A"]["efficacy_confident"] is True
+        assert post["program-A"].k_harm == 0
+        assert post["program-A"].efficacy_confident is True
 
     def test_plateau_card_matching_baseline_is_neutral(self) -> None:
         # Every mutation regresses at the plateau; a card whose children regress by
@@ -261,8 +275,8 @@ class TestRedesignedHarmDefinition:
             ],
             higher_is_better=True,
         )
-        assert post["program-A"]["k_harm"] == 0
-        assert post["program-A"]["efficacy_confident"] is True
+        assert post["program-A"].k_harm == 0
+        assert post["program-A"].efficacy_confident is True
 
     def test_genuine_consistent_regression_is_harm(self) -> None:
         # Children fall far below the local counterfactual: real harm survives.
@@ -283,8 +297,8 @@ class TestRedesignedHarmDefinition:
             ],
             higher_is_better=True,
         )
-        assert post["program-A"]["k_harm"] == 3
-        assert post["program-A"]["efficacy_confident"] is False
+        assert post["program-A"].k_harm == 3
+        assert post["program-A"].efficacy_confident is False
 
     def test_minimisation_genuine_harm_still_suspect(self) -> None:
         # Lower fitness is better; card children land far ABOVE (worse) the parent.
@@ -305,7 +319,7 @@ class TestRedesignedHarmDefinition:
             ],
             higher_is_better=False,
         )
-        assert post["program-A"]["k_harm"] == 3
+        assert post["program-A"].k_harm == 3
 
     def test_discrete_unit_steps_register_without_a_guard(self) -> None:
         # Quantised fitness, mostly-flat mutations -> noise band collapses to 0, so a
@@ -333,8 +347,8 @@ class TestRedesignedHarmDefinition:
             ],
             higher_is_better=True,
         )
-        assert post["program-UP"]["k_harm"] == 0
-        assert post["program-DOWN"]["k_harm"] == 2
+        assert post["program-UP"].k_harm == 0
+        assert post["program-DOWN"].k_harm == 2
 
     def test_deterministic_under_input_reordering(self) -> None:
         # median + MAD are deterministic; the live signal must equal the offline

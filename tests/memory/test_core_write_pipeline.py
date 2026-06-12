@@ -88,22 +88,22 @@ class TestHarmEvictor:
             _THIN_STATS,
             {},
             {"ALL": {}},
-            {"ALL": {"intro_events": 6, "posterior_a": "bad", "posterior_b": 1.0}},
             {"Q4": {"intro_events": 6, "posterior_a": 1.0, "posterior_b": 7.0}},
             None,
         ],
     )
     def test_should_evict_matches_reputation_predicate(self, stats):
         evictor = HarmEvictor()
-        card = _idea("idea-x", "desc", stats)
-        normalized = normalize_memory_card(dict(card, evolution_statistics=stats or {}))
-        expected = BetaBinomialReputation().is_confidently_harmful(stats)
+        card = normalize_memory_card(_idea("idea-x", "desc", stats))
+        expected = BetaBinomialReputation().is_confidently_harmful(
+            card.evolution_statistics
+        )
         assert evictor.should_evict(card) is expected
-        assert evictor.should_evict(normalized) is expected
 
     def test_reputation_is_injectable(self):
         lenient = HarmEvictor(reputation=BetaBinomialReputation(harm_min_events=99))
-        assert lenient.should_evict(_idea("idea-x", "d", _HARMFUL_STATS)) is False
+        card = normalize_memory_card(_idea("idea-x", "d", _HARMFUL_STATS))
+        assert lenient.should_evict(card) is False
 
     def test_sweep_returns_only_harmful_ids(self):
         bank = {

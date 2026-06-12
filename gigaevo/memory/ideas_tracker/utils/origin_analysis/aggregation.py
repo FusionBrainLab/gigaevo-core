@@ -19,10 +19,10 @@ from gigaevo.memory.shared_memory.injection_posterior import (
     noise_band,
     parent_local_baseline,
 )
+from gigaevo.memory.shared_memory.models import Quartile
 
 _NAN = float("nan")
-_QUARTILE_SORT_RANK = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "ALL": 5}
-_MISSING_SORT_RANK = 99
+_QUARTILE_SORT_RANK = {q: rank for rank, q in enumerate(Quartile)}
 
 
 def _column(events: list[dict[str, Any]], key: str) -> list[float]:
@@ -39,10 +39,9 @@ def aggregate_idea_rows(
     b1: float,
     b2: float,
     b3: float,
-    gens_by_quartile: dict[str, set[int]],
+    gens_by_quartile: dict[Quartile, set[int]],
     total_distinct_gens: int,
 ) -> list[IdeaStats]:
-    quartile_order = ["Q1", "Q2", "Q3", "Q4", "ALL"]
     out_rows: list[IdeaStats] = []
 
     population: list[tuple[float, float]] = []
@@ -62,13 +61,13 @@ def aggregate_idea_rows(
             and isinstance(programs[pid].get("generation", None), int)
         ]
 
-        origin_by_q: dict[str, list[str]] = {q: [] for q in ["Q1", "Q2", "Q3", "Q4"]}
+        origin_by_q: dict[Quartile, list[str]] = {q: [] for q in Quartile.quarters()}
         for pid in origin_pids_valid:
             gen = int(programs[pid]["generation"])
             q = generation_to_quartile(gen, b1, b2, b3)
             origin_by_q[q].append(pid)
 
-        def origin_metrics(pids: list[str], q_label: str) -> dict[str, float]:
+        def origin_metrics(pids: list[str], q_label: Quartile) -> dict[str, float]:
             if not pids:
                 denom_gens = (
                     len(gens_by_quartile[q_label]) if q_label in gens_by_quartile else 0
@@ -92,7 +91,7 @@ def aggregate_idea_rows(
             elite_rate = sum(1 for pid in pids if pid in elite_pids) / len(pids)
             denom_gens = (
                 total_distinct_gens
-                if q_label == "ALL"
+                if q_label is Quartile.ALL
                 else len(gens_by_quartile.get(q_label, set()))
             )
             reinvention_rate = (
@@ -109,12 +108,14 @@ def aggregate_idea_rows(
         sub_all = [ev for ev in events if ev.get("idea_id") == idea_id]
         sub_by_q = {
             q: [ev for ev in sub_all if ev.get("quartile") == q]
-            for q in ["Q1", "Q2", "Q3", "Q4"]
+            for q in Quartile.quarters()
         }
 
-        for q in quartile_order:
-            sub = sub_all if q == "ALL" else sub_by_q[q]
-            om = origin_metrics(origin_pids_valid if q == "ALL" else origin_by_q[q], q)
+        for q in Quartile:
+            sub = sub_all if q is Quartile.ALL else sub_by_q[q]
+            om = origin_metrics(
+                origin_pids_valid if q is Quartile.ALL else origin_by_q[q], q
+            )
 
             paired = [
                 (float(ref), float(gain))
@@ -132,25 +133,25 @@ def aggregate_idea_rows(
 
             adj_gains = [g - baseline(ref) for ref, g in paired]
             post = beta_binomial_posterior(adj_gains, threshold=-epsilon)
-            k_harm = post["k_harm"]
-            posterior_a = post["posterior_a"]
-            posterior_b = post["posterior_b"]
-            p_help_mean = post["p_help_mean"]
-            p_help_lo20 = post["p_help_lo20"]
-            efficacy_confident = post["efficacy_confident"]
+            k_harm = post.k_harm or 0
+            posterior_a = post.posterior_a
+            posterior_b = post.posterior_b
+            p_help_mean = post.p_help_mean
+            p_help_lo20 = post.p_help_lo20
+            efficacy_confident = post.efficacy_confident
             downside_rate = (
                 (k_harm / intro_events_ct) if intro_events_ct else float("nan")
             )
 
             pct_in_q = (
                 nanmedian(_column(sub, "IntroGain_percentile_in_quartile"))
-                if q != "ALL"
+                if q is not Quartile.ALL
                 else float("nan")
             )
             pct_overall = nanmedian(_column(sub, "IntroGain_percentile_overall"))
             z_in_q = (
                 nanmedian(_column(sub, "IntroGain_z_in_quartile"))
-                if q != "ALL"
+                if q is not Quartile.ALL
                 else float("nan")
             )
             z_overall = nanmedian(_column(sub, "IntroGain_z_overall"))
@@ -169,7 +170,7 @@ def aggregate_idea_rows(
                         ),
                         "IntroGain_best_p90": nanquantile(gains, 0.90),
                         "DownsideRate_best": downside_rate,
-                        "TailRisk_best_median(min(gain,0))": tail_risk,
+                        "TailRisk_best_median": tail_risk,
                         "posterior_a": posterior_a,
                         "posterior_b": posterior_b,
                         "p_help_mean": p_help_mean,
@@ -228,10 +229,5 @@ def aggregate_idea_rows(
                 )
             )
 
-    out_rows.sort(
-        key=lambda s: (
-            s.idea_id,
-            _QUARTILE_SORT_RANK.get(s.quartile, _MISSING_SORT_RANK),
-        )
-    )
+    out_rows.sort(key=lambda s: (s.idea_id, _QUARTILE_SORT_RANK[s.quartile]))
     return out_rows

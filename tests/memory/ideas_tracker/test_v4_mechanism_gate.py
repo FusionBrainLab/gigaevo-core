@@ -11,6 +11,7 @@ RED-phase TDD tests for v4-FINAL upgrades:
 from __future__ import annotations
 
 from gigaevo.memory.ideas_tracker.idea_bank import (
+    VerificationVerdict,
     changed_tokens,
     decide_verification,
     mechanism_grounded_in_diff,
@@ -206,10 +207,10 @@ class TestDecideVerificationV4Final:
             new=7,
             mechanism="depth 7 reduces bias by enabling one more split level",
         )
-        assert result["verb_prefix"] == ""
-        assert "verified:true" in result["keywords"]
-        assert "mechanism_unverified:true" not in result["keywords"]
-        assert result["parent_diff_verified"] is True
+        assert result.verb_prefix == ""
+        assert "verified:true" in result.keywords
+        assert "mechanism_unverified:true" not in result.keywords
+        assert result.parent_diff_verified is True
 
     def test_branch_2_lexicon_only_marks_mechanism_unverified(self) -> None:
         """GPT amendment: Lever pass + Pass-B lexicon only → UNVERIFIED_ + mechanism_unverified."""
@@ -226,7 +227,7 @@ class TestDecideVerificationV4Final:
             mechanism="depth reduces bias and improves generalisation",
         )
         # lever fails because literal "999"/"998" not in code → branch 3 actually
-        assert result["verb_prefix"] == "UNVERIFIED_"
+        assert result.verb_prefix == "UNVERIFIED_"
 
     def test_branch_2_target_ok_no_evidence_at_all(self) -> None:
         """Lever pass + target mentioned + no evidence (no code, no lexicon) → mechanism_unverified."""
@@ -245,10 +246,10 @@ class TestDecideVerificationV4Final:
         # only 1 ML lexicon term ('converging'? not in lexicon — only "converge"/"convergence")
         # Actually 'converging' is NOT in lexicon. So fails Pass-B.
         # Result: branch 2 → UNVERIFIED_ + verified:true + mechanism_unverified
-        assert result["verb_prefix"] == "UNVERIFIED_"
-        assert "verified:true" in result["keywords"]
-        assert "mechanism_unverified:true" in result["keywords"]
-        assert result["parent_diff_verified"] is True
+        assert result.verb_prefix == "UNVERIFIED_"
+        assert "verified:true" in result.keywords
+        assert "mechanism_unverified:true" in result.keywords
+        assert result.parent_diff_verified is True
 
     def test_branch_3_lever_fail(self) -> None:
         parent = "model = CatBoostRegressor()"
@@ -262,10 +263,10 @@ class TestDecideVerificationV4Final:
             new=100,
             mechanism="depth 7 reduces bias and overfit",
         )
-        assert result["verb_prefix"] == "UNVERIFIED_"
-        assert "verified:false" in result["keywords"]
-        assert "verified:true" not in result["keywords"]
-        assert "mechanism_unverified:true" not in result["keywords"]
+        assert result.verb_prefix == "UNVERIFIED_"
+        assert "verified:false" in result.keywords
+        assert "verified:true" not in result.keywords
+        assert "mechanism_unverified:true" not in result.keywords
 
     def test_2026_05_23_hallucinated_why_caught(self) -> None:
         result = decide_verification(
@@ -277,8 +278,8 @@ class TestDecideVerificationV4Final:
             new=100,
             mechanism="captures slower-converging geographic patterns",
         )
-        assert result["verb_prefix"] == "UNVERIFIED_"
-        assert "verified:false" in result["keywords"]
+        assert result.verb_prefix == "UNVERIFIED_"
+        assert "verified:false" in result.keywords
 
     def test_update_with_literal_anchored_mechanism_branch_1(self) -> None:
         """UPDATE/SWAP literal old/new in mechanism → code evidence → clean verb."""
@@ -294,12 +295,12 @@ class TestDecideVerificationV4Final:
             mechanism="stronger l2 regularization with l2_leaf_reg 2.0 reduces leaf-value variance",
         )
         # literal "2.0" is in extra_changed_tokens → Pass-A
-        assert result["verb_prefix"] == ""
-        assert "verified:true" in result["keywords"]
+        assert result.verb_prefix == ""
+        assert "verified:true" in result.keywords
 
 
-class TestVerificationDictShape:
-    def test_branch_1_returns_required_keys(self) -> None:
+class TestVerificationVerdictShape:
+    def test_branch_1_returns_typed_verdict(self) -> None:
         result = decide_verification(
             parent_code="depth=6",
             child_code="depth=7",
@@ -309,12 +310,10 @@ class TestVerificationDictShape:
             new=7,
             mechanism="depth 7 reduces bias at cost of higher variance",
         )
-        assert "verb_prefix" in result
-        assert "keywords" in result
-        assert "parent_diff_verified" in result
-        assert "verification_method" in result
-        assert isinstance(result["keywords"], list)
-        assert isinstance(result["parent_diff_verified"], bool)
+        assert isinstance(result, VerificationVerdict)
+        assert isinstance(result.verb_prefix, str)
+        assert isinstance(result.keywords, list)
+        assert isinstance(result.parent_diff_verified, bool)
 
     def test_verification_method_enum(self) -> None:
         result = decide_verification(
@@ -326,4 +325,4 @@ class TestVerificationDictShape:
             new=7,
             mechanism="depth 7 reduces bias at cost of higher variance",
         )
-        assert result["verification_method"] in {"ast_diff", "regex_diff", "absent"}
+        assert result.verification_method in {"ast_diff", "regex_diff", "absent"}

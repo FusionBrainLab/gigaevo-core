@@ -68,10 +68,9 @@ class TestIdeaBankCanonicalDedup:
         # First-wins on description
         assert merged.description == a.description
         # Second's description preserved in aliases
-        assert any(
-            isinstance(alias, dict) and b.description in str(alias)
-            for alias in merged.aliases
-        )
+        assert any(alias.description == b.description for alias in merged.aliases)
+        assert merged.aliases[0].key == f"{a.id}-canonical-merge"
+        assert merged.aliases[0].programs == ["p2"]
 
     def test_duplicate_canonical_key_appends_motivation(self) -> None:
         bank = IdeaBank()

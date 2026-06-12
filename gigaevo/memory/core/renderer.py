@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict
 
 from gigaevo.memory.shared_memory.card_search import format_card_efficacy
+from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard
 
 
 class EfficacyCardRenderer(BaseModel):
@@ -15,20 +13,13 @@ class EfficacyCardRenderer(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    def render(self, card: Any) -> str:
+    def render(self, card: AnyCard | None) -> str:
         if card is None:
             return ""
-        if isinstance(card, dict):
-            description = str(card.get("description") or "")
-            explanation = card.get("explanation")
-        else:
-            description = str(getattr(card, "description", "") or "")
-            explanation = getattr(card, "explanation", None)
-        description = description.strip()
-        if isinstance(explanation, Mapping):
-            mechanism = str(explanation.get("summary") or "").strip()
-        else:
-            mechanism = str(getattr(explanation, "summary", "") or "").strip()
+        description = card.description.strip()
+        mechanism = (
+            card.explanation.summary.strip() if isinstance(card, MemoryCard) else ""
+        )
         lines = [description] if description else []
         if mechanism and mechanism != description:
             lines.append(f"mechanism: {mechanism}")

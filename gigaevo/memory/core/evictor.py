@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.memory.core.reputation import BetaBinomialReputation
+from gigaevo.memory.shared_memory.models import AnyCard
 
 
 class HarmEvictor(BaseModel):
@@ -15,16 +15,15 @@ class HarmEvictor(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    reputation: BetaBinomialReputation = Field(default_factory=BetaBinomialReputation)
+    reputation: BetaBinomialReputation = Field(
+        default_factory=BetaBinomialReputation,
+        description="Posterior model deciding the confidently-harmful verdict.",
+    )
 
-    def should_evict(self, card: Any) -> bool:
-        if isinstance(card, Mapping):
-            stats = card.get("evolution_statistics")
-        else:
-            stats = getattr(card, "evolution_statistics", None)
-        return self.reputation.is_confidently_harmful(stats)
+    def should_evict(self, card: AnyCard) -> bool:
+        return self.reputation.is_confidently_harmful(card.evolution_statistics)
 
-    def sweep(self, bank: Mapping[str, Any]) -> list[str]:
+    def sweep(self, bank: Mapping[str, AnyCard]) -> list[str]:
         evicted = [cid for cid, card in bank.items() if self.should_evict(card)]
         if evicted:
             logger.info(

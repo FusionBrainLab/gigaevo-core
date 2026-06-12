@@ -13,6 +13,7 @@ from gigaevo.memory.ideas_tracker.models import (
     ClassificationChunk,
     Idea,
     IdeaUpdate,
+    Improvement,
     normalize_improvement_item,
     normalize_improvements,
     program_to_record,
@@ -25,38 +26,38 @@ from tests.fakes.llm_router import FakeMemoryRouter
 class TestNormalizeImprovementItem:
     def test_string_becomes_description(self) -> None:
         result = normalize_improvement_item("Use BFS traversal")
-        assert result == {"description": "Use BFS traversal", "explanation": ""}
+        assert result == Improvement(description="Use BFS traversal", explanation="")
 
     def test_dict_with_description_and_explanation(self) -> None:
         result = normalize_improvement_item(
             {"description": "Add cache", "explanation": "reduces calls"}
         )
-        assert result["description"] == "Add cache"
-        assert result["explanation"] == "reduces calls"
+        assert result.description == "Add cache"
+        assert result.explanation == "reduces calls"
 
     def test_dict_with_alternative_description_key(self) -> None:
         result = normalize_improvement_item(
             {"summary": "Switched algo", "reason": "faster"}
         )
-        assert result["description"] == "Switched algo"
-        assert result["explanation"] == "faster"
+        assert result.description == "Switched algo"
+        assert result.explanation == "faster"
 
     def test_non_dict_non_string_uses_stringify(self) -> None:
         result = normalize_improvement_item(42)
-        assert result["description"] == "42"
-        assert result["explanation"] == ""
+        assert result.description == "42"
+        assert result.explanation == ""
 
     def test_empty_dict_returns_unspecified(self) -> None:
         result = normalize_improvement_item({})
-        assert result["description"] == "Unspecified change"
+        assert result.description == "Unspecified change"
 
     def test_none_returns_unspecified(self) -> None:
         result = normalize_improvement_item(None)
-        assert result["description"] == "Unspecified change"
+        assert result.description == "Unspecified change"
 
     def test_whitespace_only_string_returns_unspecified(self) -> None:
         result = normalize_improvement_item("   ")
-        assert result["description"] == "Unspecified change"
+        assert result.description == "Unspecified change"
 
 
 class TestNormalizeImprovements:
@@ -66,12 +67,12 @@ class TestNormalizeImprovements:
     def test_list_of_dicts(self) -> None:
         result = normalize_improvements([{"description": "A"}, {"description": "B"}])
         assert len(result) == 2
-        assert result[0]["description"] == "A"
+        assert result[0].description == "A"
 
     def test_single_non_list_is_wrapped(self) -> None:
         result = normalize_improvements("Single change")
         assert len(result) == 1
-        assert result[0]["description"] == "Single change"
+        assert result[0].description == "Single change"
 
 
 class TestIdeaModel:
@@ -201,7 +202,7 @@ class TestClassifyAgainstBankStructuredOutput:
         from gigaevo.memory.ideas_tracker.analyzers import _PendingIdeas
 
         return _PendingIdeas.from_improvements(
-            [{"description": "Add cache", "explanation": "faster"}]
+            [Improvement(description="Add cache", explanation="faster")]
         )
 
     def test_validation_error_leaves_items_unclassified(self) -> None:
@@ -216,7 +217,7 @@ class TestClassifyAgainstBankStructuredOutput:
         analyzer, llm = self._make_analyzer(raise_validation)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
-        assert pending.items[0]["classified"] is False
+        assert pending.items[0].classified is False
         assert len(llm.calls) == 2
 
     def test_transport_error_leaves_items_unclassified(self) -> None:
@@ -226,11 +227,11 @@ class TestClassifyAgainstBankStructuredOutput:
         analyzer, _ = self._make_analyzer(raise_transport)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
-        assert pending.items[0]["classified"] is False
+        assert pending.items[0].classified is False
 
     def test_valid_present_idea_classifies(self) -> None:
         chunk = self._make_chunk("abc123")
-        full_id = chunk.short_ids[0]["id"]
+        full_id = chunk.short_ids[0].id
         response = ClassifyExtResponse(
             new_ideas=[],
             present_ideas=[PresentIdeaRef(idea_id="abc123", sequence=1)],
@@ -239,13 +240,13 @@ class TestClassifyAgainstBankStructuredOutput:
         analyzer, _ = self._make_analyzer(lambda schema, messages: response)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [chunk])
-        assert pending.items[0]["classified"] is True
-        assert pending.items[0]["target_id"] == full_id
+        assert pending.items[0].classified is True
+        assert pending.items[0].target_id == full_id
 
     def test_bracketed_idea_id_normalized_by_schema(self) -> None:
         """LLM echoing "[abc123]" instead of "abc123" still resolves."""
         chunk = self._make_chunk("abc123")
-        full_id = chunk.short_ids[0]["id"]
+        full_id = chunk.short_ids[0].id
         response = ClassifyExtResponse(
             new_ideas=[],
             present_ideas=[PresentIdeaRef(idea_id="[abc123]", sequence=1)],
@@ -254,8 +255,8 @@ class TestClassifyAgainstBankStructuredOutput:
         analyzer, _ = self._make_analyzer(lambda schema, messages: response)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [chunk])
-        assert pending.items[0]["classified"] is True
-        assert pending.items[0]["target_id"] == full_id
+        assert pending.items[0].classified is True
+        assert pending.items[0].target_id == full_id
 
     def test_unknown_idea_id_skipped(self) -> None:
         response = ClassifyExtResponse(
@@ -266,4 +267,4 @@ class TestClassifyAgainstBankStructuredOutput:
         analyzer, _ = self._make_analyzer(lambda schema, messages: response)
         pending = self._make_pending()
         analyzer._classify_against_bank(pending, [self._make_chunk()])
-        assert pending.items[0]["classified"] is False
+        assert pending.items[0].classified is False

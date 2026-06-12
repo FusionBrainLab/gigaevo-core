@@ -222,8 +222,16 @@ class TestMemoryWritePipeline:
             [
                 {
                     "best_ideas": [
-                        {"idea_id": "idea-1", "description": "SA for refinement"},
-                        {"idea_id": "idea-2", "description": "Genetic crossover"},
+                        {
+                            "idea_id": "idea-1",
+                            "quartile": "ALL",
+                            "description": "SA for refinement",
+                        },
+                        {
+                            "idea_id": "idea-2",
+                            "quartile": "ALL",
+                            "description": "Genetic crossover",
+                        },
                     ],
                 }
             ],
@@ -269,7 +277,10 @@ class TestMemoryWritePipeline:
         )
 
         best_ideas = tmp_path / "best_ideas.json"
-        _write_json(best_ideas, [{"best_ideas": [{"idea_id": "idea-1"}]}])
+        _write_json(
+            best_ideas,
+            [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}],
+        )
 
         programs = tmp_path / "programs.json"
         _write_json(

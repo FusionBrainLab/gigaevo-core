@@ -23,6 +23,7 @@ from gigaevo.memory.core import (
     LLMCardSelector,
     MemorySelection,
 )
+from gigaevo.memory.shared_memory.models import MemoryCard
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.fakes.read_pipeline import make_read_pipeline
@@ -61,13 +62,11 @@ class _StubMemory:
         return self._cards.get(card_id)
 
 
-def _card(description: str, posterior: tuple[float, float] | None = None) -> dict:
-    card: dict = {"description": description}
+def _card(description: str, posterior: tuple[float, float] | None = None) -> MemoryCard:
+    stats: dict = {}
     if posterior is not None:
-        card["evolution_statistics"] = {
-            "ALL": {"posterior_a": posterior[0], "posterior_b": posterior[1]}
-        }
-    return card
+        stats = {"ALL": {"posterior_a": posterior[0], "posterior_b": posterior[1]}}
+    return MemoryCard(id="idea-x", description=description, evolution_statistics=stats)
 
 
 def _make_program(code: str = "def solve(): return 1") -> Program:
@@ -105,11 +104,7 @@ async def test_select_pulls_ids_from_top_ideas_card_id():
 
 
 @pytest.mark.asyncio
-async def test_select_resolves_description_from_pydantic_card():
-    class _PydanticCard:
-        description = "Use a heap for sorted retrieval"
-        evolution_statistics = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
-
+async def test_select_resolves_description_from_typed_card():
     memory = _StubMemory(
         raw_memory={
             "final_decision": {
@@ -118,7 +113,7 @@ async def test_select_resolves_description_from_pydantic_card():
                 "additional_queries": [],
             }
         },
-        cards={"idea-1": _PydanticCard()},
+        cards={"idea-1": _card("Use a heap for sorted retrieval", _PROVEN)},
     )
     pipeline = make_read_pipeline(memory, seed=_SEED)
 
@@ -162,7 +157,7 @@ async def test_max_cards_hard_caps_auction_winners():
 
     assert len(selection.card_ids) == 2
     assert len(selection.cards) == 2
-    theta = {r["card_id"]: r["theta"] for r in selection.slate}
+    theta = {bid.card_id: bid.theta for bid in selection.slate}
     assert len(selection.slate) == 5
     assert selection.card_ids == sorted(theta, key=theta.get, reverse=True)[:2]
 
@@ -258,7 +253,7 @@ async def test_select_skips_missing_cards_silently():
     # 'missing' is not fetchable -> excluded from the auction (not a phantom id).
     assert selection.card_ids == ["exists"]
     assert selection.cards == ["real card"]
-    assert [r["card_id"] for r in selection.slate] == ["exists"]
+    assert [bid.card_id for bid in selection.slate] == ["exists"]
 
 
 @pytest.mark.asyncio
@@ -311,8 +306,8 @@ async def test_auction_keeps_proven_drops_suspect():
     assert selection.card_ids == ["good"]
     assert selection.cards == ["proven move"]
     # The slate records BOTH candidates and the suspect's rejection (auditable).
-    assert [r["card_id"] for r in selection.slate] == ["good", "bad"]
-    assert [r["selected"] for r in selection.slate] == [True, False]
+    assert [bid.card_id for bid in selection.slate] == ["good", "bad"]
+    assert [bid.selected for bid in selection.slate] == [True, False]
 
 
 @pytest.mark.asyncio
@@ -341,7 +336,7 @@ async def test_auction_can_select_zero_cards():
     assert selection.cards == []
     # The "no-card" outcome is still recorded: 3 rejected candidates.
     assert len(selection.slate) == 3
-    assert all(r["selected"] is False for r in selection.slate)
+    assert all(bid.selected is False for bid in selection.slate)
 
 
 @pytest.mark.asyncio
@@ -366,12 +361,12 @@ async def test_slate_records_posteriors_and_baseline_arm():
         max_cards=1,
     )
 
-    rec = selection.slate[0]
-    assert rec["card_id"] == "good"
-    assert rec["a"] == 200.0
-    assert rec["b"] == 1.0
-    assert rec["baseline_a"] == 3.0
-    assert rec["baseline_b"] == 3.0
+    bid = selection.slate[0]
+    assert bid.card_id == "good"
+    assert bid.posterior_a == 200.0
+    assert bid.posterior_b == 1.0
+    assert bid.baseline_a == 3.0
+    assert bid.baseline_b == 3.0
 
 
 @pytest.mark.asyncio
@@ -396,9 +391,9 @@ async def test_card_without_track_record_is_cold_one_one():
         max_cards=1,
     )
 
-    rec = selection.slate[0]
-    assert rec["a"] == 1.0
-    assert rec["b"] == 1.0
+    bid = selection.slate[0]
+    assert bid.posterior_a == 1.0
+    assert bid.posterior_b == 1.0
 
 
 @pytest.mark.asyncio
@@ -456,13 +451,8 @@ def test_parse_final_decision_handles_non_dict_raw_memory():
     assert LLMCardSelector().shortlist("not a dict") == []
 
 
-def test_render_card_handles_dict_pydantic_and_none():
+def test_render_card_handles_typed_card_and_none():
     render = EfficacyCardRenderer().render
     assert render(None) == ""
-    assert render({"description": " trim me  "}) == "trim me"
-    assert render({"description": None}) == ""
-
-    class _Obj:
-        description = "via attribute"
-
-    assert render(_Obj()) == "via attribute"
+    assert render(MemoryCard(id="idea-1", description=" trim me  ")) == "trim me"
+    assert render(MemoryCard(id="idea-2")) == ""

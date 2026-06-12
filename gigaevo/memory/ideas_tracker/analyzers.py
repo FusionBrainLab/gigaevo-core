@@ -36,7 +36,9 @@ from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
     IdeaUpdate,
+    Improvement,
     ProgramRecord,
+    ShortIdEntry,
 )
 from gigaevo.memory.ideas_tracker.schemas import (
     ClassifyExtResponse,
@@ -98,6 +100,17 @@ class Analyzer(Protocol):
 
 
 @dataclass
+class PendingIdea:
+    """Classification state for one improvement while it moves through the bank chunks."""
+
+    description: str
+    motivation: str
+    classified: bool = False
+    target_id: str = ""
+    rewrite: bool = False
+
+
+@dataclass
 class _PendingIdeas:
     """
     Scratch object tracking classification state for a single program's improvements.
@@ -105,19 +118,13 @@ class _PendingIdeas:
     Private to ClassifyingAnalyzer — not exported.
     """
 
-    items: list[dict[str, Any]] = field(default_factory=list)
+    items: list[PendingIdea] = field(default_factory=list)
     mapping: dict[int, str] = field(default_factory=dict)
 
     @classmethod
-    def from_improvements(cls, improvements: list[dict[str, str]]) -> _PendingIdeas:
+    def from_improvements(cls, improvements: list[Improvement]) -> _PendingIdeas:
         items = [
-            {
-                "description": i["description"],
-                "motivation": i.get("explanation", ""),
-                "classified": False,
-                "target_id": "",
-                "rewrite": False,
-            }
+            PendingIdea(description=i.description, motivation=i.explanation)
             for i in improvements
         ]
         pending = cls(items=items)
@@ -128,8 +135,8 @@ class _PendingIdeas:
         mapping: dict[int, str] = {}
         c = 1
         for item in self.items:
-            if not item["classified"]:
-                mapping[c] = item["description"]
+            if not item.classified:
+                mapping[c] = item.description
                 c += 1
         self.mapping = mapping
 
@@ -142,22 +149,22 @@ class _PendingIdeas:
             )
             return
         for item in self.items:
-            if item["description"] == desc:
-                item["target_id"] = target_id
-                item["classified"] = True
-                item["rewrite"] = rewrite
+            if item.description == desc:
+                item.target_id = target_id
+                item.classified = True
+                item.rewrite = rewrite
                 break
 
     @property
     def unclassified_count(self) -> int:
-        return sum(1 for i in self.items if not i["classified"])
+        return sum(1 for i in self.items if not i.classified)
 
     def as_numbered_text(self) -> str:
         lines: list[str] = []
         c = 1
         for item in self.items:
-            if not item["classified"]:
-                lines.append(f"{c}) {item['description']} \n")
+            if not item.classified:
+                lines.append(f"{c}) {item.description} \n")
                 c += 1
         return "".join(lines)
 
@@ -330,11 +337,11 @@ class ClassifyingAnalyzer:
 
             self._apply_classify_response(parsed, pending, chunk)
 
-    def _resolve_id(self, short_id: str, short_ids: list[dict[str, str]]) -> str:
+    def _resolve_id(self, short_id: str, short_ids: list[ShortIdEntry]) -> str:
         """Map a short UUID prefix to a full UUID, or return '' if not found."""
         for entry in short_ids:
-            if entry["short_id"] == short_id:
-                return entry["id"]
+            if entry.short_id == short_id:
+                return entry.id
         return ""
 
     def _apply_pending_to_result(
@@ -342,44 +349,44 @@ class ClassifyingAnalyzer:
     ) -> None:
         """Convert classified/unclassified pending items into AnalysisResult entries."""
         for item in pending.items:
-            if not item["classified"]:
+            if not item.classified:
                 enriched = enrich_with_verification(
-                    description=item["description"],
+                    description=item.description,
                     parent_code=record.parent_code,
                     child_code=record.code,
                 )
                 result.new_ideas.append(
                     Idea(
-                        description=enriched["description"],
+                        description=enriched.description,
                         strategy=record.strategy,
                         task_description=record.task_description,
                         last_generation=record.generation,
                         programs=[record.id],
-                        keywords=enriched["keywords"],
+                        keywords=enriched.keywords,
                         explanation=IdeaExplanation(
-                            entries=[item["motivation"]] if item["motivation"] else []
+                            entries=[item.motivation] if item.motivation else []
                         ),
                     )
                 )
-            elif item["rewrite"]:
+            elif item.rewrite:
                 result.updates.append(
                     IdeaUpdate(
-                        idea_id=item["target_id"],
+                        idea_id=item.target_id,
                         programs=[record.id],
                         generation=record.generation,
-                        new_description=item["description"]
+                        new_description=item.description
                         if self._description_rewriting
                         else None,
-                        motivation=item["motivation"] or None,
+                        motivation=item.motivation or None,
                     )
                 )
             else:
                 result.updates.append(
                     IdeaUpdate(
-                        idea_id=item["target_id"],
+                        idea_id=item.target_id,
                         programs=[record.id],
                         generation=record.generation,
-                        motivation=item["motivation"] or None,
+                        motivation=item.motivation or None,
                     )
                 )
 
@@ -589,9 +596,9 @@ class ClusteringAnalyzer:
             for imp in record.improvements:
                 cards.append(
                     EmbeddedIdea(
-                        description=str(imp.get("description", "")),
+                        description=imp.description,
                         source_program_id=record.id,
-                        change_motivation=str(imp.get("explanation", "")),
+                        change_motivation=imp.explanation,
                     )
                 )
         return cards

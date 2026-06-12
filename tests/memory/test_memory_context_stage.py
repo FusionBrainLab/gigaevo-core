@@ -12,7 +12,7 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.evolution.mutation.context import MemoryMutationContext
 from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
-from gigaevo.memory.core import MemorySelection
+from gigaevo.memory.core import AuctionBid, MemorySelection
 from gigaevo.memory.provider import NullMemoryProvider, SelectorMemoryProvider
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.cache_handler import NO_CACHE
@@ -22,6 +22,21 @@ from gigaevo.programs.stages.memory_context import MemoryContextStage
 
 def _make_program(code: str = "def solve(): return 42") -> Program:
     return Program(code=code)
+
+
+def _bid(
+    card_id: str, posterior_a: float, posterior_b: float, selected: bool
+) -> AuctionBid:
+    return AuctionBid(
+        card_id=card_id,
+        posterior_a=posterior_a,
+        posterior_b=posterior_b,
+        theta=0.5,
+        baseline_a=3.0,
+        baseline_b=3.0,
+        baseline_theta=0.4,
+        selected=selected,
+    )
 
 
 class TestMemoryMutationContext:
@@ -144,8 +159,8 @@ class TestMemoryContextStageWithSelectorProvider:
     @pytest.mark.asyncio
     async def test_writes_candidate_slate_to_metadata(self) -> None:
         slate = [
-            {"card_id": "card-abc", "a": 200.0, "b": 1.0, "selected": True},
-            {"card_id": "card-xyz", "a": 1.0, "b": 200.0, "selected": False},
+            _bid("card-abc", 200.0, 1.0, selected=True),
+            _bid("card-xyz", 1.0, 200.0, selected=False),
         ]
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(
@@ -166,13 +181,15 @@ class TestMemoryContextStageWithSelectorProvider:
         program = _make_program()
         await stage.compute(program)
 
-        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == slate
+        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == [
+            bid.model_dump() for bid in slate
+        ]
 
     @pytest.mark.asyncio
     async def test_writes_slate_even_when_auction_selects_nothing(self) -> None:
         # The "no-card" outcome is the whole point of the auction: a 0-winner
         # sweep must still record which candidates were offered and rejected.
-        slate = [{"card_id": "card-xyz", "a": 1.0, "b": 200.0, "selected": False}]
+        slate = [_bid("card-xyz", 1.0, 200.0, selected=False)]
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(
             cards=[], card_ids=[], slate=slate
@@ -194,7 +211,9 @@ class TestMemoryContextStageWithSelectorProvider:
 
         assert result.data == ""
         assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in program.metadata
-        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == slate
+        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == [
+            bid.model_dump() for bid in slate
+        ]
 
     @pytest.mark.asyncio
     async def test_no_slate_metadata_when_slate_empty(self) -> None:

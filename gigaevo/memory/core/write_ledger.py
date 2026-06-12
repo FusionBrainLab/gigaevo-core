@@ -30,16 +30,31 @@ class WriteOutcome(StrEnum):
 
 
 class WriteLedgerRecord(BaseModel):
+    """One JSONL row of the write ledger: a single ingest or eviction verdict."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    timestamp_utc: str
-    incoming_id: str
-    final_id: str
-    outcome: WriteOutcome
-    reason: str = ""
-    duplicate_of: str = ""
-    merge_targets: list[str] = Field(default_factory=list)
-    category: str = ""
+    timestamp_utc: str = Field(
+        description="ISO-8601 UTC time the verdict was recorded."
+    )
+    incoming_id: str = Field(description="Id of the card as submitted to the bank.")
+    final_id: str = Field(
+        description="Id the card ended up under (merge target for merges, '' if dropped)."
+    )
+    outcome: WriteOutcome = Field(description="Gate verdict for this card.")
+    reason: str = Field(
+        default="", description="Human-readable rationale emitted by the deciding gate."
+    )
+    duplicate_of: str = Field(
+        default="", description="Id of the existing card this one duplicated, if any."
+    )
+    merge_targets: list[str] = Field(
+        default_factory=list,
+        description="Ids of the cards this one was merged into.",
+    )
+    category: str = Field(
+        default="", description="Category of the incoming card at submission time."
+    )
 
 
 class WriteLedger:

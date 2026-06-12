@@ -56,7 +56,11 @@ def stats_from_bank(ideas: list[dict]) -> list[IdeaStats]:
         for quartile, block in stats.items():
             if not isinstance(block, dict):
                 continue
-            rec = {k: v for k, v in block.items() if v is not None}
+            rec = {
+                k: v
+                for k, v in block.items()
+                if v is not None and k in IdeaStats.model_fields
+            }
             rec["idea_id"] = idea.get("id") or idea.get("idea_id")
             rec["quartile"] = quartile
             rec["description"] = idea.get("description", "")

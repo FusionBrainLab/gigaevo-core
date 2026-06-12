@@ -12,13 +12,32 @@ from loguru import logger
 import numpy as np
 
 from gigaevo.memory.core.admitter import TieredAdmitter
-from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
+from gigaevo.memory.core.auctioneer import (
+    AuctionBid,
+    AuctionCandidate,
+    ThompsonAuctioneer,
+)
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.shared_memory.injection_posterior import (
+    InjectionOutcome,
     compute_injection_posterior,
 )
+from gigaevo.memory.shared_memory.models import MemoryCard
+
+
+def _bid(card_id: str, theta: float) -> AuctionBid:
+    return AuctionBid(
+        card_id=card_id,
+        posterior_a=1.0,
+        posterior_b=1.0,
+        theta=theta,
+        baseline_a=3.0,
+        baseline_b=3.0,
+        baseline_theta=0.5,
+        selected=True,
+    )
 
 
 @contextmanager
@@ -35,7 +54,14 @@ class TestAuctioneerLogging:
     def test_run_emits_canonical_event_with_draws(self):
         with capture_logs() as captured:
             winners, records = ThompsonAuctioneer().run(
-                [("card-hot", 9.0, 1.0), ("card-cold", 1.0, 9.0)],
+                [
+                    AuctionCandidate(
+                        card_id="card-hot", posterior_a=9.0, posterior_b=1.0
+                    ),
+                    AuctionCandidate(
+                        card_id="card-cold", posterior_a=1.0, posterior_b=9.0
+                    ),
+                ],
                 np.random.default_rng(0),
             )
         text = "".join(captured)
@@ -51,10 +77,7 @@ class TestAuctioneerLogging:
 
 class TestBudgeterLogging:
     def test_cap_drop_is_logged_with_dropped_ids(self):
-        slate = [
-            {"card_id": "a", "theta": 0.9},
-            {"card_id": "b", "theta": 0.2},
-        ]
+        slate = [_bid("a", 0.9), _bid("b", 0.2)]
         with capture_logs() as captured:
             kept = TopThetaBudgeter().cap(["a", "b"], slate, max_cards=1)
         text = "".join(captured)
@@ -64,19 +87,24 @@ class TestBudgeterLogging:
 
     def test_within_budget_is_silent(self):
         with capture_logs() as captured:
-            TopThetaBudgeter().cap(["a"], [{"card_id": "a", "theta": 0.9}], 3)
+            TopThetaBudgeter().cap(["a"], [_bid("a", 0.9)], 3)
         assert "[Memory][Budgeter]" not in "".join(captured)
 
 
-def _harmful_stats() -> dict:
-    return {"ALL": {"intro_events": 6, "posterior_a": 1.0, "posterior_b": 9.0}}
+def _harmful_card(card_id: str) -> MemoryCard:
+    return MemoryCard(
+        id=card_id,
+        evolution_statistics={
+            "ALL": {"intro_events": 6, "posterior_a": 1.0, "posterior_b": 9.0}
+        },
+    )
 
 
 class TestEvictorLogging:
     def test_sweep_logs_evicted_ids(self):
         bank = {
-            "bad-card": {"evolution_statistics": _harmful_stats()},
-            "good-card": {"evolution_statistics": None},
+            "bad-card": _harmful_card("bad-card"),
+            "good-card": MemoryCard(id="good-card"),
         }
         with capture_logs() as captured:
             evicted = HarmEvictor().sweep(bank)
@@ -87,7 +115,7 @@ class TestEvictorLogging:
 
     def test_clean_sweep_is_silent(self):
         with capture_logs() as captured:
-            HarmEvictor().sweep({"good-card": {"evolution_statistics": None}})
+            HarmEvictor().sweep({"good-card": MemoryCard(id="good-card")})
         assert "[Memory][Evictor]" not in "".join(captured)
 
 
@@ -121,8 +149,8 @@ class TestAdmitterLogging:
 class TestInjectionPosteriorLogging:
     def test_bridge_logs_summary(self):
         programs = [
-            {"id": "p1", "fitness": 0.5, "selected_ids": ["card-x"], "parents": []},
-            {"id": "c1", "fitness": 0.6, "selected_ids": [], "parents": ["p1"]},
+            InjectionOutcome(id="p1", fitness=0.5, selected_ids=["card-x"]),
+            InjectionOutcome(id="c1", fitness=0.6, parents=["p1"]),
         ]
         with capture_logs() as captured:
             result = compute_injection_posterior(programs)

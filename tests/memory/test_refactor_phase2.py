@@ -101,6 +101,21 @@ class TestCardLoader:
         assert "program" not in caller_set, "CardLoader must not mutate caller's set"
         assert caller_set == {"foo"}, "original set must be unmodified"
 
+    def test_missing_category_treated_as_general(self, tmp_path):
+        """A card without a category is a 'general' card for filtering purposes."""
+        from gigaevo.memory.shared_memory.card_loader import CardLoader
+
+        export_file = tmp_path / "cards.jsonl"
+        export_file.write_text('{"id": "c1", "description": "no category"}\n')
+
+        kept = CardLoader(export_file=export_file).load()
+        assert [c["id"] for c in kept] == ["c1"]
+
+        excluded = CardLoader(
+            export_file=export_file, exclude_categories={"general"}
+        ).load()
+        assert excluded == []
+
 
 class TestMemoryState:
     def test_initial_state_is_initializing(self):

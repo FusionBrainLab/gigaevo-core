@@ -140,7 +140,8 @@ class TestScenarioTwoRunCycle:
         _write_json(banks_path, [{"active_bank": active_bank}])
 
         best_ideas = [
-            {"idea_id": idea.id, "description": idea.description} for idea in all_ideas
+            {"idea_id": idea.id, "quartile": "ALL", "description": idea.description}
+            for idea in all_ideas
         ]
         best_ideas_path = tmp_path / "logs" / "best_ideas.json"
         _write_json(best_ideas_path, [{"best_ideas": best_ideas}])
@@ -491,7 +492,7 @@ class TestScenarioWritePipeline:
         _write_json(banks, [{"active_bank": active_bank}])
 
         best_ideas = [
-            {"idea_id": f"idea-{i}", "description": f"Technique {i}"}
+            {"idea_id": f"idea-{i}", "quartile": "ALL", "description": f"Technique {i}"}
             for i in range(n_ideas)
         ]
         best = tmp_path / "best_ideas.json"

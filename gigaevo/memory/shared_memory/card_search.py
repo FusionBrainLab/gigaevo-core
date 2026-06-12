@@ -6,9 +6,7 @@ results via an LLM service.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
-from typing import Any
 
 from loguru import logger
 
@@ -16,57 +14,33 @@ from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
 from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
 
 
-def _card_field(card: Any, name: str, default: Any = None) -> Any:
-    if isinstance(card, Mapping):
-        return card.get(name, default)
-    return getattr(card, name, default)
-
-
-def _is_program_card(card: Any) -> bool:
-    if isinstance(card, ProgramCard):
-        return True
-    if isinstance(card, MemoryCard):
-        return False
-    cid = str(_card_field(card, "id", "") or "")
-    cat = str(_card_field(card, "category", "") or "")
-    return (
-        cat == "program"
-        or cid.startswith("program-")
-        or bool(_card_field(card, "program_id"))
-    )
-
-
-def format_card_efficacy(card: Any) -> str | None:
+def format_card_efficacy(card: AnyCard | None) -> str | None:
     """One legible per-card endorsement line for the mutator, or None.
 
     MemoryCard: rendered only when the Beta-Binomial downside posterior is
-    confident (``evolution_statistics["ALL"].efficacy_confident``) — non-confident
+    confident (``evolution_statistics.ALL.efficacy_confident``) — non-confident
     and no-signal cards stay silent (description only). ProgramCard: exemplar fitness.
     """
     if card is None:
         return None
-    if _is_program_card(card):
-        fitness = _card_field(card, "fitness")
-        if fitness is None:
+    if isinstance(card, ProgramCard):
+        if card.fitness is None:
             return None
-        return f"efficacy: exemplar fitness {float(fitness):.4f}"
+        return f"efficacy: exemplar fitness {card.fitness:.4f}"
 
-    stats = _card_field(card, "evolution_statistics") or {}
-    if not isinstance(stats, Mapping):
+    block = card.evolution_statistics.ALL
+    if block is None:
         return None
-    all_block = stats.get("ALL") or {}
-    intros = int(all_block.get("intro_events") or 0)
+    intros = block.intro_events
     # Raw child-minus-parent medians are dominated by weak parents regressing to
     # the frontier; the cohort-adjusted median (gain minus the parent-local
     # counterfactual the posterior already uses) is the honest effect size.
     # Legacy banks without the field fall back to the raw median.
-    adj_median = all_block.get("IntroGain_best_adj_median")
-    median = (
-        adj_median if adj_median is not None else all_block.get("IntroGain_best_median")
-    )
+    adj_median = block.IntroGain_best_adj_median
+    median = adj_median if adj_median is not None else block.IntroGain_best_median
     if intros <= 0 or median is None:
         return None
-    if not all_block.get("efficacy_confident"):
+    if not block.efficacy_confident:
         return None
     scale = " vs cohort" if adj_median is not None else ""
     # Gains are stored in "positive = improvement" space regardless of metric
@@ -76,7 +50,7 @@ def format_card_efficacy(card: Any) -> str | None:
         f"efficacy: introduced in {intros} children; "
         f"median improvement{scale} {float(median):+.4f}"
     )
-    downside = all_block.get("DownsideRate_best")
+    downside = block.DownsideRate_best
     if downside is not None:
         line += f"; downside {float(downside):.0%}"
     # A noise-band-confident posterior with a losing median must never read as
@@ -84,45 +58,6 @@ def format_card_efficacy(card: Any) -> str | None:
     if float(median) <= 0:
         return line + " (caution: non-positive median)"
     return line + " (confident)"
-
-
-def run_card_auction(
-    candidates: list[tuple[str, float, float]],
-    rng: Any,
-    baseline: tuple[float, float] = (3.0, 3.0),
-) -> tuple[list[str], list[dict]]:
-    """Thompson auction: each card's posterior draw competes against a no-card arm.
-
-    For each ``(card_id, a, b)`` draw ``theta ~ Beta(a, b)`` and a fresh no-card
-    ``base ~ Beta(*baseline)``; select the card iff ``theta > base``. Winners are the
-    emergent 0..N subset; ``records`` keep the per-candidate draws for offline audit.
-
-    Retained as the seed-exactness golden oracle for ``ThompsonAuctioneer``
-    (tests/memory/test_core_efficacy.py pins draw-order equality); production
-    selection goes through the core auctioneer.
-    """
-    base_a, base_b = baseline
-    winners: list[str] = []
-    records: list[dict] = []
-    for card_id, a, b in candidates:
-        theta = float(rng.beta(a, b))
-        base_theta = float(rng.beta(base_a, base_b))
-        selected = theta > base_theta
-        if selected:
-            winners.append(card_id)
-        records.append(
-            {
-                "card_id": card_id,
-                "a": float(a),
-                "b": float(b),
-                "theta": theta,
-                "baseline_a": float(base_a),
-                "baseline_b": float(base_b),
-                "baseline_theta": base_theta,
-                "selected": selected,
-            }
-        )
-    return winners, records
 
 
 def format_search_results(query: str, cards: list[AnyCard]) -> str:

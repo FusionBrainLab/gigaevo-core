@@ -60,7 +60,8 @@ class MemoryContextStage(Stage):
 
         if selection.slate:
             program.set_metadata(
-                MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, selection.slate
+                MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+                [bid.model_dump() for bid in selection.slate],
             )
 
         if selection.cards:

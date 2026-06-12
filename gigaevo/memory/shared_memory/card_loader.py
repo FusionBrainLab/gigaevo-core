@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic import ValidationError
 
+from gigaevo.memory.shared_memory.card_conversion import RawCardRecord
 from gigaevo.memory.shared_memory.card_store import CardStore
-from gigaevo.memory.shared_memory.utils import _str_or_empty
 
 
 class CardLoader:
@@ -90,9 +91,9 @@ class CardLoader:
                     continue
                 total += 1
                 try:
-                    card = json.loads(line)
-                    if isinstance(card, dict):
-                        cards.append(card)
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        cards.append(parsed)
                 except json.JSONDecodeError:
                     malformed += 1
                     logger.debug(
@@ -129,11 +130,15 @@ class CardLoader:
         seen = set()
         filtered = []
         for card in cards:
-            card_id = _str_or_empty(card.get("id")).strip()
+            try:
+                record = RawCardRecord.model_validate(card)
+            except ValidationError as exc:
+                logger.debug("[CardLoader] Skipping unparseable card: {}", exc)
+                continue
+            card_id = record.id.strip()
             if not card_id or card_id in seen:
                 continue
-            category = _str_or_empty(card.get("category")).strip().lower()
-            if category in self.exclude_categories:
+            if record.category.strip().lower() in self.exclude_categories:
                 continue
             seen.add(card_id)
             filtered.append(card)

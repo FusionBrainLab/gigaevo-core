@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from gigaevo.memory.shared_memory.card_dedup import DedupAction, DedupDecision
 from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
+from gigaevo.memory.shared_memory.models import AnyCard
 
 
 def _add(reason: str) -> DedupDecision:
@@ -21,7 +22,7 @@ class NullDeduplicator(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    def reconcile(self, card: Any, bank: Mapping[str, Any]) -> DedupDecision:
+    def reconcile(self, card: AnyCard, bank: Mapping[str, AnyCard]) -> DedupDecision:
         return _add("dedup disabled")
 
 
@@ -39,7 +40,7 @@ class LLMDeduplicator:
         self.engine = engine
         self._warned_no_llm = False
 
-    def reconcile(self, card: Any, bank: Mapping[str, Any]) -> DedupDecision:
+    def reconcile(self, card: AnyCard, bank: Mapping[str, AnyCard]) -> DedupDecision:
         if self.engine is None:
             return _add("dedup engine unavailable")
         if not self.engine.config.enabled or not bank:

@@ -57,6 +57,7 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.types import (
     AnalysisResult,
     DescMetrics,
 )
+from gigaevo.memory.shared_memory.models import Quartile
 
 
 def _negate_fitness(programs: dict[str, dict]) -> dict[str, dict]:
@@ -126,7 +127,7 @@ def analyse(
     else:
         b1, b2, b3 = generation_range_bounds(gens)
 
-    gens_by_quartile: dict[str, set[int]] = {q: set() for q in ["Q1", "Q2", "Q3", "Q4"]}
+    gens_by_quartile: dict[Quartile, set[int]] = {q: set() for q in Quartile.quarters()}
     for g in distinct_gens:
         q = generation_to_quartile(g, b1, b2, b3)
         gens_by_quartile[q].add(g)

@@ -1,12 +1,9 @@
 """End-to-end pipeline test: ideas_tracker → normalize_memory_card → load_memory_cards.
 
-This test covers the integration boundary that was broken by Bug #2 (PR #161):
-- ideas_tracker produces RecordCardExtended with aliases: list[dict[...]]
-- normalize_memory_card must pass through dict aliases without crashing
-- load_memory_cards must preserve the full card metadata
-
-Without this E2E test, bugs in the type conversions at the boundary crash
-silently during memory write, wasting API credits.
+Covers the typed integration boundary between the tracker's serialized cards
+and the write pipeline: alias version history validates into CardAlias,
+quartile stats blocks into typed models, and load_memory_cards preserves
+the full card metadata.
 """
 
 import json
@@ -15,8 +12,8 @@ from pathlib import Path
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
-from gigaevo.memory.write_pipeline import _classify_card_type, load_memory_cards
+from gigaevo.memory.shared_memory.models import CardAlias, MemoryCard, ProgramCard
+from gigaevo.memory.write_pipeline import classify_card_type, load_memory_cards
 
 
 def _write_json(path: Path, payload: dict | list) -> None:
@@ -34,35 +31,26 @@ def make_ideas_tracker_card(
     description: str,
     has_version_history: bool = False,
 ) -> dict:
-    """Create a mock ideas_tracker output card with aliases as dict version history.
-
-    Mirrors RecordCardExtended structure:
-    - aliases: list[dict[str, dict[str, str | list[str]]]] (version history)
-    - explanation: dict[str, list[str] | str] (explanations list + summary)
-    """
+    """Create a mock ideas_tracker output card with CardAlias version history."""
     aliases = []
     if has_version_history:
-        # Version 1: initial description
         aliases.append(
             {
-                "exp1-prog1": {
-                    "description": f"{description} (initial)",
-                    "programs": ["p1"],
-                    "explanations": ["Found this pattern in early runs"],
-                }
+                "key": "exp1-prog1",
+                "description": f"{description} (initial)",
+                "programs": ["p1"],
+                "explanations": ["Found this pattern in early runs"],
             }
         )
-        # Version 2: updated description (simulating update_idea call)
         aliases.append(
             {
-                "exp1-prog2": {
-                    "description": f"{description} (refined)",
-                    "programs": ["p1", "p2"],
-                    "explanations": [
-                        "Found this pattern in early runs",
-                        "Refined after testing",
-                    ],
-                }
+                "key": "exp1-prog2",
+                "description": f"{description} (refined)",
+                "programs": ["p1", "p2"],
+                "explanations": [
+                    "Found this pattern in early runs",
+                    "Refined after testing",
+                ],
             }
         )
 
@@ -77,7 +65,9 @@ def make_ideas_tracker_card(
         "programs": ["p1", "p2"],
         "aliases": aliases,  # dict version history, NOT string list
         "keywords": ["retrieval", "chunking"],
-        "evolution_statistics": {"improved_count": 3, "generations": [5, 10, 15]},
+        "evolution_statistics": {
+            "ALL": {"intro_events": 3, "IntroGain_best_median": 0.01}
+        },
         "explanation": {
             "explanations": ["Found effective chunking strategy"],
             "summary": "Improved retrieval via adaptive chunking",
@@ -95,8 +85,8 @@ def make_ideas_tracker_card(
 class TestNormalizeWithIdeasTrackerOutput:
     """Test normalize_memory_card with realistic ideas_tracker output shapes."""
 
-    def test_normalize_card_with_dict_aliases(self):
-        """Card with dict aliases (version history) should not crash."""
+    def test_normalize_card_with_alias_history(self):
+        """Alias version history validates into typed CardAlias entries."""
         card = make_ideas_tracker_card(
             "idea-1", "Retrieval chunking", has_version_history=True
         )
@@ -105,20 +95,20 @@ class TestNormalizeWithIdeasTrackerOutput:
         assert isinstance(result, MemoryCard)
         assert result.id == "idea-1"
         assert result.description == "Retrieval chunking"
-        # Aliases preserved exactly as-is (list of dicts)
         assert len(result.aliases) == 2
-        assert isinstance(result.aliases[0], dict)
-        assert "exp1-prog1" in result.aliases[0]
+        assert isinstance(result.aliases[0], CardAlias)
+        assert result.aliases[0].key == "exp1-prog1"
+        assert result.aliases[1].programs == ["p1", "p2"]
 
     def test_preserve_evolution_statistics(self):
-        """Nested dict in evolution_statistics (nested list/dict) preserved."""
+        """Quartile blocks in evolution_statistics validate into typed models."""
         card = make_ideas_tracker_card(
             "idea-2", "Pooling strategy", has_version_history=False
         )
         result = normalize_memory_card(card)
 
-        assert result.evolution_statistics["improved_count"] == 3
-        assert result.evolution_statistics["generations"] == [5, 10, 15]
+        assert result.evolution_statistics.ALL.intro_events == 3
+        assert result.evolution_statistics.ALL.IntroGain_best_median == 0.01
 
     def test_preserve_explanation_structure(self):
         """explanation dict with explanations list and summary preserved."""
@@ -140,7 +130,7 @@ class TestNormalizeWithIdeasTrackerOutput:
         assert result.id == "idea-full"
         assert result.category == "general"
         assert len(result.aliases) == 2
-        assert isinstance(result.aliases[0], dict)
+        assert isinstance(result.aliases[0], CardAlias)
         assert result.keywords == ["retrieval", "chunking"]
         assert result.works_with == ["idea-2", "idea-3"]
         assert result.links == ["related-concept-1"]
@@ -179,7 +169,14 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         best_ideas_path = tmp_path / "best_ideas.json"
         _write_json(
             best_ideas_path,
-            [{"best_ideas": [{"idea_id": "idea-1"}, {"idea_id": "idea-2"}]}],
+            [
+                {
+                    "best_ideas": [
+                        {"idea_id": "idea-1", "quartile": "ALL"},
+                        {"idea_id": "idea-2", "quartile": "ALL"},
+                    ]
+                }
+            ],
         )
 
         # Load and validate
@@ -190,9 +187,9 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         assert isinstance(card1, MemoryCard)
         assert card1.id == "idea-1"
         assert len(card1.aliases) == 2
-        assert isinstance(card1.aliases[0], dict)
+        assert isinstance(card1.aliases[0], CardAlias)
         assert card1.description == "Chunking"
-        assert card1.evolution_statistics["improved_count"] == 3
+        assert card1.evolution_statistics.ALL.intro_events == 3
 
         card2 = cards[1]
         assert isinstance(card2, MemoryCard)
@@ -216,7 +213,10 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         )
 
         best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(best_ideas_path, [{"best_ideas": [{"idea_id": "idea-1"}]}])
+        _write_json(
+            best_ideas_path,
+            [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}],
+        )
 
         programs_path = tmp_path / "programs.json"
         _write_json(
@@ -269,6 +269,7 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
                     "best_ideas": [
                         {
                             "idea_id": "missing-idea",
+                            "quartile": "ALL",
                             "description": "Reconstructed from best_ideas",
                         }
                     ]
@@ -279,87 +280,41 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         cards = load_memory_cards(banks_path, best_ideas_path)
         assert cards == []
 
-    def test_e2e_complex_nested_structures_survive(self, tmp_path):
-        """Test that deeply nested structures (common in ideas_tracker) survive."""
+    def test_e2e_quartile_blocks_survive(self, tmp_path):
+        """Per-quartile stats blocks load back into typed models."""
         complex_card = make_ideas_tracker_card(
             "idea-nested", "Complex", has_version_history=True
         )
-        # Add more nesting
         complex_card["evolution_statistics"] = {
-            "by_generation": {
-                "5": {"fitness": 50.0, "count": 3},
-                "10": {"fitness": 75.0, "count": 5},
-            },
-            "total_improvements": [
-                {"gen": 5, "delta": 5.0},
-                {"gen": 10, "delta": 25.0},
-            ],
+            "ALL": {"intro_events": 8, "IntroGain_best_median": 0.02},
+            "Q2": {"intro_events": 3, "SiblingWinRate": 0.75},
+            "Q4": {"posterior_a": 4.0, "posterior_b": 2.0},
         }
         banks_path = tmp_path / "banks.json"
         _write_json(banks_path, [{"active_bank": [complex_card]}])
 
         best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(best_ideas_path, [{"best_ideas": [{"idea_id": "idea-nested"}]}])
+        _write_json(
+            best_ideas_path,
+            [{"best_ideas": [{"idea_id": "idea-nested", "quartile": "ALL"}]}],
+        )
 
         cards = load_memory_cards(banks_path, best_ideas_path)
         card = cards[0]
 
-        # Verify deep nesting survived (for evolution_statistics, which is still a dict)
-        assert card.evolution_statistics["by_generation"]["5"]["fitness"] == 50.0
-        assert card.evolution_statistics["total_improvements"][1]["delta"] == 25.0
+        assert card.evolution_statistics.ALL.intro_events == 8
+        assert card.evolution_statistics.Q2.SiblingWinRate == 0.75
+        assert card.evolution_statistics.Q4.posterior_a == 4.0
+        assert card.evolution_statistics.Q1 is None
 
 
 # ===========================================================================
-# Regression: the exact bug from PR #161
-# ===========================================================================
-
-
-class TestRegression_BugPR161:
-    """Regression test for Bug #2: Pydantic aliases type mismatch.
-
-    Before fix: normalize_memory_card would crash when ideas_tracker output
-    had aliases: list[dict[...]] because MemoryCard.aliases was typed list[str].
-
-    This test verifies the fix (aliases: list[Any]) handles this correctly.
-    """
-
-    def test_bug_pr161_aliases_type_mismatch(self):
-        """Original bug: aliases list[dict] crashed when expected list[str]."""
-        # This exact shape crashed before the fix
-        card_input = {
-            "id": "idea-1",
-            "description": "Idea",
-            "aliases": [
-                {
-                    "exp1-prog1": {
-                        "description": "Old version",
-                        "programs": ["p1"],
-                        "explanations": ["reason"],
-                    }
-                }
-            ],
-        }
-
-        # This used to crash with Pydantic validation error
-        result = normalize_memory_card(card_input)
-
-        assert isinstance(result, MemoryCard)
-        assert result.aliases == card_input["aliases"]
-        assert isinstance(result.aliases[0], dict)
-        assert "exp1-prog1" in result.aliases[0]
-
-
-# ===========================================================================
-# Full main() loop simulation — Bug #3 (PR #161)
+# Full main() loop simulation
 # ===========================================================================
 
 
 class TestMainLoopSimulation:
-    """Simulate the main() loop: load_memory_cards → _classify_card_type for each card.
-
-    Bug #3: _classify_card_type called .get() on Pydantic models returned by load_memory_cards.
-    These tests verify the full flow works without AttributeError.
-    """
+    """Simulate the main() loop: load_memory_cards → classify_card_type for each card."""
 
     def test_full_loop_ideas_only(self, tmp_path):
         """Simulate main() loop with idea cards from ideas_tracker."""
@@ -382,13 +337,19 @@ class TestMainLoopSimulation:
         best_ideas_path = tmp_path / "best_ideas.json"
         _write_json(
             best_ideas_path,
-            [{"best_ideas": [{"idea_id": "idea-1"}, {"idea_id": "idea-2"}]}],
+            [
+                {
+                    "best_ideas": [
+                        {"idea_id": "idea-1", "quartile": "ALL"},
+                        {"idea_id": "idea-2", "quartile": "ALL"},
+                    ]
+                }
+            ],
         )
 
         cards = load_memory_cards(banks_path, best_ideas_path)
-        # Simulate main() loop — this crashed before the fix
         for card in cards:
-            card_type = _classify_card_type(card)
+            card_type = classify_card_type(card)
             assert card_type == "ideas"
             assert isinstance(card, MemoryCard)
 
@@ -408,7 +369,10 @@ class TestMainLoopSimulation:
             ],
         )
         best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(best_ideas_path, [{"best_ideas": [{"idea_id": "idea-1"}]}])
+        _write_json(
+            best_ideas_path,
+            [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}],
+        )
         programs_path = tmp_path / "programs.json"
         _write_json(
             programs_path,
@@ -437,7 +401,7 @@ class TestMainLoopSimulation:
         # Simulate main() loop
         type_counts = {"ideas": 0, "programs": 0}
         for card in cards:
-            card_type = _classify_card_type(card)
+            card_type = classify_card_type(card)
             type_counts[card_type] += 1
 
         assert type_counts["ideas"] == 1
@@ -471,7 +435,7 @@ def test_write_pipeline_main_full_loop(tmp_path):
             ]
         }
     ]
-    best_ideas_data = [{"best_ideas": [{"idea_id": "idea-1"}]}]
+    best_ideas_data = [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}]
 
     banks_file = tmp_path / "banks.json"
     best_ideas_file = tmp_path / "best_ideas.json"

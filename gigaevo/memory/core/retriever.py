@@ -5,6 +5,9 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
+
 
 class GamRetriever:
     """Thin seam over a GAM memory backend: ``research`` runs the red-agent
@@ -45,11 +48,20 @@ class GamRetriever:
             )
         return self.backend.research(query, planning_request=planning_request)
 
-    def get_card(self, card_id: str) -> Any:
+    def get_card(self, card_id: str) -> AnyCard | None:
+        """Resolve a shortlisted card id to a typed card, fail-to-None.
+
+        Typed backends pass through; legacy backends that still return raw
+        dicts are normalized here — this is the typed boundary of the read
+        pipeline, so a corrupt persisted card degrades to None instead of
+        sinking the selection."""
         if self.backend is None:
             return None
         try:
-            return self.backend.get_card(card_id)
+            raw = self.backend.get_card(card_id)
+            if raw is None or isinstance(raw, MemoryCard | ProgramCard):
+                return raw
+            return normalize_memory_card(raw, fallback_id=card_id)
         except Exception as exc:
             logger.warning("[Memory][Retriever] get_card({}) failed: {}", card_id, exc)
             return None

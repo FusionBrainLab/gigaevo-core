@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from gigaevo.memory.shared_memory.models import Quartile
+
 
 def generation_quantile_bounds(
     gens: list[int], qs: tuple[float, float, float] = (0.25, 0.50, 0.75)
@@ -27,11 +29,11 @@ def generation_range_bounds(gens: list[int]) -> tuple[float, float, float]:
     return b1, b2, b3
 
 
-def generation_to_quartile(gen: int, b1: float, b2: float, b3: float) -> str:
+def generation_to_quartile(gen: int, b1: float, b2: float, b3: float) -> Quartile:
     if gen < b1:
-        return "Q1"
+        return Quartile.Q1
     if gen < b2:
-        return "Q2"
+        return Quartile.Q2
     if gen < b3:
-        return "Q3"
-    return "Q4"
+        return Quartile.Q3
+    return Quartile.Q4

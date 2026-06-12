@@ -1,10 +1,11 @@
-"""Equivalence + unit tests for the modular efficacy core.
+"""Unit + contract tests for the modular efficacy core.
 
-BetaBinomialReputation / ThompsonAuctioneer must reproduce the legacy functions
-(beta_binomial_posterior / compute_injection_posterior / run_card_auction)
-exactly under default config, and expose every threshold as a constructor
-parameter. The admitters and the harm predicate have no legacy twin anymore —
-their semantics are pinned directly here over ``IdeaStats`` rows.
+BetaBinomialReputation must agree with the standalone posterior functions
+(beta_binomial_posterior / compute_injection_posterior) under default config,
+ThompsonAuctioneer's draw order (theta then baseline, per candidate) is pinned
+seed-exact, and every threshold is exposed as a constructor parameter. The
+admitters and the harm predicate have their semantics pinned directly here
+over ``IdeaStats`` rows.
 """
 
 from __future__ import annotations
@@ -18,14 +19,15 @@ from gigaevo.memory.core.admitter import (
     SignBasedAdmitter,
     TieredAdmitter,
 )
-from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
+from gigaevo.memory.core.auctioneer import AuctionCandidate, ThompsonAuctioneer
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.reputation import BetaBinomialReputation
-from gigaevo.memory.shared_memory.card_search import run_card_auction
 from gigaevo.memory.shared_memory.injection_posterior import (
+    InjectionOutcome,
     beta_binomial_posterior,
     compute_injection_posterior,
 )
+from gigaevo.memory.shared_memory.models import EvolutionStatistics
 
 
 def make_stats_block(
@@ -77,8 +79,8 @@ class TestBetaBinomialReputation:
             ([], 0.0),
             ([-1.0, -2.0], 0.0),
         ]:
-            got = rep.posterior(gains, threshold=threshold)
-            want = beta_binomial_posterior(gains, threshold=threshold)
+            got = rep.posterior(gains, threshold=threshold).model_dump()
+            want = beta_binomial_posterior(gains, threshold=threshold).model_dump()
             for key, val in want.items():
                 if isinstance(val, float) and math.isnan(val):
                     assert math.isnan(got[key])
@@ -123,33 +125,27 @@ class TestBetaBinomialReputation:
             ({"Q4": make_stats_block()}, False),
             ({}, False),
             (None, False),
-            (
-                {"ALL": {"intro_events": 3, "posterior_a": "bad", "posterior_b": 1.0}},
-                False,
-            ),
         ]
         for stats, expected in cases:
-            assert rep.is_confidently_harmful(stats) is expected, stats
+            typed = None if stats is None else EvolutionStatistics.model_validate(stats)
+            assert rep.is_confidently_harmful(typed) is expected, stats
 
     def test_harm_min_events_configurable(self):
-        harmful = {
-            "ALL": make_stats_block(intro_events=2, posterior_a=1.0, posterior_b=4.0)
-        }
+        harmful = EvolutionStatistics.model_validate(
+            {"ALL": make_stats_block(intro_events=2, posterior_a=1.0, posterior_b=4.0)}
+        )
         assert not BetaBinomialReputation().is_confidently_harmful(harmful)
         assert BetaBinomialReputation(harm_min_events=2).is_confidently_harmful(harmful)
 
     def test_injection_posteriors_match_legacy(self):
         programs = [
-            {"id": "p1", "fitness": 0.5, "parents": [], "selected_ids": []},
-            {"id": "p2", "fitness": 0.6, "parents": ["p1"], "selected_ids": ["c1"]},
-            {"id": "p3", "fitness": 0.4, "parents": ["p1"], "selected_ids": ["c2"]},
-            {
-                "id": "p4",
-                "fitness": 0.7,
-                "parents": ["p2"],
-                "selected_ids": ["c1", "c3"],
-            },
-            {"id": "p5", "fitness": 0.3, "parents": ["p3"], "selected_ids": ["c2"]},
+            InjectionOutcome(id="p1", fitness=0.5),
+            InjectionOutcome(id="p2", fitness=0.6, parents=["p1"], selected_ids=["c1"]),
+            InjectionOutcome(id="p3", fitness=0.4, parents=["p1"], selected_ids=["c2"]),
+            InjectionOutcome(
+                id="p4", fitness=0.7, parents=["p2"], selected_ids=["c1", "c3"]
+            ),
+            InjectionOutcome(id="p5", fitness=0.3, parents=["p3"], selected_ids=["c2"]),
         ]
         got = BetaBinomialReputation().compute_injection_posteriors(programs)
         want = compute_injection_posterior(programs)
@@ -157,8 +153,8 @@ class TestBetaBinomialReputation:
 
     def test_injection_posteriors_lower_is_better(self):
         programs = [
-            {"id": "p1", "fitness": 0.5, "parents": [], "selected_ids": []},
-            {"id": "p2", "fitness": 0.4, "parents": ["p1"], "selected_ids": ["c1"]},
+            InjectionOutcome(id="p1", fitness=0.5),
+            InjectionOutcome(id="p2", fitness=0.4, parents=["p1"], selected_ids=["c1"]),
         ]
         got = BetaBinomialReputation().compute_injection_posteriors(
             programs, higher_is_better=False
@@ -169,22 +165,22 @@ class TestBetaBinomialReputation:
     def test_noise_band_k_widens_dead_band(self):
         # cardX rides on parent pX; its child cx regresses within the noise band.
         programs = [
-            {"id": "p0", "fitness": 0.5, "parents": [], "selected_ids": []},
-            {"id": "pX", "fitness": 0.5, "parents": [], "selected_ids": ["cardX"]},
-            {"id": "c1", "fitness": 0.5, "parents": ["p0"], "selected_ids": []},
-            {"id": "c2", "fitness": 0.6, "parents": ["p0"], "selected_ids": []},
-            {"id": "c3", "fitness": 0.4, "parents": ["p0"], "selected_ids": []},
-            {"id": "c4", "fitness": 0.7, "parents": ["p0"], "selected_ids": []},
-            {"id": "c5", "fitness": 0.3, "parents": ["p0"], "selected_ids": []},
-            {"id": "cx", "fitness": 0.4, "parents": ["pX"], "selected_ids": []},
+            InjectionOutcome(id="p0", fitness=0.5),
+            InjectionOutcome(id="pX", fitness=0.5, selected_ids=["cardX"]),
+            InjectionOutcome(id="c1", fitness=0.5, parents=["p0"]),
+            InjectionOutcome(id="c2", fitness=0.6, parents=["p0"]),
+            InjectionOutcome(id="c3", fitness=0.4, parents=["p0"]),
+            InjectionOutcome(id="c4", fitness=0.7, parents=["p0"]),
+            InjectionOutcome(id="c5", fitness=0.3, parents=["p0"]),
+            InjectionOutcome(id="cx", fitness=0.4, parents=["pX"]),
         ]
         default = BetaBinomialReputation().compute_injection_posteriors(programs)
-        assert default["cardX"]["k_harm"] == 0
+        assert default["cardX"].k_harm == 0
         assert default == compute_injection_posterior(programs)
         no_band = BetaBinomialReputation(noise_band_k=0.0).compute_injection_posteriors(
             programs
         )
-        assert no_band["cardX"]["k_harm"] == 1
+        assert no_band["cardX"].k_harm == 1
 
     def test_cold_prior_configurable(self):
         assert BetaBinomialReputation().cold_prior == (1.0, 1.0)
@@ -192,23 +188,31 @@ class TestBetaBinomialReputation:
 
 
 class TestThompsonAuctioneer:
-    def test_seed_exact_match_with_legacy(self):
-        candidates = [("a", 4.0, 1.0), ("b", 1.0, 1.0), ("c", 2.0, 5.0)] * 50
-        new_winners, new_records = ThompsonAuctioneer().run(
-            candidates, np.random.default_rng(7)
-        )
-        old_winners, old_records = run_card_auction(
-            candidates, np.random.default_rng(7)
-        )
-        assert new_winners == old_winners
-        assert new_records == old_records
+    def test_draw_order_is_seed_exact(self):
+        candidates = [
+            AuctionCandidate(card_id="a", posterior_a=4.0, posterior_b=1.0),
+            AuctionCandidate(card_id="b", posterior_a=1.0, posterior_b=1.0),
+            AuctionCandidate(card_id="c", posterior_a=2.0, posterior_b=5.0),
+        ] * 50
+        winners, slate = ThompsonAuctioneer().run(candidates, np.random.default_rng(7))
+        replay = np.random.default_rng(7)
+        for candidate, bid in zip(candidates, slate, strict=True):
+            assert bid.theta == float(
+                replay.beta(candidate.posterior_a, candidate.posterior_b)
+            )
+            assert bid.baseline_theta == float(replay.beta(3.0, 3.0))
+            assert bid.selected == (bid.theta > bid.baseline_theta)
+        assert winners == [bid.card_id for bid in slate if bid.selected]
 
     def test_baseline_prior_configurable(self):
         auct = ThompsonAuctioneer(baseline_prior=(1.0, 1000.0))
-        winners, records = auct.run([("a", 2.0, 2.0)], np.random.default_rng(0))
+        winners, slate = auct.run(
+            [AuctionCandidate(card_id="a", posterior_a=2.0, posterior_b=2.0)],
+            np.random.default_rng(0),
+        )
         assert winners == ["a"]
-        assert records[0]["baseline_a"] == 1.0
-        assert records[0]["baseline_b"] == 1000.0
+        assert slate[0].baseline_a == 1.0
+        assert slate[0].baseline_b == 1000.0
 
     def test_empty_candidates(self):
         winners, records = ThompsonAuctioneer().run([], np.random.default_rng(0))

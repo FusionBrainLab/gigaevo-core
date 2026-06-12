@@ -7,6 +7,9 @@ from pydantic import ValidationError
 import pytest
 
 from gigaevo.memory.shared_memory.models import (
+    CardAlias,
+    CardStatsBlock,
+    EvolutionStatistics,
     LocalMemorySnapshot,
     MemoryCard,
     MemoryCardExplanation,
@@ -55,7 +58,7 @@ class TestMemoryCard:
         assert c.programs == []
         assert c.aliases == []
         assert c.keywords == []
-        assert c.evolution_statistics == {}
+        assert c.evolution_statistics == EvolutionStatistics()
         assert c.explanation.explanations == []
         assert c.explanation.summary == ""
         assert c.works_with == []
@@ -71,9 +74,9 @@ class TestMemoryCard:
             strategy="exploration",
             last_generation=5,
             programs=["p1"],
-            aliases=["a1"],
+            aliases=[CardAlias(key="a1", description="superseded wording")],
             keywords=["k1"],
-            evolution_statistics={"x": 1},
+            evolution_statistics={"ALL": {"intro_events": 1}},
             explanation=MemoryCardExplanation(explanations=["e"], summary="s"),
             works_with=["w1"],
             links=["l1"],
@@ -109,11 +112,11 @@ class TestMemoryCard:
         c1.programs.append("p1")
         assert c2.programs == []
 
-    def test_dict_fields_are_independent_instances(self):
+    def test_statistics_are_independent_instances(self):
         c1 = MemoryCard(id="a", description="d")
         c2 = MemoryCard(id="b", description="d")
-        c1.evolution_statistics["x"] = 1
-        assert c2.evolution_statistics == {}
+        c1.evolution_statistics.ALL = CardStatsBlock(intro_events=1)
+        assert c2.evolution_statistics == EvolutionStatistics()
 
 
 # ===========================================================================

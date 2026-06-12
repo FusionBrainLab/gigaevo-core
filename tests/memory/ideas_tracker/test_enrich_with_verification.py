@@ -13,11 +13,10 @@ class TestEnrichWithVerification:
             child_code="y = y",
         )
         assert (
-            result["description"]
-            == "Removed target_log_transform log->raw: matches scale"
+            result.description == "Removed target_log_transform log->raw: matches scale"
         )
-        assert result["keywords"] == []
-        assert result["parent_diff_verified"] is False
+        assert result.keywords == []
+        assert result.parent_diff_verified is False
 
     def test_parsable_update_lever_passes(self) -> None:
         result = enrich_with_verification(
@@ -25,9 +24,9 @@ class TestEnrichWithVerification:
             parent_code="model = CatBoostRegressor(l2_leaf_reg=1.0)",
             child_code="model = CatBoostRegressor(l2_leaf_reg=2.0)",
         )
-        assert not result["description"].startswith("UNVERIFIED_")
-        assert "verified:true" in result["keywords"]
-        assert result["parent_diff_verified"] is True
+        assert not result.description.startswith("UNVERIFIED_")
+        assert "verified:true" in result.keywords
+        assert result.parent_diff_verified is True
 
     def test_parsable_use_lever_fails(self) -> None:
         result = enrich_with_verification(
@@ -35,8 +34,8 @@ class TestEnrichWithVerification:
             parent_code="model = CatBoostRegressor()",
             child_code="model = CatBoostRegressor(early_stopping_rounds=100)",
         )
-        assert result["description"].startswith("UNVERIFIED_USE")
-        assert "verified:false" in result["keywords"]
+        assert result.description.startswith("UNVERIFIED_USE")
+        assert "verified:false" in result.keywords
 
     def test_lever_pass_no_code_evidence_marks_mechanism_unverified(self) -> None:
         result = enrich_with_verification(
@@ -44,9 +43,9 @@ class TestEnrichWithVerification:
             parent_code="model = CatBoostRegressor(depth=6)",
             child_code="model = CatBoostRegressor(depth=7)",
         )
-        assert result["description"].startswith("UNVERIFIED_UPDATE")
-        assert "verified:true" in result["keywords"]
-        assert "mechanism_unverified:true" in result["keywords"]
+        assert result.description.startswith("UNVERIFIED_UPDATE")
+        assert "verified:true" in result.keywords
+        assert "mechanism_unverified:true" in result.keywords
 
     def test_no_parent_code_skips_verification(self) -> None:
         result = enrich_with_verification(
@@ -55,9 +54,9 @@ class TestEnrichWithVerification:
             child_code="model = ...",
         )
         # No parent code → can't verify lever; pass through but don't mark verified
-        assert result["parent_diff_verified"] is False
+        assert result.parent_diff_verified is False
         assert (
-            result["description"]
+            result.description
             == "UPDATE depth 6→7: bias-variance; support=1; Δbest=+0.005; co=[]"
         )
 
@@ -68,4 +67,4 @@ class TestEnrichWithVerification:
             child_code="model = CatBoostRegressor(early_stopping_rounds=100)",
         )
         # Don't double-prefix
-        assert result["description"].count("UNVERIFIED_") == 1
+        assert result.description.count("UNVERIFIED_") == 1
