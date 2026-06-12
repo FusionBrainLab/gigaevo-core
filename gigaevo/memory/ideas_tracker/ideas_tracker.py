@@ -92,7 +92,9 @@ def _ensure_writable_hf_cache() -> None:
         if not raw or not str(raw).strip():
             continue
         if not _hf_cache_dir_usable(Path(raw)):
-            print(f"[Memory][IdeaTracker] Clearing unwritable {key}={raw!r}")
+            logger.warning(
+                "[Memory][IdeaTracker] Clearing unwritable {}={!r}", key, raw
+            )
             os.environ.pop(key, None)
 
     hf = os.environ.get("HF_HOME")
@@ -106,7 +108,7 @@ def _ensure_writable_hf_cache() -> None:
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub)
     os.environ["TRANSFORMERS_CACHE"] = str(hub)
     os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(fallback)
-    print(f"[Memory][IdeaTracker] HF cache directory -> {fallback}")
+    logger.warning("[Memory][IdeaTracker] HF cache directory -> {}", fallback)
 
 
 def _load_task_description(redis_prefix: str, package_path: Path) -> str:
