@@ -2,6 +2,295 @@
 
 <!-- version list -->
 
+## v2.4.0 (2026-06-12)
+
+### Bug Fixes
+
+- **ci**: Scope dry_run resolver stubs + drop tests/problems; CI on py3.12
+  ([#274](https://github.com/KhrulkovV/gigaevo-core-internal/pull/274),
+  [`3917da2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3917da25e8a19109a55e15ed6b42771404910699))
+
+- **ci**: Un-stick RedisInstanceLock renewal cancel + survive future hangs
+  ([#274](https://github.com/KhrulkovV/gigaevo-core-internal/pull/274),
+  [`3917da2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3917da25e8a19109a55e15ed6b42771404910699))
+
+- **deps**: Minimal install works end-to-end + promote lightweight matplotlib
+  ([`5d3ab2b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5d3ab2b4b2fe1d64e3e7136a6c16c5ae25e61a5c))
+
+- **memory**: Bounded parallel refresh + structured-output cutover + observability polish
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **memory**: Direction- and sentinel-correct stats tracking
+  ([#272](https://github.com/KhrulkovV/gigaevo-core-internal/pull/272),
+  [`e07ec8a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e07ec8a949a03e92baf9d2e228f231b583a95d05))
+
+- **memory**: Final-review pass — CLI direction flag + sentinel-ceiling test
+  ([#272](https://github.com/KhrulkovV/gigaevo-core-internal/pull/272),
+  [`e07ec8a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e07ec8a949a03e92baf9d2e228f231b583a95d05))
+
+- **memory**: Ledger rows for sweep evictions + legacy-backend dropped-component warning
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Resolve mypy type errors flagged by pre-push gate
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Review iteration 1 — write-side evictor/dedup plumbing, sweep_harmful facade,
+  traceback logging ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Route HF-cache env diagnostics through loguru
+  ([#273](https://github.com/KhrulkovV/gigaevo-core-internal/pull/273),
+  [`f4dd916`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f4dd9160f01711045f0ed6c18bfb250e33f9e766))
+
+- **memory**: Route IdeaTracker program-card posteriors through reputation singleton
+  ([#270](https://github.com/KhrulkovV/gigaevo-core-internal/pull/270),
+  [`2812ad7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2812ad76c9de65f7eb70ae338e3ef67cb71a7c5f))
+
+- **metrics**: Recompute valid-frontier on every drain in iteration order
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **metrics_tracker**: Use program.iteration as step for valid/program/<key>
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **monitoring**: Extend frontier line + annotate jumps; prune buffer on clear_series
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **storage**: Address PR #267 review iteration 1
+  ([`d381257`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d3812572990adf14bc1b8b08b01db7c0df48b8b0))
+
+- **storage**: Review iteration 2 — disk-aware run.py messaging + status-set crash reconciliation
+  ([`a6dc24f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a6dc24f0b81892afbade34a8a67d627a47c3bf01))
+
+- **tabular**: Add fit_predict code skeleton to task-description CONTRACT
+  ([#265](https://github.com/KhrulkovV/gigaevo-core-internal/pull/265),
+  [`2728702`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/272870281133c135dbb1820e78b091db34f4719e))
+
+- **tabular**: Align seed programs with the task-description protocol
+  ([#264](https://github.com/KhrulkovV/gigaevo-core-internal/pull/264),
+  [`4a5e614`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4a5e6142ce25862899e724c4879c827060c80e39))
+
+- **tabular**: Align seeds with task-description protocol + semantic task descriptions
+  ([#264](https://github.com/KhrulkovV/gigaevo-core-internal/pull/264),
+  [`4a5e614`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4a5e6142ce25862899e724c4879c827060c80e39))
+
+- **tabular**: Prevent programs from poisoning the worker dataset cache
+  ([#268](https://github.com/KhrulkovV/gigaevo-core-internal/pull/268),
+  [`d783f11`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d783f11a8e73b894e2eebb5b372338f4e978e92a))
+
+- **types**: Satisfy mypy in memory_selector + CMA pipeline
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+### Build System
+
+- **release**: Also strip compiled extensions and graphify-out
+  ([`dcac51b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/dcac51bfbb27917e4e80d706632c7bd1c1bbee1f))
+
+- **release**: Teach sync_public.sh glob/regex prefixes + size gate
+  ([`4855cff`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4855cff7861b056ec66c21ed61325ada096c1585))
+
+### Chores
+
+- **config**: Drop stale top-level top_p / top_k Hydra constants
+  ([#257](https://github.com/KhrulkovV/gigaevo-core-internal/pull/257),
+  [`4508e20`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4508e209b9f08b3cfa463e9138c46443f1af2f0c))
+
+- **gitignore**: Untrack ~2.8GB bench fixtures + add runtime artifact rules
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **lint**: Satisfy ruff check + format for pre-push gate
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **lint**: Sort post-Agg imports in live_frontier_compare
+  ([`b2db237`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b2db237770fb05771966dc972306245b4d5267af))
+
+- **memory**: Prefix all memory logs [Memory][Locus]; untrack catboost
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+### Documentation
+
+- **memory**: Field descriptions on every Pydantic model in the card paths
+  ([#271](https://github.com/KhrulkovV/gigaevo-core-internal/pull/271),
+  [`2ed48b7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2ed48b706e0605647cee96b4bb20dd74726e093e))
+
+- **memory**: Refresh stale memory READMEs for release
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **tabular**: Canonical README for tabular suite + USAGE pointer
+  ([`4b2d380`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4b2d380754f40d95f1350cff8c57dc5f2163034a))
+
+### Features
+
+- **cli**: -r accepts disk storage paths alongside prefix@db specs
+  ([`1d62f22`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1d62f22eb7fad9f80442c6adc49c9b0d8e105e66))
+
+- **core**: Curated framework fixes + tabular-regression QD support
+  ([`52ebc6b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/52ebc6b107b730da785972309094019fdcce0e23))
+
+- **evolution**: Content-addressable stage-output store for debug observability
+  ([#266](https://github.com/KhrulkovV/gigaevo-core-internal/pull/266),
+  [`50a3b10`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/50a3b10e75d868b325797d5e287c2b489e16152d))
+
+- **llm,run**: Global LLM-concurrency cap + always-finalize hooks
+  ([`0190f0e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0190f0e73cc7292e608b763c0234400915544e85))
+
+- **memory**: Beta-Binomial confidence gate + Thompson auction for shared-bank cards
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Modular memory core, Hydra config groups, canonical event logging
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Single-owner EfficacyScorer for card- and idea-side gain stats
+  ([#272](https://github.com/KhrulkovV/gigaevo-core-internal/pull/272),
+  [`e07ec8a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e07ec8a949a03e92baf9d2e228f231b583a95d05))
+
+- **memory**: Surface per-card efficacy to mutator; drop dead usage blob
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Write-side integrity gate for card bank (GAM Phase 1)
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **metrics**: Storage-agnostic metrics history — disk JSONL backend + reader protocol
+  ([`a650473`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a65047351b82acd0b16768f20b35de5d8d7a47f9))
+
+- **monitoring**: Dynamic ETA ticker — periodic log driven by observed throughput
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **prompts**: Land v4 packed-grammar mutation prompt + strip CONTEXT scaffolding
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **stages**: Salvage best-so-far on cancellation for Optuna and CMA stages
+  ([`4b1ce31`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4b1ce31ce416ed9cd81e627ce8366914e2266ca1))
+
+- **storage**: Disk-backed ProgramStorage + ArchiveStorage backend
+  ([`45b38a7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/45b38a7e48b445b2cc27e29eeb04c5e6300bdf8d))
+
+- **tabular**: 10 dataset dirs (task_description + symlinks) + description generator
+  ([`28bd9b2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/28bd9b20a14d25e3f4b59f8b7f46f238f0e9ef20))
+
+- **tabular**: 5 seed programs per task type (reg/binclass/multiclass)
+  ([`848274e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/848274e69f1b674161b935e5ee15788f32b13653))
+
+- **tabular**: Build(name) validator + scorer with CV/holdout + task-typed keys
+  ([`c738e77`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c738e7775f0269b780474333b44220b596e35769))
+
+- **tabular**: Data loader with ordinal-encoded categoricals + column descriptions
+  ([`21ad0f4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/21ad0f45cecb4923685cdaacd574a47598c52f2b))
+
+- **tabular**: Generalised robustness BD probe (local Lipschitz + OOD slope)
+  ([`b46f508`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b46f5087a49379e4c541f26be97f913107546850))
+
+- **tabular**: Per-task-type metrics.yaml with key-set parity tests
+  ([`3d938fe`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3d938fef87a5c0fb4d10d701581d0b64586e3909))
+
+- **tabular**: Scale-free metric helpers (regression + classification)
+  ([`b0450b0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b0450b07d04a869f08dc724c80b47e543d991298))
+
+- **tabular**: Semantic column meaning + kaggler strategy hints in task descriptions
+  ([#264](https://github.com/KhrulkovV/gigaevo-core-internal/pull/264),
+  [`4a5e614`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4a5e6142ce25862899e724c4879c827060c80e39))
+
+- **tabular**: Validator shim (sys.path[0]) + standalone test scorer
+  ([`252ff3a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/252ff3a84d7d425326ec9ad5e47c3e42b3d7573c))
+
+### Performance Improvements
+
+- **exec**: Cap intra-worker thread libs to (cpu//8) to stop oversubscription
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **memory**: Bound live-refresh sweep and parallelise classifier
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+### Refactoring
+
+- **config**: Storage backend as first-class Hydra group
+  ([`afe050d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/afe050d017390e83dfa0abfc248212536fa47525))
+
+- **memory**: Cut over to LangChain structured output + v3 selector prompts
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **memory**: DecisionMetrics/AuditMetrics split + CardStatsStamper; delete TieredAdmitter
+  ([#272](https://github.com/KhrulkovV/gigaevo-core-internal/pull/272),
+  [`e07ec8a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e07ec8a949a03e92baf9d2e228f231b583a95d05))
+
+- **memory**: Finish typed-card boundaries — vendor meta envelope, typed Idea statistics, canonical
+  mutation-output key ([#271](https://github.com/KhrulkovV/gigaevo-core-internal/pull/271),
+  [`2ed48b7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2ed48b706e0605647cee96b4bb20dd74726e093e))
+
+- **memory**: GenerationBucketer + typed EfficacyEvent rows
+  ([#272](https://github.com/KhrulkovV/gigaevo-core-internal/pull/272),
+  [`e07ec8a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e07ec8a949a03e92baf9d2e228f231b583a95d05))
+
+- **memory**: Make LangChainLLMService structured-output method per-deployment
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **memory**: Remove dead usage-tracking store (converge on IntroGain)
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **memory**: Self-review pass — typed auction slate, CardAlias, IdeaStats everywhere
+  ([#271](https://github.com/KhrulkovV/gigaevo-core-internal/pull/271),
+  [`2ed48b7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2ed48b706e0605647cee96b4bb20dd74726e093e))
+
+- **memory**: Typed Pydantic cards everywhere — remove dict plumbing from card paths
+  ([#271](https://github.com/KhrulkovV/gigaevo-core-internal/pull/271),
+  [`2ed48b7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2ed48b706e0605647cee96b4bb20dd74726e093e))
+
+- **memory**: WriteStatKey enum for write_stats counters; enum-keyed dedup fallbacks
+  ([#271](https://github.com/KhrulkovV/gigaevo-core-internal/pull/271),
+  [`2ed48b7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2ed48b706e0605647cee96b4bb20dd74726e093e))
+
+- **problems**: Rename optimization → tabular_regression, redesign contract
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **storage**: Pure ProgramStorage abstraction, Hydra-confined construction
+  ([`5213e9a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5213e9a7babe17bc016044df94cee11cafecca29))
+
+- **tabular**: Remove tabular_regression (replaced by tabular/california)
+  ([`4030df9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4030df9aa748c4193d78875c77e09d36e6fb92d7))
+
+### Testing
+
+- **memory**: Align selector tests with structured-output select() API
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **memory**: Fix CI integration tests after structured-output cutover
+  ([#258](https://github.com/KhrulkovV/gigaevo-core-internal/pull/258),
+  [`47f68e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47f68e3f3f026d638ecb8e3cf6f820c48a76e96f))
+
+- **memory**: Guard platform-injection test behind gigaevo_memory importorskip
+  ([#269](https://github.com/KhrulkovV/gigaevo-core-internal/pull/269),
+  [`8663f30`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8663f3062853d3ec534e8652b5fa3b29f9ef6675))
+
+- **tabular**: ProblemContext loads all 10 dataset dirs
+  ([`3038532`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3038532b5f18f493498ba29214fcbeb590fb2bba))
+
+- **tabular**: Scaffold tabular test package + conftest
+  ([`f8c7e69`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f8c7e6972c50b21015177f076829e64e6b8a937f))
+
+
 ## v2.3.1 (2026-05-22)
 
 ### Bug Fixes
