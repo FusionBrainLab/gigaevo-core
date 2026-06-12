@@ -234,3 +234,40 @@ class TestInvokeFailureSurface:
         exp, _ = dummy_manifest
         with pytest.raises(RuntimeError, match="Hydra compose failed"):
             dry_run(exp)
+
+
+class TestResolverScoping:
+    def _real_ref_resolves(self) -> bool:
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create({"a": 5, "b": "${ref:a}"})
+        return cfg.b == 5
+
+    def test_import_leaves_real_ref_resolver(self):
+        import importlib
+
+        from gigaevo.config.resolvers import register_resolvers
+        import gigaevo.experiment.dry_run as mod
+
+        register_resolvers()
+        importlib.reload(mod)
+        assert self._real_ref_resolves()
+
+    def test_ref_stub_used_during_resolution(self, dummy_manifest, monkeypatch):
+        import gigaevo.experiment.dry_run as mod
+        from gigaevo.experiment.dry_run import dry_run
+
+        def _fake(args, cwd, timeout=120):
+            return "problem:\n  name: toy_kadane\nwriter: ${ref:problem}\n"
+
+        monkeypatch.setattr(mod, "_invoke_run_py_cfg_job", _fake)
+        exp, _ = dummy_manifest
+        res = dry_run(exp)
+        assert res.resolved["A1"]["writer"] == "<ref:problem>"
+
+    def test_dry_run_restores_real_ref_resolver(self, dummy_manifest, stub_invoke):
+        from gigaevo.experiment.dry_run import dry_run
+
+        exp, _ = dummy_manifest
+        dry_run(exp)
+        assert self._real_ref_resolves()

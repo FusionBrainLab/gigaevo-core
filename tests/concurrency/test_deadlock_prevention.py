@@ -1264,11 +1264,14 @@ class TestStorageBatchContention:
 
             async def poll_status():
                 for _ in range(50):
-                    queued = await storage.get_all_by_status(ProgramState.QUEUED.value)
+                    # Read sets opposite to the transition direction: a program
+                    # advancing QUEUED->RUNNING->DONE between reads would
+                    # otherwise be counted in two consecutive sets.
+                    done = await storage.get_all_by_status(ProgramState.DONE.value)
                     running = await storage.get_all_by_status(
                         ProgramState.RUNNING.value
                     )
-                    done = await storage.get_all_by_status(ProgramState.DONE.value)
+                    queued = await storage.get_all_by_status(ProgramState.QUEUED.value)
                     # Total should be <= 20 (some may be in-flight between states)
                     total = len(queued) + len(running) + len(done)
                     assert total <= 20, f"Got {total} programs, expected <= 20"

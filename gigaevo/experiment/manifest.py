@@ -30,6 +30,7 @@ from omegaconf import OmegaConf
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     field_validator,
     model_validator,
 )
@@ -269,8 +270,9 @@ class TreatmentVerificationInfo(BaseModel):
     # reject-as-string_type broke manifest validation for any manifest
     # that hadn't been touched since creation (6 redesign-sandbox yamls
     # failed this way). Accept None (coerced to "") via pre-validator so
-    # downstream code can still treat `note` as a plain str.
-    note: str = ""
+    # downstream code can still treat `note` as a plain str; the JSON
+    # schema must mirror that wire format, hence the explicit null type.
+    note: str = Field(default="", json_schema_extra={"type": ["string", "null"]})
 
     @field_validator("note", mode="before")
     @classmethod

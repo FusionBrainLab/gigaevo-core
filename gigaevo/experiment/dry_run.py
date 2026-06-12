@@ -17,6 +17,7 @@ so tests can stub it without spinning up Hydra.
 from __future__ import annotations
 
 import concurrent.futures
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import hashlib
 import os
@@ -30,17 +31,6 @@ from gigaevo.config.resolvers import register_resolvers
 from gigaevo.experiment import manifest as _manifest_mod
 from gigaevo.experiment.launch_generator import _build_run_cmd
 from gigaevo.experiment.manifest import experiment_dir, load_manifest
-
-# Register project resolvers (eval/get_object/merge/len/ref) so that
-# OmegaConf.to_container(..., resolve=True) can resolve ${get_object:...}
-# interpolations present in resolved --cfg job output. Safe to call repeatedly:
-# OmegaConf.register_new_resolver is idempotent when replace=False is omitted
-# (it no-ops on re-registration of the same name).
-try:
-    register_resolvers()
-except ValueError:
-    # Resolvers already registered in this process — fine.
-    pass
 
 
 def _hydra_stub_resolver(path: str) -> str:
@@ -56,12 +46,6 @@ def _hydra_stub_resolver(path: str) -> str:
     pin-matching.
     """
     return f"<hydra:{path}>"
-
-
-try:
-    OmegaConf.register_new_resolver("hydra", _hydra_stub_resolver)
-except ValueError:
-    pass
 
 
 def _ref_stub_resolver(path: str) -> str:
@@ -80,14 +64,32 @@ def _ref_stub_resolver(path: str) -> str:
     return f"<ref:{path}>"
 
 
-OmegaConf.register_new_resolver("ref", _ref_stub_resolver, replace=True)
+_STUB_ENV_KEYS = ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
 
 
-# Set placeholder env vars for ${oc.env:...} references that appear in the
-# default LLM/logging configs. The preview only needs pin-match values;
-# secrets don't matter.
-for _env_key in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
-    os.environ.setdefault(_env_key, "<dry-run-stub>")
+@contextmanager
+def _stub_resolvers():
+    """Scope stub resolvers + placeholder env vars to one dry-run compile.
+
+    Registering these globally at import time poisons every later Hydra
+    composition in the process: real ``${ref:...}`` nodes resolve to
+    placeholder strings instead of instantiated objects. The placeholder
+    env vars satisfy ``${oc.env:...}`` references in default LLM/logging
+    configs; the preview only needs pin-match values, secrets don't matter.
+    """
+    OmegaConf.register_new_resolver("hydra", _hydra_stub_resolver, replace=True)
+    OmegaConf.register_new_resolver("ref", _ref_stub_resolver, replace=True)
+    added_env = [k for k in _STUB_ENV_KEYS if k not in os.environ]
+    for key in added_env:
+        os.environ[key] = "<dry-run-stub>"
+    try:
+        yield
+    finally:
+        for key in added_env:
+            os.environ.pop(key, None)
+        OmegaConf.clear_resolver("hydra")
+        register_resolvers()
+
 
 PYTHON_PATH_DEFAULT = "python3"
 
@@ -153,20 +155,21 @@ def dry_run(
             )
         return run_label, doc  # type: ignore[return-value]
 
-    if max_workers <= 1 or len(cli_args) == 1:
-        for label, args in cli_args.items():
-            label, doc = _one(label, args)
-            resolved[label] = doc
-    else:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(max_workers, len(cli_args))
-        ) as pool:
-            futures = [
-                pool.submit(_one, label, args) for label, args in cli_args.items()
-            ]
-            for fut in concurrent.futures.as_completed(futures):
-                label, doc = fut.result()  # re-raises worker exceptions
+    with _stub_resolvers():
+        if max_workers <= 1 or len(cli_args) == 1:
+            for label, args in cli_args.items():
+                label, doc = _one(label, args)
                 resolved[label] = doc
+        else:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(max_workers, len(cli_args))
+            ) as pool:
+                futures = [
+                    pool.submit(_one, label, args) for label, args in cli_args.items()
+                ]
+                for fut in concurrent.futures.as_completed(futures):
+                    label, doc = fut.result()  # re-raises worker exceptions
+                    resolved[label] = doc
 
     # Step 3: Fingerprint Hydra-reachable config files.
     fingerprint = _fingerprint_config(manifest)

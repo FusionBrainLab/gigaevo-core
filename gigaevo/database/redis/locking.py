@@ -135,8 +135,15 @@ class RedisInstanceLock:
 
     async def _renew_periodically(self) -> None:
         """Background task to renew the lock periodically."""
+        task = asyncio.current_task()
         while not self._conn.is_closing:
             try:
+                # On py3.11, CancelledError delivered inside a redis call can be
+                # swallowed by client internals; cancelling() still records the
+                # request, so re-check it here or release() awaits us forever.
+                if task is not None and task.cancelling():
+                    break
+
                 await asyncio.sleep(self._config.lock_renewal_secs)
 
                 if self._conn.is_closing:

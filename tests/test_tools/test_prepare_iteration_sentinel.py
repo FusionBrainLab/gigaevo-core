@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from gigaevo.monitoring.run_spec import RunSpec
 from tools.utils import prepare_iteration_dataframe
 
 
@@ -161,8 +162,7 @@ class TestFetchRunDataSentinelPassthrough:
         mock_asyncio.run.return_value = raw_df
 
         mock_rc = MagicMock()
-        mock_rc.run_spec.db = 0
-        mock_rc.run_spec.prefix = "test_prefix"
+        mock_rc.run_spec = RunSpec(prefix="test_prefix", db=0, label="test_label")
         results = _fetch_run_data(
             [mock_rc], "localhost", 6379, metric="fitness", sentinel_value=-1.0
         )
@@ -186,8 +186,7 @@ class TestFetchRunDataSentinelPassthrough:
         mock_asyncio.run.return_value = raw_df
 
         mock_rc = MagicMock()
-        mock_rc.run_spec.db = 0
-        mock_rc.run_spec.prefix = "test_prefix"
+        mock_rc.run_spec = RunSpec(prefix="test_prefix", db=0, label="test_label")
         results = _fetch_run_data([mock_rc], "localhost", 6379, metric="fitness")
 
         assert len(results) == 1
