@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections import deque
 import math
 
-from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
-    generation_to_quartile,
-)
+from gigaevo.memory.efficacy import GenerationBucketer
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.types import (
     DescMetrics,
     IntroEvent,
@@ -35,30 +33,11 @@ def pick_best_parent(
     return best_pid, best_fit
 
 
-def mean_parent_fitness(parents: list[str], programs: dict[str, dict]) -> float | None:
-    fits = []
-    for par in parents:
-        p = programs.get(par)
-        if not p:
-            continue
-        try:
-            f = float(p.get("fitness", float("nan")))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(f):
-            fits.append(f)
-    if not fits:
-        return None
-    return sum(fits) / len(fits)
-
-
 def compute_intro_events(
     programs: dict[str, dict],
     prog_to_origin_ideas: dict[str, set[str]],
     parents_of: dict[str, list[str]],
-    b1: float,
-    b2: float,
-    b3: float,
+    bucketer: GenerationBucketer,
 ) -> list[IntroEvent]:
     events: list[IntroEvent] = []
 
@@ -88,11 +67,10 @@ def compute_intro_events(
             continue
 
         best = pick_best_parent(parents, programs)
-        mfit = mean_parent_fitness(parents, programs)
-        if best is None or mfit is None:
+        if best is None:
             continue
         best_pid, best_fit = best
-        q = generation_to_quartile(int(gen_child), b1, b2, b3)
+        q = bucketer.bucket(int(gen_child))
 
         for idea in introduced:
             events.append(
@@ -104,7 +82,6 @@ def compute_intro_events(
                     parents=parents,
                     best_parent_id=best_pid,
                     best_parent_fit=float(best_fit),
-                    mean_parent_fit=float(mfit),
                     quartile=q,
                 )
             )

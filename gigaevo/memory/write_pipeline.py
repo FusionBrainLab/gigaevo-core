@@ -13,6 +13,7 @@ from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
+from gigaevo.memory.efficacy import CardStatsStamper
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
@@ -20,7 +21,6 @@ from gigaevo.memory.shared_memory.models import (
     ConnectedIdea,
     MemoryCard,
     ProgramCard,
-    Quartile,
 )
 from gigaevo.memory.utils import to_float
 
@@ -74,11 +74,6 @@ def top_percent_count(total: int, percent: float) -> int:
 def classify_card_type(card: AnyCard) -> str:
     """Bucket a typed card for write-stats reporting: ``programs`` or ``ideas``."""
     return "programs" if isinstance(card, ProgramCard) else "ideas"
-
-
-# ---------------------------------------------------------------------------
-# Typed snapshot rows (boundary envelopes for tracker JSON files)
-# ---------------------------------------------------------------------------
 
 
 class BankSnapshot(BaseModel):
@@ -161,11 +156,6 @@ class ProgramRow(BaseModel):
         return self.is_valid is None or self.is_valid > 0
 
 
-# ---------------------------------------------------------------------------
-# Write-stats counters
-# ---------------------------------------------------------------------------
-
-
 class WriteStats(BaseModel):
     """Card-store write counters as reported by the backend's write ledger."""
 
@@ -243,11 +233,6 @@ class WriteStatsSnapshot(BaseModel):
     stats_by_classify_card_type: CardTypeWriteStats = Field(
         description="Write counters split by card type."
     )
-
-
-# ---------------------------------------------------------------------------
-# Snapshot parsing
-# ---------------------------------------------------------------------------
 
 
 def parse_best_ideas(path: Path) -> tuple[list[str], dict[str, IdeaStats]]:
@@ -485,24 +470,6 @@ def build_program_cards_from_top_programs(
     return cards
 
 
-def stamp_card_posterior(
-    card: AnyCard, card_posterior: dict[str, CardStatsBlock]
-) -> AnyCard:
-    """Stamp a card's injection posterior into ``evolution_statistics.ALL``.
-
-    Applies to ANY card the selector can inject — idea and program cards alike —
-    keyed by the card's own id. Other statistics blocks (e.g.
-    ``best_ideas_snapshot``) are preserved; cards without a posterior are
-    returned unchanged so the auction treats them as COLD. The input card is
-    never mutated.
-    """
-    posterior = card_posterior.get(str(card.id or "").strip())
-    if posterior is None:
-        return card
-    stamped_stats = card.evolution_statistics.with_block(Quartile.ALL, posterior)
-    return card.model_copy(update={"evolution_statistics": stamped_stats})
-
-
 def load_memory_cards(
     path: Path,
     best_ideas_path: Path,
@@ -544,7 +511,8 @@ def load_memory_cards(
         ),
     ]
     if card_posterior:
-        typed_cards = [stamp_card_posterior(c, card_posterior) for c in typed_cards]
+        stamper = CardStatsStamper()
+        typed_cards = [stamper.stamp_posterior(c, card_posterior) for c in typed_cards]
     return typed_cards
 
 

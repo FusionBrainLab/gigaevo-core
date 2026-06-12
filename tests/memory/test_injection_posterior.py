@@ -17,9 +17,9 @@ from pydantic import ValidationError
 import pytest
 
 from gigaevo.memory.core.reputation import BetaBinomialReputation
+from gigaevo.memory.efficacy import beta_binomial_posterior
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
-    beta_binomial_posterior,
     compute_injection_posterior,
 )
 from gigaevo.memory.shared_memory.models import EvolutionStatistics

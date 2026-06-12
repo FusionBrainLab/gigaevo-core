@@ -13,10 +13,11 @@ description_rewriting: true
 memory_write_enabled: true
 memory_write_best_programs_percent: 5.0
 fitness_higher_is_better: ${higher_is_better}
+metrics_context: ${metrics_context}
 checkpoint_dir: ${checkpoint_dir}
 redis_prefix: ${problem.name}
 # Rides the read-side memory= group: memory=local injects its admitter
-# (sign_based by default), memory=none leaves it null (TieredAdmitter
+# (sign_based by default), memory=none leaves it null (SignBasedAdmitter
 # fallback) — so best_ideas.json contents depend on the chosen read backend.
 admitter: ${ref:memory.admitter}
 # Same riding for the write-side dedup/evictor singletons (memory=none → null,

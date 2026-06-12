@@ -41,17 +41,23 @@ def load_ideas(path: str) -> tuple[dict[str, set[str]], dict[str, str]]:
     return idea_to_origin_programs, idea_desc
 
 
-def load_programs(path: str) -> dict[str, dict]:
+def load_programs(path: str, higher_is_better: bool = True) -> dict[str, dict]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     programs: dict[str, dict] = {}
+    worst = float("-inf") if higher_is_better else float("inf")
 
     def fit_of(p: dict) -> float:
         try:
-            return float(p.get("fitness", float("-inf")))
+            return float(p.get("fitness", worst))
         except Exception:
-            return float("-inf")
+            return worst
+
+    def better(candidate: dict, incumbent: dict) -> bool:
+        if higher_is_better:
+            return fit_of(candidate) > fit_of(incumbent)
+        return fit_of(candidate) < fit_of(incumbent)
 
     if isinstance(data, list):
         for snap in data:
@@ -64,11 +70,11 @@ def load_programs(path: str) -> dict[str, dict]:
                     if not isinstance(p, dict) or "id" not in p:
                         continue
                     pid = str(p["id"])
-                    if pid not in programs or fit_of(p) > fit_of(programs[pid]):
+                    if pid not in programs or better(p, programs[pid]):
                         programs[pid] = p
             elif isinstance(snap, dict) and "id" in snap:
                 pid = str(snap["id"])
-                if pid not in programs or fit_of(snap) > fit_of(programs[pid]):
+                if pid not in programs or better(snap, programs[pid]):
                     programs[pid] = snap
     elif (
         isinstance(data, dict)

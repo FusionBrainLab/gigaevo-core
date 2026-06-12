@@ -1,8 +1,5 @@
-"""Tests for memory system refactoring Phase 2: CardLoader utility.
-
-Task 1: Extract card loading utilities into CardLoader class.
-Task 2: Create memory state machine (MemoryState).
-"""
+"""CardLoader behavior: typed card loading from tracker artifacts and the
+memory state machine (MemoryState) transitions."""
 
 from __future__ import annotations
 

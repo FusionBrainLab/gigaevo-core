@@ -7,11 +7,7 @@ contract pinned in tests/memory/test_core_efficacy.py. The renderer adds a
 ``mechanism:`` line and the budgeter enforces ``max_cards`` post-auction.
 """
 
-from gigaevo.memory.core.admitter import (
-    PermissiveAdmitter,
-    SignBasedAdmitter,
-    TieredAdmitter,
-)
+from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import (
     AuctionBid,
     AuctionCandidate,
@@ -65,7 +61,6 @@ __all__ = [
     "ReputationModel",
     "SignBasedAdmitter",
     "ThompsonAuctioneer",
-    "TieredAdmitter",
     "TopThetaBudgeter",
     "WriteLedger",
     "WriteLedgerRecord",

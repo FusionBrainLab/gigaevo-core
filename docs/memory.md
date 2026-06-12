@@ -295,7 +295,7 @@ Swap a stage by overriding its group, tune a knob by path:
 
 ```bash
 python run.py memory=local \
-  memory/admitter=tiered \
+  memory/admitter=permissive \
   memory.auction.baseline_prior=[5,2] \
   memory.retriever.pipeline_mode=experimental \
   checkpoint_dir=/workspace/experiments/hover/memory_store \
@@ -312,7 +312,7 @@ python run.py memory=local \
 | `memory/auction` | `thompson` | `ThompsonAuctioneer` | Thompson-sampling card auction |
 | `memory/budget` | `top_theta` | `TopThetaBudgeter` | Caps cards per injection |
 | `memory/reputation` | `beta_binomial` | `BetaBinomialReputation` | Per-card efficacy posterior |
-| `memory/admitter` | `sign_based`, `tiered` | `SignBasedAdmitter` / `TieredAdmitter` | Write-side admission gate |
+| `memory/admitter` | `sign_based`, `permissive` | `SignBasedAdmitter` / `PermissiveAdmitter` | Write-side admission gate |
 | `memory/dedup` | `llm`, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (via `ideas_tracker` → write pipeline) |
 | `memory/evictor` | `harm` | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (via `ideas_tracker` → write pipeline) |
 
@@ -466,7 +466,7 @@ admitter: ${ref:memory.admitter}
 The tracker shares the SAME `memory_llm` router and `memory.backend` factory
 as the `memory=` read side — both are root-registered singletons resolved via
 `${ref:...}`. With `memory=none` the `admitter` ref resolves to null
-(`TieredAdmitter` fallback inside the tracker); with `memory=local` the
+(`SignBasedAdmitter` fallback inside the tracker); with `memory=local` the
 tracker rides the composed admitter (sign-based by default).
 
 #### `config/ideas_tracker/fast.yaml`
@@ -486,7 +486,7 @@ Same structure as `default.yaml` but with:
 | `memory_write_enabled` | bool | `true` | Write extracted ideas to the memory database |
 | `memory_write_best_programs_percent` | float | `5.0` | Share of top programs (by fitness) the write pipeline converts into program cards |
 | `fitness_higher_is_better` | bool | `${higher_is_better}` | Metric direction; gains are stored in "positive = improvement" space |
-| `admitter` | MemoryAdmitter or null | from `memory=` group | Admission gate for `best_ideas.json` (null → `TieredAdmitter`) |
+| `admitter` | MemoryAdmitter or null | from `memory=` group | Admission gate for `best_ideas.json` (null → `SignBasedAdmitter`) |
 | `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). The same path must be used in Phase A (write) and Phase B (read) so the memory bank persists between phases. |
 | `redis_prefix` | str | `${problem.name}` | Redis key prefix for loading programs |
 
@@ -926,13 +926,21 @@ through on failure or empty result.
 | File | What it does |
 |------|-------------|
 | `pipeline.py` | `analyse()` entry point: banks+programs JSON → `AnalysisResult` (lists of `IdeaStats`), CSV writer |
-| `events.py` | Intro-event detection (child introduces idea absent from parents) |
-| `aggregation.py` | Per idea×quartile `IdeaStats` rows (gains, posteriors via `injection_posterior`) |
+| `origin_analysis/events.py` | Intro-event detection (child introduces idea absent from parents) |
+| `aggregation.py` | Per idea×quartile `IdeaStats` rows (gains, posteriors via `EfficacyScorer`) |
 | `loader.py` | Banks/programs JSON loading |
-| `quartiles.py` | Generation → quartile bucketing |
 | `siblings.py` | Sibling win-rate computation |
 | `statistics.py` | NaN-aware medians/quantiles/rates (pure python) |
 | `types.py` | Event/row type definitions |
+
+### Efficacy core (`gigaevo/memory/efficacy/`)
+
+| File | What it does |
+|------|-------------|
+| `scorer.py` | `EfficacyScorer`: counterfactual baseline, MAD noise band, Beta-Binomial posterior over intro-gain events |
+| `events.py` | `EfficacyEvent`: one typed idea-introduction outcome (gain vs best parent) |
+| `bucketing.py` | `GenerationBucketer`: generation → quartile bucketing for `IdeaStats` rows |
+| `stamping.py` | `CardStatsStamper`: single writer of card-side stats (`DecisionMetrics` vocabulary only) |
 
 ### Tests
 
@@ -943,6 +951,8 @@ through on failure or empty result.
 | `tests/memory/test_dag_memory_flow.py` | End-to-end DAG flow, composite context, auto-derivation |
 | `tests/memory/test_ideas_tracker_pipeline.py` | IdeaTracker pipeline: records conversion, PostRunHook contract, program filtering, engine integration, Hydra composability, E2E |
 | `tests/memory/test_data_components.py` | Data structures: RecordBank, RecordCardExtended, IncomingIdeas |
+| `tests/memory/test_efficacy_scorer.py` | `EfficacyScorer` contract: cohort dedup, parent-local baseline, noise band, posterior math |
+| `tests/memory/test_typed_card_stats.py` | Typed `CardStatsBlock`/`EvolutionStatistics`, DecisionMetrics/AuditMetrics split, stamper overwrite semantics |
 | `tests/integration/test_memory_e2e.py` | Full-loop E2E with real EvolutionEngine + fakeredis |
 
 ---

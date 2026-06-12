@@ -6,9 +6,9 @@ import math
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import beta
 
+from gigaevo.memory.efficacy import EfficacyScorer, beta_binomial_posterior
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
-    beta_binomial_posterior,
     compute_injection_posterior,
 )
 from gigaevo.memory.shared_memory.models import (
@@ -21,10 +21,9 @@ from gigaevo.memory.shared_memory.models import (
 class BetaBinomialReputation(BaseModel):
     """Downside Beta-Binomial reputation over per-card injection gains.
 
-    Configurable façade over the numeric primitives in
-    ``gigaevo.memory.shared_memory.injection_posterior`` — one implementation,
-    bound here to injectable thresholds. Also the single home of the
-    ``is_confidently_harmful`` predicate (pinned by
+    Configurable façade over ``gigaevo.memory.efficacy.EfficacyScorer`` — one
+    implementation, bound here to injectable thresholds. Also the single home
+    of the ``is_confidently_harmful`` predicate (pinned by
     tests/memory/test_harm_predicate_single_source.py).
     """
 
@@ -62,6 +61,17 @@ class BetaBinomialReputation(BaseModel):
         default=(1.0, 1.0),
         description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
     )
+
+    def scorer(self) -> EfficacyScorer:
+        """The gain-scoring policy under this reputation's thresholds — the one
+        parameterization both the card-side injection posterior and the
+        idea-side origin aggregation must use."""
+        return EfficacyScorer(
+            baseline_neighbors=self.baseline_neighbors,
+            noise_band_k=self.noise_band_k,
+            confident_quantile=self.confident_quantile,
+            confident_threshold=self.confident_threshold,
+        )
 
     def posterior(
         self, gains: Sequence[float], *, threshold: float = 0.0
@@ -112,8 +122,5 @@ class BetaBinomialReputation(BaseModel):
         return compute_injection_posterior(
             programs,
             higher_is_better=higher_is_better,
-            baseline_neighbors=self.baseline_neighbors,
-            noise_band_k=self.noise_band_k,
-            confident_quantile=self.confident_quantile,
-            confident_threshold=self.confident_threshold,
+            scorer=self.scorer(),
         )

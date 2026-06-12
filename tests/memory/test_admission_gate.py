@@ -9,7 +9,7 @@ before (the auction treats thin cards as near-cold).
 
 from __future__ import annotations
 
-from gigaevo.memory.shared_memory.injection_posterior import beta_binomial_posterior
+from gigaevo.memory.efficacy import beta_binomial_posterior
 from tests.fakes.agentic_memory import make_test_memory
 
 

@@ -6,8 +6,9 @@ from typing import Any
 from pydantic import ConfigDict, Field
 
 from gigaevo.memory.shared_memory.models import (
+    AuditMetrics,
     CardStatsBlock,
-    EfficacyMetrics,
+    DecisionMetrics,
     Quartile,
 )
 
@@ -26,13 +27,15 @@ def coerce_metric(value: Any) -> float | None:
     return None if math.isnan(v) else v
 
 
-class IdeaStats(EfficacyMetrics):
+class IdeaStats(DecisionMetrics, AuditMetrics):
     """One per-(idea, quartile) row of the origin-analysis summary.
 
-    Identity fields plus the full :class:`EfficacyMetrics` vocabulary;
-    aggregation is the sole producer, so undeclared keys are rejected
-    (``extra="forbid"``). ``as_row()`` returns the full dict with NaN
-    preserved; ``as_json_row()`` is the JSON-writer shape with NaN as None.
+    Identity fields plus the full vocabulary — :class:`DecisionMetrics` and
+    :class:`AuditMetrics`; aggregation is the sole producer, so undeclared
+    keys are rejected (``extra="forbid"``). ``as_row()`` returns the full dict
+    with NaN preserved; ``as_json_row()`` is the JSON-writer shape with NaN as
+    None. ``to_stats_block()`` projects only the decision vocabulary — what
+    cards carry.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -56,14 +59,14 @@ class IdeaStats(EfficacyMetrics):
         }
 
     def to_stats_block(self) -> CardStatsBlock:
-        """Project the row's metric vocabulary into a card stats block.
+        """Project the row's decision vocabulary into a card stats block.
 
-        Identity fields stay behind; NaN becomes None at this typed boundary
-        (banks.json carries nulls, not NaN).
+        Identity and audit fields stay behind; NaN becomes None at this typed
+        boundary (banks.json carries nulls, not NaN).
         """
         metrics = {
             name: (None if isinstance(value, float) and math.isnan(value) else value)
             for name, value in self.model_dump().items()
-            if name in EfficacyMetrics.model_fields
+            if name in DecisionMetrics.model_fields
         }
         return CardStatsBlock.model_validate(metrics)

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from gigaevo.memory.core.idea_stats import IdeaStats
+from gigaevo.memory.efficacy import EfficacyEvent, EfficacyScorer, GenerationBucketer
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import AnalysisResult, analyse
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.aggregation import (
     aggregate_idea_rows,
@@ -16,7 +17,6 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.aggregation import (
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.events import (
     compute_descendant_metrics,
     compute_intro_events,
-    mean_parent_fitness,
     pick_best_parent,
 )
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.loader import (
@@ -26,11 +26,6 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.loader import (
     invert_idea_to_programs,
     load_ideas,
     load_programs,
-)
-from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
-    generation_quantile_bounds,
-    generation_range_bounds,
-    generation_to_quartile,
 )
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.siblings import (
     build_sibling_groups,
@@ -47,6 +42,7 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.statistics import (
     robust_median,
     robust_quantile,
 )
+from gigaevo.memory.shared_memory.models import Quartile
 
 
 class TestRobustMedian:
@@ -133,39 +129,33 @@ class TestNanHelpers:
         assert nancount([1.0, float("nan"), 3.0]) == 2
 
 
-class TestGenerationQuantileBounds:
-    def test_symmetric_list(self):
-        b1, b2, b3 = generation_quantile_bounds([0, 1, 2, 3, 4, 5, 6, 7])
-        assert b1 == 2.0
-        assert b2 == 4.0  # q=0.5, idx=round(0.5*7)=round(3.5)=4 (banker's rounding)
-        assert b3 == 5.0
-
-    def test_empty_raises(self):
-        with pytest.raises(ValueError):
-            generation_quantile_bounds([])
-
-
-class TestGenerationRangeBounds:
-    def test_gens_0_to_3(self):
-        b1, b2, b3 = generation_range_bounds([0, 1, 2, 3])
+class TestGenerationBucketer:
+    def test_from_generations_equal_span_bounds(self):
+        b = GenerationBucketer.from_generations([0, 1, 2, 3])
         # gmin=0, gmax=3, span=4; b1=1.0, b2=2.0, b3=3.0
-        assert b1 == pytest.approx(1.0)
-        assert b2 == pytest.approx(2.0)
-        assert b3 == pytest.approx(3.0)
+        assert b.b1 == pytest.approx(1.0)
+        assert b.b2 == pytest.approx(2.0)
+        assert b.b3 == pytest.approx(3.0)
 
+    def test_from_generations_empty_raises(self):
+        with pytest.raises(ValueError):
+            GenerationBucketer.from_generations([])
 
-class TestGenerationToQuartile:
-    def test_q1(self):
-        assert generation_to_quartile(0, 1.0, 2.0, 3.0) == "Q1"
+    def test_bucket_bounds_are_exclusive_upper(self):
+        b = GenerationBucketer(b1=1.0, b2=2.0, b3=3.0)
+        assert b.bucket(0) is Quartile.Q1
+        assert b.bucket(1) is Quartile.Q2
+        assert b.bucket(2) is Quartile.Q3
+        assert b.bucket(3) is Quartile.Q4
 
-    def test_q2(self):
-        assert generation_to_quartile(1, 1.0, 2.0, 3.0) == "Q2"
-
-    def test_q3(self):
-        assert generation_to_quartile(2, 1.0, 2.0, 3.0) == "Q3"
-
-    def test_q4(self):
-        assert generation_to_quartile(3, 1.0, 2.0, 3.0) == "Q4"
+    def test_generations_by_bucket_partitions_quarters(self):
+        b = GenerationBucketer(b1=1.0, b2=2.0, b3=3.0)
+        assert b.generations_by_bucket([0, 1, 2, 3, 3]) == {
+            Quartile.Q1: {0},
+            Quartile.Q2: {1},
+            Quartile.Q3: {2},
+            Quartile.Q4: {3},
+        }
 
 
 def _write_json(path: Path, obj: object) -> None:
@@ -239,6 +229,24 @@ class TestLoadPrograms:
         _write_json(progs_file, data)
         programs = load_programs(str(progs_file))
         assert programs["p1"]["fitness"] == 0.9
+
+    def test_deduplicates_keeps_best_fitness_lower_is_better(self, tmp_path):
+        progs_file = tmp_path / "programs.json"
+        data = [
+            {
+                "programs": [
+                    {"id": "p1", "generation": 0, "fitness": 0.3, "parents": []}
+                ]
+            },
+            {
+                "programs": [
+                    {"id": "p1", "generation": 0, "fitness": 0.9, "parents": []}
+                ]
+            },
+        ]
+        _write_json(progs_file, data)
+        programs = load_programs(str(progs_file), higher_is_better=False)
+        assert programs["p1"]["fitness"] == 0.3
 
 
 class TestBuildParentsAndChildren:
@@ -352,25 +360,13 @@ class TestPickBestParent:
         assert pick_best_parent([], {}) is None
 
 
-class TestMeanParentFitness:
-    def test_mean_of_two(self):
-        programs = {"a": {"fitness": 0.4}, "b": {"fitness": 0.6}}
-        result = mean_parent_fitness(["a", "b"], programs)
-        assert result == pytest.approx(0.5)
-
-    def test_returns_none_for_empty(self):
-        assert mean_parent_fitness([], {}) is None
-
-
 class TestComputeIntroEvents:
     def test_detects_intro_event(self):
         events = compute_intro_events(
             programs=EVENTS_PROGRAMS,
             prog_to_origin_ideas=PROG_TO_ORIGIN_IDEAS,
             parents_of=EVENTS_PARENTS_OF,
-            b1=0.5,
-            b2=1.5,
-            b3=2.5,
+            bucketer=GenerationBucketer(b1=0.5, b2=1.5, b3=2.5),
         )
         # p3 introduces idea_b (not in parent p2's idea set)
         assert len(events) == 1
@@ -378,7 +374,7 @@ class TestComputeIntroEvents:
         assert ev.idea_id == "idea_b"
         assert ev.child_id == "p3"
         assert (
-            ev.quartile == "Q3"
+            ev.quartile is Quartile.Q3
         )  # gen=2, b1=0.5, b2=1.5, b3=2.5 → 2 >= 1.5 and 2 < 2.5 → Q3
 
     def test_no_event_when_idea_in_parent(self):
@@ -387,9 +383,7 @@ class TestComputeIntroEvents:
             programs=EVENTS_PROGRAMS,
             prog_to_origin_ideas=prog_to_ideas,
             parents_of=EVENTS_PARENTS_OF,
-            b1=0.5,
-            b2=1.5,
-            b3=2.5,
+            bucketer=GenerationBucketer(b1=0.5, b2=1.5, b3=2.5),
         )
         assert len(events) == 0
 
@@ -478,24 +472,38 @@ class TestHigherIsBetterDirection:
         assert all_row(up, "idea_b").IntroGain_best_median == pytest.approx(0.1)
         assert all_row(down, "idea_b").IntroGain_best_median == pytest.approx(-0.1)
 
+    def test_lower_is_better_dedup_keeps_better_duplicate(self, tmp_path):
+        banks_file = tmp_path / "banks.json"
+        progs_file = tmp_path / "programs.json"
+        _write_json(banks_file, BANKS_FIXTURE)
+        # A second snapshot re-exports p3 with a worse (higher, since
+        # minimizing) fitness; dedup must keep the 0.7 copy, so idea_b's gain
+        # stays -0.1 instead of -(5.0) - -(0.6) = -4.4.
+        worse_p3 = {"id": "p3", "generation": 2, "fitness": 5.0, "parents": ["p2"]}
+        _write_json(progs_file, PROGRAMS_FIXTURE + [{"programs": [worse_p3]}])
+
+        down = analyse(str(banks_file), str(progs_file), higher_is_better=False)
+
+        row = next(
+            s for s in down.summary if s.idea_id == "idea_b" and s.quartile == "ALL"
+        )
+        assert row.IntroGain_best_median == pytest.approx(-0.1)
+
 
 def _make_events(
     rows: list[tuple[str, str, float, float]],
-) -> list[dict]:
-    """Build minimal event rows from (idea_id, quartile, IntroGain_best,
-    best_parent_fit) tuples.
-
-    All other event fields are absent — only the fields the posterior reads
-    matter; aggregation treats missing keys as NaN.
-    """
+) -> list[EfficacyEvent]:
+    """Build minimal events from (idea_id, quartile, IntroGain_best,
+    best_parent_fit) tuples; every metric not under test stays at its NaN
+    default."""
     return [
-        {
-            "idea_id": idea_id,
-            "quartile": quartile,
-            "child_id": f"child_{i}",
-            "IntroGain_best": gain,
-            "best_parent_fit": best_parent_fit,
-        }
+        EfficacyEvent(
+            idea_id=idea_id,
+            quartile=Quartile(quartile),
+            child_id=f"child_{i}",
+            IntroGain_best=gain,
+            best_parent_fit=best_parent_fit,
+        )
         for i, (idea_id, quartile, gain, best_parent_fit) in enumerate(rows, start=1)
     ]
 
@@ -527,11 +535,10 @@ class TestPosteriorFields:
             programs={},
             elite_pids=set(),
             roots_memo={},
-            b1=0.5,
-            b2=1.5,
-            b3=2.5,
-            gens_by_quartile={"Q1": set(), "Q2": set(), "Q3": set(), "Q4": set()},
+            bucketer=GenerationBucketer(b1=0.5, b2=1.5, b3=2.5),
+            gens_by_quartile={q: set() for q in Quartile.quarters()},
             total_distinct_gens=1,
+            scorer=EfficacyScorer(),
         )
 
     @staticmethod
@@ -633,8 +640,8 @@ class TestAdmitterInjection:
         assert marker.seen is not None
         assert result.best_ideas == marker.seen[:1]
 
-    def test_default_admitter_matches_tiered(self, tmp_path):
-        from gigaevo.memory.core.admitter import TieredAdmitter
+    def test_default_admitter_is_sign_based(self, tmp_path):
+        from gigaevo.memory.core.admitter import SignBasedAdmitter
 
         banks_file = tmp_path / "banks.json"
         progs_file = tmp_path / "programs.json"
@@ -642,14 +649,72 @@ class TestAdmitterInjection:
         _write_json(progs_file, PROGRAMS_FIXTURE)
 
         default = analyse(str(banks_file), str(progs_file)).best_ideas
-        tiered = analyse(
-            str(banks_file), str(progs_file), admitter=TieredAdmitter()
+        sign_based = analyse(
+            str(banks_file), str(progs_file), admitter=SignBasedAdmitter()
         ).best_ideas
         # NaN-bearing models from separate runs never compare equal; pin identity
         # by (idea_id, quartile) instead.
         assert [(s.idea_id, s.quartile) for s in default] == [
-            (s.idea_id, s.quartile) for s in tiered
+            (s.idea_id, s.quartile) for s in sign_based
         ]
+
+
+class TestMultiIdeaChildWeighsOnce:
+    """A child that introduces several ideas is ONE mutation outcome: it weighs
+    once in the counterfactual baseline and noise band, matching the card-side
+    injection posterior's per-child cohort."""
+
+    @staticmethod
+    def _aggregate(events: list[EfficacyEvent]) -> list[IdeaStats]:
+        idea_ids = sorted({e.idea_id for e in events})
+        return aggregate_idea_rows(
+            events=events,
+            idea_to_origin_programs={i: set() for i in idea_ids},
+            idea_desc={i: i for i in idea_ids},
+            programs={},
+            elite_pids=set(),
+            roots_memo={},
+            bucketer=GenerationBucketer(b1=0.5, b2=1.5, b3=2.5),
+            gens_by_quartile={q: set() for q in Quartile.quarters()},
+            total_distinct_gens=1,
+            scorer=EfficacyScorer(),
+        )
+
+    def test_duplicated_outlier_child_does_not_shift_probe_posterior(self):
+        background = _make_events(_BG)
+        outlier = EfficacyEvent(
+            idea_id="x",
+            quartile=Quartile.Q4,
+            child_id="outlier_child",
+            IntroGain_best=-0.30,
+            best_parent_fit=0.0,
+        )
+        probe = EfficacyEvent(
+            idea_id="probe",
+            quartile=Quartile.Q4,
+            child_id="probe_child",
+            IntroGain_best=-0.02,
+            best_parent_fit=0.0,
+        )
+        single_idea = self._aggregate([*background, outlier, probe])
+        multi_idea = self._aggregate(
+            [*background, outlier, outlier.model_copy(update={"idea_id": "y"}), probe]
+        )
+
+        def probe_all(rows: list[IdeaStats]) -> IdeaStats:
+            return next(
+                r for r in rows if r.idea_id == "probe" and r.quartile is Quartile.ALL
+            )
+
+        before, after = probe_all(single_idea), probe_all(multi_idea)
+        for field in (
+            "posterior_a",
+            "posterior_b",
+            "DownsideRate_best",
+            "IntroGain_best_adj_median",
+            "efficacy_confident",
+        ):
+            assert getattr(after, field) == getattr(before, field), field
 
 
 class TestWriteCsv:

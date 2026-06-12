@@ -7,8 +7,8 @@ from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.core import BetaBinomialReputation
 from gigaevo.memory.core.deduplicator import NullDeduplicator
 from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.efficacy import beta_binomial_posterior
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.injection_posterior import beta_binomial_posterior
 from gigaevo.memory.shared_memory.models import (
     CardStatsBlock,
     EvolutionStatistics,

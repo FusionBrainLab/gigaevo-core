@@ -12,7 +12,6 @@ import numpy as np
 from pydantic import ValidationError
 import pytest
 
-from gigaevo.memory.core.admitter import harm_statistics
 from gigaevo.memory.core.auctioneer import (
     AuctionBid,
     AuctionCandidate,
@@ -23,50 +22,37 @@ from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.core.selection import MemorySelection
+from gigaevo.memory.efficacy import CardStatsStamper
 from gigaevo.memory.shared_memory.card_search import format_card_efficacy
 from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
 from gigaevo.memory.shared_memory.models import (
+    AuditMetrics,
     CardAlias,
     CardStatsBlock,
+    DecisionMetrics,
     EvolutionStatistics,
     MemoryCard,
     ProgramCard,
     Quartile,
 )
-from gigaevo.memory.write_pipeline import (
-    fold_best_idea_metrics,
-    parse_best_ideas,
-    stamp_card_posterior,
-)
+from gigaevo.memory.write_pipeline import fold_best_idea_metrics, parse_best_ideas
 
 BANK_STATS = {
     "ALL": {
         "intro_events": 7,
-        "IntroGain_best_p10": -0.01,
+        "k_harm": 1,
         "IntroGain_best_median": 0.004,
         "IntroGain_best_adj_median": 0.006,
-        "IntroGain_best_rel_median": 0.1,
-        "IntroGain_best_p90": 0.02,
         "DownsideRate_best": 0.142857,
-        "TailRisk_best_median": -0.002,
         "posterior_a": 7.0,
         "posterior_b": 2.0,
         "p_help_mean": 0.7778,
         "p_help_lo20": 0.62,
         "efficacy_confident": True,
-        "SiblingWinRate": None,
-    },
-    "Q1": {
-        "intro_events": 2,
-        "posterior_a": 2.0,
-        "posterior_b": 2.0,
-        "p_help_mean": 0.5,
-        "p_help_lo20": 0.3,
-        "efficacy_confident": False,
     },
     "best_ideas_snapshot": {
         "IntroGain_best_median": 0.004,
-        "SiblingDelta_median": None,
+        "DownsideRate_best": None,
     },
 }
 
@@ -82,23 +68,22 @@ class TestEvolutionStatisticsModel:
         assert stats.ALL.posterior_a == 7.0
         assert stats.ALL.posterior_b == 2.0
         assert stats.ALL.intro_events == 7
+        assert stats.ALL.k_harm == 1
         assert stats.ALL.efficacy_confident is True
         assert stats.ALL.IntroGain_best_adj_median == 0.006
         assert stats.ALL.DownsideRate_best == 0.142857
-        assert stats.ALL.TailRisk_best_median == -0.002
-        assert stats.Q1 is not None and stats.Q1.efficacy_confident is False
 
     def test_metric_vocabulary_is_first_class_and_described(self):
-        metric_fields = set(IdeaStats.model_fields) - {
-            "idea_id",
-            "quartile",
-            "description",
-        }
-        assert metric_fields <= set(CardStatsBlock.model_fields)
+        decision = set(DecisionMetrics.model_fields)
+        audit = set(AuditMetrics.model_fields)
+        identity = {"idea_id", "quartile", "description"}
+        assert not decision & audit
+        assert set(CardStatsBlock.model_fields) == decision
+        assert set(IdeaStats.model_fields) == identity | decision | audit
         assert IdeaStats.model_config["extra"] == "forbid"
         undescribed = [
             f"{model.__name__}.{name}"
-            for model in (CardStatsBlock, IdeaStats)
+            for model in (DecisionMetrics, AuditMetrics, CardStatsBlock, IdeaStats)
             for name, field in model.model_fields.items()
             if not field.description
         ]
@@ -119,16 +104,12 @@ class TestEvolutionStatisticsModel:
     def test_stats_blocks_reject_undeclared_keys(self):
         assert CardStatsBlock.model_config["extra"] == "forbid"
         assert EvolutionStatistics.model_config["extra"] == "forbid"
+        with pytest.raises(ValidationError):
+            CardStatsBlock(SiblingWinRate=0.5)
+        with pytest.raises(ValidationError):
+            EvolutionStatistics.model_validate({"Q4": {"intro_events": 1}})
 
-    def test_with_block_and_from_blocks_build_typed_statistics(self):
-        block = CardStatsBlock(posterior_a=3.0, posterior_b=1.0, intro_events=2)
-        stats = EvolutionStatistics.from_blocks({Quartile.Q2: block})
-        assert stats.Q2 == block and stats.ALL is None
-        replaced = stats.with_block(Quartile.ALL, block)
-        assert replaced.ALL == block and replaced.Q2 == block
-        assert stats.ALL is None
-
-    def test_idea_stats_projects_to_stats_block_without_identity_keys(self):
+    def test_idea_stats_projects_only_decision_metrics(self):
         row = IdeaStats(
             idea_id="i1",
             quartile=Quartile.ALL,
@@ -136,23 +117,35 @@ class TestEvolutionStatisticsModel:
             intro_events=3,
             IntroGain_best_median=float("nan"),
             posterior_a=3.0,
+            SiblingWinRate=0.9,
         )
         block = row.to_stats_block()
         assert isinstance(block, CardStatsBlock)
         assert block.IntroGain_best_median is None
         assert block.posterior_a == 3.0
         assert block.model_extra in (None, {})
+        assert "SiblingWinRate" not in type(block).model_fields
 
     def test_harm_statistics_carries_no_identity_keys(self):
         row = IdeaStats(idea_id="i1", quartile=Quartile.ALL, posterior_a=1.0)
-        stats = harm_statistics(row)
+        stats = CardStatsStamper().harm_statistics(row)
         assert stats.ALL is not None
         assert stats.ALL.model_extra in (None, {})
+
+    def test_stamper_keeps_only_all_rows_per_idea(self):
+        rows = [
+            IdeaStats(idea_id="i1", quartile=Quartile.ALL, intro_events=5),
+            IdeaStats(idea_id="i1", quartile=Quartile.Q1, intro_events=2),
+            IdeaStats(idea_id="i2", quartile=Quartile.Q4, intro_events=3),
+        ]
+        stats_by_idea = CardStatsStamper().idea_statistics(rows)
+        assert set(stats_by_idea) == {"i1"}
+        assert stats_by_idea["i1"].ALL.intro_events == 5
 
     def test_absent_blocks_stay_absent_in_dump(self):
         stats = EvolutionStatistics.model_validate({"ALL": {"intro_events": 1}})
         dumped = stats.model_dump()
-        assert "Q1" not in dumped
+        assert dumped == {"ALL": {"intro_events": 1}}
         assert "best_ideas_snapshot" not in dumped
 
     def test_empty_statistics_dump_to_empty_dict(self):
@@ -256,7 +249,7 @@ class TestStampCardPosteriorTyped:
         posterior = CardStatsBlock(
             posterior_a=5.0, posterior_b=1.0, intro_events=4, efficacy_confident=True
         )
-        stamped = stamp_card_posterior(card, {"idea-1": posterior})
+        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
         assert stamped.evolution_statistics.ALL == posterior
         assert (
             stamped.evolution_statistics.best_ideas_snapshot.IntroGain_best_median
@@ -264,9 +257,22 @@ class TestStampCardPosteriorTyped:
         )
         assert card.evolution_statistics.ALL is None
 
+    def test_stamp_overwrites_preexisting_all_block(self):
+        card = MemoryCard(
+            id="idea-1",
+            evolution_statistics={
+                "ALL": {"intro_events": 9, "posterior_a": 1.0, "posterior_b": 8.0}
+            },
+        )
+        posterior = CardStatsBlock(
+            posterior_a=5.0, posterior_b=1.0, intro_events=4, efficacy_confident=True
+        )
+        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
+        assert stamped.evolution_statistics.ALL == posterior
+
     def test_cards_without_posterior_pass_through_cold(self):
         card = MemoryCard(id="idea-2")
-        assert stamp_card_posterior(card, {}) is card
+        assert CardStatsStamper().stamp_posterior(card, {}) is card
 
     def test_compute_injection_posteriors_returns_typed_blocks(self):
         rep = BetaBinomialReputation()
@@ -415,6 +421,7 @@ class TestNoDictPlumbingInCardPaths:
         "gigaevo/memory/ideas_tracker/models.py",
         "gigaevo/memory/ideas_tracker/idea_bank.py",
         "gigaevo/memory/ideas_tracker/analyzers.py",
+        "gigaevo/memory/efficacy/stamping.py",
         "gigaevo/memory/write_pipeline.py",
     ]
     FORBIDDEN = (

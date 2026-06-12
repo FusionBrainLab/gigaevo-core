@@ -29,14 +29,15 @@ class Quartile(StrEnum):
         return tuple(q for q in cls if q is not cls.ALL)
 
 
-class EfficacyMetrics(BaseModel):
-    """Single source of the per-(idea, quartile) efficacy-metric vocabulary.
+class DecisionMetrics(BaseModel):
+    """Efficacy metrics that decision paths read.
 
-    Every metric the origin analysis produces is a declared, described field —
-    nothing rides along as an undeclared extra. ``IdeaStats`` (the analysis row)
-    and ``CardStatsBlock`` (the card-stamped block) both inherit this vocabulary,
-    so producer and consumer cannot drift apart. Field names are the banks.json
-    contract, including the analyzer-cased ``IntroGain_*`` keys.
+    Exactly the fields the admitters, the Thompson auction, the reputation harm
+    predicate, and the prompt renderer consume. Cards are stamped with this
+    vocabulary and nothing more; everything else the origin analysis computes
+    lives in :class:`AuditMetrics` and stays in the offline artifacts. Field
+    names are the banks.json contract, including the analyzer-cased
+    ``IntroGain_*`` keys.
 
     "Gain" is always the child-minus-parent best-fitness delta in
     positive-is-improvement space (the analysis negates for minimize metrics);
@@ -55,6 +56,10 @@ class EfficacyMetrics(BaseModel):
         default=0,
         description="Introduction events (scorable children) backing this row.",
     )
+    k_harm: int | None = Field(
+        default=None,
+        description="Introduction events whose baseline-adjusted gain fell below the negative noise-band threshold.",
+    )
     p_help_mean: float | None = Field(
         default=None, description="Posterior mean P(gain >= threshold), a / (a + b)."
     )
@@ -66,9 +71,6 @@ class EfficacyMetrics(BaseModel):
         default=None,
         description="True when the lower credible bound clears the confidence threshold.",
     )
-    IntroGain_best_p10: float | None = Field(
-        default=None, description="10th percentile of raw per-introduction gains."
-    )
     IntroGain_best_median: float | None = Field(
         default=None, description="Median raw child-minus-parent best-fitness gain."
     )
@@ -76,16 +78,29 @@ class EfficacyMetrics(BaseModel):
         default=None,
         description="Median cohort-adjusted gain (raw gain minus the parent-local counterfactual).",
     )
+    DownsideRate_best: float | None = Field(
+        default=None,
+        description="Fraction of introductions whose adjusted gain fell below the harm threshold.",
+    )
+
+
+class AuditMetrics(BaseModel):
+    """Efficacy metrics computed for offline analysis only.
+
+    No live decision path reads these; they appear in the offline artifacts
+    (best_ideas.json rows via :class:`~gigaevo.memory.core.idea_stats.IdeaStats`)
+    and never on cards. Gain semantics match :class:`DecisionMetrics`.
+    """
+
+    IntroGain_best_p10: float | None = Field(
+        default=None, description="10th percentile of raw per-introduction gains."
+    )
     IntroGain_best_rel_median: float | None = Field(
         default=None,
         description="Median gain relative to the parent's best fitness magnitude.",
     )
     IntroGain_best_p90: float | None = Field(
         default=None, description="90th percentile of raw per-introduction gains."
-    )
-    DownsideRate_best: float | None = Field(
-        default=None,
-        description="Fraction of introductions whose adjusted gain fell below the harm threshold.",
     )
     TailRisk_best_median: float | None = Field(
         default=None,
@@ -184,19 +199,15 @@ class EfficacyMetrics(BaseModel):
     )
 
 
-class CardStatsBlock(EfficacyMetrics):
-    """One efficacy-statistics block of a card (the ``ALL`` or a per-quartile entry).
+class CardStatsBlock(DecisionMetrics):
+    """One efficacy-statistics block of a card.
 
-    The metric vocabulary is inherited from :class:`EfficacyMetrics`; ``k_harm``
-    is added by the injection-posterior producer.
+    The metric vocabulary is exactly :class:`DecisionMetrics` — cards carry
+    only what decision paths read. Two producers stamp it: the origin
+    analysis (via ``IdeaStats.to_stats_block``) and the injection posterior.
     """
 
     model_config = ConfigDict(extra="forbid")
-
-    k_harm: int | None = Field(
-        default=None,
-        description="Introduction events whose gain fell below the harm threshold.",
-    )
 
     @model_serializer(mode="wrap")
     def serialize_without_unset_defaults(
@@ -216,50 +227,24 @@ class CardStatsBlock(EfficacyMetrics):
 class EvolutionStatistics(BaseModel):
     """Typed ``evolution_statistics`` payload of a card.
 
-    Two writers populate it: the ideas-tracker origin analysis (per-quartile
-    ``Q1``..``Q4`` plus ``ALL`` blocks) and the injection-posterior stamp
-    (``ALL`` only). ``best_ideas_snapshot`` is the metric block of the
-    best-ideas summary row the offline write pipeline merges in. Absent blocks
-    stay absent on serialization so banks.json keeps its shape.
+    The ``ALL`` block is stamped by the ideas-tracker origin analysis when the
+    card is persisted, and overwritten by the injection-posterior stamp at read
+    time — the injection posterior wins when present. ``best_ideas_snapshot``
+    is the metric block of the best-ideas summary row the offline write
+    pipeline merges in.
+    Absent blocks stay absent on serialization so banks.json keeps its shape.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     ALL: CardStatsBlock | None = Field(
         default=None,
-        description="Whole-run aggregate block — the only block decision paths read.",
-    )
-    Q1: CardStatsBlock | None = Field(
-        default=None, description="First run-quarter audit block (write-only)."
-    )
-    Q2: CardStatsBlock | None = Field(
-        default=None, description="Second run-quarter audit block (write-only)."
-    )
-    Q3: CardStatsBlock | None = Field(
-        default=None, description="Third run-quarter audit block (write-only)."
-    )
-    Q4: CardStatsBlock | None = Field(
-        default=None, description="Fourth run-quarter audit block (write-only)."
+        description="Whole-run aggregate block — the block decision paths read.",
     )
     best_ideas_snapshot: CardStatsBlock | None = Field(
         default=None,
         description="Metric block of the best-ideas summary row merged in by the offline write pipeline.",
     )
-
-    @classmethod
-    def from_blocks(cls, blocks: dict[Quartile, CardStatsBlock]) -> EvolutionStatistics:
-        """Build statistics from per-quartile blocks without string keys."""
-        stats = cls()
-        for quartile, block in blocks.items():
-            stats = stats.with_block(quartile, block)
-        return stats
-
-    def with_block(
-        self, quartile: Quartile, block: CardStatsBlock
-    ) -> EvolutionStatistics:
-        """Copy with one quartile's block replaced; the enum member maps onto
-        the field of the same name."""
-        return self.model_copy(update={quartile.name: block})
 
     @model_serializer(mode="wrap")
     def serialize_without_absent_blocks(
@@ -337,7 +322,7 @@ class MemoryCard(BaseModel):
     )
     evolution_statistics: EvolutionStatistics = Field(
         default_factory=EvolutionStatistics,
-        description="Per-quartile and whole-run efficacy statistics.",
+        description="Whole-run (ALL) efficacy block plus the offline best-ideas snapshot.",
     )
     explanation: MemoryCardExplanation = Field(
         default_factory=MemoryCardExplanation,
@@ -422,10 +407,11 @@ class LocalMemorySnapshot(BaseModel):
 
 __all__ = [
     "AnyCard",
+    "AuditMetrics",
     "CardAlias",
     "CardStatsBlock",
     "ConnectedIdea",
-    "EfficacyMetrics",
+    "DecisionMetrics",
     "EvolutionStatistics",
     "LocalMemorySnapshot",
     "MemoryCard",

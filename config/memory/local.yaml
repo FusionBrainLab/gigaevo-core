@@ -1,6 +1,6 @@
 # Memory selection over the local card-bank backend.
 # Components nest under `memory.<group>`; swap stages via e.g.
-# `memory/admitter=tiered`, tune via `memory.auction.baseline_prior=[5,2]`.
+# `memory/admitter=permissive`, tune via `memory.auction.baseline_prior=[5,2]`.
 # The card-bank backend (`memory.backend`) and the memory LLM (`memory_llm`)
 # are root-registered singletons shared with ideas_tracker via ${ref:...}.
 defaults:

@@ -20,9 +20,10 @@ from pathlib import Path
 
 from loguru import logger
 
-from gigaevo.memory.core.admitter import TieredAdmitter
+from gigaevo.memory.core.admitter import SignBasedAdmitter
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.protocols import MemoryAdmitter
+from gigaevo.memory.efficacy import EfficacyEvent, EfficacyScorer, GenerationBucketer
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.aggregation import (
     aggregate_idea_rows,
 )
@@ -37,11 +38,6 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis.loader import (
     invert_idea_to_programs,
     load_ideas,
     load_programs,
-)
-from gigaevo.memory.ideas_tracker.utils.origin_analysis.quartiles import (
-    generation_quantile_bounds,
-    generation_range_bounds,
-    generation_to_quartile,
 )
 from gigaevo.memory.ideas_tracker.utils.origin_analysis.siblings import (
     build_sibling_groups,
@@ -75,22 +71,26 @@ def _negate_fitness(programs: dict[str, dict]) -> dict[str, dict]:
 def analyse(
     banks_path: str,
     programs_path: str,
-    quartile_mode: str = "generation_range",
     elite_pct: float = 0.05,
     desc_k: int = 10,
     sibling_mode: str = "best_parent",
     sibling_gen_window: int = 0,
     admitter: MemoryAdmitter | None = None,
     higher_is_better: bool = True,
+    scorer: EfficacyScorer | None = None,
 ) -> AnalysisResult:
     """Run origin-based evolutionary statistics analysis.
 
-    When ``higher_is_better`` is False, fitness values are negated on ingestion
-    so every downstream gain / elite / percentile statistic reads as
-    "positive = improvement" regardless of the metric's direction.
+    When ``higher_is_better`` is False, snapshot dedup keeps the lowest-fitness
+    copy of each program and fitness values are negated on ingestion so every
+    downstream gain / elite / percentile statistic reads as
+    "positive = improvement" regardless of the metric's direction. ``scorer``
+    is the gain-scoring policy (baseline / noise band / posterior thresholds);
+    pass ``BetaBinomialReputation.scorer()`` so idea rows are judged under the
+    same parameterization as the card-side injection posteriors.
     """
     idea_to_origin_programs, idea_desc = load_ideas(banks_path)
-    programs = load_programs(programs_path)
+    programs = load_programs(programs_path, higher_is_better=higher_is_better)
     if not higher_is_better:
         programs = _negate_fitness(programs)
     parents_of = build_parents(programs)
@@ -122,15 +122,8 @@ def analyse(
     distinct_gens = sorted(set(gens))
     total_distinct_gens = len(distinct_gens)
 
-    if quartile_mode == "generation_quantiles":
-        b1, b2, b3 = generation_quantile_bounds(gens)
-    else:
-        b1, b2, b3 = generation_range_bounds(gens)
-
-    gens_by_quartile: dict[Quartile, set[int]] = {q: set() for q in Quartile.quarters()}
-    for g in distinct_gens:
-        q = generation_to_quartile(g, b1, b2, b3)
-        gens_by_quartile[q].add(g)
+    bucketer = GenerationBucketer.from_generations(gens)
+    gens_by_quartile = bucketer.generations_by_bucket(distinct_gens)
 
     elite_threshold, _ = elite_threshold_by_top_k(fits_all, elite_pct)
     elite_pids: set[str] = set()
@@ -187,17 +180,15 @@ def analyse(
         programs=programs,
         prog_to_origin_ideas=prog_to_origin_ideas,
         parents_of=parents_of,
-        b1=b1,
-        b2=b2,
-        b3=b3,
+        bucketer=bucketer,
     )
 
     desc_cache: dict[str, DescMetrics] = {}
-    event_rows = []
+    event_rows: list[EfficacyEvent] = []
     eps = 1e-12
 
     gains_all: list[float] = []
-    gains_by_q: dict[str, list[float]] = defaultdict(list)
+    gains_by_q: dict[Quartile, list[float]] = defaultdict(list)
     for ev in intro_events:
         gain_best = ev.child_fit - ev.best_parent_fit
         if math.isfinite(gain_best):
@@ -213,7 +204,6 @@ def analyse(
 
     for ev in intro_events:
         gain_best = ev.child_fit - ev.best_parent_fit
-        gain_mean = ev.child_fit - ev.mean_parent_fit
         gain_best_rel = (
             gain_best / (abs(ev.best_parent_fit) + eps)
             if math.isfinite(gain_best)
@@ -308,34 +298,33 @@ def analyse(
         born_elite = 1.0 if ev.child_id in elite_pids else 0.0
 
         event_rows.append(
-            {
-                "idea_id": ev.idea_id,
-                "quartile": ev.quartile,
-                "child_id": ev.child_id,
-                "best_parent_fit": ev.best_parent_fit,
-                "IntroGain_best": gain_best,
-                "IntroGain_mean": gain_mean,
-                "IntroGain_best_rel": gain_best_rel,
-                "IntroGain_percentile_in_quartile": gain_pct_in_q,
-                "IntroGain_percentile_overall": gain_pct_overall,
-                "IntroGain_z_in_quartile": z_in_q,
-                "IntroGain_z_overall": z_overall,
-                "SiblingWin": sib_win,
-                "SiblingPercentile": sib_percentile,
-                "SiblingDelta": sib_delta,
-                "SiblingWin_allgens": sib_win_all,
-                "SiblingPercentile_allgens": sib_percentile_all,
-                "SiblingDelta_allgens": sib_delta_all,
-                "ParentFitnessPercentile_within_gen": parent_pct,
-                "BornInElite": born_elite,
-                "DescMaxLift_k_best": desc_max_lift_k_best,
-                "ReachesElite_k": dm.reaches_elite_k,
-                "TimeToElite_k": dm.time_to_elite_k,
-                "LineageReachesFinal": dm.lineage_reaches_final,
-                "DescendantCount_k": dm.desc_count_k,
-                "BranchingFactor": dm.branching_factor,
-                "TimeToPeak_k": dm.time_to_peak_k,
-            }
+            EfficacyEvent(
+                idea_id=ev.idea_id,
+                quartile=ev.quartile,
+                child_id=ev.child_id,
+                best_parent_fit=ev.best_parent_fit,
+                IntroGain_best=gain_best,
+                IntroGain_best_rel=gain_best_rel,
+                IntroGain_percentile_in_quartile=gain_pct_in_q,
+                IntroGain_percentile_overall=gain_pct_overall,
+                IntroGain_z_in_quartile=z_in_q,
+                IntroGain_z_overall=z_overall,
+                SiblingWin=sib_win,
+                SiblingPercentile=sib_percentile,
+                SiblingDelta=sib_delta,
+                SiblingWin_allgens=sib_win_all,
+                SiblingPercentile_allgens=sib_percentile_all,
+                SiblingDelta_allgens=sib_delta_all,
+                ParentFitnessPercentile_within_gen=parent_pct,
+                BornInElite=born_elite,
+                DescMaxLift_k_best=desc_max_lift_k_best,
+                ReachesElite_k=dm.reaches_elite_k,
+                TimeToElite_k=dm.time_to_elite_k,
+                LineageReachesFinal=dm.lineage_reaches_final,
+                DescendantCount_k=dm.desc_count_k,
+                BranchingFactor=dm.branching_factor,
+                TimeToPeak_k=dm.time_to_peak_k,
+            )
         )
 
     summary = aggregate_idea_rows(
@@ -345,13 +334,12 @@ def analyse(
         programs=programs,
         elite_pids=elite_pids,
         roots_memo=roots_memo,
-        b1=b1,
-        b2=b2,
-        b3=b3,
+        bucketer=bucketer,
         gens_by_quartile=gens_by_quartile,
         total_distinct_gens=total_distinct_gens,
+        scorer=scorer if scorer is not None else EfficacyScorer(),
     )
-    gate = admitter if admitter is not None else TieredAdmitter()
+    gate = admitter if admitter is not None else SignBasedAdmitter()
     best_ideas = gate.select(summary)
     return AnalysisResult(summary=summary, best_ideas=best_ideas)
 
@@ -383,17 +371,15 @@ def main() -> None:
     )
     ap.add_argument("--output_dir", default="selected_ideas/idea_origin_analysis_out")
     ap.add_argument("--output_name", default="idea_origin_quartile_summary6.csv")
-    ap.add_argument(
-        "--quartile_mode",
-        choices=["generation_range", "generation_quantiles"],
-        default="generation_range",
-    )
     ap.add_argument("--elite_pct", type=float, default=0.05)
     ap.add_argument("--desc_k", type=int, default=10)
     ap.add_argument(
         "--sibling_mode", choices=["best_parent", "parent_set"], default="best_parent"
     )
     ap.add_argument("--sibling_gen_window", type=int, default=0)
+    ap.add_argument(
+        "--higher_is_better", action=argparse.BooleanOptionalAction, default=True
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -402,11 +388,11 @@ def main() -> None:
     result = analyse(
         banks_path=args.ideas,
         programs_path=args.programs,
-        quartile_mode=args.quartile_mode,
         elite_pct=args.elite_pct,
         desc_k=args.desc_k,
         sibling_mode=args.sibling_mode,
         sibling_gen_window=args.sibling_gen_window,
+        higher_is_better=args.higher_is_better,
     )
 
     out_csv = out_dir / args.output_name

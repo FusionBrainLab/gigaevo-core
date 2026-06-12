@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from loguru import logger
 import numpy as np
 
-from gigaevo.memory.core.admitter import TieredAdmitter
+from gigaevo.memory.core.admitter import SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import (
     AuctionBid,
     AuctionCandidate,
@@ -124,6 +124,7 @@ def _admittable_row() -> IdeaStats:
         idea_id="idea-1",
         quartile="ALL",
         intro_events=4,
+        IntroGain_best_median=0.05,
         IntroGain_best_rel_median=0.05,
         DownsideRate_best=0.1,
         SiblingWinRate_allgens=0.8,
@@ -133,16 +134,16 @@ def _admittable_row() -> IdeaStats:
 class TestAdmitterLogging:
     def test_select_logs_admitted_count(self):
         with capture_logs() as captured:
-            kept = TieredAdmitter().select([_admittable_row()])
+            kept = SignBasedAdmitter().select([_admittable_row()])
         text = "".join(captured)
         assert len(kept) == 1
         assert "[Memory][Admitter]" in text
-        assert "TieredAdmitter" in text
+        assert "SignBasedAdmitter" in text
         assert "idea-1" in text
 
     def test_empty_input_is_silent(self):
         with capture_logs() as captured:
-            TieredAdmitter().select([])
+            SignBasedAdmitter().select([])
         assert "[Memory][Admitter]" not in "".join(captured)
 
 

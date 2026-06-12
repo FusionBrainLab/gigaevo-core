@@ -383,10 +383,10 @@ class TestNormalizeEdgeCases:
         assert result.aliases[0].key == "idea-1-update"
         assert result.aliases[1].programs == ["p3"]
 
-    def test_quartile_blocks_in_evolution_statistics(self):
-        stats = {"Q2": {"posterior_a": 2.0, "posterior_b": 1.0}}
+    def test_stats_blocks_in_evolution_statistics(self):
+        stats = {"ALL": {"posterior_a": 2.0, "posterior_b": 1.0}}
         result = normalize_memory_card({"evolution_statistics": stats})
-        assert result.evolution_statistics.Q2.posterior_a == 2.0
+        assert result.evolution_statistics.ALL.posterior_a == 2.0
 
 
 # ===========================================================================

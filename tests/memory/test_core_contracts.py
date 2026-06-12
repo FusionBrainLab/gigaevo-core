@@ -12,11 +12,7 @@ from omegaconf import OmegaConf
 import pytest
 
 import gigaevo.memory.core as core
-from gigaevo.memory.core.admitter import (
-    PermissiveAdmitter,
-    SignBasedAdmitter,
-    TieredAdmitter,
-)
+from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
@@ -42,9 +38,7 @@ CONFIG_MEMORY = REPO_ROOT / "config" / "memory"
 
 
 class TestProtocolConformance:
-    @pytest.mark.parametrize(
-        "impl", [SignBasedAdmitter(), TieredAdmitter(), PermissiveAdmitter()]
-    )
+    @pytest.mark.parametrize("impl", [SignBasedAdmitter(), PermissiveAdmitter()])
     def test_admitters(self, impl):
         assert isinstance(impl, MemoryAdmitter)
 
@@ -86,7 +80,6 @@ class TestHydraComposition:
         ("leaf", "cls"),
         [
             ("sign_based.yaml", SignBasedAdmitter),
-            ("tiered.yaml", TieredAdmitter),
             ("permissive.yaml", PermissiveAdmitter),
         ],
     )

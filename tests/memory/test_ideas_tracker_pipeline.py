@@ -30,6 +30,11 @@ from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
     programs_to_records,
 )
+from gigaevo.programs.metrics.context import (
+    MIN_VALUE_DEFAULT,
+    MetricsContext,
+    MetricSpec,
+)
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Lineage, Program
 from gigaevo.programs.program_state import ProgramState
 from tests.fakes.llm_router import FakeMemoryRouter
@@ -72,6 +77,18 @@ def _make_program(
     if program_id is not None:
         object.__setattr__(prog, "id", _uuid(program_id))
     return prog
+
+
+def _fitness_metrics_context() -> MetricsContext:
+    return MetricsContext(
+        specs={
+            "fitness": MetricSpec(
+                description="Primary fitness.",
+                is_primary=True,
+                higher_is_better=True,
+            )
+        }
+    )
 
 
 def _make_root_program(*, fitness: float = 1.0) -> Program:
@@ -135,11 +152,11 @@ class TestProgramToRecord:
         record = program_to_record(prog, "task", "summary")
         assert record.strategy == ""
 
-    def test_missing_fitness_defaults_to_zero(self) -> None:
+    def test_missing_fitness_raises(self) -> None:
         prog = _make_program()
         prog.metrics.clear()
-        record = program_to_record(prog, "task", "summary")
-        assert record.fitness == 0.0
+        with pytest.raises(KeyError):
+            program_to_record(prog, "task", "summary")
 
     def test_custom_fitness_key(self) -> None:
         prog = _make_program(fitness_key="accuracy")
@@ -266,6 +283,30 @@ class TestIdeaTrackerProgramFiltering:
         result = tracker._eligible_records([prog])
         assert result == []
 
+    def test_program_without_fitness_metric_is_excluded(self) -> None:
+        """A valid program missing the fitness key yields no record — no phantom default."""
+        tracker = _make_tracker()
+        prog = _make_evolved_program(fitness=5.0)
+        del prog.metrics["fitness"]
+        assert tracker._eligible_records([prog]) == []
+
+    def test_program_with_non_finite_fitness_is_excluded(self) -> None:
+        """NaN/inf fitness is not a real observation."""
+        tracker = _make_tracker()
+        result = tracker._eligible_records(
+            [_make_evolved_program(fitness=float("nan"))]
+        )
+        assert result == []
+
+    def test_program_with_sentinel_fitness_is_excluded(self) -> None:
+        """Fitness equal to the metric's sentinel floor is rejected via the wired
+        MetricsContext even when the program claims validity."""
+        tracker = _make_tracker(metrics_context=_fitness_metrics_context())
+        result = tracker._eligible_records(
+            [_make_evolved_program(fitness=MIN_VALUE_DEFAULT, is_valid=1.0)]
+        )
+        assert result == []
+
     def test_valid_program_with_negative_fitness_is_included(self) -> None:
         """Valid programs with negative fitness (e.g. hexagon_improver range [-10,-3.8]) must not be excluded."""
         tracker = _make_tracker()
@@ -359,7 +400,14 @@ class TestIdeaTrackerPosteriorPopulation:
 
         captured: dict[str, list[str]] = {}
 
-        def _spy(programs, *, fitness_key, higher_is_better, reputation=None):
+        def _spy(
+            programs,
+            *,
+            fitness_key,
+            higher_is_better,
+            reputation=None,
+            metrics_context=None,
+        ):
             captured["ids"] = [p.id for p in programs]
             return {}
 
@@ -383,7 +431,14 @@ class TestIdeaTrackerPosteriorPopulation:
 
         captured: dict[str, list[str]] = {}
 
-        def _spy(programs, *, fitness_key, higher_is_better, reputation=None):
+        def _spy(
+            programs,
+            *,
+            fitness_key,
+            higher_is_better,
+            reputation=None,
+            metrics_context=None,
+        ):
             captured["ids"] = [p.id for p in programs]
             return {}
 
@@ -662,7 +717,7 @@ class TestTypedStatsInjection:
         all_block = by_id["idea-1"]["evolution_statistics"]["ALL"]
         assert all_block["posterior_a"] == 4.0
         assert all_block["efficacy_confident"] is True
-        assert by_id["idea-1"]["evolution_statistics"]["Q1"]["intro_events"] == 2
+        assert set(by_id["idea-1"]["evolution_statistics"]) == {"ALL"}
         assert by_id["idea-2"]["evolution_statistics"] == {}
         assert stamped.evolution_statistics.ALL is None
         assert log.best_ideas_file.exists()

@@ -14,17 +14,13 @@ import math
 
 import numpy as np
 
-from gigaevo.memory.core.admitter import (
-    PermissiveAdmitter,
-    SignBasedAdmitter,
-    TieredAdmitter,
-)
+from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import AuctionCandidate, ThompsonAuctioneer
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.reputation import BetaBinomialReputation
+from gigaevo.memory.efficacy import beta_binomial_posterior
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
-    beta_binomial_posterior,
     compute_injection_posterior,
 )
 from gigaevo.memory.shared_memory.models import EvolutionStatistics
@@ -91,38 +87,31 @@ class TestBetaBinomialReputation:
         rep = BetaBinomialReputation()
         cases = [
             (
-                {
-                    "ALL": make_stats_block(
-                        intro_events=3, posterior_a=1.0, posterior_b=4.0
-                    )
-                },
+                {"ALL": {"intro_events": 3, "posterior_a": 1.0, "posterior_b": 4.0}},
+                True,
+            ),
+            (
+                {"ALL": {"intro_events": 3, "posterior_a": 4.0, "posterior_b": 1.0}},
+                False,
+            ),
+            (
+                {"ALL": {"intro_events": 2, "posterior_a": 1.0, "posterior_b": 3.0}},
+                False,
+            ),
+            (
+                {"ALL": {"intro_events": 5, "posterior_a": 2.0, "posterior_b": 5.0}},
                 True,
             ),
             (
                 {
-                    "ALL": make_stats_block(
-                        intro_events=3, posterior_a=4.0, posterior_b=1.0
-                    )
+                    "best_ideas_snapshot": {
+                        "intro_events": 5,
+                        "posterior_a": 1.0,
+                        "posterior_b": 9.0,
+                    }
                 },
                 False,
             ),
-            (
-                {
-                    "ALL": make_stats_block(
-                        intro_events=2, posterior_a=1.0, posterior_b=3.0
-                    )
-                },
-                False,
-            ),
-            (
-                {
-                    "ALL": make_stats_block(
-                        intro_events=5, posterior_a=2.0, posterior_b=5.0
-                    )
-                },
-                True,
-            ),
-            ({"Q4": make_stats_block()}, False),
             ({}, False),
             (None, False),
         ]
@@ -132,7 +121,7 @@ class TestBetaBinomialReputation:
 
     def test_harm_min_events_configurable(self):
         harmful = EvolutionStatistics.model_validate(
-            {"ALL": make_stats_block(intro_events=2, posterior_a=1.0, posterior_b=4.0)}
+            {"ALL": {"intro_events": 2, "posterior_a": 1.0, "posterior_b": 4.0}}
         )
         assert not BetaBinomialReputation().is_confidently_harmful(harmful)
         assert BetaBinomialReputation(harm_min_events=2).is_confidently_harmful(harmful)
@@ -218,73 +207,6 @@ class TestThompsonAuctioneer:
         winners, records = ThompsonAuctioneer().run([], np.random.default_rng(0))
         assert winners == []
         assert records == []
-
-
-class TestTieredAdmitter:
-    def test_tier_semantics(self):
-        stats = make_idea_stats(
-            [
-                {"idea_id": "strong", "block": make_stats_block()},
-                {
-                    "idea_id": "strong",
-                    "quartile": "Q4",
-                    "block": make_stats_block(median=0.2),
-                },
-                {
-                    "idea_id": "single-no-elite",
-                    "block": make_stats_block(
-                        intro_events=1, born_in_elite=0.0, median=0.147
-                    ),
-                },
-                {
-                    "idea_id": "neg-median",
-                    "block": make_stats_block(median=-0.05, rel_median=-0.05),
-                },
-                {
-                    "idea_id": "two-events-weak-sib",
-                    "block": make_stats_block(
-                        intro_events=2, sibling_win_allgens=0.5, p10=0.01
-                    ),
-                },
-                {
-                    "idea_id": "high-downside",
-                    "block": make_stats_block(downside=0.6),
-                },
-            ]
-        )
-        got = TieredAdmitter().select(stats)
-        assert [s.idea_id for s in got] == ["strong"]
-        assert got[0].quartile == "ALL"
-
-    def test_single_event_born_in_elite_kept(self):
-        stats = make_idea_stats(
-            [
-                {
-                    "idea_id": "newborn-elite",
-                    "block": make_stats_block(intro_events=1, born_in_elite=1.0),
-                }
-            ]
-        )
-        assert [s.idea_id for s in TieredAdmitter().select(stats)] == ["newborn-elite"]
-
-    def test_missing_metrics_never_admit(self):
-        block = make_stats_block()
-        block["IntroGain_best_rel_median"] = float("nan")
-        stats = make_idea_stats([{"idea_id": "nan-rel", "block": block}])
-        assert TieredAdmitter().select(stats) == []
-
-        block = make_stats_block()
-        block["SiblingWinRate_allgens"] = None
-        stats = make_idea_stats([{"idea_id": "no-sib", "block": block}])
-        assert TieredAdmitter().select(stats) == []
-
-    def test_thresholds_configurable(self):
-        stats = make_idea_stats(
-            [{"idea_id": "mild", "block": make_stats_block(rel_median=0.005)}]
-        )
-        assert TieredAdmitter().select(stats) == []
-        got = TieredAdmitter(min_rel_median=0.001).select(stats)
-        assert [s.idea_id for s in got] == ["mild"]
 
 
 class TestSignBasedAdmitter:

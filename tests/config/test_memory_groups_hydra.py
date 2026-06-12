@@ -75,6 +75,21 @@ class TestMemoryLocal:
         assert tracker._evictor is cfg.memory.evictor
         assert tracker._deduplicator is cfg.memory.dedup
 
+    def test_ideas_tracker_receives_metrics_context(self, llm_env):
+        from gigaevo.programs.metrics.context import MetricsContext
+
+        cfg = _compose(
+            "memory=local",
+            "ideas_tracker=default",
+            f"checkpoint_dir={llm_env}",
+            "writer=null",
+        )
+        tracker = instantiate(cfg.ideas_tracker)
+        assert isinstance(tracker._metrics_context, MetricsContext)
+        assert tracker._metrics_context.get_primary_key() == instantiate(
+            cfg.primary_key
+        )
+
     def test_component_knob_override_reaches_provider(self, llm_env):
         cfg = _compose(
             "memory=local",
@@ -86,10 +101,10 @@ class TestMemoryLocal:
         assert provider._auctioneer.baseline_prior == (5.0, 2.0)
 
     def test_admitter_group_swap(self):
-        from gigaevo.memory.core.admitter import TieredAdmitter
+        from gigaevo.memory.core.admitter import PermissiveAdmitter
 
-        cfg = _compose("memory=local", "memory/admitter=tiered")
-        assert isinstance(instantiate(cfg.memory.admitter), TieredAdmitter)
+        cfg = _compose("memory=local", "memory/admitter=permissive")
+        assert isinstance(instantiate(cfg.memory.admitter), PermissiveAdmitter)
 
 
 class TestMemoryNone:

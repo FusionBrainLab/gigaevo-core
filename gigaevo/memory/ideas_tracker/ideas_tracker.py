@@ -32,6 +32,7 @@ from gigaevo.memory.core.protocols import (
     ReputationModel,
 )
 from gigaevo.memory.core.reputation import BetaBinomialReputation
+from gigaevo.memory.efficacy import CardStatsStamper, EfficacyScorer
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
@@ -49,13 +50,8 @@ from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
     analyse as _analyse_origins,
 )
 from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
-from gigaevo.memory.shared_memory.models import (
-    CardStatsBlock,
-    EvolutionStatistics,
-    Quartile,
-)
-from gigaevo.memory.utils import to_float
-from gigaevo.programs.metrics.context import VALIDITY_KEY
+from gigaevo.memory.shared_memory.models import CardStatsBlock
+from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
@@ -215,19 +211,30 @@ async def _enrich_ideas_with_keywords_and_summaries(
     return list(await asyncio.gather(*[_enrich_one(idea) for idea in ideas]))
 
 
-def _valid_fitness(prog: Program, fitness_key: str) -> float | None:
-    """Fitness under ``fitness_key``, or ``None`` for invalid / non-finite programs.
+def _valid_fitness(
+    prog: Program,
+    fitness_key: str,
+    metrics_context: MetricsContext | None = None,
+) -> float | None:
+    """Fitness under ``fitness_key``, or ``None`` for invalid programs.
 
-    Invalid programs carry a sentinel floor fitness; treating it as a real value
-    would manufacture catastrophic harm (invalid child) or phantom improvement
-    (invalid parent baseline). Mirrors the offline lifecycle reconstruction so the
-    live posterior equals the validated one.
+    ``is_valid`` is a contract: every evaluated program carries it, so a missing
+    flag is treated as invalid — the same strict semantics record eligibility
+    uses. Invalid programs carry a sentinel floor fitness; treating it as a real
+    value would manufacture catastrophic harm (invalid child) or phantom
+    improvement (invalid parent baseline). When ``metrics_context`` is wired, a
+    fitness equal to the metric's sentinel is rejected even if the program
+    claims validity. Contrast: :meth:`MetricsContext.is_valid` defaults a
+    missing flag to valid — correct for metric aggregation, not for stat
+    tracking.
     """
     is_valid = prog.metrics.get(VALIDITY_KEY)
-    if is_valid is not None and is_valid <= 0:
+    if is_valid is None or is_valid <= 0:
         return None
     fit = prog.metrics.get(fitness_key)
     if fit is None or not math.isfinite(fit):
+        return None
+    if metrics_context is not None and metrics_context.is_sentinel(fitness_key, fit):
         return None
     return float(fit)
 
@@ -238,6 +245,7 @@ def _card_posterior_from_programs(
     fitness_key: str,
     higher_is_better: bool,
     reputation: ReputationModel | None = None,
+    metrics_context: MetricsContext | None = None,
 ) -> dict[str, CardStatsBlock]:
     """Injection-efficacy posterior per injected card id, from live programs.
 
@@ -254,7 +262,7 @@ def _card_posterior_from_programs(
         InjectionOutcome(
             id=prog.id,
             parents=prog.lineage.parents,
-            fitness=_valid_fitness(prog, fitness_key),
+            fitness=_valid_fitness(prog, fitness_key, metrics_context),
             selected_ids=prog.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
             or [],
         )
@@ -365,12 +373,14 @@ class _SessionLog:
         logs_dir: Path,
         admitter: MemoryAdmitter | None = None,
         higher_is_better: bool = True,
+        scorer: EfficacyScorer | None = None,
     ) -> None:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.session_dir: Path = logs_dir / ts
         self._entries: list[str] = []
         self._admitter = admitter
         self._higher_is_better = higher_is_better
+        self._scorer = scorer
 
     # ------ file paths ------
     @property
@@ -446,6 +456,7 @@ class _SessionLog:
                 programs_path=str(self.programs_file),
                 admitter=self._admitter,
                 higher_is_better=self._higher_is_better,
+                scorer=self._scorer,
             )
         except RuntimeError as exc:
             if "No valid programs" in str(exc):
@@ -461,15 +472,7 @@ class _SessionLog:
         if not _result.summary:
             return
 
-        blocks_by_idea: dict[str, dict[Quartile, CardStatsBlock]] = {}
-        for stats_row in _result.summary:
-            blocks_by_idea.setdefault(stats_row.idea_id, {})[stats_row.quartile] = (
-                stats_row.to_stats_block()
-            )
-        stats_by_idea = {
-            idea_id: EvolutionStatistics.from_blocks(blocks)
-            for idea_id, blocks in blocks_by_idea.items()
-        }
+        stats_by_idea = CardStatsStamper().idea_statistics(_result.summary)
 
         enriched = [
             idea.model_copy(update={"evolution_statistics": stats_by_idea[idea.id]})
@@ -562,6 +565,8 @@ class IdeaTracker(IncrementalPostRunHook):
         chunk_size: Number of ideas per LLM classification batch.
         memory_write_enabled: If True, trigger the downstream memory write pipeline.
         fitness_key: Metric key to use as fitness (default "fitness").
+        metrics_context: When wired, programs whose fitness equals the
+            metric's sentinel value are excluded from records and posteriors.
         logs_dir: Directory for timestamped session logs. Defaults to
             gigaevo/memory/ideas_tracker/logs/.
     """
@@ -584,6 +589,7 @@ class IdeaTracker(IncrementalPostRunHook):
         chunk_size: int = 5,
         fitness_key: str = "fitness",
         fitness_higher_is_better: bool = True,
+        metrics_context: MetricsContext | None = None,
         logs_dir: str | Path | None = None,
         admitter: MemoryAdmitter | None = None,
         evictor: Evictor | None = None,
@@ -627,6 +633,7 @@ class IdeaTracker(IncrementalPostRunHook):
         self._bank = IdeaBank(chunk_size=chunk_size)
         self._fitness_key = fitness_key
         self._fitness_higher_is_better = fitness_higher_is_better
+        self._metrics_context = metrics_context
         self._memory_write_enabled = memory_write_enabled
         self._best_programs_percent = memory_write_best_programs_percent
         self._backend = backend
@@ -657,6 +664,7 @@ class IdeaTracker(IncrementalPostRunHook):
             resolved_logs,
             admitter=admitter,
             higher_is_better=fitness_higher_is_better,
+            scorer=self._reputation.scorer(),
         )
 
     @cached_property
@@ -738,6 +746,7 @@ class IdeaTracker(IncrementalPostRunHook):
             fitness_key=self._fitness_key,
             higher_is_better=self._fitness_higher_is_better,
             reputation=self._reputation,
+            metrics_context=self._metrics_context,
         )
 
         _run_write_pipeline(
@@ -758,14 +767,15 @@ class IdeaTracker(IncrementalPostRunHook):
         """
         Filter programs and convert to ProgramRecord.
 
-        Skips: root programs (no parents), invalid programs (is_valid != 1.0), already-seen ids.
+        Skips: root programs (no parents), programs without a validated fitness
+        (missing/non-positive is_valid; missing, non-finite, or sentinel
+        fitness), already-seen ids.
         """
         eligible: list[Program] = []
         for prog in programs:
             if not prog.lineage.parents:
                 continue
-            is_valid = to_float(prog.metrics.get(VALIDITY_KEY))
-            if is_valid is None or is_valid <= 0:
+            if _valid_fitness(prog, self._fitness_key, self._metrics_context) is None:
                 continue
             if prog.id in self._seen_ids:
                 continue

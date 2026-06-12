@@ -280,15 +280,18 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         cards = load_memory_cards(banks_path, best_ideas_path)
         assert cards == []
 
-    def test_e2e_quartile_blocks_survive(self, tmp_path):
-        """Per-quartile stats blocks load back into typed models."""
+    def test_e2e_decision_stats_blocks_survive(self, tmp_path):
+        """Decision-vocabulary stats blocks load back into typed models."""
         complex_card = make_ideas_tracker_card(
             "idea-nested", "Complex", has_version_history=True
         )
         complex_card["evolution_statistics"] = {
-            "ALL": {"intro_events": 8, "IntroGain_best_median": 0.02},
-            "Q2": {"intro_events": 3, "SiblingWinRate": 0.75},
-            "Q4": {"posterior_a": 4.0, "posterior_b": 2.0},
+            "ALL": {
+                "intro_events": 8,
+                "IntroGain_best_median": 0.02,
+                "posterior_a": 4.0,
+                "posterior_b": 2.0,
+            },
         }
         banks_path = tmp_path / "banks.json"
         _write_json(banks_path, [{"active_bank": [complex_card]}])
@@ -296,16 +299,27 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         best_ideas_path = tmp_path / "best_ideas.json"
         _write_json(
             best_ideas_path,
-            [{"best_ideas": [{"idea_id": "idea-nested", "quartile": "ALL"}]}],
+            [
+                {
+                    "best_ideas": [
+                        {
+                            "idea_id": "idea-nested",
+                            "quartile": "ALL",
+                            "IntroGain_best_median": 0.02,
+                        }
+                    ]
+                }
+            ],
         )
 
         cards = load_memory_cards(banks_path, best_ideas_path)
         card = cards[0]
 
         assert card.evolution_statistics.ALL.intro_events == 8
-        assert card.evolution_statistics.Q2.SiblingWinRate == 0.75
-        assert card.evolution_statistics.Q4.posterior_a == 4.0
-        assert card.evolution_statistics.Q1 is None
+        assert card.evolution_statistics.ALL.posterior_a == 4.0
+        assert card.evolution_statistics.best_ideas_snapshot.IntroGain_best_median == (
+            0.02
+        )
 
 
 # ===========================================================================

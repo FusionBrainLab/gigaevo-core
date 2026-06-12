@@ -351,7 +351,11 @@ def program_to_record(
     fitness_key: str = "fitness",
     parent_codes: dict[str, str] | None = None,
 ) -> ProgramRecord:
-    """Convert a Program to a ProgramRecord for analyser consumption."""
+    """Convert a Program to a ProgramRecord for analyser consumption.
+
+    The program must carry a metric under ``fitness_key`` (callers filter
+    eligibility first); a missing key raises rather than minting a default.
+    """
     raw_output = program.metadata.get(MUTATION_OUTPUT_METADATA_KEY)
     mutation_output = (
         MutationOutput.model_validate(raw_output)
@@ -364,7 +368,7 @@ def program_to_record(
         parent_code = parent_codes.get(parents[0], "")
     return ProgramRecord(
         id=program.id,
-        fitness=program.metrics.get(fitness_key, 0.0),
+        fitness=program.metrics[fitness_key],
         generation=program.lineage.generation,
         parents=parents,
         improvements=normalize_improvements(mutation_output.changes),
@@ -383,7 +387,11 @@ def programs_to_records(
     fitness_key: str = "fitness",
     parent_codes: dict[str, str] | None = None,
 ) -> tuple[list[ProgramRecord], set[str]]:
-    """Convert a list of Programs to (list[ProgramRecord], set of their ids)."""
+    """Convert a list of Programs to (list[ProgramRecord], set of their ids).
+
+    Every program must carry a metric under ``fitness_key``; filter
+    eligibility before calling (a missing key raises).
+    """
     records = [
         program_to_record(
             p, task_description, task_description_summary, fitness_key, parent_codes

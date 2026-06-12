@@ -1,8 +1,8 @@
 """Replay equivalence on real archived idea banks (task #87 reproduction).
 
-The admitters must reproduce the offline gate-replay study exactly on the
-two durably archived banks (db11 house: 103 ideas -> tiered 13 / sign-based 28;
-db12 california: 85 -> 3 / 28). The third replay bank (db15 smoke) was lost
+The admitter must reproduce the offline gate-replay study exactly on the
+two durably archived banks (db11 house: 103 ideas -> sign-based 28;
+db12 california: 85 -> 28). The third replay bank (db15 smoke) was lost
 (its /tmp source was emptied; tracker checkpoints are file-based, not in Redis)
 — its per-idea diagnostics survive only in _paper/findings/gate_replay_raw.json.
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from gigaevo.memory.core.admitter import SignBasedAdmitter, TieredAdmitter
+from gigaevo.memory.core.admitter import SignBasedAdmitter
 from gigaevo.memory.core.idea_stats import IdeaStats, coerce_metric
 
 ARCHIVE_ROOT = Path(
@@ -31,8 +31,8 @@ BANKS = {
 }
 
 EXPECTED = {
-    "db11_house": {"ideas": 103, "tiered": 13, "sign_based": 28},
-    "db12_california": {"ideas": 85, "tiered": 3, "sign_based": 28},
+    "db11_house": {"ideas": 103, "sign_based": 28},
+    "db12_california": {"ideas": 85, "sign_based": 28},
 }
 
 pytestmark = pytest.mark.skipif(
@@ -80,17 +80,11 @@ def test_bank_has_expected_idea_count(bank_case):
     assert len({s.idea_id for s in stats}) == EXPECTED[name]["ideas"]
 
 
-def test_tiered_admitter_matches_replay_counts(bank_case):
-    name, stats = bank_case
-    got = TieredAdmitter().select(stats)
-    assert len(got) == EXPECTED[name]["tiered"]
-    assert len({s.idea_id for s in got}) == len(got)
-
-
 def test_sign_based_admitter_matches_replay_counts(bank_case):
     name, stats = bank_case
     got = SignBasedAdmitter().select(stats)
     assert len(got) == EXPECTED[name]["sign_based"]
+    assert len({s.idea_id for s in got}) == len(got)
     for s in got:
         median = coerce_metric(s.IntroGain_best_median)
         assert median is not None and median > 0

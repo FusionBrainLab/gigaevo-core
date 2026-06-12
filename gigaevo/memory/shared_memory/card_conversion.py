@@ -208,7 +208,7 @@ class RawCardRecord(BaseModel):
     )
     evolution_statistics: EvolutionStatistics = Field(
         default_factory=EvolutionStatistics,
-        description="Per-quartile efficacy blocks stamped on the card.",
+        description="Whole-run (ALL) efficacy block plus the offline best-ideas snapshot.",
     )
     explanation: RawExplanationRecord = Field(
         default_factory=RawExplanationRecord,

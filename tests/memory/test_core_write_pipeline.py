@@ -88,7 +88,13 @@ class TestHarmEvictor:
             _THIN_STATS,
             {},
             {"ALL": {}},
-            {"Q4": {"intro_events": 6, "posterior_a": 1.0, "posterior_b": 7.0}},
+            {
+                "best_ideas_snapshot": {
+                    "intro_events": 6,
+                    "posterior_a": 1.0,
+                    "posterior_b": 7.0,
+                }
+            },
             None,
         ],
     )

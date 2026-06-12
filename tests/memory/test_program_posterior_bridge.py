@@ -21,7 +21,13 @@ from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.ideas_tracker.ideas_tracker import (
     _card_posterior_from_programs,
 )
-from gigaevo.programs.metrics.context import VALIDITY_KEY
+from gigaevo.programs.metrics.context import (
+    MAX_VALUE_DEFAULT,
+    MIN_VALUE_DEFAULT,
+    VALIDITY_KEY,
+    MetricsContext,
+    MetricSpec,
+)
 from gigaevo.programs.program import Lineage, Program
 
 
@@ -164,6 +170,82 @@ def test_invalid_child_with_sentinel_fitness_creates_no_harm_event() -> None:
     ]
     post = _card_posterior_from_programs(
         programs, fitness_key="fitness", higher_is_better=True
+    )
+    assert post == {}
+
+
+def test_child_missing_is_valid_is_excluded() -> None:
+    # Validity is a contract: a program without the is_valid metric is treated
+    # as invalid, matching record eligibility.
+    programs = [
+        _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+        _prog("c1", fitness=0.85, parents=["root"], selected=[]),
+    ]
+    del programs[1].metrics[VALIDITY_KEY]
+    post = _card_posterior_from_programs(
+        programs, fitness_key="fitness", higher_is_better=True
+    )
+    assert post == {}
+
+
+def test_sentinel_fitness_rejected_via_metrics_context() -> None:
+    # Belt over the is_valid braces: a child claiming validity but carrying the
+    # metric's sentinel floor is rejected through MetricsContext.is_sentinel.
+    ctx = MetricsContext(
+        specs={
+            "fitness": MetricSpec(
+                description="Primary fitness.",
+                is_primary=True,
+                higher_is_better=True,
+            )
+        }
+    )
+    programs = [
+        _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+        _prog("c1", fitness=MIN_VALUE_DEFAULT, parents=["root"], selected=[]),
+    ]
+    post = _card_posterior_from_programs(
+        programs,
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=ctx,
+    )
+    assert post == {}
+
+
+def test_sentinel_fitness_rejected_lower_is_better() -> None:
+    # Lower-is-better metrics default to the +1e5 sentinel ceiling; the
+    # MetricsContext gate must reject that side too.
+    ctx = MetricsContext(
+        specs={
+            "cost": MetricSpec(
+                description="Primary cost.",
+                is_primary=True,
+                higher_is_better=False,
+            )
+        }
+    )
+    programs = [
+        _prog(
+            "root",
+            fitness=0.30,
+            parents=[],
+            selected=["program-A"],
+            fitness_key="cost",
+        ),
+        _prog(
+            "c1",
+            fitness=MAX_VALUE_DEFAULT,
+            parents=["root"],
+            selected=[],
+            fitness_key="cost",
+        ),
+    ]
+    post = _card_posterior_from_programs(
+        programs,
+        fitness_key="cost",
+        higher_is_better=False,
+        metrics_context=ctx,
     )
     assert post == {}
 

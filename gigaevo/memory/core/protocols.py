@@ -5,6 +5,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.memory.core.auctioneer import AuctionBid, AuctionCandidate
 from gigaevo.memory.core.idea_stats import IdeaStats
+from gigaevo.memory.efficacy import EfficacyScorer
+from gigaevo.memory.shared_memory.card_dedup import DedupDecision
 from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
@@ -16,6 +18,8 @@ from gigaevo.memory.shared_memory.models import (
 @runtime_checkable
 class ReputationModel(Protocol):
     """Owns all per-card efficacy statistics derived from injection outcomes."""
+
+    def scorer(self) -> EfficacyScorer: ...
 
     def posterior(
         self, gains: Sequence[float], *, threshold: float = 0.0
@@ -110,7 +114,9 @@ class Deduplicator(Protocol):
     """Reconciles an incoming card against the existing bank into a
     DedupDecision (add / discard / update-with-merges)."""
 
-    def reconcile(self, card: AnyCard, bank: Mapping[str, AnyCard]) -> Any: ...
+    def reconcile(
+        self, card: AnyCard, bank: Mapping[str, AnyCard]
+    ) -> DedupDecision: ...
 
 
 @runtime_checkable

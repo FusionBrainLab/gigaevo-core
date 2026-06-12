@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from gigaevo.memory.core.idea_stats import IdeaStats
+from gigaevo.memory.shared_memory.models import Quartile
 
 
 class IntroEvent(BaseModel):
@@ -17,8 +18,7 @@ class IntroEvent(BaseModel):
     parents: list[str]
     best_parent_id: str
     best_parent_fit: float
-    mean_parent_fit: float
-    quartile: str
+    quartile: Quartile
 
 
 class DescMetrics(BaseModel):
