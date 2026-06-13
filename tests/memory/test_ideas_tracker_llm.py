@@ -77,7 +77,7 @@ class TestStructuredCalls:
         parsed = call_step_structured(llm, STEP, _Partition, "x")
         assert parsed == _Partition(included=[1], rejected=[2])
 
-    def test_forces_function_calling_method(self):
+    def test_defers_structured_method_to_router(self):
         captured = {}
 
         class _Capture(FakeMemoryRouter):
@@ -86,7 +86,19 @@ class TestStructuredCalls:
                 return super().with_structured_output(schema, **kwargs)
 
         call_step_structured(_Capture(), STEP, _Partition, "x")
-        assert captured["method"] == "function_calling"
+        assert "method" not in captured
+
+    @pytest.mark.asyncio
+    async def test_async_defers_structured_method_to_router(self):
+        captured = {}
+
+        class _Capture(FakeMemoryRouter):
+            def with_structured_output(self, schema, **kwargs):
+                captured.update(kwargs)
+                return super().with_structured_output(schema, **kwargs)
+
+        await call_step_structured_async(_Capture(), STEP, _Partition, "x")
+        assert "method" not in captured
 
     def test_router_failure_propagates(self):
         llm = FakeMemoryRouter(

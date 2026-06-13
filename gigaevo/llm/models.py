@@ -6,7 +6,7 @@ from contextvars import ContextVar
 import json
 import os
 import random
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 import urllib.error
 import urllib.request
 
@@ -113,6 +113,15 @@ def _with_langfuse(
     return cast(RunnableConfig, cfg)
 
 
+_StructuredMethod = Literal["function_calling", "json_mode", "json_schema"]
+_AUTO_STRUCTURED_METHOD = "auto"
+_STRUCTURED_METHOD_CHAIN: tuple[_StructuredMethod, ...] = (
+    "json_schema",
+    "function_calling",
+    "json_mode",
+)
+
+
 class MultiModelRouter(Runnable):
     """Probabilistic model router with token tracking and Langfuse tracing.
 
@@ -153,6 +162,7 @@ class MultiModelRouter(Runnable):
         self._task_model_map: dict[int, str] = {}
         self._name = name
         self._structured_output_method = structured_output_method
+        self._negotiated_method: dict[int, _StructuredMethod] = {}
         self._max_concurrent = max_concurrent
         self._semaphore: asyncio.Semaphore | None = None
 
@@ -392,13 +402,21 @@ class MultiModelRouter(Runnable):
         parsed = self.with_structured_output(schema).invoke(data)
         return _parsed_to_text(parsed), parsed, None, None
 
-    def with_structured_output(self, schema: Any, **kwargs) -> _StructuredOutputRouter:
+    def with_structured_output(self, schema: Any, **kwargs) -> Runnable:
         """Create a router that returns parsed Pydantic models with token tracking.
 
         If the router was constructed with ``structured_output_method`` (e.g.
         ``"json_schema"`` or ``"function_calling"``), that method is forwarded
-        to each underlying model. Explicit ``method`` in ``**kwargs`` wins.
+        to each underlying model. The ``"auto"`` sentinel instead negotiates a
+        working method per model at call time (see
+        :class:`_AutoStructuredOutputRouter`). Explicit ``method`` in
+        ``**kwargs`` wins and bypasses negotiation.
         """
+        if (
+            self._structured_output_method == _AUTO_STRUCTURED_METHOD
+            and "method" not in kwargs
+        ):
+            return _AutoStructuredOutputRouter(self, schema)
         if self._structured_output_method is not None:
             kwargs.setdefault("method", self._structured_output_method)
         wrapped = [
@@ -493,3 +511,102 @@ class _StructuredOutputRouter(Runnable):
             return self._process(
                 await model.ainvoke(input, self._config(config, name), **kwargs), name
             )
+
+
+class _AutoStructuredOutputRouter(Runnable):
+    """Negotiates a structured-output method per model, caching the winner.
+
+    For each selected model, tries the methods in ``_STRUCTURED_METHOD_CHAIN``
+    until one both transports and parses, then caches it on the base router's
+    ``_negotiated_method`` so later calls skip the dead methods. A model that
+    only serves ``function_calling`` self-heals; one that rejects forced
+    ``tool_choice`` stays on ``json_schema``.
+    """
+
+    def __init__(self, router: MultiModelRouter, schema: Any) -> None:
+        self._router = router
+        self._schema = schema
+
+    def _select(self) -> tuple[ChatOpenAI, str]:
+        idx = random.choices(
+            range(len(self._router.models)), weights=self._router.probabilities
+        )[0]
+        return self._router.models[idx], self._router.model_names[idx]
+
+    def _methods_for(self, model_id: int) -> tuple[_StructuredMethod, ...]:
+        cached = self._router._negotiated_method.get(model_id)
+        return (cached,) if cached is not None else _STRUCTURED_METHOD_CHAIN
+
+    def _remember(self, model_id: int, name: str, method: _StructuredMethod) -> None:
+        if self._router._negotiated_method.get(model_id) == method:
+            return
+        self._router._negotiated_method[model_id] = method
+        logger.info(
+            "[MultiModelRouter:{}] structured-output method for {} auto-resolved to {!r}",
+            self._router._name,
+            name,
+            method,
+        )
+
+    def _bound_router(
+        self, model: ChatOpenAI, name: str, method: _StructuredMethod
+    ) -> _StructuredOutputRouter:
+        wrapped = model.with_structured_output(
+            self._schema, include_raw=True, method=method
+        )
+        return _StructuredOutputRouter(
+            [wrapped],
+            [name],
+            [1.0],
+            self._router._langfuse,
+            self._router._tracker,
+            task_model_map=self._router._task_model_map,
+            semaphore_factory=self._router.get_semaphore,
+        )
+
+    def _log_failure(
+        self, method: _StructuredMethod, name: str, exc: Exception
+    ) -> None:
+        logger.debug(
+            "[MultiModelRouter:{}] structured method {!r} failed for {}: {}",
+            self._router._name,
+            method,
+            name,
+            exc,
+        )
+
+    def invoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> Any:
+        model, name = self._select()
+        model_id = id(model)
+        last_exc: Exception | None = None
+        for method in self._methods_for(model_id):
+            try:
+                result = self._bound_router(model, name, method).invoke(
+                    input, config, **kwargs
+                )
+                self._remember(model_id, name, method)
+                return result
+            except Exception as exc:
+                last_exc = exc
+                self._log_failure(method, name, exc)
+        raise cast(Exception, last_exc)
+
+    async def ainvoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> Any:
+        model, name = self._select()
+        model_id = id(model)
+        last_exc: Exception | None = None
+        for method in self._methods_for(model_id):
+            try:
+                result = await self._bound_router(model, name, method).ainvoke(
+                    input, config, **kwargs
+                )
+                self._remember(model_id, name, method)
+                return result
+            except Exception as exc:
+                last_exc = exc
+                self._log_failure(method, name, exc)
+        raise cast(Exception, last_exc)

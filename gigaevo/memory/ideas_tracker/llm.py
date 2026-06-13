@@ -78,7 +78,7 @@ def call_step_structured(
     content: str | dict[str, str] = "",
 ) -> TSchema:
     """Structured LLM call for a prompt step; raises on transport or parse failure."""
-    structured = llm.with_structured_output(schema, method="function_calling")
+    structured = llm.with_structured_output(schema)
     return structured.invoke(render_messages(step, content))
 
 
@@ -89,5 +89,5 @@ async def call_step_structured_async(
     content: str | dict[str, str] = "",
 ) -> TSchema:
     """Async structured LLM call; raises on transport or parse failure."""
-    structured = llm.with_structured_output(schema, method="function_calling")
+    structured = llm.with_structured_output(schema)
     return await structured.ainvoke(render_messages(step, content))
