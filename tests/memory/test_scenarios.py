@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import Idea
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -696,8 +699,8 @@ class TestScenarioCrossTask:
 class TestScenarioErrorRecovery:
     """Test behavior when things go wrong: corrupt files, missing fields."""
 
-    def test_truncated_index_json_recovers_empty(self, tmp_path):
-        """Crash mid-write → truncated JSON → silent empty start."""
+    def test_truncated_index_json_fails_fast(self, tmp_path):
+        """Crash mid-write → truncated JSON → raise, never overwrite."""
         mem_dir = tmp_path / "mem"
         mem_dir.mkdir(parents=True)
 
@@ -709,9 +712,8 @@ class TestScenarioErrorRecovery:
         # Corrupt the index file (simulating crash mid-write)
         mem.config.index_file.write_text('{"memory_cards": {"c1": {"id": "c1", "des')
 
-        # Reload: data is lost (known bug, documented)
-        mem2 = _make_memory(tmp_path)
-        assert len(mem2.card_store.cards) == 0
+        with pytest.raises(MemoryStorageError):
+            _make_memory(tmp_path)
 
     def test_save_card_with_minimal_fields(self, tmp_path):
         """Cards with only description should still work."""

@@ -69,12 +69,16 @@ def _prog(
     fitness: float | None,
     parents: list[str] | None = None,
     selected: list[str] | None = None,
+    injected: list[str] | None = None,
+    invalid: bool = False,
 ) -> InjectionOutcome:
     return InjectionOutcome(
         id=pid,
         fitness=fitness,
         parents=parents or [],
         selected_ids=selected or [],
+        injected_ids=injected,
+        invalid=invalid,
     )
 
 
@@ -209,12 +213,52 @@ class TestComputeInjectionPosterior:
         ]
         assert compute_injection_posterior(programs, higher_is_better=True) == {}
 
-    def test_child_with_none_fitness_skipped(self) -> None:
+    def test_child_with_missing_fitness_skipped(self) -> None:
+        # Missing fitness (never evaluated / metric absent) is no evidence.
         programs = [
             _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
             _prog("c1", fitness=None, parents=["root"], selected=[]),
         ]
         assert compute_injection_posterior(programs, higher_is_better=True) == {}
+
+    def test_invalid_child_counts_as_harm_event(self) -> None:
+        # A child evaluated and judged invalid is the worst possible outcome of
+        # an injection — it must raise k_harm even without a gain magnitude.
+        programs = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=None, parents=["root"], invalid=True),
+        ]
+        post = compute_injection_posterior(programs, higher_is_better=True)
+        assert post["program-A"].intro_events == 1
+        assert post["program-A"].k_harm == 1
+        assert (post["program-A"].posterior_a, post["program-A"].posterior_b) == (
+            1.0,
+            2.0,
+        )
+
+    def test_invalid_child_without_valid_parent_skipped(self) -> None:
+        programs = [
+            _prog("root", fitness=None, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=None, parents=["root"], invalid=True),
+        ]
+        assert compute_injection_posterior(programs, higher_is_better=True) == {}
+
+    def test_invalid_child_never_enters_the_baseline_cohort(self) -> None:
+        # The invalid child contributes a harm event but no gain — siblings'
+        # baselines must be computed as if it produced no number at all.
+        with_invalid = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=0.85, parents=["root"]),
+            _prog("c2", fitness=None, parents=["root"], invalid=True),
+        ]
+        without_invalid = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=0.85, parents=["root"]),
+        ]
+        a = compute_injection_posterior(with_invalid, higher_is_better=True)
+        b = compute_injection_posterior(without_invalid, higher_is_better=True)
+        assert a["program-A"].k_harm == b["program-A"].k_harm + 1
+        assert a["program-A"].intro_events == b["program-A"].intro_events + 1
 
     def test_never_injected_card_absent(self) -> None:
         # program-Z is in nobody's parent selected set -> absent (auction: COLD).
@@ -372,3 +416,61 @@ class TestRedesignedHarmDefinition:
             list(reversed(programs)), higher_is_better=True
         )
         assert forward == backward
+
+
+class TestBirthStampAttribution:
+    """Attribution reads the child's frozen birth slate (``injected_ids``),
+    falling back to the parents' current ``selected_ids`` only for legacy
+    programs born before the stamp existed."""
+
+    def test_frozen_birth_slate_overrides_parent_current_slate(self) -> None:
+        # Parent re-ran the stochastic auction after the child was born; the
+        # child's prompt contained program-OLD, not the parent's current pick.
+        programs = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-NEW"]),
+            _prog("c1", fitness=0.85, parents=["root"], injected=["program-OLD"]),
+        ]
+        post = compute_injection_posterior(programs, higher_is_better=True)
+        assert set(post) == {"program-OLD"}
+
+    def test_empty_birth_slate_means_no_exposure(self) -> None:
+        programs = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=0.85, parents=["root"], injected=[]),
+        ]
+        assert compute_injection_posterior(programs, higher_is_better=True) == {}
+
+    def test_legacy_child_without_stamp_falls_back_to_parent_slates(self) -> None:
+        programs = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=0.85, parents=["root"], injected=None),
+        ]
+        post = compute_injection_posterior(programs, higher_is_better=True)
+        assert set(post) == {"program-A"}
+
+
+class TestNoiseFloor:
+    def test_zero_mad_plateau_jitter_below_floor_is_not_harm(self) -> None:
+        # Over half the cohort ties exactly at the median -> MAD collapses to
+        # zero; sub-floor jitter (CV fold noise) must not register as harm.
+        siblings = [_prog(f"n{i}", fitness=0.80, parents=["root"]) for i in range(5)]
+        programs = [
+            _prog("root", fitness=0.80, parents=[], selected=[]),
+            _prog("rootA", fitness=0.80, parents=[], selected=["program-A"]),
+            *siblings,
+            _prog("c1", fitness=0.80 - 1e-6, parents=["rootA"]),
+        ]
+        post = compute_injection_posterior(programs, higher_is_better=True)
+        assert post["program-A"].k_harm == 0
+
+
+class TestLeaveOneOutBaseline:
+    def test_lone_regressing_child_is_harm_not_help(self) -> None:
+        # With self-inclusion the child IS its own baseline (adjusted gain 0),
+        # so a hard regression scored as help. Leave-one-out exposes it.
+        programs = [
+            _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
+            _prog("c1", fitness=0.70, parents=["root"]),
+        ]
+        post = compute_injection_posterior(programs, higher_is_better=True)
+        assert post["program-A"].k_harm == 1

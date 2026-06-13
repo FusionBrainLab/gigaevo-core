@@ -14,6 +14,7 @@ from pathlib import Path
 
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
+from omegaconf import OmegaConf
 import pytest
 
 from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
@@ -48,6 +49,9 @@ def _compose_with_tracker(name: str, tmp_path: Path, *extra: str):
                 "pipeline=auto",
                 f"ideas_tracker='{name}'",
                 f"checkpoint_dir={tmp_path / 'ckpt'}",
+                # The shipped value is ${hydra:runtime.output_dir}/tracker,
+                # which only resolves inside a real @hydra.main run.
+                f"ideas_tracker.logs_dir={tmp_path / 'tracker'}",
                 "writer=null",
                 *extra,
             ],
@@ -74,6 +78,56 @@ class TestHydraInstantiateTrue:
         tracker = instantiate(cfg.ideas_tracker)
         assert isinstance(tracker, IdeaTracker)
         assert isinstance(tracker._analyzer, ClassifyingAnalyzer)
+
+
+class TestTrackerLogsDir:
+    """Session logs belong in the run's Hydra output dir, not the package tree."""
+
+    @pytest.mark.parametrize("name", ["default", "fast", "true"])
+    def test_shipped_yaml_routes_logs_to_run_output_dir(self, name, tmp_path):
+        with initialize_config_dir(
+            config_dir=str(REPO_ROOT / "config"), version_base=None
+        ):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=toy_example",
+                    f"problem.dir={REPO_ROOT}/problems/toy_example",
+                    "algorithm=multi_island",
+                    "pipeline=auto",
+                    f"ideas_tracker='{name}'",
+                ],
+            )
+        raw = OmegaConf.to_container(cfg.ideas_tracker, resolve=False)
+        assert raw["logs_dir"] == "${hydra:runtime.output_dir}/tracker"
+
+    def test_logs_dir_override_controls_session_dir(self, tmp_path):
+        cfg = _compose_with_tracker("default", tmp_path)
+        tracker = instantiate(cfg.ideas_tracker)
+        assert tracker._log.session_dir.is_relative_to(tmp_path / "tracker")
+
+
+class TestReputationRef:
+    """fast/true must ride the same reputation singleton as default — a missing
+    ref silently splits the tracker's posteriors from the read-side auction."""
+
+    @pytest.mark.parametrize("name", ["default", "fast", "true"])
+    def test_yaml_wires_shared_reputation_singleton(self, name, tmp_path):
+        with initialize_config_dir(
+            config_dir=str(REPO_ROOT / "config"), version_base=None
+        ):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=toy_example",
+                    f"problem.dir={REPO_ROOT}/problems/toy_example",
+                    "algorithm=multi_island",
+                    "pipeline=auto",
+                    f"ideas_tracker='{name}'",
+                ],
+            )
+        raw = OmegaConf.to_container(cfg.ideas_tracker, resolve=False)
+        assert raw["reputation"] == "${ref:memory.reputation}"
 
 
 class TestHydraExtrasCatchAll:

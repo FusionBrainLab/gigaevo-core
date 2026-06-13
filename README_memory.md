@@ -2,8 +2,8 @@
 
 Two scenarios are supported today: a **single-pass live pipeline**
 (`intra_extra_memory`) that reads and writes memory in the same run, and
-an older **two-pass build-then-use** flow that still works for any pipeline
-that wires a `MemorySelectorAgent`.
+an older **two-pass build-then-use** flow that still works for any run
+that wires a read-side provider (`memory=local`).
 
 ## Required environment
 
@@ -60,16 +60,34 @@ per-run `updated` / `rejected` counts.
 
 ## How `checkpoint_dir` is applied
 
-- `memory=local` (or `memory=api`): used as `paths.checkpoint_dir` for the
-  memory backend during the run (read/update of checkpointed memory state).
+- `memory=local` (or the legacy `memory=legacy_api`): used as
+  `paths.checkpoint_dir` for the memory backend during the run (read/update
+  of checkpointed memory state).
 - `ideas_tracker=default` with `memory_write_enabled: true`: the same
   `checkpoint_dir` is used by the final write step to persist cards.
 
 ## Hydra groups
 
 - Pipeline: [`config/pipeline/`](config/pipeline/) — `intra_extra_memory`, `standard`, ...
-- Memory backend: [`config/memory/`](config/memory/) — `local`, `api`, `none`
+- Memory backend: [`config/memory/`](config/memory/) — `local`, `none`, `legacy_api`
 - Ideas tracker: [`config/ideas_tracker/`](config/ideas_tracker/) — `default`, `fast`, `true` (alias), `none`
+
+## Paper arm matrix
+
+The three experiment arms differ only in Hydra group overrides. A missed
+co-override silently degrades to a `Null*` component, so every run logs a
+startup banner — verify the arm from the first generation's log, not from
+`.hydra/config.yaml` archaeology.
+
+| Arm | Overrides | Active components | Gen-1 log verification |
+|---|---|---|---|
+| Intra-only baseline | `pipeline=standard` | intra stage only; no tracker, no read provider | `[Memory][Arm]` banner shows `Null`/`None` provider and hook |
+| Write-side-controlled baseline | `pipeline=intra_extra_memory ideas_tracker=default memory=none` | tracker writes cards; read path Null | banner + `[Memory][Arm] read path DISABLED (memory=none)` WARNING |
+| Full memory | `pipeline=intra_extra_memory ideas_tracker=default memory=local` | tracker + read provider + auction → 1 card | banner + `[Memory][Exposure] FIRST_INJECTION` once the bank is non-empty |
+
+The write-side-controlled baseline is state-pure: the tracker never touches
+program metadata or Redis engine state. It is timing-dirty only under
+wall-clock stoppers — fine with `max_mutants`.
 
 ## Platform / API-backed memory
 

@@ -15,6 +15,9 @@ memory_write_best_programs_percent: 5.0
 fitness_higher_is_better: ${higher_is_better}
 metrics_context: ${metrics_context}
 checkpoint_dir: ${checkpoint_dir}
+# Session logs (sweep windows, classify transcripts) belong in the run's
+# output dir, not the installed package tree.
+logs_dir: ${hydra:runtime.output_dir}/tracker
 redis_prefix: ${problem.name}
 # Rides the read-side memory= group: memory=local injects its admitter
 # (sign_based by default), memory=none leaves it null (SignBasedAdmitter
@@ -24,3 +27,7 @@ admitter: ${ref:memory.admitter}
 # backend defaults apply).
 evictor: ${ref:memory.evictor}
 deduplicator: ${ref:memory.dedup}
+# Injection posteriors use the SAME reputation singleton as the read-side
+# admitter/auction, so `memory/reputation` knob overrides reach the tracker
+# (memory=none → null, module defaults apply).
+reputation: ${ref:memory.reputation}

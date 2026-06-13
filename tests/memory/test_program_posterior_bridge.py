@@ -154,10 +154,10 @@ def test_program_without_selected_metadata_contributes_nothing() -> None:
     assert post == {}
 
 
-def test_invalid_child_with_sentinel_fitness_creates_no_harm_event() -> None:
+def test_invalid_child_with_sentinel_fitness_is_one_forced_harm_event() -> None:
     # Invalid programs carry a sentinel floor fitness (-100000) in this suite.
-    # Reading it raw would register a catastrophic harm event; the validated
-    # signal treats invalid fitness as absent, so the card is not credited.
+    # Reading it raw would register a catastrophic gain magnitude; the child is
+    # instead a single forced harm event with no gain, outside the cohort.
     programs = [
         _prog("root", fitness=0.80, parents=[], selected=["program-A"]),
         _prog(
@@ -171,7 +171,10 @@ def test_invalid_child_with_sentinel_fitness_creates_no_harm_event() -> None:
     post = _card_posterior_from_programs(
         programs, fitness_key="fitness", higher_is_better=True
     )
-    assert post == {}
+    block = post["program-A"]
+    assert block.intro_events == 1
+    assert block.k_harm == 1
+    assert (block.posterior_a, block.posterior_b) == (1.0, 2.0)
 
 
 def test_child_missing_is_valid_is_excluded() -> None:
@@ -188,9 +191,10 @@ def test_child_missing_is_valid_is_excluded() -> None:
     assert post == {}
 
 
-def test_sentinel_fitness_rejected_via_metrics_context() -> None:
+def test_sentinel_fitness_via_metrics_context_is_forced_harm() -> None:
     # Belt over the is_valid braces: a child claiming validity but carrying the
-    # metric's sentinel floor is rejected through MetricsContext.is_sentinel.
+    # metric's sentinel floor is caught through MetricsContext.is_sentinel —
+    # judged invalid, so one forced harm event, never a -100000 gain.
     ctx = MetricsContext(
         specs={
             "fitness": MetricSpec(
@@ -210,12 +214,13 @@ def test_sentinel_fitness_rejected_via_metrics_context() -> None:
         higher_is_better=True,
         metrics_context=ctx,
     )
-    assert post == {}
+    block = post["program-A"]
+    assert (block.intro_events, block.k_harm) == (1, 1)
 
 
-def test_sentinel_fitness_rejected_lower_is_better() -> None:
+def test_sentinel_fitness_lower_is_better_is_forced_harm() -> None:
     # Lower-is-better metrics default to the +1e5 sentinel ceiling; the
-    # MetricsContext gate must reject that side too.
+    # MetricsContext gate must catch that side too.
     ctx = MetricsContext(
         specs={
             "cost": MetricSpec(
@@ -247,7 +252,8 @@ def test_sentinel_fitness_rejected_lower_is_better() -> None:
         higher_is_better=False,
         metrics_context=ctx,
     )
-    assert post == {}
+    block = post["program-A"]
+    assert (block.intro_events, block.k_harm) == (1, 1)
 
 
 def test_child_with_only_invalid_parent_has_no_baseline() -> None:

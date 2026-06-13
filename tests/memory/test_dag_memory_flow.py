@@ -246,13 +246,15 @@ class TestCardIdMetadataTracking:
         ]
 
     @pytest.mark.asyncio
-    async def test_empty_selection_does_not_set_metadata(self) -> None:
+    async def test_empty_selection_writes_empty_list(self) -> None:
+        # NO_CACHE requeues must overwrite a stale slate; an empty selection is
+        # a real outcome, not "leave the previous one in place".
         provider = _make_selector_provider(cards=[], card_ids=[])
         stage = _make_memory_stage(provider=provider)
         program = _make_program()
         await stage.compute(program)
 
-        assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in program.metadata
+        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
 
     @pytest.mark.asyncio
     async def test_card_ids_survive_program_deep_copy(self) -> None:

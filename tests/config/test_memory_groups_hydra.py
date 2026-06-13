@@ -60,6 +60,9 @@ class TestMemoryLocal:
             "memory=local",
             "ideas_tracker=default",
             f"checkpoint_dir={llm_env}",
+            # The shipped value is ${hydra:runtime.output_dir}/tracker,
+            # which only resolves inside a real @hydra.main run.
+            f"ideas_tracker.logs_dir={llm_env / 'tracker'}",
             "writer=null",
         )
         provider = instantiate(cfg.memory.provider)
@@ -82,6 +85,9 @@ class TestMemoryLocal:
             "memory=local",
             "ideas_tracker=default",
             f"checkpoint_dir={llm_env}",
+            # The shipped value is ${hydra:runtime.output_dir}/tracker,
+            # which only resolves inside a real @hydra.main run.
+            f"ideas_tracker.logs_dir={llm_env / 'tracker'}",
             "writer=null",
         )
         tracker = instantiate(cfg.ideas_tracker)

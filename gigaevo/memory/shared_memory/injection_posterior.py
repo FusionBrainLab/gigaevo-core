@@ -32,8 +32,11 @@ class InjectionOutcome(BaseModel):
     """One program's injection-relevant facts, extracted at the tracker seam.
 
     ``selected_ids`` are the cards stamped on THIS program at mutation time —
-    they feed its future children's prompts. ``fitness`` must already be the
-    validated signal (``None`` for invalid or missing fitness).
+    they feed its future children's prompts. ``injected_ids`` is the child's
+    birth-time frozen slate (union of parents' prompt-time selections); when
+    present it overrides the parents' CURRENT ``selected_ids``, which a
+    NO_CACHE requeue may have rewritten since the child was born. ``fitness``
+    must already be the validated signal (``None`` for invalid or missing).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -48,6 +51,17 @@ class InjectionOutcome(BaseModel):
         default_factory=list,
         description="Card ids stamped on this program at mutation time.",
     )
+    injected_ids: list[str] | None = Field(
+        default=None,
+        description="Birth-time frozen card slate from the child's own metadata; "
+        "None for legacy programs without the stamp (fall back to parents' "
+        "current selected_ids).",
+    )
+    invalid: bool = Field(
+        default=False,
+        description="Evaluated and judged invalid: one forced harm event per "
+        "injected card, never part of the baseline cohort.",
+    )
 
 
 def compute_injection_posterior(
@@ -58,36 +72,51 @@ def compute_injection_posterior(
 ) -> dict[str, CardStatsBlock]:
     """Map each injected card id to its injection posterior.
 
-    For each child program, every card in the union of its resolvable parents'
-    ``selected_ids`` — the cards actually present in the mutation prompt that
-    produced the child — receives one intro event. The event's gain is the
-    parent-relative improvement *minus* the parent-fitness-local counterfactual;
-    it counts as harm only if it falls below the population's noise band. Cards
-    never injected into a child with a valid parent baseline are absent from the
-    result, which the auction treats as COLD Beta(1, 1).
+    For each child program, every card in its birth-time frozen slate
+    (``injected_ids``; legacy fallback: union of its resolvable parents'
+    current ``selected_ids``) receives one intro event. A valid child's gain
+    is the parent-relative improvement *minus* the parent-fitness-local
+    leave-one-out counterfactual; it counts as harm only if it falls below the
+    population's noise band. An evaluated-and-judged-invalid child is one
+    forced harm event per injected card and never enters the baseline cohort.
+    Cards never injected into a child with a valid parent baseline are absent
+    from the result, which the auction treats as COLD Beta(1, 1).
     """
     by_id = {p.id: p for p in programs if p.id}
     cohort: list[GainObservation] = []
     events: dict[str, list[GainObservation]] = {}
     for p in programs:
-        if p.fitness is None:
-            continue
-        parent_union: set[str] = set()
+        legacy_union: set[str] = set()
         parent_fits: list[float] = []
         for par_id in p.parents:
             parent = by_id.get(par_id)
             if parent is None:
                 continue
-            parent_union |= {c for c in parent.selected_ids if c}
+            legacy_union |= {c for c in parent.selected_ids if c}
             if parent.fitness is not None:
                 parent_fits.append(parent.fitness)
         if not parent_fits:
             continue
+        card_ids = (
+            {c for c in p.injected_ids if c}
+            if p.injected_ids is not None
+            else legacy_union
+        )
         ref = max(parent_fits) if higher_is_better else min(parent_fits)
+        if p.invalid:
+            if card_ids:
+                observation = GainObservation(
+                    child_id=p.id, parent_fitness=ref, gain=0.0, invalid=True
+                )
+                for card_id in card_ids:
+                    events.setdefault(card_id, []).append(observation)
+            continue
+        if p.fitness is None:
+            continue
         gain = p.fitness - ref if higher_is_better else ref - p.fitness
         observation = GainObservation(child_id=p.id, parent_fitness=ref, gain=gain)
         cohort.append(observation)
-        for card_id in parent_union:
+        for card_id in card_ids:
             events.setdefault(card_id, []).append(observation)
 
     if not events:

@@ -36,6 +36,7 @@ def beta_binomial_posterior(
     gains: Sequence[float],
     *,
     threshold: float = 0.0,
+    invalid_events: int = 0,
     confident_quantile: float = 0.20,
     confident_threshold: float = 0.5,
 ) -> CardStatsBlock:
@@ -45,11 +46,12 @@ def beta_binomial_posterior(
     events whose gain is below ``threshold`` (default 0); ``efficacy_confident``
     iff the ``confident_quantile`` of Beta(a, b) exceeds ``confident_threshold``.
     The ``p_help_lo20`` field name is part of the banks.json contract regardless
-    of the configured quantile.
+    of the configured quantile. ``invalid_events`` are evaluated-and-judged-
+    invalid children: each is one forced harm event with no gain magnitude.
     """
     finite = [float(g) for g in gains if g is not None and math.isfinite(float(g))]
-    n = len(finite)
-    k_harm = sum(1 for g in finite if g < threshold)
+    n = len(finite) + invalid_events
+    k_harm = sum(1 for g in finite if g < threshold) + invalid_events
     a = 1.0 + (n - k_harm)
     b = 1.0 + k_harm
     lo = float(beta.ppf(confident_quantile, a, b)) if n else float("nan")
@@ -77,6 +79,11 @@ class GainObservation(BaseModel):
     gain: float = Field(
         description="Child fitness minus best-parent fitness, direction-normalized."
     )
+    invalid: bool = Field(
+        default=False,
+        description="Evaluated-and-judged-invalid child: forced harm event, "
+        "excluded from the baseline cohort, gain magnitude meaningless.",
+    )
 
 
 class EfficacyScorer(BaseModel):
@@ -96,6 +103,11 @@ class EfficacyScorer(BaseModel):
     noise_band_k: float = Field(
         default=1.0,
         description="Robust noise-scale multiplier; gains within the band are not harm.",
+    )
+    noise_floor_rel: float = Field(
+        default=1e-4,
+        description="Minimum dead-band as a fraction of the cohort's parent-fitness "
+        "scale; keeps a zero-MAD plateau from flagging float jitter as harm.",
     )
     confident_quantile: float = Field(
         default=0.20,
@@ -123,14 +135,19 @@ class FittedEfficacyScorer:
         seen: set[str] = set()
         cohort: list[GainObservation] = []
         for o in observations:
-            if o.child_id in seen:
+            if o.invalid or o.child_id in seen:
                 continue
             seen.add(o.child_id)
             cohort.append(o)
+        self._ids = [o.child_id for o in cohort]
         self._refs = [o.parent_fitness for o in cohort]
         self._gains = [o.gain for o in cohort]
         centered = [self.adjusted_gain(o) for o in cohort]
-        self.epsilon = scorer.noise_band_k * self._noise_band(centered)
+        scale = max((abs(r) for r in self._refs), default=0.0)
+        self.epsilon = max(
+            scorer.noise_band_k * self._noise_band(centered),
+            scorer.noise_floor_rel * scale,
+        )
 
     @staticmethod
     def _noise_band(centered: Sequence[float]) -> float:
@@ -142,32 +159,38 @@ class FittedEfficacyScorer:
         med = _median(centered)
         return _MAD_TO_SIGMA * _median([abs(x - med) for x in centered])
 
-    def baseline(self, parent_fitness: float) -> float:
+    def baseline(
+        self, parent_fitness: float, *, exclude_child_id: str | None = None
+    ) -> float:
         """Counterfactual improvement for a parent of this fitness: the median
         gain of the ``baseline_neighbors`` cohort children with the nearest
-        best-parent fitness. With a small cohort every point is used (a global
-        median); an empty cohort yields 0."""
-        n = len(self._gains)
-        if not n:
+        best-parent fitness, leave-one-out for the scored child itself (a lone
+        regressing child must not be its own counterfactual). With a small
+        cohort every point is used (a global median); an empty pool yields 0."""
+        pool = [i for i in range(len(self._gains)) if self._ids[i] != exclude_child_id]
+        if not pool:
             return 0.0
-        k = min(self._scorer.baseline_neighbors, n)
-        nearest = sorted(range(n), key=lambda i: abs(self._refs[i] - parent_fitness))[
-            :k
-        ]
+        k = min(self._scorer.baseline_neighbors, len(pool))
+        nearest = sorted(pool, key=lambda i: abs(self._refs[i] - parent_fitness))[:k]
         return _median([self._gains[i] for i in nearest])
 
     def adjusted_gain(self, event: GainObservation) -> float:
-        return event.gain - self.baseline(event.parent_fitness)
+        return event.gain - self.baseline(
+            event.parent_fitness, exclude_child_id=event.child_id
+        )
 
     def adjusted_gains(self, events: Sequence[GainObservation]) -> list[float]:
         return [self.adjusted_gain(e) for e in events]
 
     def posterior(self, events: Sequence[GainObservation]) -> CardStatsBlock:
         """Downside posterior over the events' baseline-adjusted gains; harm is
-        an adjusted gain below ``-epsilon``."""
+        an adjusted gain below ``-epsilon``. Invalid events skip the gain math
+        entirely and enter as forced harm."""
+        scored = [e for e in events if not e.invalid]
         return beta_binomial_posterior(
-            self.adjusted_gains(events),
+            self.adjusted_gains(scored),
             threshold=-self.epsilon,
+            invalid_events=len(events) - len(scored),
             confident_quantile=self._scorer.confident_quantile,
             confident_threshold=self._scorer.confident_threshold,
         )

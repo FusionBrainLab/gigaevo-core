@@ -416,6 +416,8 @@ class TestDedupPreventsIdeaBloat:
             None,
         )
         mem.llm_service = mock_llm
+        # CardDedup binds llm_service at construction; rebind it too.
+        mem.dedup.llm_service = mock_llm
 
         # Try adding 5 similar ideas
         for i in range(5):

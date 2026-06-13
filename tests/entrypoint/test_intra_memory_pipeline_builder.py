@@ -24,6 +24,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from loguru import logger
+import pytest
+
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.entrypoint.lineage_memory_pipeline import (
@@ -31,8 +34,11 @@ from gigaevo.entrypoint.lineage_memory_pipeline import (
     IntraMemoryPipelineBuilder,
 )
 from gigaevo.llm.models import MultiModelRouter
+from gigaevo.memory.core import MemorySelection
+from gigaevo.memory.provider import MemoryProvider
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+from gigaevo.programs.program import Program
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 
 LEGACY_STAGES = (
@@ -64,7 +70,7 @@ def _make_metrics_context() -> MetricsContext:
     )
 
 
-def _make_ctx() -> EvolutionContext:
+def _make_ctx(memory_provider: MemoryProvider | None = None) -> EvolutionContext:
     metrics_ctx = _make_metrics_context()
     problem_ctx = MagicMock(spec=ProblemContext)
     problem_ctx.problem_dir = Path("/fake/problem")
@@ -75,11 +81,13 @@ def _make_ctx() -> EvolutionContext:
     storage = MagicMock(spec=ProgramStorage)
     llm_wrapper = MagicMock(spec=MultiModelRouter)
 
+    extra = {} if memory_provider is None else {"memory_provider": memory_provider}
     return EvolutionContext(
         problem_ctx=problem_ctx,
         llm_wrapper=llm_wrapper,
         storage=storage,
         prompts_dir=None,
+        **extra,
     )
 
 
@@ -293,3 +301,55 @@ class TestIntraExtraMemoryPipelineBuilder:
             "MutationSuggestionStage",
             "evolutionary_statistics",
         ) in _edge_triples(bp)
+
+
+# ===================================================================
+# Arm-mismatch warnings — read-side provider vs pipeline capability
+# ===================================================================
+
+
+class _CardProvider(MemoryProvider):
+    async def select_cards(
+        self,
+        program: Program,
+        *,
+        task_description: str,
+        metrics_description: str,
+    ) -> MemorySelection:
+        return MemorySelection(cards=[], card_ids=[])
+
+
+@pytest.fixture
+def warnings_log() -> list[str]:
+    messages: list[str] = []
+    handle = logger.add(messages.append, level="WARNING", format="{message}")
+    yield messages
+    logger.remove(handle)
+
+
+def _arm_warnings(messages: list[str]) -> list[str]:
+    return [m for m in messages if "[Memory][Arm]" in m]
+
+
+class TestArmMismatchWarnings:
+    def test_intra_extra_with_null_provider_warns_read_path_disabled(
+        self, warnings_log
+    ):
+        # arm 2′ (write-cost-controlled baseline) is legitimate and currently
+        # used live — this must stay a WARNING, never a raise.
+        IntraExtraMemoryPipelineBuilder(_make_ctx())
+        (warning,) = _arm_warnings(warnings_log)
+        assert "read path DISABLED" in warning
+
+    def test_intra_extra_with_real_provider_is_silent(self, warnings_log):
+        IntraExtraMemoryPipelineBuilder(_make_ctx(_CardProvider()))
+        assert _arm_warnings(warnings_log) == []
+
+    def test_standard_with_real_provider_warns_cards_never_read(self, warnings_log):
+        IntraMemoryPipelineBuilder(_make_ctx(_CardProvider()))
+        (warning,) = _arm_warnings(warnings_log)
+        assert "never reads" in warning
+
+    def test_standard_with_null_provider_is_silent(self, warnings_log):
+        IntraMemoryPipelineBuilder(_make_ctx())
+        assert _arm_warnings(warnings_log) == []

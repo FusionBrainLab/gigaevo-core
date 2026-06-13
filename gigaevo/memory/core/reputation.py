@@ -57,6 +57,11 @@ class BetaBinomialReputation(BaseModel):
         default=1.0,
         description="Robust noise-scale multiplier; gains within the band are not harm.",
     )
+    noise_floor_rel: float = Field(
+        default=1e-4,
+        description="Minimum dead-band as a fraction of the cohort's parent-fitness "
+        "scale; keeps a zero-MAD plateau from flagging float jitter as harm.",
+    )
     cold_prior: tuple[float, float] = Field(
         default=(1.0, 1.0),
         description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
@@ -69,6 +74,7 @@ class BetaBinomialReputation(BaseModel):
         return EfficacyScorer(
             baseline_neighbors=self.baseline_neighbors,
             noise_band_k=self.noise_band_k,
+            noise_floor_rel=self.noise_floor_rel,
             confident_quantile=self.confident_quantile,
             confident_threshold=self.confident_threshold,
         )

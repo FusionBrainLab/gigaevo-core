@@ -86,7 +86,7 @@ class TestFittedCohort:
             obs("c4", 0.5, -0.05),
             obs("c5", 0.5, 0.0),
         ]
-        narrow = EfficacyScorer(noise_band_k=0.0).fit(cohort)
+        narrow = EfficacyScorer(noise_band_k=0.0, noise_floor_rel=0.0).fit(cohort)
         wide = EfficacyScorer(noise_band_k=10.0).fit(cohort)
         assert narrow.epsilon == 0.0
         assert wide.epsilon > 0.0
@@ -102,11 +102,89 @@ class TestFittedCohort:
         assert lax.fit([]).posterior(gains).efficacy_confident is True
 
 
+class TestNoiseFloorRel:
+    def test_floor_scales_with_parent_fitness_magnitude(self):
+        cohort = [obs("c1", 0.5, 0.0), obs("c2", 0.5, 0.0), obs("c3", 0.5, 0.0)]
+        fitted = EfficacyScorer(noise_band_k=0.0, noise_floor_rel=1e-4).fit(cohort)
+        assert fitted.epsilon == pytest.approx(1e-4 * 0.5)
+
+    def test_floor_does_not_shrink_a_healthy_mad_band(self):
+        cohort = [
+            obs("c1", 0.5, 0.10),
+            obs("c2", 0.5, -0.10),
+            obs("c3", 0.5, 0.05),
+            obs("c4", 0.5, -0.05),
+            obs("c5", 0.5, 0.0),
+        ]
+        with_floor = EfficacyScorer(noise_band_k=1.0, noise_floor_rel=1e-4).fit(cohort)
+        without_floor = EfficacyScorer(noise_band_k=1.0, noise_floor_rel=0.0).fit(
+            cohort
+        )
+        assert with_floor.epsilon == without_floor.epsilon
+
+    def test_empty_cohort_floor_is_zero(self):
+        assert EfficacyScorer(noise_floor_rel=1e-4).fit([]).epsilon == 0.0
+
+
+class TestInvalidObservations:
+    def test_invalid_observations_excluded_from_cohort(self):
+        base = [
+            obs("c1", 0.5, 0.10),
+            obs("c2", 0.5, -0.30),
+            obs("c3", 0.5, 0.02),
+            obs("c4", 0.5, 0.04),
+        ]
+        invalid = GainObservation(
+            child_id="bad", parent_fitness=0.5, gain=0.0, invalid=True
+        )
+        assert EfficacyScorer().fit([*base, invalid]).epsilon == (
+            EfficacyScorer().fit(base).epsilon
+        )
+
+    def test_invalid_event_is_forced_harm_in_posterior(self):
+        fitted = EfficacyScorer().fit([])
+        invalid = GainObservation(
+            child_id="bad", parent_fitness=0.5, gain=0.0, invalid=True
+        )
+        block = fitted.posterior([obs("c1", 0.5, 0.10), invalid])
+        assert block.intro_events == 2
+        assert block.k_harm == 1
+
+    def test_posterior_primitive_invalid_events_param(self):
+        block = beta_binomial_posterior([0.2, 0.3], invalid_events=2)
+        assert block.intro_events == 4
+        assert block.k_harm == 2
+        assert block.posterior_a == pytest.approx(3.0)
+        assert block.posterior_b == pytest.approx(3.0)
+
+
+class TestLeaveOneOutBaseline:
+    def test_cohort_member_baseline_excludes_itself(self):
+        cohort = [
+            obs("c1", 0.5, 0.0),
+            obs("c2", 0.5, 0.0),
+            obs("c3", 0.5, -0.30),
+        ]
+        fitted = EfficacyScorer(noise_band_k=0.0, noise_floor_rel=0.0).fit(cohort)
+        # Self-inclusion would pull c3's baseline toward its own -0.30.
+        assert fitted.baseline(0.5, exclude_child_id="c3") == pytest.approx(0.0)
+        assert fitted.adjusted_gain(cohort[2]) == pytest.approx(-0.30)
+
+    def test_external_event_id_excludes_nothing(self):
+        cohort = [
+            obs("c1", 0.5, 0.10),
+            obs("c2", 0.5, 0.20),
+        ]
+        fitted = EfficacyScorer(noise_band_k=0.0, noise_floor_rel=0.0).fit(cohort)
+        assert fitted.baseline(0.5, exclude_child_id="elsewhere") == pytest.approx(0.15)
+
+
 class TestReputationBinding:
     def test_scorer_carries_reputation_thresholds(self):
         rep = BetaBinomialReputation(
             baseline_neighbors=7,
             noise_band_k=2.5,
+            noise_floor_rel=5e-4,
             confident_quantile=0.10,
             confident_threshold=0.6,
         )
@@ -114,6 +192,7 @@ class TestReputationBinding:
         assert scorer == EfficacyScorer(
             baseline_neighbors=7,
             noise_band_k=2.5,
+            noise_floor_rel=5e-4,
             confident_quantile=0.10,
             confident_threshold=0.6,
         )

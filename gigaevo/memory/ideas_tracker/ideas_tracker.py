@@ -21,6 +21,7 @@ from loguru import logger
 
 from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.llm.models import MultiModelRouter
@@ -241,6 +242,25 @@ def _valid_fitness(
     return float(fit)
 
 
+def _evaluated_invalid(
+    prog: Program,
+    fitness_key: str,
+    metrics_context: MetricsContext | None = None,
+) -> bool:
+    """True iff the program was evaluated and judged invalid — a real negative
+    outcome the posterior must count as harm, unlike a program that simply never
+    produced a fitness (missing ``is_valid``: not evaluated, no signal)."""
+    is_valid = prog.metrics.get(VALIDITY_KEY)
+    if is_valid is None:
+        return False
+    if is_valid <= 0:
+        return True
+    fit = prog.metrics.get(fitness_key)
+    if fit is None or not math.isfinite(fit):
+        return False
+    return metrics_context is not None and metrics_context.is_sentinel(fitness_key, fit)
+
+
 def _card_posterior_from_programs(
     programs: list[Program],
     *,
@@ -267,6 +287,8 @@ def _card_posterior_from_programs(
             fitness=_valid_fitness(prog, fitness_key, metrics_context),
             selected_ids=prog.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
             or [],
+            injected_ids=prog.get_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY),
+            invalid=_evaluated_invalid(prog, fitness_key, metrics_context),
         )
         for prog in programs
     ]

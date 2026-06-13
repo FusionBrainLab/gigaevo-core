@@ -8,6 +8,9 @@ import json
 from unittest.mock import MagicMock
 import uuid
 
+import pytest
+
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import (
     MemoryCard,
     ProgramCard,
@@ -405,15 +408,14 @@ class TestIndexPersistence:
         assert mem2.get_card("c1").description == "idea one"
         assert mem2.get_card("c2") is not None
 
-    def test_malformed_json_handled(self, tmp_path):
+    def test_malformed_json_raises(self, tmp_path):
         mem_path = tmp_path / "mem"
         mem_path.mkdir(parents=True)
         index_file = mem_path / "api_index.json"
         index_file.write_text("not valid json {{{")
 
-        # Should not crash
-        mem = _make_memory(tmp_path)
-        assert mem.card_store.cards == {}
+        with pytest.raises(MemoryStorageError):
+            _make_memory(tmp_path)
 
     def test_empty_index_file(self, tmp_path):
         mem_path = tmp_path / "mem"

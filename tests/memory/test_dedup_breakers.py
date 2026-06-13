@@ -13,7 +13,11 @@ from unittest.mock import MagicMock
 from pydantic import ValidationError
 import pytest
 
+from gigaevo.exceptions import LLMAPIError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
+from gigaevo.memory.shared_memory.card_dedup import (
+    _MAX_CONSECUTIVE_DEDUP_LLM_FAILURES,
+)
 from gigaevo.memory.shared_memory.memory_config import (
     ApiConfig,
     GamConfig,
@@ -194,6 +198,58 @@ class TestDedupLLMFailures:
         assert decision["action"] == "add"
         # LLM was NOT called
         mock_llm.generate.assert_not_called()
+
+
+class TestDedupConsecutiveFailureEscalation:
+    """A dead dedup LLM must escalate loudly instead of silently discarding
+    every incoming card forever (fail-closed is only correct for blips)."""
+
+    def _failing_memory(self, tmp_path):
+        mem = _make_full_memory(
+            tmp_path,
+            card_update_dedup_config={"enabled": True, "llm_max_retries": 1},
+        )
+        mock_llm = MagicMock()
+        mock_llm.generate.side_effect = RuntimeError("LLM down")
+        mem.dedup.llm_service = mock_llm
+        return mem, mock_llm
+
+    def test_escalates_after_max_consecutive_total_failures(self, tmp_path):
+        mem, _ = self._failing_memory(tmp_path)
+        card = normalize_memory_card({"description": "new"})
+        candidates = [{"card_id": "existing", "final_score": 0.8}]
+
+        for _ in range(_MAX_CONSECUTIVE_DEDUP_LLM_FAILURES - 1):
+            decision = mem.dedup.ask_llm_for_dedup_decision(card, candidates)
+            assert decision["action"] == "discard"
+            assert decision["reason"] == "dedup llm unavailable"
+
+        with pytest.raises(LLMAPIError):
+            mem.dedup.ask_llm_for_dedup_decision(card, candidates)
+
+    def test_success_resets_consecutive_failure_counter(self, tmp_path):
+        mem, mock_llm = self._failing_memory(tmp_path)
+        card = normalize_memory_card({"description": "new"})
+        candidates = [{"card_id": "existing", "final_score": 0.8}]
+
+        for _ in range(_MAX_CONSECUTIVE_DEDUP_LLM_FAILURES - 1):
+            mem.dedup.ask_llm_for_dedup_decision(card, candidates)
+
+        mock_llm.generate.side_effect = None
+        mock_llm.generate.return_value = (
+            json.dumps(
+                {"action": "add", "reason": "", "duplicate_of": "", "updates": []}
+            ),
+            {},
+            None,
+            None,
+        )
+        assert mem.dedup.ask_llm_for_dedup_decision(card, candidates)["action"] == "add"
+
+        mock_llm.generate.side_effect = RuntimeError("LLM down again")
+        for _ in range(_MAX_CONSECUTIVE_DEDUP_LLM_FAILURES - 1):
+            decision = mem.dedup.ask_llm_for_dedup_decision(card, candidates)
+            assert decision["action"] == "discard"
 
 
 # ===========================================================================

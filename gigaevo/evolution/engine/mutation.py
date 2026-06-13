@@ -6,7 +6,9 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_USED_METADATA_KEY,
     MUTATION_PARENT_STAGE_OUTPUTS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
@@ -57,12 +59,21 @@ async def generate_one_mutation(
         program = Program.from_mutation_spec(mutation_spec)
         program.iteration = iteration
 
-        # Auto-derive memory_used from parent metadata (set by MemoryContextStage)
-        has_memory_ids = any(
-            parent.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
-            for parent in parents
+        # Freeze the birth-time card slate: parents' selected-ids metadata is
+        # overwritten on every NO_CACHE requeue, so attribution must read the
+        # child's stamp, never the parents' current state.
+        injected_ids = sorted(
+            {
+                card_id
+                for parent in parents
+                for card_id in (
+                    parent.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY) or []
+                )
+                if card_id
+            }
         )
-        program.set_metadata("memory_used", bool(has_memory_ids))
+        program.set_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY, injected_ids)
+        program.set_metadata(MUTATION_MEMORY_USED_METADATA_KEY, bool(injected_ids))
 
         # Freeze the parent stage outputs that produced this child (debug only —
         # must never block the mutation, so failures are swallowed).

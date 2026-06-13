@@ -177,3 +177,74 @@ def test_plain_post_run_hook_rejected_at_init():
             storage=_StubStorage([]),
             refresh_every=1,
         )
+
+
+class _FlakyTracker(IncrementalPostRunHook):
+    """Fails the first ``fail_times`` refreshes, then succeeds."""
+
+    def __init__(self, fail_times: int) -> None:
+        self._failures_left = fail_times
+        self.successes = 0
+
+    async def on_run_complete(self, storage) -> None:  # type: ignore[no-untyped-def]
+        pass
+
+    async def run_increment(
+        self,
+        programs: list[Program],
+        *,
+        posterior_programs: list[Program] | None = None,
+    ) -> None:
+        if self._failures_left > 0:
+            self._failures_left -= 1
+            raise RuntimeError("analyzer LLM unavailable")
+        self.successes += 1
+
+
+@pytest.fixture
+def error_log():
+    from loguru import logger
+
+    messages: list[str] = []
+    handle = logger.add(messages.append, level="ERROR", format="{message}")
+    yield messages
+    logger.remove(handle)
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_logs_error_and_reraises(five_programs, error_log):
+    """A failed refresh must be loudly attributable in the run log (the
+    engine's bounded wrapper swallows the traceback into its own channel)
+    and still propagate so the engine keeps owning fault isolation."""
+    tracker = _FlakyTracker(fail_times=1)
+    hook = LiveMemoryRefreshHook(
+        tracker=tracker, storage=_StubStorage(five_programs), refresh_every=1
+    )
+
+    with pytest.raises(RuntimeError, match="analyzer LLM unavailable"):
+        await hook()
+
+    failures = [m for m in error_log if "[Memory][LiveRefresh] refresh FAILED" in m]
+    assert len(failures) == 1
+    assert "sweep" in failures[0]
+    assert hook.consecutive_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_consecutive_failures_count_and_reset_on_success(
+    five_programs, error_log
+):
+    tracker = _FlakyTracker(fail_times=2)
+    hook = LiveMemoryRefreshHook(
+        tracker=tracker, storage=_StubStorage(five_programs), refresh_every=1
+    )
+
+    with pytest.raises(RuntimeError):
+        await hook()
+    with pytest.raises(RuntimeError):
+        await hook()
+    assert hook.consecutive_failures == 2
+
+    await hook()
+    assert hook.consecutive_failures == 0
+    assert tracker.successes == 1

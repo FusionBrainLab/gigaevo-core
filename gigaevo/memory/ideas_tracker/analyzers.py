@@ -120,6 +120,7 @@ class _PendingIdeas:
 
     items: list[PendingIdea] = field(default_factory=list)
     mapping: dict[int, str] = field(default_factory=dict)
+    classification_failed: bool = False
 
     @classmethod
     def from_improvements(cls, improvements: list[Improvement]) -> _PendingIdeas:
@@ -285,9 +286,6 @@ class ClassifyingAnalyzer:
                 break
             unclassified_text = pending.as_numbered_text()
             prompt = f" Existing Ideas: \n {chunk.text} \n Incoming Ideas: \n {unclassified_text}"
-            parsed = ClassifyExtResponse(
-                new_ideas=[], present_ideas=[], updated_ideas=[]
-            )
             for _ in range(self._retry_attempts):
                 try:
                     parsed = self.call_structured(
@@ -304,6 +302,9 @@ class ClassifyingAnalyzer:
                         "[Memory][Analyzer] ClassifyingAnalyzer: LLM call failed: {}",
                         exc,
                     )
+            else:
+                pending.classification_failed = True
+                continue
 
             self._apply_classify_response(parsed, pending, chunk)
 
@@ -315,9 +316,6 @@ class ClassifyingAnalyzer:
                 break
             unclassified_text = pending.as_numbered_text()
             prompt = f" Existing Ideas: \n {chunk.text} \n Incoming Ideas: \n {unclassified_text}"
-            parsed = ClassifyExtResponse(
-                new_ideas=[], present_ideas=[], updated_ideas=[]
-            )
             for _ in range(self._retry_attempts):
                 try:
                     parsed = await self.call_structured_async(
@@ -334,6 +332,9 @@ class ClassifyingAnalyzer:
                         "[Memory][Analyzer] ClassifyingAnalyzer: LLM call failed: {}",
                         exc,
                     )
+            else:
+                pending.classification_failed = True
+                continue
 
             self._apply_classify_response(parsed, pending, chunk)
 
@@ -348,8 +349,19 @@ class ClassifyingAnalyzer:
         self, pending: _PendingIdeas, record: ProgramRecord, result: AnalysisResult
     ) -> None:
         """Convert classified/unclassified pending items into AnalysisResult entries."""
+        if pending.classification_failed and pending.unclassified_count:
+            # Minting on failure would flood the bank with unvetted ideas;
+            # the program record reappears in a later sweep and is retried.
+            logger.error(
+                "[Memory][Analyzer] ClassifyingAnalyzer: classification failed for "
+                "program {}; dropping {} unclassified idea(s)",
+                record.id,
+                pending.unclassified_count,
+            )
         for item in pending.items:
             if not item.classified:
+                if pending.classification_failed:
+                    continue
                 enriched = enrich_with_verification(
                     description=item.description,
                     parent_code=record.parent_code,

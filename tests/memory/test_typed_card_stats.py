@@ -274,6 +274,45 @@ class TestStampCardPosteriorTyped:
         card = MemoryCard(id="idea-2")
         assert CardStatsStamper().stamp_posterior(card, {}) is card
 
+    def test_stamp_merges_prior_introgain_fields(self):
+        card = MemoryCard(
+            id="idea-1",
+            evolution_statistics={
+                "ALL": {
+                    "intro_events": 9,
+                    "IntroGain_best_median": 0.02,
+                    "IntroGain_best_adj_median": 0.015,
+                    "DownsideRate_best": 0.1,
+                }
+            },
+        )
+        posterior = CardStatsBlock(
+            posterior_a=5.0, posterior_b=1.0, intro_events=4, efficacy_confident=True
+        )
+        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
+        merged = stamped.evolution_statistics.ALL
+        assert merged.IntroGain_best_median == 0.02
+        assert merged.IntroGain_best_adj_median == 0.015
+        assert merged.DownsideRate_best == 0.1
+        assert merged.posterior_a == 5.0
+        assert merged.intro_events == 4
+
+    def test_render_survives_posterior_stamp(self):
+        card = MemoryCard(id="idea-1", evolution_statistics=BANK_STATS)
+        posterior = CardStatsBlock(
+            posterior_a=3.0,
+            posterior_b=1.0,
+            intro_events=2,
+            k_harm=0,
+            p_help_mean=0.75,
+            p_help_lo20=0.58,
+            efficacy_confident=True,
+        )
+        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
+        line = format_card_efficacy(stamped)
+        assert line is not None
+        assert "vs cohort" in line
+
     def test_compute_injection_posteriors_returns_typed_blocks(self):
         rep = BetaBinomialReputation()
         rng = np.random.default_rng(0)

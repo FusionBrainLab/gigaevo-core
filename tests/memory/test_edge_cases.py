@@ -8,6 +8,9 @@ import json
 from unittest.mock import MagicMock, patch
 import uuid
 
+import pytest
+
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_update_dedup import append_unique_text
 from gigaevo.memory.shared_memory.models import ProgramCard
@@ -23,17 +26,13 @@ def _make_memory(tmp_path, **overrides):
 
 
 # ===========================================================================
-# BUG 1 (CRITICAL): Corrupt api_index.json → silent empty start
+# Corrupt api_index.json → fail fast (starting empty would overwrite the
+# recoverable file on the next persist)
 # ===========================================================================
 
 
 class TestBug1CorruptIndexFile:
-    def test_partial_json_silently_starts_empty(self, tmp_path):
-        """If api_index.json contains truncated JSON (from a crash mid-write),
-        AmemGamMemory silently starts with empty state instead of raising.
-
-        This documents current behavior. A fix would use atomic writes.
-        """
+    def test_partial_json_raises_instead_of_starting_empty(self, tmp_path):
         mem_dir = tmp_path / "mem"
         mem_dir.mkdir(parents=True)
         index_file = mem_dir / "api_index.json"
@@ -41,9 +40,8 @@ class TestBug1CorruptIndexFile:
         # Simulate crash mid-write: valid JSON start, truncated
         index_file.write_text('{"memory_cards": {"c1": {"id": "c1", "descr')
 
-        mem = _make_memory(tmp_path)
-        # BUG: silently lost all data
-        assert mem.card_store.cards == {}
+        with pytest.raises(MemoryStorageError):
+            _make_memory(tmp_path)
 
     def test_valid_index_loads_correctly(self, tmp_path):
         """Contrast: valid JSON loads fine."""

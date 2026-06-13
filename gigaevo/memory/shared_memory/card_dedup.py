@@ -12,7 +12,7 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from gigaevo.exceptions import MemoryRetrieverError
+from gigaevo.exceptions import LLMAPIError, MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     is_program_card,
@@ -43,6 +43,9 @@ from gigaevo.memory.shared_memory.utils import (
 
 _MAX_SUMMARY_CHARS = 600
 _MAX_DESCRIPTION_CHARS = 1200
+# Discard-by-default is only correct for transient LLM blips; a dead dedup
+# LLM would otherwise silently drop every incoming card for the whole run.
+_MAX_CONSECUTIVE_DEDUP_LLM_FAILURES = 5
 
 
 class DedupAction(StrEnum):
@@ -96,6 +99,7 @@ class CardDedup:
         self._embedding_model_name = embedding_model_name
         self._retrievers: dict[str, Any] | None = None
         self._retrievers_lock = Lock()
+        self._consecutive_llm_failures = 0
 
     @property
     def config(self) -> CardUpdateDedupConfig:
@@ -404,12 +408,22 @@ class CardDedup:
                 cfg.llm_max_retries,
             )
         else:
+            self._consecutive_llm_failures += 1
+            if self._consecutive_llm_failures >= _MAX_CONSECUTIVE_DEDUP_LLM_FAILURES:
+                raise LLMAPIError(
+                    f"dedup LLM failed all retries on "
+                    f"{self._consecutive_llm_failures} consecutive cards; "
+                    "refusing to keep discarding incoming cards by default"
+                )
             logger.warning(
                 "[Memory][CardDedup]Dedup LLM failed all {} attempts, defaulting to "
-                "action=discard for card {!r}",
+                "action=discard for card {!r} ({} consecutive failures)",
                 cfg.llm_max_retries,
                 _str_or_empty(incoming_card.id).strip(),
+                self._consecutive_llm_failures,
             )
+            return decision
+        self._consecutive_llm_failures = 0
         return decision
 
     def run_dedup_on_incoming_card(self, card: AnyCard) -> DedupDecision:

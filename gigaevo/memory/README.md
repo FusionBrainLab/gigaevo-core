@@ -34,7 +34,7 @@ AmemGamMemory checks:
        ↓
    normalize card (use CardStore to assign/verify IDs)
        ↓
-   (optional) write to API if MEMORY_USE_API=true
+   (optional) write to API in legacy API-backed mode
        ↓
    store in CardStore (in-memory + persisted to disk)
        ↓
@@ -104,7 +104,7 @@ mem.close()    # clean shutdown
 
 ## API Mapping
 
-Cards are represented locally in a normalized schema (examples in `new_mem_example.json`) and mapped to API concept payloads.
+Cards are represented locally in a normalized schema (`shared_memory/models.py`) and mapped to API concept payloads.
 
 ### Local card fields
 
@@ -161,7 +161,7 @@ Rebuild regenerates export + GAM retrievers:
 
 1. If available, use GAM `ResearchAgent.research(...)` (agentic retrieval).
 2. On GAM error/unavailability, use API full-text `/v1/search`.
-3. In local-only mode (`MEMORY_USE_API=false`), use local token-overlap search.
+3. In local-only mode (`api=None`), use local token-overlap search.
 4. Optional LLM synthesis can post-process retrieved cards into a final answer.
 
 If no OpenRouter key is provided:
@@ -170,60 +170,44 @@ If no OpenRouter key is provided:
 
 ## Configuration
 
-Environment variables commonly used:
+This package reads **no environment variables** — enforced by
+`tests/memory/test_no_env_in_memory.py`. All wiring comes from Hydra:
 
-```bash
-MEMORY_API_URL=http://localhost:8000
-MEMORY_NAMESPACE=exp5
-MEMORY_USE_API=true
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL_NAME=openai/gpt-4.1-mini
-```
+- `memory=local` / `memory=none` / `memory=legacy_api` select the read-side
+  provider stack (`config/memory/`).
+- `config/memory/backend/local.yaml` builds the shared card-bank backend via
+  `LocalMemoryBackendFactory`; its fields are the tuning surface.
+- The memory LLM is the root-registered `memory_llm` singleton from the
+  `llms` group (API keys resolve there, not here).
 
-Important runtime flags in `AmemGamMemory(...)`:
+Effective defaults shipped by `LocalMemoryBackendFactory`:
 - `search_limit` (default `5`)
-- `rebuild_interval` (default `10`)
-- `enable_llm_synthesis` (default `true`)
+- `rebuild_interval` (default `30`)
+- `enable_llm_synthesis` (default `false`)
 - `enable_bm25` (default `false`)
-- `allowed_gam_tools` (default: all supported GAM tools)
-- `gam_top_k_by_tool` (per-tool max retrieved hits, defaults to `5` each)
-- `gam_pipeline_mode` (`default` | `experimental`, default `default`)
-- `sync_batch_size` (default `100`)
-- `sync_on_init` (default `true`)
-- `channel` (default `latest`)
-- `namespace`, `author`
+- `embedding_model_name` (default `all-MiniLM-L6-v2`)
+
+`MemoryConfig` (`shared_memory/memory_config.py`) is the validated runtime
+config object the factory assembles; construct it directly only in tests.
 
 ## Quick Start
 
-Local-only smoke (no API backend required):
-
-```bash
-python gigaevo/memory/examples/memory_usage_example.py
-```
-
-Read-only example against an already-populated backend:
-
-```bash
-python gigaevo/memory/examples/memory_read_example.py
-```
-
 For end-to-end usage from an evolution run, see the root-level
-[`README_memory.md`](../../README_memory.md) (single-pass live pipeline)
+[`README_memory.md`](../../README_memory.md) (single-pass live pipeline,
+paper arm matrix)
 and [`README_memory_platform_run.md`](../../README_memory_platform_run.md)
 (remote API backend).
 
 ## Local-only Mode
 
-Set:
-
-```bash
-MEMORY_USE_API=false
-```
-
-Behavior in this mode:
+Local-only is the default and the only mode used by paper runs: construct
+with `api=None` in `MemoryConfig` (what `memory=local` ships). Behavior:
 - no API writes/reads/sync
 - cards are kept locally
 - retrieval is local (agentic if LLM/runtime available, otherwise lexical fallback)
+
+The remote-API path (`memory=legacy_api`, `api_sync.py`, `concept_api.py`)
+is legacy and not exercised by current experiments.
 
 ## Troubleshooting
 

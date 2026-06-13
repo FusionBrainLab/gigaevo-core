@@ -17,7 +17,10 @@ from gigaevo.memory.provider import NullMemoryProvider, SelectorMemoryProvider
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import StringContainer
-from gigaevo.programs.stages.memory_context import MemoryContextStage
+from gigaevo.programs.stages.memory_context import (
+    MemoryContextStage,
+    MemoryExposureCounter,
+)
 
 
 def _make_program(code: str = "def solve(): return 42") -> Program:
@@ -69,7 +72,9 @@ class TestMemoryContextStageWithNullProvider:
         assert result.data == ""
 
     @pytest.mark.asyncio
-    async def test_does_not_write_metadata(self) -> None:
+    async def test_writes_empty_selection_metadata(self) -> None:
+        # Empty must be written explicitly so a child's birth stamp can
+        # distinguish "no cards at birth" from legacy programs with no record.
         stage = MemoryContextStage(
             memory_provider=NullMemoryProvider(),
             task_description="t",
@@ -78,7 +83,8 @@ class TestMemoryContextStageWithNullProvider:
         )
         program = _make_program()
         await stage.compute(program)
-        assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in program.metadata
+        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
+        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == []
 
 
 class TestMemoryContextStageWithSelectorProvider:
@@ -154,7 +160,7 @@ class TestMemoryContextStageWithSelectorProvider:
         result = await stage.compute(program)
 
         assert result.data == ""
-        assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in program.metadata
+        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
 
     @pytest.mark.asyncio
     async def test_writes_candidate_slate_to_metadata(self) -> None:
@@ -210,13 +216,13 @@ class TestMemoryContextStageWithSelectorProvider:
         result = await stage.compute(program)
 
         assert result.data == ""
-        assert MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY not in program.metadata
+        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
         assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == [
             bid.model_dump() for bid in slate
         ]
 
     @pytest.mark.asyncio
-    async def test_no_slate_metadata_when_slate_empty(self) -> None:
+    async def test_empty_slate_writes_empty_list(self) -> None:
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
 
@@ -234,7 +240,36 @@ class TestMemoryContextStageWithSelectorProvider:
         program = _make_program()
         await stage.compute(program)
 
-        assert MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY not in program.metadata
+        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == []
+
+    @pytest.mark.asyncio
+    async def test_stale_metadata_overwritten_by_empty_selection(self) -> None:
+        # A requeued parent re-runs this NO_CACHE stage; a now-empty auction
+        # must erase the previous slate, or children inherit phantom credit.
+        mock_selector = AsyncMock()
+        mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
+
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=3
+        )
+        provider._pipeline = mock_selector
+
+        stage = MemoryContextStage(
+            memory_provider=provider,
+            task_description="t",
+            metrics_description="m",
+            timeout=60,
+        )
+        program = _make_program()
+        program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, ["stale-card"])
+        program.set_metadata(
+            MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+            [_bid("stale-card", 5.0, 1.0, selected=True).model_dump()],
+        )
+        await stage.compute(program)
+
+        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
+        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == []
 
 
 class TestMemoryContextStageCardNumbering:
@@ -265,3 +300,53 @@ class TestMemoryContextStageCardNumbering:
 class TestMemoryContextStageProperties:
     def test_no_cache(self) -> None:
         assert MemoryContextStage.cache_handler is NO_CACHE
+
+
+class TestExposureCounter:
+    def _stage(
+        self, selection: MemorySelection, exposure: MemoryExposureCounter
+    ) -> MemoryContextStage:
+        mock_selector = AsyncMock()
+        mock_selector.select.return_value = selection
+        provider = SelectorMemoryProvider(
+            backend=LocalMemoryBackendFactory(), max_cards=3
+        )
+        provider._pipeline = mock_selector
+        return MemoryContextStage(
+            memory_provider=provider,
+            task_description="t",
+            metrics_description="m",
+            timeout=60,
+            exposure=exposure,
+        )
+
+    @pytest.mark.asyncio
+    async def test_counts_shared_across_stage_instances(self) -> None:
+        # The DAG builds a fresh stage per program; the counter is the
+        # run-lifetime object shared through the pipeline-builder closure.
+        exposure = MemoryExposureCounter()
+        non_empty = self._stage(
+            MemorySelection(cards=["idea"], card_ids=["card-a"]), exposure
+        )
+        empty = self._stage(MemorySelection(cards=[], card_ids=[]), exposure)
+
+        await non_empty.compute(_make_program())
+        await empty.compute(_make_program())
+        await empty.compute(_make_program())
+
+        assert exposure.attempts == 3
+        assert exposure.non_empty == 1
+
+    @pytest.mark.asyncio
+    async def test_null_provider_counts_as_empty_attempt(self) -> None:
+        exposure = MemoryExposureCounter()
+        stage = MemoryContextStage(
+            memory_provider=NullMemoryProvider(),
+            task_description="t",
+            metrics_description="m",
+            timeout=60,
+            exposure=exposure,
+        )
+        await stage.compute(_make_program())
+        assert exposure.attempts == 1
+        assert exposure.non_empty == 0

@@ -177,6 +177,33 @@ class TestLedgerRows:
         assert row["merge_targets"] == ["idea-0"]
         assert final_id == "idea-0"
 
+    def test_discarded_with_phantom_duplicate_mints_no_final_id(self, tmp_path):
+        # duplicate_of is empty/phantom (e.g. "dedup llm unavailable" default):
+        # nothing was stored, so minting an id would fabricate a card reference
+        # that exists nowhere in the bank.
+        pipeline, _, _ = _pipeline(
+            tmp_path,
+            decision=_decision("discard", reason="dedup llm unavailable"),
+        )
+        final_id = pipeline.ingest(_idea_card("idea-1"))
+        (row,) = _rows(tmp_path)
+        assert row["outcome"] == "discarded"
+        assert final_id == ""
+        assert row["final_id"] == ""
+
+    def test_failed_update_falls_to_add_with_explicit_reason(self, tmp_path):
+        # An UPDATE verdict with no applicable merges falls through to ADD;
+        # the ledger must say so instead of repeating the LLM's merge rationale.
+        pipeline, _, _ = _pipeline(
+            tmp_path,
+            decision=_decision("update", reason="same mechanism, merge it"),
+        )
+        pipeline.ingest(_idea_card("idea-1"))
+        (row,) = _rows(tmp_path)
+        assert row["outcome"] == "added"
+        assert "merge failed" in row["reason"]
+        assert "same mechanism, merge it" in row["reason"]
+
     def test_program_fast_path_added_row(self, tmp_path):
         pipeline, _, _ = _pipeline(tmp_path)
         pipeline.ingest(_program_card())

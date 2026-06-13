@@ -48,10 +48,23 @@ class CardStatsStamper(BaseModel):
     def stamp_posterior(
         self, card: AnyCard, posteriors: dict[str, CardStatsBlock]
     ) -> AnyCard:
-        """Card with its injection posterior written into the ALL block;
-        cards without a posterior pass through unchanged."""
+        """Card with its injection posterior merged into the ALL block;
+        cards without a posterior pass through unchanged.
+
+        Merge, not replace: the posterior carries only the fields it computes,
+        so a prior block's IntroGain_*/DownsideRate fields (written by the
+        origin-analysis path) must survive or the rendered efficacy line goes
+        silent."""
         posterior = posteriors.get(card.id.strip())
         if posterior is None:
             return card
+        prior = card.evolution_statistics.ALL
+        if prior is not None:
+            posterior = prior.model_copy(
+                update={
+                    name: getattr(posterior, name)
+                    for name in posterior.model_fields_set
+                }
+            )
         stamped = card.evolution_statistics.model_copy(update={"ALL": posterior})
         return card.model_copy(update={"evolution_statistics": stamped})

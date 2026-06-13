@@ -9,6 +9,16 @@ from typing import Literal
 MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
 
+#: Frozen onto a child at birth: sorted union of the parents' prompt-time
+#: selected card ids. Posterior attribution reads this stamp — the parents'
+#: own selected-ids metadata is overwritten on every NO_CACHE requeue, so it
+#: cannot be trusted at sweep time. Empty list means "born without cards";
+#: absent means legacy program (fall back to parents' current slates).
+MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY = "memory_injected_idea_ids"
+
+#: Bool stamped on a child at birth: whether any card was in its mutation prompt.
+MUTATION_MEMORY_USED_METADATA_KEY = "memory_used"
+
 #: Structured mutation output (archetype, changes) stamped on a child program's
 #: metadata by the mutation operator (``MutationSpec.META_OUTPUT``).
 MUTATION_OUTPUT_METADATA_KEY = "mutation_output"

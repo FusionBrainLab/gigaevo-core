@@ -93,10 +93,10 @@ class MemoryWritePipeline:
         if decision.action is DedupAction.DISCARD:
             store.write_stats[WriteStatKey.REJECTED] += 1
             duplicate_of = str(decision.duplicate_of or "")
-            if duplicate_of and duplicate_of in store.cards:
-                final_id = duplicate_of
-            else:
-                final_id = store.ensure_id(normalized)
+            # Phantom/empty duplicate_of: nothing was stored, so an empty
+            # final_id is the honest ledger value — minting one would
+            # fabricate a card reference that exists nowhere in the bank.
+            final_id = duplicate_of if duplicate_of in store.cards else ""
             logger.info(
                 "[Memory][Store] Card {!r} discarded as duplicate of {!r}: {}",
                 incoming_id or "<new>",
@@ -129,11 +129,14 @@ class MemoryWritePipeline:
 
         store.write_stats[WriteStatKey.ADDED] += 1
         final_id = self._store.save_card_direct(normalized)
+        reason = decision.reason
+        if decision.action is DedupAction.UPDATE:
+            reason = f"merge failed; added as new ({decision.reason})"
         self._record(
             incoming_id=incoming_id,
             final_id=final_id,
             outcome=WriteOutcome.ADDED,
-            reason=decision.reason,
+            reason=reason,
             category=category,
         )
         return final_id

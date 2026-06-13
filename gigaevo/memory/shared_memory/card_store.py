@@ -12,6 +12,7 @@ import uuid
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import AnyCard, normalize_memory_card
 from gigaevo.memory.shared_memory.utils import _str_or_empty
 
@@ -159,12 +160,12 @@ class CardStore:
         try:
             payload = json.loads(self._index_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
-            logger.warning(
-                "[Memory][CardStore]Could not parse index file {}: {}",
-                self._index_file,
-                exc,
-            )
-            return
+            # Starting empty would overwrite the corrupt-but-recoverable
+            # index on the next persist; a missing file stays the
+            # legitimate cold start (handled above).
+            raise MemoryStorageError(
+                f"corrupt memory-card index {self._index_file}: {exc}"
+            ) from exc
 
         raw_cards = payload.get("memory_cards", {})
         raw_map = payload.get("entity_by_card_id", {})

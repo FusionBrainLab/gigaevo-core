@@ -24,6 +24,38 @@ class MemoryContextInputs(StageIO):
     pass
 
 
+class MemoryExposureCounter:
+    """Run-lifetime exposure telemetry for card injection.
+
+    The DAG builds a fresh ``MemoryContextStage`` per program, so the counter
+    must be a single object shared through the pipeline-builder closure.
+    """
+
+    summary_every: int = 50
+
+    def __init__(self) -> None:
+        self.attempts = 0
+        self.non_empty = 0
+
+    def record(self, *, program_id: str, card_ids: list[str]) -> None:
+        self.attempts += 1
+        if card_ids:
+            self.non_empty += 1
+            if self.non_empty == 1:
+                logger.info(
+                    "[Memory][Exposure] FIRST_INJECTION program={} ids={}",
+                    program_id[:8],
+                    card_ids,
+                )
+        if self.attempts % self.summary_every == 0:
+            logger.info(
+                "[Memory][Exposure] attempts={} non_empty={} ({:.0f}%)",
+                self.attempts,
+                self.non_empty,
+                100.0 * self.non_empty / self.attempts,
+            )
+
+
 @StageRegistry.register(description="Select memory cards for mutation context")
 class MemoryContextStage(Stage):
     """Select memory cards via the injected MemoryProvider.
@@ -31,7 +63,9 @@ class MemoryContextStage(Stage):
     Always present in the DAG. When the provider is NullMemoryProvider,
     this stage returns an empty string instantly (no-op).
 
-    Writes selected card IDs into program metadata for tracking.
+    Always writes selected ids and slate metadata, empty lists included —
+    this NO_CACHE stage re-runs on every parent requeue, and a stale slate
+    left behind by a previous run would hand phantom credit to children.
     """
 
     InputsModel = MemoryContextInputs
@@ -44,12 +78,14 @@ class MemoryContextStage(Stage):
         memory_provider: MemoryProvider,
         task_description: str,
         metrics_description: str,
+        exposure: MemoryExposureCounter | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._provider = memory_provider
         self._task_description = task_description
         self._metrics_description = metrics_description
+        self._exposure = exposure if exposure is not None else MemoryExposureCounter()
 
     async def compute(self, program: Program) -> StageIO:
         selection = await self._provider.select_cards(
@@ -58,16 +94,16 @@ class MemoryContextStage(Stage):
             metrics_description=self._metrics_description,
         )
 
-        if selection.slate:
-            program.set_metadata(
-                MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
-                [bid.model_dump() for bid in selection.slate],
-            )
+        program.set_metadata(
+            MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+            [bid.model_dump() for bid in selection.slate],
+        )
+        program.set_metadata(
+            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, list(selection.card_ids)
+        )
+        self._exposure.record(program_id=program.id, card_ids=selection.card_ids)
 
         if selection.cards:
-            program.set_metadata(
-                MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, selection.card_ids
-            )
             logger.info(
                 "[Memory][ContextStage] Selected {} card(s) for {} (ids={})",
                 len(selection.cards),
@@ -82,4 +118,9 @@ class MemoryContextStage(Stage):
             ]
             return StringContainer(data="\n\n".join(numbered))
 
+        logger.info(
+            "[Memory][ContextStage] Empty selection for {} (candidates={})",
+            program.id[:8],
+            len(selection.slate),
+        )
         return StringContainer(data="")

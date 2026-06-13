@@ -14,9 +14,10 @@ The hook signature matches what :class:`EvolutionEngine` expects::
     Callable[[], Awaitable[None]]
 
 Fault isolation, wall-clock bounds and cancel-grace are provided by the
-engine's ``_run_bounded_post_step_hook`` wrapper, so this class deliberately
-does no try/except of its own — failures propagate and the engine handles
-them.
+engine's ``_run_bounded_post_step_hook`` wrapper. This class logs each refresh
+failure on its own channel (with a consecutive-failure count, so a silently
+dying memory bank is attributable from the run log) and re-raises — the engine
+keeps owning fault isolation.
 """
 
 from __future__ import annotations
@@ -73,6 +74,12 @@ class LiveMemoryRefreshHook:
         )
         self._sweep_counter = 0
         self._last_refresh_sweep = 0
+        self._consecutive_failures = 0
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Refresh failures since the last successful refresh."""
+        return self._consecutive_failures
 
     async def __call__(self) -> None:
         self._sweep_counter += 1
@@ -101,5 +108,18 @@ class LiveMemoryRefreshHook:
             len(window),
             total,
         )
-        await self._tracker.run_increment(window, posterior_programs=programs)
+        try:
+            await self._tracker.run_increment(window, posterior_programs=programs)
+        except Exception as exc:
+            # _last_refresh_sweep is deliberately NOT advanced: the next
+            # landing sweep retries instead of waiting a full cadence window.
+            self._consecutive_failures += 1
+            logger.error(
+                "[Memory][LiveRefresh] refresh FAILED at sweep {} ({} consecutive): {}",
+                self._sweep_counter,
+                self._consecutive_failures,
+                exc,
+            )
+            raise
+        self._consecutive_failures = 0
         self._last_refresh_sweep = self._sweep_counter

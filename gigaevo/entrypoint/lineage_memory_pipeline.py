@@ -69,6 +69,8 @@ reload-on-read.
 
 from __future__ import annotations
 
+from loguru import logger
+
 from gigaevo.entrypoint.constants import (
     DEFAULT_OPTIMIZATION_TIME_BUDGET_FRACTION,
     DEFAULT_SIMPLE_STAGE_TIMEOUT,
@@ -76,12 +78,16 @@ from gigaevo.entrypoint.constants import (
 )
 from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
 from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.memory.provider import NullMemoryProvider
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.collector import DescendantProgramIds
 from gigaevo.programs.stages.lineage_memory import IntraMemoryStage
-from gigaevo.programs.stages.memory_context import MemoryContextStage
+from gigaevo.programs.stages.memory_context import (
+    MemoryContextStage,
+    MemoryExposureCounter,
+)
 from gigaevo.programs.stages.mutation_suggestions import MutationSuggestionStage
 
 DEFAULT_INTRA_MAX_CHILDREN = 24
@@ -99,6 +105,8 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
     for subsequent runs that use ``pipeline=intra_extra_memory``, but they
     are NOT consumed by this builder's DAG.
     """
+
+    _reads_memory_cards = False
 
     def __init__(
         self,
@@ -291,6 +299,18 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
             )
             self._wire_optuna_stage()
 
+        # The subclass sets _reads_memory_cards=True, so this never fires
+        # during its construction even though it runs this __init__.
+        if not self._reads_memory_cards and not isinstance(
+            ctx.memory_provider, NullMemoryProvider
+        ):
+            logger.warning(
+                "[Memory][Arm] memory provider {} is configured but this "
+                "pipeline never reads cards — selected cards reach no stage; "
+                "use pipeline=intra_extra_memory to consume them",
+                type(ctx.memory_provider).__name__,
+            )
+
 
 class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     """Intra base + extra (cross-population) memory channel.
@@ -317,6 +337,8 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     ``/proc/<pid>/environ`` contains the OpenRouter key, before trusting
     extra-memory results.
     """
+
+    _reads_memory_cards = True
 
     def __init__(
         self,
@@ -348,6 +370,15 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         )
 
         memory_provider = self.ctx.memory_provider
+        # WARNING, never raise: memory=none under this pipeline is the
+        # legitimate write-side-controlled baseline arm (cards written by the
+        # tracker, never injected) and is used by live paper runs.
+        if isinstance(memory_provider, NullMemoryProvider):
+            logger.warning(
+                "[Memory][Arm] read path DISABLED (memory=none) under "
+                "pipeline=intra_extra_memory — cards are written but never "
+                "read; intentional only for write-cost-controlled baselines"
+            )
         task_description = self.ctx.problem_ctx.task_description
         metrics_context = self.ctx.problem_ctx.metrics_context
         metrics_description = MetricsFormatter(
@@ -356,6 +387,8 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
 
         # Re-add MemoryContextStage (the intra-only base strips it). Factory
         # signature mirrors DefaultPipelineBuilder._contribute_default_nodes.
+        # One exposure counter is shared across all per-program stage instances.
+        exposure = MemoryExposureCounter()
         self.add_stage(
             "MemoryContextStage",
             lambda: MemoryContextStage(
@@ -363,6 +396,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
                 task_description=task_description,
                 metrics_description=metrics_description,
                 timeout=stage_timeout,
+                exposure=exposure,
             ),
         )
 
