@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v2.6.1 (2026-06-13)
+
+### Bug Fixes
+
+- **memory**: Read-path defaults + slate hygiene (review iter 2, set C)
+  ([#277](https://github.com/KhrulkovV/gigaevo-core-internal/pull/277),
+  [`8bf566b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8bf566baccfa0c0e9969fcceb981d9feba47502e))
+
+- **memory**: Review iteration 2 — tracker correctness, write-path hardening, read-path defaults
+  ([#277](https://github.com/KhrulkovV/gigaevo-core-internal/pull/277),
+  [`8bf566b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8bf566baccfa0c0e9969fcceb981d9feba47502e))
+
+- **memory**: Tracker correctness sweep (review-2 commit A)
+  ([#277](https://github.com/KhrulkovV/gigaevo-core-internal/pull/277),
+  [`8bf566b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8bf566baccfa0c0e9969fcceb981d9feba47502e))
+
+- **memory**: Write-path hardening (review-2 commit B)
+  ([#277](https://github.com/KhrulkovV/gigaevo-core-internal/pull/277),
+  [`8bf566b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8bf566baccfa0c0e9969fcceb981d9feba47502e))
+
+- **test**: Mock SentenceTransformer in fast-analyzer factory test
+  ([#277](https://github.com/KhrulkovV/gigaevo-core-internal/pull/277),
+  [`8bf566b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8bf566baccfa0c0e9969fcceb981d9feba47502e))
+
+
 ## v2.6.0 (2026-06-13)
 
 ### Bug Fixes
