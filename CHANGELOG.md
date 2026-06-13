@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.6.2 (2026-06-13)
+
+### Bug Fixes
+
+- **memory**: Config-driven + auto-negotiated structured-output method
+  ([#278](https://github.com/KhrulkovV/gigaevo-core-internal/pull/278),
+  [`1360edf`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1360edf17441b265cc868dab5b6f9262c99f4371))
+
+
 ## v2.6.1 (2026-06-13)
 
 ### Bug Fixes
