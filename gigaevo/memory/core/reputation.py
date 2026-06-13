@@ -95,7 +95,13 @@ class BetaBinomialReputation(BaseModel):
         block = card.evolution_statistics.ALL
         if block is None or block.posterior_a is None or block.posterior_b is None:
             return self.cold_prior
-        return (float(block.posterior_a), float(block.posterior_b))
+        a = float(block.posterior_a)
+        b = float(block.posterior_b)
+        # Beta(a, b) requires finite a > 0, b > 0; a corrupt stamped block
+        # would otherwise raise inside the auction's rng.beta draw.
+        if not (math.isfinite(a) and math.isfinite(b) and a > 0 and b > 0):
+            return self.cold_prior
+        return (a, b)
 
     def is_confidently_harmful(
         self, evolution_statistics: EvolutionStatistics | None

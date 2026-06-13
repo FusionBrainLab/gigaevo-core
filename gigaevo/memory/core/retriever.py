@@ -20,7 +20,10 @@ class GamRetriever:
         backend: Any = None,
         *,
         enable_bm25: bool = False,
-        pipeline_mode: str = "default",
+        # structured card selection only runs under "experimental"
+        # (LLMCardSelector returns empty otherwise) — the bare fallback
+        # must match the shipped config/memory/retriever/gam.yaml
+        pipeline_mode: str = "experimental",
         allowed_tools: Sequence[str] = (),
         top_k_by_tool: Mapping[str, int] | None = None,
         max_iters: int | None = None,

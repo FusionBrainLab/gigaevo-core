@@ -32,7 +32,9 @@ class TestAdmissionGate:
                 "evolution_statistics": _harmful_stats(),
             }
         )
-        assert cid == "bad-1"
+        # rejected cards return no id — a final_id must reference a card
+        # that actually exists in the bank
+        assert cid == ""
         assert "bad-1" not in mem.card_store.cards
         assert mem.card_store.write_stats["rejected"] == before + 1
 

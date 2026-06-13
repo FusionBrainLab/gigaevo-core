@@ -311,7 +311,7 @@ class TestSaveCardDelegation:
         mem = make_test_memory(tmp_path)
         cid = mem.save_card(_idea("idea-1", "real ingest"))
         assert cid == "idea-1"
-        assert mem.save_card(_idea("idea-bad", "harmful", _HARMFUL_STATS)) == "idea-bad"
+        assert mem.save_card(_idea("idea-bad", "harmful", _HARMFUL_STATS)) == ""
         stats = mem.get_card_write_stats()
         assert stats["processed"] == 2
         assert stats["added"] == 1

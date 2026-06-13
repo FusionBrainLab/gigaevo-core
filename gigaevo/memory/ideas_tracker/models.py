@@ -266,6 +266,13 @@ class AnalysisResult(BaseModel):
         default_factory=list,
         description="Modifications to apply to ideas already in the bank.",
     )
+    failed_program_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Programs whose classification failed entirely; the tracker "
+            "un-marks them as seen so a later sweep retries them."
+        ),
+    )
 
 
 class EmbeddedIdea(BaseModel):

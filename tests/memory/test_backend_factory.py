@@ -13,7 +13,7 @@ from gigaevo.memory.backend_factory import (
     LocalMemoryBackendFactory,
     MemoryBackendFactory,
 )
-from gigaevo.memory.shared_memory.memory_config import GamConfig
+from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 
 
 class _CaptureBackend:
@@ -63,6 +63,16 @@ class TestLocalFactory:
         _capture(monkeypatch, LocalMemoryBackendFactory)
         cfg = LocalMemoryBackendFactory(checkpoint_dir=tmp_path).build().config
         assert cfg.search_limit == 5
+        assert cfg.rebuild_interval == 30
+        assert cfg.enable_llm_synthesis is False
+        assert cfg.enable_memory_evolution is False
+        assert cfg.enable_llm_card_enrichment is False
+
+    def test_memory_config_defaults_match_factory_defaults(self, tmp_path):
+        """A MemoryConfig built directly must behave like one built via the
+        factory — drifting defaults make direct constructions (tests, tools)
+        exercise a different backend than production runs."""
+        cfg = MemoryConfig(checkpoint_path=tmp_path)
         assert cfg.rebuild_interval == 30
         assert cfg.enable_llm_synthesis is False
         assert cfg.enable_memory_evolution is False

@@ -100,6 +100,37 @@ class TestSelectorMemoryProvider:
         assert mock_pipeline.select.call_args.kwargs["max_cards"] == 7
 
     @pytest.mark.asyncio
+    async def test_default_max_cards_matches_shipped_config(self) -> None:
+        """config/memory/local.yaml ships max_cards=1; the constructor default
+        must agree so a bare provider behaves like a configured run."""
+        mock_pipeline = AsyncMock()
+        mock_pipeline.select.return_value = MemorySelection(cards=[], card_ids=[])
+
+        provider = SelectorMemoryProvider(backend=LocalMemoryBackendFactory())
+        provider._pipeline = mock_pipeline
+
+        await provider.select_cards(
+            program=_make_program(),
+            task_description="t",
+            metrics_description="m",
+        )
+
+        assert mock_pipeline.select.call_args.kwargs["max_cards"] == 1
+
+    def test_bare_retriever_defaults_to_experimental_pipeline(self) -> None:
+        """Structured card selection only runs under pipeline_mode=experimental
+        (card_selector warns and returns empty otherwise); the bare-retriever
+        fallback must not compose the dead "default" mode."""
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=1
+            )
+            provider._get_pipeline()
+            assert mock_build.call_args.kwargs["gam"].pipeline_mode == "experimental"
+
+    @pytest.mark.asyncio
     async def test_passes_mutation_mode_rewrite(self) -> None:
         mock_pipeline = AsyncMock()
         mock_pipeline.select.return_value = MemorySelection(cards=[], card_ids=[])

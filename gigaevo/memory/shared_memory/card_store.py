@@ -145,12 +145,10 @@ class CardStore:
         Used by readers that need to pick up writes made by a separate
         ``AmemGamMemory`` instance (typical writer/reader split where both
         sides share an on-disk checkpoint but each holds its own RAM state).
+        A corrupt index raises without touching in-memory state, so the
+        reader keeps serving its last good snapshot.
         """
         with self._lock:
-            self.cards.clear()
-            self.entity_by_card_id.clear()
-            self.card_id_by_entity.clear()
-            self.entity_version.clear()
             self._load()
 
     def _load(self) -> None:
@@ -171,10 +169,15 @@ class CardStore:
         raw_map = payload.get("entity_by_card_id", {})
         raw_versions = payload.get("entity_version_by_entity", {})
 
+        cards: dict[str, AnyCard] = {}
+        entity_by_card_id: dict[str, str] = {}
+        card_id_by_entity: dict[str, str] = {}
+        entity_version: dict[str, str] = {}
+
         if isinstance(raw_cards, dict):
             for card_id, card in raw_cards.items():
                 cid = str(card_id)
-                self.cards[cid] = normalize_memory_card(card, fallback_id=cid)
+                cards[cid] = normalize_memory_card(card, fallback_id=cid)
 
         if isinstance(raw_map, dict):
             for card_id, entity_id in raw_map.items():
@@ -182,19 +185,30 @@ class CardStore:
                 eid = str(entity_id)
                 if not cid or not eid:
                     continue
-                if cid not in self.cards:
+                if cid not in cards:
                     logger.debug(
                         "[Memory][CardStore]Skipping dangling entity mapping: "
                         "card_id={!r} not in cards",
                         cid,
                     )
                     continue
-                self.entity_by_card_id[cid] = eid
-                self.card_id_by_entity[eid] = cid
+                entity_by_card_id[cid] = eid
+                card_id_by_entity[eid] = cid
 
         if isinstance(raw_versions, dict):
             for entity_id, version_id in raw_versions.items():
                 eid = str(entity_id)
                 vid = str(version_id or "")
-                if eid and eid in self.card_id_by_entity:
-                    self.entity_version[eid] = vid
+                if eid and eid in card_id_by_entity:
+                    entity_version[eid] = vid
+
+        # Swap only after the whole file parsed — a corrupt index must not
+        # leave the store half-cleared.
+        self.cards.clear()
+        self.cards.update(cards)
+        self.entity_by_card_id.clear()
+        self.entity_by_card_id.update(entity_by_card_id)
+        self.card_id_by_entity.clear()
+        self.card_id_by_entity.update(card_id_by_entity)
+        self.entity_version.clear()
+        self.entity_version.update(entity_version)

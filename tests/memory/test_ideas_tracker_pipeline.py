@@ -8,7 +8,9 @@ Three layers, from fastest to slowest:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
@@ -27,6 +29,7 @@ from gigaevo.memory.ideas_tracker.analyzers import (
 )
 from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 from gigaevo.memory.ideas_tracker.models import (
+    AnalysisResult,
     program_to_record,
     programs_to_records,
 )
@@ -354,6 +357,83 @@ class TestIdeaTrackerProgramFiltering:
         tracker._eligible_records([p1])
         tracker._eligible_records([p2])
         assert len(tracker._all_records) == 2
+
+
+class _FlakyAnalyzer:
+    """Fails classification of everything on the first sweep, succeeds after."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    async def analyze_async(self, records, bank) -> AnalysisResult:
+        self.calls.append([r.id for r in records])
+        if len(self.calls) == 1:
+            return AnalysisResult(failed_program_ids=[r.id for r in records])
+        return AnalysisResult()
+
+
+class TestFailedClassificationRetry:
+    @pytest.mark.asyncio
+    async def test_failed_programs_are_retried_next_increment(self) -> None:
+        tracker = _make_tracker(memory_write_enabled=False)
+        analyzer = _FlakyAnalyzer()
+        tracker._analyzer = analyzer
+        prog = _make_evolved_program(fitness=2.0)
+
+        await tracker.run_increment([prog])
+        await tracker.run_increment([prog])
+
+        assert analyzer.calls == [[prog.id], [prog.id]]
+        assert [r.id for r in tracker._all_records] == [prog.id]
+
+
+class _OverlapProbeAnalyzer:
+    """Yields control mid-analysis so unserialized callers would interleave."""
+
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def analyze_async(self, records, bank) -> AnalysisResult:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.02)
+        self.in_flight -= 1
+        return AnalysisResult()
+
+
+class TestRunIncrementConcurrency:
+    @pytest.mark.asyncio
+    async def test_concurrent_run_increments_serialize(self, tmp_path) -> None:
+        """The live hook and the post-run hook share one tracker; overlapping
+        sweeps would interleave bank mutations and _seen_ids bookkeeping."""
+        tracker = _make_tracker(memory_write_enabled=False, logs_dir=tmp_path)
+        probe = _OverlapProbeAnalyzer()
+        tracker._analyzer = probe
+
+        await asyncio.gather(tracker.run_increment([]), tracker.run_increment([]))
+
+        assert probe.max_in_flight == 1
+
+    @pytest.mark.asyncio
+    async def test_write_pipeline_runs_off_event_loop_thread(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Backend build + card ingest are blocking I/O; running them on the
+        loop thread stalls every in-flight mutation for the whole sweep."""
+        import gigaevo.memory.ideas_tracker.ideas_tracker as mod
+
+        seen: dict[str, int] = {}
+
+        def _spy(*args, **kwargs) -> None:
+            seen["thread"] = threading.get_ident()
+
+        monkeypatch.setattr(mod, "_run_write_pipeline", _spy)
+        tracker = _make_tracker(memory_write_enabled=False, logs_dir=tmp_path)
+
+        await tracker.run_increment([])
+
+        assert seen["thread"] != threading.get_ident()
 
 
 class TestIdeaTrackerOnRunComplete:

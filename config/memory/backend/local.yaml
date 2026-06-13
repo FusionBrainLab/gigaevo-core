@@ -5,9 +5,5 @@ _target_: gigaevo.memory.backend_factory.LocalMemoryBackendFactory
 llm: ${ref:memory_llm}
 checkpoint_dir: ${checkpoint_dir}
 embedding_model_name: all-MiniLM-L6-v2
-# Write-side LLM dedup on card ingest; scoring is skipped when llm is null.
-dedup:
-  enabled: true
-  top_k_per_query: 10
-  final_top_n: 10
-  min_final_score: 0.05
+# Write-side dedup is configured once in config/memory/dedup/ (the injected
+# LLMDeduplicator's config wins over the factory's `dedup` field).

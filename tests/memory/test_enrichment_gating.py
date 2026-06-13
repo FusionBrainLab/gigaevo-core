@@ -8,6 +8,7 @@ import pytest
 
 from gigaevo.memory.ideas_tracker.ideas_tracker import (
     IdeaTracker,
+    _enrich_ideas_with_keywords_and_summaries,
     _select_ideas_needing_enrichment,
 )
 from gigaevo.memory.ideas_tracker.models import (
@@ -16,6 +17,7 @@ from gigaevo.memory.ideas_tracker.models import (
     IdeaExplanation,
     IdeaUpdate,
 )
+from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryResponse
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.program import Program
 
@@ -130,6 +132,53 @@ async def test_run_increment_skips_enrichment_when_nothing_changed(
 
     assert len(captured) == 1
     assert captured[0] == ["a"]
+
+
+class _KeywordAnalyzer:
+    def __init__(self, *, keywords: list[str] | None = None, fail: bool = False):
+        self._keywords = keywords or []
+        self._fail = fail
+
+    async def call_structured_async(self, step, schema, content):  # type: ignore[no-untyped-def]
+        if step == "keywords":
+            if self._fail:
+                raise RuntimeError("keyword llm down")
+            return KeywordsResponse(keywords=self._keywords)
+        return SummaryResponse(summary="s")
+
+
+class TestEnrichmentKeywordPreservation:
+    @pytest.mark.asyncio
+    async def test_machine_tokens_survive_keyword_refresh(self):
+        # verified:*/mechanism_unverified:*/canonical:* are produced by the
+        # verification gate and consumed by the selector prompt — a wholesale
+        # keyword replacement silently strips the caveat semantics.
+        idea = _idea(
+            id_="a",
+            entries=["e1"],
+            keywords=["verified:true", "mechanism_unverified:true", "old-topic"],
+        )
+        analyzer = _KeywordAnalyzer(keywords=["new-topic"])
+
+        (enriched,) = await _enrich_ideas_with_keywords_and_summaries(
+            [idea], analyzer, "task summary"
+        )
+
+        assert "verified:true" in enriched.keywords
+        assert "mechanism_unverified:true" in enriched.keywords
+        assert "new-topic" in enriched.keywords
+        assert "old-topic" not in enriched.keywords
+
+    @pytest.mark.asyncio
+    async def test_keyword_llm_failure_keeps_existing_keywords(self):
+        idea = _idea(id_="a", entries=["e1"], keywords=["verified:false", "old-topic"])
+        analyzer = _KeywordAnalyzer(fail=True)
+
+        (enriched,) = await _enrich_ideas_with_keywords_and_summaries(
+            [idea], analyzer, "task summary"
+        )
+
+        assert enriched.keywords == ["verified:false", "old-topic"]
 
 
 class TestSelectIdeasNeedingEnrichment:

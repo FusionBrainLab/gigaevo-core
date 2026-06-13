@@ -39,7 +39,10 @@ from gigaevo.memory.ideas_tracker.analyzers import (
     ClassifyingAnalyzer,
     ClusteringAnalyzer,
 )
-from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
+from gigaevo.memory.ideas_tracker.idea_bank import (
+    MACHINE_KEYWORD_PREFIXES,
+    IdeaBank,
+)
 from gigaevo.memory.ideas_tracker.models import (
     Idea,
     IdeaExplanation,
@@ -172,12 +175,17 @@ async def _enrich_ideas_with_keywords_and_summaries(
     """Enrich all ideas concurrently with keywords and explanation summaries."""
 
     async def _enrich_one(idea: Idea) -> Idea:
-        keywords: list[str] = []
+        # On LLM failure the old keywords stay; on success the machine tokens
+        # (verification gate, canonical-dedup) survive the topical refresh.
+        keywords = list(idea.keywords)
         try:
             kw_parsed = await analyzer.call_structured_async(
                 "keywords", KeywordsResponse, idea.description
             )
-            keywords = kw_parsed.keywords
+            machine = [
+                kw for kw in idea.keywords if kw.startswith(MACHINE_KEYWORD_PREFIXES)
+            ]
+            keywords = machine + [kw for kw in kw_parsed.keywords if kw not in machine]
         except Exception as exc:
             logger.warning(
                 "[Memory][IdeaTracker] Keyword extraction failed for idea {!r}: {}",
@@ -670,6 +678,9 @@ class IdeaTracker(IncrementalPostRunHook):
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
         self._last_entry_count: dict[str, int] = {}
+        # the live hook and the post-run hook share one tracker; overlapping
+        # sweeps would interleave bank mutations and _seen_ids bookkeeping
+        self._run_lock = asyncio.Lock()
 
         if task_description:
             self._task_description = task_description
@@ -737,10 +748,28 @@ class IdeaTracker(IncrementalPostRunHook):
         resolves; a capped window would sever lineage and collapse the
         intro-event population. Defaults to ``programs`` when not supplied.
         """
+        async with self._run_lock:
+            await self._run_increment_locked(
+                programs, posterior_programs=posterior_programs
+            )
+
+    async def _run_increment_locked(
+        self,
+        programs: list[Program],
+        *,
+        posterior_programs: list[Program] | None,
+    ) -> None:
         records = self._eligible_records(programs)
 
         result = await self._analyzer.analyze_async(records, self._bank)
         self._bank.apply(result)
+
+        failed_ids = set(result.failed_program_ids)
+        if failed_ids:
+            # Without this the ids stay in _seen_ids and the LLM outage
+            # permanently loses those programs' ideas.
+            self._seen_ids -= failed_ids
+            self._all_records = [r for r in self._all_records if r.id not in failed_ids]
 
         if records:
             stale_ideas = _select_ideas_needing_enrichment(
@@ -773,7 +802,10 @@ class IdeaTracker(IncrementalPostRunHook):
             metrics_context=self._metrics_context,
         )
 
-        _run_write_pipeline(
+        # backend build + card ingest are blocking I/O; keep them off the
+        # event loop so in-flight mutations don't stall for the whole sweep
+        await asyncio.to_thread(
+            _run_write_pipeline,
             self._memory_write_enabled,
             self._log.banks_file,
             self._log.best_ideas_file,

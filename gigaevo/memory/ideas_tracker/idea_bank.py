@@ -454,11 +454,26 @@ def enrich_with_verification(
     if verdict.verb_prefix and not new_desc.startswith(verdict.verb_prefix):
         new_desc = verdict.verb_prefix + new_desc.lstrip()
 
+    canonical = derive_canonical_key(
+        parsed.verb,
+        parsed.target,
+        _coerce_value(parsed.old),
+        _coerce_value(parsed.new),
+    )
     return EnrichedDescription(
         description=new_desc,
-        keywords=list(verdict.keywords),
+        keywords=[f"canonical:{canonical}", *verdict.keywords],
         parent_diff_verified=verdict.parent_diff_verified,
     )
+
+
+# Keyword tokens with machine semantics (verification gate, canonical-dedup);
+# the selector prompt documents the verified:/mechanism_unverified: caveats.
+MACHINE_KEYWORD_PREFIXES: tuple[str, ...] = (
+    "verified:",
+    "mechanism_unverified:",
+    "canonical:",
+)
 
 
 def _canonical_keyword(idea: Idea) -> str | None:

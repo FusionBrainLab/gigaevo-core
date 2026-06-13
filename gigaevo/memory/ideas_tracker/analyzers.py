@@ -351,7 +351,9 @@ class ClassifyingAnalyzer:
         """Convert classified/unclassified pending items into AnalysisResult entries."""
         if pending.classification_failed and pending.unclassified_count:
             # Minting on failure would flood the bank with unvetted ideas;
-            # the program record reappears in a later sweep and is retried.
+            # reporting the program id lets the tracker un-see it so a later
+            # sweep retries.
+            result.failed_program_ids.append(record.id)
             logger.error(
                 "[Memory][Analyzer] ClassifyingAnalyzer: classification failed for "
                 "program {}; dropping {} unclassified idea(s)",

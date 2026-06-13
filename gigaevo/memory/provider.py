@@ -79,7 +79,9 @@ class SelectorMemoryProvider(MemoryProvider):
         self,
         *,
         backend: MemoryBackendFactory,
-        max_cards: int = 3,
+        # matches config/memory/local.yaml — one card per mutation is the
+        # experimental protocol the shipped configs run
+        max_cards: int = 1,
         checkpoint_dir: str | None = None,
         retriever: GamRetriever | None = None,
         selector: CardShortlister | None = None,

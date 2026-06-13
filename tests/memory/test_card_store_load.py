@@ -30,21 +30,64 @@ def test_corrupt_index_file_raises(tmp_path):
         CardStore(index_file=index)
 
 
-def test_valid_index_file_loads(tmp_path):
-    index = tmp_path / "index.json"
+def _write_index(index, cards: dict, mapping: dict | None = None) -> None:
     index.write_text(
         json.dumps(
             {
-                "memory_cards": {
-                    "mem-1": {"id": "mem-1", "description": "use ridge targets"}
-                },
-                "entity_by_card_id": {},
+                "memory_cards": cards,
+                "entity_by_card_id": mapping or {},
                 "entity_version_by_entity": {},
             }
         ),
         encoding="utf-8",
     )
 
+
+def test_valid_index_file_loads(tmp_path):
+    index = tmp_path / "index.json"
+    _write_index(index, {"mem-1": {"id": "mem-1", "description": "use ridge targets"}})
+
     store = CardStore(index_file=index)
 
     assert set(store.cards) == {"mem-1"}
+
+
+def test_reload_picks_up_writer_additions(tmp_path):
+    index = tmp_path / "index.json"
+    _write_index(index, {"mem-1": {"id": "mem-1", "description": "use ridge targets"}})
+    store = CardStore(index_file=index)
+    _write_index(
+        index,
+        {
+            "mem-1": {"id": "mem-1", "description": "use ridge targets"},
+            "mem-2": {"id": "mem-2", "description": "clip outliers"},
+        },
+        {"mem-2": "entity-2"},
+    )
+
+    store.reload()
+
+    assert set(store.cards) == {"mem-1", "mem-2"}
+    assert store.entity_by_card_id == {"mem-2": "entity-2"}
+    assert store.card_id_by_entity == {"entity-2": "mem-2"}
+
+
+def test_reload_on_corrupt_index_keeps_last_good_snapshot(tmp_path):
+    # A reader hitting a corrupt index mid-run must keep serving its last
+    # good state — clearing before the parse would leave it permanently
+    # empty while the warn-and-continue caller keeps the run alive.
+    index = tmp_path / "index.json"
+    _write_index(
+        index,
+        {"mem-1": {"id": "mem-1", "description": "use ridge targets"}},
+        {"mem-1": "entity-1"},
+    )
+    store = CardStore(index_file=index)
+    index.write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(MemoryStorageError):
+        store.reload()
+
+    assert set(store.cards) == {"mem-1"}
+    assert store.entity_by_card_id == {"mem-1": "entity-1"}
+    assert store.card_id_by_entity == {"entity-1": "mem-1"}

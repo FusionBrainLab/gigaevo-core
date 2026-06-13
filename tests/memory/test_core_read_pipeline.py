@@ -323,6 +323,21 @@ class TestCardPosterior:
     def test_card_posterior_golden(self, card, expected):
         assert BetaBinomialReputation().card_posterior(card) == expected
 
+    @pytest.mark.parametrize(
+        "posterior",
+        [(0.0, 1.0), (-1.0, 2.0), (1.0, 0.0), (float("inf"), 1.0), (float("nan"), 1.0)],
+    )
+    def test_malformed_stamped_posterior_degrades_to_cold(self, posterior):
+        # Beta(a, b) requires a > 0 and b > 0; a corrupt stamped block must
+        # degrade to the cold prior, not poison the auction's rng.beta draw.
+        card = MemoryCard(
+            id="m-bad",
+            evolution_statistics={
+                "ALL": {"posterior_a": posterior[0], "posterior_b": posterior[1]}
+            },
+        )
+        assert BetaBinomialReputation().card_posterior(card) == (1.0, 1.0)
+
     def test_cold_prior_configurable(self):
         assert BetaBinomialReputation(cold_prior=(2.0, 5.0)).card_posterior(
             MemoryCard(id="m-cold")
@@ -434,7 +449,10 @@ class TestMemoryReadPipeline:
         assert got == MemorySelection(cards=[], card_ids=[])
 
     @pytest.mark.asyncio
-    async def test_nonfinite_posterior_never_selected(self):
+    async def test_nonfinite_posterior_competes_as_cold(self):
+        # A corrupt stamped posterior degrades to the cold prior — the card
+        # competes as COLD (same contract as a half-stamped block) instead of
+        # NaN silently propagating through the auction draw.
         bad = _card("NaN card", (float("nan"), 1.0))
         backend = _StubBackend(
             raw_memory=_decision(["idea-nan"]),
@@ -443,8 +461,23 @@ class TestMemoryReadPipeline:
         got = await make_read_pipeline(backend, seed=_SEED).select(
             parents=[_make_program()], **_SELECT_KWARGS
         )
-        assert got.card_ids == []
-        assert got.cards == []
+        assert got.card_ids == ["idea-nan"]
+
+    @pytest.mark.asyncio
+    async def test_nonpositive_posterior_does_not_blank_healthy_cards(self):
+        # One poisoned stamped posterior must not raise inside the auction and
+        # fail-to-empty the WHOLE selection — healthy candidates still compete.
+        backend = _StubBackend(
+            raw_memory=_decision(["idea-bad", "idea-good"]),
+            cards={
+                "idea-bad": _card("Poisoned card", (0.0, 1.0)),
+                "idea-good": _card("Good card", _PROVEN),
+            },
+        )
+        got = await make_read_pipeline(backend, seed=_SEED).select(
+            parents=[_make_program()], **_SELECT_KWARGS
+        )
+        assert "idea-good" in got.card_ids
 
     @pytest.mark.asyncio
     async def test_unfetchable_cards_skipped(self):

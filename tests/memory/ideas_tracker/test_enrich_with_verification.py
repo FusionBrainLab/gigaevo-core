@@ -47,6 +47,16 @@ class TestEnrichWithVerification:
         assert "verified:true" in result.keywords
         assert "mechanism_unverified:true" in result.keywords
 
+    def test_parsable_lever_emits_canonical_keyword(self) -> None:
+        """The bank dedups on canonical: keyword collisions; without a producer
+        here, equivalent levers minted from different programs never merge."""
+        result = enrich_with_verification(
+            description="UPDATE l2_leaf_reg 1.0→2.0: stronger l2_leaf_reg 2.0 reduces leaf variance; support=1; Δbest=+0.012; co=[]",
+            parent_code="model = CatBoostRegressor(l2_leaf_reg=1.0)",
+            child_code="model = CatBoostRegressor(l2_leaf_reg=2.0)",
+        )
+        assert "canonical:UPDATE:l2_leaf_reg:1:2" in result.keywords
+
     def test_no_parent_code_skips_verification(self) -> None:
         result = enrich_with_verification(
             description="UPDATE depth 6→7: bias-variance; support=1; Δbest=+0.005; co=[]",

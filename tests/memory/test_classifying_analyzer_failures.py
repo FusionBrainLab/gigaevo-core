@@ -50,6 +50,7 @@ def test_sync_total_failure_drops_items_instead_of_minting_new():
 
     assert result.new_ideas == []
     assert result.updates == []
+    assert result.failed_program_ids == ["p0", "p1"]
 
 
 @pytest.mark.asyncio
@@ -63,6 +64,7 @@ async def test_async_total_failure_drops_items_instead_of_minting_new():
 
     assert result.new_ideas == []
     assert result.updates == []
+    assert sorted(result.failed_program_ids) == ["p0", "p1"]
 
 
 def test_cold_start_empty_bank_still_mints_new_without_llm():
@@ -72,4 +74,5 @@ def test_cold_start_empty_bank_still_mints_new_without_llm():
     result = analyzer.analyze(_records(3), IdeaBank())
 
     assert len(result.new_ideas) == 3
+    assert result.failed_program_ids == []
     assert llm.calls == []

@@ -69,10 +69,12 @@ class MemoryConfig(BaseModel):
     checkpoint_path: Path
     embedding_model_name: str = "all-MiniLM-L6-v2"
     search_limit: int = Field(default=5, gt=0)
-    rebuild_interval: int = Field(default=10, gt=0)
-    enable_llm_synthesis: bool = True
-    enable_memory_evolution: bool = True
-    enable_llm_card_enrichment: bool = True
+    # defaults mirror MemoryBackendFactory — a directly-built MemoryConfig
+    # must behave like a factory-built one
+    rebuild_interval: int = Field(default=30, gt=0)
+    enable_llm_synthesis: bool = False
+    enable_memory_evolution: bool = False
+    enable_llm_card_enrichment: bool = False
     api: ApiConfig | None = None
     gam: GamConfig = Field(default_factory=GamConfig)
     dedup: CardUpdateDedupConfig = Field(default_factory=CardUpdateDedupConfig)

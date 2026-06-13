@@ -151,13 +151,14 @@ python run.py problem.name=heilbron \
     num_parents=4 max_mutants=500
 ```
 
-> **Required overrides:** `pipeline=intra_extra_memory` silently falls
-> back to `NullMemoryProvider` + `NullPostRunHook` unless launched with
-> **both** `ideas_tracker=default memory=local`. The extra-memory (GAM)
-> agents also call OpenRouter directly, so `OPENROUTER_API_KEY` must be
-> exported — without it every GAM call 401s and the extra channel ships
-> zero cards silently. Verify the resolved config does not contain
-> `Null*` targets before trusting results.
+> **Required overrides:** launch with **both** `ideas_tracker=default
+> memory=local`. Omitting them is loud, not silent: without
+> `ideas_tracker` the run fails at startup (the live-refresh hook needs a
+> tracker); `memory=none` logs a `[Memory][Arm] read path DISABLED`
+> WARNING. The extra-memory (GAM) agents also call OpenRouter directly,
+> so `OPENROUTER_API_KEY` must be exported — without it every GAM call
+> 401s and the extra channel ships zero cards silently. Verify the arm
+> from the startup `[Memory][Arm]` banner before trusting results.
 
 ### Tabular Suite (regression + classification, 10 datasets)
 

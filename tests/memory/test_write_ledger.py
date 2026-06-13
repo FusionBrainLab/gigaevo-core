@@ -29,9 +29,6 @@ class _FakeCardStore:
             "updated_target_cards": 0,
         }
 
-    def ensure_id(self, card) -> str:
-        return str(getattr(card, "id", "") or "minted-id")
-
 
 class _FakeStore:
     def __init__(self):
@@ -150,6 +147,27 @@ class TestLedgerRows:
         (row,) = _rows(tmp_path)
         assert row["outcome"] == "rejected_harm"
         assert row["reason"]
+
+    def test_rejected_harm_idless_card_mints_no_final_id(self, tmp_path):
+        # The card is never stored (an existing one is even deleted), so a
+        # minted final_id would reference a card that exists nowhere in the
+        # bank — same contract as the phantom-duplicate DISCARD row.
+        pipeline, store, _ = _pipeline(tmp_path, evict=True)
+        final_id = pipeline.ingest({"description": "harmful", "category": "insight"})
+        (row,) = _rows(tmp_path)
+        assert final_id == ""
+        assert row["final_id"] == ""
+        assert store.card_store.cards == {}
+
+    def test_rejected_harm_existing_card_deleted_and_final_id_empty(self, tmp_path):
+        pipeline, store, _ = _pipeline(tmp_path, evict=True)
+        store.card_store.cards["idea-1"] = object()
+        final_id = pipeline.ingest(_idea_card("idea-1"))
+        (row,) = _rows(tmp_path)
+        assert store.deleted == ["idea-1"]
+        assert final_id == ""
+        assert row["final_id"] == ""
+        assert row["incoming_id"] == "idea-1"
 
     def test_updated_row_for_known_id(self, tmp_path):
         pipeline, store, _ = _pipeline(tmp_path)

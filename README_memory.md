@@ -37,8 +37,10 @@ OPENAI_API_KEY=sk-gigaevo python run.py \
 ```
 
 Hydra group co-overrides `ideas_tracker=default memory=local num_parents=1`
-are **required** — `pipeline=intra_extra_memory` alone silently falls
-back to `Null*` providers.
+are **required**. Omitting them is loud, not silent: without
+`ideas_tracker` the run fails at startup (the `LiveMemoryRefreshHook`
+needs a tracker), and `memory=none` logs a
+`[Memory][Arm] read path DISABLED` WARNING.
 
 ## Scenario B — Two-pass build cards, then read
 
@@ -51,7 +53,9 @@ python run.py problem.name=heilbron ideas_tracker=default \
   checkpoint_dir=outputs/memory_bank_01
 
 # 2. Run with memory enabled, pointing at the same dir
-python run.py problem.name=heilbron memory=local \
+#    (read path only: tracker + live-refresh hook off)
+python run.py problem.name=heilbron pipeline=intra_extra_memory \
+  memory=local ideas_tracker=none post_step_hook=null \
   checkpoint_dir=outputs/memory_bank_01
 ```
 
@@ -74,10 +78,9 @@ per-run `updated` / `rejected` counts.
 
 ## Paper arm matrix
 
-The three experiment arms differ only in Hydra group overrides. A missed
-co-override silently degrades to a `Null*` component, so every run logs a
-startup banner — verify the arm from the first generation's log, not from
-`.hydra/config.yaml` archaeology.
+The three experiment arms differ only in Hydra group overrides. Every run
+logs a startup `[Memory][Arm]` banner — verify the arm from the first
+generation's log, not from `.hydra/config.yaml` archaeology.
 
 | Arm | Overrides | Active components | Gen-1 log verification |
 |---|---|---|---|

@@ -152,7 +152,7 @@ Reads/search use:
 
 Rebuild regenerates export + GAM retrievers:
 - automatic after sync if local state changed
-- periodic after writes (`rebuild_interval`, default 10 saves)
+- periodic after writes (`rebuild_interval`, default 30 saves)
 - explicit via `memory.rebuild()`
 
 ## Retrieval Strategy and Fallbacks

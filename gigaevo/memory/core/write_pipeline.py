@@ -55,15 +55,17 @@ class MemoryWritePipeline:
                 "[Memory][Store] Card {!r} rejected: injection posterior confidently harmful",
                 incoming_id or "<new>",
             )
-            final_id = incoming_id or store.ensure_id(normalized)
+            # The card never remains in the bank (any existing copy was just
+            # deleted), so a final_id would reference a card that exists
+            # nowhere; incoming_id keeps the row traceable.
             self._record(
                 incoming_id=incoming_id,
-                final_id=final_id,
+                final_id="",
                 outcome=WriteOutcome.REJECTED_HARM,
                 reason="injection posterior confidently harmful",
                 category=category,
             )
-            return final_id
+            return ""
 
         if incoming_id and incoming_id in store.cards:
             store.write_stats[WriteStatKey.UPDATED] += 1
