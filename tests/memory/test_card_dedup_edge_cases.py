@@ -5,6 +5,9 @@ Complements test_memory_card_update_dedup.py with adversarial inputs.
 
 import json
 
+from pydantic import ValidationError
+import pytest
+
 # Also test private helpers that are critical to correctness
 from gigaevo.memory.shared_memory.card_update_dedup import (
     CardUpdateDedupConfig,
@@ -108,6 +111,18 @@ class TestCardUpdateDedupConfig:
             # Pydantic frozen models raise ValidationError; dataclass raises AttributeError
             pass
 
+    def test_unknown_top_level_key_raises(self):
+        with pytest.raises(ValidationError):
+            CardUpdateDedupConfig.model_validate({"top_k_par_query": 3})
+
+    def test_unknown_nested_retrieval_key_raises(self):
+        with pytest.raises(ValidationError):
+            CardUpdateDedupConfig.model_validate({"retrieval": {"final_topn": 5}})
+
+    def test_unknown_nested_llm_key_raises(self):
+        with pytest.raises(ValidationError):
+            CardUpdateDedupConfig.model_validate({"llm": {"retries": 2}})
+
 
 # ===========================================================================
 # RetrievalWeights
@@ -133,6 +148,10 @@ class TestRetrievalWeights:
     def test_validate_non_dict(self):
         w = RetrievalWeights.model_validate("bad")
         assert w.description == 0.35
+
+    def test_unknown_weight_key_raises(self):
+        with pytest.raises(ValidationError):
+            RetrievalWeights.model_validate({"descripton": 0.5})
 
     def test_as_score_multipliers_keys(self):
         keys = set(RetrievalWeights().as_score_multipliers().keys())

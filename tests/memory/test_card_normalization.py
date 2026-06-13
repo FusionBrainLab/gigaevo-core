@@ -438,3 +438,20 @@ class TestRawCardRecord:
         record = RawCardRecord.model_validate({"explanation": "why it works"})
         assert record.explanation.summary == "why it works"
         assert record.explanation.explanations == []
+
+    def test_program_card_category_roundtrips(self):
+        raw = {"program_id": "p1", "category": "program-seed"}
+        card = RawCardRecord.model_validate(raw).to_card()
+        assert isinstance(card, ProgramCard)
+        assert card.category == "program-seed"
+
+    def test_program_dispatch_without_category_defaults_to_program(self):
+        card = RawCardRecord.model_validate({"program_id": "p1"}).to_card()
+        assert isinstance(card, ProgramCard)
+        assert card.category == "program"
+
+    def test_program_card_full_roundtrip_preserves_category(self):
+        original = ProgramCard(id="pc-1", program_id="p1", description="d")
+        rebuilt = normalize_memory_card(original.model_dump())
+        assert isinstance(rebuilt, ProgramCard)
+        assert rebuilt.category == original.category

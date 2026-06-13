@@ -9,6 +9,7 @@ import pytest
 from gigaevo.memory.ideas_tracker.ideas_tracker import (
     IdeaTracker,
     _enrich_ideas_with_keywords_and_summaries,
+    _EnrichmentOutcome,
     _select_ideas_needing_enrichment,
 )
 from gigaevo.memory.ideas_tracker.models import (
@@ -74,7 +75,7 @@ def _install_enrichment_spy(monkeypatch) -> list[list[str]]:
 
     async def spy(ideas, *_a, **_k):  # type: ignore[no-untyped-def]
         captured.append([i.id for i in ideas])
-        return list(ideas)
+        return [_EnrichmentOutcome(idea=i, ok=True) for i in ideas]
 
     monkeypatch.setattr(
         "gigaevo.memory.ideas_tracker.ideas_tracker."
@@ -160,25 +161,80 @@ class TestEnrichmentKeywordPreservation:
         )
         analyzer = _KeywordAnalyzer(keywords=["new-topic"])
 
-        (enriched,) = await _enrich_ideas_with_keywords_and_summaries(
+        (outcome,) = await _enrich_ideas_with_keywords_and_summaries(
             [idea], analyzer, "task summary"
         )
+        enriched = outcome.idea
 
         assert "verified:true" in enriched.keywords
         assert "mechanism_unverified:true" in enriched.keywords
         assert "new-topic" in enriched.keywords
         assert "old-topic" not in enriched.keywords
+        assert outcome.ok is True
 
     @pytest.mark.asyncio
     async def test_keyword_llm_failure_keeps_existing_keywords(self):
         idea = _idea(id_="a", entries=["e1"], keywords=["verified:false", "old-topic"])
         analyzer = _KeywordAnalyzer(fail=True)
 
-        (enriched,) = await _enrich_ideas_with_keywords_and_summaries(
+        (outcome,) = await _enrich_ideas_with_keywords_and_summaries(
             [idea], analyzer, "task summary"
         )
 
-        assert enriched.keywords == ["verified:false", "old-topic"]
+        assert outcome.idea.keywords == ["verified:false", "old-topic"]
+        assert outcome.ok is False
+
+
+class _SummaryFailAnalyzer:
+    async def call_structured_async(self, step, schema, content):  # type: ignore[no-untyped-def]
+        if step == "usage_summary":
+            raise RuntimeError("summary llm down")
+        return KeywordsResponse(keywords=["topic"])
+
+
+class TestEnrichmentFailureRecovery:
+    @pytest.mark.asyncio
+    async def test_summary_llm_failure_keeps_existing_summary(self):
+        """A transient summary-LLM failure must not clobber a previously
+        synthesized usage summary down to the empty string."""
+        idea = Idea(
+            id="a",
+            description="d",
+            explanation=IdeaExplanation(entries=["e1", "e2"], summary="old summary"),
+        )
+
+        (outcome,) = await _enrich_ideas_with_keywords_and_summaries(
+            [idea], _SummaryFailAnalyzer(), "task summary"
+        )
+
+        assert outcome.idea.explanation.summary == "old summary"
+        assert outcome.ok is False
+
+    @pytest.mark.asyncio
+    async def test_failed_enrichment_is_retried_next_sweep(self, monkeypatch, tmp_path):
+        """An idea whose enrichment failed must stay stale (re-selected next
+        sweep) even when its entry count did not grow in between."""
+        idea_a = _idea(id_="a", entries=["seed-a"])
+        analyzer = _StubAnalyzer([AnalysisResult(new_ideas=[idea_a]), AnalysisResult()])
+        tracker = _build_tracker(analyzer, tmp_path)
+        captured: list[list[str]] = []
+        outcomes = [False, True]
+
+        async def spy(ideas, *_a, **_k):  # type: ignore[no-untyped-def]
+            captured.append([i.id for i in ideas])
+            ok = outcomes[len(captured) - 1]
+            return [_EnrichmentOutcome(idea=i, ok=ok) for i in ideas]
+
+        monkeypatch.setattr(
+            "gigaevo.memory.ideas_tracker.ideas_tracker."
+            "_enrich_ideas_with_keywords_and_summaries",
+            spy,
+        )
+
+        await tracker.run_increment([_child_program(1)])
+        await tracker.run_increment([_child_program(2)])
+
+        assert captured == [["a"], ["a"]]
 
 
 class TestSelectIdeasNeedingEnrichment:

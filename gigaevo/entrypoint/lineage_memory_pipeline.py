@@ -385,8 +385,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
             metrics_context
         ).format_metrics_description()
 
-        # Re-add MemoryContextStage (the intra-only base strips it). Factory
-        # signature mirrors DefaultPipelineBuilder._contribute_default_nodes.
+        # Re-add MemoryContextStage (the intra-only base strips it).
         # One exposure counter is shared across all per-program stage instances.
         exposure = MemoryExposureCounter()
         self.add_stage(

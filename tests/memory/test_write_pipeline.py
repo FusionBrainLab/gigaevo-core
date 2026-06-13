@@ -18,8 +18,11 @@ from gigaevo.memory.shared_memory.models import (
     Quartile,
 )
 from gigaevo.memory.write_pipeline import (
+    CardTypeCounts,
+    CardTypeWriteStats,
     ProgramRow,
     WriteStats,
+    append_write_stats_snapshot,
     build_program_cards_from_top_programs,
     classify_card_type,
     extract_latest_snapshot,
@@ -622,3 +625,42 @@ class TestWriteStats:
         )
         assert stats.processed == 3
         assert stats.added == 1
+
+
+class TestAppendWriteStatsSnapshot:
+    def test_failed_write_preserves_prior_snapshot(self, tmp_path, monkeypatch):
+        """A crash mid-serialization must not corrupt the existing stats file.
+
+        The snapshot append must be atomic — a serialization error on the new
+        write leaves the previously recorded snapshots intact on disk.
+        """
+        import gigaevo.memory.write_pipeline as wp
+
+        stats_path = tmp_path / "memory_write_stats.json"
+        append_write_stats_snapshot(
+            stats_path=stats_path,
+            input_cards_count=1,
+            input_card_type_counts=CardTypeCounts(ideas=1),
+            write_stats=WriteStats(processed=1, added=1),
+            write_stats_by_card_type=CardTypeWriteStats(),
+        )
+        original = json.loads(stats_path.read_text(encoding="utf-8"))
+        assert len(original) == 1
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(wp.json, "dump", boom)
+
+        with pytest.raises(OSError):
+            append_write_stats_snapshot(
+                stats_path=stats_path,
+                input_cards_count=2,
+                input_card_type_counts=CardTypeCounts(ideas=2),
+                write_stats=WriteStats(processed=2, added=2),
+                write_stats_by_card_type=CardTypeWriteStats(),
+            )
+
+        survived_text = stats_path.read_text(encoding="utf-8")
+        assert survived_text, "stats file was truncated by the failed write"
+        assert json.loads(survived_text) == original

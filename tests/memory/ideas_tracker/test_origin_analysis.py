@@ -230,6 +230,54 @@ class TestLoadPrograms:
         programs = load_programs(str(progs_file))
         assert programs["p1"]["fitness"] == 0.9
 
+    def test_nan_fitness_treated_as_worst(self, tmp_path):
+        """float('nan') parses without exception but every comparison against
+        it is False — a NaN incumbent must lose to any finite candidate."""
+        progs_file = tmp_path / "programs.json"
+        data = [
+            {
+                "programs": [
+                    {
+                        "id": "p1",
+                        "generation": 0,
+                        "fitness": float("nan"),
+                        "parents": [],
+                    }
+                ]
+            },
+            {
+                "programs": [
+                    {"id": "p1", "generation": 0, "fitness": 0.3, "parents": []}
+                ]
+            },
+        ]
+        _write_json(progs_file, data)
+        programs = load_programs(str(progs_file))
+        assert programs["p1"]["fitness"] == 0.3
+
+    def test_nan_fitness_treated_as_worst_lower_is_better(self, tmp_path):
+        progs_file = tmp_path / "programs.json"
+        data = [
+            {
+                "programs": [
+                    {
+                        "id": "p1",
+                        "generation": 0,
+                        "fitness": float("nan"),
+                        "parents": [],
+                    }
+                ]
+            },
+            {
+                "programs": [
+                    {"id": "p1", "generation": 0, "fitness": 0.9, "parents": []}
+                ]
+            },
+        ]
+        _write_json(progs_file, data)
+        programs = load_programs(str(progs_file), higher_is_better=False)
+        assert programs["p1"]["fitness"] == 0.9
+
     def test_deduplicates_keeps_best_fitness_lower_is_better(self, tmp_path):
         progs_file = tmp_path / "programs.json"
         data = [

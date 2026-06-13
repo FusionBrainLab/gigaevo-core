@@ -12,9 +12,14 @@ from __future__ import annotations
 
 import pytest
 
-from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
+from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer, _PendingIdeas
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
-from gigaevo.memory.ideas_tracker.models import Idea, ProgramRecord
+from gigaevo.memory.ideas_tracker.models import (
+    AnalysisResult,
+    Idea,
+    Improvement,
+    ProgramRecord,
+)
 from tests.fakes.llm_router import FakeMemoryRouter
 
 
@@ -65,6 +70,65 @@ async def test_async_total_failure_drops_items_instead_of_minting_new():
     assert result.new_ideas == []
     assert result.updates == []
     assert sorted(result.failed_program_ids) == ["p0", "p1"]
+
+
+def test_partial_classification_failure_emits_nothing_for_retry():
+    """If classification failed with items still pending, emitting the
+    classified subset double-applies those updates when the tracker un-sees
+    the program and retries the whole record next sweep."""
+    analyzer = ClassifyingAnalyzer(llm=FakeMemoryRouter(), retry_attempts=1)
+    pending = _PendingIdeas.from_improvements(
+        [
+            Improvement(description="idea one", explanation="m1"),
+            Improvement(description="idea two", explanation="m2"),
+        ]
+    )
+    pending.mark_classified(1, "existing-idea", rewrite=False)
+    pending.refresh_mapping()
+    pending.classification_failed = True
+    record = _records(1)[0]
+    result = AnalysisResult()
+
+    analyzer._apply_pending_to_result(pending, record, result)
+
+    assert result.updates == []
+    assert result.new_ideas == []
+    assert result.failed_program_ids == [record.id]
+
+
+def test_fully_classified_despite_chunk_failure_emits_normally():
+    """A chunk failure followed by full classification on a later chunk is a
+    complete result — emit it, no retry."""
+    analyzer = ClassifyingAnalyzer(llm=FakeMemoryRouter(), retry_attempts=1)
+    pending = _PendingIdeas.from_improvements(
+        [Improvement(description="idea one", explanation="m1")]
+    )
+    pending.mark_classified(1, "existing-idea", rewrite=False)
+    pending.classification_failed = True
+    record = _records(1)[0]
+    result = AnalysisResult()
+
+    analyzer._apply_pending_to_result(pending, record, result)
+
+    assert len(result.updates) == 1
+    assert result.failed_program_ids == []
+
+
+def test_mark_classified_handles_duplicate_descriptions():
+    """Two pending items with identical descriptions must classify one each;
+    matching the first item regardless of state strands the second forever."""
+    pending = _PendingIdeas.from_improvements(
+        [
+            Improvement(description="same lever", explanation="a"),
+            Improvement(description="same lever", explanation="b"),
+        ]
+    )
+    pending.mark_classified(1, "idea-1", rewrite=False)
+    pending.refresh_mapping()
+    pending.mark_classified(1, "idea-2", rewrite=False)
+
+    assert pending.unclassified_count == 0
+    assert [i.target_id for i in pending.items] == ["idea-1", "idea-2"]
 
 
 def test_cold_start_empty_bank_still_mints_new_without_llm():

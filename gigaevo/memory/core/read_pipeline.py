@@ -140,14 +140,15 @@ class MemoryReadPipeline:
 
         if card_ids:
             logger.debug(
-                "[Memory][ReadPipeline] Auction kept {}/{} idea(s) (ids={})",
+                "[Memory][ReadPipeline] Selected {}/{} card(s) after auction+budget (ids={})",
                 len(card_ids),
                 len(auction_input),
                 card_ids,
             )
         else:
             logger.debug(
-                "[Memory][ReadPipeline] Auction kept no cards from {} candidate(s)",
+                "[Memory][ReadPipeline] No cards selected from {} candidate(s) "
+                "after auction+budget",
                 len(auction_input),
             )
         return MemorySelection(cards=cards, card_ids=card_ids, slate=slate)

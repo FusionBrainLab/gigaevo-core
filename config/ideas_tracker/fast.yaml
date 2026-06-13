@@ -15,7 +15,6 @@ analyzer_fast_settings:
   dbscan_min_samples: 2
   max_attempts: 10
   max_rounds: 20
-  recompute_center: false
   refine_subgroup_size: 20
 description_rewriting: true
 memory_write_enabled: true

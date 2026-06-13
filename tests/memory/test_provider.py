@@ -130,6 +130,29 @@ class TestSelectorMemoryProvider:
             provider._get_pipeline()
             assert mock_build.call_args.kwargs["gam"].pipeline_mode == "experimental"
 
+    def test_bare_retriever_defaults_match_shipped_gam_yaml(self) -> None:
+        """A directly-constructed GamRetriever (no Hydra) must compose the same
+        retrieval as config/memory/retriever/gam.yaml: page_index+vector only
+        (an empty list means ALL tools incl. the dead keyword one) and the
+        shipped max_iters=3 — so tests and scripts behave like a real run."""
+        retriever = GamRetriever()
+        assert retriever.allowed_tools == ["page_index", "vector"]
+        assert retriever.max_iters == 3
+
+    def test_empty_pipeline_mode_falls_back_to_experimental(self) -> None:
+        """A falsy pipeline_mode must degrade to the working "experimental"
+        mode, not the dead "default" (under which the selector returns no
+        cards) — the in-code fallback mirrors the shipped safe default."""
+        retriever = GamRetriever(pipeline_mode="")
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=1, retriever=retriever
+            )
+            provider._get_pipeline()
+            assert mock_build.call_args.kwargs["gam"].pipeline_mode == "experimental"
+
     @pytest.mark.asyncio
     async def test_passes_mutation_mode_rewrite(self) -> None:
         mock_pipeline = AsyncMock()
@@ -169,6 +192,56 @@ class TestSelectorMemoryProvider:
                 program=_make_program(),
                 task_description="t2",
                 metrics_description="m2",
+            )
+            mock_build.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_backend_build_runs_off_event_loop(self) -> None:
+        # The backend build loads an embedding model — seconds of blocking work
+        # that must not stall the asyncio loop the other program-stages share.
+        import threading
+
+        main_thread = threading.current_thread()
+        captured: dict[str, threading.Thread] = {}
+
+        def _capture_build(**kwargs: object) -> MagicMock:
+            captured["thread"] = threading.current_thread()
+            return MagicMock()
+
+        with patch.object(
+            LocalMemoryBackendFactory, "build", side_effect=_capture_build
+        ):
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=1
+            )
+            await provider.select_cards(
+                program=_make_program(),
+                task_description="t",
+                metrics_description="m",
+            )
+
+        assert captured["thread"] is not main_thread
+
+    @pytest.mark.asyncio
+    async def test_concurrent_select_builds_backend_once(self) -> None:
+        # Two parents entering select_cards before the pipeline exists must not
+        # each spawn a backend build; the once-lock serializes the off-loop
+        # build that the previous test pushed into a worker thread.
+        with patch.object(
+            LocalMemoryBackendFactory, "build", return_value=MagicMock()
+        ) as mock_build:
+            provider = SelectorMemoryProvider(
+                backend=LocalMemoryBackendFactory(), max_cards=1
+            )
+            await asyncio.gather(
+                *[
+                    provider.select_cards(
+                        program=_make_program(),
+                        task_description="t",
+                        metrics_description="m",
+                    )
+                    for _ in range(4)
+                ]
             )
             mock_build.assert_called_once()
 

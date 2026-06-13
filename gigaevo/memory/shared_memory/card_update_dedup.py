@@ -38,11 +38,18 @@ class RetrievalWeights(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_input(cls, data: Any) -> dict[str, Any]:
-        """Accept non-dict input gracefully; coerce values to float."""
+        """Accept non-dict input gracefully; coerce known weights to float.
+
+        Unknown keys pass through unchanged so ``extra='forbid'`` rejects config
+        typos instead of silently dropping them onto field defaults.
+        """
         if not isinstance(data, dict):
             return {}
         result: dict[str, Any] = {}
         for key, val in data.items():
+            if key not in cls.model_fields:
+                result[key] = val
+                continue
             try:
                 result[key] = float(val)
             except (TypeError, ValueError):
@@ -142,6 +149,34 @@ class CardUpdateDedupConfig(BaseModel):
             raw_weights = data.get("weights")
         if raw_weights is not None:
             result["weights"] = raw_weights
+
+        # Surface unknown keys at any level so ``extra='forbid'`` rejects config
+        # typos instead of silently ignoring them onto field defaults.
+        _top_consumed = {
+            "enabled",
+            "retrieval",
+            "llm",
+            "top_k_per_query",
+            "final_top_n",
+            "llm_max_retries",
+            "min_final_score",
+            "weights",
+        }
+        _retrieval_consumed = {
+            "top_k_per_query",
+            "final_top_n",
+            "min_final_score",
+            "weights",
+        }
+        for key, val in data.items():
+            if key not in _top_consumed:
+                result[key] = val
+        for key, val in retrieval.items():
+            if key not in _retrieval_consumed:
+                result[key] = val
+        for key, val in llm.items():
+            if key != "max_retries":
+                result[key] = val
 
         return result
 

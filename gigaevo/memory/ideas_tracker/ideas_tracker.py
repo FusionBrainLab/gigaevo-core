@@ -9,12 +9,14 @@ timestamped directory in a single flush() call at session end.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
 import json
 import math
 import os
 from pathlib import Path
+import threading
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
@@ -169,12 +171,22 @@ def _select_ideas_needing_enrichment(
     ]
 
 
+@dataclass(frozen=True)
+class _EnrichmentOutcome:
+    """Enriched idea plus whether every LLM step succeeded; failed ideas stay
+    stale so the next sweep retries them."""
+
+    idea: Idea
+    ok: bool
+
+
 async def _enrich_ideas_with_keywords_and_summaries(
     ideas: list[Idea], analyzer: Analyzer, task_summary: str
-) -> list[Idea]:
+) -> list[_EnrichmentOutcome]:
     """Enrich all ideas concurrently with keywords and explanation summaries."""
 
-    async def _enrich_one(idea: Idea) -> Idea:
+    async def _enrich_one(idea: Idea) -> _EnrichmentOutcome:
+        ok = True
         # On LLM failure the old keywords stay; on success the machine tokens
         # (verification gate, canonical-dedup) survive the topical refresh.
         keywords = list(idea.keywords)
@@ -187,13 +199,15 @@ async def _enrich_ideas_with_keywords_and_summaries(
             ]
             keywords = machine + [kw for kw in kw_parsed.keywords if kw not in machine]
         except Exception as exc:
+            ok = False
             logger.warning(
                 "[Memory][IdeaTracker] Keyword extraction failed for idea {!r}: {}",
                 idea.id,
                 exc,
             )
 
-        summary = ""
+        # On LLM failure the previously synthesized summary stays.
+        summary = idea.explanation.summary
         entries = idea.explanation.entries
         if len(entries) == 1:
             summary = entries[0]
@@ -205,19 +219,21 @@ async def _enrich_ideas_with_keywords_and_summaries(
                 )
                 summary = sum_parsed.summary
             except Exception as exc:
+                ok = False
                 logger.warning(
                     "[Memory][IdeaTracker] Summary generation failed for idea {!r}: {}",
                     idea.id,
                     exc,
                 )
 
-        return idea.model_copy(
+        enriched = idea.model_copy(
             update={
                 "keywords": keywords,
                 "explanation": IdeaExplanation(entries=entries, summary=summary),
                 "task_description_summary": task_summary,
             }
         )
+        return _EnrichmentOutcome(idea=enriched, ok=ok)
 
     return list(await asyncio.gather(*[_enrich_one(idea) for idea in ideas]))
 
@@ -304,6 +320,11 @@ def _card_posterior_from_programs(
     return rep.compute_injection_posteriors(rows, higher_is_better=higher_is_better)
 
 
+# A cancelled sweep abandons its to_thread writer mid-ingest; the next sweep
+# (or on_run_complete) must not interleave a second backend build with it.
+_WRITE_PIPELINE_LOCK = threading.Lock()
+
+
 def _run_write_pipeline(
     enabled: bool,
     banks_path: Path | None,
@@ -326,6 +347,33 @@ def _run_write_pipeline(
     """
     if not enabled:
         return
+    with _WRITE_PIPELINE_LOCK:
+        _run_write_pipeline_locked(
+            banks_path,
+            best_ideas_path,
+            programs_path,
+            backend=backend,
+            checkpoint_dir=checkpoint_dir,
+            best_programs_percent=best_programs_percent,
+            higher_is_better=higher_is_better,
+            card_posterior=card_posterior,
+            evictor=evictor,
+            deduplicator=deduplicator,
+        )
+
+
+def _run_write_pipeline_locked(
+    banks_path: Path | None,
+    best_ideas_path: Path | None,
+    programs_path: Path | None,
+    backend: MemoryBackendFactory | None,
+    checkpoint_dir: str | Path | None,
+    best_programs_percent: float,
+    higher_is_better: bool,
+    card_posterior: dict[str, CardStatsBlock] | None,
+    evictor: Evictor | None,
+    deduplicator: Deduplicator | None,
+) -> None:
     if backend is None:
         raise ValueError(
             "memory write pipeline enabled but no backend factory provided; "
@@ -552,8 +600,14 @@ def _build_analyzer_from_hydra_fields(
 
     if kind == "fast":
         fast = dict(analyzer_fast_settings or {})
-        fast.pop("recompute_center", None)
         extra = {k: v for k, v in fast.items() if k in _CLUSTERING_ANALYZER_KEYS}
+        unknown = sorted(set(fast) - _CLUSTERING_ANALYZER_KEYS)
+        if unknown:
+            logger.warning(
+                "[Memory][IdeaTracker] ignoring unrecognized analyzer_fast_settings "
+                "keys: {}",
+                unknown,
+            )
         return ClusteringAnalyzer(llm=llm, **extra)
 
     return ClassifyingAnalyzer(
@@ -677,6 +731,8 @@ class IdeaTracker(IncrementalPostRunHook):
         )
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
+        self._classification_failures: dict[str, int] = {}
+        self._max_classification_failures = 3
         self._last_entry_count: dict[str, int] = {}
         # the live hook and the post-run hook share one tracker; overlapping
         # sweeps would interleave bank mutations and _seen_ids bookkeeping
@@ -759,40 +815,67 @@ class IdeaTracker(IncrementalPostRunHook):
         *,
         posterior_programs: list[Program] | None,
     ) -> None:
-        records = self._eligible_records(programs)
+        records = self._eligible_records(
+            programs, posterior_programs=posterior_programs
+        )
 
-        result = await self._analyzer.analyze_async(records, self._bank)
+        try:
+            result = await self._analyzer.analyze_async(records, self._bank)
+        except BaseException:
+            # CancelledError included: records were marked seen before analysis;
+            # without rollback the window's ideas are permanently lost.
+            self._forget_records({r.id for r in records})
+            raise
         self._bank.apply(result)
 
         failed_ids = set(result.failed_program_ids)
         if failed_ids:
             # Without this the ids stay in _seen_ids and the LLM outage
-            # permanently loses those programs' ideas.
-            self._seen_ids -= failed_ids
-            self._all_records = [r for r in self._all_records if r.id not in failed_ids]
+            # permanently loses those programs' ideas. Poison programs whose
+            # ideas never classify are retired after the failure cap so they
+            # stop re-burning analyzer calls while inside the window.
+            retry_ids: set[str] = set()
+            for pid in failed_ids:
+                failures = self._classification_failures.get(pid, 0) + 1
+                self._classification_failures[pid] = failures
+                if failures < self._max_classification_failures:
+                    retry_ids.add(pid)
+                else:
+                    logger.warning(
+                        "[Memory][IdeaTracker] program {} failed classification "
+                        "{} times, retiring it from future sweeps.",
+                        pid,
+                        failures,
+                    )
+            self._forget_records(retry_ids)
 
         if records:
             stale_ideas = _select_ideas_needing_enrichment(
                 self._bank.all_ideas(), self._last_entry_count
             )
+            failed_enrichment: set[str] = set()
             if stale_ideas:
-                enriched = await _enrich_ideas_with_keywords_and_summaries(
+                outcomes = await _enrich_ideas_with_keywords_and_summaries(
                     stale_ideas, self._analyzer, self._task_summary
                 )
-                for idea in enriched:
+                for outcome in outcomes:
+                    if not outcome.ok:
+                        failed_enrichment.add(outcome.idea.id)
+                        continue
                     self._bank.enrich(
-                        idea.id,
-                        keywords=idea.keywords,
-                        summary=idea.explanation.summary,
+                        outcome.idea.id,
+                        keywords=outcome.idea.keywords,
+                        summary=outcome.idea.explanation.summary,
                         task_summary=self._task_summary,
                     )
+            # Failed ideas are left unstamped so the next sweep retries them.
             self._last_entry_count = {
                 idea.id: len(idea.explanation.entries)
                 for idea in self._bank.all_ideas()
+                if idea.id not in failed_enrichment
             }
 
         self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
-        self._log.flush(self._bank, records=self._all_records)
 
         card_posterior = _card_posterior_from_programs(
             programs if posterior_programs is None else posterior_programs,
@@ -802,30 +885,51 @@ class IdeaTracker(IncrementalPostRunHook):
             metrics_context=self._metrics_context,
         )
 
-        # backend build + card ingest are blocking I/O; keep them off the
-        # event loop so in-flight mutations don't stall for the whole sweep
-        await asyncio.to_thread(
-            _run_write_pipeline,
-            self._memory_write_enabled,
-            self._log.banks_file,
-            self._log.best_ideas_file,
-            self._log.programs_file,
-            backend=self._backend,
-            checkpoint_dir=self._checkpoint_dir,
-            best_programs_percent=self._best_programs_percent,
-            higher_is_better=self._fitness_higher_is_better,
-            card_posterior=card_posterior,
-            evictor=self._evictor,
-            deduplicator=self._deduplicator,
-        )
+        # flush (bank serialization + offline origin analysis) and the write
+        # pipeline (backend build + card ingest) are blocking I/O; keep them
+        # off the event loop so in-flight mutations don't stall for the sweep
+        def _flush_and_write() -> None:
+            self._log.flush(self._bank, records=self._all_records)
+            _run_write_pipeline(
+                self._memory_write_enabled,
+                self._log.banks_file,
+                self._log.best_ideas_file,
+                self._log.programs_file,
+                backend=self._backend,
+                checkpoint_dir=self._checkpoint_dir,
+                best_programs_percent=self._best_programs_percent,
+                higher_is_better=self._fitness_higher_is_better,
+                card_posterior=card_posterior,
+                evictor=self._evictor,
+                deduplicator=self._deduplicator,
+            )
 
-    def _eligible_records(self, programs: list[Program]) -> list[ProgramRecord]:
+        await asyncio.to_thread(_flush_and_write)
+
+    def _forget_records(self, ids: set[str]) -> None:
+        if not ids:
+            return
+        self._seen_ids -= ids
+        self._all_records = [r for r in self._all_records if r.id not in ids]
+
+    def _eligible_records(
+        self,
+        programs: list[Program],
+        *,
+        posterior_programs: list[Program] | None = None,
+    ) -> list[ProgramRecord]:
         """
         Filter programs and convert to ProgramRecord.
 
         Skips: root programs (no parents), programs without a validated fitness
         (missing/non-positive is_valid; missing, non-finite, or sentinel
         fitness), already-seen ids.
+
+        Parent code resolves from ``posterior_programs`` (the full pool) when
+        provided: live sweeps cap ``programs`` to the newest window, and
+        mutation parents are usually older archive elites outside it — without
+        the full pool the verification gate, canonical dedup, and
+        diff-grounding silently disable mid-run.
         """
         eligible: list[Program] = []
         for prog in programs:
@@ -837,7 +941,8 @@ class IdeaTracker(IncrementalPostRunHook):
                 continue
             eligible.append(prog)
 
-        parent_codes: dict[str, str] = {p.id: p.code for p in programs if p.code}
+        code_pool = programs if posterior_programs is None else posterior_programs
+        parent_codes: dict[str, str] = {p.id: p.code for p in code_pool if p.code}
         records = [
             program_to_record(
                 p,

@@ -148,7 +148,9 @@ class TestHydraComposition:
         assert obj.max_iters == 3
         assert list(obj.allowed_tools) == ["page_index", "vector"]
         assert isinstance(obj.top_k_by_tool, dict)
-        assert obj.top_k_by_tool["keyword"] == 5
+        # keyword is a dead tool (not in allowed_tools); its top_k entry was
+        # dropped so the config carries no budget for a path that never runs.
+        assert "keyword" not in obj.top_k_by_tool
         assert obj.top_k_by_tool["vector"] == 3
         assert obj.top_k_by_tool["page_index"] == 5
         assert obj.top_k_by_tool["vector_task_description"] == 0

@@ -8,7 +8,6 @@ allowed_tools:
   - page_index
   - vector
 top_k_by_tool:
-  keyword: 5
   vector: 3
   vector_description: 3
   vector_task_description: 0

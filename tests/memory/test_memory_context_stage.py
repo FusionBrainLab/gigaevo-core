@@ -13,7 +13,11 @@ from gigaevo.evolution.mutation.constants import (
 from gigaevo.evolution.mutation.context import MemoryMutationContext
 from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.core import AuctionBid, MemorySelection
-from gigaevo.memory.provider import NullMemoryProvider, SelectorMemoryProvider
+from gigaevo.memory.provider import (
+    MemoryProvider,
+    NullMemoryProvider,
+    SelectorMemoryProvider,
+)
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.cache_handler import NO_CACHE
 from gigaevo.programs.stages.common import StringContainer
@@ -240,6 +244,40 @@ class TestMemoryContextStageWithSelectorProvider:
         program = _make_program()
         await stage.compute(program)
 
+        assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == []
+
+    @pytest.mark.asyncio
+    async def test_stale_metadata_cleared_when_selection_raises(self) -> None:
+        # A requeued parent re-runs this NO_CACHE stage; if select_cards raises
+        # (e.g. a stage timeout), the previous run's slate must already be
+        # erased, or the failed sweep leaves children inheriting phantom credit.
+        class _RaisingProvider(MemoryProvider):
+            async def select_cards(
+                self,
+                program: Program,
+                *,
+                task_description: str,
+                metrics_description: str,
+            ) -> MemorySelection:
+                raise RuntimeError("select timed out")
+
+        stage = MemoryContextStage(
+            memory_provider=_RaisingProvider(),
+            task_description="t",
+            metrics_description="m",
+            timeout=60,
+        )
+        program = _make_program()
+        program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, ["stale-card"])
+        program.set_metadata(
+            MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+            [_bid("stale-card", 5.0, 1.0, selected=True).model_dump()],
+        )
+
+        with pytest.raises(RuntimeError):
+            await stage.compute(program)
+
+        assert program.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
         assert program.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == []
 
     @pytest.mark.asyncio

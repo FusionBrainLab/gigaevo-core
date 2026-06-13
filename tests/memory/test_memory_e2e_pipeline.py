@@ -514,3 +514,80 @@ def test_write_pipeline_main_full_loop(tmp_path):
     card_ids = [getattr(c, "id", None) for c in saved_cards]
     assert "idea-1" in card_ids, f"Expected idea-1 in saved cards, got {card_ids}"
     assert result is not None
+
+
+def test_write_pipeline_main_swallows_llm_error(tmp_path):
+    """A dedup-time LLM failure during save_card must not crash the write loop.
+
+    The dedup deduplicator calls an LLM; its transient failures raise LLMError
+    subclasses. main() catches them like any other write failure and returns
+    None rather than propagating and taking down the whole write stage.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    from gigaevo.exceptions import LLMAPIError
+    from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
+    from gigaevo.memory.write_pipeline import main
+
+    banks_data = [
+        {
+            "active_bank": [
+                {
+                    "id": "idea-1",
+                    "description": "Use beam search for decoding",
+                    "category": "general",
+                    "keywords": ["beam", "search"],
+                    "last_generation": 3,
+                }
+            ]
+        }
+    ]
+    best_ideas_data = [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}]
+
+    banks_file = tmp_path / "banks.json"
+    best_ideas_file = tmp_path / "best_ideas.json"
+    memory_dir = tmp_path / "memory"
+    banks_file.write_text(json.dumps(banks_data))
+    best_ideas_file.write_text(json.dumps(best_ideas_data))
+    memory_dir.mkdir()
+
+    closed = []
+
+    class FakeMemory:
+        def save_card(self, card):
+            raise LLMAPIError("dedup LLM call timed out")
+
+        def get_card(self, mid):
+            return None
+
+        def get_card_write_stats(self):
+            return {
+                "processed": 0,
+                "added": 0,
+                "updated": 0,
+                "rejected": 0,
+                "updated_target_cards": 0,
+            }
+
+        def sweep_harmful(self):
+            return []
+
+        def rebuild(self):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    factory = MagicMock(spec=LocalMemoryBackendFactory)
+    factory.build.return_value = FakeMemory()
+
+    result = main(
+        banks_path=banks_file,
+        best_ideas_path=best_ideas_file,
+        backend=factory,
+        checkpoint_dir=memory_dir,
+    )
+
+    assert result is None
+    assert closed == [True], "memory.close() must still run via finally"

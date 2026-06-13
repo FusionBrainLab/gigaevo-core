@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import json
+import math
 
 
 def load_ideas(path: str) -> tuple[dict[str, set[str]], dict[str, str]]:
@@ -50,9 +51,12 @@ def load_programs(path: str, higher_is_better: bool = True) -> dict[str, dict]:
 
     def fit_of(p: dict) -> float:
         try:
-            return float(p.get("fitness", worst))
+            fit = float(p.get("fitness", worst))
         except Exception:
             return worst
+        # NaN parses fine but every comparison against it is False, which
+        # would make a NaN incumbent unbeatable.
+        return worst if math.isnan(fit) else fit
 
     def better(candidate: dict, incumbent: dict) -> bool:
         if higher_is_better:

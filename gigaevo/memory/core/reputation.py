@@ -117,8 +117,11 @@ class BetaBinomialReputation(BaseModel):
             return False
         a = float(block.posterior_a)
         b = float(block.posterior_b)
+        # Beta(a, b) requires finite a > 0, b > 0; beta.ppf on a degenerate
+        # (0/negative) posterior returns nan, and ``nan < threshold`` is False —
+        # which would silently read a corrupt block as "never harmful".
         if block.intro_events < self.harm_min_events or not (
-            math.isfinite(a) and math.isfinite(b)
+            math.isfinite(a) and math.isfinite(b) and a > 0 and b > 0
         ):
             return False
         return float(beta.ppf(self.harm_quantile, a, b)) < self.harm_threshold

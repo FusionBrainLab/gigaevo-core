@@ -230,6 +230,44 @@ async def test_refresh_failure_logs_error_and_reraises(five_programs, error_log)
     assert hook.consecutive_failures == 1
 
 
+class _CancellingTracker(IncrementalPostRunHook):
+    async def on_run_complete(self, storage) -> None:  # type: ignore[no-untyped-def]
+        pass
+
+    async def run_increment(
+        self,
+        programs: list[Program],
+        *,
+        posterior_programs: list[Program] | None = None,
+    ) -> None:
+        import asyncio
+
+        raise asyncio.CancelledError()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_refresh_counts_failure_and_propagates(
+    five_programs, error_log
+):
+    """CancelledError is a BaseException — the generic except arm misses it,
+    so a cancelled sweep neither logs nor counts. It must do both AND still
+    propagate so the engine's cancellation semantics stay intact."""
+    import asyncio
+
+    hook = LiveMemoryRefreshHook(
+        tracker=_CancellingTracker(),
+        storage=_StubStorage(five_programs),
+        refresh_every=1,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await hook()
+
+    failures = [m for m in error_log if "[Memory][LiveRefresh] refresh FAILED" in m]
+    assert len(failures) == 1
+    assert hook.consecutive_failures == 1
+
+
 @pytest.mark.asyncio
 async def test_consecutive_failures_count_and_reset_on_success(
     five_programs, error_log

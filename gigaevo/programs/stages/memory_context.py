@@ -88,6 +88,13 @@ class MemoryContextStage(Stage):
         self._exposure = exposure if exposure is not None else MemoryExposureCounter()
 
     async def compute(self, program: Program) -> StageIO:
+        # Erase any slate left by a prior run of this NO_CACHE stage BEFORE the
+        # provider call: a select_cards failure (e.g. stage timeout) must not
+        # leave a requeued parent carrying a stale slate that would hand phantom
+        # credit to its children. Overwritten with the real selection on success.
+        program.set_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, [])
+        program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, [])
+
         selection = await self._provider.select_cards(
             program,
             task_description=self._task_description,

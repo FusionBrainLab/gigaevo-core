@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 from math import ceil
+import os
 from pathlib import Path
 from typing import Any, Protocol
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from gigaevo.exceptions import MemoryStorageError
+from gigaevo.exceptions import LLMError, MemoryStorageError
 from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
@@ -550,8 +551,11 @@ def append_write_stats_snapshot(
             existing = []
 
     existing.append(snapshot.model_dump())
-    with stats_path.open("w", encoding="utf-8") as f:
+    # Atomic write: a serialization crash must not truncate the prior snapshots.
+    tmp_path = stats_path.with_suffix(f".{os.getpid()}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(existing, f, ensure_ascii=True, indent=2)
+    os.replace(str(tmp_path), str(stats_path))
     return snapshot
 
 
@@ -620,7 +624,7 @@ def main(
                     memory_id,
                     (stored.description if stored is not None else "")[:110],
                 )
-        except (RuntimeError, MemoryStorageError) as exc:
+        except (RuntimeError, MemoryStorageError, LLMError) as exc:
             logger.error("[Memory][WritePipeline] Write failed: {}", exc)
             return None
 

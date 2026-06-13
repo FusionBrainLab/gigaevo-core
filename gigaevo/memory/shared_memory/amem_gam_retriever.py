@@ -21,7 +21,10 @@ from gigaevo.memory._vendor.GAM_root.gam import (
 from gigaevo.memory._vendor.GAM_root.gam.generator import AMemGenerator
 from gigaevo.memory._vendor.GAM_root.gam.schemas import Page
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_search import format_card_efficacy
+from gigaevo.memory.shared_memory.card_search import (
+    format_card_efficacy,
+    topical_keywords,
+)
 from gigaevo.memory.shared_memory.models import AnyCard, ProgramCard
 
 
@@ -65,7 +68,7 @@ def render_card_text(card: AnyCard) -> str:
         f"task_description: {card.task_description}",
         f"category: {card.category}",
         f"strategy: {card.strategy}",
-        f"keywords: {', '.join(card.keywords)}",
+        f"keywords: {', '.join(topical_keywords(card.keywords))}",
     ]
     if isinstance(card, ProgramCard):
         parts += [

@@ -20,13 +20,15 @@ class GamRetriever:
         backend: Any = None,
         *,
         enable_bm25: bool = False,
-        # structured card selection only runs under "experimental"
-        # (LLMCardSelector returns empty otherwise) — the bare fallback
-        # must match the shipped config/memory/retriever/gam.yaml
+        # Bare-construction defaults mirror config/memory/retriever/gam.yaml so a
+        # directly-built retriever (tests, scripts) behaves like a Hydra run:
+        # structured selection only runs under "experimental" (LLMCardSelector
+        # returns empty otherwise); an empty allowed_tools means ALL tools incl.
+        # the dead keyword one, so the page_index+vector pair is named explicitly.
         pipeline_mode: str = "experimental",
-        allowed_tools: Sequence[str] = (),
+        allowed_tools: Sequence[str] = ("page_index", "vector"),
         top_k_by_tool: Mapping[str, int] | None = None,
-        max_iters: int | None = None,
+        max_iters: int | None = 3,
     ) -> None:
         self.backend = backend
         self.enable_bm25 = enable_bm25

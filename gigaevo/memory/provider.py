@@ -9,6 +9,7 @@ The provider is a strategy object injected into the DAG pipeline via Hydra.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
 
 from loguru import logger
 
@@ -104,6 +105,7 @@ class SelectorMemoryProvider(MemoryProvider):
             reputation if reputation is not None else BetaBinomialReputation()
         )
         self._pipeline: MemoryReadPipeline | None = None
+        self._build_lock = asyncio.Lock()
 
     def _build_retriever(self) -> GamRetriever:
         retriever = self._retriever if self._retriever is not None else GamRetriever()
@@ -113,7 +115,9 @@ class SelectorMemoryProvider(MemoryProvider):
             enable_bm25=retriever.enable_bm25,
             allowed_tools=list(retriever.allowed_tools),
             top_k_by_tool=dict(retriever.top_k_by_tool),
-            pipeline_mode=retriever.pipeline_mode or "default",
+            # A falsy pipeline_mode degrades to the working "experimental" mode,
+            # not the dead "default" under which the selector returns no cards.
+            pipeline_mode=retriever.pipeline_mode or "experimental",
             max_cards=self._max_cards,
             **(
                 {"max_iters": retriever.max_iters}
@@ -148,6 +152,18 @@ class SelectorMemoryProvider(MemoryProvider):
             )
         return self._pipeline
 
+    async def _ensure_pipeline(self) -> MemoryReadPipeline:
+        if self._pipeline is not None:
+            return self._pipeline
+        # Build off the event loop — loading the embedding model is seconds of
+        # blocking work that would otherwise stall every other program-stage
+        # sharing the loop; the lock collapses a concurrent first-selection
+        # race down to a single build.
+        async with self._build_lock:
+            if self._pipeline is None:
+                return await asyncio.to_thread(self._get_pipeline)
+            return self._pipeline
+
     async def select_cards(
         self,
         program: Program,
@@ -155,7 +171,7 @@ class SelectorMemoryProvider(MemoryProvider):
         task_description: str,
         metrics_description: str,
     ) -> MemorySelection:
-        pipeline = self._get_pipeline()
+        pipeline = await self._ensure_pipeline()
         return await pipeline.select(
             parents=[program],
             mutation_mode="rewrite",

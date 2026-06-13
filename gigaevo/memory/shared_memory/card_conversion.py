@@ -298,8 +298,12 @@ class RawCardRecord(BaseModel):
         task_description_summary = self.task_description_summary or self.context_summary
 
         if self.category == "program" or self.program_id:
+            # coerce_category turns a missing label into "general"; a program
+            # card with no explicit category is canonically "program".
+            category = self.category if self.category != "general" else "program"
             return ProgramCard(
                 id=card_id,
+                category=category,
                 program_id=self.program_id,
                 task_description=task_description,
                 task_description_summary=task_description_summary,

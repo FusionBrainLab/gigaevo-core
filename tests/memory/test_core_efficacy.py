@@ -11,8 +11,10 @@ over ``IdeaStats`` rows.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
+import yaml
 
 from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import AuctionCandidate, ThompsonAuctioneer
@@ -125,6 +127,16 @@ class TestBetaBinomialReputation:
         )
         assert not BetaBinomialReputation().is_confidently_harmful(harmful)
         assert BetaBinomialReputation(harm_min_events=2).is_confidently_harmful(harmful)
+
+    def test_harm_predicate_guards_non_positive_posterior_params(self):
+        # Without the positivity guard beta.ppf(q, 0, 0) yields nan and the
+        # predicate silently reads "never harmful" through a nan comparison.
+        rep = BetaBinomialReputation()
+        for a, b in [(0.0, 0.0), (0.0, 4.0), (-1.0, 4.0), (4.0, -1.0)]:
+            stats = EvolutionStatistics.model_validate(
+                {"ALL": {"intro_events": 5, "posterior_a": a, "posterior_b": b}}
+            )
+            assert rep.is_confidently_harmful(stats) is False, (a, b)
 
     def test_injection_posteriors_match_legacy(self):
         programs = [
@@ -317,3 +329,15 @@ class TestPermissiveAdmitter:
         )
         got = PermissiveAdmitter().select(stats)
         assert [s.idea_id for s in got] == ["neg-but-not-harmful"]
+
+
+def test_beta_binomial_yaml_surfaces_every_reputation_knob() -> None:
+    """Every tunable BetaBinomialReputation field must be surfaced in the
+    shipped config so an experimenter can tune it without reading source —
+    noise_floor_rel was the silent default that motivated this guard."""
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = yaml.safe_load(
+        (repo_root / "config/memory/reputation/beta_binomial.yaml").read_text()
+    )
+    yaml_keys = {key for key in cfg if not key.startswith("_")}
+    assert set(BetaBinomialReputation.model_fields) <= yaml_keys

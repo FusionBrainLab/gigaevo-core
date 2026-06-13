@@ -81,6 +81,37 @@ class TestBuildAnalyzerNormalization:
         )
         assert isinstance(analyzer, expected)
 
+    def test_fast_settings_unknown_key_warns_and_is_dropped(self):
+        """A typo'd fast-settings knob must be loudly reported, not silently
+        filtered into a default-parameter run."""
+        from unittest.mock import MagicMock, patch
+
+        from loguru import logger
+
+        from gigaevo.memory.ideas_tracker.analyzers import ClusteringAnalyzer
+
+        messages: list[str] = []
+        handle = logger.add(messages.append, level="WARNING", format="{message}")
+        try:
+            build = _factory()
+            with patch(
+                "gigaevo.memory.ideas_tracker.analyzers.SentenceTransformer",
+                return_value=MagicMock(),
+            ):
+                analyzer = build(
+                    analyzer_type="fast",
+                    llm=FakeMemoryRouter(),
+                    analyzer_fast_settings={"batch_size": 4, "dbscan_epps": 0.3},
+                    description_rewriting=True,
+                )
+        finally:
+            logger.remove(handle)
+
+        assert isinstance(analyzer, ClusteringAnalyzer)
+        assert analyzer._batch_size == 4
+        warned = [m for m in messages if "dbscan_epps" in m]
+        assert len(warned) == 1
+
     def test_unknown_type_falls_back_to_default(self):
         """The current factory falls through to ClassifyingAnalyzer on any
         non-fast value rather than raising. Pin that behavior."""

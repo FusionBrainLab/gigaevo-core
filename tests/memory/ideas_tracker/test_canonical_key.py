@@ -46,6 +46,13 @@ class TestNormalizeCanonicalValue:
         assert normalize_canonical_value("lgbm") == "lightgbm"
         assert normalize_canonical_value("cb") == "catboost"
 
+    def test_small_floats_keep_three_significant_figures(self) -> None:
+        """An absolute pre-round to 3 decimals collapses distinct small
+        hyperparameters (0.0014 vs 0.001) into one canonical key."""
+        assert normalize_canonical_value(0.0014) == "0.0014"
+        assert normalize_canonical_value(0.001) != normalize_canonical_value(0.0014)
+        assert normalize_canonical_value(3e-05) == "3e-05"
+
     def test_dict_fallback_to_hash(self) -> None:
         result = normalize_canonical_value({"a": 1})
         # Hash form: 8-char hex

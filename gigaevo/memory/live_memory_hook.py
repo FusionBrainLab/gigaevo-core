@@ -110,7 +110,8 @@ class LiveMemoryRefreshHook:
         )
         try:
             await self._tracker.run_increment(window, posterior_programs=programs)
-        except Exception as exc:
+        except BaseException as exc:
+            # BaseException so CancelledError is counted and logged too.
             # _last_refresh_sweep is deliberately NOT advanced: the next
             # landing sweep retries instead of waiting a full cadence window.
             self._consecutive_failures += 1
@@ -118,7 +119,7 @@ class LiveMemoryRefreshHook:
                 "[Memory][LiveRefresh] refresh FAILED at sweep {} ({} consecutive): {}",
                 self._sweep_counter,
                 self._consecutive_failures,
-                exc,
+                repr(exc),
             )
             raise
         self._consecutive_failures = 0

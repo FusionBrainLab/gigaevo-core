@@ -387,6 +387,104 @@ class TestFailedClassificationRetry:
         assert [r.id for r in tracker._all_records] == [prog.id]
 
 
+class _RecordProbeAnalyzer:
+    """Captures the ProgramRecords each sweep feeds the analyzer."""
+
+    def __init__(self) -> None:
+        self.batches: list[list] = []
+
+    async def analyze_async(self, records, bank) -> AnalysisResult:
+        self.batches.append(list(records))
+        return AnalysisResult()
+
+
+class TestParentCodeResolution:
+    @pytest.mark.asyncio
+    async def test_parent_codes_resolve_from_posterior_programs(self, tmp_path) -> None:
+        """Live sweeps cap the analyzer window to the newest programs; mutation
+        parents are usually older archive elites OUTSIDE that window. Parent
+        code must resolve from the full posterior set or the verification gate,
+        canonical dedup, and diff-grounding all silently disable mid-run."""
+        tracker = _make_tracker(memory_write_enabled=False, logs_dir=tmp_path)
+        probe = _RecordProbeAnalyzer()
+        tracker._analyzer = probe
+        parent = _make_program(
+            parents=[],
+            generation=1,
+            code="def solve(): return 'parent'",
+            program_id="elder-parent",
+        )
+        child = _make_program(
+            parents=["elder-parent"],
+            generation=2,
+            code="def solve(): return 'child'",
+        )
+
+        await tracker.run_increment([child], posterior_programs=[parent, child])
+
+        (record,) = probe.batches[0]
+        assert record.parent_code == parent.code
+
+
+class _CancellingAnalyzer:
+    """Raises CancelledError on the first sweep (engine cancel-grace fired)."""
+
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+        self._cancel_once = True
+
+    async def analyze_async(self, records, bank) -> AnalysisResult:
+        self.batches.append([r.id for r in records])
+        if self._cancel_once:
+            self._cancel_once = False
+            raise asyncio.CancelledError
+        return AnalysisResult()
+
+
+class TestCancelledSweepRollback:
+    @pytest.mark.asyncio
+    async def test_cancelled_analysis_unsees_records(self, tmp_path) -> None:
+        """Records are marked seen before analysis; a cancelled sweep must roll
+        that back or the window's ideas are permanently lost."""
+        tracker = _make_tracker(memory_write_enabled=False, logs_dir=tmp_path)
+        analyzer = _CancellingAnalyzer()
+        tracker._analyzer = analyzer
+        prog = _make_evolved_program(fitness=2.0)
+
+        with pytest.raises(asyncio.CancelledError):
+            await tracker.run_increment([prog])
+        await tracker.run_increment([prog])
+
+        assert analyzer.batches == [[prog.id], [prog.id]]
+        assert [r.id for r in tracker._all_records] == [prog.id]
+
+
+class _AlwaysFailingAnalyzer:
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    async def analyze_async(self, records, bank) -> AnalysisResult:
+        self.batches.append([r.id for r in records])
+        return AnalysisResult(failed_program_ids=[r.id for r in records])
+
+
+class TestClassificationFailureCap:
+    @pytest.mark.asyncio
+    async def test_poison_program_retired_after_cap(self, tmp_path) -> None:
+        """A program whose ideas the LLM can never classify must stop re-burning
+        analyzer calls after a bounded number of retries."""
+        tracker = _make_tracker(memory_write_enabled=False, logs_dir=tmp_path)
+        analyzer = _AlwaysFailingAnalyzer()
+        tracker._analyzer = analyzer
+        prog = _make_evolved_program(fitness=2.0)
+
+        for _ in range(5):
+            await tracker.run_increment([prog])
+
+        attempts = [batch for batch in analyzer.batches if batch]
+        assert len(attempts) == 3
+
+
 class _OverlapProbeAnalyzer:
     """Yields control mid-analysis so unserialized callers would interleave."""
 
@@ -434,6 +532,68 @@ class TestRunIncrementConcurrency:
         await tracker.run_increment([])
 
         assert seen["thread"] != threading.get_ident()
+
+    @pytest.mark.asyncio
+    async def test_session_log_flush_runs_off_event_loop_thread(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """flush() serializes the whole bank and runs offline origin analysis —
+        per-sweep blocking work that belongs off the loop thread too."""
+        import gigaevo.memory.ideas_tracker.ideas_tracker as mod
+
+        seen: dict[str, int] = {}
+
+        def _spy(self, bank, *, records) -> None:
+            seen["thread"] = threading.get_ident()
+
+        monkeypatch.setattr(mod._SessionLog, "flush", _spy)
+        tracker = _make_tracker(memory_write_enabled=False, logs_dir=tmp_path)
+
+        await tracker.run_increment([])
+
+        assert seen["thread"] != threading.get_ident()
+
+    def test_run_write_pipeline_serializes_concurrent_callers(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A cancelled sweep leaves its to_thread writer running as an orphan;
+        the next sweep (or on_run_complete) must not interleave a second
+        backend build/ingest with it."""
+        import time
+
+        import gigaevo.memory.ideas_tracker.ideas_tracker as mod
+        import gigaevo.memory.write_pipeline as wp
+
+        state = {"in_flight": 0, "max_in_flight": 0}
+        gauge = threading.Lock()
+
+        def _slow_main(**kwargs):
+            with gauge:
+                state["in_flight"] += 1
+                state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+            time.sleep(0.05)
+            with gauge:
+                state["in_flight"] -= 1
+            return None
+
+        monkeypatch.setattr(wp, "main", _slow_main)
+        banks = tmp_path / "banks.json"
+        banks.write_text('[{"active_bank": []}]', encoding="utf-8")
+        best = tmp_path / "best_ideas.json"
+        best.write_text('[{"best_ideas": []}]', encoding="utf-8")
+
+        def _call() -> None:
+            mod._run_write_pipeline(
+                True, banks, best, None, backend=LocalMemoryBackendFactory()
+            )
+
+        workers = [threading.Thread(target=_call) for _ in range(2)]
+        for t in workers:
+            t.start()
+        for t in workers:
+            t.join()
+
+        assert state["max_in_flight"] == 1
 
 
 class TestIdeaTrackerOnRunComplete:

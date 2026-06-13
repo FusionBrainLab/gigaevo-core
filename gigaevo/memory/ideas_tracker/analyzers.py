@@ -149,8 +149,10 @@ class _PendingIdeas:
                 seq_num,
             )
             return
+        # Only unclassified items: duplicate descriptions must classify one
+        # each, not re-stamp the first match and strand the rest forever.
         for item in self.items:
-            if item.description == desc:
+            if not item.classified and item.description == desc:
                 item.target_id = target_id
                 item.classified = True
                 item.rewrite = rewrite
@@ -352,18 +354,19 @@ class ClassifyingAnalyzer:
         if pending.classification_failed and pending.unclassified_count:
             # Minting on failure would flood the bank with unvetted ideas;
             # reporting the program id lets the tracker un-see it so a later
-            # sweep retries.
+            # sweep retries. Emitting the classified subset would double-apply
+            # those updates on that retry, so the whole record emits nothing.
             result.failed_program_ids.append(record.id)
             logger.error(
                 "[Memory][Analyzer] ClassifyingAnalyzer: classification failed for "
-                "program {}; dropping {} unclassified idea(s)",
+                "program {}; dropping {} classified and {} unclassified idea(s)",
                 record.id,
+                len(pending.items) - pending.unclassified_count,
                 pending.unclassified_count,
             )
+            return
         for item in pending.items:
             if not item.classified:
-                if pending.classification_failed:
-                    continue
                 enriched = enrich_with_verification(
                     description=item.description,
                     parent_code=record.parent_code,

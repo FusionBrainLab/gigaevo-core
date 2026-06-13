@@ -99,8 +99,9 @@ def normalize_canonical_value(v: Any) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
-        x = round(float(v), 3)
-        s = f"{x:.3g}"
+        # 3 significant figures, NOT 3 decimals — an absolute round collapses
+        # distinct small hyperparameters (0.0014 vs 0.001) into one key.
+        s = f"{float(v):.3g}"
         if s.endswith(".0"):
             s = s[:-2]
         return s
@@ -516,18 +517,36 @@ class IdeaBank:
                     merged_programs = list(
                         dict.fromkeys(list(existing.programs) + list(idea.programs))
                     )
+                    base_key = f"{existing.id}-canonical-merge"
+                    taken = {alias.key for alias in existing.aliases}
+                    alias_key, n = base_key, 2
+                    while alias_key in taken:
+                        alias_key = f"{base_key}-{n}"
+                        n += 1
                     archive_entry = CardAlias(
-                        key=f"{existing.id}-canonical-merge",
+                        key=alias_key,
                         description=idea.description,
                         programs=list(idea.programs),
                     )
                     merged_entries = list(existing.explanation.entries) + list(
                         idea.explanation.entries
                     )
+                    # Topical keywords union in; machine tags do not — the
+                    # incumbent's verification verdict stays the card's verdict.
+                    incoming_topical = [
+                        kw
+                        for kw in idea.keywords
+                        if not kw.startswith(MACHINE_KEYWORD_PREFIXES)
+                        and kw not in existing.keywords
+                    ]
                     merged = existing.model_copy(
                         update={
                             "programs": merged_programs,
                             "aliases": list(existing.aliases) + [archive_entry],
+                            "keywords": list(existing.keywords) + incoming_topical,
+                            "last_generation": max(
+                                existing.last_generation, idea.last_generation
+                            ),
                             "explanation": IdeaExplanation(
                                 entries=merged_entries,
                                 summary=existing.explanation.summary,

@@ -10,8 +10,21 @@ import re
 
 from loguru import logger
 
+from gigaevo.memory.ideas_tracker.idea_bank import MACHINE_KEYWORD_PREFIXES
 from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
 from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
+
+
+def topical_keywords(keywords: list[str] | None) -> list[str]:
+    """Keywords minus machine tokens (verification gate / canonical dedup).
+
+    Machine tokens stay on the stored card for the selector prompt and dedup;
+    surfacing them as searchable/corpus text would let queries match on
+    bookkeeping rather than content.
+    """
+    return [
+        kw for kw in (keywords or []) if not kw.startswith(MACHINE_KEYWORD_PREFIXES)
+    ]
 
 
 def format_card_efficacy(card: AnyCard | None) -> str | None:
@@ -100,7 +113,7 @@ def search_cards_by_keyword(
                 str(card.description or ""),
                 str(card.task_description_summary or ""),
                 str(card.task_description or ""),
-                " ".join([str(x) for x in (card.keywords or [])]),
+                " ".join(topical_keywords(card.keywords)),
                 str(card.category or ""),
             ]
         ).lower()
@@ -145,7 +158,7 @@ def synthesize_search_results(
                     f"task_description_summary: {card.task_description_summary}",
                     f"task_description: {card.task_description}",
                     f"description: {card.description}",
-                    f"keywords: {card.keywords}",
+                    f"keywords: {topical_keywords(card.keywords)}",
                     f"explanation: {expl_text}",
                 ]
             )

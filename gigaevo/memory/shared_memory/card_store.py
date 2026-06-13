@@ -202,8 +202,11 @@ class CardStore:
                 if eid and eid in card_id_by_entity:
                     entity_version[eid] = vid
 
-        # Swap only after the whole file parsed — a corrupt index must not
-        # leave the store half-cleared.
+        # Parse into side dicts first so a corrupt index raises before any
+        # mutation. The clear()+update() swap below is NOT atomic to a lockless
+        # reader (get() takes no lock); safety rests on the single-writer
+        # assumption — reload() holds self._lock and is the only mutator of
+        # these maps, so a concurrent get() can at worst briefly miss a card.
         self.cards.clear()
         self.cards.update(cards)
         self.entity_by_card_id.clear()
