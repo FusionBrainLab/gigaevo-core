@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v2.6.0 (2026-06-13)
+
+### Bug Fixes
+
+- **memory**: Review iteration 1 — paper-readiness fixes + canonical-dedup wiring
+  ([#276](https://github.com/KhrulkovV/gigaevo-core-internal/pull/276),
+  [`b40d28c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b40d28c6d193754735ef698e56c8e2e5ff5b161e))
+
+- **memory**: Review-1 paper-readiness fixes — honest ledger ids, hardened reload/posterior,
+  factory-aligned defaults, serialized tracker sweeps
+  ([#276](https://github.com/KhrulkovV/gigaevo-core-internal/pull/276),
+  [`b40d28c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b40d28c6d193754735ef698e56c8e2e5ff5b161e))
+
+### Features
+
+- **memory**: Wire canonical-key dedup producer into enrich_with_verification
+  ([#276](https://github.com/KhrulkovV/gigaevo-core-internal/pull/276),
+  [`b40d28c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b40d28c6d193754735ef698e56c8e2e5ff5b161e))
+
+
 ## v2.5.0 (2026-06-13)
 
 ### Features
