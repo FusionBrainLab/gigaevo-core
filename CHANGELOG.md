@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.5.0 (2026-06-13)
+
+### Features
+
+- **memory**: Paper-readiness hardening — exposure observability, fail-loud LLM paths, config wiring
+  ([#275](https://github.com/KhrulkovV/gigaevo-core-internal/pull/275),
+  [`490452f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/490452f965e576eaf49090668a8da4e13ee43891))
+
+
 ## v2.4.0 (2026-06-12)
 
 ### Bug Fixes
