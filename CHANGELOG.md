@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v2.7.0 (2026-06-14)
+
+### Chores
+
+- **infra**: Repurpose INTERNAL_IP to Qwen3-235B Instruct + add proxy alias
+  ([`b5f9767`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b5f97671fe9203bc0ca47ec3906d025e01948a3d))
+
+### Features
+
+- **memory**: One-knob memory config (MemorySystem; memory={none,reader,writer,full}) + LCB fitness
+  ([#280](https://github.com/KhrulkovV/gigaevo-core-internal/pull/280),
+  [`5685128`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/568512855b2a68efd1ddfd7dd3f002b726446570))
+
+
 ## v2.6.2 (2026-06-13)
 
 ### Bug Fixes
