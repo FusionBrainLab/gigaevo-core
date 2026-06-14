@@ -1,0 +1,23 @@
+# memory=full — read + write both on (the old `memory=local ideas_tracker=default`).
+# ONE assembled MemorySystem node: Hydra builds the component leaves below and
+# passes them to MemorySystem, which threads the shared reputation/backend/dedup/
+# llm in Python (no ${ref:memory.*} sibling web). Swap a component with e.g.
+# `memory/llm=qwen_instruct`, `memory/admitter=...`; tune via `memory.auction.baseline_prior=[5,2]`.
+defaults:
+  - llm: gemini
+  - reputation: beta_binomial
+  - dedup: llm
+  - admitter: sign_based
+  - evictor: harm
+  - retriever: gam
+  - selector: llm
+  - auction: thompson
+  - budget: top_theta
+  - backend: local
+  - provider: selector
+  - tracker: ideas
+  - _self_
+
+_target_: gigaevo.memory.MemorySystem
+reader_enabled: true
+writer_enabled: true

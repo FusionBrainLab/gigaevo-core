@@ -2,17 +2,16 @@
 #
 # Live intra/extra-memory pipeline.
 #
-# REQUIRED CLI co-overrides (Hydra defaults-list ordering means we cannot
-# safely flip these from inside `pipeline/`):
-#   ideas_tracker=default   — IdeaTracker is what the live refresh hook calls.
-#   memory=local            — MemoryReadPipeline reads the local card store
-#                             that IdeaTracker writes to between refreshes.
+# REQUIRED CLI co-override:
+#   memory=full   — the assembled MemorySystem supplies BOTH the provider this
+#                   pipeline reads AND the IdeaTracker the live refresh hook
+#                   writes; with memory=none both collapse to no-ops.
 #
 # Full acceptance command:
 #   OPENAI_API_KEY=sk-gigaevo python run.py \
 #     problem.name=heilbron llm_base_url=http://INTERNAL_IP:4000 \
 #     model_name=Qwen3-235B-A22B-Thinking-2507 redis.db=10 num_parents=1 \
-#     pipeline=intra_extra_memory ideas_tracker=default memory=local
+#     pipeline=intra_extra_memory memory=full
 #
 # Wiring:
 #   - pipeline_builder    = IntraExtraMemoryPipelineBuilder
@@ -31,7 +30,7 @@ evolution_context:
   storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${ref:memory.provider}
+  memory_provider: ${ref:memory::provider}
 
 pipeline_builder:
   _target_: gigaevo.entrypoint.lineage_memory_pipeline.IntraExtraMemoryPipelineBuilder
@@ -60,7 +59,7 @@ dag_blueprint:
 # this prevents sweep time from growing linearly with storage size.
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
-  tracker: ${ref:ideas_tracker}
+  tracker: ${ref:memory::tracker}
   storage: ${ref:program_storage}
   refresh_every: 10
   max_programs_per_sweep: 24

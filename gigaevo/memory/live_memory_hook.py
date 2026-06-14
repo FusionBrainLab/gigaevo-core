@@ -61,8 +61,11 @@ class LiveMemoryRefreshHook:
         if not isinstance(tracker, IncrementalPostRunHook):
             raise TypeError(
                 "LiveMemoryRefreshHook needs an IncrementalPostRunHook (got "
-                f"{type(tracker).__name__}); pipeline=intra_extra_memory requires "
-                "the co-overrides `ideas_tracker=default memory=local`"
+                f"{type(tracker).__name__}); pipeline=intra_extra_memory writes "
+                "cards live, so it needs a writer-enabled arm: memory=full "
+                "(read+write) or memory=writer (write-only). memory=reader "
+                "(read-only) is not supported by this pipeline — use it with "
+                "pipeline=standard, or switch to memory=full."
             )
         self._tracker = tracker
         self._storage = storage

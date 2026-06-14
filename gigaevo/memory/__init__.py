@@ -37,6 +37,7 @@ from gigaevo.memory.shared_memory.models import (
     ProgramCard,
     Strategy,
 )
+from gigaevo.memory.system import MemorySystem
 
 __all__ = [
     "AmemGamMemory",
@@ -49,6 +50,7 @@ __all__ = [
     "MemoryCard",
     "MemoryCardExplanation",
     "MemoryConfig",
+    "MemorySystem",
     "ProgramCard",
     "Strategy",
     "normalize_memory_card",

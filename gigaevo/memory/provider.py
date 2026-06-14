@@ -3,7 +3,7 @@
 The provider is a strategy object injected into the DAG pipeline via Hydra.
 - ``NullMemoryProvider`` — no-op, returns empty selection (default: ``memory=none``)
 - ``SelectorMemoryProvider`` — assembles a ``MemoryReadPipeline`` over the shared
-  card bank (``memory=local`` or ``memory=legacy_api``)
+  card bank (``memory=reader`` or ``memory=full``)
 """
 
 from __future__ import annotations

@@ -147,18 +147,20 @@ python run.py problem.name=my_task pipeline=my_pipeline \
 ```bash
 # See docs/INTRA_EXTRA_MEMORY.md for the full mode guide
 python run.py problem.name=heilbron \
-    pipeline=intra_extra_memory ideas_tracker=default memory=local \
+    pipeline=intra_extra_memory memory=full \
     num_parents=4 max_mutants=500
 ```
 
-> **Required overrides:** launch with **both** `ideas_tracker=default
-> memory=local`. Omitting them is loud, not silent: without
-> `ideas_tracker` the run fails at startup (the live-refresh hook needs a
-> tracker); `memory=none` logs a `[Memory][Arm] read path DISABLED`
-> WARNING. The extra-memory (GAM) agents also call OpenRouter directly,
-> so `OPENROUTER_API_KEY` must be exported — without it every GAM call
-> 401s and the extra channel ships zero cards silently. Verify the arm
-> from the startup `[Memory][Arm]` banner before trusting results.
+> **Required override:** launch with `memory=full` — the single preset that
+> turns *both* the reader (injects cards) and the writer (`IdeaTracker`
+> extracts + enriches them) on. Under `pipeline=intra_extra_memory` the
+> writer-off presets (`memory=none`, `memory=reader`) **fail fast at
+> startup**: the live-refresh hook needs a real tracker. A true no-memory
+> baseline is `pipeline=standard memory=none`. The extra-memory (GAM) agents
+> call OpenRouter directly, so `OPENROUTER_API_KEY` must be exported —
+> without it every GAM call 401s and the extra channel ships zero cards
+> silently. Verify the arm from the startup `[Memory][Arm]` banner before
+> trusting results.
 
 ### Tabular Suite (regression + classification, 10 datasets)
 

@@ -151,7 +151,7 @@ class TestGamRetriever:
         assert retriever.get_card("missing") is None
 
     def test_get_card_normalizes_legacy_dict_backend(self):
-        # The legacy_api backend still hands back raw dicts; the retriever is
+        # A dict-returning backend can hand back raw dicts; the retriever is
         # the typed boundary for them.
         raw = {
             "description": "legacy idea",

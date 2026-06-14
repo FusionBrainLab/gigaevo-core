@@ -193,5 +193,5 @@ class TestMainBuildsBackendViaFactory:
 
 class TestIdeaTrackerRequiresBackendForWrites:
     def test_write_enabled_without_backend_raises(self):
-        with pytest.raises(ValueError, match=r"memory\.backend"):
+        with pytest.raises(ValueError, match="memory=full"):
             IdeaTracker(memory_write_enabled=True, backend=None)

@@ -1,0 +1,9 @@
+# memory=writer — write only (seed a card bank for a later `memory=reader` run;
+# the deliberate "build a bank" move). Inherits full's components; reader off.
+# NOTE: this spends memory-LLM tokens — see gigaevo/memory/README.md.
+defaults:
+  - full
+  - _self_
+
+reader_enabled: false
+writer_enabled: true

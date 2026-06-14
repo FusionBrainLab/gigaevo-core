@@ -7,7 +7,7 @@ evolution_context:
   storage: ${program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${ref:memory.provider}
+  memory_provider: ${ref:memory::provider}
 
 pipeline_builder:
   _target_: gigaevo.entrypoint.default_pipelines.ContextPipelineBuilder

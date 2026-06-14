@@ -1,9 +1,0 @@
-# DEPRECATED: HTTP API backend kept only for reproducing historical experiments.
-# Prefer memory/backend=local. Instantiation emits a DeprecationWarning.
-# Requires `namespace=<ns>` (top-level default is null; build() fails fast).
-_target_: gigaevo.memory.backend_factory.LegacyApiMemoryBackendFactory
-llm: ${ref:memory_llm}
-checkpoint_dir: ${checkpoint_dir}
-base_url: http://localhost:8000
-namespace: ${namespace}
-embedding_model_name: all-MiniLM-L6-v2

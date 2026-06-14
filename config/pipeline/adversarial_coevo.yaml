@@ -47,7 +47,7 @@ evolution_context:
   storage: ${program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${ref:memory.provider}
+  memory_provider: ${ref:memory::provider}
 
 # Opponent result production strategy:
 #   exec   → always re-run opponent entrypoint() in a subprocess (safe for closures)

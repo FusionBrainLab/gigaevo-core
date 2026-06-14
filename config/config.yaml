@@ -2,10 +2,7 @@ defaults:
   - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - storage: redis         # Program/archive storage backend (override with storage=disk)
   - /migration_bus: disabled
-  - llms@memory_llm: null   # Shared memory-LLM router; ideas_tracker/memory groups override it
-  - memory/backend: null    # Shared card-bank backend; ideas_tracker/memory groups override it
-  - ideas_tracker: none    # Post-run ideas analysis (override with ideas_tracker=default)
-  - memory: none           # Memory provider (override with memory=local for treatment arms)
+  - memory: none           # Memory subsystem: none | reader | writer | full (one assembled MemorySystem node)
   - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
   - chains/runner: none    # Chain runner preset for chain-task problems (override with chains/runner=simple|dataset|metrics|self_critic*)
@@ -21,7 +18,3 @@ problem:
 # run dir for isolation across concurrent runs. Override on the CLI
 # (`checkpoint_dir=/abs/path`) to share a card bank across runs.
 checkpoint_dir: ${hydra:runtime.output_dir}/memory
-
-# Card-bank namespace for the deprecated legacy API backend
-# (memory=legacy_api requires it: `namespace=<ns>`). Unused by memory=local.
-namespace: null

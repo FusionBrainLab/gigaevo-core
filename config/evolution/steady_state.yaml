@@ -26,5 +26,5 @@ evolution_engine:
   writer: ${ref:writer}
   metrics_tracker: ${metrics_tracker}
   pre_step_hook: ${pre_step_hook}
-  post_run_hook: ${ref:ideas_tracker}
+  post_run_hook: ${ref:memory::tracker}
   post_step_hook: ${post_step_hook}

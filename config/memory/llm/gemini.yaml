@@ -1,6 +1,5 @@
-# Memory-subsystem LLM router (OpenRouter Gemini Flash). Composed once at
-# top-level `memory_llm`; all consumers share the instance via `${ref:memory_llm}`
-# (memory.backend.llm also accepts null).
+# Memory-subsystem LLM router (OpenRouter Gemini Flash) — the default writer/
+# enrichment model (cheaper than evolution's). Swap with `memory/llm=qwen_instruct`.
 _target_: gigaevo.llm.models.MultiModelRouter
 _convert_: all
 name: memory
@@ -19,6 +18,6 @@ probabilities:
 max_concurrent: 100
 writer: ${ref:writer}
 # auto: negotiate json_schema -> function_calling -> json_mode per endpoint and
-# cache the winner, so any model this router points at (OpenRouter Gemini, the
-# in-cluster Qwen vLLM proxy that rejects forced tool_choice, ...) just works.
+# cache the winner, so this one router serves OpenRouter Gemini and the in-cluster
+# Qwen vLLM proxy (which rejects forced tool_choice) without per-run tuning.
 structured_output_method: auto

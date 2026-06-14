@@ -80,22 +80,14 @@ class TestHydraComposition:
         ("leaf", "cls"),
         [
             ("sign_based.yaml", SignBasedAdmitter),
-            ("permissive.yaml", PermissiveAdmitter),
         ],
     )
     def test_admitter_group(self, leaf, cls):
-        root = OmegaConf.create(
-            {
-                "memory": {
-                    "reputation": self._load("reputation", "beta_binomial.yaml"),
-                    "admitter": self._load("admitter", leaf),
-                }
-            }
-        )
-        obj = instantiate(root.memory.admitter)
+        # _partial_ leaf: MemorySystem completes it with the shared reputation.
+        rep = instantiate(self._load("reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("admitter", leaf))(reputation=rep)
         assert isinstance(obj, cls)
-        if hasattr(obj, "reputation"):
-            assert obj.reputation == BetaBinomialReputation()
+        assert obj.reputation == BetaBinomialReputation()
 
     def test_auction_group(self):
         obj = instantiate(self._load("auction", "thompson.yaml"))
@@ -129,15 +121,9 @@ class TestHydraComposition:
         assert cfg.weights.description_task_description_summary == 0.15
 
     def test_evictor_harm_group(self):
-        root = OmegaConf.create(
-            {
-                "memory": {
-                    "reputation": self._load("reputation", "beta_binomial.yaml"),
-                    "evictor": self._load("evictor", "harm.yaml"),
-                }
-            }
-        )
-        obj = instantiate(root.memory.evictor)
+        # _partial_ leaf: MemorySystem completes it with the shared reputation.
+        rep = instantiate(self._load("reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("evictor", "harm.yaml"))(reputation=rep)
         assert isinstance(obj, HarmEvictor)
         assert obj.reputation == BetaBinomialReputation()
 

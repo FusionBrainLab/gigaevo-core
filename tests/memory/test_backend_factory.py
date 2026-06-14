@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import warnings
-
-from loguru import logger
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.backend_factory import (
-    LegacyApiMemoryBackendFactory,
     LocalMemoryBackendFactory,
     MemoryBackendFactory,
 )
@@ -157,116 +153,3 @@ class TestLlmWiring:
         _capture(monkeypatch, LocalMemoryBackendFactory)
         cfg = LocalMemoryBackendFactory(checkpoint_dir=tmp_path).build().config
         assert cfg.embedding_model_name == "all-MiniLM-L6-v2"
-
-    def test_legacy_factory_forwards_llm(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            LegacyApiMemoryBackendFactory,
-            "backend_class",
-            lambda self: _CaptureBackend,
-        )
-        llm = object()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            factory = LegacyApiMemoryBackendFactory(
-                checkpoint_dir=tmp_path, llm=llm, namespace="exp9"
-            )
-        assert factory.build().kwargs["llm_service"] is llm
-
-
-class TestLegacyApiFactory:
-    def test_is_a_memory_backend_factory(self):
-        assert issubclass(LegacyApiMemoryBackendFactory, MemoryBackendFactory)
-
-    def test_instantiation_warns_deprecated(self, tmp_path):
-        with pytest.warns(DeprecationWarning):
-            LegacyApiMemoryBackendFactory(checkpoint_dir=tmp_path)
-
-    def test_builds_api_backend_with_connection_kwargs(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            LegacyApiMemoryBackendFactory,
-            "backend_class",
-            lambda self: _CaptureBackend,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            factory = LegacyApiMemoryBackendFactory(
-                checkpoint_dir=tmp_path,
-                base_url="http://memory:9000",
-                namespace="exp9",
-                channel="latest",
-            )
-        memory = factory.build()
-        assert memory.kwargs["base_url"] == "http://memory:9000"
-        assert memory.kwargs["namespace"] == "exp9"
-        assert memory.kwargs["use_api"] is True
-        assert memory.kwargs["checkpoint_path"] == str(tmp_path)
-
-    def test_backend_init_failure_raises_storage_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            LegacyApiMemoryBackendFactory,
-            "backend_class",
-            lambda self: _ExplodingBackend,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            factory = LegacyApiMemoryBackendFactory(
-                checkpoint_dir=tmp_path, namespace="exp9"
-            )
-        with pytest.raises(MemoryStorageError):
-            factory.build()
-
-    def test_namespace_accepts_none_at_instantiation(self, tmp_path):
-        # config.yaml has namespace: null, so the composed node arrives as None;
-        # the factory must instantiate and defer the failure to build().
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            factory = LegacyApiMemoryBackendFactory(
-                checkpoint_dir=tmp_path, namespace=None
-            )
-        assert factory.namespace is None
-
-    def test_build_without_namespace_raises_storage_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            LegacyApiMemoryBackendFactory,
-            "backend_class",
-            lambda self: _CaptureBackend,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            factory = LegacyApiMemoryBackendFactory(checkpoint_dir=tmp_path)
-        with pytest.raises(MemoryStorageError, match="namespace"):
-            factory.build()
-
-    def _legacy_factory(self, tmp_path, monkeypatch) -> LegacyApiMemoryBackendFactory:
-        monkeypatch.setattr(
-            LegacyApiMemoryBackendFactory,
-            "backend_class",
-            lambda self: _CaptureBackend,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            return LegacyApiMemoryBackendFactory(
-                checkpoint_dir=tmp_path, namespace="exp9"
-            )
-
-    def test_build_warns_when_injected_components_are_dropped(
-        self, tmp_path, monkeypatch
-    ):
-        factory = self._legacy_factory(tmp_path, monkeypatch)
-        messages: list[str] = []
-        handler_id = logger.add(messages.append, level="WARNING")
-        try:
-            factory.build(evictor=object(), deduplicator=object())
-        finally:
-            logger.remove(handler_id)
-        assert any("evictor" in m and "deduplicator" in m for m in messages)
-
-    def test_build_silent_when_no_components_injected(self, tmp_path, monkeypatch):
-        factory = self._legacy_factory(tmp_path, monkeypatch)
-        messages: list[str] = []
-        handler_id = logger.add(messages.append, level="WARNING")
-        try:
-            factory.build()
-        finally:
-            logger.remove(handler_id)
-        assert not any("evictor" in m for m in messages)

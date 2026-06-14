@@ -2,10 +2,11 @@
 
 ``PostRunHook`` is the ABC; concrete implementations are injected via Hydra.
 
-- ``NullPostRunHook`` — no-op (default: ``ideas_tracker=none``)
+- ``NullPostRunHook`` — no-op (writer off: ``memory=none`` or ``memory=reader``)
 - ``IncrementalPostRunHook`` — abstract extension that also supports mid-run
   refreshes via ``run_increment`` (required by ``LiveMemoryRefreshHook``)
-- ``IdeaTracker`` — analyses programs and classifies ideas (``ideas_tracker=default``)
+- ``IdeaTracker`` — analyses programs and classifies ideas (writer on:
+  ``memory=writer`` or ``memory=full``)
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ class IncrementalPostRunHook(PostRunHook):
 
 
 class NullPostRunHook(PostRunHook):
-    """No-op hook. Default when ``ideas_tracker=none``."""
+    """No-op hook. Default when the writer is off (``memory=none`` or ``memory=reader``)."""
 
     async def on_run_complete(self, storage: ProgramStorage) -> None:
         pass

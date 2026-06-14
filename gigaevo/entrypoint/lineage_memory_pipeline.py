@@ -14,7 +14,7 @@ Two related builders share most of their DAG structure:
       cross-population cards is dropped entirely).
     - No ``LiveMemoryRefreshHook`` is wired by the matching YAML — when an
       end-of-run extractor is desired the user opts in with
-      ``ideas_tracker=default`` (post_run_hook only; no mid-run refresh).
+      ``memory=writer`` (post_run_hook only; no mid-run refresh).
 
 * :class:`IntraExtraMemoryPipelineBuilder` (used by
   ``pipeline=intra_extra_memory``) is a subclass that re-adds the extra
@@ -101,7 +101,7 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
 
     Used by ``pipeline=standard``. The end-of-run external-memory extractor
     (IdeaTracker) is independent of this builder — opt in by passing
-    ``ideas_tracker=default`` on the CLI; the cards it writes are available
+    ``memory=writer`` on the CLI; the cards it writes are available
     for subsequent runs that use ``pipeline=intra_extra_memory``, but they
     are NOT consumed by this builder's DAG.
     """
@@ -325,13 +325,15 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     :class:`LiveMemoryRefreshHook` into the engine's ``post_step_hook`` so the
     extra cards are refreshed mid-run.
 
-    REQUIRED CLI co-overrides (the YAML cannot safely flip these from inside
+    REQUIRED CLI co-override (the YAML cannot safely flip this from inside
     the ``pipeline/`` config group):
 
-        ideas_tracker=default   — IdeaTracker is what LiveMemoryRefreshHook calls.
-        memory=local            — MemoryReadPipeline reads the local card store
-                                  that IdeaTracker writes to between refreshes.
-        OPENROUTER_API_KEY=...  — GAM extra-memory agents call OpenRouter directly.
+        memory=full             — assembles ONE MemorySystem providing BOTH the
+                                  SelectorMemoryProvider this builder READS and the
+                                  IdeaTracker the LiveMemoryRefreshHook WRITES, sharing
+                                  one card bank; memory=none collapses both to no-ops.
+        OPENROUTER_API_KEY=...  — GAM extra-memory agents call OpenRouter directly
+                                  (default memory/llm=gemini; swap memory/llm=qwen_instruct).
 
     Verify ``.hydra/config.yaml`` does not show ``Null*`` targets, and that
     ``/proc/<pid>/environ`` contains the OpenRouter key, before trusting

@@ -50,7 +50,7 @@ async def run_experiment(cfg: DictConfig) -> None:
 
         log_memory_arm_banner(
             provider=config_with_instances.memory.provider,
-            tracker=config_with_instances.ideas_tracker,
+            tracker=config_with_instances.memory.tracker,
             post_step_hook=config_with_instances.get("post_step_hook"),
             pipeline_builder=config_with_instances.get("pipeline_builder"),
         )

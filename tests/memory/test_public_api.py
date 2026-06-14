@@ -19,6 +19,7 @@ def test_all_exports_complete():
         "MemoryCard",
         "MemoryCardExplanation",
         "MemoryConfig",
+        "MemorySystem",
         "ProgramCard",
         "Strategy",
         "normalize_memory_card",
@@ -39,6 +40,7 @@ def test_import_from_package_root():
         MemoryCard,
         MemoryCardExplanation,
         MemoryConfig,
+        MemorySystem,
         ProgramCard,
         Strategy,
         normalize_memory_card,
@@ -56,6 +58,7 @@ def test_import_from_package_root():
     assert MemoryCardExplanation is not None
     assert LocalMemorySnapshot is not None
     assert MemoryConfig is not None
+    assert MemorySystem is not None
     assert Strategy is not None
 
 

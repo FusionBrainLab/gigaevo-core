@@ -14,14 +14,14 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 4. [How Memory Flows Through the Pipeline](#how-memory-flows-through-the-pipeline)
 5. [Architecture: The Provider Pattern](#architecture-the-provider-pattern)
 6. [Configuration Reference](#configuration-reference)
-   - [Provider selection (memory=...)](#provider-selection-memoryname)
+   - [Preset selection (memory=...)](#preset-selection-memoryname)
    - [Component groups](#component-groups)
-   - [Backend factories](#backend-factories)
-   - [The memory LLM (config/llms/)](#the-memory-llm-configllms)
+   - [Backend factory](#backend-factory)
+   - [The memory LLM (config/memory/llm/)](#the-memory-llm-configmemoryllm)
 7. [The Ideas Tracker (Write Phase)](#the-ideas-tracker-write-phase)
    - [What It Does](#what-it-does)
    - [Two Entry Points: PostRunHook vs CLI](#two-entry-points-postrunhook-vs-cli)
-   - [Hydra Config Group (ideas_tracker=...)](#ideas-tracker-hydra-config-group)
+   - [The Writer Side of memory= (config/memory/tracker/)](#the-writer-side-of-memory-configmemorytracker)
    - [CLI Reference](#cli-reference)
    - [CLI Examples](#cli-examples)
    - [Pipeline Internals](#pipeline-internals)
@@ -43,12 +43,13 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 ## The 30-Second Version
 
 ```bash
-python run.py memory=none  ...   # No memory (default)
-python run.py memory=local ...   # Memory from local backend
-python run.py memory=legacy_api ...  # DEPRECATED: remote API backend
+python run.py memory=none   ...  # No memory (default): reader off, writer off
+python run.py memory=reader ...  # Inject cards from an existing bank; no extraction
+python run.py memory=writer ...  # Extract/enrich cards for a LATER run; inject nothing
+python run.py memory=full   ...  # Reader + writer share ONE card bank
 ```
 
-One Hydra override. Everything else is automatic.
+One Hydra override assembles the whole `MemorySystem`. Everything else is automatic.
 
 ---
 
@@ -104,7 +105,7 @@ The memory system has two completely separate phases:
 ╠═══════════════════════════════════════════════════════════════════╣
 ║                      READ PHASE                                   ║
 ║                                                                   ║
-║  Evolution Run B (memory=local) ──> DAG pipeline                  ║
+║  Evolution Run B (memory=reader) ──> DAG pipeline                 ║
 ║                                       │                           ║
 ║                                       ▼                           ║
 ║                              MemoryContextStage                   ║
@@ -179,8 +180,8 @@ When `memory=none`:
 - MutationContextStage skips the empty memory section
 - Everything works exactly as if the stage didn't exist
 
-When `memory=local` or `memory=legacy_api`:
-- MemoryContextStage uses SelectorMemoryProvider
+When `memory=reader` or `memory=full`:
+- MemoryContextStage uses SelectorMemoryProvider (the `MemorySystem.provider`)
 - Queries the memory database for relevant cards
 - Returns formatted card text
 - MutationContextStage includes it in the composite context
@@ -205,8 +206,12 @@ Two implementations:
 
 | Provider | Config | What it does |
 |----------|--------|-------------|
-| `NullMemoryProvider` | `memory=none` | Returns empty. Zero overhead. Default. |
-| `SelectorMemoryProvider` | `memory=local` or `memory=legacy_api` | Queries memory DB via a `MemoryReadPipeline` (retrieve → shortlist → auction → budget → render) |
+| `NullMemoryProvider` | `memory=none` or `memory=writer` (reader off) | Returns empty. Zero overhead. |
+| `SelectorMemoryProvider` | `memory=reader` or `memory=full` (reader on) | Queries memory DB via a `MemoryReadPipeline` (retrieve → shortlist → auction → budget → render) |
+
+The provider is reached as `MemorySystem.provider`; consumers wire to it via
+`${ref:memory::provider}`. When the reader is off (`memory=none`,
+`memory=writer`) that ref resolves to a `NullMemoryProvider`.
 
 ### Why a provider instead of a flag?
 
@@ -228,36 +233,48 @@ flag that gates code paths. Benefits:
 ## Configuration Reference
 
 Memory is configured entirely through Hydra — there is no side-loaded YAML and
-no environment-variable cascade. Three pieces compose together:
+no environment-variable cascade. ONE knob assembles everything:
 
-1. **Provider selection** (`config/memory/{none,local,legacy_api}.yaml`) —
-   selected via `memory=<name>` on the command line.
+1. **Preset selection** (`config/memory/{none,reader,writer,full}.yaml`) —
+   selected via `memory=<name>` on the command line. Each preset assembles a
+   single `MemorySystem` node (`gigaevo/memory/system.py`,
+   `_target_: gigaevo.memory.MemorySystem`) that owns BOTH the read side and
+   the write side. Two booleans inside that node — `reader_enabled` /
+   `writer_enabled` — are what each preset flips.
 2. **Per-component groups** (`config/memory/<group>/*.yaml`) — one group per
    pipeline stage; each nests under `memory.<group>` (Hydra's natural
-   packaging, no `@package` splats) and is injected into the provider via
+   packaging, no `@package` splats) and is injected into the `MemorySystem` via
    `${ref:...}` so every consumer shares one instance per component.
-3. **The memory LLM** (`config/llms/*.yaml`) — a `MultiModelRouter` composed
-   ONCE at the root-registered `memory_llm` entry and shared by every
-   consumer via `${ref:memory_llm}`.
+3. **The memory LLM** (`config/memory/llm/*.yaml`) — a `MultiModelRouter`
+   shared by every consumer. The writer side spends money on `memory/llm`.
 
-Two singletons are registered as null base entries in `config/config.yaml`
-(`llms@memory_llm: null`, `memory/backend: null`); the `memory=` and
-`ideas_tracker=` groups override them, so the read side and the write side
-share ONE router and ONE card-bank backend factory. The `${ref:...}` resolver
-instantiates a node on first access and writes the instance back into the
-config tree, so later refs return the same object.
+The `MemorySystem` threads the shared memory LLM and the single dedup config
+into ONE backend in Python — not via a `${ref:memory.*}` YAML web. It exposes
+`.provider` (a `NullMemoryProvider` when the reader is off) and `.tracker` (a
+`NullPostRunHook` when the writer is off). Consumers wire to it via
+`${ref:memory::provider}` (read side) and `${ref:memory::tracker}` (write
+side). The `${ref:...}` resolver instantiates a node on first access and writes
+the instance back into the config tree, so later refs return the same object.
 
-### Provider selection (`memory=<name>`)
+### Preset selection (`memory=<name>`)
 
 ```
 config/memory/
-  none.yaml        →  NullMemoryProvider (default)
-  local.yaml       →  SelectorMemoryProvider over the local card bank
-  legacy_api.yaml  →  DEPRECATED: SelectorMemoryProvider over the HTTP API backend
+  none.yaml    →  reader off + writer off  (NullMemoryProvider + NullPostRunHook)
+  reader.yaml  →  reader on  + writer off  (inject from an existing bank; no extraction)
+  writer.yaml  →  reader off + writer on   (extract/enrich cards for a LATER run; inject nothing)
+  full.yaml    →  reader on  + writer on   (reader + writer share ONE card bank)
 ```
 
-`local.yaml` wires every stage explicitly — what you see in the config is
-exactly what the provider receives:
+| Preset | reader | writer | What runs | Cost |
+|--------|--------|--------|-----------|------|
+| `memory=none` | off | off | `NullMemoryProvider` + `NullPostRunHook` | none |
+| `memory=reader` | on | off | injects cards from an existing bank; no extraction | read only |
+| `memory=writer` | off | on | extracts/enriches cards into a bank for a LATER run; injects nothing | memory/llm spend |
+| `memory=full` | on | on | reader + writer share ONE card bank | memory/llm spend |
+
+Each preset wires the `MemorySystem` from the per-component groups — what you
+see in the config is exactly what the system receives:
 
 ```yaml
 defaults:
@@ -269,93 +286,102 @@ defaults:
   - admitter: sign_based
   - dedup: llm
   - evictor: harm
+  - tracker: ideas
+  - backend: local
+  - llm: gemini
   - _self_
-  - override /memory/backend@_global_.memory.backend: local
-  - override /llms@_global_.memory_llm: gemini_flash_openrouter
 
-provider:
-  _target_: gigaevo.memory.provider.SelectorMemoryProvider
-  max_cards: 1
-  checkpoint_dir: ${checkpoint_dir}
-  backend: ${ref:memory.backend}
-  retriever: ${ref:memory.retriever}
-  selector: ${ref:memory.selector}
-  auctioneer: ${ref:memory.auction}
-  budgeter: ${ref:memory.budget}
-  reputation: ${ref:memory.reputation}
+_target_: gigaevo.memory.MemorySystem
+reader_enabled: true
+writer_enabled: true
+max_cards: 1
+checkpoint_dir: ${checkpoint_dir}
 ```
 
-The `dedup`/`evictor` singletons composed here are write-side components: the
-provider's read backend never ingests, so `config/ideas_tracker/*.yaml` picks
-them up (`evictor: ${ref:memory.evictor}`, `deduplicator: ${ref:memory.dedup}`)
-and IdeaTracker threads them into the write pipeline, which sweeps confidently
-harmful cards after each ingest pass.
+The `dedup`/`evictor` singletons are write-side components: the read backend
+never ingests, so the `MemorySystem` threads them into the write pipeline,
+which sweeps confidently harmful cards after each ingest pass.
 
-Swap a stage by overriding its group, tune a knob by path:
+Swap a stage by overriding its group, tune a knob by path, switch the writer
+LLM by its group:
 
 ```bash
-python run.py memory=local \
-  memory/admitter=permissive \
+python run.py memory=full \
+  memory/llm=qwen_instruct \
   memory.auction.baseline_prior=[5,2] \
   memory.retriever.pipeline_mode=experimental \
   checkpoint_dir=/workspace/experiments/hover/memory_store \
   problem.name=chains/hover/static
 ```
 
+#### Asymmetric guards under `pipeline=intra_extra_memory`
+
+The two sides of the knob fail differently under this pipeline — this is the #1
+trap:
+
+- **Writer guard RAISES.** `LiveMemoryRefreshHook.__init__` raises `TypeError`
+  unless its tracker is a real `IncrementalPostRunHook`. So the writer-off
+  presets (`memory=none`, `memory=reader`) FAIL FAST at startup under this
+  pipeline.
+- **Reader guard only WARNS.** `IntraExtraMemoryPipelineBuilder.__init__` only
+  warns (never raises) on a `NullMemoryProvider`, because `memory=writer` is a
+  LEGITIMATE write-cost-controlled baseline (cards written by the tracker, never
+  injected). `memory=full` turns the read path back on.
+- **A true no-memory baseline is `pipeline=standard memory=none`** — both sides
+  off, no guard fires.
+
 ### Component groups
 
 | Group | Variants | Class | Role |
 |-------|----------|-------|------|
-| `memory/backend` | `local`, `legacy_api` | `LocalMemoryBackendFactory` / `LegacyApiMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
+| `memory/backend` | `local` | `LocalMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
 | `memory/retriever` | `gam` | `GamRetriever` | Agentic GAM search (tools, top-k, `pipeline_mode`) |
 | `memory/selector` | `llm` | `LLMCardSelector` | Picks cards from retrieval hits |
 | `memory/auction` | `thompson` | `ThompsonAuctioneer` | Thompson-sampling card auction |
 | `memory/budget` | `top_theta` | `TopThetaBudgeter` | Caps cards per injection |
 | `memory/reputation` | `beta_binomial` | `BetaBinomialReputation` | Per-card efficacy posterior |
-| `memory/admitter` | `sign_based`, `permissive` | `SignBasedAdmitter` / `PermissiveAdmitter` | Write-side admission gate |
-| `memory/dedup` | `llm`, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (via `ideas_tracker` → write pipeline) |
-| `memory/evictor` | `harm` | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (via `ideas_tracker` → write pipeline) |
+| `memory/admitter` | `sign_based` | `SignBasedAdmitter` | Write-side admission gate |
+| `memory/dedup` | `llm`, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (threaded into the write pipeline) |
+| `memory/evictor` | `harm` | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the write pipeline) |
+| `memory/tracker` | `ideas` | `IdeaTracker` | Writer side of `memory=` (extracts/enriches cards) |
+| `memory/llm` | `gemini`, `qwen_instruct` | `MultiModelRouter` | The memory LLM (writer-side spend) |
 
-### Backend factories
+### Backend factory
 
+The `memory/backend` sub-group has exactly ONE backend.
 `config/memory/backend/local.yaml` instantiates
-`gigaevo.memory.backend_factory.LocalMemoryBackendFactory`; the deprecated
-`legacy_api.yaml` instantiates `LegacyApiMemoryBackendFactory` (emits a
-`DeprecationWarning`; kept only so historical experiments reproduce). Factories
-are plain pydantic models — every knob (`checkpoint_dir`,
-`embedding_model_name`, `search_limit`, `rebuild_interval`, legacy
-`base_url`/`namespace`/`channel`/`sync_*`) is a Hydra field. `build()` runs
-lazily on first card selection and raises `MemoryStorageError` on failure
-rather than degrading to a no-memory run.
+`gigaevo.memory.backend_factory.LocalMemoryBackendFactory`. Factories are plain
+pydantic models — every knob (`checkpoint_dir`, `embedding_model_name`,
+`search_limit`, `rebuild_interval`) is a Hydra field. `build()` runs lazily on
+first card selection and raises `MemoryStorageError` on failure rather than
+degrading to a no-memory run.
 
-### The memory LLM (`config/llms/`)
+### The memory LLM (`config/memory/llm/`)
 
-The router composes ONCE at the root-registered `memory_llm` entry (the
-`memory=` and `ideas_tracker=` groups both override
-`/llms@_global_.memory_llm: gemini_flash_openrouter`); the backend factory
-points at it via `llm: ${ref:memory_llm}`. The node is a
-`gigaevo.llm.models.MultiModelRouter` with `name: memory`, so its token usage
-is tracked separately from the evolution LLM under
-`llm/tokens/memory/<model>/...`. The only environment variable involved is the
-credential, read as `${oc.env:OPENROUTER_API_KEY}` — model id, endpoint,
+The writer side spends money on `memory/llm`. The default is `gemini`; swap it
+with `memory/llm=qwen_instruct`. The `MemorySystem` threads this one router into
+the backend in Python — the read side changes fitness, the writer side spends
+the tokens. The node is a `gigaevo.llm.models.MultiModelRouter` with
+`name: memory`, so its token usage is tracked separately from the evolution LLM
+under `llm/tokens/memory/<model>/...`. The only environment variable involved is
+the credential, read as `${oc.env:OPENROUTER_API_KEY}` — model id, endpoint,
 temperature, reasoning effort, and `structured_output_method` are all YAML
-fields. Switch the memory LLM off with `memory.backend.llm=null`.
+fields.
 
-The ideas-tracker analyzer shares the SAME router instance
-(`llm: ${ref:memory_llm}` in `config/ideas_tracker/*.yaml`), so analyzer
-traffic is also booked under `llm/tokens/memory/<model>/...`. Standalone CLI
-runs build an equivalent router from `--model`/`--base-url`/`--api-key`.
+The ideas-tracker analyzer (the writer side) shares the SAME router instance, so
+analyzer traffic is also booked under `llm/tokens/memory/<model>/...`. Standalone
+CLI runs build an equivalent router from `--model`/`--base-url`/`--api-key`.
 
 #### Which settings matter most?
 
 | Setting | Where | Why it matters |
 |---------|-------|---------------|
-| `memory.provider.max_cards` | `config/memory/local.yaml` | How many cards reach the prompt per mutation |
+| `memory.max_cards` | `config/memory/{reader,full}.yaml` | How many cards reach the prompt per mutation |
 | `memory.retriever.pipeline_mode` | `memory/retriever/gam.yaml` | `experimental` = multi-tool agentic retrieval (required by the selector) |
 | `memory.retriever.allowed_tools` | `memory/retriever/gam.yaml` | Which GAM search tools the agent may call |
 | `memory.dedup.config.enabled` | `memory/dedup/llm.yaml` | LLM dedup on card writes |
 | `checkpoint_dir` | command line | Where the card bank lives on disk |
-| `memory/backend` | command line | `local` (canonical) vs `legacy_api` (deprecated) |
+| `memory/llm` | command line | Writer LLM: `gemini` (default) vs `qwen_instruct` |
 
 Everything else has sane defaults.
 
@@ -407,11 +433,11 @@ The IdeaTracker has two ways to run:
                     └──────────────────────────────────┘
 ```
 
-**PostRunHook** (preferred for experiments): Set `ideas_tracker=default` or
-`ideas_tracker=fast` in your Hydra command. The engine fires
-`on_run_complete(storage)` in its `run()` method's `finally` block after
-evolution completes. Hook errors are caught and logged — they never crash the
-engine.
+**PostRunHook** (preferred for experiments): Turn the writer on with
+`memory=writer` (build-only) or `memory=full` (read+write) in your Hydra
+command. The engine fires `on_run_complete(storage)` in its `run()` method's
+`finally` block after evolution completes. Hook errors are caught and logged —
+they never crash the engine.
 
 **CLI** (for re-running on existing data): Use when you want to re-extract
 ideas from a run that's already in Redis, or from a CSV export. Useful for
@@ -419,39 +445,18 @@ debugging, re-processing, or running on archived data.
 
 Both entry points call the same internal `_run_on_programs()` pipeline.
 
-### Ideas Tracker Hydra Config Group
+### The Writer Side of `memory=` (`config/memory/tracker/`)
 
-Located in `config/ideas_tracker/`. Selected via `ideas_tracker=<name>`.
+The IdeaTracker is the WRITER SIDE of the `memory=` knob. The `memory=writer`
+and `memory=full` presets flip `writer_enabled: true`; `memory=none` and
+`memory=reader` leave it off, so `MemorySystem.tracker` resolves to a
+`NullPostRunHook`. Consumers wire to it via `${ref:memory::tracker}`.
 
-```
-config/ideas_tracker/
-  none.yaml      →  NullPostRunHook (no-op, default)
-  default.yaml   →  IdeaTracker with default LLM analyzer
-  fast.yaml      →  IdeaTracker with fast embedding+DBSCAN analyzer
-  true.yaml      →  backward compat alias for default.yaml
-```
+There is a single tracker config — `config/memory/tracker/ideas.yaml` — with no
+`fast` vs `default` split:
 
-The default is set in `config/config.yaml`:
 ```yaml
-defaults:
-  - ideas_tracker: none
-```
-
-#### `config/ideas_tracker/none.yaml`
-```yaml
-_target_: gigaevo.evolution.engine.hooks.NullPostRunHook
-```
-
-#### `config/ideas_tracker/default.yaml`
-```yaml
-defaults:
-  - _self_
-  - override /memory/backend@_global_.memory.backend: local
-  - override /llms@_global_.memory_llm: gemini_flash_openrouter
-
 _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
-llm: ${ref:memory_llm}
-backend: ${ref:memory.backend}
 analyzer_type: default
 analyzer_max_concurrent_classifications: 8
 description_rewriting: true
@@ -460,34 +465,25 @@ memory_write_best_programs_percent: 5.0
 fitness_higher_is_better: ${higher_is_better}
 checkpoint_dir: ${checkpoint_dir}
 redis_prefix: ${problem.name}
-admitter: ${ref:memory.admitter}
 ```
 
-The tracker shares the SAME `memory_llm` router and `memory.backend` factory
-as the `memory=` read side — both are root-registered singletons resolved via
-`${ref:...}`. With `memory=none` the `admitter` ref resolves to null
-(`SignBasedAdmitter` fallback inside the tracker); with `memory=local` the
-tracker rides the composed admitter (sign-based by default).
-
-#### `config/ideas_tracker/fast.yaml`
-
-Same structure as `default.yaml` but with:
-- `analyzer_type: fast` — uses sentence embeddings + DBSCAN clustering
-- `analyzer_fast_settings:` — embedding model, DBSCAN parameters, batch sizes
+The `MemorySystem` threads the shared `memory/llm` router, the `memory/backend`
+factory, the `memory/admitter`, and the single dedup config into the tracker in
+Python — the tracker does not assemble its own `${ref:memory.*}` web. The
+tracker uses the same router and backend instance as the read side, so its
+token usage is booked under `llm/tokens/memory/<model>/...`.
 
 #### Parameter reference
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `analyzer_type` | str | `"default"` | `"default"` = LLM-based sequential analysis. `"fast"` = embedding+DBSCAN batched analysis. |
-| `llm` | MultiModelRouter | `${ref:memory_llm}` | Shared analyzer LLM router (model, endpoint, credential, reasoning all live in `config/llms/gemini_flash_openrouter.yaml`) |
 | `analyzer_max_concurrent_classifications` | int | `8` | Max concurrent classification LLM calls inside `ClassifyingAnalyzer` |
 | `description_rewriting` | bool | `true` | Allow the LLM to rewrite idea descriptions |
 | `memory_write_enabled` | bool | `true` | Write extracted ideas to the memory database |
 | `memory_write_best_programs_percent` | float | `5.0` | Share of top programs (by fitness) the write pipeline converts into program cards |
 | `fitness_higher_is_better` | bool | `${higher_is_better}` | Metric direction; gains are stored in "positive = improvement" space |
-| `admitter` | MemoryAdmitter or null | from `memory=` group | Admission gate for `best_ideas.json` (null → `SignBasedAdmitter`) |
-| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). The same path must be used in Phase A (write) and Phase B (read) so the memory bank persists between phases. |
+| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). The same path must be used in the build phase (writer) and the read phase (reader) so the memory bank persists between phases. |
 | `redis_prefix` | str | `${problem.name}` | Redis key prefix for loading programs |
 
 ### CLI Reference
@@ -614,12 +610,11 @@ When `memory_write_enabled=true`, after idea extraction completes:
    are selected from the idea banks
 2. Per-idea efficacy statistics (Beta-Binomial injection posterior) are
    carried in each card's `evolution_statistics`
-3. Cards are written to the memory backend:
-   - **Local**: JSON files in `checkpoint_dir` with a search index
-   - **API**: Posted to the memory API service via the configured namespace
+3. Cards are written to the local memory backend (`memory/backend=local`, the
+   only backend): JSON files in `checkpoint_dir` with a search index
 
 The write pipeline receives its backend factory by injection: the PostRunHook
-path gets the run's shared `memory.backend` singleton (the same factory the
+path gets the `MemorySystem`'s shared backend factory (the same instance the
 read-side provider uses), and the ideas-tracker CLI constructs a
 `LocalMemoryBackendFactory` directly.
 
@@ -679,8 +674,8 @@ of the specified directory.
 
 ## The Memory Search (Read Phase)
 
-When `memory=local` or `memory=legacy_api`, here's what happens on each program
-evaluation:
+When the reader is on (`memory=reader` or `memory=full`), here's what happens on
+each program evaluation:
 
 1. **`MemoryContextStage`** calls `SelectorMemoryProvider.select_cards()`
 2. The provider assembles a **`MemoryReadPipeline`** lazily on first call
@@ -738,17 +733,17 @@ experiment with and without memory.
 
 ### Phase A: Build the Memory Bank
 
-Run evolution with `ideas_tracker=true` (or `ideas_tracker=default`). The
-IdeaTracker fires as a PostRunHook after evolution completes and writes
-memory cards to `checkpoint_dir`.
+Run evolution with `memory=writer` (writer on, reader off). The IdeaTracker
+fires as a PostRunHook after evolution completes and writes memory cards to
+`checkpoint_dir`; nothing is injected during this run.
 
 ```bash
-# Phase A: Run evolution with IdeaTracker enabled
+# Phase A: Run evolution with the writer enabled
 python run.py \
   problem.name=chains/hover/full7_no_deep \
   pipeline=structural_metrics \
   evolution=steady_state \
-  ideas_tracker=true \
+  memory=writer \
   checkpoint_dir=experiments/hover/memory/memory_bank \
   redis.db=3 \
   max_mutants=200
@@ -792,21 +787,21 @@ python run.py \
   evolution=steady_state \
   redis.db=5
 
-# R3: treatment (memory enabled)
+# R3: treatment (reader enabled, consumes the Phase A bank)
 python run.py \
   problem.name=chains/hover/full7_no_deep \
   pipeline=structural_metrics \
   evolution=steady_state \
-  memory=local \
+  memory=reader \
   checkpoint_dir="$MEMORY_BANK" \
   redis.db=6
 
-# R4: treatment (memory enabled)
+# R4: treatment (reader enabled, consumes the Phase A bank)
 python run.py \
   problem.name=chains/hover/full7_no_deep \
   pipeline=structural_metrics \
   evolution=steady_state \
-  memory=local \
+  memory=reader \
   checkpoint_dir="$MEMORY_BANK" \
   redis.db=7
 ```
@@ -842,10 +837,12 @@ gigaevo top \
 
 | File | What it does |
 |------|-------------|
+| `gigaevo/memory/system.py` | `MemorySystem` — owns `.provider` (read side) + `.tracker` (write side) |
 | `gigaevo/memory/provider.py` | `MemoryProvider` ABC, `NullMemoryProvider`, `SelectorMemoryProvider` |
-| `config/memory/none.yaml` | Hydra config: NullMemoryProvider (default) |
-| `config/memory/local.yaml` | Hydra config: SelectorMemoryProvider (local) |
-| `config/memory/legacy_api.yaml` | Hydra config: SelectorMemoryProvider (legacy API backend) |
+| `config/memory/none.yaml` | Hydra preset: reader off + writer off (default) |
+| `config/memory/reader.yaml` | Hydra preset: reader on + writer off |
+| `config/memory/writer.yaml` | Hydra preset: reader off + writer on |
+| `config/memory/full.yaml` | Hydra preset: reader on + writer on |
 
 ### DAG Pipeline (Read Phase)
 
@@ -864,7 +861,7 @@ gigaevo top \
 |------|-------------|
 | `gigaevo/memory/provider.py` | `SelectorMemoryProvider` — assembles the read pipeline lazily |
 | `gigaevo/memory/core/read_pipeline.py` | `MemoryReadPipeline` — retrieve → shortlist → auction → budget → render |
-| `gigaevo/memory/backend_factory.py` | Lazy fail-fast backend factories (`LocalMemoryBackendFactory`, `LegacyApiMemoryBackendFactory`) |
+| `gigaevo/memory/backend_factory.py` | Lazy fail-fast backend factory (`LocalMemoryBackendFactory`) |
 | `gigaevo/memory/shared_memory/memory.py` | `AmemGamMemory` — local memory backend with GAM search |
 | `config/memory/backend/` | Hydra configs for the backend factories (checkpoint dir, embedding model, memory LLM) |
 
@@ -902,11 +899,7 @@ through on failure or empty result.
 |------|-------------|
 | `gigaevo/memory/ideas_tracker/ideas_tracker.py` | `IdeaTracker(PostRunHook)` — core pipeline orchestrator |
 | `gigaevo/memory/ideas_tracker/cli.py` | CLI entry point (`python -m gigaevo.memory.ideas_tracker.cli`) |
-| `config/ideas_tracker/none.yaml` | Hydra config: NullPostRunHook (default) |
-| `config/ideas_tracker/default.yaml` | Hydra config: IdeaTracker with default LLM analyzer |
-| `config/ideas_tracker/fast.yaml` | Hydra config: IdeaTracker with fast embedding analyzer |
-| `config/ideas_tracker/true.yaml` | Backward compat alias for `default.yaml` |
-| `config/memory.yaml` | Unified memory config (backend + ideas_tracker sections) |
+| `config/memory/tracker/ideas.yaml` | Hydra config: IdeaTracker (writer side of `memory=`) |
 
 ### Ideas Tracker Modules
 
@@ -962,10 +955,11 @@ through on failure or empty result.
 ### Memory Read Phase
 
 **Q: Does memory add latency?**
-With `memory=none`, zero. With `memory=local`, search runs on local disk
-(~50-200ms depending on card count and GAM tools). With `memory=legacy_api`, depends
-on network latency. The search runs in parallel with other DAG stages
-(insights, lineage), so the wall-clock impact is often hidden.
+With the reader off (`memory=none`, `memory=writer`), zero. With the reader on
+(`memory=reader`, `memory=full`), search runs on the local disk bank
+(~50-200ms depending on card count and GAM tools). The search runs in parallel
+with other DAG stages (insights, lineage), so the wall-clock impact is often
+hidden.
 
 **Q: Can I use memory with the steady-state engine?**
 Yes. This was the main reason for the refactor. The old implementation was
@@ -981,11 +975,12 @@ without memory guidance.
 Configurable via `max_cards` in the Hydra config (default: 3). The memory
 agent searches the database and returns the most relevant cards.
 
-**Q: What's the difference between `memory=local` and `memory=legacy_api`?**
-Both use `SelectorMemoryProvider`; they differ only in the composed backend
-factory (`config/memory/backend/local.yaml` vs `legacy_api.yaml`). `local`
-builds an on-disk `AmemGamMemory` bank; `legacy_api` builds the deprecated
-remote-API client and additionally needs `base_url`/`namespace`.
+**Q: What's the difference between `memory=reader` and `memory=full`?**
+Both turn the reader on, so both use `SelectorMemoryProvider` over the same
+`config/memory/backend/local.yaml` on-disk `AmemGamMemory` bank. They differ on
+the writer: `reader` leaves the writer off (it only consumes a bank built by an
+earlier run), while `full` also turns the writer on so the same run injects AND
+extracts cards into ONE shared bank.
 
 **Q: How does the system decide which cards are "relevant"?**
 The GAM pipeline sends the parent code + task description as a query, then
@@ -996,17 +991,18 @@ results each returns.
 
 ### Ideas Tracker (Write Phase)
 
-**Q: What's the difference between `ideas_tracker=default` and `ideas_tracker=fast`?**
+**Q: What's the difference between `analyzer_type: default` and `analyzer_type: fast`?**
 `default` uses a sequential LLM-based analyzer that processes each program
 one at a time. It classifies each improvement against the full bank of existing
 ideas. Slower but more accurate for small runs.
 `fast` uses sentence embeddings + DBSCAN clustering to batch-process all
 programs at once, then uses the LLM to refine clusters into idea cards.
-Much faster for large runs (100+ programs).
+Much faster for large runs (100+ programs). Set it on the tracker config
+(`config/memory/tracker/ideas.yaml`) or via `memory.tracker.analyzer_type=fast`.
 
 **Q: When does the IdeaTracker run?**
 Two ways: (1) **Automatically**, as a PostRunHook after evolution completes
-(`ideas_tracker=default` or `ideas_tracker=fast` in Hydra). The engine calls
+(the writer side of `memory=writer` or `memory=full`). The engine calls
 `on_run_complete(storage)` in its `run()` finally block. (2) **Manually**, via
 CLI (`python -m gigaevo.memory.ideas_tracker.cli`), typically to re-extract
 ideas from a run that's already in Redis.
@@ -1040,9 +1036,10 @@ analyze programs and log ideas — it just won't write them to the memory backen
 ### General
 
 **Q: Can I add a new memory backend?**
-Yes. Implement `MemoryProvider.select_cards()`, create a new
-`config/memory/your_backend.yaml`, and use `memory=your_backend` on the
-command line. The pipeline doesn't need any changes.
+Yes. Implement a backend factory, drop a new variant under the `memory/backend`
+group (`config/memory/backend/your_backend.yaml`), and select it with
+`memory/backend=your_backend` alongside any reader/writer preset
+(`memory=reader|writer|full`). The pipeline doesn't need any changes.
 
 **Q: Where are cards stored on disk?**
 At the path specified by `checkpoint_dir`. Inside that directory, the

@@ -1,4 +1,0 @@
-# Replay policy B: any ALL-block evidence that is not confidently harmful.
-_target_: gigaevo.memory.core.admitter.PermissiveAdmitter
-min_intro_events: 1
-reputation: ${ref:memory.reputation}

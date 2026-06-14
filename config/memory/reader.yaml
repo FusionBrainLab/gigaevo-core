@@ -1,0 +1,9 @@
+# memory=reader — read only (inject cards from a pre-seeded bank, no writer).
+# Inherits full's components; flips the writer off. Used to read a bank a prior
+# `memory=writer` run filled.
+defaults:
+  - full
+  - _self_
+
+reader_enabled: true
+writer_enabled: false

@@ -12,6 +12,8 @@ import tabular_metrics
 CV_FOLDS_ENV = "GIGAEVO_TABULAR_CV_FOLDS"
 CV_MAX_ENV = "GIGAEVO_TABULAR_CV_MAX"
 BD_MAX_ENV = "GIGAEVO_TABULAR_BD_MAX"
+FITNESS_ENV = "GIGAEVO_TABULAR_FITNESS"
+LCB_LAMBDA_ENV = "GIGAEVO_TABULAR_LCB_LAMBDA"
 
 _ALLOWED_FOLDS = {2, 3, 5, 10}
 _DEFAULT_FOLDS = 3
@@ -19,6 +21,7 @@ _DEFAULT_CV_MAX = 100_000
 _DEFAULT_BD_MAX = 2048
 _HOLDOUT_SPLITS = 5  # first fold of a 5-way split == 80/20 holdout
 _SEED = 0
+_DEFAULT_LCB_LAMBDA = 1.0  # lambda=1 == the textbook 1-standard-error rule
 
 
 def _env_int(name: str, default: int) -> int:
@@ -29,6 +32,28 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError as e:
         raise ValueError(f"{name} must be an integer; got {raw!r}") from e
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a float; got {raw!r}") from e
+
+
+def _aggregate_fitness(mean_score: float, cv_std: float, n_folds: int) -> float:
+    mode = os.environ.get(FITNESS_ENV, "mean").lower()
+    if mode == "mean":
+        return mean_score
+    if mode == "lcb":
+        if n_folds <= 1:
+            return mean_score
+        lam = _env_float(LCB_LAMBDA_ENV, _DEFAULT_LCB_LAMBDA)
+        return mean_score - lam * cv_std / np.sqrt(n_folds)
+    raise ValueError(f"{FITNESS_ENV} must be 'mean' or 'lcb'; got {mode!r}")
 
 
 def _k_folds() -> int:
@@ -101,8 +126,8 @@ class TabularProblem:
             folds.append(self._fold_metrics(ds, ds.y_train[query_idx], pred))
 
         scores = [m["score"] for m in folds]
-        fitness = float(np.mean(scores))
         cv_score_std = float(np.std(scores, ddof=1)) if len(folds) > 1 else 0.0
+        fitness = _aggregate_fitness(float(np.mean(scores)), cv_score_std, len(folds))
         secondary_keys = [k for k in folds[0] if k != "score"]
         secondary = {k: float(np.mean([m[k] for m in folds])) for k in secondary_keys}
 

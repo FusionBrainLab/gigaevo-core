@@ -2,6 +2,6 @@
 # validated by the offline median-gate vs posterior-admission replay study)
 # + not confidently harmful.
 _target_: gigaevo.memory.core.admitter.SignBasedAdmitter
+_partial_: true   # reputation injected by MemorySystem (the one shared instance)
 min_intro_events: 1
 min_median: 0.0
-reputation: ${ref:memory.reputation}

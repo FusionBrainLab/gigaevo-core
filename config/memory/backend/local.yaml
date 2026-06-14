@@ -1,9 +1,6 @@
 # Canonical local card-bank backend; all knobs are LocalMemoryBackendFactory fields.
-# The memory LLM is the shared top-level `memory_llm` router (cheaper model than
-# evolution's); switch off via `memory.backend.llm=null`.
+# MemorySystem threads in the shared memory LLM (`memory.llm`) and the single
+# dedup config (`memory.dedup.config`) once, in Python — no second copy here.
 _target_: gigaevo.memory.backend_factory.LocalMemoryBackendFactory
-llm: ${ref:memory_llm}
 checkpoint_dir: ${checkpoint_dir}
 embedding_model_name: all-MiniLM-L6-v2
-# Write-side dedup is configured once in config/memory/dedup/ (the injected
-# LLMDeduplicator's config wins over the factory's `dedup` field).

@@ -633,16 +633,17 @@ class IdeaTracker(IncrementalPostRunHook):
     Args:
         analyzer: Explicit analyser instance. When omitted, one is built from
             ``llm`` and the Hydra-style fields below.
-        llm: Memory LLM router for the analyser (Hydra ``llms`` group, composed
-            via ``/llms@ideas_tracker.llm``). Required when ``analyzer`` is None.
+        llm: Memory LLM router for the analyser (Hydra ``memory/llm`` group,
+            threaded in by ``MemorySystem``). Required when ``analyzer`` is None.
         analyzer_type: ``"default"`` → ClassifyingAnalyzer; ``"fast"`` → ClusteringAnalyzer.
         analyzer_fast_settings: Extra kwargs for ClusteringAnalyzer when ``fast``.
         memory_write_best_programs_percent: Share of top-fitness programs
             converted into program cards by the write pipeline.
         backend: Memory backend factory (Hydra ``memory/backend`` group) used
             by the write pipeline to build the card bank. Required whenever
-            ``memory_write_enabled`` is True — ideas_tracker configs share the
-            top-level ``memory.backend`` singleton via ``${ref:memory.backend}``.
+            ``memory_write_enabled`` is True — ``MemorySystem`` threads in the
+            shared backend it built for the read provider, so the writer and
+            reader share one card bank.
         checkpoint_dir: Pins per-run memory cards under the Hydra output dir.
         task_description: Human-readable description of the current task. If empty,
             loaded from the matching problems/ directory using redis_prefix.
@@ -690,19 +691,19 @@ class IdeaTracker(IncrementalPostRunHook):
         if memory_write_enabled and backend is None:
             raise ValueError(
                 "IdeaTracker: memory_write_enabled=True requires an explicit "
-                "backend factory; wire the shared `memory.backend` node (`${ref:memory.backend}`) "
-                "(ideas_tracker configs do this by default) or pass "
-                "memory_write_enabled=False."
+                "backend factory. Enable the writer via `memory=writer` or "
+                "`memory=full` (MemorySystem assembles the backend and threads "
+                "it in), or pass memory_write_enabled=False."
             )
 
         _ensure_writable_hf_cache()
         if analyzer is None:
             if llm is None:
                 raise ValueError(
-                    "IdeaTracker: building an analyzer requires an LLM router; "
-                    "compose `/llms@ideas_tracker.llm: gemini_flash_openrouter` "
-                    "(ideas_tracker configs do this by default) or pass an "
-                    "explicit analyzer."
+                    "IdeaTracker: building an analyzer requires an LLM router. "
+                    "Enable the writer via `memory=writer` or `memory=full` "
+                    "(MemorySystem threads in the `memory/llm` router; swap it "
+                    "with `memory/llm=qwen_instruct`), or pass an explicit analyzer."
                 )
             analyzer = cast(
                 Analyzer,

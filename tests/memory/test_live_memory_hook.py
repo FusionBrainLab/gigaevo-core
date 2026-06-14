@@ -167,11 +167,11 @@ async def test_empty_storage_skips_without_error():
 
 
 def test_plain_post_run_hook_rejected_at_init():
-    """`pipeline=intra_extra_memory` without `ideas_tracker=default` hands the
-    hook a NullPostRunHook; that must fail at startup, not mid-run."""
+    """`pipeline=intra_extra_memory` without the writer on (`memory=full`) hands
+    the hook a NullPostRunHook; that must fail at startup, not mid-run."""
     from gigaevo.evolution.engine.hooks import NullPostRunHook
 
-    with pytest.raises(TypeError, match="ideas_tracker=default"):
+    with pytest.raises(TypeError, match="memory=full"):
         LiveMemoryRefreshHook(
             tracker=NullPostRunHook(),  # type: ignore[arg-type]
             storage=_StubStorage([]),

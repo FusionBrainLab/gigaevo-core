@@ -151,15 +151,18 @@ See [`tests/stages/test_intra_memory_cache.py`](../tests/stages/test_intra_memor
 
 ## 6. Required co-overrides
 
-The mode depends on two upstream config nodes that Hydra's defaults-list cannot safely flip from inside `pipeline/`, so they must be passed on the CLI:
+The mode depends on one upstream config node that Hydra's defaults-list cannot safely flip from inside `pipeline/`, so it must be passed on the CLI:
 
 ```
-ideas_tracker=default    # LiveMemoryRefreshHook calls IdeaTracker.run_increment
-memory=local             # MemoryReadPipeline reads the local card store that
-                         # IdeaTracker writes to between refreshes
+memory=full              # one preset, both sides on: LiveMemoryRefreshHook
+                         # calls IdeaTracker.run_increment (writer) and
+                         # MemoryReadPipeline reads the card store it writes
+                         # to between refreshes (reader)
 ```
 
-Omit either and the live refresh silently no-ops (no error — the card store is just empty).
+Under `pipeline=intra_extra_memory` the writer-off presets (`memory=none`,
+`memory=reader`) fail fast at startup — the live-refresh hook needs a real
+tracker. A true no-memory baseline is `pipeline=standard memory=none`.
 
 ---
 
@@ -179,8 +182,7 @@ python3 run.py \
   redis.db=10 \
   num_parents=1 \
   pipeline=intra_extra_memory \
-  ideas_tracker=default \
-  memory=local \
+  memory=full \
   max_mutants=40 \
   hydra.run.dir=output/smoke_intra_extra/$(date +%Y%m%d_%H%M%S)_smoke
 ```
@@ -199,8 +201,7 @@ python3 run.py \
   redis.db=11 \
   num_parents=4 \
   pipeline=intra_extra_memory \
-  ideas_tracker=default \
-  memory=local \
+  memory=full \
   max_mutants=500 \
   hydra.run.dir=output/intra_extra_memory/$(date +%Y%m%d_%H%M%S)_heilbron
 ```
@@ -226,7 +227,7 @@ nohup python3 run.py \
   llm_base_url=http://INTERNAL_IP:4000 \
   model_name=Qwen3-235B-A22B-Thinking-2507 \
   redis.db=11 num_parents=4 \
-  pipeline=intra_extra_memory ideas_tracker=default memory=local \
+  pipeline=intra_extra_memory memory=full \
   max_mutants=500 \
   hydra.run.dir=output/intra_extra_memory/$(date +%Y%m%d_%H%M%S)_heilbron \
   > /tmp/intra_extra_run.log 2>&1 &
@@ -280,7 +281,7 @@ The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) — run on the pre-
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `MemoryContextStage` block always empty | `ideas_tracker=default memory=local` not set | Add both to the CLI. |
+| `MemoryContextStage` block always empty | `memory=full` not set | Add it to the CLI. |
 | Intra card never appears on parents | The mutator never visited any parent twice (run too short) | `max_mutants >= 2 * num_parents`. |
 | `IntraMemoryStage` runs every iteration (no cache hits) | Different `children_ids` order on each visit | Confirm `DescendantProgramIds` uses `strategy="best_fitness"`. |
 | Rendered card shows `min=-1000.0` etc. | Pre-fix build (`< 89f01be5`) | Pull main, rebuild. The current schema excludes invalid children from delta stats and routes them to `n_failed`. |

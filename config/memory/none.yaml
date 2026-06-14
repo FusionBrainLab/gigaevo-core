@@ -1,2 +1,6 @@
-provider:
-  _target_: gigaevo.memory.provider.NullMemoryProvider
+# memory=none — baseline, both switches off (the old `memory=none ideas_tracker=none`).
+# No component leaves are mounted; MemorySystem builds a NullMemoryProvider (read)
+# and a NullPostRunHook (write), so nothing is injected and no memory LLM is billed.
+_target_: gigaevo.memory.MemorySystem
+reader_enabled: false
+writer_enabled: false

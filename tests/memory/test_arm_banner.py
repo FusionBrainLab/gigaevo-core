@@ -4,9 +4,9 @@ The three paper arms differ only in which memory components Hydra wires:
 
 * arm 1  — ``pipeline=standard`` (defaults): Null provider, Null tracker,
   no post_step_hook.
-* arm 2′ — ``pipeline=intra_extra_memory ideas_tracker=default memory=none``:
+* arm 2′ — ``pipeline=intra_extra_memory memory=writer``:
   write side live, read path Null (write-cost-controlled baseline).
-* arm 3  — ``+ memory=local``: full read/write loop.
+* arm 3  — ``pipeline=intra_extra_memory memory=full``: full read/write loop.
 
 The banner makes the resolved arm verifiable from the first log lines instead
 of from ``.hydra/config.yaml`` archaeology after the run.
