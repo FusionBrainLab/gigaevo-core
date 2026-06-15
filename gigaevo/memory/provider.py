@@ -18,6 +18,7 @@ from gigaevo.memory.core import (
     Auctioneer,
     BetaBinomialReputation,
     Budgeter,
+    CardExcluder,
     CardRenderer,
     CardShortlister,
     EfficacyCardRenderer,
@@ -25,6 +26,7 @@ from gigaevo.memory.core import (
     LLMCardSelector,
     MemoryReadPipeline,
     MemorySelection,
+    NullExcluder,
     ReputationModel,
     ThompsonAuctioneer,
     TopThetaBudgeter,
@@ -90,6 +92,7 @@ class SelectorMemoryProvider(MemoryProvider):
         budgeter: Budgeter | None = None,
         renderer: CardRenderer | None = None,
         reputation: ReputationModel | None = None,
+        excluder: CardExcluder | None = None,
     ) -> None:
         self._max_cards = max_cards
         self._checkpoint_dir = checkpoint_dir
@@ -104,6 +107,7 @@ class SelectorMemoryProvider(MemoryProvider):
         self._reputation = (
             reputation if reputation is not None else BetaBinomialReputation()
         )
+        self._excluder = excluder if excluder is not None else NullExcluder()
         self._pipeline: MemoryReadPipeline | None = None
         self._build_lock = asyncio.Lock()
 
@@ -178,4 +182,6 @@ class SelectorMemoryProvider(MemoryProvider):
             task_description=task_description,
             metrics_description=metrics_description,
             max_cards=self._max_cards,
+            exclude_ids=self._excluder.exclude_for(program),
+            random_drop_dose=self._excluder.dose_for(program),
         )

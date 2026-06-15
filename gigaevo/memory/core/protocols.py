@@ -60,9 +60,26 @@ class Auctioneer(Protocol):
 class CardRetriever(Protocol):
     """Runs the backend research pass and resolves shortlisted card ids."""
 
-    def research(self, query: str, *, planning_request: str | None = None) -> Any: ...
+    def research(
+        self,
+        query: str,
+        *,
+        planning_request: str | None = None,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
+    ) -> Any: ...
 
     def get_card(self, card_id: str) -> AnyCard | None: ...
+
+
+@runtime_checkable
+class CardExcluder(Protocol):
+    """Decides which card ids must be pruned from the candidate pool BEFORE
+    retrieval ranks them (filter-first lineage gate)."""
+
+    def exclude_for(self, program: Any) -> frozenset[str]: ...
+
+    def dose_for(self, program: Any) -> int: ...
 
 
 @runtime_checkable

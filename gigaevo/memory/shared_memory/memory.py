@@ -445,6 +445,9 @@ class AmemGamMemory(GigaEvoMemoryBase):
         query: str,
         memory_state: str | None = None,
         planning_request: str | None = None,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> ResearchOutput:
         """Self-healing structured search.
 
@@ -459,6 +462,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     query,
                     memory_state=memory_state,
                     planning_request=planning_request,
+                    exclude_ids=exclude_ids,
+                    random_drop_dose=random_drop_dose,
                 )
             except Exception as exc:
                 logger.warning(

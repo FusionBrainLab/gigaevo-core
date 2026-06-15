@@ -36,6 +36,7 @@ class MemorySystem:
         budget: Any = None,
         admitter: Any = None,
         evictor: Any = None,
+        excluder: Any = None,
         provider: Any = None,
         tracker: Any = None,
     ) -> None:
@@ -59,6 +60,7 @@ class MemorySystem:
                 auctioneer=auction,
                 budgeter=budget,
                 reputation=reputation,
+                excluder=excluder,
             )
         else:
             self.provider = NullMemoryProvider()

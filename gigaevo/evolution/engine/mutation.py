@@ -7,6 +7,7 @@ from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_USED_METADATA_KEY,
     MUTATION_PARENT_STAGE_OUTPUTS_METADATA_KEY,
@@ -14,6 +15,24 @@ from gigaevo.evolution.mutation.constants import (
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
 from gigaevo.programs.program import Program
+
+
+def lineage_applied_closure(
+    *, injected_ids: list[str], parents: list[Program]
+) -> list[str]:
+    """Transitive closure of every card applied to this child or any ancestor.
+
+    Built from frozen inputs only: the child's just-computed ``injected_ids``
+    unioned with each parent's own (birth-frozen) lineage-applied closure.
+    """
+    closure: set[str] = {cid for cid in injected_ids if cid}
+    for parent in parents:
+        for cid in (
+            parent.get_metadata(MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY) or []
+        ):
+            if cid:
+                closure.add(cid)
+    return sorted(closure)
 
 
 async def generate_one_mutation(
@@ -74,6 +93,10 @@ async def generate_one_mutation(
         )
         program.set_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY, injected_ids)
         program.set_metadata(MUTATION_MEMORY_USED_METADATA_KEY, bool(injected_ids))
+        program.set_metadata(
+            MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
+            lineage_applied_closure(injected_ids=injected_ids, parents=parents),
+        )
 
         # Freeze the parent stage outputs that produced this child (debug only —
         # must never block the mutation, so failures are swallowed).

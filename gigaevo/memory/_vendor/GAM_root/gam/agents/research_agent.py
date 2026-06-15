@@ -14,7 +14,9 @@ The module focuses on providing clear abstraction and extensible interfaces for 
 
 from __future__ import annotations
 
+import hashlib
 import json
+import random
 from typing import Any
 
 from gigaevo.memory._vendor.GAM_root.gam.generator import AbsGenerator
@@ -73,6 +75,21 @@ _TOOL_ORDER = [
     "page_index",
 ]
 _PIPELINE_MODES = {"default", "experimental"}
+
+
+def _drop_random_ideas(
+    ideas: list[dict[str, Any]], dose: int, *, seed_basis: str
+) -> list[dict[str, Any]]:
+    """Drop ``dose`` of the ranked ideas at random, protecting the top-ranked one
+    until the dose empties the slate. Seeded from the pool itself (hashlib, not
+    salted ``hash()``) so the drop is reproducible across processes."""
+    if dose <= 0 or not ideas:
+        return ideas
+    if dose >= len(ideas):
+        return []
+    seed = int(hashlib.sha256(seed_basis.encode()).hexdigest()[:16], 16)
+    drop = set(random.Random(seed).sample(range(1, len(ideas)), dose))
+    return [idea for i, idea in enumerate(ideas) if i not in drop]
 
 
 class ResearchAgent:
@@ -220,6 +237,9 @@ class ResearchAgent:
         request: str,
         memory_state: str | None = None,
         planning_request: str | None = None,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> ResearchOutput:
         # 在开始研究前，确保检索器索引是最新的
         self._update_retrievers()
@@ -229,6 +249,8 @@ class ResearchAgent:
                 request,
                 memory_state=memory_state,
                 planning_request=planning_request,
+                exclude_ids=exclude_ids,
+                random_drop_dose=random_drop_dose,
             )
         return self._research_default(
             request,
@@ -296,6 +318,9 @@ class ResearchAgent:
         request: str,
         memory_state: str | None = None,
         planning_request: str | None = None,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> ResearchOutput:
         iterations: list[dict[str, Any]] = []
         planning_base = planning_request or request
@@ -314,7 +339,10 @@ class ResearchAgent:
             logger.debug("[GAM][experimental] Plan:")
             logger.debug(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
 
-            retrieved = self._search_no_integrate(plan, Result(), request)
+            retrieved = self._search_no_integrate(
+                plan, Result(), request,
+                exclude_ids=exclude_ids, random_drop_dose=random_drop_dose,
+            )
             iteration_ideas = self._parse_retrieved_ideas(retrieved.content)
             for idea in iteration_ideas:
                 card_id = str(idea.get("card_id") or "").strip()
@@ -418,7 +446,13 @@ class ResearchAgent:
             return str(explanation.get("summary") or "").strip()
         return ""
 
-    def _build_retrieved_ideas(self, hits: list[Hit]) -> list[dict[str, Any]]:
+    def _build_retrieved_ideas(
+        self,
+        hits: list[Hit],
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
+    ) -> list[dict[str, Any]]:
         card_map = self._card_map_by_id()
         ideas: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -426,6 +460,8 @@ class ResearchAgent:
         for hit in hits:
             card_id = str(hit.page_id or "").strip()
             if not card_id or card_id in seen_ids:
+                continue
+            if card_id in exclude_ids:
                 continue
             seen_ids.add(card_id)
 
@@ -451,6 +487,9 @@ class ResearchAgent:
                 idea["score"] = float(score)
             ideas.append(idea)
 
+        if random_drop_dose > 0:
+            seed_basis = "|".join(i["card_id"] for i in ideas) + f"#{random_drop_dose}"
+            ideas = _drop_random_ideas(ideas, random_drop_dose, seed_basis=seed_basis)
         return ideas
 
     def _parse_retrieved_ideas(self, payload: Any) -> list[dict[str, Any]]:
@@ -829,7 +868,13 @@ class ResearchAgent:
         return self._integrate(sorted_hits, result, question)
 
     def _search_no_integrate(
-        self, plan: SearchPlan, result: Result, question: str
+        self,
+        plan: SearchPlan,
+        result: Result,
+        question: str,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> Result:
         """
         Search without integration:
@@ -925,7 +970,9 @@ class ResearchAgent:
             reverse=True,
         )
 
-        ideas = self._build_retrieved_ideas(sorted_hits)
+        ideas = self._build_retrieved_ideas(
+            sorted_hits, exclude_ids=exclude_ids, random_drop_dose=random_drop_dose
+        )
         if not ideas:
             return result
         sources = [

@@ -46,12 +46,24 @@ class GamRetriever:
         self.backend = backend
         return self
 
-    def research(self, query: str, *, planning_request: str | None = None) -> Any:
+    def research(
+        self,
+        query: str,
+        *,
+        planning_request: str | None = None,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
+    ) -> Any:
         if self.backend is None:
             raise RuntimeError(
                 "GamRetriever.research called before bind(); no backend attached"
             )
-        return self.backend.research(query, planning_request=planning_request)
+        return self.backend.research(
+            query,
+            planning_request=planning_request,
+            exclude_ids=exclude_ids,
+            random_drop_dose=random_drop_dose,
+        )
 
     def get_card(self, card_id: str) -> AnyCard | None:
         """Resolve a shortlisted card id to a typed card, fail-to-None.

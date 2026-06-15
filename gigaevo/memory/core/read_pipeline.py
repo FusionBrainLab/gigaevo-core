@@ -60,6 +60,8 @@ class MemoryReadPipeline:
         task_description: str,
         metrics_description: str,
         max_cards: int = 1,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> MemorySelection:
         if max_cards <= 0:
             return _empty()
@@ -74,6 +76,8 @@ class MemoryReadPipeline:
                 task_description=task_description,
                 metrics_description=metrics_description,
                 max_cards=max_cards,
+                exclude_ids=exclude_ids,
+                random_drop_dose=random_drop_dose,
             )
         except Exception as exc:
             logger.opt(exception=True).warning(
@@ -89,6 +93,8 @@ class MemoryReadPipeline:
         task_description: str,
         metrics_description: str,
         max_cards: int,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> MemorySelection:
         retriever = self._retriever
         if retriever is None:
@@ -110,7 +116,11 @@ class MemoryReadPipeline:
 
         async with self._lock:
             result = await asyncio.to_thread(
-                retriever.research, query, planning_request=core_request
+                retriever.research,
+                query,
+                planning_request=core_request,
+                exclude_ids=exclude_ids,
+                random_drop_dose=random_drop_dose,
             )
 
         candidate_ids = self._selector.shortlist(result.raw_memory)

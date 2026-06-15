@@ -51,9 +51,17 @@ class _StubBackend:
         request: str,
         memory_state: str | None = None,
         planning_request: str | None = None,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ):
         self.research_calls.append(
-            {"request": request, "planning_request": planning_request}
+            {
+                "request": request,
+                "planning_request": planning_request,
+                "exclude_ids": exclude_ids,
+                "random_drop_dose": random_drop_dose,
+            }
         )
         return _StubResearchOutput(integrated_memory="", raw_memory=self._raw_memory)
 
@@ -62,7 +70,15 @@ class _StubBackend:
 
 
 class _ExplodingResearchBackend(_StubBackend):
-    def research(self, request, memory_state=None, planning_request=None):
+    def research(
+        self,
+        request,
+        memory_state=None,
+        planning_request=None,
+        *,
+        exclude_ids=frozenset(),
+        random_drop_dose=0,
+    ):
         raise RuntimeError("research boom")
 
 

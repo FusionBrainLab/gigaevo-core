@@ -265,6 +265,8 @@ class FakeResearchAgent:
         request: str,
         memory_state: str | None = None,
         planning_request: str | None = None,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
     ) -> ResearchOutput:
         """Search all retrievers and format results."""
         all_results = []

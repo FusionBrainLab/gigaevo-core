@@ -17,9 +17,11 @@ from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
 from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
 from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.core.excluder import LineageExcluder, NullExcluder
 from gigaevo.memory.core.protocols import (
     Auctioneer,
     Budgeter,
+    CardExcluder,
     CardRenderer,
     CardRetriever,
     CardShortlister,
@@ -28,6 +30,7 @@ from gigaevo.memory.core.protocols import (
     MemoryAdmitter,
     ReputationModel,
 )
+from gigaevo.memory.core.random_drop import RandomDropExcluder
 from gigaevo.memory.core.read_pipeline import MemoryReadPipeline
 from gigaevo.memory.core.renderer import EfficacyCardRenderer
 from gigaevo.memory.core.reputation import BetaBinomialReputation
@@ -42,6 +45,7 @@ __all__ = [
     "Auctioneer",
     "BetaBinomialReputation",
     "Budgeter",
+    "CardExcluder",
     "CardRenderer",
     "CardRetriever",
     "CardShortlister",
@@ -52,12 +56,15 @@ __all__ = [
     "HarmEvictor",
     "LLMCardSelector",
     "LLMDeduplicator",
+    "LineageExcluder",
     "MemoryAdmitter",
     "MemoryReadPipeline",
     "MemorySelection",
     "MemoryWritePipeline",
     "NullDeduplicator",
+    "NullExcluder",
     "PermissiveAdmitter",
+    "RandomDropExcluder",
     "ReputationModel",
     "SignBasedAdmitter",
     "ThompsonAuctioneer",
