@@ -17,11 +17,13 @@ from __future__ import annotations
 from typing import ClassVar
 from unittest.mock import MagicMock
 
+from omegaconf import OmegaConf
 import pytest
 
 from gigaevo.monitoring import emit as emit_mod
 from gigaevo.monitoring.emit import (
     configure_event_counters,
+    configure_event_counters_from_cfg,
     emit,
     reset_event_counters,
 )
@@ -114,6 +116,69 @@ class TestConfigureEventCountersIgnoresEmptyPrefix:
         emit(_PingEvent())
 
         assert not client.incr.called, "empty prefix must be a no-op"
+
+
+# ---------------------------------------------------------------------------
+# configure_event_counters_from_cfg only wires Redis for Redis-backed runs.
+# Minute-bucket counters live in Redis and are read by the watchdog; a
+# disk-storage run is Redis-free by design, so it must NOT construct a client
+# or write counters into whatever DB the leftover ``redis`` node points at.
+# ---------------------------------------------------------------------------
+
+_REDIS_TARGET = "gigaevo.database.redis_program_storage.RedisProgramStorage"
+_DISK_TARGET = "gigaevo.database.disk_program_storage.DiskProgramStorage"
+
+
+def _cfg(target: str, *, prefix: str = "exp", db: int = 0):
+    return OmegaConf.create(
+        {
+            "program_storage": {
+                "_target_": target,
+                "config": {"key_prefix": prefix},
+            },
+            "redis": {"host": "localhost", "port": 6379, "db": db},
+        }
+    )
+
+
+class TestConfigureFromCfgRespectsStorageBackend:
+    def test_disk_storage_builds_no_redis_client(self, monkeypatch):
+        import redis
+
+        ctor = MagicMock(side_effect=AssertionError("disk run must not touch Redis"))
+        monkeypatch.setattr(redis, "Redis", ctor)
+
+        configure_event_counters_from_cfg(_cfg(_DISK_TARGET))
+
+        assert not ctor.called, "disk run must not construct a Redis client"
+        assert emit_mod._event_redis is None
+        # And emit() stays Redis-free afterwards.
+        emit(_PingEvent(note="disk"))
+
+    def test_redis_storage_wires_counters_to_configured_db(self, monkeypatch):
+        import redis
+
+        fake_client = MagicMock()
+        ctor = MagicMock(return_value=fake_client)
+        monkeypatch.setattr(redis, "Redis", ctor)
+
+        configure_event_counters_from_cfg(_cfg(_REDIS_TARGET, prefix="exp", db=7))
+
+        ctor.assert_called_once_with(host="localhost", port=6379, db=7)
+        emit(_PingEvent(note="redis"))
+        assert fake_client.incr.called, "redis-backed run must INCR counters"
+        assert emit_mod._event_prefix == "exp"
+
+    def test_redis_storage_with_empty_prefix_is_noop(self, monkeypatch):
+        import redis
+
+        ctor = MagicMock(side_effect=AssertionError("no prefix → nowhere to write"))
+        monkeypatch.setattr(redis, "Redis", ctor)
+
+        configure_event_counters_from_cfg(_cfg(_REDIS_TARGET, prefix=""))
+
+        assert not ctor.called
+        assert emit_mod._event_redis is None
 
 
 # ---------------------------------------------------------------------------

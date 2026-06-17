@@ -69,7 +69,16 @@ def configure_event_counters_from_cfg(cfg: Any) -> None:
     client used for minute-bucket INCRs here (separate from the async
     program-storage client), and we never leak its construction into the
     caller. Silent no-op when the prefix is absent.
+
+    Minute-bucket counters are a Redis-monitoring feature whose only reader
+    is the watchdog. A disk-storage run is Redis-free by design — the
+    leftover ``redis`` config node would otherwise make us write counters
+    into a DB nobody reads (often shared with another live experiment). So
+    we wire counters only when the program store is the Redis backend.
     """
+    storage_target = str(cfg.program_storage.get("_target_", ""))
+    if not storage_target.endswith("RedisProgramStorage"):
+        return
     prefix = cfg.program_storage.config.key_prefix
     if not prefix:
         return
