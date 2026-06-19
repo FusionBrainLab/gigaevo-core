@@ -52,11 +52,20 @@ def _write_fixture(run_dir):
             ),
             _event(
                 "auction.run",
-                {"candidate_count": 2, "winner_count": 2, "winner_ids": ["idea-a", "program-x"]},
+                {
+                    "candidate_count": 2,
+                    "winner_count": 2,
+                    "winner_ids": ["idea-a", "program-x"],
+                },
             ),
             _event(
                 "budget.cap",
-                {"winner_count": 2, "max_cards": 1, "kept_ids": ["idea-a"], "dropped_ids": ["program-x"]},
+                {
+                    "winner_count": 2,
+                    "max_cards": 1,
+                    "kept_ids": ["idea-a"],
+                    "dropped_ids": ["program-x"],
+                },
             ),
             _event(
                 "read.selection",
@@ -90,9 +99,24 @@ def _write_fixture(run_dir):
     _append_jsonl(
         memory_dir / "write_ledger.jsonl",
         [
-            {"incoming_id": "idea-a", "final_id": "idea-a", "outcome": "added", "category": "general"},
-            {"incoming_id": "program-x", "final_id": "program-x", "outcome": "merged", "category": "program"},
-            {"incoming_id": "idea-b", "final_id": "", "outcome": "rejected_harm", "category": "general"},
+            {
+                "incoming_id": "idea-a",
+                "final_id": "idea-a",
+                "outcome": "added",
+                "category": "general",
+            },
+            {
+                "incoming_id": "program-x",
+                "final_id": "program-x",
+                "outcome": "merged",
+                "category": "program",
+            },
+            {
+                "incoming_id": "idea-b",
+                "final_id": "",
+                "outcome": "rejected_harm",
+                "category": "general",
+            },
         ],
     )
     _append_jsonl(

@@ -38,8 +38,13 @@ def _load_improver(path: str):
 
 
 def _init_worker(path: str, threads: int) -> None:
-    for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-              "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    for v in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
         os.environ[v] = str(threads)
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     sys.path.insert(0, _PROB)
@@ -54,8 +59,14 @@ def _grade_one(task: tuple) -> dict:
 
     X_cohn, mu_cohn = cc.load_frozen(d, n)
     cfg = types.SimpleNamespace(
-        r_rounds=r_rounds, b_steps=b_steps, intensity_hi=hi, intensity_lo=lo,
-        dry_patience=dry, config_timeout=config_timeout, norm_tol=norm_tol, seed=seed,
+        r_rounds=r_rounds,
+        b_steps=b_steps,
+        intensity_hi=hi,
+        intensity_lo=lo,
+        dry_patience=dry,
+        config_timeout=config_timeout,
+        norm_tol=norm_tol,
+        seed=seed,
     )
     deadline = time.monotonic() + config_timeout
     t0 = time.perf_counter()
@@ -89,15 +100,28 @@ def main() -> None:
     configs = cc.eval_configs(args.eval_set)
     panel = set(cc.eval_configs("panel"))
     tasks = [
-        (d, n, args.rounds, args.steps, args.intensity_hi, args.intensity_lo,
-         args.dry_patience, args.config_timeout, args.norm_tol, args.seed)
+        (
+            d,
+            n,
+            args.rounds,
+            args.steps,
+            args.intensity_hi,
+            args.intensity_lo,
+            args.dry_patience,
+            args.config_timeout,
+            args.norm_tol,
+            args.seed,
+        )
         for (d, n) in configs
     ]
 
     t0 = time.perf_counter()
     ctx = mp.get_context("spawn")
-    with ctx.Pool(args.workers, initializer=_init_worker,
-                  initargs=(os.path.abspath(args.program), args.threads)) as pool:
+    with ctx.Pool(
+        args.workers,
+        initializer=_init_worker,
+        initargs=(os.path.abspath(args.program), args.threads),
+    ) as pool:
         results = pool.map(_grade_one, tasks)
     elapsed = time.perf_counter() - t0
 
@@ -114,14 +138,20 @@ def main() -> None:
     def mean_gain_pct(rs):
         return 100.0 * sum(r["gain"] for r in rs) / len(rs) if rs else float("nan")
 
-    print(f"\n================  {label}  ({args.eval_set}, R={args.rounds}, B={args.steps}, "
-          f"seed={args.seed}, {args.workers}w×{args.threads}t)  ================")
+    print(
+        f"\n================  {label}  ({args.eval_set}, R={args.rounds}, B={args.steps}, "
+        f"seed={args.seed}, {args.workers}w×{args.threads}t)  ================"
+    )
     print(f"FITNESS (mean rel. improvement over Cohn): {fitness:.4f}%")
-    print(f"  improved {improved}/{total}   valid {valid}/{total}   "
-          f"mean abs μ reduction {abs_red:.6f}   wall {elapsed/60:.1f} min")
-    print(f"  in-panel({len(in_panel)})  mean gain {mean_gain_pct(in_panel):.4f}%   "
-          f"out-of-panel({len(out_panel)}) mean gain {mean_gain_pct(out_panel):.4f}%   "
-          f"(panel→rest gap shows generalization)")
+    print(
+        f"  improved {improved}/{total}   valid {valid}/{total}   "
+        f"mean abs μ reduction {abs_red:.6f}   wall {elapsed / 60:.1f} min"
+    )
+    print(
+        f"  in-panel({len(in_panel)})  mean gain {mean_gain_pct(in_panel):.4f}%   "
+        f"out-of-panel({len(out_panel)}) mean gain {mean_gain_pct(out_panel):.4f}%   "
+        f"(panel→rest gap shows generalization)"
+    )
     by_d: dict[int, list] = {}
     for r in results:
         by_d.setdefault(r["d"], []).append(r)
@@ -133,19 +163,42 @@ def main() -> None:
         slow = max(x.get("secs", 0.0) for x in rs)
         print(f"    d={d:2d}:  {mg:8.4f}%   {sc}/{len(rs)}   {slow:6.1f}s")
     top = sorted(results, key=lambda r: r["gain"], reverse=True)[:5]
-    print("  largest gains: " + ", ".join(
-        f"(d={r['d']},N={r['n']}) {r['gain_pct']:.3f}%" for r in top if r["gain"] > 0))
+    print(
+        "  largest gains: "
+        + ", ".join(
+            f"(d={r['d']},N={r['n']}) {r['gain_pct']:.3f}%"
+            for r in top
+            if r["gain"] > 0
+        )
+    )
     errs = [r for r in results if r.get("error")]
     if errs:
-        print(f"  {len(errs)} configs reported an error; e.g. "
-              f"(d={errs[0]['d']},N={errs[0]['n']}): {errs[0]['error']}")
+        print(
+            f"  {len(errs)} configs reported an error; e.g. "
+            f"(d={errs[0]['d']},N={errs[0]['n']}): {errs[0]['error']}"
+        )
 
-    out = args.out or f"validation_{label}_{args.eval_set}_R{args.rounds}_seed{args.seed}.json"
+    out = (
+        args.out
+        or f"validation_{label}_{args.eval_set}_R{args.rounds}_seed{args.seed}.json"
+    )
     with open(os.path.join(_PROB, out), "w") as f:
-        json.dump({"label": label, "eval_set": args.eval_set, "rounds": args.rounds,
-                   "steps": args.steps, "seed": args.seed, "fitness": fitness,
-                   "improved": improved, "valid": valid, "elapsed_min": elapsed / 60,
-                   "results": results}, f, indent=2)
+        json.dump(
+            {
+                "label": label,
+                "eval_set": args.eval_set,
+                "rounds": args.rounds,
+                "steps": args.steps,
+                "seed": args.seed,
+                "fitness": fitness,
+                "improved": improved,
+                "valid": valid,
+                "elapsed_min": elapsed / 60,
+                "results": results,
+            },
+            f,
+            indent=2,
+        )
     print(f"  wrote {out}")
 
 

@@ -513,7 +513,9 @@ class TestMemoryReadPipeline:
         assert len(got.slate) == 1
 
     @pytest.mark.asyncio
-    async def test_canonical_events_record_read_decision_and_child_events(self, tmp_path):
+    async def test_canonical_events_record_read_decision_and_child_events(
+        self, tmp_path
+    ):
         path = tmp_path / "memory_events.jsonl"
         backend = _mk_backend()
 
@@ -552,9 +554,7 @@ class TestMemoryReadPipeline:
         assert got.card_ids == []
         assert len(got.slate) == 1
         read = [
-            row
-            for row in _event_rows(path)
-            if row["event_type"] == "read.selection"
+            row for row in _event_rows(path) if row["event_type"] == "read.selection"
         ][-1]
         assert read["payload"]["candidate_ids"] == ["bad"]
         assert read["payload"]["auction_winner_ids"] == []

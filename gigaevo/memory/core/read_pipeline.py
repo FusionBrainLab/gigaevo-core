@@ -258,9 +258,7 @@ class MemoryReadPipeline:
             if (text := self._renderer.render(fetched[cid]))
         ]
         rendered_id_set = {cid for cid, _ in rendered}
-        render_dropped_ids = [
-            cid for cid in budgeted_ids if cid not in rendered_id_set
-        ]
+        render_dropped_ids = [cid for cid in budgeted_ids if cid not in rendered_id_set]
         card_ids = [cid for cid, _ in rendered]
         cards = [text for _, text in rendered]
         empty_reason = ""

@@ -59,6 +59,7 @@ class Improver:
         V = points.copy()
         alphas = [100.0, 400.0, 1600.0, 6400.0, 25600.0]
         for alpha in alphas:
+
             def fun(v_flat):
                 v_reshaped = v_flat.reshape((self.n, self.d))
                 val, grad = self.val_grad_lse(v_reshaped, float(alpha))
@@ -97,7 +98,11 @@ class Improver:
             for idx in (i, j):
                 noise = rng.standard_normal(self.d)
                 noise -= np.dot(noise, new_points[idx]) * new_points[idx]
-                new_points[idx] += rng.uniform(0.005, 0.02) * (intensity + 0.1) * (noise / np.linalg.norm(noise))
+                new_points[idx] += (
+                    rng.uniform(0.005, 0.02)
+                    * (intensity + 0.1)
+                    * (noise / np.linalg.norm(noise))
+                )
 
         new_points /= np.linalg.norm(new_points, axis=1, keepdims=True)
         s_val = float(self.d) + 20.0 * (1.0 - intensity)

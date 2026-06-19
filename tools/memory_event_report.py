@@ -88,7 +88,9 @@ def _card_type(card: Mapping[str, Any]) -> str:
     return "idea"
 
 
-def _card_type_for_id(card_id: str, cards_by_id: Mapping[str, Mapping[str, Any]]) -> str:
+def _card_type_for_id(
+    card_id: str, cards_by_id: Mapping[str, Mapping[str, Any]]
+) -> str:
     card = cards_by_id.get(card_id)
     if card is not None:
         return _card_type(card)
@@ -124,8 +126,7 @@ def _counter_dict(counter: Counter[str]) -> dict[str, int]:
 
 def _top_counts(items: Iterable[str], top_n: int) -> list[dict[str, Any]]:
     return [
-        {"id": key, "count": count}
-        for key, count in Counter(items).most_common(top_n)
+        {"id": key, "count": count} for key, count in Counter(items).most_common(top_n)
     ]
 
 
@@ -178,9 +179,7 @@ def summarize_memory_events(
         slate = _as_list(payload.get("slate"))
         slate_total += len(slate)
         slate_selected += sum(
-            1
-            for bid in slate
-            if isinstance(bid, Mapping) and bool(bid.get("selected"))
+            1 for bid in slate if isinstance(bid, Mapping) and bool(bid.get("selected"))
         )
 
     selected_type_counts = Counter(
@@ -232,7 +231,9 @@ def summarize_memory_events(
         "events": {
             "total": len(events),
             "invalid_json": sum(1 for row in events if row.get("_invalid_json")),
-            "by_type": _counter_dict(Counter(str(row.get("event_type")) for row in events)),
+            "by_type": _counter_dict(
+                Counter(str(row.get("event_type")) for row in events)
+            ),
         },
         "read": {
             "decisions": len(read_events),
@@ -333,7 +334,9 @@ def _format_counts(counts: Mapping[str, int], *, empty: str = "none") -> list[st
     return [f"  {key}: {value}" for key, value in counts.items()]
 
 
-def _format_top(items: Sequence[Mapping[str, Any]], *, empty: str = "none") -> list[str]:
+def _format_top(
+    items: Sequence[Mapping[str, Any]], *, empty: str = "none"
+) -> list[str]:
     if not items:
         return [f"  {empty}"]
     return [f"  {item['id']}: {item['count']}" for item in items]
@@ -448,11 +451,19 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         help="Memory checkpoint dir, or a run dir containing memory/.",
     )
-    parser.add_argument("--events", type=Path, help="Explicit memory_events.jsonl path.")
-    parser.add_argument("--write-ledger", type=Path, help="Explicit write_ledger.jsonl path.")
+    parser.add_argument(
+        "--events", type=Path, help="Explicit memory_events.jsonl path."
+    )
+    parser.add_argument(
+        "--write-ledger", type=Path, help="Explicit write_ledger.jsonl path."
+    )
     parser.add_argument("--cards", type=Path, help="Explicit amem_memories.jsonl path.")
-    parser.add_argument("--top-n", type=int, default=10, help="Number of card IDs to show.")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--top-n", type=int, default=10, help="Number of card IDs to show."
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON."
+    )
     return parser.parse_args()
 
 
