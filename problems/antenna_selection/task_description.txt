@@ -1,0 +1,53 @@
+**TASK — ANTENNA SELECTION (MISO, general objective)**
+
+Choose which antennas to switch off in a MISO array to maximise a capacity-style
+objective on the effective channel, beating two reference heuristics.
+
+**SETUP**
+- Input matrix $V \in \mathbb{C}^{N \times L}$: $N$ antennas (rows), $L$ streams (columns), $N$ from $1000$ to $4000$, $L \in \{2,3,\dots,10\}$, $P=1$. Matrices are drawn fresh at random on every evaluation — nothing to memorize.
+- Select an active set via a binary mask $x \in \{0,1\}^N$ ($x_n=1$ keeps antenna $n$).
+- Effective channel $V_{eq} = V^{H} W$, where $W = z \cdot \mathrm{diag}(x) \cdot V$ and the scalar $z>0$ enforces the per-antenna power budget $P=1$. The harness pins $z$ to the strongest antenna in the full input array, not the strongest kept antenna, i.e. $z = \sqrt{P / \max_n s_n}$. The harness owns $z$ — you only choose which antennas are active, and dropping a high-power antenna cannot increase the transmit scale.
+- Noise power $\sigma = 1$.
+
+**OBJECTIVE (maximise)**
+$$ U = \det\!\left(V_{eq} V_{eq}^{H} + \sigma I\right) $$
+Larger and better-balanced singular values of $V_{eq}$ raise $U$ — it rewards both
+beamforming gain (diagonal energy) and low inter-stream interference (off-diagonal energy).
+
+**CONSTRAINT**
+- Cardinality: $\sum_n x_n \le K$ with $K = N/2$ (at least 50% of antennas off). At least one antenna must stay on.
+
+**WHAT YOU RETURN**
+- Only the mask. The harness owns $z$, $W$, $V_{eq}$, and $U$ — do not return weights or rescale power yourself.
+
+**BASELINES TO BEAT (by >= 5%)**
+- H1: keep the $K$ antennas of largest power $s_n = \sum_j |v_{nj}|^2$ (delete the weakest).
+- H2: greedily delete the antenna minimising the residual off-diagonal energy $\sum_{i \ne j} \left|\sum_{k\in\text{active}} v_{ki}^* v_{kj}\right|^2$ of the active Gram $V^{H} V$ (at $L=2$ this is the residual $\left|\sum_{k} v_{k1}^* v_{k2}\right|$).
+
+**LIBRARIES**
+`numpy`, `scipy`, `sklearn` or standard Python.
+
+**INTERFACE — implement exactly**
+```python
+import numpy as np
+
+class Solver:
+    def solve(self, V, K, sigma):
+        """V: complex ndarray (N, L). Return a boolean mask of shape (N,) marking
+        ACTIVE antennas, with 1 <= mask.sum() <= K."""
+        ...
+        return mask
+
+def entrypoint():
+    return Solver()
+```
+
+**FAILURE MODES**
+- Mask not shape $(N,)$ (e.g. returning a list of indices, or $W$).
+- Non-binary mask: scores, probabilities, or complex values — entries must be exactly 0 or 1.
+- More than $K$ active antennas, or zero active antennas.
+- NaN/Inf entries.
+- Hardcoding to a specific matrix or to $L=2$ — `solve` is scored on freshly drawn random matrices every evaluation, spanning $N$ from $1000$ to $4000$ and $L \in \{2,3,\dots,10\}$.
+
+**DOCUMENTATION**
+Briefly explain the algorithm in the introductory comment (LaTeX allowed).

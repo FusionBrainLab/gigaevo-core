@@ -6,6 +6,9 @@ name: memory
 models:
   - _target_: langchain_openai.ChatOpenAI
     model: Qwen/Qwen3-235B-A22B-Instruct-2507
+    # OPENAI_API_KEY holds the in-cluster LiteLLM proxy key (sk-gigaevo in .env).
+    # OpenRouter-backed main LLMs read OPENROUTER_API_KEY instead, so the two
+    # endpoints never share a key — no override juggling, no extra env var.
     api_key: ${oc.env:OPENAI_API_KEY}
     base_url: http://localhost:8000/v1
     temperature: 0.0

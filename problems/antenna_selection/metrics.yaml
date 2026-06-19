@@ -1,0 +1,41 @@
+specs:
+  fitness:
+    description: Mean capacity gain over the best heuristic across instances, in bits/s/Hz (Δlog2 det; higher is better; the PDF's 5% det target ≈ 0.07 bits)
+    decimals: 6
+    is_primary: true
+    higher_is_better: true
+    lower_bound: -2.0
+    upper_bound: 2.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  win_rate:
+    description: Fraction of instances where the solver objective beats the best heuristic
+    decimals: 4
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: 0.0
+  median_margin:
+    description: Median per-instance capacity gain over the best heuristic, in bits/s/Hz
+    decimals: 6
+    is_primary: false
+    higher_is_better: true
+    lower_bound: -2.0
+    upper_bound: 2.0
+    include_in_prompts: true
+    significant_change: 0.01
+    sentinel_value: -1000.0
+  is_valid:
+    description: Whether the program is valid (1 valid, 0 invalid)
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0

@@ -1,0 +1,25 @@
+# @package _global_
+# Pipeline: default evolution pipeline + compact spherical-codes artifact formatter.
+# The general spherical-codes improver returns artifact["feedback_preview"] (a per-dimension
+# gain summary); this swaps FormatterStage so the mutator reads that summary instead of a
+# repr() of the metrics dict.
+# Launch: python run.py problem.name=spherical_codes_improver_general pipeline=spherical_general ...
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${program_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${ref:memory::provider}
+
+pipeline_builder:
+  _target_: problems.spherical_codes_improver_general.pipeline.SphericalCodesGeneralPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}

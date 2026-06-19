@@ -1,0 +1,32 @@
+# @package _global_
+
+# Single mutation LLM: openai/gpt-5.4-mini via OpenRouter.
+#
+# GPT-5 reasoning-model API (same family as llm=openai / gpt-5.5):
+#   - temperature / top_p are NOT supported (silently ignored) — omitted.
+#   - `reasoning.effort` is the tuning knob; pinned "high" for mutation quality,
+#     matching llm=openai. Forwarded via `extra_body`.
+#   - `max_tokens` is accepted by OpenRouter as the GPT-5 token-budget alias.
+#
+# Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
+#   (read directly so OPENAI_API_KEY stays free for the in-cluster LiteLLM proxy,
+#    e.g. memory/llm=qwen_instruct — the two endpoints never share a key.)
+#
+# Usage:
+#   python run.py ... llm=gpt54_mini
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: openai/gpt-5.4-mini
+      api_key: ${oc.env:OPENROUTER_API_KEY}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+      extra_body:
+        reasoning:
+          effort: high
+  probabilities: [1.0]
+  writer: ${ref:writer}
