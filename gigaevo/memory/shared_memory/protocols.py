@@ -51,6 +51,9 @@ class ResearchAgentProtocol(Protocol):
         request: str,
         memory_state: str | None = None,
         planning_request: str | None = None,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        random_drop_dose: int = 0,
     ) -> ResearchOutput: ...
 
 
