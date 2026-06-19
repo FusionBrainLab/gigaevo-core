@@ -16,7 +16,6 @@ from gigaevo.memory.core.auctioneer import (
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
 from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
-from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.events import (
     DEFAULT_MEMORY_EVENTS_FILENAME,
     MEMORY_EVENT_SCHEMA_VERSION,
@@ -26,6 +25,7 @@ from gigaevo.memory.core.events import (
     new_memory_decision_id,
     resolve_memory_event_path,
 )
+from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.excluder import LineageExcluder, NullExcluder
 from gigaevo.memory.core.protocols import (
     Auctioneer,

@@ -13,11 +13,10 @@ mu_Cohn is computed LIVE from the frozen coordinates, never transcribed.
 
 from __future__ import annotations
 
-import json
 import os
+from pathlib import Path
 import re
 import urllib.request
-from pathlib import Path
 
 import numpy as np
 
@@ -27,15 +26,96 @@ _FLOAT_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
 # 90 configurations (d, N): 10 per dimension d in [8, 16] (paper Table 7 set).
 CONFIGS: tuple[tuple[int, int], ...] = (
-    (8, 26), (8, 51), (8, 86), (8, 283), (8, 322), (8, 528), (8, 656), (8, 669), (8, 835), (8, 873),
-    (9, 32), (9, 44), (9, 521), (9, 625), (9, 750), (9, 786), (9, 838), (9, 869), (9, 880), (9, 886),
-    (10, 91), (10, 136), (10, 271), (10, 314), (10, 324), (10, 785), (10, 827), (10, 862), (10, 868), (10, 912),
-    (11, 84), (11, 268), (11, 352), (11, 373), (11, 407), (11, 521), (11, 590), (11, 613), (11, 692), (11, 740),
-    (12, 95), (12, 240), (12, 331), (12, 343), (12, 416), (12, 642), (12, 734), (12, 855), (12, 899), (12, 913),
-    (13, 69), (13, 90), (13, 162), (13, 244), (13, 351), (13, 592), (13, 691), (13, 725), (13, 818), (13, 882),
-    (14, 102), (14, 211), (14, 212), (14, 642), (14, 692), (14, 913), (14, 922), (14, 925), (14, 970), (14, 1021),
-    (15, 208), (15, 243), (15, 380), (15, 425), (15, 436), (15, 456), (15, 491), (15, 514), (15, 517), (15, 527),
-    (16, 88), (16, 126), (16, 160), (16, 197), (16, 296), (16, 341), (16, 534), (16, 688), (16, 770), (16, 807),
+    (8, 26),
+    (8, 51),
+    (8, 86),
+    (8, 283),
+    (8, 322),
+    (8, 528),
+    (8, 656),
+    (8, 669),
+    (8, 835),
+    (8, 873),
+    (9, 32),
+    (9, 44),
+    (9, 521),
+    (9, 625),
+    (9, 750),
+    (9, 786),
+    (9, 838),
+    (9, 869),
+    (9, 880),
+    (9, 886),
+    (10, 91),
+    (10, 136),
+    (10, 271),
+    (10, 314),
+    (10, 324),
+    (10, 785),
+    (10, 827),
+    (10, 862),
+    (10, 868),
+    (10, 912),
+    (11, 84),
+    (11, 268),
+    (11, 352),
+    (11, 373),
+    (11, 407),
+    (11, 521),
+    (11, 590),
+    (11, 613),
+    (11, 692),
+    (11, 740),
+    (12, 95),
+    (12, 240),
+    (12, 331),
+    (12, 343),
+    (12, 416),
+    (12, 642),
+    (12, 734),
+    (12, 855),
+    (12, 899),
+    (12, 913),
+    (13, 69),
+    (13, 90),
+    (13, 162),
+    (13, 244),
+    (13, 351),
+    (13, 592),
+    (13, 691),
+    (13, 725),
+    (13, 818),
+    (13, 882),
+    (14, 102),
+    (14, 211),
+    (14, 212),
+    (14, 642),
+    (14, 692),
+    (14, 913),
+    (14, 922),
+    (14, 925),
+    (14, 970),
+    (14, 1021),
+    (15, 208),
+    (15, 243),
+    (15, 380),
+    (15, 425),
+    (15, 436),
+    (15, 456),
+    (15, 491),
+    (15, 514),
+    (15, 517),
+    (15, 527),
+    (16, 88),
+    (16, 126),
+    (16, 160),
+    (16, 197),
+    (16, 296),
+    (16, 341),
+    (16, 534),
+    (16, 688),
+    (16, 770),
+    (16, 807),
 )
 
 _LOAD_CACHE: dict[tuple[int, int], tuple[np.ndarray, float]] = {}
@@ -47,10 +127,15 @@ def _packing_path(d: int, n: int) -> Path:
 
 def _download(d: int, n: int) -> str:
     proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-    handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy}) if proxy else urllib.request.ProxyHandler({})
+    handler = (
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        if proxy
+        else urllib.request.ProxyHandler({})
+    )
     opener = urllib.request.build_opener(handler)
     req = urllib.request.Request(
-        _CATALOGUE_URL.format(d=d, n=n), headers={"User-Agent": "gigaevo-spherical-general"}
+        _CATALOGUE_URL.format(d=d, n=n),
+        headers={"User-Agent": "gigaevo-spherical-general"},
     )
     return opener.open(req, timeout=60).read().decode("utf-8", "replace")
 
@@ -59,7 +144,9 @@ def _parse(text: str, d: int, n: int) -> np.ndarray:
     vals = _FLOAT_RE.findall(text)
     arr = np.asarray([float(v) for v in vals], dtype=np.float64)
     if arr.size != d * n:
-        raise ValueError(f"packing (d={d}, N={n}): parsed {arr.size} floats, expected {d * n}")
+        raise ValueError(
+            f"packing (d={d}, N={n}): parsed {arr.size} floats, expected {d * n}"
+        )
     return arr.reshape(n, d)
 
 
@@ -125,14 +212,19 @@ def _stratified(by_index: tuple[int, ...]) -> list[tuple[int, int]]:
 # docs/superpowers/specs/2026-06-17-spherical-codes-general-improver-design.md.
 PANEL: tuple[tuple[int, int], ...] = (
     (8, 669),
-    (9, 521), (9, 625),
+    (9, 521),
+    (9, 625),
     (10, 785),
-    (11, 613), (11, 692),
+    (11, 613),
+    (11, 692),
     (12, 343),
-    (13, 244), (13, 818),
+    (13, 244),
+    (13, 818),
     (14, 692),
-    (15, 380), (15, 527),
-    (16, 296), (16, 807),
+    (15, 380),
+    (15, 527),
+    (16, 296),
+    (16, 807),
 )
 # smoke: smallest N in the first 6 dimensions -> 6 fast configs.
 SMOKE: tuple[tuple[int, int], ...] = tuple(_stratified((0,))[:6])
