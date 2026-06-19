@@ -118,10 +118,10 @@ AmemGamMemory routes through fallback chain:
      └─ calls GAM ResearchAgent.research(query)
           └─ semantic retrieval via Chroma vectors
                └─ returns structured answer with memories
-  
+
   2. [fallback] API full-text search (if API mode enabled)
      └─ calls API /v1/search endpoint
-  
+
   3. [fallback] Local lexical search (always available)
      └─ token-overlap matching over CardStore.cards
        ↓
