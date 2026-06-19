@@ -31,6 +31,7 @@ from gigaevo.memory.core import (
     ThompsonAuctioneer,
     TopThetaBudgeter,
 )
+from gigaevo.memory.core.events import resolve_memory_event_path
 from gigaevo.memory.shared_memory.memory_config import GamConfig
 from gigaevo.programs.program import Program
 
@@ -153,6 +154,7 @@ class SelectorMemoryProvider(MemoryProvider):
                 budgeter=self._budgeter,
                 renderer=self._renderer,
                 reputation=self._reputation,
+                event_path=resolve_memory_event_path(self._checkpoint_dir),
             )
         return self._pipeline
 

@@ -5,6 +5,8 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.core.events import emit_memory_event
+
 
 class AuctionCandidate(BaseModel):
     """One card entering the Thompson auction with its help-probability posterior."""
@@ -87,6 +89,17 @@ class ThompsonAuctioneer(BaseModel):
                 )
             )
         if slate:
+            emit_memory_event(
+                component="Auction",
+                event_type="auction.run",
+                payload={
+                    "candidate_count": len(slate),
+                    "winner_count": len(winners),
+                    "winner_ids": winners,
+                    "baseline_prior": [float(base_a), float(base_b)],
+                    "bids": [bid.model_dump(mode="json") for bid in slate],
+                },
+            )
             logger.debug(
                 "[Memory][Auction] {}/{} candidate(s) beat baseline Beta{}: {}",
                 len(winners),

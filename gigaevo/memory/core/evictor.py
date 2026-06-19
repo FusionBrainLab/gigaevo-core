@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.core.events import emit_memory_event
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.shared_memory.models import AnyCard
 
@@ -26,6 +27,16 @@ class HarmEvictor(BaseModel):
     def sweep(self, bank: Mapping[str, AnyCard]) -> list[str]:
         evicted = [cid for cid, card in bank.items() if self.should_evict(card)]
         if evicted:
+            emit_memory_event(
+                component="Evictor",
+                event_type="evictor.sweep",
+                payload={
+                    "bank_count": len(bank),
+                    "evicted_count": len(evicted),
+                    "evicted_ids": evicted,
+                },
+                level="INFO",
+            )
             logger.info(
                 "[Memory][Evictor] Sweep evicting {}/{} card(s) as confidently harmful: {}",
                 len(evicted),

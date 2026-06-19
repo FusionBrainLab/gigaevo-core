@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.core.events import emit_memory_event
 from gigaevo.memory.efficacy import EfficacyScorer, GainObservation
 from gigaevo.memory.shared_memory.models import CardStatsBlock
 
@@ -124,12 +125,28 @@ def compute_injection_posterior(
 
     fitted = (scorer if scorer is not None else EfficacyScorer()).fit(cohort)
     posteriors = {card_id: fitted.posterior(evs) for card_id, evs in events.items()}
+    confident_count = sum(
+        1 for block in posteriors.values() if block.efficacy_confident
+    )
+    emit_memory_event(
+        component="InjectionPosterior",
+        event_type="injection_posterior.compute",
+        payload={
+            "card_count": len(posteriors),
+            "scorable_child_count": len(cohort),
+            "epsilon": fitted.epsilon,
+            "confident_count": confident_count,
+            "event_count_by_card_id": {
+                card_id: len(card_events) for card_id, card_events in events.items()
+            },
+        },
+    )
     logger.debug(
         "[Memory][InjectionPosterior] {} card(s) credited from {} scorable child(ren); "
         "noise band epsilon={:.4g}, confident={}",
         len(posteriors),
         len(cohort),
         fitted.epsilon,
-        sum(1 for block in posteriors.values() if block.efficacy_confident),
+        confident_count,
     )
     return posteriors

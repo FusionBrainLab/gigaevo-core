@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.core.events import emit_memory_event
 from gigaevo.memory.core.idea_stats import IdeaStats, coerce_metric
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.efficacy import CardStatsStamper
@@ -15,12 +16,23 @@ _STAMPER = CardStatsStamper()
 
 def _log_admission(admitter: BaseModel, kept: list[IdeaStats], total: int) -> None:
     if total:
+        kept_ids = [s.idea_id for s in kept]
+        emit_memory_event(
+            component="Admitter",
+            event_type="admission.select",
+            payload={
+                "admitter": type(admitter).__name__,
+                "input_count": total,
+                "admitted_count": len(kept),
+                "admitted_ids": kept_ids,
+            },
+        )
         logger.debug(
             "[Memory][Admitter] {} admitted {}/{} idea(s): {}",
             type(admitter).__name__,
             len(kept),
             total,
-            [s.idea_id for s in kept],
+            kept_ids,
         )
 
 

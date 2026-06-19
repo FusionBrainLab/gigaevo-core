@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,7 +19,7 @@ from gigaevo.memory.core import (
 
 
 def make_read_pipeline(
-    backend: Any | None, *, seed: int = 20260604
+    backend: Any | None, *, seed: int = 20260604, event_path: str | Path | None = None
 ) -> MemoryReadPipeline:
     return MemoryReadPipeline(
         retriever=GamRetriever(backend) if backend is not None else None,
@@ -28,4 +29,5 @@ def make_read_pipeline(
         renderer=EfficacyCardRenderer(),
         reputation=BetaBinomialReputation(),
         rng=np.random.default_rng(seed),
+        event_path=event_path,
     )

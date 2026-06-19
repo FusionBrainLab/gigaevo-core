@@ -8,6 +8,7 @@ End-to-end goldens were frozen from the legacy ``MemorySelectorAgent.select()``
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -112,6 +113,10 @@ def _decision(ids: list[str]) -> dict:
             "additional_queries": [],
         }
     }
+
+
+def _event_rows(path):
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 class TestLLMCardSelector:
@@ -506,3 +511,51 @@ class TestMemoryReadPipeline:
         )
         assert got.card_ids == ["idea-A"]
         assert len(got.slate) == 1
+
+    @pytest.mark.asyncio
+    async def test_canonical_events_record_read_decision_and_child_events(self, tmp_path):
+        path = tmp_path / "memory_events.jsonl"
+        backend = _mk_backend()
+
+        got = await make_read_pipeline(backend, seed=_SEED, event_path=path).select(
+            parents=[_make_program()], **_SELECT_KWARGS
+        )
+
+        rows = _event_rows(path)
+        read = [row for row in rows if row["event_type"] == "read.selection"][-1]
+        auction = [row for row in rows if row["event_type"] == "auction.run"][-1]
+        budget = [row for row in rows if row["event_type"] == "budget.cap"][-1]
+        assert read["schema_version"] == "memory_event.v1"
+        assert read["decision_id"]
+        assert auction["decision_id"] == read["decision_id"]
+        assert budget["decision_id"] == read["decision_id"]
+        assert read["payload"]["candidate_count"] == 5
+        assert read["payload"]["selected_ids"] == got.card_ids
+        assert read["payload"]["empty_reason"] == ""
+        assert len(read["payload"]["slate"]) == 5
+        assert auction["payload"]["winner_count"] == 3
+        assert budget["payload"]["dropped_ids"] == ["idea-0"]
+
+    @pytest.mark.asyncio
+    async def test_canonical_event_records_auction_empty_reason(self, tmp_path):
+        path = tmp_path / "memory_events.jsonl"
+        backend = _StubBackend(
+            raw_memory=_decision(["bad"]),
+            cards={"bad": _card("Bad card", (1.0, 1_000_000.0))},
+        )
+
+        got = await make_read_pipeline(backend, seed=_SEED, event_path=path).select(
+            parents=[_make_program()], **_SELECT_KWARGS
+        )
+
+        assert got.cards == []
+        assert got.card_ids == []
+        assert len(got.slate) == 1
+        read = [
+            row
+            for row in _event_rows(path)
+            if row["event_type"] == "read.selection"
+        ][-1]
+        assert read["payload"]["candidate_ids"] == ["bad"]
+        assert read["payload"]["auction_winner_ids"] == []
+        assert read["payload"]["empty_reason"] == "auction_rejected"

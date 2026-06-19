@@ -17,6 +17,15 @@ from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
 from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
 from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.core.events import (
+    DEFAULT_MEMORY_EVENTS_FILENAME,
+    MEMORY_EVENT_SCHEMA_VERSION,
+    MemoryEventRecord,
+    emit_memory_event,
+    memory_event_context,
+    new_memory_decision_id,
+    resolve_memory_event_path,
+)
 from gigaevo.memory.core.excluder import LineageExcluder, NullExcluder
 from gigaevo.memory.core.protocols import (
     Auctioneer,
@@ -52,12 +61,15 @@ __all__ = [
     "Deduplicator",
     "EfficacyCardRenderer",
     "Evictor",
+    "DEFAULT_MEMORY_EVENTS_FILENAME",
     "GamRetriever",
     "HarmEvictor",
     "LLMCardSelector",
     "LLMDeduplicator",
     "LineageExcluder",
     "MemoryAdmitter",
+    "MEMORY_EVENT_SCHEMA_VERSION",
+    "MemoryEventRecord",
     "MemoryReadPipeline",
     "MemorySelection",
     "MemoryWritePipeline",
@@ -71,4 +83,8 @@ __all__ = [
     "TopThetaBudgeter",
     "WriteLedger",
     "WriteLedgerRecord",
+    "emit_memory_event",
+    "memory_event_context",
+    "new_memory_decision_id",
+    "resolve_memory_event_path",
 ]

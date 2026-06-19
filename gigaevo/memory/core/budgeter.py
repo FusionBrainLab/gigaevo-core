@@ -4,6 +4,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from gigaevo.memory.core.auctioneer import AuctionBid
+from gigaevo.memory.core.events import emit_memory_event
 
 
 class TopThetaBudgeter(BaseModel):
@@ -24,6 +25,17 @@ class TopThetaBudgeter(BaseModel):
             :max_cards
         ]
         dropped = [c for c in card_ids if c not in kept]
+        emit_memory_event(
+            component="Budgeter",
+            event_type="budget.cap",
+            payload={
+                "winner_count": len(card_ids),
+                "max_cards": max_cards,
+                "kept_ids": kept,
+                "dropped_ids": dropped,
+                "theta_by_card_id": theta,
+            },
+        )
         logger.debug(
             "[Memory][Budgeter] Capped {} auction winner(s) to max_cards={}: kept={} dropped={}",
             len(card_ids),
