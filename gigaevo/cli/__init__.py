@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import os
+import sys
 from typing import Any
 
 import click
@@ -52,12 +54,24 @@ class LazyGroup(click.Group):
         return None
 
     def invoke(self, ctx: click.Context) -> Any:
-        # Convert missing-manifest errors from any subcommand into a clean
-        # ClickException (exit 1, no traceback) instead of an uncaught
-        # FileNotFoundError with exit 0.
         try:
-            return super().invoke(ctx)
+            result = super().invoke(ctx)
+            # Force a late EPIPE (small output lingers in the block buffer until
+            # exit) to surface here, not at the interpreter's shutdown flush.
+            sys.stdout.flush()
+            return result
+        except BrokenPipeError:
+            # Downstream reader (e.g. `gigaevo top | head`) closed the pipe:
+            # redirect stdout to devnull so the shutdown flush can't re-raise,
+            # then exit quietly like a Unix filter instead of dumping a traceback.
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            except (OSError, ValueError):
+                pass
+            raise SystemExit(0) from None
         except FileNotFoundError as exc:
+            # Convert missing-manifest errors into a clean ClickException (exit 1,
+            # no traceback) instead of an uncaught FileNotFoundError with exit 0.
             msg = str(exc)
             if "experiment.yaml" in msg:
                 raise click.ClickException(msg) from exc
