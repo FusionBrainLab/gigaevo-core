@@ -24,8 +24,8 @@ from .tools import Tool, ToolRegistry, ToolResult
 # =============================
 # Model rebuilding for forward references
 # =============================
-# 显式重建模型以确保在并发环境下所有前向引用（如 'Page'）都正确解析
-# 这对于多线程环境尤为重要
+# Rebuild models so forward references such as Page resolve consistently in
+# concurrent environments.
 MemoryUpdate.model_rebuild()
 ResearchOutput.model_rebuild()
 

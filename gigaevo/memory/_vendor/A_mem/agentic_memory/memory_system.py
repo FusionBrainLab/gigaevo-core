@@ -133,7 +133,7 @@ class AgenticMemorySystem:
         self._evolution_system_prompt = """
                                 You are an AI memory evolution agent responsible for managing and evolving a knowledge base.
                                 Analyze the new memory note according to keywords and context, also with their several nearest neighbors memory.
-                                Make decisions about its evolution.  
+                                Make decisions about its evolution.
 
                                 The new memory context:
                                 {context}
@@ -156,7 +156,7 @@ class AgenticMemorySystem:
                                     "should_evolve": True or False,
                                     "actions": ["strengthen", "update_neighbor"],
                                     "suggested_connections": ["neighbor_memory_ids"],
-                                    "tags_to_update": ["tag_1",..."tag_n"], 
+                                    "tags_to_update": ["tag_1",..."tag_n"],
                                     "new_context_neighborhood": ["new context",...,"new context"],
                                     "new_tags_neighborhood": [["tag_1",...,"tag_n"],...["tag_1",...,"tag_n"]],
                                 }}
@@ -177,7 +177,11 @@ class AgenticMemorySystem:
                 try:
                     retriever.client.reset()
                 except Exception as e:
-                    logger.warning(f"Could not reset ChromaDB collection: {e}")
+                    logger.warning(
+                        "[Memory][AMem][MemorySystem] Could not reset ChromaDB "
+                        "collection: {}",
+                        e,
+                    )
             return retriever
 
         return PersistentChromaRetriever(
@@ -308,7 +312,7 @@ class AgenticMemorySystem:
                     // Don't include keywords that are the name of the speaker or time
                     // At least three keywords, but don't be too redundant.
                 ],
-                "context": 
+                "context":
                     // one sentence summarizing:
                     // - Main topic/domain
                     // - Key arguments/points
@@ -350,7 +354,8 @@ class AgenticMemorySystem:
                 },
             )
             logger.debug(
-                "[LLM DEBUG][analyze_content] Response received:\n" + str(response)
+                "[Memory][AMem][MemorySystem][AnalyzeContent] LLM response received:\n{}",
+                response,
             )
             parsed = self._parse_llm_json(response)
             # Ensure expected keys exist.
@@ -364,7 +369,11 @@ class AgenticMemorySystem:
                 "tags": parsed.get("tags", []) if isinstance(parsed, dict) else [],
             }
         except Exception as e:
-            logger.error(f"Error analyzing content: {e}")
+            logger.error(
+                "[Memory][AMem][MemorySystem][AnalyzeContent] Failed to analyze "
+                "content: {}",
+                e,
+            )
             return {"keywords": [], "context": "General", "tags": []}
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
@@ -458,7 +467,11 @@ class AgenticMemorySystem:
 
             return memory_str, indices
         except Exception as e:
-            logger.error(f"Error in find_related_memories: {str(e)}")
+            logger.error(
+                "[Memory][AMem][MemorySystem][FindRelated] Failed to find related "
+                "memories: {}",
+                e,
+            )
             return "", []
 
     def find_related_memories_raw(self, query: str, k: int = 5) -> str:
@@ -757,7 +770,10 @@ class AgenticMemorySystem:
 
             return memories[:k]
         except Exception as e:
-            logger.error(f"Error in search_agentic: {str(e)}")
+            logger.error(
+                "[Memory][AMem][MemorySystem][SearchAgentic] Agentic search failed: {}",
+                e,
+            )
             return []
 
     def process_memory(self, note: MemoryNote) -> tuple[bool, MemoryNote]:
@@ -841,7 +857,10 @@ class AgenticMemorySystem:
                     },
                 )
                 logger.debug(
-                    f"[LLM DEBUG][process_memory] Response for note {note.id}:\n{response}"
+                    "[Memory][AMem][MemorySystem][ProcessMemory] LLM response for "
+                    "note {}:\n{}",
+                    note.id,
+                    response,
                 )
 
                 response_json = self._parse_llm_json(response)
@@ -900,10 +919,16 @@ class AgenticMemorySystem:
                 return should_evolve, note
 
             except (json.JSONDecodeError, KeyError, Exception) as e:
-                logger.error(f"Error in memory evolution: {str(e)}")
+                logger.error(
+                    "[Memory][AMem][MemorySystem][Evolution] Memory evolution failed: {}",
+                    e,
+                )
                 return False, note
 
         except Exception as e:
             # For testing purposes, catch all exceptions and return the original note
-            logger.error(f"Error in process_memory: {str(e)}")
+            logger.error(
+                "[Memory][AMem][MemorySystem][ProcessMemory] Processing failed: {}",
+                e,
+            )
             return False, note

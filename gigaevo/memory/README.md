@@ -161,9 +161,17 @@ mem.close()    # clean shutdown
 - API is authoritative when API mode is enabled.
 - Local state is a synchronized, query-optimized cache:
   - `api_index.json`: card ID <-> entity UUID mapping + known version IDs + normalized cards
+  - `memory_events.jsonl`: canonical read/write/backend event stream for debugging
+  - `write_ledger.jsonl`: append-only ingest/eviction verdict ledger
   - `amem_exports/amem_memories.jsonl`: exported cards for GAM ingestion
   - `gam_shared/amem_store/...`: GAM page/index store
   - `chroma/...`: local vector index used by A-MEM/GAM components
+
+### Observability
+
+- `memory_events.jsonl` is the primary trace: read requests/retrievals/selections, auction draws, budget caps, write requests/verdicts/sweep summaries, backend init/persist/rebuild/search/refresh, GAM planner/search/reflection/iteration telemetry, and posterior bridge summaries.
+- `write_ledger.jsonl` mirrors write-path verdicts in a compact append-only ledger.
+- `python tools/memory_event_report.py <run-dir-or-memory-dir>` summarizes both files plus exported cards and should be the first stop for debugging empty selections, repeated winners, harmful-card evictions, GAM planner/search/reflection behavior, or backend rebuild/search failures.
 
 ## API Mapping
 

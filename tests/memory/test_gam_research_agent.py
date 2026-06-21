@@ -14,6 +14,7 @@ Pins the post-audit behavior:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from gigaevo.memory._vendor.GAM_root.gam.agents.research_agent import ResearchAgent
@@ -24,6 +25,7 @@ from gigaevo.memory._vendor.GAM_root.gam.schemas import (
     Hit,
     MemoryState,
 )
+from gigaevo.memory.core.events import memory_event_context
 
 _PLAN = {
     "tools": ["keyword"],
@@ -46,6 +48,10 @@ def _final(*ids: str) -> dict:
     }
 
 
+def _event_rows(path):
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 class _FakePage:
     def __init__(self, card_id: str) -> None:
         self.header = card_id
@@ -54,8 +60,23 @@ class _FakePage:
             "amem_id": card_id,
             "amem": {
                 "id": card_id,
+                "category": "general",
                 "description": f"desc {card_id}",
+                "task_description_summary": f"task summary {card_id}",
+                "task_description": f"task context {card_id}",
+                "strategy": "exploration",
+                "keywords": [f"kw-{card_id}", "mechanism"],
                 "explanation": {"summary": f"why {card_id}"},
+                "works_with": ["ally-card"],
+                "links": ["related-card"],
+                "evolution_statistics": {
+                    "ALL": {
+                        "intro_events": 4,
+                        "efficacy_confident": True,
+                        "IntroGain_best_adj_median": 0.25,
+                        "DownsideRate_best": 0.1,
+                    }
+                },
             },
         }
 
@@ -294,3 +315,61 @@ def test_planning_request_defaults_to_full_request():
     agent, gen = _make_agent(decisions=[_final("c1")])
     agent.research("FULL_REQUEST_ONLY")
     assert "FULL_REQUEST_ONLY" in gen.planning_prompts[0]
+
+
+# --- prompt quality -----------------------------------------------------------
+
+
+def test_decision_prompt_includes_compact_candidate_context():
+    agent, gen = _make_agent(decisions=[_final("c1")])
+    agent.research("pick cards")
+
+    prompt = gen.decision_prompts[0]
+    assert '"task_description_summary": "task summary c1"' in prompt
+    assert '"task_description": "task context c1"' in prompt
+    assert '"strategy": "exploration"' in prompt
+    assert '"keywords": [' in prompt
+    assert "kw-c1" in prompt
+    assert '"works_with": [' in prompt
+    assert '"links": [' in prompt
+    assert (
+        '"efficacy": "introduced in 4 children; median improvement vs cohort +0.2500; downside 10% (confident)"'
+        in prompt
+    )
+
+
+# --- canonical telemetry ------------------------------------------------------
+
+
+def test_experimental_pipeline_emits_canonical_gam_events(tmp_path):
+    path = tmp_path / "memory_events.jsonl"
+    agent, _ = _make_agent(decisions=[_final("c1")])
+
+    with memory_event_context(decision_id="d-gam", event_path=path):
+        agent.research("pick cards")
+
+    rows = _event_rows(path)
+    types = [row["event_type"] for row in rows]
+
+    assert "gam.research.start" in types
+    assert "gam.retriever_update" in types
+    assert "gam.plan" in types
+    assert "gam.search.tool" in types
+    assert "gam.search" in types
+    assert "gam.reflection" in types
+    assert "gam.iteration" in types
+    assert "gam.research.complete" in types
+    assert all(row["decision_id"] == "d-gam" for row in rows)
+
+    plan = [row for row in rows if row["event_type"] == "gam.plan"][-1]
+    assert plan["payload"]["outcome"] == "ok"
+    assert plan["payload"]["pipeline_mode"] == "experimental"
+    assert plan["payload"]["filtered_tools"] == ["keyword"]
+
+    search = [row for row in rows if row["event_type"] == "gam.search"][-1]
+    assert search["payload"]["mode"] == "no_integrate"
+    assert search["payload"]["idea_count"] == 3
+
+    reflection = [row for row in rows if row["event_type"] == "gam.reflection"][-1]
+    assert reflection["payload"]["mode"] == "final"
+    assert reflection["payload"]["top_idea_ids"] == ["c1"]

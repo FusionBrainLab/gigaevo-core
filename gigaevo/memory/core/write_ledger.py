@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from uuid import uuid4
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +35,14 @@ class WriteLedgerRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    schema_version: str = Field(
+        default="write_ledger.v1",
+        description="Stable schema id for append-only write ledger rows.",
+    )
+    record_id: str = Field(
+        default_factory=lambda: uuid4().hex,
+        description="Unique id for this ledger row.",
+    )
     timestamp_utc: str = Field(
         description="ISO-8601 UTC time the verdict was recorded."
     )

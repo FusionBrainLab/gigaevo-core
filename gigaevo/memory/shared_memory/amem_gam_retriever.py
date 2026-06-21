@@ -194,10 +194,10 @@ def build_retrievers(
             )
             index_retriever.build(page_store)
             retrievers["page_index"] = index_retriever
-            logger.debug("[Memory][AmemGamRetriever]Index retriever ready")
+            logger.debug("[Memory][AmemGamRetriever] Index retriever ready")
         except Exception as exc:
             logger.warning(
-                "[Memory][AmemGamRetriever]Index retriever init failed: {}", exc
+                "[Memory][AmemGamRetriever] Index retriever init failed: {}", exc
             )
 
     for tool_name, extra in vector_tool_configs.items():
@@ -212,11 +212,11 @@ def build_retrievers(
             }
             retrievers[tool_name] = ChromaRetriever(chroma_config)
             logger.debug(
-                "[Memory][AmemGamRetriever]Chroma retriever ready: {}", tool_name
+                "[Memory][AmemGamRetriever] Chroma retriever ready: {}", tool_name
             )
         except Exception as exc:
             logger.warning(
-                "[Memory][AmemGamRetriever]Chroma retriever init for '{}' failed: {}",
+                "[Memory][AmemGamRetriever] Chroma retriever init for '{}' failed: {}",
                 tool_name,
                 exc,
             )
@@ -231,10 +231,10 @@ def build_retrievers(
             bm25_retriever = BM25Retriever(bm25_config)
             bm25_retriever.build(page_store)
             retrievers["keyword"] = bm25_retriever
-            logger.debug("[Memory][AmemGamRetriever]BM25 retriever ready")
+            logger.debug("[Memory][AmemGamRetriever] BM25 retriever ready")
         except Exception as exc:
             logger.warning(
-                "[Memory][AmemGamRetriever]BM25 retriever init failed: {}", exc
+                "[Memory][AmemGamRetriever] BM25 retriever init failed: {}", exc
             )
 
     return retrievers

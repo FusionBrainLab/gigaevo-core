@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -9,6 +10,11 @@ from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.core.deduplicator import LLMDeduplicator
+from gigaevo.memory.core.events import (
+    emit_memory_event,
+    memory_event_context,
+    resolve_memory_event_path,
+)
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
 from gigaevo.memory.core.write_ledger import WriteLedger
@@ -76,6 +82,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         cfg = self.config
         cfg.checkpoint_path.mkdir(parents=True, exist_ok=True)
+        self._event_path = resolve_memory_event_path(cfg.checkpoint_path)
 
         self._iters_after_rebuild = 0
         self._gam_build_failed = False
@@ -155,6 +162,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
             evictor=evictor if evictor is not None else HarmEvictor(),
             deduplicator=deduplicator,
             ledger=WriteLedger(cfg.checkpoint_path / "write_ledger.jsonl"),
+            event_path=self._event_path,
         )
 
         # --- GAM search ---
@@ -204,6 +212,43 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self._sync_from_api(force_full=True)
 
         self._state.mark_ready()
+        self._emit_store_event(
+            "store.init",
+            {
+                "checkpoint_path": cfg.checkpoint_path,
+                "index_file": cfg.index_file,
+                "export_file": cfg.export_file,
+                "card_count": len(self.card_store.cards),
+                "index_exists": cfg.index_file.exists(),
+                "export_exists": cfg.export_file.exists(),
+                "api_enabled": self.api is not None,
+                "api_sync_enabled": self.api_sync is not None,
+                "llm_enabled": self.llm_service is not None,
+                "agentic_enabled": self._has_agentic,
+                "note_sync_enabled": self.note_sync is not None,
+                "gam_enabled": self.gam is not None,
+                "research_agent_ready": self.research_agent is not None,
+                "embedding_model_name": cfg.embedding_model_name,
+                "search_limit": cfg.search_limit,
+                "rebuild_interval": cfg.rebuild_interval,
+            },
+            level="INFO",
+        )
+
+    def _emit_store_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        level: str = "DEBUG",
+    ) -> None:
+        emit_memory_event(
+            component="Store",
+            event_type=event_type,
+            payload=payload or {},
+            level=level,
+            event_path=self._event_path,
+        )
 
     def _get_api_sync(self) -> ApiSync | None:
         """Lazily create ApiSync if mem.api was set post-construction."""
@@ -227,8 +272,28 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def _sync_from_api(self, force_full: bool = False) -> bool:
         sync = self._get_api_sync()
         if sync is None:
+            self._emit_store_event(
+                "store.api_sync",
+                {"force_full": force_full, "outcome": "no_sync_config"},
+            )
             return False
-        changed = sync.sync(force_full=force_full)
+        started = perf_counter()
+        try:
+            changed = sync.sync(force_full=force_full)
+        except Exception as exc:
+            self._emit_store_event(
+                "store.api_sync",
+                {
+                    "force_full": force_full,
+                    "outcome": "exception",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                    "card_count": len(self.card_store.cards),
+                },
+                level="WARNING",
+            )
+            raise
         if changed:
             self._gam_build_failed = False  # new data — retry build
         needs_rebuild = changed or (
@@ -240,6 +305,18 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.rebuild()
         else:
             self._persist_index()
+        self._emit_store_event(
+            "store.api_sync",
+            {
+                "outcome": "changed" if changed else "unchanged",
+                "force_full": force_full,
+                "changed": changed,
+                "needs_rebuild": needs_rebuild,
+                "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                "card_count": len(self.card_store.cards),
+            },
+            level="INFO" if changed else "DEBUG",
+        )
         return changed
 
     def apply_merges(self, merges: list[tuple[str, AnyCard]]) -> list[str]:
@@ -266,8 +343,27 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 logger.warning(
                     "[Memory][Store] Merge into card {!r} failed: {}", card_id, exc
                 )
+                self._emit_store_event(
+                    "store.merge_target_failed",
+                    {
+                        "card_id": card_id,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                    level="WARNING",
+                )
         if updated_ids:
             self._persist_index()
+        self._emit_store_event(
+            "store.merge",
+            {
+                "outcome": "updated" if updated_ids else "no_updates",
+                "requested_count": len(merges),
+                "updated_count": len(updated_ids),
+                "updated_ids": updated_ids,
+            },
+            level="INFO" if updated_ids else "DEBUG",
+        )
         return updated_ids
 
     def _insert_new_card(self, card: AnyCard) -> tuple[str, bool]:
@@ -275,10 +371,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
         indicates whether a periodic rebuild (which includes index persist)
         was triggered."""
         card_id = self.card_store.ensure_id(card)
+        enrichments: dict[str, Any] = {}
 
         if self.config.enable_llm_card_enrichment and self.memory_system is not None:
             analysis = self.memory_system.analyze_content(card.description)
-            enrichments: dict[str, Any] = {}
             if not card.keywords:
                 enrichments["keywords"] = analysis.get("keywords") or []
             if not card.task_description:
@@ -304,6 +400,22 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self.rebuild()
             rebuilt = True
 
+        self._emit_store_event(
+            "store.insert",
+            {
+                "outcome": "inserted",
+                "card_id": card_id,
+                "category": store.cards[card_id].category,
+                "bank_card_count": len(store.cards),
+                "sync_mode": "api" if sync is not None else "local",
+                "note_sync_enabled": self.note_sync is not None,
+                "enriched_fields": sorted(enrichments),
+                "dedup_retrievers_invalidated": True,
+                "iters_after_rebuild": self._iters_after_rebuild,
+                "rebuild_interval": self.config.rebuild_interval,
+                "rebuild_triggered": rebuilt,
+            },
+        )
         return card_id, rebuilt
 
     def save_card_direct(self, card: AnyCard) -> str:
@@ -400,6 +512,16 @@ class AmemGamMemory(GigaEvoMemoryBase):
             self._last_seen_index_mtime = self.config.index_file.stat().st_mtime
         except OSError as exc:
             logger.debug("[Memory][Store] post-persist mtime read failed: {}", exc)
+        self._emit_store_event(
+            "store.persist",
+            {
+                "outcome": "persisted",
+                "index_file": self.config.index_file,
+                "serialized_count": len(serialized) if serialized is not None else None,
+                "bank_card_count": len(self.card_store.cards),
+                "last_seen_index_mtime": self._last_seen_index_mtime,
+            },
+        )
 
     def _refresh_from_disk_if_stale(self) -> None:
         """Reload card_store + rebuild GAM agent if the on-disk index changed.
@@ -420,25 +542,59 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if mtime <= self._last_seen_index_mtime:
             return
 
+        before_count = len(self.card_store.cards)
+        previous_mtime = self._last_seen_index_mtime
+        started = perf_counter()
         try:
             self.card_store.reload()
         except Exception as exc:
             logger.warning("[Memory][Store] card_store reload failed: {}", exc)
+            self._emit_store_event(
+                "store.refresh",
+                {
+                    "outcome": "reload_failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "index_file": cfg.index_file,
+                    "previous_mtime": previous_mtime,
+                    "observed_mtime": mtime,
+                    "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                },
+                level="WARNING",
+            )
             return
 
+        rebuild_outcome = "not_needed"
         if self._has_agentic and self.gam is not None and cfg.export_file.exists():
             try:
                 self.gam.build_research_agent()
                 self.research_agent = self.gam.agent
                 self._gam_build_failed = False
+                rebuild_outcome = "rebuilt"
             except MemoryRetrieverError as exc:
                 logger.warning(
                     "[Memory][Store] Stale-refresh GAM rebuild failed: {}", exc
                 )
                 self.research_agent = None
                 self._gam_build_failed = True
+                rebuild_outcome = "rebuild_failed"
 
         self._last_seen_index_mtime = mtime
+        self._emit_store_event(
+            "store.refresh",
+            {
+                "outcome": "reloaded",
+                "rebuild_outcome": rebuild_outcome,
+                "index_file": cfg.index_file,
+                "export_file": cfg.export_file,
+                "previous_mtime": previous_mtime,
+                "observed_mtime": mtime,
+                "card_count_before": before_count,
+                "card_count_after": len(self.card_store.cards),
+                "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+            },
+            level="INFO",
+        )
 
     def research(
         self,
@@ -455,44 +611,144 @@ class AmemGamMemory(GigaEvoMemoryBase):
         on-disk index, then dispatches to the GAM research agent. Falls back
         to a local-cards ResearchOutput when GAM is unavailable.
         """
+        started = perf_counter()
         self._refresh_from_disk_if_stale()
+        fallback_error: Exception | None = None
         if self.research_agent is not None:
             try:
-                return self.research_agent.research(
-                    query,
-                    memory_state=memory_state,
-                    planning_request=planning_request,
-                    exclude_ids=exclude_ids,
-                    random_drop_dose=random_drop_dose,
+                with memory_event_context(event_path=self._event_path):
+                    output = self.research_agent.research(
+                        query,
+                        memory_state=memory_state,
+                        planning_request=planning_request,
+                        exclude_ids=exclude_ids,
+                        random_drop_dose=random_drop_dose,
+                    )
+                self._emit_store_event(
+                    "store.research",
+                    {
+                        "outcome": "ok",
+                        "mode": "gam",
+                        "query_chars": len(query),
+                        "memory_state_chars": len(memory_state or ""),
+                        "planning_request_chars": len(planning_request or ""),
+                        "exclude_count": len(exclude_ids),
+                        "exclude_ids": sorted(exclude_ids),
+                        "random_drop_dose": random_drop_dose,
+                        "raw_memory_type": type(output.raw_memory).__name__,
+                        "has_raw_memory": output.raw_memory is not None,
+                        "integrated_memory_chars": len(output.integrated_memory or ""),
+                        "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                    },
                 )
+                return output
             except Exception as exc:
                 logger.warning(
                     "[Memory][Store] GAM research failed, falling back to local cards: {}",
                     exc,
                 )
+                fallback_error = exc
         text = self._search_local_cards(query, memory_state=memory_state)
+        payload = {
+            "outcome": "fallback",
+            "mode": "local_fallback",
+            "query_chars": len(query),
+            "memory_state_chars": len(memory_state or ""),
+            "planning_request_chars": len(planning_request or ""),
+            "exclude_count": len(exclude_ids),
+            "exclude_ids": sorted(exclude_ids),
+            "random_drop_dose": random_drop_dose,
+            "integrated_memory_chars": len(text),
+            "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+        }
+        if fallback_error is not None:
+            payload.update(
+                {
+                    "fallback_reason": "gam_exception",
+                    "error_type": type(fallback_error).__name__,
+                    "error": str(fallback_error),
+                }
+            )
+        self._emit_store_event(
+            "store.research",
+            payload,
+            level="INFO",
+        )
         return ResearchOutput(integrated_memory=text, raw_memory=None)
 
     def search(self, query: str, memory_state: str | None = None) -> str:
         """Search memory cards. Tries GAM agent, then API, then local keyword match."""
+        started = perf_counter()
         self._refresh_from_disk_if_stale()
         if self.api is not None:
             self._sync_from_api(force_full=False)
 
+        fallback_error: Exception | None = None
         if self.research_agent is not None:
             try:
-                return self.research_agent.research(
-                    query, memory_state=memory_state
-                ).integrated_memory
+                with memory_event_context(event_path=self._event_path):
+                    text = self.research_agent.research(
+                        query, memory_state=memory_state
+                    ).integrated_memory
+                self._emit_store_event(
+                    "store.search",
+                    {
+                        "outcome": "ok",
+                        "mode": "gam",
+                        "query_chars": len(query),
+                        "memory_state_chars": len(memory_state or ""),
+                        "result_chars": len(text or ""),
+                        "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                    },
+                )
+                return text
             except Exception as exc:
                 logger.warning(
                     "[Memory][Store] GAM search failed, falling back to non-agentic search: {}",
                     exc,
                 )
+                fallback_error = exc
 
         if self.api is not None:
-            return self._search_via_api(query, memory_state=memory_state)
-        return self._search_local_cards(query, memory_state=memory_state)
+            try:
+                text = self._search_via_api(query, memory_state=memory_state)
+                mode = "api"
+            except Exception as exc:
+                self._emit_store_event(
+                    "store.search",
+                    {
+                        "mode": "api",
+                        "outcome": "exception",
+                        "query_chars": len(query),
+                        "memory_state_chars": len(memory_state or ""),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                    },
+                    level="WARNING",
+                )
+                raise
+        else:
+            text = self._search_local_cards(query, memory_state=memory_state)
+            mode = "local"
+        payload = {
+            "outcome": "fallback" if fallback_error is not None else "ok",
+            "mode": mode,
+            "query_chars": len(query),
+            "memory_state_chars": len(memory_state or ""),
+            "result_chars": len(text or ""),
+            "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+        }
+        if fallback_error is not None:
+            payload.update(
+                {
+                    "fallback_reason": "gam_exception",
+                    "error_type": type(fallback_error).__name__,
+                    "error": str(fallback_error),
+                }
+            )
+        self._emit_store_event("store.search", payload)
+        return text
 
     def get_card(self, card_id: str) -> AnyCard | None:
         """Return a card by ID, or None if not found."""
@@ -503,12 +759,26 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
     def rebuild(self) -> None:
         """Persist cards, re-export JSONL, rebuild GAM index and dedup retrievers."""
+        started = perf_counter()
         serialized = self.card_store.serialize_all()
         self._persist_index(serialized=serialized)
         if not self._has_agentic:
+            self._emit_store_event(
+                "store.rebuild",
+                {
+                    "outcome": "persist_only_no_agentic",
+                    "serialized_count": len(serialized),
+                    "bank_card_count": len(self.card_store.cards),
+                    "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+                },
+                level="INFO",
+            )
             return
+        exported = False
         if self.note_sync is not None:
             self.note_sync.export_jsonl(self.config.export_file, serialized)
+            exported = True
+        outcome = "no_gam"
         if self.gam is not None:
             # Track state only when already ready (not during initialization)
             track_state = self._state.current == "ready"
@@ -518,6 +788,7 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self.gam.build_research_agent()
                 self.research_agent = self.gam.agent
                 self._gam_build_failed = False
+                outcome = "rebuilt"
                 if track_state:
                     self._state.mark_ready()
             except MemoryRetrieverError as exc:
@@ -525,10 +796,25 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 self.gam.clear_research_agent()
                 self.research_agent = None
                 self._gam_build_failed = True
+                outcome = "gam_build_failed"
                 if track_state:
                     self._state.mark_error(f"GAM build failed: {exc}")
         self.dedup.invalidate_retrievers()
         self._iters_after_rebuild = 0
+        self._emit_store_event(
+            "store.rebuild",
+            {
+                "outcome": outcome,
+                "serialized_count": len(serialized),
+                "bank_card_count": len(self.card_store.cards),
+                "exported": exported,
+                "export_file": self.config.export_file,
+                "research_agent_ready": self.research_agent is not None,
+                "dedup_retrievers_invalidated": True,
+                "duration_ms": round((perf_counter() - started) * 1000.0, 3),
+            },
+            level="INFO" if outcome != "gam_build_failed" else "WARNING",
+        )
 
     def delete(self, memory_id: str) -> bool:
         """Delete a card by ID or entity ID. Returns True if found and removed."""
@@ -538,10 +824,18 @@ class AmemGamMemory(GigaEvoMemoryBase):
         if sync is not None:
             card_id = sync.delete_from_api(key)
             if card_id is None:
+                self._emit_store_event(
+                    "store.delete",
+                    {"requested_id": key, "outcome": "not_found_api"},
+                )
                 return False
         else:
             resolved = store.resolve_card_id(key)
             if resolved is None:
+                self._emit_store_event(
+                    "store.delete",
+                    {"requested_id": key, "outcome": "not_found_local"},
+                )
                 return False
             card_id = resolved
             store.clear_entity(card_id)
@@ -557,11 +851,26 @@ class AmemGamMemory(GigaEvoMemoryBase):
         else:
             self._persist_index()
 
+        self._emit_store_event(
+            "store.delete",
+            {
+                "requested_id": key,
+                "card_id": card_id,
+                "outcome": "deleted",
+                "sync_mode": "api" if sync is not None else "local",
+                "bank_card_count": len(store.cards),
+            },
+            level="INFO",
+        )
         return True
 
     def close(self) -> None:
         if self.api is not None:
             self.api.close()
+        self._emit_store_event(
+            "store.close",
+            {"outcome": "closed", "api_enabled": self.api is not None},
+        )
 
     def __enter__(self) -> AmemGamMemory:
         return self
@@ -580,5 +889,14 @@ class AmemGamMemory(GigaEvoMemoryBase):
                     "[Memory][Store] Final rebuild during context exit failed; "
                     "some changes may not be persisted: {}",
                     exc,
+                )
+                self._emit_store_event(
+                    "store.close",
+                    {
+                        "outcome": "final_rebuild_failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                    level="WARNING",
                 )
         self.close()

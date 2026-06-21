@@ -32,6 +32,14 @@ def _write_fixture(run_dir):
         memory_dir / "memory_events.jsonl",
         [
             _event(
+                "read.request",
+                {"max_cards": 1, "exclude_count": 0},
+            ),
+            _event(
+                "read.retrieval",
+                {"duration_ms": 12.5, "raw_memory": {"type": "dict"}},
+            ),
+            _event(
                 "read.selection",
                 {
                     "candidate_ids": ["idea-a", "program-x"],
@@ -44,6 +52,7 @@ def _write_fixture(run_dir):
                     "selected_ids": ["idea-a"],
                     "selected_count": 1,
                     "empty_reason": "",
+                    "timing_ms": {"total": 20.0},
                     "slate": [
                         {"card_id": "idea-a", "selected": True},
                         {"card_id": "program-x", "selected": True},
@@ -80,9 +89,73 @@ def _write_fixture(run_dir):
                     "selected_ids": [],
                     "selected_count": 0,
                     "empty_reason": "auction_rejected",
+                    "timing_ms": {"total": 30.0},
                     "slate": [{"card_id": "idea-b", "selected": False}],
                 },
                 decision_id="d2",
+            ),
+            _event(
+                "write.ingest",
+                {
+                    "incoming_id": "idea-a",
+                    "final_id": "idea-a",
+                    "outcome": "added",
+                    "category": "general",
+                },
+            ),
+            _event(
+                "write.sweep",
+                {
+                    "incoming_id": "idea-b",
+                    "final_id": "idea-b",
+                    "outcome": "evicted",
+                    "category": "general",
+                },
+            ),
+            _event(
+                "store.research",
+                {"mode": "gam", "duration_ms": 18.0},
+            ),
+            _event(
+                "store.rebuild",
+                {"outcome": "rebuilt", "duration_ms": 42.0},
+            ),
+            _event(
+                "gam.plan",
+                {
+                    "outcome": "ok",
+                    "pipeline_mode": "experimental",
+                    "filtered_tools": ["keyword"],
+                    "duration_ms": 2.0,
+                },
+            ),
+            _event(
+                "gam.search.tool",
+                {
+                    "mode": "no_integrate",
+                    "tool": "keyword",
+                    "hit_count": 3,
+                },
+            ),
+            _event(
+                "gam.search",
+                {
+                    "outcome": "ideas",
+                    "mode": "no_integrate",
+                    "selected_tools": ["keyword"],
+                    "idea_count": 2,
+                    "duration_ms": 4.0,
+                },
+            ),
+            _event(
+                "gam.reflection",
+                {
+                    "outcome": "ok",
+                    "pipeline_mode": "experimental",
+                    "mode": "final",
+                    "top_idea_ids": ["idea-a"],
+                    "duration_ms": 6.0,
+                },
             ),
             _event(
                 "injection_posterior.compute",
@@ -157,7 +230,12 @@ def test_build_report_summarizes_memory_events_and_artifacts(tmp_path) -> None:
     summary = build_report(tmp_path, top_n=5)
 
     assert summary["files"]["checkpoint_dir"] == str(tmp_path / "memory")
+    assert summary["events"]["by_component"]["write"] == 2
     assert summary["read"]["decisions"] == 2
+    assert summary["read"]["request_events"] == 1
+    assert summary["read"]["retrieval_events"] == 1
+    assert summary["read"]["avg_retrieval_ms"] == 12.5
+    assert summary["read"]["avg_total_ms"] == 25.0
     assert summary["read"]["selected_decisions"] == 1
     assert summary["read"]["empty_reasons"] == {"selected": 1, "auction_rejected": 1}
     assert summary["read"]["empty_after_candidates"] == 1
@@ -172,6 +250,28 @@ def test_build_report_summarizes_memory_events_and_artifacts(tmp_path) -> None:
         "merged": 1,
         "rejected_harm": 1,
     }
+    assert summary["write_events"]["events"] == 2
+    assert summary["write_events"]["outcomes"] == {"added": 1, "evicted": 1}
+    assert summary["store_events"]["events"] == 2
+    assert summary["store_events"]["by_type"] == {
+        "store.research": 1,
+        "store.rebuild": 1,
+    }
+    assert summary["store_events"]["modes"] == {"gam": 1}
+    assert summary["store_events"]["outcomes"] == {"rebuilt": 1}
+    assert summary["gam_events"]["events"] == 4
+    assert summary["gam_events"]["by_type"] == {
+        "gam.plan": 1,
+        "gam.search.tool": 1,
+        "gam.search": 1,
+        "gam.reflection": 1,
+    }
+    assert summary["gam_events"]["outcomes"] == {"ok": 2, "ideas": 1}
+    assert summary["gam_events"]["modes"] == {"no_integrate": 2, "final": 1}
+    assert summary["gam_events"]["pipeline_modes"] == {"experimental": 2}
+    assert summary["gam_events"]["tools"] == {"keyword": 3}
+    assert summary["gam_events"]["avg_duration_ms"] == 4.0
+    assert summary["gam_events"]["max_duration_ms"] == 6.0
     assert summary["bank"]["cards"] == 2
     assert summary["bank"]["posterior_cards"] == 2
     assert summary["bank"]["confident_cards"] == 1
@@ -188,6 +288,12 @@ def test_format_report_contains_debug_sections(tmp_path) -> None:
     assert "Top Selected Cards" in text
     assert "program-x: 1" in text
     assert "Write Ledger" in text
+    assert "Write Events" in text
+    assert "Store Events" in text
+    assert "store.rebuild: 1" in text
+    assert "GAM Events" in text
+    assert "gam.reflection: 1" in text
+    assert "by component:" in text
     assert "Exported Bank" in text
 
 

@@ -387,7 +387,9 @@ def parse_llm_card_decision(
     try:
         decision = _DedupLLMDecision.model_validate_json(str(raw_text or ""))
     except ValidationError as exc:
-        logger.debug("[CardUpdateDedup] Invalid dedup decision payload: {}", exc)
+        logger.debug(
+            "[Memory][CardUpdateDedup] Invalid dedup decision payload: {}", exc
+        )
         return None
     action = decision.action
 
@@ -434,14 +436,14 @@ def parse_llm_card_decision(
     if action == "update" and not updates:
         if duplicate_of:
             logger.warning(
-                "[CardUpdateDedup] LLM returned 'update' with no valid updates; "
+                "[Memory][CardUpdateDedup] LLM returned 'update' with no valid updates; "
                 "downgrading to 'discard' (duplicate_of={!r})",
                 duplicate_of,
             )
             action = "discard"
         else:
             logger.warning(
-                "[CardUpdateDedup] LLM returned 'update' with no valid updates "
+                "[Memory][CardUpdateDedup] LLM returned 'update' with no valid updates "
                 "or duplicate_of; downgrading to 'add'"
             )
             action = "add"
@@ -449,13 +451,13 @@ def parse_llm_card_decision(
     if action == "discard" and not duplicate_of:
         if updates:
             logger.warning(
-                "[CardUpdateDedup] LLM returned 'discard' with no duplicate_of "
+                "[Memory][CardUpdateDedup] LLM returned 'discard' with no duplicate_of "
                 "but has updates; upgrading to 'update'"
             )
             action = "update"
         else:
             logger.warning(
-                "[CardUpdateDedup] LLM returned 'discard' with no duplicate_of; "
+                "[Memory][CardUpdateDedup] LLM returned 'discard' with no duplicate_of; "
                 "downgrading to 'add'"
             )
             action = "add"

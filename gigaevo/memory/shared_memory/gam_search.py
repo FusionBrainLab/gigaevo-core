@@ -83,7 +83,7 @@ class GamSearch:
                 records, self._gam_store_dir
             )
             logger.info(
-                "[Memory][GamSearch]Loaded {} cards, added {} new pages.",
+                "[Memory][GamSearch] Loaded {} cards, added {} new pages.",
                 len(records),
                 added,
             )
@@ -108,7 +108,7 @@ class GamSearch:
 
         if not retrievers:
             logger.info(
-                "[Memory][GamSearch]No GAM retrievers enabled after applying allowed_gam_tools. "
+                "[Memory][GamSearch] No GAM retrievers enabled after applying allowed_gam_tools. "
                 "GAM agentic search is disabled."
             )
             self.agent = None

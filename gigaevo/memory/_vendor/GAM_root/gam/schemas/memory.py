@@ -51,7 +51,9 @@ class InMemoryMemoryStore:
                     return MemoryState(**data)
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.debug(
-                    f"Warning: Failed to load memory state from {self._memory_file}: {e}"
+                    "[Memory][GAM][MemoryStore] Failed to load memory state from {}: {}",
+                    self._memory_file,
+                    e,
                 )
                 return MemoryState()
         return self._state
@@ -65,7 +67,9 @@ class InMemoryMemoryStore:
                     json.dump(state.model_dump(), f, ensure_ascii=False, indent=2)
             except Exception as e:
                 logger.debug(
-                    f"Warning: Failed to save memory state to {self._memory_file}: {e}"
+                    "[Memory][GAM][MemoryStore] Failed to save memory state to {}: {}",
+                    self._memory_file,
+                    e,
                 )
 
     def add(self, abstract: str) -> None:

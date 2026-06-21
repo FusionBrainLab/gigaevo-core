@@ -17,7 +17,10 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from time import perf_counter
 from typing import Any
+
+from loguru import logger
 
 from gigaevo.memory._vendor.GAM_root.gam.generator import AbsGenerator
 from gigaevo.memory._vendor.GAM_root.gam.prompts import (
@@ -50,7 +53,7 @@ from gigaevo.memory._vendor.GAM_root.gam.schemas import (
     ToolRegistry,
     TopIdea,
 )
-from loguru import logger
+from gigaevo.memory.core.events import emit_memory_event
 
 _VECTOR_TOOLS = {
     "vector",
@@ -75,6 +78,127 @@ _TOOL_ORDER = [
     "page_index",
 ]
 _PIPELINE_MODES = {"default", "experimental"}
+_GAM_MILLISECONDS_PER_SECOND = 1000.0
+_GAM_TIMING_DECIMALS = 3
+_GAM_TEXT_HEAD_CHARS = 240
+_GAM_CANDIDATE_TEXT_CHARS = 1200
+_GAM_CANDIDATE_LIST_LIMIT = 12
+_GAM_EVENT_ID_LIMIT = 50
+_GAM_EVENT_QUERY_LIMIT = 8
+
+
+def _elapsed_ms(started: float) -> float:
+    return round(
+        (perf_counter() - started) * _GAM_MILLISECONDS_PER_SECOND,
+        _GAM_TIMING_DECIMALS,
+    )
+
+
+def _head(value: Any, max_chars: int = _GAM_TEXT_HEAD_CHARS) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 16] + "...[truncated]"
+
+
+def _query_preview(values: list[Any]) -> list[str]:
+    return [_head(value) for value in values[:_GAM_EVENT_QUERY_LIMIT]]
+
+
+def _hit_page_ids(hits: list[Hit]) -> list[str]:
+    out: list[str] = []
+    for hit in hits:
+        page_id = str(hit.page_id or "").strip()
+        if page_id:
+            out.append(page_id)
+        if len(out) >= _GAM_EVENT_ID_LIMIT:
+            break
+    return out
+
+
+def _hit_source_counts(hits: list[Hit]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for hit in hits:
+        source = str(hit.source or "unknown")
+        counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
+def _idea_card_ids(ideas: list[dict[str, Any]]) -> list[str]:
+    ids: list[str] = []
+    for idea in ideas:
+        card_id = str(idea.get("card_id") or "").strip()
+        if card_id:
+            ids.append(card_id)
+        if len(ids) >= _GAM_EVENT_ID_LIMIT:
+            break
+    return ids
+
+
+def _clean_string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _compact_string(value: Any, max_chars: int = _GAM_CANDIDATE_TEXT_CHARS) -> str:
+    return _head(_clean_string(value), max_chars=max_chars)
+
+
+def _compact_list(value: Any, limit: int = _GAM_CANDIDATE_LIST_LIMIT) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _clean_string(item)
+        if text:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _card_efficacy_summary(card: dict[str, Any]) -> str:
+    if not isinstance(card, dict):
+        return ""
+    if card.get("category") == "program" and card.get("fitness") is not None:
+        try:
+            return f"exemplar fitness {float(card['fitness']):.4f}"
+        except (TypeError, ValueError):
+            return ""
+
+    stats = card.get("evolution_statistics")
+    if not isinstance(stats, dict):
+        return ""
+    block = stats.get("ALL")
+    if not isinstance(block, dict):
+        return ""
+    intro_events = block.get("intro_events")
+    median = block.get("IntroGain_best_adj_median")
+    scale = " vs cohort"
+    if median is None:
+        median = block.get("IntroGain_best_median")
+        scale = ""
+    if median is None or not block.get("efficacy_confident"):
+        return ""
+    try:
+        intros = int(intro_events or 0)
+        median_value = float(median)
+    except (TypeError, ValueError):
+        return ""
+    if intros <= 0:
+        return ""
+    summary = (
+        f"introduced in {intros} children; "
+        f"median improvement{scale} {median_value:+.4f}"
+    )
+    downside = block.get("DownsideRate_best")
+    if downside is not None:
+        try:
+            summary += f"; downside {float(downside):.0%}"
+        except (TypeError, ValueError):
+            pass
+    if median_value <= 0:
+        return summary + " (caution: non-positive median)"
+    return summary + " (confident)"
 
 
 def _drop_random_ideas(
@@ -112,12 +236,12 @@ class ResearchAgent:
         memory_store: MemoryStore | None = None,
         tool_registry: ToolRegistry | None = None,
         retrievers: dict[str, Retriever] | None = None,
-        generator: AbsGenerator | None = None,  # 必须传入Generator实例
+        generator: AbsGenerator | None = None,
         max_iters: int = 3,
         allowed_tools: list[str] | None = None,
         top_k_by_tool: dict[str, int] | None = None,
-        dir_path: str | None = None,  # 新增：文件系统存储路径
-        system_prompts: dict[str, str] | None = None,  # 新增：system prompts字典
+        dir_path: str | None = None,
+        system_prompts: dict[str, str] | None = None,
         pipeline_mode: str = "default",
         max_cards: int = 3,
     ) -> None:
@@ -134,22 +258,26 @@ class ResearchAgent:
         self.pipeline_mode = self._normalize_pipeline_mode(pipeline_mode)
         self.max_cards = max(1, int(max_cards))
 
-        # 初始化 system_prompts，默认值为空字符串
         default_system_prompts = {"planning": "", "integration": "", "reflection": ""}
         if system_prompts is None:
             self.system_prompts = default_system_prompts
         else:
-            # 合并用户提供的 prompts 和默认值
             self.system_prompts = {**default_system_prompts, **system_prompts}
 
         # Build indices upfront (if retrievers are provided)
         for name, r in self.retrievers.items():
             try:
-                # 调用 retriever 的 build 方法，传递 page_store
                 r.build(self.page_store)
-                logger.debug(f"Successfully built {name} retriever")
+                logger.debug(
+                    "[Memory][GAM][ResearchAgent][Init] Successfully built {} retriever",
+                    name,
+                )
             except Exception as e:
-                logger.error(f"Failed to build {name} retriever: {e}")
+                logger.error(
+                    "[Memory][GAM][ResearchAgent][Init] Failed to build {} retriever: {}",
+                    name,
+                    e,
+                )
                 pass
 
     @staticmethod
@@ -231,6 +359,86 @@ class ResearchAgent:
         active = set(self._active_tools())
         return [tool for tool in tools if tool in active]
 
+    def _emit_gam_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        level: str = "DEBUG",
+    ) -> None:
+        try:
+            emit_memory_event(
+                component="GAM",
+                event_type=event_type,
+                payload=payload or {},
+                level=level,
+            )
+        except Exception as exc:
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Event] Failed to emit {} event: {}",
+                event_type,
+                exc,
+            )
+
+    def _plan_payload(self, plan: SearchPlan) -> dict[str, Any]:
+        vector_query_counts = {
+            "vector": len(self._normalize_query_list(plan.vector_queries)),
+            "vector_description": len(
+                self._normalize_query_list(plan.vector_description_queries)
+            ),
+            "vector_task_description": len(
+                self._normalize_query_list(plan.vector_task_description_queries)
+            ),
+            "vector_explanation_summary": len(
+                self._normalize_query_list(plan.vector_explanation_summary_queries)
+            ),
+        }
+        return {
+            "tools": list(plan.tools),
+            "filtered_tools": self._filter_tools(plan.tools),
+            "active_tools": self._active_tools(),
+            "keyword_count": len(self._normalize_query_list(plan.keyword_collection)),
+            "vector_query_counts": vector_query_counts,
+            "page_index_count": len(plan.page_index or []),
+            "keyword_preview": _query_preview(plan.keyword_collection),
+            "vector_preview": {
+                "vector": _query_preview(plan.vector_queries),
+                "vector_description": _query_preview(plan.vector_description_queries),
+                "vector_task_description": _query_preview(
+                    plan.vector_task_description_queries
+                ),
+                "vector_explanation_summary": _query_preview(
+                    plan.vector_explanation_summary_queries
+                ),
+            },
+            "page_index_preview": list(
+                (plan.page_index or [])[:_GAM_EVENT_QUERY_LIMIT]
+            ),
+        }
+
+    def _emit_tool_search_event(
+        self,
+        *,
+        mode: str,
+        tool: str,
+        queries: list[Any],
+        top_k: int,
+        hits: list[Hit],
+    ) -> None:
+        self._emit_gam_event(
+            "gam.search.tool",
+            {
+                "mode": mode,
+                "tool": tool,
+                "top_k": top_k,
+                "query_count": len(queries),
+                "query_preview": _query_preview(queries),
+                "hit_count": len(hits),
+                "hit_ids": _hit_page_ids(hits),
+                "hit_sources": _hit_source_counts(hits),
+            },
+        )
+
     # ---- Public ----
     def research(
         self,
@@ -241,22 +449,62 @@ class ResearchAgent:
         exclude_ids: frozenset[str] = frozenset(),
         random_drop_dose: int = 0,
     ) -> ResearchOutput:
-        # 在开始研究前，确保检索器索引是最新的
-        self._update_retrievers()
+        started = perf_counter()
+        base_payload = {
+            "pipeline_mode": self.pipeline_mode,
+            "request_chars": len(request or ""),
+            "planning_request_chars": len(planning_request or ""),
+            "memory_state_chars": len(memory_state or ""),
+            "max_iters": self.max_iters,
+            "max_cards": self.max_cards,
+            "active_tools": self._active_tools(),
+            "top_k_by_tool": dict(self._top_k_by_tool),
+            "exclude_count": len(exclude_ids),
+            "exclude_ids": sorted(exclude_ids),
+            "random_drop_dose": random_drop_dose,
+        }
+        self._emit_gam_event("gam.research.start", base_payload)
+        try:
+            self._update_retrievers()
 
-        if self.pipeline_mode == "experimental":
-            return self._research_experimental(
-                request,
-                memory_state=memory_state,
-                planning_request=planning_request,
-                exclude_ids=exclude_ids,
-                random_drop_dose=random_drop_dose,
+            if self.pipeline_mode == "experimental":
+                output = self._research_experimental(
+                    request,
+                    memory_state=memory_state,
+                    planning_request=planning_request,
+                    exclude_ids=exclude_ids,
+                    random_drop_dose=random_drop_dose,
+                )
+            else:
+                output = self._research_default(
+                    request,
+                    memory_state=memory_state,
+                    planning_request=planning_request,
+                )
+            self._emit_gam_event(
+                "gam.research.complete",
+                {
+                    **base_payload,
+                    "outcome": "ok",
+                    "integrated_memory_chars": len(output.integrated_memory or ""),
+                    "raw_memory_type": type(output.raw_memory).__name__,
+                    "duration_ms": _elapsed_ms(started),
+                },
             )
-        return self._research_default(
-            request,
-            memory_state=memory_state,
-            planning_request=planning_request,
-        )
+            return output
+        except Exception as exc:
+            self._emit_gam_event(
+                "gam.research.exception",
+                {
+                    **base_payload,
+                    "outcome": "exception",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "duration_ms": _elapsed_ms(started),
+                },
+                level="WARNING",
+            )
+            raise
 
     def _research_default(
         self,
@@ -270,6 +518,7 @@ class ResearchAgent:
         next_request = planning_base
 
         for step in range(self.max_iters):
+            step_started = perf_counter()
             # Load current memory state dynamically
             current_memory_state = self.memory_store.load()
             plan = self._planning(
@@ -278,17 +527,38 @@ class ResearchAgent:
                 memory_state_override=memory_state,
             )
             plan.tools = self._filter_tools(plan.tools)
-            logger.debug("[GAM] Plan:")
-            logger.debug(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Planning] Plan: {}",
+                json.dumps(plan.__dict__, ensure_ascii=True, indent=2),
+            )
 
             temp = self._search(plan, temp, request)
-            logger.debug("[GAM] Retrieval result:")
-            logger.debug(json.dumps(temp.__dict__, ensure_ascii=True, indent=2))
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Search] Retrieval result: {}",
+                json.dumps(temp.__dict__, ensure_ascii=True, indent=2),
+            )
 
             decision = self._reflection(request, temp)
-            logger.debug("[GAM] Reflection:")
-            logger.debug(json.dumps(decision.__dict__, ensure_ascii=True, indent=2))
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Reflection] Decision: {}",
+                json.dumps(decision.__dict__, ensure_ascii=True, indent=2),
+            )
 
+            self._emit_gam_event(
+                "gam.iteration",
+                {
+                    "pipeline_mode": "default",
+                    "step": step,
+                    "max_iters": self.max_iters,
+                    "plan_tools": list(plan.tools),
+                    "filtered_tools": self._filter_tools(plan.tools),
+                    "result_chars": len(temp.content or ""),
+                    "source_count": len(temp.sources or []),
+                    "enough": bool(decision.enough),
+                    "new_request_chars": len(decision.new_request or ""),
+                    "duration_ms": _elapsed_ms(step_started),
+                },
+            )
             iterations.append(
                 {
                     "step": step,
@@ -329,6 +599,7 @@ class ResearchAgent:
         final_decision: ExperimentalDecision | None = None
 
         for step in range(self.max_iters):
+            step_started = perf_counter()
             current_memory_state = self.memory_store.load()
             plan = self._planning(
                 next_request,
@@ -336,12 +607,17 @@ class ResearchAgent:
                 memory_state_override=memory_state,
             )
             plan.tools = self._filter_tools(plan.tools)
-            logger.debug("[GAM][experimental] Plan:")
-            logger.debug(json.dumps(plan.__dict__, ensure_ascii=True, indent=2))
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Experimental][Planning] Plan: {}",
+                json.dumps(plan.__dict__, ensure_ascii=True, indent=2),
+            )
 
             retrieved = self._search_no_integrate(
-                plan, Result(), request,
-                exclude_ids=exclude_ids, random_drop_dose=random_drop_dose,
+                plan,
+                Result(),
+                request,
+                exclude_ids=exclude_ids,
+                random_drop_dose=random_drop_dose,
             )
             iteration_ideas = self._parse_retrieved_ideas(retrieved.content)
             for idea in iteration_ideas:
@@ -356,9 +632,27 @@ class ResearchAgent:
                 request=request,
                 retrieved_ideas=aggregated_ideas,
             )
-            logger.debug("[GAM][experimental] Reflection decision:")
-            logger.debug(json.dumps(decision.model_dump(), ensure_ascii=True, indent=2))
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Experimental][Reflection] Decision: {}",
+                json.dumps(decision.model_dump(), ensure_ascii=True, indent=2),
+            )
 
+            self._emit_gam_event(
+                "gam.iteration",
+                {
+                    "pipeline_mode": "experimental",
+                    "step": step,
+                    "max_iters": self.max_iters,
+                    "plan_tools": list(plan.tools),
+                    "filtered_tools": self._filter_tools(plan.tools),
+                    "retrieved_idea_count": len(iteration_ideas),
+                    "aggregated_idea_count": len(aggregated_ideas),
+                    "decision_mode": decision.mode,
+                    "top_idea_ids": [idea.card_id for idea in decision.top_ideas],
+                    "additional_query_count": len(decision.additional_queries),
+                    "duration_ms": _elapsed_ms(step_started),
+                },
+            )
             iterations.append(
                 {
                     "step": step,
@@ -466,19 +760,41 @@ class ResearchAgent:
             seen_ids.add(card_id)
 
             card = card_map.get(card_id, {})
-            description = str(card.get("description") or "").strip()
+            description = _compact_string(card.get("description"))
             if not description:
-                description = str(hit.snippet or "").strip()
+                description = _compact_string(hit.snippet)
 
             evidence_summary = self._extract_explanation_summary(card)
             if not evidence_summary:
-                evidence_summary = str(hit.snippet or "").strip()
+                evidence_summary = _compact_string(hit.snippet)
 
             idea: dict[str, Any] = {
                 "card_id": card_id,
                 "description": description,
-                "evidence_summary": evidence_summary,
+                "evidence_summary": _compact_string(evidence_summary),
             }
+            for source_key, target_key in (
+                ("task_description_summary", "task_description_summary"),
+                ("task_description", "task_description"),
+                ("strategy", "strategy"),
+                ("category", "category"),
+            ):
+                text = _compact_string(card.get(source_key))
+                if text:
+                    idea[target_key] = text
+
+            keywords = _compact_list(card.get("keywords"))
+            if keywords:
+                idea["keywords"] = keywords
+            works_with = _compact_list(card.get("works_with"))
+            if works_with:
+                idea["works_with"] = works_with
+            links = _compact_list(card.get("links"))
+            if links:
+                idea["links"] = links
+            efficacy = _card_efficacy_summary(card)
+            if efficacy:
+                idea["efficacy"] = efficacy
             source = str(hit.source or "").strip()
             if source:
                 idea["evidence_source"] = source
@@ -518,9 +834,23 @@ class ResearchAgent:
 
             idea: dict[str, Any] = {
                 "card_id": card_id,
-                "description": str(item.get("description") or "").strip(),
-                "evidence_summary": str(item.get("evidence_summary") or "").strip(),
+                "description": _compact_string(item.get("description")),
+                "evidence_summary": _compact_string(item.get("evidence_summary")),
             }
+            for key in (
+                "task_description_summary",
+                "task_description",
+                "strategy",
+                "category",
+                "efficacy",
+            ):
+                text = _compact_string(item.get(key))
+                if text:
+                    idea[key] = text
+            for key in ("keywords", "works_with", "links"):
+                values = _compact_list(item.get(key))
+                if values:
+                    idea[key] = values
             evidence_source = str(item.get("evidence_source") or "").strip()
             if evidence_source:
                 idea["evidence_source"] = evidence_source
@@ -535,6 +865,7 @@ class ResearchAgent:
         request: str,
         retrieved_ideas: list[dict[str, Any]],
     ) -> ExperimentalDecision:
+        started = perf_counter()
         normalized_ideas = self._parse_retrieved_ideas(retrieved_ideas)
         card_ids = [str(item.get("card_id") or "").strip() for item in normalized_ideas]
         ideas_payload = self._truncate_text(
@@ -563,14 +894,40 @@ class ResearchAgent:
         except Exception as e:
             if isinstance(response, dict):
                 text_head = str(response.get("text") or "")[:200]
-                response_ctx = f"response_keys={sorted(response)} text_head={text_head!r}"
+                response_ctx = (
+                    f"response_keys={sorted(response)} text_head={text_head!r}"
+                )
             else:
                 response_ctx = f"response={response!r} (LLM call itself failed)"
+            self._emit_gam_event(
+                "gam.reflection",
+                {
+                    "pipeline_mode": "experimental",
+                    "outcome": "exception",
+                    "mode": "continue",
+                    "prompt_chars": len(prompt),
+                    "request_chars": len(request or ""),
+                    "retrieved_idea_count": len(normalized_ideas),
+                    "candidate_ids": card_ids[:_GAM_EVENT_ID_LIMIT],
+                    "top_idea_ids": [],
+                    "additional_query_count": 0,
+                    "response_context": _head(response_ctx),
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "duration_ms": _elapsed_ms(started),
+                },
+                level="WARNING",
+            )
             logger.opt(exception=True).error(
-                "[GAM][experimental] reflection LLM call failed — falling back to "
-                f"mode=continue, 0 ideas kept | {type(e).__name__}: {e} | "
-                f"schema=ExperimentalDecision prompt_chars={len(prompt)} "
-                f"retrieved_ideas={len(normalized_ideas)} | {response_ctx}"
+                "[Memory][GAM][ResearchAgent][Experimental][Reflection] LLM call "
+                "failed; falling back to mode=continue with 0 ideas kept | "
+                "{}: {} | schema=ExperimentalDecision prompt_chars={} "
+                "retrieved_ideas={} | {}",
+                type(e).__name__,
+                e,
+                len(prompt),
+                len(normalized_ideas),
+                response_ctx,
             )
             return ExperimentalDecision(
                 mode="continue", top_ideas=[], additional_queries=[]
@@ -605,14 +962,47 @@ class ResearchAgent:
                 )
 
         if mode == "final":
-            return ExperimentalDecision(
+            decision = ExperimentalDecision(
                 mode="final",
                 top_ideas=top_ideas[: self.max_cards],
                 additional_queries=[],
             )
-        return ExperimentalDecision(
+            self._emit_gam_event(
+                "gam.reflection",
+                {
+                    "pipeline_mode": "experimental",
+                    "outcome": "ok",
+                    "mode": "final",
+                    "prompt_chars": len(prompt),
+                    "request_chars": len(request or ""),
+                    "retrieved_idea_count": len(normalized_ideas),
+                    "candidate_ids": card_ids[:_GAM_EVENT_ID_LIMIT],
+                    "top_idea_ids": [idea.card_id for idea in decision.top_ideas],
+                    "additional_query_count": 0,
+                    "duration_ms": _elapsed_ms(started),
+                },
+            )
+            return decision
+        decision = ExperimentalDecision(
             mode="continue", top_ideas=[], additional_queries=additional_queries[:5]
         )
+        self._emit_gam_event(
+            "gam.reflection",
+            {
+                "pipeline_mode": "experimental",
+                "outcome": "ok",
+                "mode": "continue",
+                "prompt_chars": len(prompt),
+                "request_chars": len(request or ""),
+                "retrieved_idea_count": len(normalized_ideas),
+                "candidate_ids": card_ids[:_GAM_EVENT_ID_LIMIT],
+                "top_idea_ids": [],
+                "additional_query_count": len(decision.additional_queries),
+                "additional_query_preview": _query_preview(decision.additional_queries),
+                "duration_ms": _elapsed_ms(started),
+            },
+        )
+        return decision
 
     def _format_top_ideas(self, top_ideas: list[TopIdea]) -> str:
         if not top_ideas:
@@ -635,27 +1025,63 @@ class ResearchAgent:
         return "\n".join(lines).strip()
 
     def _update_retrievers(self):
-        """确保检索器索引是最新的"""
-        # 检查是否有新的页面需要更新索引
+        """Keep retriever indices in sync with the page store."""
+        started = perf_counter()
         current_page_count = len(self.page_store.load())
+        previous_page_count = getattr(self, "_last_page_count", None)
+        changed = (
+            previous_page_count is not None
+            and current_page_count != previous_page_count
+        )
+        updated: list[str] = []
+        failed: list[dict[str, str]] = []
 
-        # 如果页面数量发生变化，更新所有检索器索引
-        if (
-            hasattr(self, "_last_page_count")
-            and current_page_count != self._last_page_count
-        ):
+        if changed:
             logger.debug(
-                f"检测到页面数量变化 ({self._last_page_count} -> {current_page_count})，更新检索器索引..."
+                "[Memory][GAM][ResearchAgent][RetrieverUpdate] Page count changed "
+                "({} -> {}); updating retriever indices.",
+                previous_page_count,
+                current_page_count,
             )
             for name, retriever in self.retrievers.items():
                 try:
                     retriever.update(self.page_store)
-                    logger.debug(f"✅ Updated {name} retriever index")
+                    updated.append(name)
+                    logger.debug(
+                        "[Memory][GAM][ResearchAgent][RetrieverUpdate] Updated {} "
+                        "retriever index",
+                        name,
+                    )
                 except Exception as e:
-                    logger.error(f"❌ Failed to update {name} retriever: {e}")
+                    failed.append(
+                        {
+                            "name": name,
+                            "error_type": type(e).__name__,
+                            "error": str(e),
+                        }
+                    )
+                    logger.error(
+                        "[Memory][GAM][ResearchAgent][RetrieverUpdate] Failed to "
+                        "update {} retriever: {}",
+                        name,
+                        e,
+                    )
 
-        # 更新页面计数
         self._last_page_count = current_page_count
+        self._emit_gam_event(
+            "gam.retriever_update",
+            {
+                "outcome": "updated" if changed and updated else "unchanged",
+                "changed": changed,
+                "previous_page_count": previous_page_count,
+                "current_page_count": current_page_count,
+                "retriever_count": len(self.retrievers),
+                "updated": updated,
+                "failed": failed,
+                "duration_ms": _elapsed_ms(started),
+            },
+            level="WARNING" if failed else "DEBUG",
+        )
 
     # ---- Internal ----
     def _planning(
@@ -671,6 +1097,7 @@ class ResearchAgent:
           - which tools are useful + inputs
           - keyword/vector/page_id payloads
         """
+        started = perf_counter()
 
         if memory_state_override is not None:
             memory_context = memory_state_override
@@ -695,11 +1122,12 @@ class ResearchAgent:
         else:
             prompt = template_prompt
 
-        # 调试：打印prompt长度
         prompt_chars = len(prompt)
-        estimated_tokens = prompt_chars // 4  # 粗略估算：1 token ≈ 4 字符
+        estimated_tokens = prompt_chars // 4
         logger.debug(
-            f"[DEBUG] Planning prompt length: {prompt_chars} chars (~{estimated_tokens} tokens)"
+            "[Memory][GAM][ResearchAgent][Planning] Prompt length: {} chars (~{} tokens)",
+            prompt_chars,
+            estimated_tokens,
         )
 
         try:
@@ -707,7 +1135,7 @@ class ResearchAgent:
                 prompt=prompt, schema=PLANNING_SCHEMA
             )
             data = response.get("json") or json.loads(response["text"])
-            return SearchPlan(
+            plan = SearchPlan(
                 tools=data.get("tools", []),
                 # keyword_collection=[request],
                 keyword_collection=data.get("keyword_collection", []),
@@ -721,9 +1149,25 @@ class ResearchAgent:
                 ),
                 page_index=data.get("page_index", []),
             )
+            self._emit_gam_event(
+                "gam.plan",
+                {
+                    "outcome": "ok",
+                    "pipeline_mode": self.pipeline_mode,
+                    "request_chars": len(request or ""),
+                    "memory_context_chars": len(memory_context or ""),
+                    "prompt_chars": prompt_chars,
+                    "estimated_tokens": estimated_tokens,
+                    "duration_ms": _elapsed_ms(started),
+                    **self._plan_payload(plan),
+                },
+            )
+            return plan
         except Exception as e:
-            logger.error(f"Error in planning: {e}")
-            return SearchPlan(
+            logger.error(
+                "[Memory][GAM][ResearchAgent][Planning] Planning failed: {}", e
+            )
+            plan = SearchPlan(
                 tools=[],
                 keyword_collection=[],
                 vector_queries=[],
@@ -732,6 +1176,23 @@ class ResearchAgent:
                 vector_explanation_summary_queries=[],
                 page_index=[],
             )
+            self._emit_gam_event(
+                "gam.plan",
+                {
+                    "outcome": "exception",
+                    "pipeline_mode": self.pipeline_mode,
+                    "request_chars": len(request or ""),
+                    "memory_context_chars": len(memory_context or ""),
+                    "prompt_chars": prompt_chars,
+                    "estimated_tokens": estimated_tokens,
+                    "duration_ms": _elapsed_ms(started),
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    **self._plan_payload(plan),
+                },
+                level="WARNING",
+            )
+            return plan
 
     def _search(
         self,
@@ -747,20 +1208,30 @@ class ResearchAgent:
           3) Integrate all deduplicated hits together with LLM
         Returns integrated Result.
         """
+        started = perf_counter()
         all_hits: list[Hit] = []
+        selected_tools = self._filter_tools(plan.tools)
 
         # Execute each planned tool and collect all hits
-        for tool in self._filter_tools(plan.tools):
+        for tool in selected_tools:
             hits: list[Hit] = []
-            logger.debug(f"[GAM] Action selected: {tool}")
+            tool_queries: list[Any] = []
+            tool_top_k = self._tool_top_k(tool)
+            logger.debug(
+                "[Memory][GAM][ResearchAgent][Search] Action selected: {}", tool
+            )
 
             if tool == "keyword":
                 if plan.keyword_collection:
-                    tool_top_k = self._tool_top_k(tool)
-                    logger.debug("[GAM] Keyword queries:")
+                    tool_queries = list(plan.keyword_collection)
+                    logger.debug(
+                        "[Memory][GAM][ResearchAgent][Search][Keyword] Queries:"
+                    )
                     for q in plan.keyword_collection:
-                        logger.debug(f"  - {q}")
-                    # 将多个关键词拼接成一个字符串进行搜索
+                        logger.debug(
+                            "[Memory][GAM][ResearchAgent][Search][Keyword] Query: {}",
+                            q,
+                        )
                     combined_keywords = " ".join(plan.keyword_collection)
                     keyword_results = self._search_by_keyword(
                         [combined_keywords], top_k=tool_top_k
@@ -772,27 +1243,48 @@ class ResearchAgent:
                     else:
                         hits.extend(keyword_results)
                     if hits:
-                        logger.debug("[GAM] Keyword hits:")
+                        logger.debug(
+                            "[Memory][GAM][ResearchAgent][Search][Keyword] Hits:"
+                        )
                         for i, hit in enumerate(hits, 1):
                             score = hit.meta.get("score") if hit.meta else None
                             score_str = f" score={score}" if score is not None else ""
                             page_id = hit.page_id if hit.page_id else "n/a"
                             logger.debug(
-                                f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}"
+                                "[Memory][GAM][ResearchAgent][Search][Keyword] Hit "
+                                "{:02d}: source={} page_id={}{}",
+                                i,
+                                hit.source,
+                                page_id,
+                                score_str,
                             )
-                            logger.debug(f"      {hit.snippet}")
+                            logger.debug(
+                                "[Memory][GAM][ResearchAgent][Search][Keyword] Hit "
+                                "{:02d} snippet: {}",
+                                i,
+                                _head(hit.snippet),
+                            )
                     else:
-                        logger.debug("[GAM] Keyword hits: (none)")
+                        logger.debug(
+                            "[Memory][GAM][ResearchAgent][Search][Keyword] Hits: none"
+                        )
                     all_hits.extend(hits)
 
             elif tool in _VECTOR_TOOLS:
                 vector_queries = self._vector_queries_for_tool(plan, tool)
+                tool_queries = list(vector_queries)
                 if vector_queries:
-                    tool_top_k = self._tool_top_k(tool)
-                    logger.debug(f"[GAM] {tool} queries:")
+                    logger.debug(
+                        "[Memory][GAM][ResearchAgent][Search][VectorTool] {} queries:",
+                        tool,
+                    )
                     for q in vector_queries:
-                        logger.debug(f"  - {q}")
-                    # 对每个向量查询都进行独立的搜索，然后在retriever层面聚合得分
+                        logger.debug(
+                            "[Memory][GAM][ResearchAgent][Search][VectorTool] {} "
+                            "query: {}",
+                            tool,
+                            q,
+                        )
                     vector_results = self._search_by_vector_tool(
                         tool_name=tool,
                         query_list=vector_queries,
@@ -805,22 +1297,41 @@ class ResearchAgent:
                     else:
                         hits.extend(vector_results)
                     if hits:
-                        logger.debug(f"[GAM] {tool} hits:")
+                        logger.debug(
+                            "[Memory][GAM][ResearchAgent][Search][VectorTool] {} hits:",
+                            tool,
+                        )
                         for i, hit in enumerate(hits, 1):
                             score = hit.meta.get("score") if hit.meta else None
                             score_str = f" score={score}" if score is not None else ""
                             page_id = hit.page_id if hit.page_id else "n/a"
                             logger.debug(
-                                f"  {i:02d}. source={hit.source} page_id={page_id}{score_str}"
+                                "[Memory][GAM][ResearchAgent][Search][VectorTool] {} "
+                                "hit {:02d}: source={} page_id={}{}",
+                                tool,
+                                i,
+                                hit.source,
+                                page_id,
+                                score_str,
                             )
-                            logger.debug(f"      {hit.snippet}")
+                            logger.debug(
+                                "[Memory][GAM][ResearchAgent][Search][VectorTool] {} "
+                                "hit {:02d} snippet: {}",
+                                tool,
+                                i,
+                                _head(hit.snippet),
+                            )
                     else:
-                        logger.debug(f"[GAM] {tool} hits: (none)")
+                        logger.debug(
+                            "[Memory][GAM][ResearchAgent][Search][VectorTool] {} "
+                            "hits: none",
+                            tool,
+                        )
                     all_hits.extend(hits)
 
             elif tool == "page_index":
+                tool_queries = list(plan.page_index or [])
                 if plan.page_index:
-                    tool_top_k = self._tool_top_k(tool)
                     target_page_index = plan.page_index[:tool_top_k]
                     page_results = self._search_by_page_index(target_page_index)
                     # Flatten the results if they come as List[List[Hit]]
@@ -831,20 +1342,38 @@ class ResearchAgent:
                         hits.extend(page_results)
                     all_hits.extend(hits)
 
+            self._emit_tool_search_event(
+                mode="integrate",
+                tool=tool,
+                queries=tool_queries,
+                top_k=tool_top_k,
+                hits=hits,
+            )
+
         # Deduplicate hits by page_id
         if not all_hits:
+            self._emit_gam_event(
+                "gam.search",
+                {
+                    "mode": "integrate",
+                    "outcome": "no_hits",
+                    "selected_tools": selected_tools,
+                    "raw_hit_count": 0,
+                    "unique_hit_count": 0,
+                    "result_before_chars": len(result.content or ""),
+                    "duration_ms": _elapsed_ms(started),
+                },
+            )
             return result
 
-        # 按 page_id 去重 hits，避免同一个 page 被多个 tool 检索到时重复添加
-        unique_hits: dict[str, Hit] = {}  # page_id -> Hit
-        hits_without_id: list[Hit] = []  # 没有 page_id 的 hits
+        # Deduplicate by page_id so cross-tool matches do not repeat evidence.
+        unique_hits: dict[str, Hit] = {}
+        hits_without_id: list[Hit] = []
         for hit in all_hits:
             if hit.page_id:
-                # 如果这个 page_id 还没出现过，或者当前 hit 的得分更高（如果有的话），则更新
                 if hit.page_id not in unique_hits:
                     unique_hits[hit.page_id] = hit
                 else:
-                    # 如果已有该 page_id 的 hit，比较得分（如果有的话），保留得分更高的
                     existing_hit = unique_hits[hit.page_id]
                     existing_score = (
                         existing_hit.meta.get("score", 0) if existing_hit.meta else 0
@@ -853,10 +1382,8 @@ class ResearchAgent:
                     if current_score > existing_score:
                         unique_hits[hit.page_id] = hit
             else:
-                # 没有 page_id 的 hits 也保留
                 hits_without_id.append(hit)
 
-        # 合并有 page_id 和没有 page_id 的 hits，按得分排序
         all_unique_hits = list(unique_hits.values()) + hits_without_id
         sorted_hits = sorted(
             all_unique_hits,
@@ -864,7 +1391,20 @@ class ResearchAgent:
             reverse=True,
         )
 
-        # 统一进行一次 integrate
+        self._emit_gam_event(
+            "gam.search",
+            {
+                "mode": "integrate",
+                "outcome": "hits",
+                "selected_tools": selected_tools,
+                "raw_hit_count": len(all_hits),
+                "unique_hit_count": len(sorted_hits),
+                "hit_ids": _hit_page_ids(sorted_hits),
+                "hit_sources": _hit_source_counts(sorted_hits),
+                "result_before_chars": len(result.content or ""),
+                "duration_ms": _elapsed_ms(started),
+            },
+        )
         return self._integrate(sorted_hits, result, question)
 
     def _search_no_integrate(
@@ -883,16 +1423,19 @@ class ResearchAgent:
           3) Format hits as plain text results
         Returns Result with raw search hits formatted as content.
         """
+        started = perf_counter()
         all_hits: list[Hit] = []
+        selected_tools = self._filter_tools(plan.tools)
 
         # Execute each planned tool and collect hits
-        for tool in self._filter_tools(plan.tools):
+        for tool in selected_tools:
             hits: list[Hit] = []
+            tool_queries: list[Any] = []
+            tool_top_k = self._tool_top_k(tool)
 
             if tool == "keyword":
                 if plan.keyword_collection:
-                    tool_top_k = self._tool_top_k(tool)
-                    # 将多个关键词拼接成一个字符串进行搜索
+                    tool_queries = list(plan.keyword_collection)
                     combined_keywords = " ".join(plan.keyword_collection)
                     keyword_results = self._search_by_keyword(
                         [combined_keywords], top_k=tool_top_k
@@ -907,9 +1450,8 @@ class ResearchAgent:
 
             elif tool in _VECTOR_TOOLS:
                 vector_queries = self._vector_queries_for_tool(plan, tool)
+                tool_queries = list(vector_queries)
                 if vector_queries:
-                    tool_top_k = self._tool_top_k(tool)
-                    # 对每个向量查询都进行独立的搜索，然后在retriever层面聚合得分
                     vector_results = self._search_by_vector_tool(
                         tool_name=tool,
                         query_list=vector_queries,
@@ -924,8 +1466,8 @@ class ResearchAgent:
                     all_hits.extend(hits)
 
             elif tool == "page_index":
+                tool_queries = list(plan.page_index or [])
                 if plan.page_index:
-                    tool_top_k = self._tool_top_k(tool)
                     target_page_index = plan.page_index[:tool_top_k]
                     page_results = self._search_by_page_index(target_page_index)
                     # Flatten the results if they come as List[List[Hit]]
@@ -936,20 +1478,40 @@ class ResearchAgent:
                         hits.extend(page_results)
                     all_hits.extend(hits)
 
+            self._emit_tool_search_event(
+                mode="no_integrate",
+                tool=tool,
+                queries=tool_queries,
+                top_k=tool_top_k,
+                hits=hits,
+            )
+
         # Format all hits as text content without integration
         if not all_hits:
+            self._emit_gam_event(
+                "gam.search",
+                {
+                    "mode": "no_integrate",
+                    "outcome": "no_hits",
+                    "selected_tools": selected_tools,
+                    "raw_hit_count": 0,
+                    "unique_hit_count": 0,
+                    "exclude_count": len(exclude_ids),
+                    "exclude_ids": sorted(exclude_ids),
+                    "random_drop_dose": random_drop_dose,
+                    "duration_ms": _elapsed_ms(started),
+                },
+            )
             return result
 
-        # 按 page_id 去重 hits，避免同一个 page 被多个 tool 检索到时重复添加
-        unique_hits: dict[str, Hit] = {}  # page_id -> Hit
-        hits_without_id: list[Hit] = []  # 没有 page_id 的 hits
+        # Deduplicate by page_id so cross-tool matches do not repeat evidence.
+        unique_hits: dict[str, Hit] = {}
+        hits_without_id: list[Hit] = []
         for hit in all_hits:
             if hit.page_id:
-                # 如果这个 page_id 还没出现过，或者当前 hit 的得分更高（如果有的话），则更新
                 if hit.page_id not in unique_hits:
                     unique_hits[hit.page_id] = hit
                 else:
-                    # 如果已有该 page_id 的 hit，比较得分（如果有的话），保留得分更高的
                     existing_hit = unique_hits[hit.page_id]
                     existing_score = (
                         existing_hit.meta.get("score", 0) if existing_hit.meta else 0
@@ -958,11 +1520,8 @@ class ResearchAgent:
                     if current_score > existing_score:
                         unique_hits[hit.page_id] = hit
             else:
-                # 没有 page_id 的 hits 也保留
                 hits_without_id.append(hit)
 
-        # 按得分排序（如果有的话）
-        # 合并有 page_id 和没有 page_id 的 hits
         all_unique_hits = list(unique_hits.values()) + hits_without_id
         sorted_hits = sorted(
             all_unique_hits,
@@ -974,6 +1533,23 @@ class ResearchAgent:
             sorted_hits, exclude_ids=exclude_ids, random_drop_dose=random_drop_dose
         )
         if not ideas:
+            self._emit_gam_event(
+                "gam.search",
+                {
+                    "mode": "no_integrate",
+                    "outcome": "no_ideas",
+                    "selected_tools": selected_tools,
+                    "raw_hit_count": len(all_hits),
+                    "unique_hit_count": len(sorted_hits),
+                    "hit_ids": _hit_page_ids(sorted_hits),
+                    "hit_sources": _hit_source_counts(sorted_hits),
+                    "exclude_count": len(exclude_ids),
+                    "exclude_ids": sorted(exclude_ids),
+                    "random_drop_dose": random_drop_dose,
+                    "idea_count": 0,
+                    "duration_ms": _elapsed_ms(started),
+                },
+            )
             return result
         sources = [
             str(item.get("card_id") or "").strip()
@@ -982,6 +1558,25 @@ class ResearchAgent:
         ]
         formatted_content = json.dumps(ideas, ensure_ascii=True, indent=2)
 
+        self._emit_gam_event(
+            "gam.search",
+            {
+                "mode": "no_integrate",
+                "outcome": "ideas",
+                "selected_tools": selected_tools,
+                "raw_hit_count": len(all_hits),
+                "unique_hit_count": len(sorted_hits),
+                "hit_ids": _hit_page_ids(sorted_hits),
+                "hit_sources": _hit_source_counts(sorted_hits),
+                "exclude_count": len(exclude_ids),
+                "exclude_ids": sorted(exclude_ids),
+                "random_drop_dose": random_drop_dose,
+                "idea_count": len(ideas),
+                "idea_ids": sources[:_GAM_EVENT_ID_LIMIT],
+                "content_chars": len(formatted_content),
+                "duration_ms": _elapsed_ms(started),
+            },
+        )
         return Result(
             content=formatted_content if formatted_content else result.content,
             sources=sources if sources else result.sources,
@@ -998,6 +1593,7 @@ class ResearchAgent:
         Integrate search hits with LLM to generate question-relevant result.
         """
 
+        started = perf_counter()
         evidence_text = []
         sources = []
         for i, hit in enumerate(hits, 1):
@@ -1010,7 +1606,9 @@ class ResearchAgent:
             if hit.page_id:
                 sources.append(hit.page_id)
 
-        evidence_context = "\n".join(evidence_text) if evidence_text else "无搜索结果"
+        evidence_context = (
+            "\n".join(evidence_text) if evidence_text else "No search results."
+        )
 
         system_prompt = self.system_prompts.get("integration")
         template_prompt = Integrate_PROMPT.format(
@@ -1027,10 +1625,8 @@ class ResearchAgent:
             )
             data = response.get("json") or json.loads(response["text"])
 
-            # 处理 sources：确保是字符串列表（如果LLM返回的是整数，转换为字符串）
             llm_sources = data.get("sources", sources)
             if llm_sources:
-                # 将整数或混合类型转换为字符串列表
                 sources_list = []
                 for s in llm_sources:
                     if s is not None:
@@ -1039,9 +1635,45 @@ class ResearchAgent:
             else:
                 sources = sources
 
-            return Result(content=data.get("content", ""), sources=sources)
+            integrated = Result(content=data.get("content", ""), sources=sources)
+            self._emit_gam_event(
+                "gam.integrate",
+                {
+                    "outcome": "ok",
+                    "hit_count": len(hits),
+                    "source_count": len(sources),
+                    "hit_ids": _hit_page_ids(hits),
+                    "hit_sources": _hit_source_counts(hits),
+                    "evidence_context_chars": len(evidence_context),
+                    "prompt_chars": len(prompt),
+                    "result_before_chars": len(result.content or ""),
+                    "result_chars": len(integrated.content or ""),
+                    "duration_ms": _elapsed_ms(started),
+                },
+            )
+            return integrated
         except Exception as e:
-            logger.error(f"Error in integration: {e}")
+            logger.error(
+                "[Memory][GAM][ResearchAgent][Integration] Integration failed: {}",
+                e,
+            )
+            self._emit_gam_event(
+                "gam.integrate",
+                {
+                    "outcome": "exception",
+                    "hit_count": len(hits),
+                    "source_count": len(sources),
+                    "hit_ids": _hit_page_ids(hits),
+                    "hit_sources": _hit_source_counts(hits),
+                    "evidence_context_chars": len(evidence_context),
+                    "prompt_chars": len(prompt),
+                    "result_before_chars": len(result.content or ""),
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "duration_ms": _elapsed_ms(started),
+                },
+                level="WARNING",
+            )
             return result
 
     # ---- search channels ----
@@ -1051,10 +1683,13 @@ class ResearchAgent:
         r = self.retrievers.get("keyword")
         if r is not None:
             try:
-                # BM25Retriever 返回 List[List[Hit]]
                 return r.search(query_list, top_k=top_k)
             except Exception as e:
-                logger.error(f"Error in keyword search: {e}")
+                logger.error(
+                    "[Memory][GAM][ResearchAgent][KeywordSearch] Keyword search "
+                    "failed: {}",
+                    e,
+                )
                 return []
         # naive fallback: scan pages for substring
         out: list[list[Hit]] = []
@@ -1090,7 +1725,12 @@ class ResearchAgent:
             try:
                 return r.search(query_list, top_k=top_k)
             except Exception as e:
-                logger.error(f"Error in vector search ({tool_name}): {e}")
+                logger.error(
+                    "[Memory][GAM][ResearchAgent][VectorSearch] Vector search failed "
+                    "for {}: {}",
+                    tool_name,
+                    e,
+                )
                 return []
         # fallback: none
         return []
@@ -1099,15 +1739,17 @@ class ResearchAgent:
         r = self.retrievers.get("page_index")
         if r is not None:
             try:
-                # IndexRetriever 现在期望 List[str]，将 page_index 转换为逗号分隔的字符串
                 query_string = ",".join([str(idx) for idx in page_index])
                 hits = r.search([query_string], top_k=len(page_index))
                 return hits if hits else []
             except Exception as e:
-                logger.error(f"Error in page index search: {e}")
+                logger.error(
+                    "[Memory][GAM][ResearchAgent][PageIndexSearch] Page index search "
+                    "failed: {}",
+                    e,
+                )
                 return []
 
-        # fallback: 直接通过 page_store 获取页面
         out: list[Hit] = []
         for idx in page_index:
             p = self.page_store.get(idx)
@@ -1120,7 +1762,7 @@ class ResearchAgent:
                         meta={},
                     )
                 )
-        return [out]  # 包装成 List[List[Hit]] 格式
+        return [out]
 
     # ---- reflection & summarization ----
     def _reflection(
@@ -1131,14 +1773,17 @@ class ResearchAgent:
         - "if not, generate remaining information as a new request"
         """
 
+        started = perf_counter()
         try:
             system_prompt = self.system_prompts.get("reflection")
 
-            # 调试：打印reflection prompt长度
-            result_content_chars = len(result.content)
+            result_content_chars = len(result.content or "")
             estimated_result_tokens = result_content_chars // 4
             logger.debug(
-                f"[DEBUG] Reflection result.content length: {result_content_chars} chars (~{estimated_result_tokens} tokens)"
+                "[Memory][GAM][ResearchAgent][Reflection] Result content length: {} "
+                "chars (~{} tokens)",
+                result_content_chars,
+                estimated_result_tokens,
             )
 
             # Step 1: Check for completeness of information
@@ -1152,7 +1797,10 @@ class ResearchAgent:
             check_prompt_chars = len(check_prompt)
             estimated_check_tokens = check_prompt_chars // 4
             logger.debug(
-                f"[DEBUG] Reflection check_prompt length: {check_prompt_chars} chars (~{estimated_check_tokens} tokens)"
+                "[Memory][GAM][ResearchAgent][Reflection] Check prompt length: {} "
+                "chars (~{} tokens)",
+                check_prompt_chars,
+                estimated_check_tokens,
             )
 
             check_response = self.generator.generate_single(
@@ -1166,7 +1814,23 @@ class ResearchAgent:
 
             # If there is enough information, return directly
             if enough:
-                return ReflectionDecision(enough=True, new_request=None)
+                decision = ReflectionDecision(enough=True, new_request=None)
+                self._emit_gam_event(
+                    "gam.reflection",
+                    {
+                        "pipeline_mode": "default",
+                        "outcome": "ok",
+                        "enough": True,
+                        "request_chars": len(request or ""),
+                        "result_chars": result_content_chars,
+                        "check_prompt_chars": check_prompt_chars,
+                        "check_estimated_tokens": estimated_check_tokens,
+                        "generate_prompt_chars": 0,
+                        "new_request_chars": 0,
+                        "duration_ms": _elapsed_ms(started),
+                    },
+                )
+                return decision
 
             # Step 2: Generate a list of new requests
             template_generate_prompt = GenerateRequests_PROMPT.format(
@@ -1179,7 +1843,10 @@ class ResearchAgent:
             generate_prompt_chars = len(generate_prompt)
             estimated_generate_tokens = generate_prompt_chars // 4
             logger.debug(
-                f"[DEBUG] Reflection generate_prompt length: {generate_prompt_chars} chars (~{estimated_generate_tokens} tokens)"
+                "[Memory][GAM][ResearchAgent][Reflection] Generate prompt length: {} "
+                "chars (~{} tokens)",
+                generate_prompt_chars,
+                estimated_generate_tokens,
             )
 
             generate_response = self.generator.generate_single(
@@ -1196,8 +1863,40 @@ class ResearchAgent:
             if new_requests_list and isinstance(new_requests_list, list):
                 new_request = " ".join(new_requests_list)
 
-            return ReflectionDecision(enough=False, new_request=new_request)
+            decision = ReflectionDecision(enough=False, new_request=new_request)
+            self._emit_gam_event(
+                "gam.reflection",
+                {
+                    "pipeline_mode": "default",
+                    "outcome": "ok",
+                    "enough": False,
+                    "request_chars": len(request or ""),
+                    "result_chars": result_content_chars,
+                    "check_prompt_chars": check_prompt_chars,
+                    "check_estimated_tokens": estimated_check_tokens,
+                    "generate_prompt_chars": generate_prompt_chars,
+                    "generate_estimated_tokens": estimated_generate_tokens,
+                    "new_request_chars": len(new_request or ""),
+                    "duration_ms": _elapsed_ms(started),
+                },
+            )
+            return decision
 
         except Exception as e:
-            logger.error(f"Error in reflection: {e}")
+            logger.error(
+                "[Memory][GAM][ResearchAgent][Reflection] Reflection failed: {}", e
+            )
+            self._emit_gam_event(
+                "gam.reflection",
+                {
+                    "pipeline_mode": "default",
+                    "outcome": "exception",
+                    "request_chars": len(request or ""),
+                    "result_chars": len(result.content or ""),
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "duration_ms": _elapsed_ms(started),
+                },
+                level="WARNING",
+            )
             return ReflectionDecision(enough=False, new_request=None)

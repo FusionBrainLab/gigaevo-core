@@ -61,7 +61,7 @@ class CardLoader:
                 cards = self._load_from_export()
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning(
-                    "[CardLoader] Export file load failed: {}, using card_store",
+                    "[Memory][CardLoader] Export file load failed: {}, using card_store",
                     exc,
                 )
                 cards = self._load_from_store()
@@ -97,12 +97,13 @@ class CardLoader:
                 except json.JSONDecodeError:
                     malformed += 1
                     logger.debug(
-                        "[CardLoader] Skipping malformed line in export: {}", line
+                        "[Memory][CardLoader] Skipping malformed line in export: {}",
+                        line,
                     )
                     continue
         if malformed > 0 and total > 0 and malformed / total > 0.05:
             logger.warning(
-                "[CardLoader] High export corruption: {}/{} lines malformed",
+                "[Memory][CardLoader] High export corruption: {}/{} lines malformed",
                 malformed,
                 total,
             )
@@ -133,7 +134,7 @@ class CardLoader:
             try:
                 record = RawCardRecord.model_validate(card)
             except ValidationError as exc:
-                logger.debug("[CardLoader] Skipping unparseable card: {}", exc)
+                logger.debug("[Memory][CardLoader] Skipping unparseable card: {}", exc)
                 continue
             card_id = record.id.strip()
             if not card_id or card_id in seen:

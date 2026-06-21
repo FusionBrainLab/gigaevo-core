@@ -102,12 +102,20 @@ def _pipeline(
         evictor=_FakeEvictor(evict),
         deduplicator=_FakeDedup(decision or _decision("add", reason="novel")),
         ledger=ledger,
+        event_path=tmp_path / "memory_events.jsonl",
     )
     return pipeline, store, ledger
 
 
 def _rows(tmp_path) -> list[dict]:
     path = tmp_path / "write_ledger.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _event_rows(tmp_path) -> list[dict]:
+    path = tmp_path / "memory_events.jsonl"
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
@@ -124,6 +132,29 @@ class TestLedgerRows:
         assert row["final_id"] == final_id
         assert row["incoming_id"] == "idea-1"
         assert row["reason"] == "novel mechanism"
+        assert row["schema_version"] == "write_ledger.v1"
+        assert row["record_id"]
+
+    def test_added_row_has_matching_canonical_write_event(self, tmp_path):
+        pipeline, _, _ = _pipeline(
+            tmp_path, decision=_decision("add", reason="novel mechanism")
+        )
+        pipeline.ingest(_idea_card())
+        (event,) = [
+            row for row in _event_rows(tmp_path) if row["event_type"] == "write.ingest"
+        ]
+        request = [
+            row for row in _event_rows(tmp_path) if row["event_type"] == "write.request"
+        ][-1]
+        assert event["schema_version"] == "memory_event.v1"
+        assert event["component"] == "WritePipeline"
+        assert request["decision_id"] == event["decision_id"]
+        assert request["payload"]["known_card"] is False
+        assert event["payload"]["outcome"] == "added"
+        assert event["payload"]["incoming_id"] == "idea-1"
+        assert event["payload"]["final_id"] == "idea-1"
+        assert event["payload"]["bank_card_count"] == 1
+        assert event["payload"]["write_stats"]["processed"] == 1
 
     def test_discarded_row_carries_duplicate_of_and_reason(self, tmp_path):
         pipeline, store, _ = _pipeline(
@@ -244,6 +275,7 @@ class TestSweepRows:
             evictor=_FakeEvictor(sweep_ids=["idea-bad"]),
             deduplicator=_FakeDedup(_decision("add", reason="novel")),
             ledger=WriteLedger(tmp_path / "write_ledger.jsonl"),
+            event_path=tmp_path / "memory_events.jsonl",
         )
         pipeline.ingest(_idea_card("idea-bad"))
         pipeline.ingest(_idea_card("idea-good"))
@@ -254,6 +286,18 @@ class TestSweepRows:
         assert row["category"] == "insight"
         assert "harmful" in row["reason"]
         assert store.deleted == ["idea-bad"]
+        sweep_events = [
+            row for row in _event_rows(tmp_path) if row["event_type"] == "write.sweep"
+        ]
+        assert sweep_events[-1]["payload"]["outcome"] == "evicted"
+        assert sweep_events[-1]["payload"]["final_id"] == "idea-bad"
+        summary_events = [
+            row
+            for row in _event_rows(tmp_path)
+            if row["event_type"] == "write.sweep.summary"
+        ]
+        assert summary_events[-1]["decision_id"] == sweep_events[-1]["decision_id"]
+        assert summary_events[-1]["payload"]["evicted_count"] == 1
 
     def test_clean_sweep_records_nothing(self, tmp_path):
         pipeline, _, _ = _pipeline(tmp_path)
@@ -318,6 +362,8 @@ class TestLedgerRobustness:
         (row,) = _rows(tmp_path)
         WriteLedgerRecord.model_validate(row)
         assert row["timestamp_utc"]
+        assert row["schema_version"] == "write_ledger.v1"
+        assert row["record_id"]
 
     def test_invalid_record_swallowed(self, tmp_path):
         ledger = WriteLedger(tmp_path / "write_ledger.jsonl")

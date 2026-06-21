@@ -524,17 +524,23 @@ class TestMemoryReadPipeline:
         )
 
         rows = _event_rows(path)
+        request = [row for row in rows if row["event_type"] == "read.request"][-1]
+        retrieval = [row for row in rows if row["event_type"] == "read.retrieval"][-1]
         read = [row for row in rows if row["event_type"] == "read.selection"][-1]
         auction = [row for row in rows if row["event_type"] == "auction.run"][-1]
         budget = [row for row in rows if row["event_type"] == "budget.cap"][-1]
         assert read["schema_version"] == "memory_event.v1"
         assert read["decision_id"]
+        assert request["decision_id"] == read["decision_id"]
+        assert retrieval["decision_id"] == read["decision_id"]
         assert auction["decision_id"] == read["decision_id"]
         assert budget["decision_id"] == read["decision_id"]
+        assert retrieval["payload"]["duration_ms"] >= 0
         assert read["payload"]["candidate_count"] == 5
         assert read["payload"]["selected_ids"] == got.card_ids
         assert read["payload"]["empty_reason"] == ""
         assert len(read["payload"]["slate"]) == 5
+        assert read["payload"]["timing_ms"]["total"] >= 0
         assert auction["payload"]["winner_count"] == 3
         assert budget["payload"]["dropped_ids"] == ["idea-0"]
 

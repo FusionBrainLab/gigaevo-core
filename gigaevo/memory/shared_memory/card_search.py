@@ -181,7 +181,8 @@ def synthesize_search_results(
             return text
     except Exception as exc:
         logger.warning(
-            "[Memory][CardSearch]LLM synthesis failed, falling back to keyword results: {}",
+            "[Memory][CardSearch] LLM synthesis failed, falling back to keyword "
+            "results: {}",
             exc,
         )
 

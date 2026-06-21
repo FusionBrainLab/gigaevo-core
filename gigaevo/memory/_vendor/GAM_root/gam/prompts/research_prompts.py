@@ -236,8 +236,13 @@ You are given:
 - REQUEST: original memory-selection request.
 - RETRIEVED_IDEAS: retrieved candidate ideas. Each item contains:
   - card_id
-  - description
-  - evidence_summary
+  - description: the candidate mechanism or memory claim
+  - evidence_summary: why the candidate helped or mattered
+  - optional task_description_summary / task_description: where it worked
+  - optional strategy / category / keywords: intent and topical fit signals
+  - optional works_with / links: known related card ids
+  - optional evidence_source / score: retrieval provenance signals
+  - optional efficacy: compact empirical reputation signal when available
 
 Your objective:
 Decide ONE of the following:
@@ -255,6 +260,11 @@ Decision rules:
 - Choose mode = "continue" when evidence is missing/unclear.
 - Do not invent card IDs. Use IDs only from RETRIEVED_IDEAS.card_id.
 - Keep output factual and grounded in RETRIEVED_IDEAS.
+- Rank by task fit first: the selected idea must apply to this REQUEST's problem, constraints, mutation mode, and objective.
+- Use efficacy as supporting evidence or a tie-breaker, never as a reason to select a task-mismatched card.
+- Treat missing efficacy as neutral, not negative. Treat cautionary/non-positive efficacy as a risk signal.
+- Prefer candidates whose task_description/task_description_summary match the REQUEST over candidates with only generic semantic overlap.
+- Prefer a small diverse slate of distinct mechanisms over multiple variants of the same mechanism.
 
 Idea quality bar — select only crisp ideas:
 - A crisp idea names one concrete mechanism: a specific knob, component, or transformation, the direction of change, and why it should help on this REQUEST.

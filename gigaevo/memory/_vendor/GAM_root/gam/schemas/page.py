@@ -53,7 +53,9 @@ class InMemoryPageStore:
                         ]
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 logger.error(
-                    f"Warning: Failed to load pages from {self._pages_file}: {e}"
+                    "[Memory][GAM][PageStore] Failed to load pages from {}: {}",
+                    self._pages_file,
+                    e,
                 )
                 return []
         return self._pages
@@ -68,7 +70,9 @@ class InMemoryPageStore:
                     json.dump(pages_data, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 logger.error(
-                    f"Warning: Failed to save pages to {self._pages_file}: {e}"
+                    "[Memory][GAM][PageStore] Failed to save pages to {}: {}",
+                    self._pages_file,
+                    e,
                 )
 
     def add(self, page: Page) -> None:

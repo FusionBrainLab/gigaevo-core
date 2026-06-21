@@ -116,6 +116,17 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _avg(values: Sequence[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
 def _percent(part: int | float, total: int | float) -> float:
     return 100.0 * float(part) / float(total) if total else 0.0
 
@@ -147,8 +158,23 @@ def summarize_memory_events(
 ) -> dict[str, Any]:
     cards_by_id = {_card_id(card): card for card in cards if _card_id(card)}
     read_events = [row for row in events if row.get("event_type") == "read.selection"]
+    read_request_events = [
+        row for row in events if row.get("event_type") == "read.request"
+    ]
+    read_retrieval_events = [
+        row for row in events if row.get("event_type") == "read.retrieval"
+    ]
     auction_events = [row for row in events if row.get("event_type") == "auction.run"]
     budget_events = [row for row in events if row.get("event_type") == "budget.cap"]
+    write_events = [
+        row for row in events if str(row.get("event_type", "")).startswith("write.")
+    ]
+    store_events = [
+        row for row in events if str(row.get("event_type", "")).startswith("store.")
+    ]
+    gam_events = [
+        row for row in events if str(row.get("event_type", "")).startswith("gam.")
+    ]
     bridge_events = [
         row for row in events if row.get("event_type") == "injection_posterior.compute"
     ]
@@ -163,6 +189,7 @@ def summarize_memory_events(
     empty_after_candidates = 0
     slate_total = 0
     slate_selected = 0
+    read_total_ms: list[float] = []
     for row in read_events:
         payload = _event_payload(row)
         selected_count = _safe_int(payload.get("selected_count")) or len(
@@ -181,6 +208,17 @@ def summarize_memory_events(
         slate_selected += sum(
             1 for bid in slate if isinstance(bid, Mapping) and bool(bid.get("selected"))
         )
+        timing = payload.get("timing_ms")
+        if isinstance(timing, Mapping):
+            total = _safe_float(timing.get("total"))
+            if total is not None:
+                read_total_ms.append(total)
+
+    retrieval_ms = [
+        duration
+        for row in read_retrieval_events
+        if (duration := _safe_float(_event_payload(row).get("duration_ms"))) is not None
+    ]
 
     selected_type_counts = Counter(
         _card_type_for_id(card_id, cards_by_id) for card_id in selected_ids
@@ -203,6 +241,63 @@ def summarize_memory_events(
     ledger_categories = Counter(
         str(row.get("category")) for row in ledger if row.get("category")
     )
+    write_event_outcomes = Counter(
+        str(_event_payload(row).get("outcome"))
+        for row in write_events
+        if _event_payload(row).get("outcome") is not None
+    )
+    write_event_categories = Counter(
+        str(_event_payload(row).get("category"))
+        for row in write_events
+        if _event_payload(row).get("category")
+    )
+    write_event_final_ids = [
+        str(_event_payload(row).get("final_id"))
+        for row in write_events
+        if _event_payload(row).get("final_id")
+    ]
+    store_event_types = Counter(str(row.get("event_type")) for row in store_events)
+    store_outcomes = Counter(
+        str(_event_payload(row).get("outcome"))
+        for row in store_events
+        if _event_payload(row).get("outcome") is not None
+    )
+    store_modes = Counter(
+        str(_event_payload(row).get("mode"))
+        for row in store_events
+        if _event_payload(row).get("mode") is not None
+    )
+    store_durations = [
+        duration
+        for row in store_events
+        if (duration := _safe_float(_event_payload(row).get("duration_ms"))) is not None
+    ]
+    gam_tools: list[str] = []
+    gam_modes: Counter[str] = Counter()
+    gam_pipeline_modes: Counter[str] = Counter()
+    for row in gam_events:
+        payload = _event_payload(row)
+        tool = payload.get("tool")
+        if tool is not None:
+            gam_tools.append(str(tool))
+        for key in ("selected_tools", "filtered_tools", "plan_tools"):
+            gam_tools.extend(str(item) for item in _as_list(payload.get(key)) if item)
+        mode = payload.get("mode")
+        if mode is not None:
+            gam_modes[str(mode)] += 1
+        pipeline_mode = payload.get("pipeline_mode")
+        if pipeline_mode is not None:
+            gam_pipeline_modes[str(pipeline_mode)] += 1
+    gam_outcomes = Counter(
+        str(_event_payload(row).get("outcome"))
+        for row in gam_events
+        if _event_payload(row).get("outcome") is not None
+    )
+    gam_durations = [
+        duration
+        for row in gam_events
+        if (duration := _safe_float(_event_payload(row).get("duration_ms"))) is not None
+    ]
 
     intro_events: list[int] = []
     posterior_count = 0
@@ -234,8 +329,13 @@ def summarize_memory_events(
             "by_type": _counter_dict(
                 Counter(str(row.get("event_type")) for row in events)
             ),
+            "by_component": _counter_dict(
+                Counter(str(row.get("component")) for row in events)
+            ),
         },
         "read": {
+            "request_events": len(read_request_events),
+            "retrieval_events": len(read_retrieval_events),
             "decisions": len(read_events),
             "selected_decisions": selected_decisions,
             "empty_decisions": len(read_events) - selected_decisions,
@@ -249,6 +349,8 @@ def summarize_memory_events(
             "top_selected": top_selected,
             "top1_share_pct": _percent(top1_count, total_selected),
             "top5_share_pct": _percent(top5_count, total_selected),
+            "avg_retrieval_ms": _avg(retrieval_ms),
+            "avg_total_ms": _avg(read_total_ms),
         },
         "auction": {
             "event_count": len(auction_events),
@@ -272,6 +374,35 @@ def summarize_memory_events(
             "invalid_json": sum(1 for row in ledger if row.get("_invalid_json")),
             "outcomes": _counter_dict(ledger_outcomes),
             "categories": _counter_dict(ledger_categories),
+        },
+        "write_events": {
+            "events": len(write_events),
+            "by_type": _counter_dict(
+                Counter(str(row.get("event_type")) for row in write_events)
+            ),
+            "outcomes": _counter_dict(write_event_outcomes),
+            "categories": _counter_dict(write_event_categories),
+            "top_final_ids": _top_counts(write_event_final_ids, top_n),
+        },
+        "store_events": {
+            "events": len(store_events),
+            "by_type": _counter_dict(store_event_types),
+            "outcomes": _counter_dict(store_outcomes),
+            "modes": _counter_dict(store_modes),
+            "avg_duration_ms": _avg(store_durations),
+            "max_duration_ms": max(store_durations) if store_durations else None,
+        },
+        "gam_events": {
+            "events": len(gam_events),
+            "by_type": _counter_dict(
+                Counter(str(row.get("event_type")) for row in gam_events)
+            ),
+            "outcomes": _counter_dict(gam_outcomes),
+            "modes": _counter_dict(gam_modes),
+            "pipeline_modes": _counter_dict(gam_pipeline_modes),
+            "tools": _counter_dict(Counter(gam_tools)),
+            "avg_duration_ms": _avg(gam_durations),
+            "max_duration_ms": max(gam_durations) if gam_durations else None,
         },
         "bank": {
             "cards": len(cards),
@@ -328,6 +459,13 @@ def _fmt_pct(value: Any) -> str:
         return "n/a"
 
 
+def _fmt_ms(value: Any) -> str:
+    try:
+        return f"{float(value):.1f} ms"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def _format_counts(counts: Mapping[str, int], *, empty: str = "none") -> list[str]:
     if not counts:
         return [f"  {empty}"]
@@ -350,6 +488,9 @@ def format_report(summary: Mapping[str, Any]) -> str:
     budget = summary["budget"]
     card_types = summary["card_types"]
     ledger = summary["write_ledger"]
+    write_events = summary["write_events"]
+    store_events = summary["store_events"]
+    gam_events = summary["gam_events"]
     bank = summary["bank"]
     bridge = summary["posterior_bridge"]
 
@@ -363,12 +504,17 @@ def format_report(summary: Mapping[str, Any]) -> str:
         "",
         "Event Stream",
         f"  rows: {events['total']} invalid_json: {events['invalid_json']}",
+        "  by type:",
     ]
     lines.extend(_format_counts(events["by_type"], empty="no event rows"))
+    lines.append("  by component:")
+    lines.extend(_format_counts(events["by_component"], empty="no event rows"))
     lines.extend(
         [
             "",
             "Read Decisions",
+            f"  request events: {read['request_events']}",
+            f"  retrieval events: {read['retrieval_events']}",
             f"  decisions: {read['decisions']}",
             f"  selected decisions: {read['selected_decisions']}",
             f"  empty decisions: {read['empty_decisions']}",
@@ -376,6 +522,7 @@ def format_report(summary: Mapping[str, Any]) -> str:
             f"  candidates: {read['candidate_total']} fetched: {read['fetched_total']} missing: {read['missing_total']}",
             f"  selected cards: {read['selected_total']} unique: {read['unique_selected']}",
             f"  top1 share: {_fmt_pct(read['top1_share_pct'])} top5 share: {_fmt_pct(read['top5_share_pct'])}",
+            f"  avg retrieval: {_fmt_ms(read['avg_retrieval_ms'])} avg total: {_fmt_ms(read['avg_total_ms'])}",
             "  empty reasons:",
         ]
     )
@@ -422,6 +569,55 @@ def format_report(summary: Mapping[str, Any]) -> str:
     lines.extend(_format_counts(ledger["outcomes"]))
     lines.append("  categories:")
     lines.extend(_format_counts(ledger["categories"]))
+    lines.extend(
+        [
+            "",
+            "Write Events",
+            f"  events: {write_events['events']}",
+            "  by type:",
+        ]
+    )
+    lines.extend(_format_counts(write_events["by_type"], empty="none"))
+    lines.append("  outcomes:")
+    lines.extend(_format_counts(write_events["outcomes"], empty="none"))
+    lines.append("  categories:")
+    lines.extend(_format_counts(write_events["categories"], empty="none"))
+    lines.append("  top final ids:")
+    lines.extend(_format_top(write_events["top_final_ids"]))
+    lines.extend(
+        [
+            "",
+            "Store Events",
+            f"  events: {store_events['events']}",
+            f"  avg duration: {_fmt_ms(store_events['avg_duration_ms'])}",
+            f"  max duration: {_fmt_ms(store_events['max_duration_ms'])}",
+            "  by type:",
+        ]
+    )
+    lines.extend(_format_counts(store_events["by_type"], empty="none"))
+    lines.append("  outcomes:")
+    lines.extend(_format_counts(store_events["outcomes"], empty="none"))
+    lines.append("  modes:")
+    lines.extend(_format_counts(store_events["modes"], empty="none"))
+    lines.extend(
+        [
+            "",
+            "GAM Events",
+            f"  events: {gam_events['events']}",
+            f"  avg duration: {_fmt_ms(gam_events['avg_duration_ms'])}",
+            f"  max duration: {_fmt_ms(gam_events['max_duration_ms'])}",
+            "  by type:",
+        ]
+    )
+    lines.extend(_format_counts(gam_events["by_type"], empty="none"))
+    lines.append("  outcomes:")
+    lines.extend(_format_counts(gam_events["outcomes"], empty="none"))
+    lines.append("  modes:")
+    lines.extend(_format_counts(gam_events["modes"], empty="none"))
+    lines.append("  pipeline modes:")
+    lines.extend(_format_counts(gam_events["pipeline_modes"], empty="none"))
+    lines.append("  tools:")
+    lines.extend(_format_counts(gam_events["tools"], empty="none"))
     lines.extend(
         [
             "",

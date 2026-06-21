@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 __all__ = ["DiskProgramStorageConfig", "DiskProgramStorage"]
 
 PROGRAMS_DIR = "programs"
+STAGE_OUTPUTS_DIR = "stage_outputs"
 STATUS_SETS_FILE = "status_sets.json"
 RUN_STATE_FILE = "run_state.json"
 INSTANCE_LOCK_FILE = "instance.lock"
@@ -71,8 +72,23 @@ class DiskProgramStorage(ProgramStorage):
         return self.base_dir / PROGRAMS_DIR
 
     @property
+    def _stage_outputs_dir(self) -> Path:
+        return self.base_dir / STAGE_OUTPUTS_DIR
+
+    @property
     def _lock_path(self) -> Path:
         return self.base_dir / INSTANCE_LOCK_FILE
+
+    def _stage_output_path(self, cache_id: str) -> Path:
+        """Return the on-disk path for a stage-output cache id.
+
+        Cache ids are generated from content hashes today, but this method
+        still rejects path-like values so the store cannot write outside its
+        namespace if called incorrectly.
+        """
+        if not cache_id or Path(cache_id).name != cache_id or cache_id in {".", ".."}:
+            raise StorageError(f"Invalid stage-output cache id: {cache_id!r}")
+        return self._stage_outputs_dir / cache_id
 
     # --------------------- Load / persist helpers (lock held) ---------------------
 
@@ -269,6 +285,34 @@ class DiskProgramStorage(ProgramStorage):
         async with self._lock:
             self._ensure_loaded()
             return self._run_state.get(field)
+
+    async def put_stage_output(self, cache_id: str, blob: str) -> None:
+        """Persist a serialized stage output under its content-derived id.
+
+        Matches RedisProgramStorage semantics: writes are idempotent and the
+        first value for an id wins. ``snapshot_parent_stage_outputs`` derives
+        ids from the serialized blob, so a second write should be byte-identical
+        and can safely become a no-op.
+        """
+        self.require_writable("put_stage_output")
+        async with self._lock:
+            path = self._stage_output_path(cache_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with path.open("x", encoding="utf-8") as f:
+                    f.write(blob)
+            except FileExistsError:
+                return
+
+    async def get_stage_output(self, cache_id: str) -> str | None:
+        async with self._lock:
+            try:
+                path = self._stage_output_path(cache_id)
+            except StorageError:
+                return None
+            if not path.is_file():
+                return None
+            return path.read_text(encoding="utf-8")
 
     async def recover_stranded_programs(self) -> int:
         self.require_writable("recover_stranded_programs")

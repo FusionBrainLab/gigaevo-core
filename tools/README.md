@@ -205,7 +205,7 @@ Most read/write/plot functionality previously lived as standalone scripts here; 
 | Tool | Purpose | Key flags |
 |---|---|---|
 | `lineage.py` | Trace evolutionary ancestry chain back to seed | `python -m tools.lineage --run`, `--top-n 1`, `--depth N` |
-| `memory_event_report.py` | Summarize memory telemetry from `memory_events.jsonl`, `write_ledger.jsonl`, and exported cards. Use this first when debugging empty memory selections, auction rejects, card-type mix, repeated winners, budget drops, and posterior bridge activity. | `python tools/memory_event_report.py <run-dir-or-memory-dir>`, `--events PATH`, `--write-ledger PATH`, `--cards PATH`, `--json`, `--top-n N` |
+| `memory_event_report.py` | Summarize memory telemetry from `memory_events.jsonl`, `write_ledger.jsonl`, and exported cards. Use this first when debugging empty memory selections, auction rejects, repeated winners, budget drops, write outcomes/sweeps, GAM planner/search/reflection events, backend rebuild/search/refresh events, and posterior bridge activity. | `python tools/memory_event_report.py <run-dir-or-memory-dir>`, `--events PATH`, `--write-ledger PATH`, `--cards PATH`, `--json`, `--top-n N` |
 | `profiler.py` | Log → text summary + HTML dashboard (called by `gigaevo profiler`) | invoked via `gigaevo profiler`; importable as `from tools.profiler import Profiler` |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
 | `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |

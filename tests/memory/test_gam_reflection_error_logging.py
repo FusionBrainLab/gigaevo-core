@@ -44,4 +44,4 @@ class TestReflectionExperimentalErrorLogging:
         assert "TypeError" in text
         assert "'NoneType' object is not iterable" in text
         assert "generate_single" in text
-        assert "[GAM][experimental]" in text
+        assert "[Memory][GAM][ResearchAgent][Experimental][Reflection]" in text

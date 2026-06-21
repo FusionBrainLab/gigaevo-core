@@ -119,7 +119,7 @@ class CardDedup:
                 build_retrievers,
             )
         except ImportError as exc:
-            logger.warning("[Memory][CardDedup]Dedup retriever import failed: {}", exc)
+            logger.warning("[Memory][CardDedup] Dedup retriever import failed: {}", exc)
             return {}
 
         self._gam_store_dir.mkdir(parents=True, exist_ok=True)
@@ -148,7 +148,7 @@ class CardDedup:
                 embedding_model_name=self._embedding_model_name,
             )
         except (MemoryRetrieverError, OSError, ValidationError) as exc:
-            logger.warning("[Memory][CardDedup]Dedup retriever build failed: {}", exc)
+            logger.warning("[Memory][CardDedup] Dedup retriever build failed: {}", exc)
             return {}
 
         return {
@@ -214,7 +214,7 @@ class CardDedup:
                 hits_by_query = retriever.search([text], top_k=cfg.top_k_per_query)
             except Exception as exc:
                 logger.warning(
-                    "[Memory][CardDedup]Dedup retrieval failed for query '{}': {}",
+                    "[Memory][CardDedup] Dedup retrieval failed for query '{}': {}",
                     query_key,
                     exc,
                 )
@@ -392,7 +392,7 @@ class CardDedup:
                 )
             except Exception as exc:
                 logger.warning(
-                    "[Memory][CardDedup]Dedup LLM decision call failed: {}", exc
+                    "[Memory][CardDedup] Dedup LLM decision call failed: {}", exc
                 )
                 continue
             parsed = parse_llm_card_decision(
@@ -403,7 +403,8 @@ class CardDedup:
                 decision = parsed
                 break
             logger.warning(
-                "[Memory][CardDedup]Dedup LLM returned no valid decision (attempt {}/{})",
+                "[Memory][CardDedup] Dedup LLM returned no valid decision "
+                "(attempt {}/{})",
                 attempt + 1,
                 cfg.llm_max_retries,
             )
@@ -416,7 +417,7 @@ class CardDedup:
                     "refusing to keep discarding incoming cards by default"
                 )
             logger.warning(
-                "[Memory][CardDedup]Dedup LLM failed all {} attempts, defaulting to "
+                "[Memory][CardDedup] Dedup LLM failed all {} attempts, defaulting to "
                 "action=discard for card {!r} ({} consecutive failures)",
                 cfg.llm_max_retries,
                 _str_or_empty(incoming_card.id).strip(),

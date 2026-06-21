@@ -104,6 +104,35 @@ def send_photo(
         return False
 
 
+def send_document(
+    file_path: str, caption: str = "", *, parse_mode: str | None = "Markdown"
+) -> bool:
+    """Send a file to Telegram as a document attachment (preserves filename/extension,
+    e.g. a ``.py`` program). Pass parse_mode=None for plain text. Returns True on success."""
+    from pathlib import Path
+
+    token = _bot_token()
+    chat_id = _chat_id()
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    try:
+        data = {"chat_id": chat_id, "caption": caption[:1024]}
+        if parse_mode is not None:
+            data["parse_mode"] = parse_mode
+        with open(file_path, "rb") as f:
+            resp = requests.post(
+                url,
+                data=data,
+                files={"document": (Path(file_path).name, f, "text/x-python")},
+                timeout=30,
+                proxies=_PROXIES,
+            )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"[telegram_notify] WARNING: failed to send document: {e}")
+        return False
+
+
 @dataclass
 class ApprovalResult:
     approved: bool

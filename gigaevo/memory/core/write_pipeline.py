@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from gigaevo.memory.core.events import (
+    emit_memory_event,
+    memory_event_context,
+    new_memory_decision_id,
+)
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
 from gigaevo.memory.core.write_ledger import WriteLedger, WriteOutcome
 from gigaevo.memory.shared_memory.card_conversion import (
@@ -28,17 +34,87 @@ class MemoryWritePipeline:
         evictor: Evictor,
         deduplicator: Deduplicator,
         ledger: WriteLedger | None = None,
+        event_path: str | Path | None = None,
     ):
         self._store = store
         self._evictor = evictor
         self._dedup = deduplicator
         self._ledger = ledger
+        self._event_path = Path(event_path) if event_path is not None else None
 
-    def _record(self, **fields: Any) -> None:
+    def _write_stats(self) -> dict[str, int]:
+        return {
+            str(key): int(value)
+            for key, value in getattr(self._store.card_store, "write_stats", {}).items()
+        }
+
+    @staticmethod
+    def _outcome_value(outcome: Any) -> str:
+        return outcome.value if isinstance(outcome, WriteOutcome) else str(outcome)
+
+    def _record(self, *, event_type: str = "write.ingest", **fields: Any) -> None:
         if self._ledger is not None:
             self._ledger.record(**fields)
+        outcome = self._outcome_value(fields["outcome"])
+        payload = {
+            **fields,
+            "outcome": outcome,
+            "bank_card_count": len(self._store.card_store.cards),
+            "write_stats": self._write_stats(),
+        }
+        high_signal_outcomes = {
+            WriteOutcome.DISCARDED.value,
+            WriteOutcome.REJECTED_HARM.value,
+            WriteOutcome.EVICTED.value,
+        }
+        level = "INFO" if outcome in high_signal_outcomes else "DEBUG"
+        emit_memory_event(
+            component="WritePipeline",
+            event_type=event_type,
+            payload=payload,
+            level=level,
+            event_path=self._event_path,
+        )
+        logger.log(
+            level,
+            "[Memory][WritePipeline] event={} outcome={} incoming_id={!r} final_id={!r} "
+            "category={} reason={} bank_cards={} stats={}",
+            event_type,
+            outcome,
+            fields["incoming_id"],
+            fields["final_id"],
+            fields["category"],
+            fields["reason"],
+            payload["bank_card_count"],
+            payload["write_stats"],
+        )
 
     def ingest(self, card: dict[str, Any] | AnyCard) -> str:
+        with memory_event_context(
+            decision_id=new_memory_decision_id("memwrite"),
+            event_path=self._event_path,
+        ):
+            try:
+                return self._ingest(card)
+            except Exception as exc:
+                emit_memory_event(
+                    component="WritePipeline",
+                    event_type="write.exception",
+                    payload={
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "bank_card_count": len(self._store.card_store.cards),
+                        "write_stats": self._write_stats(),
+                    },
+                    level="WARNING",
+                )
+                logger.opt(exception=True).warning(
+                    "[Memory][WritePipeline] ingest failed before a verdict was recorded: {}",
+                    exc,
+                )
+                raise
+
+    def _ingest(self, card: dict[str, Any] | AnyCard) -> str:
         """Normalize ``card`` at this boundary (raw dicts arrive from JSON and
         GAM producers) and run it through the write verdict chain."""
         normalized = normalize_memory_card(card)
@@ -46,6 +122,32 @@ class MemoryWritePipeline:
         store.write_stats[WriteStatKey.PROCESSED] += 1
         incoming_id = str(normalized.id or "").strip()
         category = normalized.category
+        keywords = normalized.keywords or []
+        emit_memory_event(
+            component="WritePipeline",
+            event_type="write.request",
+            payload={
+                "incoming_id": incoming_id,
+                "category": category,
+                "card_model": type(normalized).__name__,
+                "description_chars": len(normalized.description or ""),
+                "keywords_count": len(keywords)
+                if isinstance(keywords, (list, tuple, set))
+                else 0,
+                "has_task_description": bool(normalized.task_description),
+                "known_card": bool(incoming_id and incoming_id in store.cards),
+                "bank_card_count_before": len(store.cards),
+                "write_stats": self._write_stats(),
+            },
+        )
+        logger.debug(
+            "[Memory][WritePipeline] Ingest start incoming_id={!r} category={} "
+            "bank_cards={} stats={}",
+            incoming_id or "<new>",
+            category,
+            len(store.cards),
+            self._write_stats(),
+        )
 
         if self._evictor.should_evict(normalized):
             store.write_stats[WriteStatKey.REJECTED] += 1
@@ -144,17 +246,63 @@ class MemoryWritePipeline:
         return final_id
 
     def sweep(self) -> list[str]:
+        with memory_event_context(
+            decision_id=new_memory_decision_id("memsweep"),
+            event_path=self._event_path,
+        ):
+            try:
+                return self._sweep()
+            except Exception as exc:
+                emit_memory_event(
+                    component="WritePipeline",
+                    event_type="write.sweep.exception",
+                    payload={
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "bank_card_count": len(self._store.card_store.cards),
+                        "write_stats": self._write_stats(),
+                    },
+                    level="WARNING",
+                )
+                logger.opt(exception=True).warning(
+                    "[Memory][WritePipeline] harm sweep failed: {}", exc
+                )
+                raise
+
+    def _sweep(self) -> list[str]:
         bank = self._store.card_store.cards
+        bank_count_before = len(bank)
+        emit_memory_event(
+            component="WritePipeline",
+            event_type="write.sweep.request",
+            payload={
+                "bank_card_count_before": bank_count_before,
+                "write_stats": self._write_stats(),
+            },
+        )
         evicted = list(self._evictor.sweep(bank))
         for card_id in evicted:
             swept = bank.get(card_id)
             category = swept.category if swept is not None else ""
             self._store.delete(card_id)
             self._record(
+                event_type="write.sweep",
                 incoming_id=card_id,
                 final_id=card_id,
                 outcome=WriteOutcome.EVICTED,
                 reason="sweep: injection posterior confidently harmful",
                 category=category,
             )
+        emit_memory_event(
+            component="WritePipeline",
+            event_type="write.sweep.summary",
+            payload={
+                "bank_card_count_before": bank_count_before,
+                "bank_card_count_after": len(bank),
+                "evicted_count": len(evicted),
+                "evicted_ids": evicted,
+                "write_stats": self._write_stats(),
+            },
+            level="INFO" if evicted else "DEBUG",
+        )
         return evicted

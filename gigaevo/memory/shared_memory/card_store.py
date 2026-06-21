@@ -187,7 +187,7 @@ class CardStore:
                     continue
                 if cid not in cards:
                     logger.debug(
-                        "[Memory][CardStore]Skipping dangling entity mapping: "
+                        "[Memory][CardStore] Skipping dangling entity mapping: "
                         "card_id={!r} not in cards",
                         cid,
                     )
