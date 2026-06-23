@@ -1,0 +1,202 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs,longtable,graphicx,amsmath,xcolor,float}
+\graphicspath{{/mnt/virtual_ai0001071-04017_SR004-nfs1/CFS-SR008/workspace/mathemage/gigaevo-core-internal/problems/spherical_codes_improver_general/report/}}
+\setlength{\parskip}{4pt}\setlength{\parindent}{0pt}
+\title{\vspace{-2.5em}ImprovEvolve on the Cohn Catalogue: a Calibrated General Spherical-Code Improver}
+\author{}\date{}
+\begin{document}\maketitle\vspace{-3em}
+
+\section*{Summary}
+We evolved a general spherical-code improver (dimensions $d\in[8,16]$) and benchmark it
+against the Cohn catalogue and the two prior paper programs (E7, E8). The headline metric is
+the mean relative improvement of the minimal achievable maximum pairwise inner product
+$\mu=\max_{i<j}\langle x_i,x_j\rangle$ over Cohn, floored at $0$ per configuration:
+$\;\%=100\cdot\mathrm{mean}_{\text{configs}}\max\!\big(0,(\mu_{\mathrm{Cohn}}-\mu_{\text{best}})/|\mu_{\mathrm{Cohn}}|\big).$
+Parameters were tuned on a 14-configuration validation \emph{panel} (the high-headroom
+configs that steered evolution) and then applied unchanged to the full 90-configuration
+\emph{test} set, identically for every program (a fair head-to-head).
+
+\textbf{Headline (full90 test, protocol $P^\star$, per-config wall $3540$\,s, best of 3 seeds).}
+Our champion reaches \textbf{0.1765\%} mean relative improvement over
+Cohn (53/90 configs improved, 90/90 valid),
+\textbf{2.35$\times$ the best prior program} (E7 0.0752\%, E8 0.0618\%).
+The advantage concentrates in the high-headroom dimensions $d=13$ and $d=16$.
+
+\section*{Calibration (validation panel)}
+\textbf{Metric replication.} Under the canonical grader (\texttt{validate.py}; single monotone
+$L$-BFGS walk, $R{=}1$, $B{=}10$, seed 42) at the evolution's true per-config budget
+($3540$\,s) the champion scores $0.4645\%$ on the panel --- reproducing the plotted $\sim$0.46.
+Fitness is wall-limited and monotone in compute ($0.4125\%$ at $600$\,s $\to 0.4645\%$ at $3540$\,s).
+
+\textbf{Protocol sweep.} Sweeping the basin-hopping knobs on the panel
+(noising steps $M$, noise schedule $\sigma_{\max}{\to}\sigma_{\min}$, fresh-restart period,
+restarts) selects $P^\star$: \emph{unbounded restarts, $M{=}10$, $\sigma\!:\!1{\to}10^{-6}$,
+fresh every 5}. Fewer noising steps per restart let more restarts fit a fixed wall, yielding
+more basin hops; the fresh-restart period is irrelevant; high base-seed variance at short walls
+collapses as the wall grows.
+
+\textbf{Beating canonical at equal budget.} At an identical $3540$\,s per-config wall on the
+panel, $P^\star$ (restart-heavy) scores $\mathbf{0.4797\%}$ vs the canonical single-chain
+$0.4645\%$ --- a $+3.3\%$ relative gain purely from the search protocol.
+
+\section*{Per-dimension improvement (full90, \% over Cohn)}
+\begin{center}\begin{tabular}{rrrr}
+\toprule
+$d$ & E7 & E8 & \textbf{ours} \\
+\midrule
+8 & 0.0446 & 0.0403 & \textbf{0.0645} \\
+9 & 0.0887 & 0.1218 & \textbf{0.1723} \\
+10 & 0.0890 & 0.0205 & \textbf{0.1097} \\
+11 & 0.0832 & 0.0667 & \textbf{0.1191} \\
+12 & 0.0560 & 0.0533 & \textbf{0.2239} \\
+13 & 0.1562 & 0.1605 & \textbf{0.4190} \\
+14 & 0.0057 & 0.0002 & \textbf{0.0428} \\
+15 & 0.1138 & 0.0473 & \textbf{0.1241} \\
+16 & 0.0401 & 0.0459 & \textbf{0.3133} \\
+\midrule
+all & 0.0752 & 0.0618 & \textbf{0.1765} \\
+\bottomrule
+\end{tabular}\end{center}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.78\linewidth]{fig_perdim_gain.png}
+\caption{Per-dimension mean relative improvement over the Cohn catalogue for E7, E8 and our champion (full90 test).}
+\end{figure}
+\begin{figure}[H]\centering
+\includegraphics[width=0.78\linewidth]{fig_gain_sorted.png}
+\caption{Per-configuration improvement of the champion over Cohn, sorted; bars above zero are configs where we strictly beat the catalogue.}
+\end{figure}
+\begin{figure}[H]\centering
+\includegraphics[width=0.62\linewidth]{fig_sweep_shape.png}
+\caption{Validation-panel calibration: best-over-seed mean gain as a function of noising steps $M$ and noise schedule. Smaller $M$ (more restarts per wall) wins.}
+\end{figure}
+
+\section*{Qualitative structure (extreme-gain configurations)}
+\begin{figure}[H]\centering
+\includegraphics[width=0.92\linewidth]{fig_umap_2x2.png}
+\caption{UMAP (cosine) of the unit vectors for the four configurations with the largest champion improvement: Cohn (green circles) vs.\ ImprovEvolve champion (blue squares), a single shared embedding per panel. The two distributions overlap because both are near-uniform on the same sphere $S^{d-1}$: every point is in fact relocated (mean displacement $\approx 0.3$--$0.6$, up to near-antipodal), but the improvement lives in the fine pairwise-extreme arrangement rather than the marginal density, so the catalogue and the improved code occupy the same embedded region.}
+\end{figure}
+\begin{figure}[H]\centering
+\includegraphics[width=0.62\linewidth]{fig_tail_16_296.png}
+\caption{Pairwise inner-product right tail, Cohn vs champion, $(d{=}16,N{=}296)$. Dashed lines mark $\mu=\max_{i<j}\langle x_i,x_j\rangle$.}
+\end{figure}
+\begin{figure}[H]\centering
+\includegraphics[width=0.62\linewidth]{fig_tail_13_244.png}
+\caption{Pairwise inner-product right tail, $(d{=}13,N{=}244)$.}
+\end{figure}
+\begin{figure}[H]\centering
+\includegraphics[width=0.62\linewidth]{fig_tail_13_90.png}
+\caption{Pairwise inner-product right tail, $(d{=}13,N{=}90)$.}
+\end{figure}
+\begin{figure}[H]\centering
+\includegraphics[width=0.62\linewidth]{fig_tail_15_380.png}
+\caption{Pairwise inner-product right tail, $(d{=}15,N{=}380)$.}
+\end{figure}
+
+\clearpage
+\section*{Full 90-configuration table}
+{\footnotesize
+\begin{longtable}{rrrrrr}
+\caption{Full 90-configuration head-to-head: minimal achievable maximum pairwise inner product $\mu=\max_{i<j}\langle x_i,x_j\rangle$ (lower is better) under the calibrated protocol $P^\star$. \textbf{Bold} = strictly beats the Cohn catalogue. Summary row: mean relative improvement over Cohn (\# configs improved).}\\
+\toprule
+$d$ & $N$ & $\mu_{\mathrm{Cohn}}$ & $\mu_{\mathrm{E7}}$ & $\mu_{\mathrm{E8}}$ & $\mu_{\textbf{ours}}$ \\
+\midrule \endfirsthead
+\toprule $d$ & $N$ & $\mu_{\mathrm{Cohn}}$ & $\mu_{\mathrm{E7}}$ & $\mu_{\mathrm{E8}}$ & $\mu_{\textbf{ours}}$ \\ \midrule \endhead
+8 & 26 & 0.172652 & 0.172652 & 0.172652 & 0.172652 \\
+8 & 51 & 0.316443 & 0.316443 & 0.316443 & 0.316443 \\
+8 & 86 & 0.405335 & 0.405335 & 0.405335 & 0.405335 \\
+8 & 283 & 0.582807 & 0.582807 & 0.582807 & 0.582\textbf{428} \\
+8 & 322 & 0.597017 & 0.597017 & 0.597017 & 0.597017 \\
+8 & 528 & 0.655771 & 0.65\textbf{4787} & 0.655\textbf{037} & 0.65\textbf{4905} \\
+8 & 656 & 0.667356 & 0.667\textbf{005} & 0.667356 & 0.66\textbf{6608} \\
+8 & 669 & 0.670139 & 0.6\textbf{69282} & 0.6\textbf{68808} & 0.6\textbf{69239} \\
+8 & 835 & 0.699340 & 0.69\textbf{8933} & 0.699340 & 0.699\textbf{200} \\
+8 & 873 & 0.703836 & 0.703\textbf{430} & 0.703\textbf{182} & 0.70\textbf{2561} \\
+9 & 32 & 0.150221 & 0.150221 & 0.150221 & 0.150221 \\
+9 & 44 & 0.233555 & 0.233555 & 0.233555 & 0.233555 \\
+9 & 521 & 0.594856 & 0.59\textbf{2695} & 0.59\textbf{2584} & 0.5\textbf{89902} \\
+9 & 625 & 0.616874 & 0.61\textbf{4612} & 0.61\textbf{4603} & 0.61\textbf{3733} \\
+9 & 750 & 0.646038 & 0.64\textbf{5774} & 0.64\textbf{5644} & 0.64\textbf{5669} \\
+9 & 786 & 0.650670 & 0.650\textbf{441} & 0.6\textbf{49881} & 0.650\textbf{086} \\
+9 & 838 & 0.656242 & 0.656\textbf{120} & 0.65\textbf{5753} & 0.65\textbf{5902} \\
+9 & 869 & 0.659627 & 0.659\textbf{420} & 0.659\textbf{090} & 0.659\textbf{103} \\
+9 & 880 & 0.660630 & 0.660\textbf{528} & 0.660\textbf{216} & 0.660\textbf{293} \\
+9 & 886 & 0.661239 & 0.661\textbf{137} & 0.66\textbf{0794} & 0.66\textbf{0899} \\
+10 & 91 & 0.326529 & 0.326\textbf{351} & 0.326\textbf{295} & 0.326\textbf{304} \\
+10 & 136 & 0.393476 & 0.3934\textbf{29} & 0.393\textbf{347} & 0.39\textbf{2930} \\
+10 & 271 & 0.480324 & 0.480\textbf{160} & 0.480\textbf{277} & 0.4\textbf{78526} \\
+10 & 314 & 0.492047 & 0.49\textbf{1805} & 0.492047 & 0.49\textbf{1275} \\
+10 & 324 & 0.494738 & 0.494\textbf{438} & 0.494\textbf{289} & 0.49\textbf{3816} \\
+10 & 785 & 0.575536 & 0.57\textbf{3796} & 0.575536 & 0.57\textbf{4547} \\
+10 & 827 & 0.588319 & 0.58\textbf{7660} & 0.588319 & 0.588319 \\
+10 & 862 & 0.593249 & 0.59\textbf{2531} & 0.593249 & 0.593249 \\
+10 & 868 & 0.594110 & 0.59\textbf{3250} & 0.594110 & 0.594110 \\
+10 & 912 & 0.598288 & 0.598288 & 0.598288 & 0.598288 \\
+11 & 84 & 0.265219 & 0.265\textbf{035} & 0.265\textbf{197} & 0.265\textbf{033} \\
+11 & 268 & 0.439263 & 0.43\textbf{8967} & 0.439263 & 0.43\textbf{8515} \\
+11 & 352 & 0.477385 & 0.477385 & 0.477385 & 0.477385 \\
+11 & 373 & 0.482230 & 0.48\textbf{1803} & 0.482\textbf{130} & 0.48\textbf{0479} \\
+11 & 407 & 0.487150 & 0.48\textbf{6685} & 0.487150 & 0.48\textbf{6263} \\
+11 & 521 & 0.499653 & 0.499653 & 0.499653 & 0.499653 \\
+11 & 590 & 0.499977 & 0.499\textbf{711} & 0.499\textbf{694} & 0.499\textbf{886} \\
+11 & 613 & 0.513245 & 0.51\textbf{2363} & 0.513245 & 0.513245 \\
+11 & 692 & 0.542819 & 0.54\textbf{1982} & 0.54\textbf{1851} & 0.54\textbf{1923} \\
+11 & 740 & 0.554281 & 0.55\textbf{3552} & 0.55\textbf{2044} & 0.55\textbf{3051} \\
+12 & 95 & 0.265091 & 0.265091 & 0.265091 & 0.265091 \\
+12 & 240 & 0.398274 & 0.39\textbf{7952} & 0.398274 & 0.39\textbf{2776} \\
+12 & 331 & 0.430981 & 0.430981 & 0.430981 & 0.430981 \\
+12 & 343 & 0.432985 & 0.43\textbf{1217} & 0.43\textbf{1049} & 0.43\textbf{0647} \\
+12 & 416 & 0.451180 & 0.451\textbf{096} & 0.451180 & 0.45\textbf{0365} \\
+12 & 642 & 0.493028 & 0.49\textbf{2858} & 0.49\textbf{2802} & 0.49\textbf{2537} \\
+12 & 734 & 0.496809 & 0.496\textbf{723} & 0.496\textbf{609} & 0.496\textbf{617} \\
+12 & 855 & 0.520373 & 0.520373 & 0.520373 & 0.520373 \\
+12 & 899 & 0.532521 & 0.532521 & 0.532521 & 0.532521 \\
+12 & 913 & 0.535266 & 0.535266 & 0.535266 & 0.535266 \\
+13 & 69 & 0.208427 & 0.2084\textbf{18} & 0.20\textbf{7659} & 0.20\textbf{7594} \\
+13 & 90 & 0.243979 & 0.2439\textbf{04} & 0.243979 & 0.24\textbf{1074} \\
+13 & 162 & 0.313684 & 0.313684 & 0.3136\textbf{73} & 0.31\textbf{2475} \\
+13 & 244 & 0.373192 & 0.373\textbf{015} & 0.37\textbf{1484} & 0.3\textbf{68425} \\
+13 & 351 & 0.412084 & 0.41\textbf{1518} & 0.41\textbf{1583} & 0.41\textbf{1023} \\
+13 & 592 & 0.465094 & 0.46\textbf{1594} & 0.465094 & 0.465094 \\
+13 & 691 & 0.482881 & 0.482\textbf{536} & 0.482\textbf{555} & 0.482\textbf{521} \\
+13 & 725 & 0.485536 & 0.48\textbf{4988} & 0.485\textbf{181} & 0.48\textbf{4966} \\
+13 & 818 & 0.490444 & 0.4\textbf{89433} & 0.4\textbf{89567} & 0.4\textbf{89671} \\
+13 & 882 & 0.497360 & 0.49\textbf{6367} & 0.49\textbf{5696} & 0.49\textbf{5720} \\
+14 & 102 & 0.228290 & 0.228290 & 0.228290 & 0.22\textbf{7337} \\
+14 & 211 & 0.315963 & 0.315963 & 0.315963 & 0.315963 \\
+14 & 212 & 0.316396 & 0.316396 & 0.31639\textbf{0} & 0.3163\textbf{67} \\
+14 & 642 & 0.434187 & 0.434187 & 0.434187 & 0.43418\textbf{1} \\
+14 & 692 & 0.454025 & 0.45\textbf{3768} & 0.454025 & 0.454025 \\
+14 & 913 & 0.455197 & 0.455197 & 0.455197 & 0.455197 \\
+14 & 922 & 0.455345 & 0.455345 & 0.455345 & 0.455345 \\
+14 & 925 & 0.455352 & 0.455352 & 0.455352 & 0.455352 \\
+14 & 970 & 0.455616 & 0.455616 & 0.455616 & 0.455616 \\
+14 & 1021 & 0.457575 & 0.457575 & 0.457575 & 0.457575 \\
+15 & 208 & 0.265531 & 0.265531 & 0.265531 & 0.265531 \\
+15 & 243 & 0.286369 & 0.286369 & 0.286369 & 0.286369 \\
+15 & 380 & 0.360536 & 0.3\textbf{58658} & 0.3\textbf{58831} & 0.3\textbf{58298} \\
+15 & 425 & 0.371377 & 0.3713\textbf{53} & 0.371377 & 0.37\textbf{0433} \\
+15 & 436 & 0.376463 & 0.376463 & 0.376463 & 0.376463 \\
+15 & 456 & 0.376463 & 0.376463 & 0.376463 & 0.376463 \\
+15 & 491 & 0.393061 & 0.39\textbf{2599} & 0.393061 & 0.393061 \\
+15 & 514 & 0.395538 & 0.39\textbf{4835} & 0.395538 & 0.395\textbf{142} \\
+15 & 517 & 0.396049 & 0.39\textbf{5548} & 0.396049 & 0.396049 \\
+15 & 527 & 0.397630 & 0.39\textbf{6878} & 0.397630 & 0.39\textbf{6573} \\
+16 & 88 & 0.168668 & 0.168668 & 0.168668 & 0.168668 \\
+16 & 126 & 0.199994 & 0.199994 & 0.199994 & 0.199994 \\
+16 & 160 & 0.204975 & 0.204975 & 0.204975 & 0.204975 \\
+16 & 197 & 0.249964 & 0.249964 & 0.249964 & 0.249\textbf{894} \\
+16 & 296 & 0.306058 & 0.30\textbf{5908} & 0.30\textbf{4967} & 0.\textbf{298652} \\
+16 & 341 & 0.330381 & 0.3303\textbf{66} & 0.330\textbf{079} & 0.3\textbf{29853} \\
+16 & 534 & 0.367437 & 0.367437 & 0.367\textbf{396} & 0.3674\textbf{14} \\
+16 & 688 & 0.397260 & 0.397260 & 0.397260 & 0.397260 \\
+16 & 770 & 0.400000 & 0.400000 & 0.400000 & 0.400000 \\
+16 & 807 & 0.411522 & 0.41\textbf{0094} & 0.411522 & 0.4\textbf{09386} \\
+\midrule
+\multicolumn{3}{r}{\emph{mean rel.\ improvement (\# improved)}} & 0.0752\% (54/90) & 0.0618\% (36/90) & \textbf{0.1765\% (53/90)} \\
+\bottomrule
+\end{longtable}
+}
+
+\end{document}

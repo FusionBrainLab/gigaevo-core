@@ -1,0 +1,20 @@
+# heavy/regenerable blobs — kept out of git (regenerate via run_eval.sh)
+__pycache__/
+*.pyc
+.claude/
+*.zip
+*.log
+cohn_cache/
+reblast_raw/
+squeeze_test/
+squeeze_test_1800s_1seed_backup/
+squeeze_smoke/
+sweep_smoke/
+squeeze_results/
+sweep_results/
+squeeze_finalist_s0/
+validation_*.json
+# npz: keep only the new improved codes (champion); baseline/prior regenerable
+configs_raw/cohn.npz
+configs_raw/E7.npz
+configs_raw/E8.npz
