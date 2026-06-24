@@ -87,10 +87,8 @@ class TestLocalFactory:
     def test_gam_config_passed_through(self, tmp_path, monkeypatch):
         _capture(monkeypatch, LocalMemoryBackendFactory)
         gam = GamConfig(
-            enable_bm25=True,
             allowed_tools=["vector"],
             top_k_by_tool={"vector": 7},
-            pipeline_mode="default",
             max_iters=5,
             max_cards=1,
         )

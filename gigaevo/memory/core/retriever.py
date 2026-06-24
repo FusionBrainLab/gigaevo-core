@@ -10,29 +10,24 @@ from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
 
 
 class GamRetriever:
-    """Thin seam over a GAM memory backend: ``research`` runs the red-agent
-    retrieval+selection pass; ``get_card`` resolves a shortlisted id, fail-to-None.
-    The retrieval knobs ride along for
-    Hydra composition; numeric values live in config/memory/retriever/gam.yaml."""
+    """Thin seam over a GAM memory backend: ``research`` runs the retrieval+
+    selection pass; ``get_card`` resolves a shortlisted id, fail-to-None.
+    The retrieval knobs ride along for Hydra composition; numeric values live
+    in config/memory/retriever/gam.yaml."""
 
     def __init__(
         self,
         backend: Any = None,
         *,
-        enable_bm25: bool = False,
         # Bare-construction defaults mirror config/memory/retriever/gam.yaml so a
-        # directly-built retriever (tests, scripts) behaves like a Hydra run:
-        # structured selection only runs under "experimental" (LLMCardSelector
-        # returns empty otherwise); an empty allowed_tools means ALL tools incl.
-        # the dead keyword one, so the page_index+vector pair is named explicitly.
-        pipeline_mode: str = "experimental",
+        # directly-built retriever (tests, scripts) behaves like a Hydra run: an
+        # empty allowed_tools means ALL tools, so the page_index+vector pair is
+        # named explicitly.
         allowed_tools: Sequence[str] = ("page_index", "vector"),
         top_k_by_tool: Mapping[str, int] | None = None,
         max_iters: int | None = 3,
     ) -> None:
         self.backend = backend
-        self.enable_bm25 = enable_bm25
-        self.pipeline_mode = pipeline_mode
         self.allowed_tools = list(allowed_tools)
         self.top_k_by_tool = dict(top_k_by_tool or {})
         self.max_iters = max_iters

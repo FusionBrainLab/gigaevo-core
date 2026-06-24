@@ -124,7 +124,6 @@ def _write_fixture(run_dir):
                 "gam.plan",
                 {
                     "outcome": "ok",
-                    "pipeline_mode": "experimental",
                     "filtered_tools": ["keyword"],
                     "duration_ms": 2.0,
                 },
@@ -151,7 +150,6 @@ def _write_fixture(run_dir):
                 "gam.reflection",
                 {
                     "outcome": "ok",
-                    "pipeline_mode": "experimental",
                     "mode": "final",
                     "top_idea_ids": ["idea-a"],
                     "duration_ms": 6.0,
@@ -268,7 +266,6 @@ def test_build_report_summarizes_memory_events_and_artifacts(tmp_path) -> None:
     }
     assert summary["gam_events"]["outcomes"] == {"ok": 2, "ideas": 1}
     assert summary["gam_events"]["modes"] == {"no_integrate": 2, "final": 1}
-    assert summary["gam_events"]["pipeline_modes"] == {"experimental": 2}
     assert summary["gam_events"]["tools"] == {"keyword": 3}
     assert summary["gam_events"]["avg_duration_ms"] == 4.0
     assert summary["gam_events"]["max_duration_ms"] == 6.0

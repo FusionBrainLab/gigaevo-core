@@ -138,7 +138,6 @@ class CardDedup:
                 page_store,
                 self._gam_store_dir / "indexes",
                 self._checkpoint_dir / "chroma",
-                enable_bm25=False,
                 allowed_tools=[
                     "vector_description",
                     "vector_explanation_summary",

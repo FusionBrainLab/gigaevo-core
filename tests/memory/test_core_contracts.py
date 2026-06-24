@@ -130,7 +130,6 @@ class TestHydraComposition:
     def test_retriever_gam_group(self):
         obj = instantiate(self._load("retriever", "gam.yaml"))
         assert isinstance(obj, GamRetriever)
-        assert obj.enable_bm25 is False
         assert obj.max_iters == 3
         assert list(obj.allowed_tools) == ["page_index", "vector"]
         assert isinstance(obj.top_k_by_tool, dict)
@@ -139,7 +138,7 @@ class TestHydraComposition:
         assert "keyword" not in obj.top_k_by_tool
         assert obj.top_k_by_tool["vector"] == 3
         assert obj.top_k_by_tool["page_index"] == 5
-        assert obj.top_k_by_tool["vector_task_description"] == 0
+        assert set(obj.top_k_by_tool) == {"vector", "page_index"}
 
 
 class TestNoHardcodedConstants:

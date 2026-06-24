@@ -57,7 +57,18 @@ python run.py problem.name=toy_example \
 
 # Use a different Redis database
 python run.py problem.name=toy_example redis.db=5
+
+# Disable the LLM I/O audit trail (on by default)
+python run.py problem.name=toy_example llm_io_dump=false
 ```
+
+### LLM I/O Audit Trail
+
+Every LLM router call (mutation, memory, suggester — both plain and structured
+output) is logged as a complete JSON record into `<run_dir>/llm_io/<router>.jsonl`.
+Each line holds the exact prompt messages sent, the response text, the model
+name, token usage, and any error — a durable record of what went into the LLM
+and what came back. Enabled by default; set `llm_io_dump=false` to turn it off.
 
 ## Configuration Groups
 

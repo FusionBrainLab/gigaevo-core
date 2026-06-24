@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from gigaevo.exceptions import LLMError, MemoryStorageError
 from gigaevo.memory.backend_factory import MemoryBackendFactory
+from gigaevo.memory.context import ContextualGain
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
 from gigaevo.memory.efficacy import CardStatsStamper
@@ -479,6 +480,7 @@ def load_memory_cards(
     best_programs_percent: float = 0.0,
     higher_is_better: bool = True,
     card_posterior: dict[str, CardStatsBlock] | None = None,
+    gain_events: dict[str, list[ContextualGain]] | None = None,
 ) -> list[AnyCard]:
     """Load idea and program cards from banks as typed cards, posteriors stamped.
 
@@ -514,6 +516,9 @@ def load_memory_cards(
     if card_posterior:
         stamper = CardStatsStamper()
         typed_cards = [stamper.stamp_posterior(c, card_posterior) for c in typed_cards]
+    if gain_events:
+        stamper = CardStatsStamper()
+        typed_cards = [stamper.stamp_gain_events(c, gain_events) for c in typed_cards]
     return typed_cards
 
 
@@ -569,6 +574,7 @@ def main(
     best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
     card_posterior: dict[str, CardStatsBlock] | None = None,
+    gain_events: dict[str, list[ContextualGain]] | None = None,
     evictor: Evictor | None = None,
     deduplicator: Deduplicator | None = None,
 ) -> WriteStatsSnapshot | None:
@@ -595,6 +601,7 @@ def main(
             best_programs_percent=best_programs_percent,
             higher_is_better=higher_is_better,
             card_posterior=card_posterior,
+            gain_events=gain_events,
         )
         logger.info(
             "[Memory][WritePipeline] Loaded {} cards from banks: {} (filtered by: {})",

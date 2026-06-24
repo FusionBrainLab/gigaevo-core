@@ -202,6 +202,17 @@ no_implicit_optional = true
 warn_no_return = true
 exclude = ["build/", "dist/", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/", "gigaevo/memory/examples/"]
 
+# Vendored third-party trees: `exclude` stops mypy from discovering them as
+# roots, but first-party modules import them, and mypy follows those imports.
+# Skip-following keeps the vendored copies out of the gate without editing them.
+[[tool.mypy.overrides]]
+module = [
+    "gigaevo.memory._vendor.A_mem.*",
+    "gigaevo.memory._vendor.GAM_root.*",
+]
+follow_imports = "skip"
+ignore_errors = true
+
 [[tool.mypy.overrides]]
 module = [
     # Core deps (always installed)
@@ -242,8 +253,6 @@ module = [
     "langdetect.*",
     "immutabledict.*",
     "mmar_carl.*",
-    "GAM_root.*",
-    "A_mem.*",
     "shared_memory.*",
     "runtime_config.*",
     # [optimization] extra

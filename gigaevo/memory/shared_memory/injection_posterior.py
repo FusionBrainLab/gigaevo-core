@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core.events import emit_memory_event
 from gigaevo.memory.efficacy import EfficacyScorer, GainObservation
 from gigaevo.memory.shared_memory.models import CardStatsBlock
@@ -63,6 +64,67 @@ class InjectionOutcome(BaseModel):
         description="Evaluated and judged invalid: one forced harm event per "
         "injected card, never part of the baseline cohort.",
     )
+    base_selected_ids: list[str] = Field(
+        default_factory=list,
+        description="Cards selected for the mutator's named base parent, frozen "
+        "onto this child at birth. Use-attribution credits only these.",
+    )
+    base_metrics: dict[str, float] = Field(
+        default_factory=dict,
+        description="The base parent's metric dict, frozen at birth — the decision "
+        "context and the reward baseline source.",
+    )
+    base_fitness: float | None = Field(
+        default=None,
+        description="Base parent's fitness (base_metrics[fitness_key], resolved at "
+        "the write seam); None means no base baseline, so no gain events.",
+    )
+    card_ids_used: list[str] = Field(
+        default_factory=list,
+        description="Card ids the mutator declared it actually applied.",
+    )
+
+
+def compute_contextual_gains(
+    programs: Sequence[InjectionOutcome],
+    *,
+    higher_is_better: bool = True,
+) -> dict[str, list[ContextualGain]]:
+    """Map each used-and-base-selected card id to its base-relative gain events.
+
+    A card is credited for a child only when it was both selected for the
+    mutator's named base parent (``base_selected_ids``) and declared applied by
+    the mutator (``card_ids_used``) — the intersection. Donor cards (used but
+    selected for the other parent) and hallucinated ids (used but selected for
+    neither) earn nothing. Reward is the base-relative fitness delta and context
+    is the base parent's metrics. An invalid child emits one forced-harm event
+    (gain 0.0, invalid) per credited card. Children with no frozen base baseline
+    (``base_fitness is None`` or empty ``base_selected_ids``) contribute nothing.
+    """
+    events: dict[str, list[ContextualGain]] = {}
+    for p in programs:
+        if p.base_fitness is None or not p.base_selected_ids:
+            continue
+        credited = {c for c in p.base_selected_ids if c} & {
+            c for c in p.card_ids_used if c
+        }
+        if not credited:
+            continue
+        context = DecisionContext(parent_metrics=dict(p.base_metrics))
+        if p.invalid:
+            gain_event = ContextualGain(context=context, gain=0.0, invalid=True)
+        elif p.fitness is None:
+            continue
+        else:
+            delta = (
+                p.fitness - p.base_fitness
+                if higher_is_better
+                else p.base_fitness - p.fitness
+            )
+            gain_event = ContextualGain(context=context, gain=delta)
+        for card_id in credited:
+            events.setdefault(card_id, []).append(gain_event)
+    return events
 
 
 def compute_injection_posterior(

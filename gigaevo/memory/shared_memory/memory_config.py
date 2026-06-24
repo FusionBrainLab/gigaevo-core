@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.memory.shared_memory.card_conversion import (
     normalize_allowed_gam_tools,
-    normalize_gam_pipeline_mode,
     normalize_gam_top_k_by_tool,
 )
 from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
@@ -24,10 +23,8 @@ class GamConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enable_bm25: bool = False
     allowed_tools: list[str] = Field(default_factory=list)
     top_k_by_tool: dict[str, int] = Field(default_factory=dict)
-    pipeline_mode: str = "default"
     max_iters: int = Field(default=3, gt=0)
     max_cards: int = Field(default=3, gt=0)
 
@@ -38,10 +35,6 @@ class GamConfig(BaseModel):
     @property
     def normalized_top_k_by_tool(self) -> dict[str, int]:
         return normalize_gam_top_k_by_tool(self.top_k_by_tool or None)
-
-    @property
-    def normalized_pipeline_mode(self) -> str:
-        return normalize_gam_pipeline_mode(self.pipeline_mode)
 
 
 class ApiConfig(BaseModel):

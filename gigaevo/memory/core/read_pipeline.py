@@ -8,6 +8,7 @@ from typing import Any
 from loguru import logger
 import numpy as np
 
+from gigaevo.memory.context import DecisionContext
 from gigaevo.memory.core.auctioneer import AuctionCandidate
 from gigaevo.memory.core.events import (
     emit_memory_event,
@@ -103,14 +104,17 @@ class MemoryReadPipeline:
         task_description: str,
         metrics_description: str,
         max_cards: int = 1,
+        shortlist_k: int = 1,
         exclude_ids: frozenset[str] = frozenset(),
         random_drop_dose: int = 0,
+        parent_contexts: list[str] | None = None,
     ) -> MemorySelection:
         parent_ids = _ids(parents)
         decision_id = new_memory_decision_id()
         event_payload_base = {
             "mutation_mode": mutation_mode,
             "max_cards": max_cards,
+            "shortlist_k": shortlist_k,
             "exclude_count": len(exclude_ids),
             "exclude_ids": sorted(exclude_ids),
             "random_drop_dose": random_drop_dose,
@@ -135,8 +139,10 @@ class MemoryReadPipeline:
                 task_description=task_description,
                 metrics_description=metrics_description,
                 max_cards=max_cards,
+                shortlist_k=shortlist_k,
                 exclude_ids=exclude_ids,
                 random_drop_dose=random_drop_dose,
+                parent_contexts=parent_contexts,
                 event_payload_base=event_payload_base,
             )
 
@@ -148,8 +154,10 @@ class MemoryReadPipeline:
         task_description: str,
         metrics_description: str,
         max_cards: int = 1,
+        shortlist_k: int = 1,
         exclude_ids: frozenset[str] = frozenset(),
         random_drop_dose: int = 0,
+        parent_contexts: list[str] | None = None,
         event_payload_base: dict[str, Any],
     ) -> MemorySelection:
         if max_cards <= 0:
@@ -185,8 +193,10 @@ class MemoryReadPipeline:
                 task_description=task_description,
                 metrics_description=metrics_description,
                 max_cards=max_cards,
+                shortlist_k=shortlist_k,
                 exclude_ids=exclude_ids,
                 random_drop_dose=random_drop_dose,
+                parent_contexts=parent_contexts,
                 event_payload_base=event_payload_base,
             )
         except Exception as exc:
@@ -216,8 +226,10 @@ class MemoryReadPipeline:
         task_description: str,
         metrics_description: str,
         max_cards: int,
+        shortlist_k: int = 1,
         exclude_ids: frozenset[str] = frozenset(),
         random_drop_dose: int = 0,
+        parent_contexts: list[str] | None = None,
         event_payload_base: dict[str, Any] | None = None,
     ) -> MemorySelection:
         started_total = perf_counter()
@@ -225,19 +237,25 @@ class MemoryReadPipeline:
         retriever = self._retriever
         if retriever is None:
             return _empty()
+        # The selector LLM is asked to shortlist up to ``shortlist_k`` cards (the
+        # recall width); ``max_cards`` is the downstream injection budget the
+        # budgeter caps to. Fusing the two (shortlist_k == max_cards == 1)
+        # collapses the pool before any ranker runs.
         core_request = self._selector.build_core_request(
             parents=parents,
             mutation_mode=mutation_mode,
             task_description=task_description,
             metrics_description=metrics_description,
-            max_cards=max_cards,
+            max_cards=shortlist_k,
+            parent_contexts=parent_contexts,
         )
         query = self._selector.build_query(
             parents=parents,
             mutation_mode=mutation_mode,
             task_description=task_description,
             metrics_description=metrics_description,
-            max_cards=max_cards,
+            max_cards=shortlist_k,
+            parent_contexts=parent_contexts,
         )
 
         started_research = perf_counter()
@@ -277,12 +295,28 @@ class MemoryReadPipeline:
         fetched_ids = list(fetched.keys())
         missing_ids = [cid for cid in candidate_ids if cid not in fetched]
         started_reputation = perf_counter()
+        # Query cell = parents[0]: no base parent is chosen until the mutator runs,
+        # so the read anchors on the primary parent's live cell. Writes later anchor
+        # each gain_event on the mutator-named base; both map through the same
+        # behavior_space tessellation, so in-cell matching stays consistent.
+        decision_context = (
+            DecisionContext(
+                parent_metrics=dict(getattr(parents[0], "metrics", None) or {})
+            )
+            if parents
+            else None
+        )
         auction_input: list[AuctionCandidate] = []
         for cid, card in fetched.items():
-            posterior_a, posterior_b = self._reputation.card_posterior(card)
+            posterior_a, posterior_b = self._reputation.card_posterior(
+                card, decision_context
+            )
             auction_input.append(
                 AuctionCandidate(
-                    card_id=cid, posterior_a=posterior_a, posterior_b=posterior_b
+                    card_id=cid,
+                    posterior_a=posterior_a,
+                    posterior_b=posterior_b,
+                    magnitude=self._reputation.card_magnitude(card, decision_context),
                 )
             )
         reputation_ms = _elapsed_ms(started_reputation)
@@ -347,6 +381,7 @@ class MemoryReadPipeline:
                 "slate": [bid.model_dump(mode="json") for bid in slate],
                 "empty_reason": empty_reason,
             },
+            level="INFO",
         )
 
         if card_ids:

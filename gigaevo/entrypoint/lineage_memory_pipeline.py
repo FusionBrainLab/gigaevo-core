@@ -356,6 +356,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         mutation_mode: str | None = None,
         enable_optuna_stage: bool = False,
         optimization_time_budget: float | None = None,
+        fresh_context_reorder: bool = True,
     ):
         super().__init__(
             ctx,
@@ -396,8 +397,10 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
                 memory_provider=memory_provider,
                 task_description=task_description,
                 metrics_description=metrics_description,
+                metrics_context=metrics_context,
                 timeout=stage_timeout,
                 exposure=exposure,
+                fresh_context_reorder=fresh_context_reorder,
             ),
         )
 
@@ -409,3 +412,29 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
             "MutationSuggestionStage",
             ExecutionOrderDependency.always_after("MemoryContextStage"),
         )
+
+        # GAM-fresh-context reorder (Arm C). Condition extra-memory card
+        # selection on the SAME fresh this-pass signals the mutation agent sees
+        # — the lineage card + live evolutionary snapshot — instead of a
+        # one-pass-stale metadata block. Gated so Arm B
+        # (fresh_context_reorder=False) reverts to the pre-reorder DAG and the
+        # stage passes parent_context=None (metadata fallback).
+        if fresh_context_reorder:
+            self.add_data_flow_edge(
+                "IntraMemoryStage", "MemoryContextStage", "intra_card"
+            )
+            self.add_data_flow_edge(
+                "EvolutionaryStatisticsCollector",
+                "MemoryContextStage",
+                "evolutionary_statistics",
+            )
+            self.add_exec_dep(
+                "MemoryContextStage",
+                ExecutionOrderDependency.always_after("IntraMemoryStage"),
+            )
+            self.add_exec_dep(
+                "MemoryContextStage",
+                ExecutionOrderDependency.always_after(
+                    "EvolutionaryStatisticsCollector"
+                ),
+            )

@@ -256,7 +256,6 @@ Effective defaults shipped by `LocalMemoryBackendFactory`:
 - `search_limit` (default `5`)
 - `rebuild_interval` (default `30`)
 - `enable_llm_synthesis` (default `false`)
-- `enable_bm25` (default `false`)
 - `embedding_model_name` (default `all-MiniLM-L6-v2`)
 
 `MemoryConfig` (`shared_memory/memory_config.py`) is the validated runtime

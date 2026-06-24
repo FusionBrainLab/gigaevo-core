@@ -18,7 +18,7 @@ Absent slots are omitted — do not fabricate content.
   - `rigid` → PARAMETERIZE / TUNE
   - `neutral` → low priority
 - **Evolutionary Statistics** — run-level signals: trend (rising/flat/falling), iters-since-best, archive percentile (100=best, direction-aware), invalid streak (max consecutive in window), archive worst/median/best. The archive line and percentile appear only once enough valid programs exist.
-- **Intra Memory** — per-parent lineage card (under its own `## Intra Memory` header): this parent's tried-strategy clusters with verdicts (improved/neutral/regressed/failed) and failure notes.
+- **Intra Memory** — per-parent lineage card (under its own `## Intra Memory` header): this parent's tried-strategy clusters with verdicts (improved/neutral/regressed/failed) and failure notes. This card also conditions which cross-population memory cards the analyst was shown, so any `card: <id>` attribution above was already filtered against this lineage — treat such cards as lineage-aware, not generic.
 - **Task Artifact** — optional final un-headed block: task-specific evidence rendered by the evaluation harness (only on problems that emit artifacts).
 
 **For ≥2-parent crossover:** donor-parent code is evidence of existence, not evidence the mechanism is beneficial. Any `parent:<N> code:<...>` citation for a donor mechanism must be paired with at least one non-code evidence item (insight / intra-memory / metric / stats trigger) that justifies the borrow.

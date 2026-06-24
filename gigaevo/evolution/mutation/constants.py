@@ -36,6 +36,17 @@ MUTATION_OUTPUT_METADATA_KEY = "mutation_output"
 #: candidates were rejected (the "no-card" outcome).
 MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY = "memory_candidate_slate"
 
+#: Frozen onto a child at birth from the base parent (the one the mutator named in
+#: base_parent): its prompt-time selected card ids. Use-attribution credits only the
+#: cards in this set that the mutator also declared in card_ids_used. Frozen because
+#: the parent's own selected-ids are overwritten on NO_CACHE requeue.
+MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY = "memory_base_selected_idea_ids"
+
+#: Frozen onto a child at birth: the base parent's metric dict — the decision context
+#: and the reward baseline (base_fitness = base_metrics[fitness_key], derived at the
+#: write seam where fitness_key is known).
+MUTATION_MEMORY_BASE_METRICS_METADATA_KEY = "memory_base_metrics"
+
 #: Frozen onto a child at birth: per parent, the cache id of every parent stage
 #: output that produced the child (outputs live content-addressed in the storage
 #: stage-output store). Survives the parent's NO_CACHE stages being overwritten

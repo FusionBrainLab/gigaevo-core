@@ -274,7 +274,6 @@ def summarize_memory_events(
     ]
     gam_tools: list[str] = []
     gam_modes: Counter[str] = Counter()
-    gam_pipeline_modes: Counter[str] = Counter()
     for row in gam_events:
         payload = _event_payload(row)
         tool = payload.get("tool")
@@ -285,9 +284,6 @@ def summarize_memory_events(
         mode = payload.get("mode")
         if mode is not None:
             gam_modes[str(mode)] += 1
-        pipeline_mode = payload.get("pipeline_mode")
-        if pipeline_mode is not None:
-            gam_pipeline_modes[str(pipeline_mode)] += 1
     gam_outcomes = Counter(
         str(_event_payload(row).get("outcome"))
         for row in gam_events
@@ -399,7 +395,6 @@ def summarize_memory_events(
             ),
             "outcomes": _counter_dict(gam_outcomes),
             "modes": _counter_dict(gam_modes),
-            "pipeline_modes": _counter_dict(gam_pipeline_modes),
             "tools": _counter_dict(Counter(gam_tools)),
             "avg_duration_ms": _avg(gam_durations),
             "max_duration_ms": max(gam_durations) if gam_durations else None,
@@ -614,8 +609,6 @@ def format_report(summary: Mapping[str, Any]) -> str:
     lines.extend(_format_counts(gam_events["outcomes"], empty="none"))
     lines.append("  modes:")
     lines.extend(_format_counts(gam_events["modes"], empty="none"))
-    lines.append("  pipeline modes:")
-    lines.extend(_format_counts(gam_events["pipeline_modes"], empty="none"))
     lines.append("  tools:")
     lines.extend(_format_counts(gam_events["tools"], empty="none"))
     lines.extend(

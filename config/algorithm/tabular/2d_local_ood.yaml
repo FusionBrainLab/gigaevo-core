@@ -27,7 +27,7 @@ islands:
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: ${island_id}
     max_size: ${island_max_size}
-    behavior_space: ${behavior_space}
+    behavior_space: ${ref:behavior_space}
     archive_selector:
       _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
       fitness_keys:

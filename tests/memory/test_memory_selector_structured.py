@@ -1,7 +1,7 @@
 """Unit tests for the structured-output path in MemoryReadPipeline.
 
 These pin the contract that:
-- ``select()`` extracts card IDs from ``ExperimentalDecision.top_ideas[].card_id``
+- ``select()`` extracts card IDs from ``Decision.top_ideas[].card_id``
   via Pydantic validation (no regex on prose).
 - ``select()`` resolves card text via ``memory.get_card(card_id).description``
   (no regex on prose).
@@ -443,15 +443,14 @@ def test_missing_final_decision_warns_once_per_selector_instance():
     sink_id = logger.add(lambda m: records.append(str(m)), level="WARNING")
     try:
         selector = LLMCardSelector()
-        selector.shortlist({"pipeline_mode": "default"})
-        selector.shortlist({"pipeline_mode": "default"})
-        LLMCardSelector().shortlist({"pipeline_mode": "default"})
+        selector.shortlist({})
+        selector.shortlist({})
+        LLMCardSelector().shortlist({})
     finally:
         logger.remove(sink_id)
 
     hits = [r for r in records if "final_decision" in r]
     assert len(hits) == 2
-    assert "default" in hits[0]
 
 
 def test_parse_final_decision_handles_non_dict_raw_memory():

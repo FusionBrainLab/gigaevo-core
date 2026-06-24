@@ -11,15 +11,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import numpy as np
 import pytest
 
 from gigaevo.memory.core import (
     AuctionBid,
     BetaBinomialReputation,
     EfficacyCardRenderer,
+    EVThompsonAuctioneer,
     GamRetriever,
     LLMCardSelector,
+    MemoryReadPipeline,
     MemorySelection,
+    TopBidBudgeter,
     TopThetaBudgeter,
 )
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
@@ -565,3 +569,92 @@ class TestMemoryReadPipeline:
         assert read["payload"]["candidate_ids"] == ["bad"]
         assert read["payload"]["auction_winner_ids"] == []
         assert read["payload"]["empty_reason"] == "auction_rejected"
+
+
+def _ev_card(
+    description: str, posterior: tuple[float, float], adj_median: float
+) -> MemoryCard:
+    return MemoryCard(
+        id=f"card-{description}",
+        description=description,
+        evolution_statistics={
+            "ALL": {
+                "posterior_a": posterior[0],
+                "posterior_b": posterior[1],
+                "IntroGain_best_adj_median": adj_median,
+            }
+        },
+    )
+
+
+def _ev_pipeline(backend, *, seed, event_path=None) -> MemoryReadPipeline:
+    return MemoryReadPipeline(
+        retriever=GamRetriever(backend),
+        selector=LLMCardSelector(),
+        auctioneer=EVThompsonAuctioneer(prior_magnitude=0.1),
+        budgeter=TopBidBudgeter(),
+        renderer=EfficacyCardRenderer(),
+        reputation=BetaBinomialReputation(),
+        rng=np.random.default_rng(seed),
+        event_path=event_path,
+    )
+
+
+class TestShortlistKThreading:
+    @pytest.mark.asyncio
+    async def test_shortlist_k_widens_selector_ask_but_budget_caps(self):
+        # The selector LLM is asked for up to shortlist_k, while the injection
+        # budget (max_cards) still caps what reaches the mutator.
+        backend = _StubBackend(
+            raw_memory=_decision([f"idea-{i}" for i in range(5)]),
+            cards={f"idea-{i}": _card(f"Card {i}", _PROVEN) for i in range(5)},
+        )
+        got = await make_read_pipeline(backend, seed=_SEED).select(
+            parents=[_make_program()],
+            mutation_mode="rewrite",
+            task_description="t",
+            metrics_description="m",
+            max_cards=1,
+            shortlist_k=10,
+        )
+        ask = backend.research_calls[0]["planning_request"]
+        assert "pick up to 10 card(s)" in ask
+        assert len(got.card_ids) <= 1
+
+    @pytest.mark.asyncio
+    async def test_shortlist_k_default_one_keeps_legacy_ask(self):
+        backend = _mk_backend()
+        await make_read_pipeline(backend, seed=_SEED).select(
+            parents=[_make_program()], **_SELECT_KWARGS
+        )
+        assert "pick up to 1 card(s)" in backend.research_calls[0]["planning_request"]
+
+
+class TestEVReadPath:
+    @pytest.mark.asyncio
+    async def test_magnitude_populated_and_winner_ranked_by_bid(self, tmp_path):
+        # Two near-certain-safe cards (gate passes) with distinct stamped
+        # magnitudes; the budget=1 cap must keep the higher-EV one, and the
+        # auction event must carry the per-card magnitude (not None).
+        path = tmp_path / "memory_events.jsonl"
+        backend = _StubBackend(
+            raw_memory=_decision(["idea-hi", "idea-lo"]),
+            cards={
+                "idea-hi": _ev_card("Hi EV", (1_000_000.0, 1.0), adj_median=0.5),
+                "idea-lo": _ev_card("Lo EV", (1_000_000.0, 1.0), adj_median=0.02),
+            },
+        )
+        got = await _ev_pipeline(backend, seed=_SEED, event_path=path).select(
+            parents=[_make_program()],
+            mutation_mode="rewrite",
+            task_description="t",
+            metrics_description="m",
+            max_cards=1,
+            shortlist_k=10,
+        )
+        assert got.card_ids == ["idea-hi"]
+        auction = [
+            row for row in _event_rows(path) if row["event_type"] == "auction.run"
+        ][-1]
+        mags = {b["card_id"]: b["magnitude"] for b in auction["payload"]["bids"]}
+        assert mags == {"idea-hi": 0.5, "idea-lo": 0.02}

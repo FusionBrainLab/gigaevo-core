@@ -84,8 +84,6 @@ ALLOWED_GAM_TOOLS = {
     *VECTOR_GAM_TOOLS,
 }
 
-ALLOWED_GAM_PIPELINE_MODES = {"default", "experimental"}
-
 DEFAULT_GAM_TOP_K_BY_TOOL = {
     "keyword": 5,
     "vector": 5,
@@ -542,14 +540,6 @@ def normalize_gam_top_k_by_tool(
         if value >= 0:
             normalized[tool] = value
     return normalized
-
-
-def normalize_gam_pipeline_mode(gam_pipeline_mode: str | None) -> str:
-    """Normalize pipeline mode to 'default' or 'experimental'."""
-    mode = str(gam_pipeline_mode or "default").strip().lower()
-    if mode in ALLOWED_GAM_PIPELINE_MODES:
-        return mode
-    return "default"
 
 
 # ---------------------------------------------------------------------------

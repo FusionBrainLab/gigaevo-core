@@ -302,6 +302,66 @@ class TestIntraExtraMemoryPipelineBuilder:
             "evolutionary_statistics",
         ) in _edge_triples(bp)
 
+    def test_intra_card_feeds_memory_context_stage(self):
+        """GAM-fresh-context reorder: the selector is conditioned on the
+        this-pass lineage card, so the intra card must feed MemoryContextStage."""
+        bp = self._build()
+        assert (
+            "IntraMemoryStage",
+            "MemoryContextStage",
+            "intra_card",
+        ) in _edge_triples(bp)
+
+    def test_evolutionary_stats_feed_memory_context_stage(self):
+        """GAM-fresh-context reorder: the selector also sees the live evolutionary
+        snapshot (replaces the stale assembled mutation_context)."""
+        bp = self._build()
+        assert (
+            "EvolutionaryStatisticsCollector",
+            "MemoryContextStage",
+            "evolutionary_statistics",
+        ) in _edge_triples(bp)
+
+    def test_reorder_off_drops_intra_card_edge_to_memory_context(self):
+        """Arm B (``fresh_context_reorder=False``): the selector is NOT fed the
+        this-pass lineage card, reverting to the pre-reorder DAG."""
+        bp = self._build(fresh_context_reorder=False)
+        assert (
+            "IntraMemoryStage",
+            "MemoryContextStage",
+            "intra_card",
+        ) not in _edge_triples(bp)
+
+    def test_reorder_off_drops_evo_edge_to_memory_context(self):
+        bp = self._build(fresh_context_reorder=False)
+        assert (
+            "EvolutionaryStatisticsCollector",
+            "MemoryContextStage",
+            "evolutionary_statistics",
+        ) not in _edge_triples(bp)
+
+    def test_reorder_off_keeps_base_extra_channel_wiring(self):
+        """The toggle gates ONLY the two reorder edges — the base extra channel
+        (cards → suggester) is untouched, so Arm B still injects cards."""
+        bp = self._build(fresh_context_reorder=False)
+        assert (
+            "MemoryContextStage",
+            "MutationSuggestionStage",
+            "memory_cards",
+        ) in _edge_triples(bp)
+
+    def test_reorder_on_by_default(self):
+        """Default is the shipping behaviour (reorder ON) — both reorder edges
+        present without an explicit flag."""
+        bp = self._build()
+        triples = _edge_triples(bp)
+        assert ("IntraMemoryStage", "MemoryContextStage", "intra_card") in triples
+        assert (
+            "EvolutionaryStatisticsCollector",
+            "MemoryContextStage",
+            "evolutionary_statistics",
+        ) in triples
+
 
 # ===================================================================
 # Arm-mismatch warnings — read-side provider vs pipeline capability
@@ -315,6 +375,7 @@ class _CardProvider(MemoryProvider):
         *,
         task_description: str,
         metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
         return MemorySelection(cards=[], card_ids=[])
 

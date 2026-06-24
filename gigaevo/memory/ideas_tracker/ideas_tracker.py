@@ -23,11 +23,15 @@ from loguru import logger
 
 from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+    MUTATION_OUTPUT_METADATA_KEY,
 )
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.backend_factory import MemoryBackendFactory
+from gigaevo.memory.context import ContextualGain
 from gigaevo.memory.core.protocols import (
     Deduplicator,
     Evictor,
@@ -55,7 +59,10 @@ from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryRespon
 from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
     analyse as _analyse_origins,
 )
-from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
+from gigaevo.memory.shared_memory.injection_posterior import (
+    InjectionOutcome,
+    compute_contextual_gains,
+)
 from gigaevo.memory.shared_memory.models import CardStatsBlock
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
@@ -320,6 +327,76 @@ def _card_posterior_from_programs(
     return rep.compute_injection_posteriors(rows, higher_is_better=higher_is_better)
 
 
+def _base_fitness(
+    base_metrics: dict[str, float],
+    fitness_key: str,
+    metrics_context: MetricsContext | None,
+) -> float | None:
+    """Base parent's reward baseline from its frozen metrics, mirroring the
+    validity/sentinel semantics of :func:`_valid_fitness`."""
+    is_valid = base_metrics.get(VALIDITY_KEY)
+    if is_valid is None or is_valid <= 0:
+        return None
+    fit = base_metrics.get(fitness_key)
+    if fit is None or not math.isfinite(fit):
+        return None
+    if metrics_context is not None and metrics_context.is_sentinel(fitness_key, fit):
+        return None
+    return float(fit)
+
+
+def _card_ids_used(prog: Program) -> list[str]:
+    """Card ids the mutator declared it applied, from the stamped structured output."""
+    out = prog.get_metadata(MUTATION_OUTPUT_METADATA_KEY)
+    if isinstance(out, dict):
+        return list(out.get("card_ids_used", []) or [])
+    return []
+
+
+def _base_selected_ids(prog: Program) -> list[str]:
+    """Cards selected for the mutator's named base parent, frozen at birth."""
+    ids = prog.get_metadata(MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY)
+    return list(ids) if isinstance(ids, list) else []
+
+
+def _base_metrics(prog: Program) -> dict[str, float]:
+    """The base parent's metric dict, frozen at birth."""
+    metrics = prog.get_metadata(MUTATION_MEMORY_BASE_METRICS_METADATA_KEY)
+    return dict(metrics) if isinstance(metrics, dict) else {}
+
+
+def _card_gain_events_from_programs(
+    programs: list[Program],
+    *,
+    fitness_key: str,
+    higher_is_better: bool,
+    metrics_context: MetricsContext | None = None,
+) -> dict[str, list[ContextualGain]]:
+    """Use-attributed base-relative gain events per card id, from live programs.
+
+    Credits a card only when it was both selected for the mutator's named base
+    parent (``memory_base_selected_idea_ids``) and declared used
+    (``mutation_output.card_ids_used``); the base fitness baseline is resolved
+    here from the frozen base metrics under ``fitness_key``.
+    """
+    rows = []
+    for prog in programs:
+        base_metrics = _base_metrics(prog)
+        rows.append(
+            InjectionOutcome(
+                id=prog.id,
+                parents=prog.lineage.parents,
+                fitness=_valid_fitness(prog, fitness_key, metrics_context),
+                invalid=_evaluated_invalid(prog, fitness_key, metrics_context),
+                base_selected_ids=_base_selected_ids(prog),
+                base_metrics=base_metrics,
+                base_fitness=_base_fitness(base_metrics, fitness_key, metrics_context),
+                card_ids_used=_card_ids_used(prog),
+            )
+        )
+    return compute_contextual_gains(rows, higher_is_better=higher_is_better)
+
+
 # A cancelled sweep abandons its to_thread writer mid-ingest; the next sweep
 # (or on_run_complete) must not interleave a second backend build with it.
 _WRITE_PIPELINE_LOCK = threading.Lock()
@@ -335,6 +412,7 @@ def _run_write_pipeline(
     best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
     card_posterior: dict[str, CardStatsBlock] | None = None,
+    gain_events: dict[str, list[ContextualGain]] | None = None,
     evictor: Evictor | None = None,
     deduplicator: Deduplicator | None = None,
 ) -> None:
@@ -357,6 +435,7 @@ def _run_write_pipeline(
             best_programs_percent=best_programs_percent,
             higher_is_better=higher_is_better,
             card_posterior=card_posterior,
+            gain_events=gain_events,
             evictor=evictor,
             deduplicator=deduplicator,
         )
@@ -371,6 +450,7 @@ def _run_write_pipeline_locked(
     best_programs_percent: float,
     higher_is_better: bool,
     card_posterior: dict[str, CardStatsBlock] | None,
+    gain_events: dict[str, list[ContextualGain]] | None,
     evictor: Evictor | None,
     deduplicator: Deduplicator | None,
 ) -> None:
@@ -421,6 +501,7 @@ def _run_write_pipeline_locked(
         best_programs_percent=best_programs_percent,
         higher_is_better=higher_is_better,
         card_posterior=card_posterior,
+        gain_events=gain_events,
         evictor=evictor,
         deduplicator=deduplicator,
     )
@@ -885,6 +966,12 @@ class IdeaTracker(IncrementalPostRunHook):
             reputation=self._reputation,
             metrics_context=self._metrics_context,
         )
+        card_gain_events = _card_gain_events_from_programs(
+            programs if posterior_programs is None else posterior_programs,
+            fitness_key=self._fitness_key,
+            higher_is_better=self._fitness_higher_is_better,
+            metrics_context=self._metrics_context,
+        )
 
         # flush (bank serialization + offline origin analysis) and the write
         # pipeline (backend build + card ingest) are blocking I/O; keep them
@@ -901,6 +988,7 @@ class IdeaTracker(IncrementalPostRunHook):
                 best_programs_percent=self._best_programs_percent,
                 higher_is_better=self._fitness_higher_is_better,
                 card_posterior=card_posterior,
+                gain_events=card_gain_events,
                 evictor=self._evictor,
                 deduplicator=self._deduplicator,
             )

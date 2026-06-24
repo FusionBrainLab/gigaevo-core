@@ -198,8 +198,13 @@ class MemoryProvider(ABC):
     async def select_cards(
         self, program: Program, *,
         task_description: str, metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
-        """Select memory cards relevant to this program."""
+        """Select memory cards relevant to this program.
+
+        ``parent_context`` is the fresh this-pass lineage card + live
+        evolutionary snapshot the selector conditions retrieval on (None
+        falls back to the legacy per-parent metadata block)."""
 ```
 
 Two implementations:
@@ -280,9 +285,9 @@ see in the config is exactly what the system receives:
 defaults:
   - retriever: gam
   - selector: llm
-  - auction: thompson
-  - budget: top_theta
-  - reputation: beta_binomial
+  - auction: thompson_ev          # EV-bid auction (theta x magnitude), abstains <= ev_floor
+  - budget: top_bid               # bid-ranked cap to max_cards
+  - reputation: absolute_progress # value channel: median base-relative gain
   - admitter: sign_based
   - dedup: llm
   - evictor: harm
@@ -298,6 +303,12 @@ max_cards: 1
 checkpoint_dir: ${checkpoint_dir}
 ```
 
+The default stack is the **EV contextual bandit**: cards bid their *expected
+fitness gain* (`θ × magnitude`) and the auction abstains rather than inject a
+card it expects to hurt. It works on every algorithm. To revert to the legacy
+probability-only behavior, override all three:
+`memory/auction=thompson memory/budget=top_theta memory/reputation=beta_binomial`.
+
 The `dedup`/`evictor` singletons are write-side components: the read backend
 never ingests, so the `MemorySystem` threads them into the write pipeline,
 which sweeps confidently harmful cards after each ingest pass.
@@ -309,7 +320,6 @@ LLM by its group:
 python run.py memory=full \
   memory/llm=qwen_instruct \
   memory.auction.baseline_prior=[5,2] \
-  memory.retriever.pipeline_mode=experimental \
   checkpoint_dir=/workspace/experiments/hover/memory_store \
   problem.name=chains/hover/static
 ```
@@ -332,19 +342,90 @@ trap:
 
 ### Component groups
 
-| Group | Variants | Class | Role |
+The **default** variant of each group is in **bold** (this is what `memory=full`
+/ `memory=reader` compose with no overrides):
+
+| Group | Variants (default in bold) | Class | Role |
 |-------|----------|-------|------|
-| `memory/backend` | `local` | `LocalMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
-| `memory/retriever` | `gam` | `GamRetriever` | Agentic GAM search (tools, top-k, `pipeline_mode`) |
-| `memory/selector` | `llm` | `LLMCardSelector` | Picks cards from retrieval hits |
-| `memory/auction` | `thompson` | `ThompsonAuctioneer` | Thompson-sampling card auction |
-| `memory/budget` | `top_theta` | `TopThetaBudgeter` | Caps cards per injection |
-| `memory/reputation` | `beta_binomial` | `BetaBinomialReputation` | Per-card efficacy posterior |
-| `memory/admitter` | `sign_based` | `SignBasedAdmitter` | Write-side admission gate |
-| `memory/dedup` | `llm`, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (threaded into the write pipeline) |
-| `memory/evictor` | `harm` | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the write pipeline) |
-| `memory/tracker` | `ideas` | `IdeaTracker` | Writer side of `memory=` (extracts/enriches cards) |
-| `memory/llm` | `gemini`, `qwen_instruct` | `MultiModelRouter` | The memory LLM (writer-side spend) |
+| `memory/backend` | **`local`** | `LocalMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
+| `memory/retriever` | **`gam`** | `GamRetriever` | Agentic GAM search (tools, top-k) |
+| `memory/selector` | **`llm`** | `LLMCardSelector` | Picks cards from retrieval hits |
+| `memory/auction` | `thompson`, **`thompson_ev`** | `ThompsonAuctioneer` / `EVThompsonAuctioneer` | Card auction (`thompson_ev` bids `θ × magnitude` and abstains below `ev_floor`; `thompson` bids `θ` only) |
+| `memory/budget` | `top_theta`, **`top_bid`** | `TopThetaBudgeter` / `TopBidBudgeter` | Caps cards per injection (`top_bid` ranks by EV bid, `top_theta` by `θ`) |
+| `memory/reputation` | `beta_binomial`, **`absolute_progress`**, `bd_proximity` | `BetaBinomialReputation` / `RewardWeightedReputation` / `BDProximityReputation` | Per-card efficacy posterior + value channel (`bd_proximity` = cell-local, single-island only) |
+| `memory/admitter` | **`sign_based`** | `SignBasedAdmitter` | Write-side admission gate |
+| `memory/dedup` | **`llm`**, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (threaded into the write pipeline) |
+| `memory/evictor` | **`harm`** | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the write pipeline) |
+| `memory/excluder` | **`none`**, `lineage` | `NullExcluder` / `LineageExcluder` | Filter-first gate (`lineage` drops cards already applied in this lineage) |
+| `memory/provider` | **`selector`** | `SelectorMemoryProvider` | Read-side provider (`shortlist_k` recall width, `max_cards` budget) |
+| `memory/tracker` | **`ideas`** | `IdeaTracker` | Writer side of `memory=` (extracts/enriches cards) |
+| `memory/llm` | **`gemini`**, `qwen_instruct` | `MultiModelRouter` | The memory LLM (writer-side spend) |
+
+### Contextual-bandit card selection (EV auction)
+
+This is the **default** stack (`thompson_ev` + `top_bid` + `absolute_progress`).
+The legacy `thompson` auction bids a card's success *probability* `θ` alone; the
+`thompson_ev` default instead turns card injection into a contextual bandit: the
+context is the query parent's MAP-Elites cell, the arms are the candidate cards,
+and the bid is `θ × magnitude` where `magnitude` is the card's *expected fitness
+gain* (a signed value channel), not just its hit rate. A card whose expected gain
+is non-positive bids at or below `ev_floor` (default `0.0`) and the auction
+**abstains** — it injects nothing rather than a neutral card.
+
+The value channel comes from the reputation arm:
+
+- `absolute_progress` (`RewardWeightedReputation` + `AbsoluteMedianReward`) — the
+  card's magnitude is the median base-relative child gain it has produced,
+  pooled across all cells.
+- `bd_proximity` (`BDProximityReputation`) — **single-island only.** Re-buckets
+  each card's stored `gain_events` into the *query parent's current cell* and
+  bids over the in-cell subset only, so a card that helped near cell A and hurt
+  near cell B bids high in A and abstains in B from one stored list. A cell with
+  no in-cell evidence delegates to `absolute_progress`. Requires a top-level
+  `${ref:behavior_space}` (the `single_island*`, `topology_3d*`, and
+  `tabular/2d_local_ood` algorithms); pairing it with `multi_island` fails fast
+  with a `NotImplementedError`.
+
+The gain evidence is **use-attributed**: a base-parent fitness snapshot is frozen
+at child birth, and a card is credited (`gain = child − base`) only when it was
+both *offered* to the mutation and *cited* by the mutator as used — selection
+alone earns no credit. `memory.provider.shortlist_k` controls how wide the GAM
+recall is before the auction (distinct from `max_cards`, the injection budget).
+
+The `memory/*` arms above are necessary but **not sufficient** — the
+contextual-bandit path only fires with the matching **non-memory** settings:
+`pipeline=intra_extra_memory` (the memory-augmented mutation pipeline; the
+`standard` pipeline has no memory-context stage), `storage=disk`, `num_parents=2`
+(so `base_parent` and the donor/base credit distinction are live), and the
+Qwen-on-proxy LLM overrides (the default model 401s on the proxy). The full
+single-island treatment recipe:
+
+```bash
+python run.py \
+  problem.name=heilbron \
+  storage=disk \
+  pipeline=intra_extra_memory \
+  num_parents=2 \
+  algorithm=single_island \
+  memory=full \
+  memory/llm=qwen_instruct \
+  memory/excluder=lineage \
+  memory/reputation=bd_proximity \
+  memory/auction=thompson_ev \
+  memory/budget=top_bid \
+  memory.provider.shortlist_k=10 \
+  post_step_hook.refresh_every=10 \
+  pipeline_builder.fresh_context_reorder=true \
+  model_name=Qwen3-235B-A22B-Thinking-2507 \
+  llm_base_url=http://localhost:8000/v1 \
+  +llm.structured_output_method=auto \
+  max_mutants=800
+```
+
+Swap only `memory/reputation=absolute_progress` for the context-free control arm
+(same auction/budget/shortlist stack). The full derivation (RL framing, Thompson
+sampling, the absolute-fitness value function, abstention proof) and a
+per-override breakdown live in `docs/reports/memory_bandit_system.pdf`.
 
 ### Backend factory
 
@@ -374,16 +455,21 @@ CLI runs build an equivalent router from `--model`/`--base-url`/`--api-key`.
 
 #### Which settings matter most?
 
-| Setting | Where | Why it matters |
-|---------|-------|---------------|
-| `memory.max_cards` | `config/memory/{reader,full}.yaml` | How many cards reach the prompt per mutation |
-| `memory.retriever.pipeline_mode` | `memory/retriever/gam.yaml` | `experimental` = multi-tool agentic retrieval (required by the selector) |
-| `memory.retriever.allowed_tools` | `memory/retriever/gam.yaml` | Which GAM search tools the agent may call |
-| `memory.dedup.config.enabled` | `memory/dedup/llm.yaml` | LLM dedup on card writes |
-| `checkpoint_dir` | command line | Where the card bank lives on disk |
-| `memory/llm` | command line | Writer LLM: `gemini` (default) vs `qwen_instruct` |
+| Setting | Default | Why it matters |
+|---------|---------|---------------|
+| `memory.max_cards` | `1` | How many cards reach the prompt per mutation (the injection budget) |
+| `memory.provider.shortlist_k` | `10` | Recall width: cards the selector shortlists before the auction ranks and the budgeter caps to `max_cards`. Set to `1` to fuse shortlist with the budget (legacy collapse) |
+| `memory.auction.ev_floor` | `0.0` | Min expected gain to inject (`thompson_ev`); raise to inject only confidently-positive cards, lower (negative) to inject more eagerly |
+| `memory.auction.prior_magnitude` | `0.1` | Optimistic cold-gain prior for a card with no value evidence; tune to the substrate's fitness scale (e.g. `0.05`) |
+| `memory.auction.baseline_prior` | `[3.0, 3.0]` | Beta prior on a cold card's success probability `θ` |
+| `memory.retriever.allowed_tools` | `[page_index, vector]` | Which GAM search tools the agent may call |
+| `memory.dedup.config.enabled` | `true` | LLM dedup on card writes |
+| `checkpoint_dir` | — | Where the card bank lives on disk (command line) |
+| `memory/llm` | `gemini` | Writer LLM group: `gemini` vs `qwen_instruct` (command line) |
 
-Everything else has sane defaults.
+Component-level swaps (`memory/reputation=bd_proximity`, `memory/excluder=lineage`,
+`memory/auction=thompson`, …) are the coarse levers; the table above are the
+fine knobs. Everything else has sane defaults.
 
 ---
 
@@ -683,7 +769,7 @@ each program evaluation:
 3. `LLMCardSelector` builds a query from the parent code, task description, and metrics
 4. The query is sent to the memory backend (local `AmemGamMemory` or remote API)
 5. The **GAM (Generative Agentic Memory) pipeline** runs:
-   - Multiple retrieval tools search different indices (vector, keyword, etc.)
+   - Retrieval tools search the card indices (vector similarity, page index)
    - The selector LLM emits an ordered `final_decision` shortlist of card ids
 6. The shortlist goes through a **Thompson auction** on each card's
    Beta-Binomial efficacy posterior, then a top-theta budget cap (`max_cards`)
@@ -984,7 +1070,7 @@ extracts cards into ONE shared bank.
 
 **Q: How does the system decide which cards are "relevant"?**
 The GAM pipeline sends the parent code + task description as a query, then
-runs the configured retrieval tools (vector search, keyword search, etc.) to
+runs the configured retrieval tools (vector search, page index) to
 find matching cards. The `allowed_tools` and `top_k_by_tool` settings in
 `config/memory/retriever/gam.yaml` control which tools run and how many
 results each returns.

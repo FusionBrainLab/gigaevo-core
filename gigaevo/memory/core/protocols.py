@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from gigaevo.memory.context import DecisionContext
 from gigaevo.memory.core.auctioneer import AuctionBid, AuctionCandidate
 from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.efficacy import EfficacyScorer
@@ -25,7 +26,13 @@ class ReputationModel(Protocol):
         self, gains: Sequence[float], *, threshold: float = 0.0
     ) -> CardStatsBlock: ...
 
-    def card_posterior(self, card: AnyCard) -> tuple[float, float]: ...
+    def card_posterior(
+        self, card: AnyCard, context: DecisionContext | None = None
+    ) -> tuple[float, float]: ...
+
+    def card_magnitude(
+        self, card: AnyCard, context: DecisionContext | None = None
+    ) -> float | None: ...
 
     def is_confidently_harmful(
         self, evolution_statistics: EvolutionStatistics | None
@@ -95,6 +102,7 @@ class CardShortlister(Protocol):
         task_description: str,
         metrics_description: str,
         max_cards: int,
+        parent_contexts: list[str] | None = None,
     ) -> str: ...
 
     def build_core_request(
@@ -105,6 +113,7 @@ class CardShortlister(Protocol):
         task_description: str,
         metrics_description: str,
         max_cards: int,
+        parent_contexts: list[str] | None = None,
     ) -> str: ...
 
     def shortlist(self, raw_memory: Any) -> list[str]: ...

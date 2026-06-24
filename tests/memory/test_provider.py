@@ -117,41 +117,14 @@ class TestSelectorMemoryProvider:
 
         assert mock_pipeline.select.call_args.kwargs["max_cards"] == 1
 
-    def test_bare_retriever_defaults_to_experimental_pipeline(self) -> None:
-        """Structured card selection only runs under pipeline_mode=experimental
-        (card_selector warns and returns empty otherwise); the bare-retriever
-        fallback must not compose the dead "default" mode."""
-        with patch.object(
-            LocalMemoryBackendFactory, "build", return_value=MagicMock()
-        ) as mock_build:
-            provider = SelectorMemoryProvider(
-                backend=LocalMemoryBackendFactory(), max_cards=1
-            )
-            provider._get_pipeline()
-            assert mock_build.call_args.kwargs["gam"].pipeline_mode == "experimental"
-
     def test_bare_retriever_defaults_match_shipped_gam_yaml(self) -> None:
         """A directly-constructed GamRetriever (no Hydra) must compose the same
         retrieval as config/memory/retriever/gam.yaml: page_index+vector only
-        (an empty list means ALL tools incl. the dead keyword one) and the
-        shipped max_iters=3 — so tests and scripts behave like a real run."""
+        and the shipped max_iters=3 — so tests and scripts behave like a real
+        run."""
         retriever = GamRetriever()
         assert retriever.allowed_tools == ["page_index", "vector"]
         assert retriever.max_iters == 3
-
-    def test_empty_pipeline_mode_falls_back_to_experimental(self) -> None:
-        """A falsy pipeline_mode must degrade to the working "experimental"
-        mode, not the dead "default" (under which the selector returns no
-        cards) — the in-code fallback mirrors the shipped safe default."""
-        retriever = GamRetriever(pipeline_mode="")
-        with patch.object(
-            LocalMemoryBackendFactory, "build", return_value=MagicMock()
-        ) as mock_build:
-            provider = SelectorMemoryProvider(
-                backend=LocalMemoryBackendFactory(), max_cards=1, retriever=retriever
-            )
-            provider._get_pipeline()
-            assert mock_build.call_args.kwargs["gam"].pipeline_mode == "experimental"
 
     @pytest.mark.asyncio
     async def test_passes_mutation_mode_rewrite(self) -> None:
@@ -306,8 +279,6 @@ class TestSelectorMemoryProvider:
 
     def test_injected_retriever_knobs_flow_into_gam_config(self) -> None:
         retriever = GamRetriever(
-            enable_bm25=True,
-            pipeline_mode="default",
             allowed_tools=["vector"],
             top_k_by_tool={"vector": 7},
             max_iters=5,
@@ -323,8 +294,6 @@ class TestSelectorMemoryProvider:
             )
             provider._get_pipeline()
             assert mock_build.call_args.kwargs["gam"] == GamConfig(
-                enable_bm25=True,
-                pipeline_mode="default",
                 allowed_tools=["vector"],
                 top_k_by_tool={"vector": 7},
                 max_iters=5,

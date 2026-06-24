@@ -11,9 +11,10 @@ from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import (
     AuctionBid,
     AuctionCandidate,
+    EVThompsonAuctioneer,
     ThompsonAuctioneer,
 )
-from gigaevo.memory.core.budgeter import TopThetaBudgeter
+from gigaevo.memory.core.budgeter import TopBidBudgeter, TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
 from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
 from gigaevo.memory.core.events import (
@@ -79,7 +80,9 @@ __all__ = [
     "RandomDropExcluder",
     "ReputationModel",
     "SignBasedAdmitter",
+    "EVThompsonAuctioneer",
     "ThompsonAuctioneer",
+    "TopBidBudgeter",
     "TopThetaBudgeter",
     "WriteLedger",
     "WriteLedgerRecord",

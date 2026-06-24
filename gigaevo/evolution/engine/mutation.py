@@ -6,6 +6,8 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
@@ -33,6 +35,38 @@ def lineage_applied_closure(
             if cid:
                 closure.add(cid)
     return sorted(closure)
+
+
+def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
+    """Snapshot the base parent's selected ids and metrics for use-attribution.
+
+    The base parent is the one the mutator named (1-based ``base_parent``); its own
+    metadata is overwritten on NO_CACHE requeue, so reward/context must read the
+    child's stamp. ``base_fitness`` is derived from ``base_metrics`` at the write
+    seam (where the fitness key is known), so it is not frozen here.
+    """
+    if not parents:
+        return {}
+    index = base_parent - 1
+    if index < 0 or index >= len(parents):
+        logger.warning(
+            "base_parent={} out of range for {} parent(s); attributing credit to "
+            "parent 1. The mutator named a base it was not given.",
+            base_parent,
+            len(parents),
+        )
+        index = 0
+    base = parents[index]
+    return {
+        MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY: [
+            card_id
+            for card_id in (
+                base.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY) or []
+            )
+            if card_id
+        ],
+        MUTATION_MEMORY_BASE_METRICS_METADATA_KEY: dict(base.metrics or {}),
+    }
 
 
 async def generate_one_mutation(
@@ -97,6 +131,13 @@ async def generate_one_mutation(
             MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
             lineage_applied_closure(injected_ids=injected_ids, parents=parents),
         )
+
+        mutation_output = mutation_spec.metadata.get(MutationSpec.META_OUTPUT)
+        base_parent = 1
+        if isinstance(mutation_output, dict):
+            base_parent = int(mutation_output.get("base_parent", 1) or 1)
+        for key, value in freeze_base_parent_snapshot(parents, base_parent).items():
+            program.set_metadata(key, value)
 
         # Freeze the parent stage outputs that produced this child (debug only —
         # must never block the mutation, so failures are swallowed).

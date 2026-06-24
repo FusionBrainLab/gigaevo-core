@@ -67,6 +67,21 @@ class MutationStructuredOutput(BaseModel):
         default_factory=list,
         description="Flat list of insight strings that were acted on (verbatim from input)",
     )
+    base_parent: int = Field(
+        default=1,
+        description=(
+            "1-based number of the parent (as labelled '=== Parent N ===' above) "
+            "whose overall structure this child keeps. If you blend both, pick the "
+            "one it most resembles. Reward and context anchor to this parent."
+        ),
+    )
+    card_ids_used: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact ids of memory cards/insights you actually applied, from either "
+            "parent (verbatim; do not invent ids). Leave empty if you applied none."
+        ),
+    )
     changes: list[MutationChange] = Field(
         default_factory=list,
         description=(
@@ -465,7 +480,9 @@ class MutationAgent(LangGraphAgent):
             structured_dict = structured_output.model_dump()
 
             citation_integrity = self._citation_integrity(
-                structured_output.insights_used, state.get("messages", [])
+                structured_output.insights_used,
+                structured_output.card_ids_used,
+                state.get("messages", []),
             )
             if citation_integrity["grounded"] < citation_integrity["cited"]:
                 logger.info(
@@ -481,6 +498,8 @@ class MutationAgent(LangGraphAgent):
                 "archetype": structured_output.archetype,
                 "justification": structured_output.justification,
                 "insights_used": structured_output.insights_used,
+                "base_parent": structured_output.base_parent,
+                "card_ids_used": structured_output.card_ids_used,
                 "changes": structured_output.changes,
                 "citation_integrity": citation_integrity,
                 "model_used": model_used,
@@ -507,12 +526,16 @@ class MutationAgent(LangGraphAgent):
 
     @staticmethod
     def _citation_integrity(
-        insights_used: list[str], messages: list[BaseMessage]
+        insights_used: list[str],
+        card_ids_used: list[str],
+        messages: list[BaseMessage],
     ) -> dict[str, int]:
-        """Count cited insights that appear verbatim in the rendered prompt.
+        """Count cited insights and card ids that appear verbatim in the rendered
+        prompt.
 
-        Whitespace-normalized substring match; purely observational (the
-        counts land in child metadata, nothing is gated on them).
+        Whitespace-normalized substring match; purely observational (the counts
+        land in child metadata, nothing is gated on them — the hard credit gate
+        is the base_selected ∩ used intersection at the write path).
         """
 
         def _norm(s: str) -> str:
@@ -520,8 +543,13 @@ class MutationAgent(LangGraphAgent):
 
         rendered = _norm(" ".join(str(m.content) for m in messages))
         cited = [_norm(s) for s in insights_used if s.strip()]
-        grounded = sum(1 for s in cited if s in rendered)
-        return {"cited": len(cited), "grounded": grounded}
+        cards = [c.strip() for c in card_ids_used if c.strip()]
+        return {
+            "cited": len(cited),
+            "grounded": sum(1 for s in cited if s in rendered),
+            "cards_cited": len(cards),
+            "cards_grounded": sum(1 for c in cards if c in rendered),
+        }
 
     @staticmethod
     def _fix_json_escaped_code(code: str) -> str:

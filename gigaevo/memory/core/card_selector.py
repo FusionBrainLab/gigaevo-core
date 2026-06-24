@@ -6,7 +6,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
-from gigaevo.memory._vendor.GAM_root.gam.schemas.result import ExperimentalDecision
+from gigaevo.memory._vendor.GAM_root.gam.schemas.result import Decision
 from gigaevo.prompts import MemorySelectorPrompts
 
 
@@ -21,10 +21,15 @@ def _role_block() -> str:
     return f"{selector_role.rstrip()}\n\n" if selector_role else ""
 
 
-def _build_parent_blocks(parents: list[Any]) -> str:
+def _build_parent_blocks(
+    parents: list[Any], parent_contexts: list[str] | None = None
+) -> str:
     blocks: list[str] = []
     for i, parent in enumerate(parents):
-        formatted_context = parent.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or ""
+        if parent_contexts is not None:
+            formatted_context = parent_contexts[i] if i < len(parent_contexts) else ""
+        else:
+            formatted_context = parent.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or ""
         block = f"""=== Parent {i + 1} ===
 ```python
 {parent.code}
@@ -49,16 +54,13 @@ class LLMCardSelector(BaseModel):
         if self._warned_no_final_decision:
             return
         self._warned_no_final_decision = True
-        mode = raw_memory.get("pipeline_mode") if isinstance(raw_memory, dict) else None
         logger.warning(
-            "[Memory][CardSelector] raw_memory carries no final_decision "
-            "(pipeline_mode={}); every selection will be empty. Structured card "
-            "selection requires gam_pipeline_mode=experimental.",
-            mode or "unknown",
+            "[Memory][CardSelector] raw_memory carries no final_decision; "
+            "every selection will be empty."
         )
 
-    def _parse_final_decision(self, raw_memory: Any) -> ExperimentalDecision:
-        empty = ExperimentalDecision(mode="final", top_ideas=[], additional_queries=[])
+    def _parse_final_decision(self, raw_memory: Any) -> Decision:
+        empty = Decision(mode="final", top_ideas=[], additional_queries=[])
         if not isinstance(raw_memory, dict):
             self._warn_no_final_decision(raw_memory)
             return empty
@@ -67,7 +69,7 @@ class LLMCardSelector(BaseModel):
             self._warn_no_final_decision(raw_memory)
             return empty
         try:
-            return ExperimentalDecision.model_validate(final)
+            return Decision.model_validate(final)
         except ValidationError as exc:
             logger.warning(
                 "[Memory][CardSelector] final_decision shape invalid: {}", exc
@@ -82,6 +84,7 @@ class LLMCardSelector(BaseModel):
         task_description: str,
         metrics_description: str,
         max_cards: int,
+        parent_contexts: list[str] | None = None,
     ) -> str:
         core = self.build_core_request(
             parents=parents,
@@ -89,6 +92,7 @@ class LLMCardSelector(BaseModel):
             task_description=task_description,
             metrics_description=metrics_description,
             max_cards=max_cards,
+            parent_contexts=parent_contexts,
         )
         return f"{_role_block()}{core}"
 
@@ -100,8 +104,9 @@ class LLMCardSelector(BaseModel):
         task_description: str,
         metrics_description: str,
         max_cards: int,
+        parent_contexts: list[str] | None = None,
     ) -> str:
-        parent_blocks = _build_parent_blocks(parents)
+        parent_blocks = _build_parent_blocks(parents, parent_contexts)
         return (
             "MUTATION INPUTS\n\n"
             "TASK DESCRIPTION:\n"
@@ -110,7 +115,7 @@ class LLMCardSelector(BaseModel):
             f"{metrics_description.strip() or '<empty>'}\n\n"
             "MUTATION MODE:\n"
             f"{mutation_mode.strip() or 'rewrite'}\n\n"
-            "PARENTS (same parent code + mutation context given to mutation agent):\n"
+            "PARENTS (parent code + this-pass lineage card + live evolutionary snapshot):\n"
             f"{parent_blocks}\n\n"
             f"Search your memory database and pick up to {max_cards} card(s) per "
             "the selection criteria above. Emit only their `card_id` values via "

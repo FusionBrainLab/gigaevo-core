@@ -6,6 +6,7 @@ import math
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import beta
 
+from gigaevo.memory.context import DecisionContext
 from gigaevo.memory.efficacy import EfficacyScorer, beta_binomial_posterior
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
@@ -89,9 +90,12 @@ class BetaBinomialReputation(BaseModel):
             confident_threshold=self.confident_threshold,
         )
 
-    def card_posterior(self, card: AnyCard) -> tuple[float, float]:
+    def card_posterior(
+        self, card: AnyCard, context: DecisionContext | None = None
+    ) -> tuple[float, float]:
         """(alpha, beta) of the card's stamped ``ALL`` downside posterior;
-        ``cold_prior`` when the card carries no posterior."""
+        ``cold_prior`` when the card carries no posterior. ``context`` is the
+        additive read-seam hook contextual reputations condition on; ignored here."""
         block = card.evolution_statistics.ALL
         if block is None or block.posterior_a is None or block.posterior_b is None:
             return self.cold_prior
@@ -102,6 +106,18 @@ class BetaBinomialReputation(BaseModel):
         if not (math.isfinite(a) and math.isfinite(b) and a > 0 and b > 0):
             return self.cold_prior
         return (a, b)
+
+    def card_magnitude(
+        self, card: AnyCard, context: DecisionContext | None = None
+    ) -> float | None:
+        """The card's stamped expected gain (``IntroGain_best_adj_median`` of the
+        ``ALL`` block) — the EV auction's magnitude. ``None`` when the card never
+        stamped one (cold), so the auction falls back to its optimistic prior.
+        ``context`` is the additive read-seam hook; ignored here."""
+        block = card.evolution_statistics.ALL
+        if block is None or block.IntroGain_best_adj_median is None:
+            return None
+        return float(block.IntroGain_best_adj_median)
 
     def is_confidently_harmful(
         self, evolution_statistics: EvolutionStatistics | None

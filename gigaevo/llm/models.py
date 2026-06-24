@@ -19,6 +19,7 @@ from langfuse.langchain import CallbackHandler
 from loguru import logger
 from pydantic import BaseModel
 
+from gigaevo.llm.io_dump import PromptIODumpHandler, create_io_dump_handler
 from gigaevo.llm.token_tracking import TokenTracker, TokenUsage
 from gigaevo.utils.trackers.base import LogWriter
 
@@ -113,6 +114,21 @@ def _with_langfuse(
     return cast(RunnableConfig, cfg)
 
 
+def _with_io_dump(
+    config: RunnableConfig | None, handler: PromptIODumpHandler | None
+) -> RunnableConfig | None:
+    """Attach the LLM I/O dump handler to the callback list."""
+    if handler is None:
+        return config
+
+    cfg: dict[str, Any] = dict(config or {})
+    callbacks: list[Any] = cfg.setdefault("callbacks", [])
+    if handler not in callbacks:
+        callbacks.append(handler)
+
+    return cast(RunnableConfig, cfg)
+
+
 _StructuredMethod = Literal["function_calling", "json_mode", "json_schema"]
 _AUTO_STRUCTURED_METHOD = "auto"
 _STRUCTURED_METHOD_CHAIN: tuple[_StructuredMethod, ...] = (
@@ -171,6 +187,7 @@ class MultiModelRouter(Runnable):
             writer=writer.bind(path=["llm", "tokens"]) if writer else None,
         )
         self._langfuse = _create_langfuse_handler()
+        self._io_dump = create_io_dump_handler(name)
 
         model_desc = ", ".join(
             f"{n} ({p:.0%})" for n, p in zip(self.model_names, self.probabilities)
@@ -314,7 +331,8 @@ class MultiModelRouter(Runnable):
     def _config(
         self, config: RunnableConfig | None, model_name: str
     ) -> RunnableConfig | None:
-        return _with_langfuse(config, self._langfuse, model_name)
+        config = _with_langfuse(config, self._langfuse, model_name)
+        return _with_io_dump(config, self._io_dump)
 
     def invoke(
         self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
@@ -431,6 +449,7 @@ class MultiModelRouter(Runnable):
             self._tracker,
             task_model_map=self._task_model_map,
             semaphore_factory=self.get_semaphore,
+            io_dump=self._io_dump,
         )
 
 
@@ -447,6 +466,7 @@ class _StructuredOutputRouter(Runnable):
         task_model_map: dict[int, str] | None = None,
         select_override: Callable[[], tuple[Any, str]] | None = None,
         semaphore_factory: Callable[[], asyncio.Semaphore | None] | None = None,
+        io_dump: PromptIODumpHandler | None = None,
     ):
         self._models = models
         self._names = model_names
@@ -456,6 +476,7 @@ class _StructuredOutputRouter(Runnable):
         self._task_model_map = task_model_map
         self._select_override = select_override
         self._semaphore_factory = semaphore_factory
+        self._io_dump = io_dump
 
     def _select(self) -> tuple[Any, str]:
         if self._select_override is not None:
@@ -472,7 +493,8 @@ class _StructuredOutputRouter(Runnable):
     def _config(
         self, config: RunnableConfig | None, model_name: str
     ) -> RunnableConfig | None:
-        return _with_langfuse(config, self._langfuse, model_name)
+        config = _with_langfuse(config, self._langfuse, model_name)
+        return _with_io_dump(config, self._io_dump)
 
     def _process(self, response: dict, name: str) -> Any:
         raw = response.get("raw")
@@ -562,6 +584,7 @@ class _AutoStructuredOutputRouter(Runnable):
             self._router._tracker,
             task_model_map=self._router._task_model_map,
             semaphore_factory=self._router.get_semaphore,
+            io_dump=self._router._io_dump,
         )
 
     def _log_failure(

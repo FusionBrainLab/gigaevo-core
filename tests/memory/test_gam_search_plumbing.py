@@ -31,10 +31,8 @@ def _make_gam_search(tmp_path, monkeypatch, **overrides) -> GamSearch:
         checkpoint_dir=Path(tmp_path),
         gam_store_dir=Path(tmp_path) / "store",
         export_file=Path(tmp_path) / "missing.jsonl",
-        enable_bm25=False,
         allowed_gam_tools={"vector"},
         gam_top_k_by_tool={"vector": 3},
-        gam_pipeline_mode="default",
         **overrides,
     )
 

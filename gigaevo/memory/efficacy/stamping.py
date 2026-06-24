@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
+from gigaevo.memory.context import ContextualGain
 from gigaevo.memory.shared_memory.models import (
     CardStatsBlock,
     EvolutionStatistics,
@@ -67,4 +68,17 @@ class CardStatsStamper(BaseModel):
                 }
             )
         stamped = card.evolution_statistics.model_copy(update={"ALL": posterior})
+        return card.model_copy(update={"evolution_statistics": stamped})
+
+    def stamp_gain_events(
+        self, card: AnyCard, gain_events: dict[str, list[ContextualGain]]
+    ) -> AnyCard:
+        """Card with its use-attributed gain events attached; cards without
+        events pass through unchanged."""
+        events = gain_events.get(card.id.strip())
+        if not events:
+            return card
+        stamped = card.evolution_statistics.model_copy(
+            update={"gain_events": list(events)}
+        )
         return card.model_copy(update={"evolution_statistics": stamped})

@@ -1,14 +1,18 @@
 import asyncio
+import os
 from pathlib import Path
 import time
+from typing import cast
 
 from dotenv import load_dotenv
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
+from gigaevo.config.validation import validate_reputation_island_compat
 from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
@@ -41,12 +45,13 @@ async def run_experiment(cfg: DictConfig) -> None:
     storage: ProgramStorage | None = None
     writer: LogWriter | None = None
     try:
+        validate_reputation_island_compat(cfg)
         config_with_instances = instantiate(cfg, recursive=True)
-        storage: ProgramStorage = config_with_instances.program_storage
+        storage = cast(ProgramStorage, config_with_instances.program_storage)
         program_loader: InitialProgramLoader = config_with_instances.program_loader
         dag_runner: DagRunner = config_with_instances.dag_runner
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
-        writer: LogWriter = config_with_instances.writer
+        writer = cast(LogWriter, config_with_instances.writer)
 
         log_memory_arm_banner(
             provider=config_with_instances.memory.provider,
@@ -104,7 +109,11 @@ async def run_experiment(cfg: DictConfig) -> None:
 
         await serve_until_signal(
             stop_coros=(evolution_engine.stop(), dag_runner.stop()),
-            on_stop=(evolution_engine.task, dag_runner.task),
+            on_stop=[
+                task
+                for task in (evolution_engine.task, dag_runner.task)
+                if task is not None
+            ],
         )
 
     except KeyboardInterrupt:
@@ -123,18 +132,36 @@ async def run_experiment(cfg: DictConfig) -> None:
         logger.info("Duration: {:.1f}s ({:.2f}h)", duration, duration / 3600)
 
 
+def _maybe_enable_llm_io_dump(cfg: DictConfig, output_dir: Path) -> None:
+    """Point the LLM I/O dump handlers at ``<output_dir>/llm_io``.
+
+    Set BEFORE ``instantiate(cfg)`` so the routers pick the dir up at
+    construction. Gated by the ``llm_io_dump`` config flag (default on).
+    """
+    from gigaevo.llm.io_dump import DUMP_DIR_ENV
+
+    if not cfg.get("llm_io_dump", True):
+        return
+    dump_dir = output_dir / "llm_io"
+    os.environ[DUMP_DIR_ENV] = str(dump_dir)
+    logger.info("LLM I/O dump enabled: {}", dump_dir)
+
+
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
     load_dotenv()
-    log_file_path = setup_logger(
-        log_dir=cfg.logging.log_dir,
-        level=cfg.logging.level,
-        rotation=cfg.logging.rotation,
-        retention=cfg.logging.retention,
+    log_file_path = Path(
+        setup_logger(
+            log_dir=cfg.logging.log_dir,
+            level=cfg.logging.level,
+            rotation=cfg.logging.rotation,
+            retention=cfg.logging.retention,
+        )
     )
-    hydra_config = hydra.core.hydra_config.HydraConfig.get().runtime
+    hydra_config = HydraConfig.get().runtime
     output_dir = Path(hydra_config.output_dir)
     logger.info("Output dir: {} | Log: {}", output_dir, log_file_path)
+    _maybe_enable_llm_io_dump(cfg, output_dir)
     last_n_raw = int(cfg.live_profiler.last_n)
     last_n: int | None = last_n_raw if last_n_raw > 0 else None
     start_live_profiler(

@@ -254,7 +254,6 @@ class FakeResearchAgent:
         max_iters: int = 3,
         allowed_tools: list[str] | None = None,
         top_k_by_tool: dict[str, int] | None = None,
-        pipeline_mode: str = "default",
         **kwargs,
     ):
         self._retrievers = retrievers or {}
@@ -390,19 +389,17 @@ def fake_build_retrievers(
     index_dir: Any,
     chroma_dir: Any,
     chroma_collection: str = "memories",
-    enable_bm25: bool = False,
     allowed_tools: list[str] | None = None,
 ) -> dict[str, FakeRetriever]:
     """Build fake retrievers from page store content.
 
     Creates a FakeRetriever per allowed tool, all sharing the same
-    in-memory keyword search index built from page content.
+    in-memory search index built from page content.
     """
     allowed = set(
         allowed_tools
         or [
             "page_index",
-            "keyword",
             "vector",
             "vector_description",
             "vector_task_description",

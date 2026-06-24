@@ -338,6 +338,8 @@ class TestCitationIntegrity:
         assert result["parsed_output"]["citation_integrity"] == {
             "cited": 1,
             "grounded": 1,
+            "cards_cited": 0,
+            "cards_grounded": 0,
         }
 
     def test_ungrounded_citation_counted(self):
@@ -350,6 +352,8 @@ class TestCitationIntegrity:
         assert result["parsed_output"]["citation_integrity"] == {
             "cited": 1,
             "grounded": 0,
+            "cards_cited": 0,
+            "cards_grounded": 0,
         }
 
     def test_whitespace_differences_still_grounded(self):
@@ -371,6 +375,8 @@ class TestCitationIntegrity:
         assert result["parsed_output"]["citation_integrity"] == {
             "cited": 0,
             "grounded": 0,
+            "cards_cited": 0,
+            "cards_grounded": 0,
         }
 
     def test_blank_citations_ignored(self):
@@ -383,6 +389,8 @@ class TestCitationIntegrity:
         assert result["parsed_output"]["citation_integrity"] == {
             "cited": 1,
             "grounded": 1,
+            "cards_cited": 0,
+            "cards_grounded": 0,
         }
 
 
@@ -598,6 +606,8 @@ class TestMutationStructuredOutput:
             "archetype",
             "justification",
             "insights_used",
+            "base_parent",
+            "card_ids_used",
             "changes",
             "code",
         }

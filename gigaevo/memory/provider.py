@@ -46,6 +46,7 @@ class MemoryProvider(ABC):
         *,
         task_description: str,
         metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
         """Select memory cards relevant to this program."""
 
@@ -59,6 +60,7 @@ class NullMemoryProvider(MemoryProvider):
         *,
         task_description: str,
         metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
         return MemorySelection(cards=[], card_ids=[])
 
@@ -86,6 +88,11 @@ class SelectorMemoryProvider(MemoryProvider):
         # matches config/memory/local.yaml — one card per mutation is the
         # experimental protocol the shipped configs run
         max_cards: int = 1,
+        # GAM shortlist width (recall): how many cards the selector LLM may
+        # surface before the auction/budgeter rank and the budgeter caps to
+        # max_cards. Default 1 == the legacy collapse (shortlist fused with the
+        # injection budget); set > 1 to give the ranker a real pool.
+        shortlist_k: int = 1,
         checkpoint_dir: str | None = None,
         retriever: GamRetriever | None = None,
         selector: CardShortlister | None = None,
@@ -96,6 +103,7 @@ class SelectorMemoryProvider(MemoryProvider):
         excluder: CardExcluder | None = None,
     ) -> None:
         self._max_cards = max_cards
+        self._shortlist_k = shortlist_k
         self._checkpoint_dir = checkpoint_dir
         self._backend_factory = backend
         self._retriever = retriever
@@ -117,13 +125,9 @@ class SelectorMemoryProvider(MemoryProvider):
         if retriever.backend is not None:
             return retriever
         gam = GamConfig(
-            enable_bm25=retriever.enable_bm25,
             allowed_tools=list(retriever.allowed_tools),
             top_k_by_tool=dict(retriever.top_k_by_tool),
-            # A falsy pipeline_mode degrades to the working "experimental" mode,
-            # not the dead "default" under which the selector returns no cards.
-            pipeline_mode=retriever.pipeline_mode or "experimental",
-            max_cards=self._max_cards,
+            max_cards=self._shortlist_k,
             **(
                 {"max_iters": retriever.max_iters}
                 if retriever.max_iters is not None
@@ -176,6 +180,7 @@ class SelectorMemoryProvider(MemoryProvider):
         *,
         task_description: str,
         metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
         pipeline = await self._ensure_pipeline()
         return await pipeline.select(
@@ -184,6 +189,8 @@ class SelectorMemoryProvider(MemoryProvider):
             task_description=task_description,
             metrics_description=metrics_description,
             max_cards=self._max_cards,
+            shortlist_k=self._shortlist_k,
             exclude_ids=self._excluder.exclude_for(program),
             random_drop_dose=self._excluder.dose_for(program),
+            parent_contexts=[parent_context] if parent_context is not None else None,
         )

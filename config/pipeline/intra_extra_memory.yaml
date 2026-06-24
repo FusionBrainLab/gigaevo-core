@@ -44,6 +44,11 @@ pipeline_builder:
   mutation_mode: ${mutation_mode}
   enable_optuna_stage: ${enable_optuna_stage}
   optimization_time_budget: ${optimization_time_budget}
+  # GAM-fresh-context reorder. true (Arm C): the card selector is conditioned
+  # on the fresh this-pass lineage card + live evolutionary snapshot. false
+  # (Arm B): the selector falls back to the one-pass-stale metadata block
+  # (pre-reorder behaviour). Override per arm: pipeline_builder.fresh_context_reorder=false
+  fresh_context_reorder: true
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

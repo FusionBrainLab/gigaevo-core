@@ -53,7 +53,7 @@ islands:
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: fitness_island
     max_size: ${island_max_size}
-    behavior_space: ${fitness_behavior_space}
+    behavior_space: ${ref:fitness_behavior_space}
     archive_selector:
       _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
       fitness_keys:
@@ -78,7 +78,7 @@ islands:
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: simplicity_island
     max_size: ${island_max_size}
-    behavior_space: ${simplicity_behavior_space}
+    behavior_space: ${ref:simplicity_behavior_space}
     archive_selector:
       _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
       fitness_keys:

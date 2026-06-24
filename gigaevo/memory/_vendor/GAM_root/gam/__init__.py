@@ -4,14 +4,12 @@ from gigaevo.memory._vendor.GAM_root.gam.agents import ResearchAgent
 from gigaevo.memory._vendor.GAM_root.gam.generator import AbsGenerator, AMemGenerator
 from gigaevo.memory._vendor.GAM_root.gam.retriever import AbsRetriever, ChromaRetriever, IndexRetriever
 from gigaevo.memory._vendor.GAM_root.gam.schemas import (
-    EnoughDecision,
     Hit,
     InMemoryMemoryStore,
     InMemoryPageStore,
     MemoryState,
     MemoryUpdate,
     Page,
-    ReflectionDecision,
     ResearchOutput,
     Result,
     SearchPlan,
@@ -31,8 +29,6 @@ __all__ = [
     "SearchPlan",
     "Hit",
     "Result",
-    "EnoughDecision",
-    "ReflectionDecision",
     "ResearchOutput",
     "InMemoryMemoryStore",
     "InMemoryPageStore",

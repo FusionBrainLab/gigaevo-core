@@ -31,10 +31,8 @@ class GamSearch:
         checkpoint_dir: Path,
         gam_store_dir: Path,
         export_file: Path,
-        enable_bm25: bool,
         allowed_gam_tools: set[str],
         gam_top_k_by_tool: dict[str, int],
-        gam_pipeline_mode: str,
         embedding_model_name: str = "all-MiniLM-L6-v2",
         max_iters: int = 3,
         max_cards: int = 3,
@@ -45,10 +43,8 @@ class GamSearch:
         self._checkpoint_dir = checkpoint_dir
         self._gam_store_dir = gam_store_dir
         self._export_file = export_file
-        self._enable_bm25 = enable_bm25
         self._allowed_gam_tools = allowed_gam_tools
         self._gam_top_k_by_tool = gam_top_k_by_tool
-        self._gam_pipeline_mode = gam_pipeline_mode
         self._embedding_model_name = embedding_model_name
         self._max_iters = max_iters
         self._max_cards = max_cards
@@ -92,7 +88,6 @@ class GamSearch:
                 page_store,
                 self._gam_store_dir / "indexes",
                 self._checkpoint_dir / "chroma",
-                enable_bm25=self._enable_bm25,
                 allowed_tools=sorted(self._allowed_gam_tools),
                 embedding_model_name=self._embedding_model_name,
             )
@@ -123,7 +118,6 @@ class GamSearch:
             max_cards=self._max_cards,
             allowed_tools=sorted(self._allowed_gam_tools),
             top_k_by_tool=self._gam_top_k_by_tool,
-            pipeline_mode=self._gam_pipeline_mode,
         )
 
     def clear_research_agent(self) -> None:

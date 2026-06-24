@@ -3,16 +3,21 @@
 # passes them to MemorySystem, which threads the shared reputation/backend/dedup/
 # llm in Python (no ${ref:memory.*} sibling web). Swap a component with e.g.
 # `memory/llm=qwen_instruct`, `memory/admitter=...`; tune via `memory.auction.baseline_prior=[5,2]`.
+# Default stack = the EV contextual-bandit treatment: absolute-progress value
+# channel + EV-bid auction + bid-ranked budgeter (works on every algorithm).
+# Single-island runs can upgrade to `memory/reputation=bd_proximity` for
+# cell-local credit; revert to the legacy probability-only stack with
+# `memory/reputation=beta_binomial memory/auction=thompson memory/budget=top_theta`.
 defaults:
   - llm: gemini
-  - reputation: beta_binomial
+  - reputation: absolute_progress
   - dedup: llm
   - admitter: sign_based
   - evictor: harm
   - retriever: gam
   - selector: llm
-  - auction: thompson
-  - budget: top_theta
+  - auction: thompson_ev
+  - budget: top_bid
   - backend: local
   - excluder: none
   - provider: selector

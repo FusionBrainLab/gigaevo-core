@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -10,18 +10,31 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.evolution.mutation.context import (
+    CompositeMutationContext,
+    EvolutionaryStatisticsMutationContext,
+    MemoryMutationContext,
+)
 from gigaevo.memory.provider import MemoryProvider
+from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.cache_handler import NO_CACHE
+from gigaevo.programs.stages.collector import EvolutionaryStatistics
 from gigaevo.programs.stages.common import StageIO, StringContainer
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
 
 class MemoryContextInputs(StageIO):
-    """Inputs for MemoryContextStage (currently none required)."""
+    """Inputs for MemoryContextStage.
 
-    pass
+    Both optional: the stage conditions extra-memory card selection on the
+    fresh this-pass lineage card (``intra_card``) and the live evolutionary
+    snapshot (``evolutionary_statistics``). Absent on a cold seed's first pass.
+    """
+
+    intra_card: StringContainer | None = None
+    evolutionary_statistics: EvolutionaryStatistics | None = None
 
 
 class MemoryExposureCounter:
@@ -78,14 +91,39 @@ class MemoryContextStage(Stage):
         memory_provider: MemoryProvider,
         task_description: str,
         metrics_description: str,
+        metrics_context: MetricsContext | None = None,
         exposure: MemoryExposureCounter | None = None,
+        fresh_context_reorder: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._provider = memory_provider
         self._task_description = task_description
         self._metrics_description = metrics_description
+        self._metrics_context = metrics_context
         self._exposure = exposure if exposure is not None else MemoryExposureCounter()
+        self._fresh_context_reorder = fresh_context_reorder
+
+    def _build_parent_context(self) -> str:
+        # Mirror the fresh this-pass mutation context the mutation agent will
+        # see, so the GAM selects cards conditioned on the lineage card + live
+        # evolutionary snapshot instead of a one-pass-stale metadata block.
+        contexts: list[Any] = []
+        params = cast(MemoryContextInputs, self.params)
+        intra_card = params.intra_card
+        if intra_card is not None and intra_card.data:
+            contexts.append(MemoryMutationContext(memory_block=intra_card.data))
+        evo = params.evolutionary_statistics
+        if evo is not None and self._metrics_context is not None:
+            contexts.append(
+                EvolutionaryStatisticsMutationContext(
+                    evolutionary_statistics=evo,
+                    metrics_context=self._metrics_context,
+                )
+            )
+        if not contexts:
+            return ""
+        return CompositeMutationContext(contexts=contexts).format()
 
     async def compute(self, program: Program) -> StageIO:
         # Erase any slate left by a prior run of this NO_CACHE stage BEFORE the
@@ -95,10 +133,16 @@ class MemoryContextStage(Stage):
         program.set_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, [])
         program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, [])
 
+        # Arm B (reorder off): pass None so the selector falls back to the stale
+        # parent.metadata[MUTATION_CONTEXT] block — the pre-reorder behaviour.
+        parent_context = (
+            self._build_parent_context() if self._fresh_context_reorder else None
+        )
         selection = await self._provider.select_cards(
             program,
             task_description=self._task_description,
             metrics_description=self._metrics_description,
+            parent_context=parent_context,
         )
 
         program.set_metadata(

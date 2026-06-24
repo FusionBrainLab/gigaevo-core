@@ -118,6 +118,7 @@ class ConstantMemoryProvider(MemoryProvider):
         *,
         task_description: str,
         metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
         self.call_count += 1
         return MemorySelection(cards=self._cards, card_ids=self._card_ids)

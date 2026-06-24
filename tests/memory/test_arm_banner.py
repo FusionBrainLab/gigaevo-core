@@ -52,6 +52,7 @@ class _CardProvider(MemoryProvider):
         *,
         task_description: str,
         metrics_description: str,
+        parent_context: str | None = None,
     ) -> MemorySelection:
         return MemorySelection(cards=[], card_ids=[])
 

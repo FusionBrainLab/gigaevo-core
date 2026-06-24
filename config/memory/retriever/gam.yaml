@@ -1,17 +1,10 @@
 _target_: gigaevo.memory.core.retriever.GamRetriever
 _convert_: all
 backend: null
-enable_bm25: false
-pipeline_mode: experimental
 max_iters: 3
 allowed_tools:
   - page_index
   - vector
 top_k_by_tool:
   vector: 3
-  vector_description: 3
-  vector_task_description: 0
-  vector_explanation_summary: 3
-  vector_description_explanation_summary: 3
-  vector_description_task_description_summary: 3
   page_index: 5

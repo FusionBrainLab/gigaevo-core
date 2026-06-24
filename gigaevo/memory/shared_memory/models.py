@@ -6,6 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
+from gigaevo.memory.context import ContextualGain
+
 Strategy = Literal["exploration", "exploitation", "hybrid"]
 
 
@@ -244,6 +246,10 @@ class EvolutionStatistics(BaseModel):
     best_ideas_snapshot: CardStatsBlock | None = Field(
         default=None,
         description="Metric block of the best-ideas summary row merged in by the offline write pipeline.",
+    )
+    gain_events: list[ContextualGain] | None = Field(
+        default=None,
+        description="Use-attributed base-relative injection events for this card.",
     )
 
     @model_serializer(mode="wrap")

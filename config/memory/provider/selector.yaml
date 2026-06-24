@@ -3,4 +3,9 @@
 _target_: gigaevo.memory.provider.SelectorMemoryProvider
 _partial_: true
 max_cards: 1
+# Recall width: how many cards the selector LLM may shortlist before the
+# auction/budgeter rank and the budgeter caps to max_cards. Default 10 hands the
+# ranker a real pool; set to 1 to reproduce the legacy collapse (shortlist fused
+# with the injection budget).
+shortlist_k: 10
 checkpoint_dir: ${checkpoint_dir}

@@ -2,7 +2,7 @@
 with the exception type and traceback.
 
 Regression for the live-run error logged as a bare
-"Error in experimental reflection: 'NoneType' object is not iterable" —
+"Error in reflection: 'NoneType' object is not iterable" —
 the message without type/traceback made the root cause undiagnosable.
 """
 
@@ -25,9 +25,9 @@ def _make_agent() -> ResearchAgent:
     return ResearchAgent(page_store=object(), generator=_ExplodingGenerator())
 
 
-class TestReflectionExperimentalErrorLogging:
+class TestReflectionErrorLogging:
     def test_fallback_decision_preserved(self):
-        decision = _make_agent()._reflection_experimental("req", [])
+        decision = _make_agent()._reflection("req", [])
         assert decision.mode == "continue"
         assert decision.top_ideas == []
         assert decision.additional_queries == []
@@ -36,7 +36,7 @@ class TestReflectionExperimentalErrorLogging:
         captured: list[str] = []
         sink_id = logger.add(captured.append, level="ERROR")
         try:
-            _make_agent()._reflection_experimental("req", [])
+            _make_agent()._reflection("req", [])
         finally:
             logger.remove(sink_id)
 
@@ -44,4 +44,4 @@ class TestReflectionExperimentalErrorLogging:
         assert "TypeError" in text
         assert "'NoneType' object is not iterable" in text
         assert "generate_single" in text
-        assert "[Memory][GAM][ResearchAgent][Experimental][Reflection]" in text
+        assert "[Memory][GAM][ResearchAgent][Reflection]" in text

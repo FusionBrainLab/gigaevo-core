@@ -10,10 +10,7 @@ from __future__ import annotations
 from .memory import InMemoryMemoryStore, MemoryState, MemoryStore, MemoryUpdate
 from .page import InMemoryPageStore, Page, PageStore
 from .result import (
-    EnoughDecision,
-    ExperimentalDecision,
-    GenerateRequests,
-    ReflectionDecision,
+    Decision,
     ResearchOutput,
     Result,
     TopIdea,
@@ -31,10 +28,7 @@ ResearchOutput.model_rebuild()
 
 # JSON Schema constants for LLM and system validation
 PLANNING_SCHEMA = SearchPlan.model_json_schema()
-INTEGRATE_SCHEMA = Result.model_json_schema()
-INFO_CHECK_SCHEMA = EnoughDecision.model_json_schema()
-GENERATE_REQUESTS_SCHEMA = GenerateRequests.model_json_schema()
-EXPERIMENTAL_DECISION_SCHEMA = ExperimentalDecision.model_json_schema()
+DECISION_SCHEMA = Decision.model_json_schema()
 
 __all__ = [
     "MemoryState",
@@ -51,15 +45,9 @@ __all__ = [
     "Tool",
     "ToolRegistry",
     "Result",
-    "EnoughDecision",
-    "ReflectionDecision",
     "ResearchOutput",
-    "GenerateRequests",
     "TopIdea",
-    "ExperimentalDecision",
+    "Decision",
     "PLANNING_SCHEMA",
-    "INTEGRATE_SCHEMA",
-    "INFO_CHECK_SCHEMA",
-    "GENERATE_REQUESTS_SCHEMA",
-    "EXPERIMENTAL_DECISION_SCHEMA",
+    "DECISION_SCHEMA",
 ]

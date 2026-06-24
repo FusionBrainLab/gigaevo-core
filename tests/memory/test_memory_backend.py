@@ -16,7 +16,6 @@ from gigaevo.memory.shared_memory.card_conversion import (
     ProgramCard,
     is_program_card,
     normalize_allowed_gam_tools,
-    normalize_gam_pipeline_mode,
     normalize_gam_top_k_by_tool,
 )
 from gigaevo.memory.shared_memory.utils import dedupe_keep_order, looks_like_uuid
@@ -498,16 +497,6 @@ class TestStaticHelpers:
         result = normalize_allowed_gam_tools(["bogus_tool"])
         # Falls back to defaults when all custom tools are invalid
         assert "keyword" in result
-
-    def test_normalize_gam_pipeline_mode_valid(self):
-        assert normalize_gam_pipeline_mode("default") == "default"
-        assert normalize_gam_pipeline_mode("experimental") == "experimental"
-
-    def test_normalize_gam_pipeline_mode_invalid(self):
-        assert normalize_gam_pipeline_mode("bogus") == "default"
-
-    def test_normalize_gam_pipeline_mode_none(self):
-        assert normalize_gam_pipeline_mode(None) == "default"
 
     def test_normalize_gam_top_k_default(self):
         result = normalize_gam_top_k_by_tool(None)

@@ -140,7 +140,6 @@ def build_retrievers(
     index_dir: Path,
     chroma_dir: Path,
     chroma_collection: str = "memories",
-    enable_bm25: bool = False,
     allowed_tools: list[str] | set[str] | tuple[str, ...] | None = None,
     embedding_model_name: str = "all-MiniLM-L6-v2",
 ) -> dict[str, Any]:
@@ -185,7 +184,7 @@ def build_retrievers(
     }
     allowed = {str(tool).strip() for tool in (allowed_tools or []) if str(tool).strip()}
     if not allowed:
-        allowed = {"page_index", "keyword", *vector_tool_configs.keys()}
+        allowed = {"page_index", *vector_tool_configs.keys()}
 
     if "page_index" in allowed:
         try:
@@ -219,22 +218,6 @@ def build_retrievers(
                 "[Memory][AmemGamRetriever] Chroma retriever init for '{}' failed: {}",
                 tool_name,
                 exc,
-            )
-
-    if enable_bm25 and "keyword" in allowed:
-        try:
-            from gigaevo.memory._vendor.GAM_root.gam.retriever.bm25 import (
-                BM25Retriever,
-            )
-
-            bm25_config = {"index_dir": str(index_dir / "bm25")}
-            bm25_retriever = BM25Retriever(bm25_config)
-            bm25_retriever.build(page_store)
-            retrievers["keyword"] = bm25_retriever
-            logger.debug("[Memory][AmemGamRetriever] BM25 retriever ready")
-        except Exception as exc:
-            logger.warning(
-                "[Memory][AmemGamRetriever] BM25 retriever init failed: {}", exc
             )
 
     return retrievers

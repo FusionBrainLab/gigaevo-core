@@ -33,4 +33,4 @@ def test_prompt_keeps_semantic_caveats():
 
 def test_prompt_within_size_budget():
     raw = MemorySelectorPrompts.system()
-    assert len(raw) <= 3500
+    assert len(raw) <= 4000

@@ -29,35 +29,6 @@ class Result(BaseModel):
         return schema
 
 
-class EnoughDecision(BaseModel):
-    """Decision on whether information is sufficient"""
-
-    enough: bool = Field(..., description="Whether information is sufficient")
-
-    @classmethod
-    def model_json_schema(cls) -> dict[str, Any]:
-        schema = super().model_json_schema()
-        schema["required"] = ["enough"]
-        schema["additionalProperties"] = False
-        return schema
-
-
-class ReflectionDecision(BaseModel):
-    """Complete reflection decision with new request if information is insufficient"""
-
-    enough: bool = Field(..., description="Whether information is sufficient")
-    new_request: str | None = Field(
-        None, description="New search request if information is insufficient"
-    )
-
-    @classmethod
-    def model_json_schema(cls) -> dict[str, Any]:
-        schema = super().model_json_schema()
-        schema["required"] = ["enough"]
-        schema["additionalProperties"] = False
-        return schema
-
-
 class ResearchOutput(BaseModel):
     """Research output"""
 
@@ -65,27 +36,8 @@ class ResearchOutput(BaseModel):
     raw_memory: dict[str, Any] = Field(..., description="Raw memory data")
 
 
-class GenerateRequests(BaseModel):
-    """Generate new requests"""
-
-    new_requests: list[str] = Field(
-        ...,
-        description=(
-            "0-5 standalone retrieval questions, ranked most-critical first. "
-            "Empty when nothing important is missing"
-        ),
-    )
-
-    @classmethod
-    def model_json_schema(cls) -> dict[str, Any]:
-        schema = super().model_json_schema()
-        schema["required"] = ["new_requests"]
-        schema["additionalProperties"] = False
-        return schema
-
-
 class TopIdea(BaseModel):
-    """Final selected idea for experimental reflection pipeline."""
+    """Final selected idea for the reflection/selection pipeline."""
 
     card_id: str = Field(..., description="Selected card/page id")
 
@@ -98,8 +50,8 @@ class TopIdea(BaseModel):
         return schema
 
 
-class ExperimentalDecision(BaseModel):
-    """Decision output for experimental reflection pipeline."""
+class Decision(BaseModel):
+    """Decision output for the reflection/selection pipeline."""
 
     mode: Literal["final", "continue"] = Field(
         ...,

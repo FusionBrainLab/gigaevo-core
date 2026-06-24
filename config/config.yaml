@@ -18,3 +18,8 @@ problem:
 # run dir for isolation across concurrent runs. Override on the CLI
 # (`checkpoint_dir=/abs/path`) to share a card bank across runs.
 checkpoint_dir: ${hydra:runtime.output_dir}/memory
+
+# LLM I/O audit trail. When true (default), every router call (plain +
+# structured) is dumped as a complete JSON record (prompt, response, token
+# usage) into <run_dir>/llm_io/<router>.jsonl. Set false to disable.
+llm_io_dump: true
