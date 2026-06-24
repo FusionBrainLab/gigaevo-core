@@ -193,16 +193,17 @@ def test_evolution_constants_default_values():
     An accidental change here would silently alter experimental conditions without
     a config-review gate catching it.
 
-    v2.0.0 baseline: one-parent archetype mutation (num_parents=1) is the canonical
-    operator; max_mutants=250 sizes a one-workday-at-parallelism-5 sweep.
+    Baseline: two-parent crossover mutation (num_parents=2) is the canonical
+    operator — the value every launched run uses; max_mutants=250 sizes a
+    one-workday-at-parallelism-5 sweep.
     """
     cfg = _compose()
     assert cfg.max_elites_per_generation == 5, (
         "max_elites_per_generation changed from 5 — update CONTEXT.md for active experiments"
     )
-    assert cfg.num_parents == 1, (
-        "num_parents changed from 1 — one-parent archetype mutation is the v2 canonical "
-        "operator. If you intentionally bump to 2 (or more), update this assertion and "
+    assert cfg.num_parents == 2, (
+        "num_parents changed from 2 — two-parent crossover mutation is the canonical "
+        "operator. If you intentionally change it, update this assertion and "
         "the canonical-benchmark contract together."
     )
     assert cfg.loop_interval == pytest.approx(1.0), (

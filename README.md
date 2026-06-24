@@ -239,11 +239,16 @@ shell before launching a run.
 
 | Variable | Effect |
 |----------|--------|
-| `OPENAI_API_KEY` | Primary LLM credential (LiteLLM proxy key or provider key). |
-| `OPENROUTER_API_KEY` | OpenRouter credential read by the `llms` Hydra group (`config/llms/`) — memory-subsystem router, ideas-tracker CLI, extra-memory GAM agents. |
+| `OPENAI_API_KEY` | Primary LLM credential — read by the default mutation router (`config/llm/single.yaml`) and most LLM configs in `config/llm/`, plus the `qwen_instruct` memory router (`config/memory/llm/qwen_instruct.yaml`). Holds a LiteLLM-proxy key or a provider key depending on the configured `base_url`. |
+| `OPENROUTER_API_KEY` | Read only by the OpenRouter-keyed configs: the main routers `config/llm/gemini35_flash.yaml` and `config/llm/gpt54_mini.yaml`, and the default memory router `config/memory/llm/gemini.yaml`. Needed only when one of those is selected. |
+
+The env-var name does **not** track the provider — e.g. the OpenRouter-targeted
+`openrouter_bandit`/`openrouter_ensemble` main routers read `OPENAI_API_KEY`, not
+`OPENROUTER_API_KEY`. Which key a run needs is determined by the selected `llm` and
+`memory/llm` configs, not by the model vendor.
 
 Memory-LLM model, endpoint, and structured-output method are Hydra knobs on the
-`llms` group (`config/llms/*.yaml`), not environment variables.
+`memory/llm` group (`config/memory/llm/*.yaml`), not environment variables.
 
 **Execution sandbox**
 
