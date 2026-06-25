@@ -68,7 +68,11 @@ from tests.fakes.read_pipeline import make_read_pipeline
 # ---------------------------------------------------------------------------
 
 _SEED = 20260604
-_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
+# 200 unblemished wins -> Beta(201, 1): an overwhelmingly-proven gain history so
+# the card reliably beats the auction baseline prior and is always selected.
+_PROVEN_GAINS = [
+    {"context": {"parent_metrics": {"min_area": 0.5}}, "gain": 0.01} for _ in range(200)
+]
 
 _RETURN_RE = re.compile(
     r'return\s*\{\s*"fitness":\s*([\d.]+)\s*,\s*"x":\s*([\d.]+)\s*\}',
@@ -402,19 +406,19 @@ class TestTwoRunMemoryLifecycle:
                 "id": "idea-sort",
                 "description": "Sort evidence by relevance score before chain building",
                 "keywords": ["sort", "relevance", "evidence", "chain"],
-                "evolution_statistics": _PROVEN_STATS,
+                "gain_events": _PROVEN_GAINS,
             },
             {
                 "id": "idea-bfs",
                 "description": "Use BFS instead of DFS for multi-hop traversal",
                 "keywords": ["bfs", "traversal", "multi-hop", "graph"],
-                "evolution_statistics": _PROVEN_STATS,
+                "gain_events": _PROVEN_GAINS,
             },
             {
                 "id": "idea-cache",
                 "description": "Cache intermediate retrieval results to reduce latency",
                 "keywords": ["cache", "retrieval", "latency", "performance"],
-                "evolution_statistics": _PROVEN_STATS,
+                "gain_events": _PROVEN_GAINS,
             },
         ]
         for card in idea_cards:
@@ -497,7 +501,7 @@ class TestTwoRunMemoryLifecycle:
                 "id": "idea-relevance",
                 "description": "Sort evidence by relevance score",
                 "keywords": ["sort", "relevance", "evidence"],
-                "evolution_statistics": _PROVEN_STATS,
+                "gain_events": _PROVEN_GAINS,
             }
         )
 

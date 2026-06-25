@@ -15,7 +15,11 @@ from tests.fakes.agentic_memory import make_test_memory
 from tests.fakes.read_pipeline import make_read_pipeline
 
 _SEED = 20260604
-_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
+# 200 unblemished wins -> Beta(201, 1): an overwhelmingly-proven gain history so
+# the card reliably beats the auction baseline prior and is always selected.
+_PROVEN_GAINS = [
+    {"context": {"parent_metrics": {"min_area": 0.5}}, "gain": 0.01} for _ in range(200)
+]
 
 
 def _make_memory(tmp_path, **overrides) -> AmemGamMemory:
@@ -39,7 +43,7 @@ class TestMemorySelectorInMutationLoop:
                 "id": "idea-1",
                 "description": "Sort evidence by relevance score for better chain quality",
                 "keywords": ["sort", "relevance", "evidence", "chain"],
-                "evolution_statistics": _PROVEN_STATS,
+                "gain_events": _PROVEN_GAINS,
             }
         )
         mem.save_card(
@@ -47,7 +51,7 @@ class TestMemorySelectorInMutationLoop:
                 "id": "idea-2",
                 "description": "Filter low-confidence hops using threshold",
                 "keywords": ["filter", "confidence", "threshold"],
-                "evolution_statistics": _PROVEN_STATS,
+                "gain_events": _PROVEN_GAINS,
             }
         )
 

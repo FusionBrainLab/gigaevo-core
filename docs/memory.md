@@ -67,7 +67,7 @@ mechanism levers extracted from previous experiments:
 ```
 [card 1] id=idea-abc123
 Sort evidence by relevance score before chain traversal
-efficacy: introduced in 9 children; median improvement +0.012; downside 11% (confident)
+efficacy: introduced in 9 children; median improvement +0.012 (confident)
 
 [card 2] id=idea-def456
 Filter low-confidence hops using a learned threshold
@@ -288,7 +288,6 @@ defaults:
   - auction: thompson_ev          # EV-bid auction (theta x magnitude), abstains <= ev_floor
   - budget: top_bid               # bid-ranked cap to max_cards
   - reputation: absolute_progress # value channel: median base-relative gain
-  - admitter: sign_based
   - dedup: llm
   - evictor: harm
   - tracker: ideas
@@ -350,10 +349,9 @@ The **default** variant of each group is in **bold** (this is what `memory=full`
 | `memory/backend` | **`local`** | `LocalMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
 | `memory/retriever` | **`gam`** | `GamRetriever` | Agentic GAM search (tools, top-k) |
 | `memory/selector` | **`llm`** | `LLMCardSelector` | Picks cards from retrieval hits |
-| `memory/auction` | `thompson`, **`thompson_ev`** | `ThompsonAuctioneer` / `EVThompsonAuctioneer` | Card auction (`thompson_ev` bids `θ × magnitude` and abstains below `ev_floor`; `thompson` bids `θ` only) |
+| `memory/auction` | `thompson`, **`thompson_ev`**, `thompson_ev_calibrated` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` / `CalibratedColdPriorAuctioneer` | Card auction (`thompson_ev` bids `θ × magnitude` and abstains below `ev_floor`; `thompson_ev_calibrated` is `thompson_ev` with the cold-card bid calibrated per slate; `thompson` bids `θ` only) |
 | `memory/budget` | `top_theta`, **`top_bid`** | `TopThetaBudgeter` / `TopBidBudgeter` | Caps cards per injection (`top_bid` ranks by EV bid, `top_theta` by `θ`) |
-| `memory/reputation` | `beta_binomial`, **`absolute_progress`**, `bd_proximity` | `BetaBinomialReputation` / `RewardWeightedReputation` / `BDProximityReputation` | Per-card efficacy posterior + value channel (`bd_proximity` = cell-local, single-island only) |
-| `memory/admitter` | **`sign_based`** | `SignBasedAdmitter` | Write-side admission gate |
+| `memory/reputation` | `beta_binomial`, **`absolute_progress`**, `bd_proximity` | `BetaBinomialReputation` / `BetaBinomialReputation` / `BDProximityReputation` | Per-card efficacy posterior + value channel (`absolute_progress` is now an alias of `beta_binomial`; `bd_proximity` = cell-local, single-island only) |
 | `memory/dedup` | **`llm`**, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (threaded into the write pipeline) |
 | `memory/evictor` | **`harm`** | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the write pipeline) |
 | `memory/excluder` | **`none`**, `lineage` | `NullExcluder` / `LineageExcluder` | Filter-first gate (`lineage` drops cards already applied in this lineage) |
@@ -374,9 +372,10 @@ is non-positive bids at or below `ev_floor` (default `0.0`) and the auction
 
 The value channel comes from the reputation arm:
 
-- `absolute_progress` (`RewardWeightedReputation` + `AbsoluteMedianReward`) — the
-  card's magnitude is the median base-relative child gain it has produced,
-  pooled across all cells.
+- `absolute_progress` (`BetaBinomialReputation`) — the card's magnitude is
+  `IntroGain_best_median`, the median base-relative child gain it has produced,
+  pooled across all cells. (`absolute_progress` and `beta_binomial` resolve to
+  the same class; the name is kept for config back-compat.)
 - `bd_proximity` (`BDProximityReputation`) — **single-island only.** Re-buckets
   each card's stored `gain_events` into the *query parent's current cell* and
   bids over the in-cell subset only, so a card that helped near cell A and hurt
@@ -385,6 +384,26 @@ The value channel comes from the reputation arm:
   `${ref:behavior_space}` (the `single_island*`, `topology_3d*`, and
   `tabular/2d_local_ood` algorithms); pairing it with `multi_island` fails fast
   with a `NotImplementedError`.
+
+#### `auction=thompson_ev_calibrated` (calibrated cold prior)
+
+Same gate and `ev_floor` as `thompson_ev`, but the cold-card bid is **calibrated
+per slate** instead of fixed. A cold card (no stamped magnitude) bids the
+`cold_quantile` (default `0.5` = median) of the proven magnitudes present on its
+own slate, so the cold bid tracks the substrate's fitness scale rather than the
+fixed `prior_magnitude=0.1` — which on heilbron was ~25–80× the learned card
+magnitudes and let untested cards out-bid proven ones
+(`docs/audits/bandit_health_report.md`, RQ1). When no proven magnitude is present
+(early run or an all-cold slate) every cold card bids `cold_floor` (default
+`1e-6`) and the EV auction degenerates to the plain Thompson safety gate.
+
+| field | default | meaning |
+|---|---|---|
+| `cold_quantile` | `0.5` | quantile of the slate's present magnitudes used as the cold bid; lower = more conservative exploration |
+| `cold_floor` | `1e-6` | strictly-positive cold bid for all-cold / non-positive-quantile slates; keeps a fresh card explorable |
+
+Opt-in only; `thompson_ev` remains the default. Intended to be A/B'd against
+`thompson_ev` (re-run `tools/analyze_bandit_health.py`) before any default flip.
 
 The gain evidence is **use-attributed**: a base-parent fitness snapshot is frozen
 at child birth, and a card is credited (`gain = child − base`) only when it was
@@ -554,7 +573,7 @@ redis_prefix: ${problem.name}
 ```
 
 The `MemorySystem` threads the shared `memory/llm` router, the `memory/backend`
-factory, the `memory/admitter`, and the single dedup config into the tracker in
+factory, and the single dedup config into the tracker in
 Python — the tracker does not assemble its own `${ref:memory.*}` web. The
 tracker uses the same router and backend instance as the read side, so its
 token usage is booked under `llm/tokens/memory/<model>/...`.
@@ -654,20 +673,20 @@ The core pipeline runs the same sequence regardless of entry point:
    │    Classify as: NEW idea | UPDATE existing | REWRITE existing
    │    Apply to active/inactive idea banks via RecordManager
    │
-6. Attach efficacy statistics to idea banks
-   │  Merge per-card posteriors into evolution_statistics.ALL
+6. Attach efficacy evidence to cards
+   │  Stamp each card's raw gain_events (reputation derives posteriors at read time)
    │
 7. Enrich ideas (postprocessing)
    │  For each idea in record bank:
    │    Generate: keywords, explanation summary, task description summary
    │
 8. Log final state
-   │  Write: idea banks, processed programs, evolutionary statistics
+   │  Write: idea banks, processed programs
    │  Output: timestamped directory with JSON/YAML files
    │
 9. Memory write pipeline (if enabled)
    │  Load cards from idea banks
-   │  Harm-gate (admitter) + dedup, then ingest
+   │  Dedup, then ingest (confidently harmful cards swept after each pass)
    │  Write to memory backend (local disk or API)
 ```
 
@@ -694,8 +713,9 @@ When `memory_write_enabled=true`, after idea extraction completes:
 
 1. The best ideas (from top `memory_write_best_programs_percent`% of programs)
    are selected from the idea banks
-2. Per-idea efficacy statistics (Beta-Binomial injection posterior) are
-   carried in each card's `evolution_statistics`
+2. Per-idea raw gain events (use-attributed child fitness deltas) are carried
+   in each card's `gain_events`; reputation derives the Beta-Binomial posterior
+   from them at read time
 3. Cards are written to the local memory backend (`memory/backend=local`, the
    only backend): JSON files in `checkpoint_dir` with a search index
 
@@ -719,18 +739,10 @@ Internally, a memory card is a structured object with these fields:
         "explanations": ["Sorting evidence before traversal ensures high-quality..."],
         "summary": "Pre-sort evidence to avoid low-quality chain hops",
     },
-    "evolution_statistics": {
-        "ALL": {
-            "intro_events": 5,
-            "IntroGain_best_median": 0.03,
-            "IntroGain_best_adj_median": 0.012,
-            "DownsideRate_best": 0.1,
-            "posterior_a": 5.0,
-            "posterior_b": 2.0,
-            "p_help_lo20": 0.55,
-            "efficacy_confident": True,
-        }
-    },
+    "gain_events": [                          # raw use-attributed child gains
+        {"context": {"parent_metrics": {"min_area": 0.41}}, "gain": 0.03},
+        {"context": {"parent_metrics": {"min_area": 0.55}}, "gain": 0.0, "invalid": True},
+    ],                                        # reputation derives the posterior at read time
     "programs": ["prog-1", "prog-2"],       # programs that produced this idea
     "last_generation": 15,                    # last generation where idea was seen
     "strategy": "exploitation",               # mutation archetype
@@ -749,7 +761,6 @@ ideas_tracker/logs/2026-04-03_14-30-00/
   active_ideas.json        # Current active idea bank (final state)
   inactive_ideas.json      # Ideas moved to inactive bank
   programs_processed.json  # All ProgramRecord dicts
-  evolution_stats.json     # Evolutionary statistics (origin analysis)
   init.json                # Initialization parameters (model, redis, etc.)
 ```
 
@@ -1000,25 +1011,11 @@ through on failure or empty result.
 | `csv_loader.py` | Load archived program dumps from CSV |
 | `run_ideas_tracker_from_csv.py` | Offline tracker replay over a CSV dump |
 
-### Origin Analysis (`utils/origin_analysis/`)
-
-| File | What it does |
-|------|-------------|
-| `pipeline.py` | `analyse()` entry point: banks+programs JSON → `AnalysisResult` (lists of `IdeaStats`), CSV writer |
-| `origin_analysis/events.py` | Intro-event detection (child introduces idea absent from parents) |
-| `aggregation.py` | Per idea×quartile `IdeaStats` rows (gains, posteriors via `EfficacyScorer`) |
-| `loader.py` | Banks/programs JSON loading |
-| `siblings.py` | Sibling win-rate computation |
-| `statistics.py` | NaN-aware medians/quantiles/rates (pure python) |
-| `types.py` | Event/row type definitions |
-
 ### Efficacy core (`gigaevo/memory/efficacy/`)
 
 | File | What it does |
 |------|-------------|
-| `scorer.py` | `EfficacyScorer`: counterfactual baseline, MAD noise band, Beta-Binomial posterior over intro-gain events |
-| `events.py` | `EfficacyEvent`: one typed idea-introduction outcome (gain vs best parent) |
-| `bucketing.py` | `GenerationBucketer`: generation → quartile bucketing for `IdeaStats` rows |
+| `scorer.py` | `robust_noise_band`, `beta_binomial_posterior`, `block_from_events`: MAD noise band + Beta-Binomial posterior derived at read time from a card's raw `gain_events` |
 | `stamping.py` | `CardStatsStamper`: single writer of card-side stats (`DecisionMetrics` vocabulary only) |
 
 ### Tests
@@ -1030,8 +1027,7 @@ through on failure or empty result.
 | `tests/memory/test_dag_memory_flow.py` | End-to-end DAG flow, composite context, auto-derivation |
 | `tests/memory/test_ideas_tracker_pipeline.py` | IdeaTracker pipeline: records conversion, PostRunHook contract, program filtering, engine integration, Hydra composability, E2E |
 | `tests/memory/test_data_components.py` | Data structures: RecordBank, RecordCardExtended, IncomingIdeas |
-| `tests/memory/test_efficacy_scorer.py` | `EfficacyScorer` contract: cohort dedup, parent-local baseline, noise band, posterior math |
-| `tests/memory/test_typed_card_stats.py` | Typed `CardStatsBlock`/`EvolutionStatistics`, DecisionMetrics/AuditMetrics split, stamper overwrite semantics |
+| `tests/memory/test_typed_card_stats.py` | Typed `CardStatsBlock`/`DecisionMetrics` reads, gain-event posteriors, typed auction slate, no dict-plumbing source scan |
 | `tests/integration/test_memory_e2e.py` | Full-loop E2E with real EvolutionEngine + fakeredis |
 
 ---
@@ -1111,8 +1107,7 @@ default — for a run with 200 programs, only the top 10 contribute ideas.
 **Q: How do I check what ideas were extracted?**
 Look at the logs directory (default: `gigaevo/memory/ideas_tracker/logs/`).
 The `active_ideas.json` file contains the final idea bank with all extracted
-cards. Each card has `description`, `keywords`, `programs`, and
-`evolution_statistics` fields.
+cards. Each card has `description`, `keywords`, and `programs` fields.
 
 **Q: Can I disable memory write but still extract ideas?**
 Yes. Use `--no-memory-write` in the CLI, or set

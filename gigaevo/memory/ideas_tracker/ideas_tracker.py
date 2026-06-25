@@ -25,21 +25,18 @@ from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
-    MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
-    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
     MUTATION_OUTPUT_METADATA_KEY,
 )
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.context import ContextualGain
+from gigaevo.memory.core.events import emit_memory_event
 from gigaevo.memory.core.protocols import (
     Deduplicator,
     Evictor,
-    MemoryAdmitter,
     ReputationModel,
 )
 from gigaevo.memory.core.reputation import BetaBinomialReputation
-from gigaevo.memory.efficacy import CardStatsStamper, EfficacyScorer
 from gigaevo.memory.ideas_tracker.analyzers import (
     Analyzer,
     ClassifyingAnalyzer,
@@ -56,14 +53,10 @@ from gigaevo.memory.ideas_tracker.models import (
     program_to_record,
 )
 from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryResponse
-from gigaevo.memory.ideas_tracker.utils.origin_analysis import (
-    analyse as _analyse_origins,
-)
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
     compute_contextual_gains,
 )
-from gigaevo.memory.shared_memory.models import CardStatsBlock
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
@@ -292,41 +285,6 @@ def _evaluated_invalid(
     return metrics_context is not None and metrics_context.is_sentinel(fitness_key, fit)
 
 
-def _card_posterior_from_programs(
-    programs: list[Program],
-    *,
-    fitness_key: str,
-    higher_is_better: bool,
-    reputation: ReputationModel | None = None,
-    metrics_context: MetricsContext | None = None,
-) -> dict[str, CardStatsBlock]:
-    """Injection-efficacy posterior per injected card id, from live programs.
-
-    Extracts each program's id, parents, valid fitness, and the
-    ``memory_selected_idea_ids`` stamped when that program was mutated — the cards
-    its children's prompts contained — then delegates to ``reputation``'s
-    ``compute_injection_posteriors``, which credits each card with its children's
-    outcomes under the configured thresholds (defaults when no reputation is
-    wired). The result is keyed by the injected cards' own ids (idea and
-    ``program-<uuid>`` alike) so every auction candidate draws a real downside
-    posterior.
-    """
-    rows = [
-        InjectionOutcome(
-            id=prog.id,
-            parents=prog.lineage.parents,
-            fitness=_valid_fitness(prog, fitness_key, metrics_context),
-            selected_ids=prog.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
-            or [],
-            injected_ids=prog.get_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY),
-            invalid=_evaluated_invalid(prog, fitness_key, metrics_context),
-        )
-        for prog in programs
-    ]
-    rep = reputation if reputation is not None else BetaBinomialReputation()
-    return rep.compute_injection_posteriors(rows, higher_is_better=higher_is_better)
-
-
 def _base_fitness(
     base_metrics: dict[str, float],
     fitness_key: str,
@@ -405,13 +363,11 @@ _WRITE_PIPELINE_LOCK = threading.Lock()
 def _run_write_pipeline(
     enabled: bool,
     banks_path: Path | None,
-    best_ideas_path: Path | None,
     programs_path: Path | None,
     backend: MemoryBackendFactory | None,
     checkpoint_dir: str | Path | None = None,
     best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
-    card_posterior: dict[str, CardStatsBlock] | None = None,
     gain_events: dict[str, list[ContextualGain]] | None = None,
     evictor: Evictor | None = None,
     deduplicator: Deduplicator | None = None,
@@ -428,13 +384,11 @@ def _run_write_pipeline(
     with _WRITE_PIPELINE_LOCK:
         _run_write_pipeline_locked(
             banks_path,
-            best_ideas_path,
             programs_path,
             backend=backend,
             checkpoint_dir=checkpoint_dir,
             best_programs_percent=best_programs_percent,
             higher_is_better=higher_is_better,
-            card_posterior=card_posterior,
             gain_events=gain_events,
             evictor=evictor,
             deduplicator=deduplicator,
@@ -443,13 +397,11 @@ def _run_write_pipeline(
 
 def _run_write_pipeline_locked(
     banks_path: Path | None,
-    best_ideas_path: Path | None,
     programs_path: Path | None,
     backend: MemoryBackendFactory | None,
     checkpoint_dir: str | Path | None,
     best_programs_percent: float,
     higher_is_better: bool,
-    card_posterior: dict[str, CardStatsBlock] | None,
     gain_events: dict[str, list[ContextualGain]] | None,
     evictor: Evictor | None,
     deduplicator: Deduplicator | None,
@@ -460,7 +412,7 @@ def _run_write_pipeline_locked(
             "compose one via the Hydra `memory/backend` group "
             "(ideas_tracker configs override the shared `memory.backend` singleton to `local`)."
         )
-    if banks_path is None or best_ideas_path is None:
+    if banks_path is None:
         logger.warning(
             "[Memory][IdeaTracker] write pipeline skipped: log paths unavailable."
         )
@@ -468,21 +420,6 @@ def _run_write_pipeline_locked(
     if not banks_path.exists():
         logger.warning(
             "[Memory][IdeaTracker] write pipeline skipped: missing {}.", banks_path
-        )
-        return
-
-    try:
-        with best_ideas_path.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
-        has_snapshot = isinstance(payload, list) and any(
-            isinstance(i, dict) and "best_ideas" in i for i in payload
-        )
-    except Exception:
-        has_snapshot = False
-
-    if not has_snapshot:
-        logger.warning(
-            "[Memory][IdeaTracker] write pipeline skipped: no best_ideas snapshot."
         )
         return
 
@@ -494,13 +431,11 @@ def _run_write_pipeline_locked(
 
     snapshot = _write_main(
         banks_path=banks_path,
-        best_ideas_path=best_ideas_path,
         programs_path=effective_programs_path,
         backend=backend,
         checkpoint_dir=checkpoint_dir,
         best_programs_percent=best_programs_percent,
         higher_is_better=higher_is_better,
-        card_posterior=card_posterior,
         gain_events=gain_events,
         evictor=evictor,
         deduplicator=deduplicator,
@@ -526,22 +461,13 @@ class _SessionLog:
     files to a timestamped session directory in a single flush() call.
 
     Replaces the per-event read-modify-write pattern of IdeasTrackerLogger.
-    Files written: log.txt, banks.json, programs.json, best_ideas.json.
+    Files written: log.txt, banks.json, programs.json.
     """
 
-    def __init__(
-        self,
-        logs_dir: Path,
-        admitter: MemoryAdmitter | None = None,
-        higher_is_better: bool = True,
-        scorer: EfficacyScorer | None = None,
-    ) -> None:
+    def __init__(self, logs_dir: Path) -> None:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.session_dir: Path = logs_dir / ts
         self._entries: list[str] = []
-        self._admitter = admitter
-        self._higher_is_better = higher_is_better
-        self._scorer = scorer
 
     # ------ file paths ------
     @property
@@ -551,10 +477,6 @@ class _SessionLog:
     @property
     def programs_file(self) -> Path:
         return self.session_dir / "programs.json"
-
-    @property
-    def best_ideas_file(self) -> Path:
-        return self.session_dir / "best_ideas.json"
 
     # ------ recording ------
 
@@ -594,8 +516,6 @@ class _SessionLog:
             json.dumps(programs_data, indent=2), encoding="utf-8"
         )
 
-        self.write_evolution_statistics(ideas, ts)
-
     def write_bank_snapshot(self, ideas: list[Idea], timestamp: str) -> None:
         """Write banks.json as a single active-bank snapshot of typed ideas."""
         banks_data = [
@@ -605,49 +525,6 @@ class _SessionLog:
             }
         ]
         self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
-
-    def write_evolution_statistics(self, ideas: list[Idea], timestamp: str) -> None:
-        """Run origin analysis and rewrite the bank snapshot with per-idea
-        ``evolution_statistics`` stamped onto copies of the matching ideas."""
-        if not self.banks_file.exists() or not self.programs_file.exists():
-            return
-        try:
-            _result = _analyse_origins(
-                banks_path=str(self.banks_file),
-                programs_path=str(self.programs_file),
-                admitter=self._admitter,
-                higher_is_better=self._higher_is_better,
-                scorer=self._scorer,
-            )
-        except RuntimeError as exc:
-            if "No valid programs" in str(exc):
-                return
-            raise
-        except Exception as exc:
-            logger.warning(
-                "[Memory][IdeaTracker] Could not compute evolutionary statistics: {}",
-                exc,
-            )
-            return
-
-        if not _result.summary:
-            return
-
-        stats_by_idea = CardStatsStamper().idea_statistics(_result.summary)
-
-        enriched = [
-            idea.model_copy(update={"evolution_statistics": stats_by_idea[idea.id]})
-            if idea.id in stats_by_idea
-            else idea
-            for idea in ideas
-        ]
-        self.write_bank_snapshot(enriched, timestamp)
-
-        best_ideas = [stats_row.as_json_row() for stats_row in _result.best_ideas]
-        self.best_ideas_file.write_text(
-            json.dumps([{"timestamp": timestamp, "best_ideas": best_ideas}], indent=2),
-            encoding="utf-8",
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -759,7 +636,6 @@ class IdeaTracker(IncrementalPostRunHook):
         fitness_higher_is_better: bool = True,
         metrics_context: MetricsContext | None = None,
         logs_dir: str | Path | None = None,
-        admitter: MemoryAdmitter | None = None,
         evictor: Evictor | None = None,
         deduplicator: Deduplicator | None = None,
         reputation: ReputationModel | None = None,
@@ -833,12 +709,7 @@ class IdeaTracker(IncrementalPostRunHook):
             else Path(__file__).resolve().parent / "logs"
         )
         resolved_logs.mkdir(parents=True, exist_ok=True)
-        self._log = _SessionLog(
-            resolved_logs,
-            admitter=admitter,
-            higher_is_better=fitness_higher_is_better,
-            scorer=self._reputation.scorer(),
-        )
+        self._log = _SessionLog(resolved_logs)
 
     @cached_property
     def _task_summary(self) -> str:
@@ -881,10 +752,11 @@ class IdeaTracker(IncrementalPostRunHook):
 
         ``programs`` feeds the expensive LLM analyzer and may be a bounded
         window (the live hook caps it to keep each sweep inside the engine's
-        time budget). ``posterior_programs`` feeds the cheap, pure injection
-        posterior, which needs the full program set so child→parent lineage
-        resolves; a capped window would sever lineage and collapse the
-        intro-event population. Defaults to ``programs`` when not supplied.
+        time budget). ``posterior_programs`` feeds the cheap, pure
+        gain-event attribution, which needs the full program set so
+        child→parent lineage resolves; a capped window would sever lineage and
+        collapse the intro-event population. Defaults to ``programs`` when not
+        supplied.
         """
         async with self._run_lock:
             await self._run_increment_locked(
@@ -959,35 +831,36 @@ class IdeaTracker(IncrementalPostRunHook):
 
         self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
 
-        card_posterior = _card_posterior_from_programs(
-            programs if posterior_programs is None else posterior_programs,
-            fitness_key=self._fitness_key,
-            higher_is_better=self._fitness_higher_is_better,
-            reputation=self._reputation,
-            metrics_context=self._metrics_context,
-        )
         card_gain_events = _card_gain_events_from_programs(
             programs if posterior_programs is None else posterior_programs,
             fitness_key=self._fitness_key,
             higher_is_better=self._fitness_higher_is_better,
             metrics_context=self._metrics_context,
         )
+        emit_memory_event(
+            component="ideas_tracker",
+            event_type="injection_posterior.compute",
+            payload={
+                "card_count": len(card_gain_events),
+                "event_count_by_card_id": {
+                    cid: len(events) for cid, events in card_gain_events.items()
+                },
+            },
+        )
 
-        # flush (bank serialization + offline origin analysis) and the write
-        # pipeline (backend build + card ingest) are blocking I/O; keep them
-        # off the event loop so in-flight mutations don't stall for the sweep
+        # flush (bank serialization) and the write pipeline (backend build +
+        # card ingest) are blocking I/O; keep them off the event loop so
+        # in-flight mutations don't stall for the sweep
         def _flush_and_write() -> None:
             self._log.flush(self._bank, records=self._all_records)
             _run_write_pipeline(
                 self._memory_write_enabled,
                 self._log.banks_file,
-                self._log.best_ideas_file,
                 self._log.programs_file,
                 backend=self._backend,
                 checkpoint_dir=self._checkpoint_dir,
                 best_programs_percent=self._best_programs_percent,
                 higher_is_better=self._fitness_higher_is_better,
-                card_posterior=card_posterior,
                 gain_events=card_gain_events,
                 evictor=self._evictor,
                 deduplicator=self._deduplicator,

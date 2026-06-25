@@ -2,7 +2,7 @@
 # ONE assembled MemorySystem node: Hydra builds the component leaves below and
 # passes them to MemorySystem, which threads the shared reputation/backend/dedup/
 # llm in Python (no ${ref:memory.*} sibling web). Swap a component with e.g.
-# `memory/llm=qwen_instruct`, `memory/admitter=...`; tune via `memory.auction.baseline_prior=[5,2]`.
+# `memory/llm=qwen_instruct`; tune via `memory.auction.baseline_prior=[5,2]`.
 # Default stack = the EV contextual-bandit treatment: absolute-progress value
 # channel + EV-bid auction + bid-ranked budgeter (works on every algorithm).
 # Single-island runs can upgrade to `memory/reputation=bd_proximity` for
@@ -12,7 +12,6 @@ defaults:
   - llm: gemini
   - reputation: absolute_progress
   - dedup: llm
-  - admitter: sign_based
   - evictor: harm
   - retriever: gam
   - selector: llm

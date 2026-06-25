@@ -24,7 +24,6 @@ from tests.fakes.read_pipeline import make_read_pipeline
 
 
 _SEED = 20260604
-_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
 
 
 def _make_program(code="def solve(): return 1", **metadata):
@@ -81,7 +80,6 @@ class TestSelectorWithRealMemory:
                         "multi",
                     ],
                     "task_description": "Multi-hop fact verification",
-                    "evolution_statistics": _PROVEN_STATS,
                 },
                 {
                     "id": "idea-2",
@@ -158,7 +156,6 @@ class TestSelectorWithRealMemory:
                     "id": "idea-abc-123",
                     "description": "Use simulated annealing for local search",
                     "keywords": ["annealing"],
-                    "evolution_statistics": _PROVEN_STATS,
                 },
             ],
         )

@@ -154,41 +154,7 @@ def _card_efficacy_summary(card: dict[str, Any]) -> str:
             return f"exemplar fitness {float(card['fitness']):.4f}"
         except (TypeError, ValueError):
             return ""
-
-    stats = card.get("evolution_statistics")
-    if not isinstance(stats, dict):
-        return ""
-    block = stats.get("ALL")
-    if not isinstance(block, dict):
-        return ""
-    intro_events = block.get("intro_events")
-    median = block.get("IntroGain_best_adj_median")
-    scale = " vs cohort"
-    if median is None:
-        median = block.get("IntroGain_best_median")
-        scale = ""
-    if median is None or not block.get("efficacy_confident"):
-        return ""
-    try:
-        intros = int(intro_events or 0)
-        median_value = float(median)
-    except (TypeError, ValueError):
-        return ""
-    if intros <= 0:
-        return ""
-    summary = (
-        f"introduced in {intros} children; "
-        f"median improvement{scale} {median_value:+.4f}"
-    )
-    downside = block.get("DownsideRate_best")
-    if downside is not None:
-        try:
-            summary += f"; downside {float(downside):.0%}"
-        except (TypeError, ValueError):
-            pass
-    if median_value <= 0:
-        return summary + " (caution: non-positive median)"
-    return summary + " (confident)"
+    return ""
 
 
 def _drop_random_ideas(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
@@ -11,40 +10,16 @@ from gigaevo.memory.context import ContextualGain
 Strategy = Literal["exploration", "exploitation", "hybrid"]
 
 
-class Quartile(StrEnum):
-    """Run-progress slice of the origin analysis.
-
-    Declaration order is canonical: chronological quarters first, then the
-    whole-run ``ALL`` aggregate. Rank tables and iteration orders must derive
-    from this enum, never restate it.
-    """
-
-    Q1 = "Q1"
-    Q2 = "Q2"
-    Q3 = "Q3"
-    Q4 = "Q4"
-    ALL = "ALL"
-
-    @classmethod
-    def quarters(cls) -> tuple[Quartile, ...]:
-        """The four chronological slices, excluding the ALL aggregate."""
-        return tuple(q for q in cls if q is not cls.ALL)
-
-
 class DecisionMetrics(BaseModel):
     """Efficacy metrics that decision paths read.
 
-    Exactly the fields the admitters, the Thompson auction, the reputation harm
-    predicate, and the prompt renderer consume. Cards are stamped with this
-    vocabulary and nothing more; everything else the origin analysis computes
-    lives in :class:`AuditMetrics` and stays in the offline artifacts. Field
-    names are the banks.json contract, including the analyzer-cased
-    ``IntroGain_*`` keys.
+    Exactly the fields the Thompson auction, the reputation harm predicate, and
+    the prompt renderer consume — the vocabulary reputation computes from a
+    card's gain events, and nothing more. Field names are the banks.json
+    contract, including the analyzer-cased ``IntroGain_*`` keys.
 
     "Gain" is always the child-minus-parent best-fitness delta in
-    positive-is-improvement space (the analysis negates for minimize metrics);
-    "adjusted" means the parent-fitness-local counterfactual median has been
-    subtracted.
+    positive-is-improvement space (the analysis negates for minimize metrics).
     """
 
     posterior_a: float | None = Field(
@@ -76,137 +51,14 @@ class DecisionMetrics(BaseModel):
     IntroGain_best_median: float | None = Field(
         default=None, description="Median raw child-minus-parent best-fitness gain."
     )
-    IntroGain_best_adj_median: float | None = Field(
-        default=None,
-        description="Median cohort-adjusted gain (raw gain minus the parent-local counterfactual).",
-    )
-    DownsideRate_best: float | None = Field(
-        default=None,
-        description="Fraction of introductions whose adjusted gain fell below the harm threshold.",
-    )
-
-
-class AuditMetrics(BaseModel):
-    """Efficacy metrics computed for offline analysis only.
-
-    No live decision path reads these; they appear in the offline artifacts
-    (best_ideas.json rows via :class:`~gigaevo.memory.core.idea_stats.IdeaStats`)
-    and never on cards. Gain semantics match :class:`DecisionMetrics`.
-    """
-
-    IntroGain_best_p10: float | None = Field(
-        default=None, description="10th percentile of raw per-introduction gains."
-    )
-    IntroGain_best_rel_median: float | None = Field(
-        default=None,
-        description="Median gain relative to the parent's best fitness magnitude.",
-    )
-    IntroGain_best_p90: float | None = Field(
-        default=None, description="90th percentile of raw per-introduction gains."
-    )
-    TailRisk_best_median: float | None = Field(
-        default=None,
-        description="Median of min(gain, 0): the typical downside magnitude per introduction.",
-    )
-    IntroGain_percentile_median_in_quartile: float | None = Field(
-        default=None,
-        description="Median percentile rank of the gain among same-quartile introductions.",
-    )
-    IntroGain_percentile_median_overall: float | None = Field(
-        default=None,
-        description="Median percentile rank of the gain among all introductions.",
-    )
-    IntroGain_z_median_in_quartile: float | None = Field(
-        default=None,
-        description="Median z-score of the gain within its quartile cohort.",
-    )
-    IntroGain_z_median_overall: float | None = Field(
-        default=None, description="Median z-score of the gain over the whole run."
-    )
-    SiblingWinRate: float | None = Field(
-        default=None,
-        description="Fraction of introductions whose child beat its same-generation siblings.",
-    )
-    SiblingPercentile_median: float | None = Field(
-        default=None,
-        description="Median fitness percentile of the child among same-generation siblings.",
-    )
-    SiblingDelta_median: float | None = Field(
-        default=None,
-        description="Median fitness delta of the child versus its sibling median.",
-    )
-    SiblingWinRate_allgens: float | None = Field(
-        default=None,
-        description="Sibling win rate with siblings pooled across all generations.",
-    )
-    SiblingPercentile_allgens_median: float | None = Field(
-        default=None,
-        description="Median sibling percentile pooled across all generations.",
-    )
-    SiblingDelta_allgens_median: float | None = Field(
-        default=None,
-        description="Median sibling delta pooled across all generations.",
-    )
-    DescMaxLift_k_best_median: float | None = Field(
-        default=None,
-        description="Median best-fitness lift achieved by descendants within k generations.",
-    )
-    ReachesElite_k_rate: float | None = Field(
-        default=None,
-        description="Fraction of introductions whose lineage reaches the elite archive within k generations.",
-    )
-    TimeToElite_k_median: float | None = Field(
-        default=None,
-        description="Median generations until a descendant enters the elite archive.",
-    )
-    LineageReachesFinal_rate: float | None = Field(
-        default=None,
-        description="Fraction of introductions whose lineage survives to the final generation.",
-    )
-    DescendantCount_k_median: float | None = Field(
-        default=None, description="Median descendant count within k generations."
-    )
-    BranchingFactor_median: float | None = Field(
-        default=None, description="Median direct-children count per lineage program."
-    )
-    TimeToPeak_k_median: float | None = Field(
-        default=None,
-        description="Median generations until the lineage's peak fitness within k generations.",
-    )
-    ParentFitnessPercentile_within_gen_median: float | None = Field(
-        default=None,
-        description="Median fitness percentile of the parent within its generation (selection-pressure diagnostic).",
-    )
-    BornInElite_rate: float | None = Field(
-        default=None,
-        description="Fraction of introductions whose child was born directly into the elite archive.",
-    )
-    origin_programs: int = Field(
-        default=0, description="Programs in which the idea first appeared."
-    )
-    origin_in_elite_rate: float | None = Field(
-        default=None,
-        description="Fraction of origin programs that sit in the elite archive.",
-    )
-    origin_generation_span: float | None = Field(
-        default=None,
-        description="Generations between the first and last origin program.",
-    )
-    origin_root_diversity: float | None = Field(
-        default=None, description="Distinct lineage roots among origin programs."
-    )
-    reinvention_rate_origins_per_distinct_gen: float | None = Field(
-        default=None,
-        description="Origin programs per distinct generation (independent-rediscovery pressure).",
-    )
 
 
 class CardStatsBlock(DecisionMetrics):
-    """One efficacy-statistics block of a card.
+    """A card's efficacy-statistics block, computed by reputation from the
+    card's gain events.
 
-    The metric vocabulary is exactly :class:`DecisionMetrics` — cards carry
-    only what decision paths read. Two producers stamp it: the origin
-    analysis (via ``IdeaStats.to_stats_block``) and the injection posterior.
+    The metric vocabulary is exactly :class:`DecisionMetrics` — what decision
+    paths read.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -224,39 +76,6 @@ class CardStatsBlock(DecisionMetrics):
             for key, value in handler(self).items()
             if key in self.model_fields_set or key not in declared
         }
-
-
-class EvolutionStatistics(BaseModel):
-    """Typed ``evolution_statistics`` payload of a card.
-
-    The ``ALL`` block is stamped by the ideas-tracker origin analysis when the
-    card is persisted, and overwritten by the injection-posterior stamp at read
-    time — the injection posterior wins when present. ``best_ideas_snapshot``
-    is the metric block of the best-ideas summary row the offline write
-    pipeline merges in.
-    Absent blocks stay absent on serialization so banks.json keeps its shape.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    ALL: CardStatsBlock | None = Field(
-        default=None,
-        description="Whole-run aggregate block — the block decision paths read.",
-    )
-    best_ideas_snapshot: CardStatsBlock | None = Field(
-        default=None,
-        description="Metric block of the best-ideas summary row merged in by the offline write pipeline.",
-    )
-    gain_events: list[ContextualGain] | None = Field(
-        default=None,
-        description="Use-attributed base-relative injection events for this card.",
-    )
-
-    @model_serializer(mode="wrap")
-    def serialize_without_absent_blocks(
-        self, handler: SerializerFunctionWrapHandler
-    ) -> dict[str, Any]:
-        return {key: value for key, value in handler(self).items() if value is not None}
 
 
 class CardAlias(BaseModel):
@@ -326,9 +145,9 @@ class MemoryCard(BaseModel):
     keywords: list[str] = Field(
         default_factory=list, description="Search keywords for retrieval ranking."
     )
-    evolution_statistics: EvolutionStatistics = Field(
-        default_factory=EvolutionStatistics,
-        description="Whole-run (ALL) efficacy block plus the offline best-ideas snapshot.",
+    gain_events: list[ContextualGain] | None = Field(
+        default=None,
+        description="Use-attributed base-relative injection events; reputation computes this card's efficacy block from them.",
     )
     explanation: MemoryCardExplanation = Field(
         default_factory=MemoryCardExplanation,
@@ -392,9 +211,9 @@ class ProgramCard(BaseModel):
     links: list[str] = Field(
         default_factory=list, description="Ids of semantically related cards."
     )
-    evolution_statistics: EvolutionStatistics = Field(
-        default_factory=EvolutionStatistics,
-        description="Injection-efficacy statistics stamped onto this card.",
+    gain_events: list[ContextualGain] | None = Field(
+        default=None,
+        description="Use-attributed base-relative injection events; reputation computes this card's efficacy block from them.",
     )
 
 
@@ -413,16 +232,13 @@ class LocalMemorySnapshot(BaseModel):
 
 __all__ = [
     "AnyCard",
-    "AuditMetrics",
     "CardAlias",
     "CardStatsBlock",
     "ConnectedIdea",
     "DecisionMetrics",
-    "EvolutionStatistics",
     "LocalMemorySnapshot",
     "MemoryCard",
     "MemoryCardExplanation",
     "ProgramCard",
-    "Quartile",
     "Strategy",
 ]

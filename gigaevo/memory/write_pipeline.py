@@ -13,13 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from gigaevo.exceptions import LLMError, MemoryStorageError
 from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.context import ContextualGain
-from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.protocols import Deduplicator, Evictor
 from gigaevo.memory.efficacy import CardStatsStamper
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
-    CardStatsBlock,
     ConnectedIdea,
     MemoryCard,
     ProgramCard,
@@ -85,16 +83,6 @@ class BankSnapshot(BaseModel):
 
     active_bank: list[Any] = Field(
         description="Raw card payloads of the active idea bank."
-    )
-
-
-class BestIdeasSnapshot(BaseModel):
-    """Latest best_ideas.json snapshot: ranked idea metric rows."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    best_ideas: list[Any] = Field(
-        description="IdeaStats.as_json_row() dumps, best ideas first."
     )
 
 
@@ -237,37 +225,6 @@ class WriteStatsSnapshot(BaseModel):
     )
 
 
-def parse_best_ideas(path: Path) -> tuple[list[str], dict[str, IdeaStats]]:
-    """Read best_ideas.json into (ordered unique idea ids, per-id stats rows).
-
-    Rows are the ``IdeaStats.as_json_row()`` dumps the tracker writes, so they
-    validate back into :class:`IdeaStats` directly.
-    """
-    payload = load_json(path)
-    try:
-        snapshot = BestIdeasSnapshot.model_validate(
-            extract_latest_snapshot(payload, "best_ideas")
-        )
-    except ValidationError as exc:
-        raise ValueError(
-            f"Invalid best ideas format in {path}: expected list under 'best_ideas'"
-        ) from exc
-
-    idea_ids: list[str] = []
-    best_by_id: dict[str, IdeaStats] = {}
-    for item in snapshot.best_ideas:
-        if not isinstance(item, dict):
-            continue
-        row = IdeaStats.model_validate(item)
-        idea_id = row.idea_id.strip()
-        if not idea_id or idea_id in best_by_id:
-            continue
-        idea_ids.append(idea_id)
-        best_by_id[idea_id] = row
-
-    return idea_ids, best_by_id
-
-
 def parse_programs(path: Path) -> list[ProgramRow]:
     """Read programs.json's latest snapshot into typed program rows."""
     payload = load_json(path)
@@ -284,68 +241,6 @@ def parse_programs(path: Path) -> list[ProgramRow]:
         for program in snapshot.programs
         if isinstance(program, dict)
     ]
-
-
-def fold_best_idea_metrics(card: AnyCard, row: IdeaStats) -> AnyCard:
-    """Fold a best_ideas stats row into a typed bank card.
-
-    Fills a missing description from the row and stamps the row's metric
-    vocabulary under ``evolution_statistics.best_ideas_snapshot``. The input
-    card is never mutated.
-    """
-    updates: dict[str, Any] = {
-        "evolution_statistics": card.evolution_statistics.model_copy(
-            update={"best_ideas_snapshot": row.to_stats_block()}
-        )
-    }
-    if not card.description:
-        updates["description"] = row.description
-
-    return card.model_copy(update=updates)
-
-
-def load_best_idea_bank_cards(path: Path, best_ideas_path: Path) -> list[AnyCard]:
-    """Select the banks.json cards named by best_ideas.json, metrics folded in."""
-    if not best_ideas_path.exists():
-        raise FileNotFoundError(f"Best ideas file not found: {best_ideas_path}")
-
-    payload = load_json(path)
-    try:
-        snapshot = BankSnapshot.model_validate(
-            extract_latest_snapshot(payload, "active_bank")
-        )
-    except ValidationError as exc:
-        raise ValueError(
-            f"Invalid banks format in {path}: expected 'active_bank' list"
-        ) from exc
-
-    all_cards = [
-        normalize_memory_card(entry)
-        for entry in snapshot.active_bank
-        if isinstance(entry, dict)
-    ]
-    cards_by_id = {card.id.strip(): card for card in all_cards if card.id.strip()}
-    best_idea_ids, best_by_id = parse_best_ideas(best_ideas_path)
-
-    selected_cards: list[AnyCard] = []
-    missing_cards: list[str] = []
-    for idea_id in best_idea_ids:
-        bank_card = cards_by_id.get(idea_id)
-        if bank_card is None:
-            missing_cards.append(idea_id)
-            continue
-        row = best_by_id.get(idea_id)
-        selected_cards.append(
-            fold_best_idea_metrics(bank_card, row) if row is not None else bank_card
-        )
-
-    if missing_cards:
-        logger.warning(
-            "[Memory][WritePipeline] {} best_ideas IDs were missing in banks and were skipped.",
-            len(missing_cards),
-        )
-
-    return selected_cards
 
 
 def load_latest_bank_cards(path: Path) -> list[AnyCard]:
@@ -372,13 +267,13 @@ def build_program_cards_from_top_programs(
     banks_path: Path,
     best_programs_percent: float,
     higher_is_better: bool = True,
-    card_posterior: dict[str, CardStatsBlock] | None = None,
+    gain_events: dict[str, list[ContextualGain]] | None = None,
 ) -> list[ProgramCard]:
     """Turn the top-fitness slice of programs.json into typed program cards.
 
     Each card links back to the bank ideas that produced the program; cards
-    that already carry an injection posterior are kept even when they drop out
-    of the top slice, so their efficacy signal still reaches the auction.
+    that already earned gain events are kept even when they drop out of the
+    top slice, so their efficacy signal still reaches the auction.
     """
     if (
         programs_path is None
@@ -408,14 +303,14 @@ def build_program_cards_from_top_programs(
     selected_count = top_percent_count(len(eligible_rows), best_programs_percent)
     selected_rows = eligible_rows[:selected_count]
 
-    # A card accrues an injection posterior only after it is injected downstream,
-    # by which point it has usually dropped out of the top-fitness slice; build it
-    # anyway so its efficacy signal reaches the auction instead of being stranded.
-    if card_posterior:
+    # A card earns gain events only after it is injected downstream, by which
+    # point it has usually dropped out of the top-fitness slice; build it anyway
+    # so its efficacy signal reaches the auction instead of being stranded.
+    if gain_events:
         selected_rows = selected_rows + [
             row
             for row in eligible_rows[selected_count:]
-            if f"program-{row.resolved_program_id}" in card_posterior
+            if f"program-{row.resolved_program_id}" in gain_events
         ]
 
     connected_ideas_by_program: dict[str, list[ConnectedIdea]] = {}
@@ -474,48 +369,30 @@ def build_program_cards_from_top_programs(
 
 def load_memory_cards(
     path: Path,
-    best_ideas_path: Path,
     *,
     programs_path: Path | None = None,
     best_programs_percent: float = 0.0,
     higher_is_better: bool = True,
-    card_posterior: dict[str, CardStatsBlock] | None = None,
     gain_events: dict[str, list[ContextualGain]] | None = None,
 ) -> list[AnyCard]:
-    """Load idea and program cards from banks as typed cards, posteriors stamped.
+    """Load every active-bank idea card plus the top program cards as typed
+    cards, gain events stamped.
 
     Raw JSON dicts cross into typed models inside the loaders called here;
-    everything downstream operates on typed cards only.
+    everything downstream operates on typed cards only. The whole active bank
+    seeds the store — the auction, not an upstream filter, decides which cards
+    are worth injecting.
     """
-    payload = load_json(path)
-
-    if isinstance(payload, dict) and "active_bank" in payload:
-        idea_cards = load_best_idea_bank_cards(path, best_ideas_path)
-    elif (
-        isinstance(payload, list)
-        and payload
-        and isinstance(payload[0], dict)
-        and "active_bank" in payload[0]
-    ):
-        idea_cards = load_best_idea_bank_cards(path, best_ideas_path)
-    else:
-        raise ValueError(
-            "Invalid banks JSON format. Expected payload with 'active_bank'"
-        )
-
     typed_cards: list[AnyCard] = [
-        *idea_cards,
+        *load_latest_bank_cards(path),
         *build_program_cards_from_top_programs(
             programs_path=programs_path,
             banks_path=path,
             best_programs_percent=best_programs_percent,
             higher_is_better=higher_is_better,
-            card_posterior=card_posterior,
+            gain_events=gain_events,
         ),
     ]
-    if card_posterior:
-        stamper = CardStatsStamper()
-        typed_cards = [stamper.stamp_posterior(c, card_posterior) for c in typed_cards]
     if gain_events:
         stamper = CardStatsStamper()
         typed_cards = [stamper.stamp_gain_events(c, gain_events) for c in typed_cards]
@@ -567,13 +444,11 @@ def append_write_stats_snapshot(
 def main(
     *,
     banks_path: Path,
-    best_ideas_path: Path,
     programs_path: Path | None = None,
     backend: MemoryBackendFactory,
     checkpoint_dir: str | Path | None = None,
     best_programs_percent: float = 5.0,
     higher_is_better: bool = True,
-    card_posterior: dict[str, CardStatsBlock] | None = None,
     gain_events: dict[str, list[ContextualGain]] | None = None,
     evictor: Evictor | None = None,
     deduplicator: Deduplicator | None = None,
@@ -596,18 +471,15 @@ def main(
             raise FileNotFoundError(f"Banks file not found: {banks_path}")
         memory_cards = load_memory_cards(
             banks_path,
-            best_ideas_path=best_ideas_path,
             programs_path=programs_path,
             best_programs_percent=best_programs_percent,
             higher_is_better=higher_is_better,
-            card_posterior=card_posterior,
             gain_events=gain_events,
         )
         logger.info(
-            "[Memory][WritePipeline] Loaded {} cards from banks: {} (filtered by: {})",
+            "[Memory][WritePipeline] Loaded {} cards from banks: {}",
             len(memory_cards),
             banks_path,
-            best_ideas_path,
         )
 
         idea_write_stats = WriteStats()

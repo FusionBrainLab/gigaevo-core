@@ -14,7 +14,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
-from gigaevo.memory.shared_memory.models import CardAlias, EvolutionStatistics
+from gigaevo.memory.shared_memory.models import CardAlias
 
 # ---------------------------------------------------------------------------
 # Improvement normalisation  (mutation output → typed Improvement)
@@ -184,10 +184,6 @@ class Idea(BaseModel):
     aliases: list[CardAlias] = Field(
         default_factory=list,
         description="Alternative phrasings merged into this idea.",
-    )
-    evolution_statistics: EvolutionStatistics = Field(
-        default_factory=EvolutionStatistics,
-        description="Per-quartile efficacy blocks stamped by the tracker.",
     )
 
 

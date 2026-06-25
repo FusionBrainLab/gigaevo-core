@@ -22,7 +22,9 @@ class HarmEvictor(BaseModel):
     )
 
     def should_evict(self, card: AnyCard) -> bool:
-        return self.reputation.is_confidently_harmful(card.evolution_statistics)
+        return self.reputation.is_confidently_harmful(
+            self.reputation.card_stats(card, None)
+        )
 
     def sweep(self, bank: Mapping[str, AnyCard]) -> list[str]:
         evicted = [cid for cid, card in bank.items() if self.should_evict(card)]

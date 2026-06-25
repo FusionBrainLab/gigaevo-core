@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.reputation import BetaBinomialReputation
@@ -18,19 +19,34 @@ from gigaevo.memory.shared_memory.card_dedup import DedupAction, DedupDecision
 from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 from tests.fakes.agentic_memory import make_test_memory
 
-_HARMFUL_STATS = {"ALL": {"intro_events": 6, "posterior_a": 1.0, "posterior_b": 7.0}}
-_PROVEN_STATS = {"ALL": {"intro_events": 6, "posterior_a": 7.0, "posterior_b": 1.0}}
-_THIN_STATS = {"ALL": {"intro_events": 2, "posterior_a": 1.0, "posterior_b": 3.0}}
+
+def _events(gains: list[float]) -> list[dict[str, Any]]:
+    return [
+        ContextualGain(
+            context=DecisionContext(parent_metrics={"min_area": 0.5}), gain=g
+        ).model_dump()
+        for g in gains
+    ]
 
 
-def _idea(card_id: str, description: str, stats: dict | None = None) -> dict[str, Any]:
+# Equal-sign gains collapse the MAD noise band to 0, so every loss falls below
+# threshold: six losses -> Beta(1, 7) k_harm=6 (confidently harmful); six wins ->
+# Beta(7, 1) (proven); two losses -> Beta(1, 3) intro=2 (too thin to evict).
+_HARMFUL_EVENTS = _events([-0.5] * 6)
+_PROVEN_EVENTS = _events([0.01] * 6)
+_THIN_EVENTS = _events([-0.5] * 2)
+
+
+def _idea(
+    card_id: str, description: str, events: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     card: dict[str, Any] = {
         "id": card_id,
         "category": "general",
         "description": description,
     }
-    if stats is not None:
-        card["evolution_statistics"] = stats
+    if events is not None:
+        card["gain_events"] = events
     return card
 
 
@@ -81,40 +97,31 @@ class _StubEngine:
 
 class TestHarmEvictor:
     @pytest.mark.parametrize(
-        "stats",
+        "events",
         [
-            _HARMFUL_STATS,
-            _PROVEN_STATS,
-            _THIN_STATS,
-            {},
-            {"ALL": {}},
-            {
-                "best_ideas_snapshot": {
-                    "intro_events": 6,
-                    "posterior_a": 1.0,
-                    "posterior_b": 7.0,
-                }
-            },
+            _HARMFUL_EVENTS,
+            _PROVEN_EVENTS,
+            _THIN_EVENTS,
+            [],
             None,
         ],
     )
-    def test_should_evict_matches_reputation_predicate(self, stats):
+    def test_should_evict_matches_reputation_predicate(self, events):
         evictor = HarmEvictor()
-        card = normalize_memory_card(_idea("idea-x", "desc", stats))
-        expected = BetaBinomialReputation().is_confidently_harmful(
-            card.evolution_statistics
-        )
+        card = normalize_memory_card(_idea("idea-x", "desc", events))
+        rep = BetaBinomialReputation()
+        expected = rep.is_confidently_harmful(rep.card_stats(card, None))
         assert evictor.should_evict(card) is expected
 
     def test_reputation_is_injectable(self):
         lenient = HarmEvictor(reputation=BetaBinomialReputation(harm_min_events=99))
-        card = normalize_memory_card(_idea("idea-x", "d", _HARMFUL_STATS))
+        card = normalize_memory_card(_idea("idea-x", "d", _HARMFUL_EVENTS))
         assert lenient.should_evict(card) is False
 
     def test_sweep_returns_only_harmful_ids(self):
         bank = {
-            "idea-good": normalize_memory_card(_idea("idea-good", "g", _PROVEN_STATS)),
-            "idea-bad": normalize_memory_card(_idea("idea-bad", "b", _HARMFUL_STATS)),
+            "idea-good": normalize_memory_card(_idea("idea-good", "g", _PROVEN_EVENTS)),
+            "idea-bad": normalize_memory_card(_idea("idea-bad", "b", _HARMFUL_EVENTS)),
             "idea-cold": normalize_memory_card(_idea("idea-cold", "c")),
         }
         assert HarmEvictor().sweep(bank) == ["idea-bad"]
@@ -206,8 +213,8 @@ class TestMemoryWritePipelineEquivalence:
                 _idea("idea-1", "use gradient clipping"),
                 _idea("idea-1", "use gradient clipping with max-norm"),
                 _program("p1"),
-                _idea("idea-bad", "harmful newcomer", _HARMFUL_STATS),
-                _idea("idea-1", "went harmful", _HARMFUL_STATS),
+                _idea("idea-bad", "harmful newcomer", _HARMFUL_EVENTS),
+                _idea("idea-1", "went harmful", _HARMFUL_EVENTS),
             ],
         )
         _assert_twins(legacy, target)
@@ -311,7 +318,7 @@ class TestSaveCardDelegation:
         mem = make_test_memory(tmp_path)
         cid = mem.save_card(_idea("idea-1", "real ingest"))
         assert cid == "idea-1"
-        assert mem.save_card(_idea("idea-bad", "harmful", _HARMFUL_STATS)) == ""
+        assert mem.save_card(_idea("idea-bad", "harmful", _HARMFUL_EVENTS)) == ""
         stats = mem.get_card_write_stats()
         assert stats["processed"] == 2
         assert stats["added"] == 1
@@ -323,9 +330,9 @@ class TestWritePipelineSweep:
     def test_sweep_evicts_harmful_cards_from_store(self, tmp_path):
         mem = make_test_memory(tmp_path)
         pipeline = _pipeline(mem)
-        pipeline.ingest(_idea("idea-good", "keep me", _PROVEN_STATS))
+        pipeline.ingest(_idea("idea-good", "keep me", _PROVEN_EVENTS))
         pipeline.ingest(_idea("idea-cold", "no stats yet"))
-        mem.card_store.cards["idea-good"].evolution_statistics = _HARMFUL_STATS
+        mem.card_store.cards["idea-good"].gain_events = _HARMFUL_EVENTS
         assert pipeline.sweep() == ["idea-good"]
         assert "idea-good" not in mem.card_store.cards
         assert "idea-cold" in mem.card_store.cards
@@ -333,7 +340,7 @@ class TestWritePipelineSweep:
     def test_sweep_noop_on_healthy_bank(self, tmp_path):
         mem = make_test_memory(tmp_path)
         pipeline = _pipeline(mem)
-        pipeline.ingest(_idea("idea-good", "keep me", _PROVEN_STATS))
+        pipeline.ingest(_idea("idea-good", "keep me", _PROVEN_EVENTS))
         assert pipeline.sweep() == []
         assert "idea-good" in mem.card_store.cards
 

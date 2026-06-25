@@ -14,11 +14,11 @@ from typing import Any, Protocol
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from gigaevo.memory.context import ContextualGain
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     CardAlias,
     ConnectedIdea,
-    EvolutionStatistics,
     MemoryCard,
     MemoryCardExplanation,
     ProgramCard,
@@ -204,9 +204,9 @@ class RawCardRecord(BaseModel):
         default_factory=list,
         description="Idea references attached to a program card.",
     )
-    evolution_statistics: EvolutionStatistics = Field(
-        default_factory=EvolutionStatistics,
-        description="Whole-run (ALL) efficacy block plus the offline best-ideas snapshot.",
+    gain_events: list[ContextualGain] | None = Field(
+        default=None,
+        description="Use-attributed, base-relative gain events the card earned.",
     )
     explanation: RawExplanationRecord = Field(
         default_factory=RawExplanationRecord,
@@ -274,10 +274,10 @@ class RawCardRecord(BaseModel):
                     )
         return result
 
-    @field_validator("evolution_statistics", mode="before")
+    @field_validator("gain_events", mode="before")
     @classmethod
-    def coerce_evolution_statistics(cls, value: Any) -> Any:
-        return value or {}
+    def coerce_gain_events(cls, value: Any) -> Any:
+        return value if isinstance(value, list) else None
 
     @field_validator("explanation", mode="before")
     @classmethod
@@ -312,7 +312,7 @@ class RawCardRecord(BaseModel):
                 keywords=self.keywords,
                 strategy=self.strategy,
                 links=self.links,
-                evolution_statistics=self.evolution_statistics,
+                gain_events=self.gain_events,
             )
 
         return MemoryCard(
@@ -326,7 +326,7 @@ class RawCardRecord(BaseModel):
             programs=self.programs,
             aliases=self.aliases,
             keywords=self.keywords,
-            evolution_statistics=self.evolution_statistics,
+            gain_events=self.gain_events,
             explanation=MemoryCardExplanation(
                 explanations=self.explanation.explanations,
                 summary=self.explanation.summary,
@@ -459,7 +459,9 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         "explanation": explanation_text,
         "strategy": strategy,
         "keywords": dedupe_keep_order(list(card.keywords)),
-        "evolution_statistics": card.evolution_statistics.model_dump(),
+        "gain_events": (
+            [g.model_dump() for g in card.gain_events] if card.gain_events else None
+        ),
         "works_with": dedupe_keep_order(list(card.works_with)),
         "links": dedupe_keep_order(list(card.links)),
     }

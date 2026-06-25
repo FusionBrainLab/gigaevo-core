@@ -18,12 +18,10 @@ from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker, _run_write_pipeline
 
 
-def _make_log_files(tmp_path: Path) -> tuple[Path, Path]:
+def _make_banks_file(tmp_path: Path) -> Path:
     banks = tmp_path / "banks.json"
-    best = tmp_path / "best_ideas.json"
     banks.write_text(json.dumps([{"active_bank": []}]), encoding="utf-8")
-    best.write_text(json.dumps([{"best_ideas": []}]), encoding="utf-8")
-    return banks, best
+    return banks
 
 
 class _FakeMemory:
@@ -61,7 +59,7 @@ class TestRunWritePipelineForwardsOverrides:
     """``_run_write_pipeline`` must forward backend/checkpoint_dir to ``main``."""
 
     def test_forwards_backend_and_checkpoint_dir(self, tmp_path, monkeypatch):
-        banks, best = _make_log_files(tmp_path)
+        banks = _make_banks_file(tmp_path)
 
         captured: dict[str, object] = {}
 
@@ -78,7 +76,6 @@ class TestRunWritePipelineForwardsOverrides:
         _run_write_pipeline(
             enabled=True,
             banks_path=banks,
-            best_ideas_path=best,
             programs_path=None,
             backend=factory,
             checkpoint_dir=run_dir,
@@ -90,7 +87,7 @@ class TestRunWritePipelineForwardsOverrides:
         assert captured["best_programs_percent"] == 12.5
 
     def test_enabled_without_backend_raises(self, tmp_path, monkeypatch):
-        banks, best = _make_log_files(tmp_path)
+        banks = _make_banks_file(tmp_path)
 
         def fake_main(**kwargs):
             raise AssertionError("main must not be reached without a backend")
@@ -103,13 +100,12 @@ class TestRunWritePipelineForwardsOverrides:
             _run_write_pipeline(
                 enabled=True,
                 banks_path=banks,
-                best_ideas_path=best,
                 programs_path=None,
                 backend=None,
             )
 
     def test_disabled_skips_main(self, tmp_path, monkeypatch):
-        banks, best = _make_log_files(tmp_path)
+        banks = _make_banks_file(tmp_path)
         called = False
 
         def fake_main(**kwargs):
@@ -123,7 +119,6 @@ class TestRunWritePipelineForwardsOverrides:
         _run_write_pipeline(
             enabled=False,
             banks_path=banks,
-            best_ideas_path=best,
             programs_path=None,
             backend=None,
             checkpoint_dir=tmp_path / "ignored",
@@ -138,7 +133,7 @@ class TestMainBuildsBackendViaFactory:
     def test_injected_factory_builds_backend(self, tmp_path):
         from gigaevo.memory import write_pipeline as wp
 
-        banks, best = _make_log_files(tmp_path)
+        banks = _make_banks_file(tmp_path)
         fake = _FakeMemory()
         factory = MagicMock(spec=LocalMemoryBackendFactory)
         factory.build.return_value = fake
@@ -146,7 +141,6 @@ class TestMainBuildsBackendViaFactory:
         run_dir = tmp_path / "hydra_run" / "memory"
         snapshot = wp.main(
             banks_path=banks,
-            best_ideas_path=best,
             backend=factory,
             checkpoint_dir=run_dir,
         )
@@ -175,12 +169,11 @@ class TestMainBuildsBackendViaFactory:
     def test_write_stats_snapshot_written_next_to_banks(self, tmp_path):
         from gigaevo.memory import write_pipeline as wp
 
-        banks, best = _make_log_files(tmp_path)
+        banks = _make_banks_file(tmp_path)
         factory = MagicMock(spec=LocalMemoryBackendFactory)
         factory.build.return_value = _FakeMemory()
         snapshot = wp.main(
             banks_path=banks,
-            best_ideas_path=best,
             backend=factory,
             checkpoint_dir=tmp_path / "mem",
         )

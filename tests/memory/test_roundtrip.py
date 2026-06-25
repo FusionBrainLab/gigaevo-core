@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core import LLMCardSelector
 from gigaevo.memory.shared_memory.card_update_dedup import (
     merge_updated_card,
@@ -44,7 +45,11 @@ def _write_json(path, payload):
 
 
 _SEED = 20260604
-_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
+# A long run of positive gains -> confident, helpful Beta posterior.
+_PROVEN_GAIN_EVENTS = [
+    ContextualGain(context=DecisionContext(parent_metrics={"min_area": 0.5}), gain=0.01)
+    for _ in range(8)
+]
 
 
 def _make_idea_card(idea_id, description, task="Solve the task", **extra):
@@ -186,7 +191,7 @@ class TestMemoryFillAndSearch:
 
 
 class TestMemoryWritePipeline:
-    """Simulate the full write pipeline: banks.json + best_ideas → memory."""
+    """Simulate the full write pipeline: banks.json → memory."""
 
     def test_banks_to_memory_roundtrip(self, tmp_path):
         """Load from banks.json → save to memory → verify searchable."""
@@ -216,29 +221,8 @@ class TestMemoryWritePipeline:
             ],
         )
 
-        best_ideas = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas,
-            [
-                {
-                    "best_ideas": [
-                        {
-                            "idea_id": "idea-1",
-                            "quartile": "ALL",
-                            "description": "SA for refinement",
-                        },
-                        {
-                            "idea_id": "idea-2",
-                            "quartile": "ALL",
-                            "description": "Genetic crossover",
-                        },
-                    ],
-                }
-            ],
-        )
-
         # Load cards via the write pipeline
-        cards = load_memory_cards(banks, best_ideas)
+        cards = load_memory_cards(banks)
         assert len(cards) == 2
 
         # Save to memory backend
@@ -276,12 +260,6 @@ class TestMemoryWritePipeline:
             ],
         )
 
-        best_ideas = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas,
-            [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}],
-        )
-
         programs = tmp_path / "programs.json"
         _write_json(
             programs,
@@ -303,7 +281,6 @@ class TestMemoryWritePipeline:
 
         cards = load_memory_cards(
             banks,
-            best_ideas,
             programs_path=programs,
             best_programs_percent=100.0,
         )
@@ -365,7 +342,7 @@ class TestMemorySelectorIntegration:
                 "idea-1",
                 "Use simulated annealing for optimization",
                 keywords=["annealing", "optimization"],
-                evolution_statistics=_PROVEN_STATS,
+                gain_events=_PROVEN_GAIN_EVENTS,
             ),
             _make_idea_card(
                 "idea-2", "Apply crossover for diversity", keywords=["crossover"]
@@ -596,7 +573,7 @@ class TestSearchFallbackPaths:
         """merge_updated_card: _safe_string_list creates new list, so
         existing card's explanation.explanations is NOT mutated.
         However, the top-level dict IS shallow-copied, so other nested
-        dicts (usage, evolution_statistics) could be mutated."""
+        dicts (gain_events) could be mutated."""
         existing = {
             "id": "c1",
             "description": "original",

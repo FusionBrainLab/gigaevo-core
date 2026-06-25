@@ -5,14 +5,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.memory.context import DecisionContext
 from gigaevo.memory.core.auctioneer import AuctionBid, AuctionCandidate
-from gigaevo.memory.core.idea_stats import IdeaStats
-from gigaevo.memory.efficacy import EfficacyScorer
 from gigaevo.memory.shared_memory.card_dedup import DedupDecision
-from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     CardStatsBlock,
-    EvolutionStatistics,
 )
 
 
@@ -20,11 +16,13 @@ from gigaevo.memory.shared_memory.models import (
 class ReputationModel(Protocol):
     """Owns all per-card efficacy statistics derived from injection outcomes."""
 
-    def scorer(self) -> EfficacyScorer: ...
-
     def posterior(
         self, gains: Sequence[float], *, threshold: float = 0.0
     ) -> CardStatsBlock: ...
+
+    def card_stats(
+        self, card: AnyCard, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None: ...
 
     def card_posterior(
         self, card: AnyCard, context: DecisionContext | None = None
@@ -34,24 +32,7 @@ class ReputationModel(Protocol):
         self, card: AnyCard, context: DecisionContext | None = None
     ) -> float | None: ...
 
-    def is_confidently_harmful(
-        self, evolution_statistics: EvolutionStatistics | None
-    ) -> bool: ...
-
-    def compute_injection_posteriors(
-        self,
-        programs: Sequence[InjectionOutcome],
-        *,
-        higher_is_better: bool = True,
-    ) -> dict[str, CardStatsBlock]: ...
-
-
-@runtime_checkable
-class MemoryAdmitter(Protocol):
-    """Decides which tracked ideas enter the shared bank from the per-idea
-    origin-analysis rows (one ``IdeaStats`` per idea x quartile block)."""
-
-    def select(self, stats: Sequence[IdeaStats]) -> list[IdeaStats]: ...
+    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool: ...
 
 
 @runtime_checkable
@@ -130,9 +111,12 @@ class Budgeter(Protocol):
 
 @runtime_checkable
 class CardRenderer(Protocol):
-    """Renders one card into its mutator-facing text block."""
+    """Renders one card into its mutator-facing text block from its resolved
+    ``card_stats`` block (the same authority the auction bid on)."""
 
-    def render(self, card: AnyCard | None) -> str: ...
+    def render(
+        self, card: AnyCard | None, block: CardStatsBlock | None = None
+    ) -> str: ...
 
 
 @runtime_checkable

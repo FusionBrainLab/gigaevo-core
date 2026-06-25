@@ -7,15 +7,12 @@ import json
 
 import pytest
 
-from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.models import (
     CardAlias,
-    CardStatsBlock,
     ConnectedIdea,
     MemoryCard,
     ProgramCard,
-    Quartile,
 )
 from gigaevo.memory.write_pipeline import (
     CardTypeCounts,
@@ -26,9 +23,7 @@ from gigaevo.memory.write_pipeline import (
     build_program_cards_from_top_programs,
     classify_card_type,
     extract_latest_snapshot,
-    load_best_idea_bank_cards,
     load_memory_cards,
-    parse_best_ideas,
     parse_programs,
     top_percent_count,
 )
@@ -41,12 +36,6 @@ def _write_json(path, payload):
 def _make_banks(tmp_path, active_bank=None):
     path = tmp_path / "banks.json"
     _write_json(path, [{"active_bank": active_bank or []}])
-    return path
-
-
-def _make_best_ideas(tmp_path, best_ideas=None):
-    path = tmp_path / "best_ideas.json"
-    _write_json(path, [{"best_ideas": best_ideas or []}])
     return path
 
 
@@ -139,8 +128,7 @@ class TestCardType:
 class TestLoadMemoryCardsEdgeCases:
     def test_empty_active_bank(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
-        cards = load_memory_cards(banks, best)
+        cards = load_memory_cards(banks)
         assert cards == []
 
     def test_no_programs_path(self, tmp_path):
@@ -148,12 +136,8 @@ class TestLoadMemoryCardsEdgeCases:
             tmp_path,
             active_bank=[{"id": "i1", "description": "idea"}],
         )
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[{"idea_id": "i1", "quartile": "ALL"}],
-        )
-        cards = load_memory_cards(banks, best, programs_path=None)
-        # Should return ideas only, no program cards
+        cards = load_memory_cards(banks, programs_path=None)
+        # Whole active bank is seeded; no program cards without a programs path.
         assert len(cards) == 1
         assert cards[0].id == "i1"
 
@@ -162,50 +146,43 @@ class TestLoadMemoryCardsEdgeCases:
             tmp_path,
             active_bank=[{"id": "i1", "description": "idea"}],
         )
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[{"idea_id": "i1", "quartile": "ALL"}],
-        )
         programs = _make_programs(
             tmp_path,
             programs=[{"id": "p1", "fitness": 90.0, "code": "pass"}],
         )
         cards = load_memory_cards(
-            banks, best, programs_path=programs, best_programs_percent=0.0
+            banks, programs_path=programs, best_programs_percent=0.0
         )
         # Zero percent = no program cards
         program_cards = [c for c in cards if c.category == "program"]
         assert program_cards == []
 
-    def test_best_idea_missing_from_bank_is_skipped(self, tmp_path):
-        """best_ideas ID not present in banks.json must be skipped — no ghost cards."""
-        banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[
-                {"idea_id": "missing-1", "quartile": "ALL", "description": "desc"}
-            ],
-        )
-        cards = load_memory_cards(banks, best)
-        assert cards == []
-
-    def test_best_idea_present_in_bank_is_included(self, tmp_path):
-        """An idea that exists in both best_ideas and banks must be returned."""
+    def test_all_active_bank_ideas_are_seeded(self, tmp_path):
+        """The whole active bank seeds the store — there is no upstream best-ideas
+        filter. Every idea card present in the bank is loaded; the auction, not a
+        pre-filter, decides which ones are worth injecting."""
         banks = _make_banks(
             tmp_path,
-            active_bank=[{"id": "real-1", "description": "real idea"}],
+            active_bank=[
+                {"id": "i1", "description": "first"},
+                {"id": "i2", "description": "second"},
+                {"id": "i3", "description": "third"},
+            ],
         )
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[{"idea_id": "real-1", "quartile": "ALL"}],
-        )
-        cards = load_memory_cards(banks, best)
+        cards = load_memory_cards(banks)
+        assert {c.id for c in cards} == {"i1", "i2", "i3"}
+
+    def test_bank_cards_carry_no_gain_events_until_stamped(self, tmp_path):
+        """Raw bank cards arrive with no gain events — reputation stamps them
+        from the event store at read time, not the loader."""
+        banks = _make_banks(tmp_path, active_bank=[{"id": "i1", "description": "d"}])
+        cards = load_memory_cards(banks)
         assert len(cards) == 1
-        assert cards[0].id == "real-1"
+        assert isinstance(cards[0], MemoryCard)
+        assert cards[0].gain_events is None
 
     def test_programs_sorted_by_fitness(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -230,7 +207,7 @@ class TestLoadMemoryCardsEdgeCases:
             ],
         )
         cards = load_memory_cards(
-            banks, best, programs_path=programs, best_programs_percent=100.0
+            banks, programs_path=programs, best_programs_percent=100.0
         )
         program_cards = [c for c in cards if c.category == "program"]
         fitnesses = [c.fitness for c in program_cards]
@@ -251,7 +228,6 @@ class TestProgramSelectionDirection:
 
     def test_lower_is_better_picks_lowest_fitness(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -277,7 +253,6 @@ class TestProgramSelectionDirection:
         )
         cards = load_memory_cards(
             banks,
-            best,
             programs_path=programs,
             best_programs_percent=1.0,
             higher_is_better=False,
@@ -289,7 +264,6 @@ class TestProgramSelectionDirection:
 
     def test_lower_is_better_orders_by_ascending_fitness(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -304,7 +278,6 @@ class TestProgramSelectionDirection:
         )
         cards = load_memory_cards(
             banks,
-            best,
             programs_path=programs,
             best_programs_percent=100.0,
             higher_is_better=False,
@@ -315,7 +288,6 @@ class TestProgramSelectionDirection:
 
     def test_higher_is_better_default_picks_highest_fitness(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -335,7 +307,6 @@ class TestProgramSelectionDirection:
         )
         cards = load_memory_cards(
             banks,
-            best,
             programs_path=programs,
             best_programs_percent=50.0,
         )
@@ -345,7 +316,6 @@ class TestProgramSelectionDirection:
 
     def test_program_without_fitness_skipped(self, tmp_path):
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -359,7 +329,7 @@ class TestProgramSelectionDirection:
             ],
         )
         cards = load_memory_cards(
-            banks, best, programs_path=programs, best_programs_percent=100.0
+            banks, programs_path=programs, best_programs_percent=100.0
         )
         program_cards = [c for c in cards if c.category == "program"]
         assert len(program_cards) == 1
@@ -368,7 +338,6 @@ class TestProgramSelectionDirection:
     def test_invalid_program_skipped(self, tmp_path):
         """Programs with is_valid=0 must not be written to memory."""
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -389,7 +358,7 @@ class TestProgramSelectionDirection:
             ],
         )
         cards = load_memory_cards(
-            banks, best, programs_path=programs, best_programs_percent=100.0
+            banks, programs_path=programs, best_programs_percent=100.0
         )
         program_cards = [c for c in cards if c.category == "program"]
         assert len(program_cards) == 1
@@ -399,7 +368,6 @@ class TestProgramSelectionDirection:
         """Programs without is_valid field are accepted — ideas_tracker pre-filters invalids
         before writing programs.json, so absence of is_valid means already-valid."""
         banks = _make_banks(tmp_path, active_bank=[])
-        best = _make_best_ideas(tmp_path, best_ideas=[])
         programs = _make_programs(
             tmp_path,
             programs=[
@@ -413,7 +381,7 @@ class TestProgramSelectionDirection:
             ],
         )
         cards = load_memory_cards(
-            banks, best, programs_path=programs, best_programs_percent=100.0
+            banks, programs_path=programs, best_programs_percent=100.0
         )
         program_cards = [c for c in cards if c.category == "program"]
         assert len(program_cards) == 1
@@ -441,65 +409,26 @@ class TestProgramSelectionDirection:
                 }
             ],
         )
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[{"idea_id": "idea-1", "quartile": "ALL"}],
-        )
-        cards = load_memory_cards(banks, best)
+        cards = load_memory_cards(banks)
         assert len(cards) == 1
         assert cards[0].id == "idea-1"
         assert isinstance(cards[0].aliases[0], CardAlias)
         assert cards[0].aliases[0].key == "idea-1-update"
 
     def test_missing_banks_file_raises(self, tmp_path):
-        best = _make_best_ideas(tmp_path)
         with pytest.raises(FileNotFoundError):
-            load_memory_cards(tmp_path / "nonexistent.json", best)
+            load_memory_cards(tmp_path / "nonexistent.json")
 
     def test_invalid_json_format_raises(self, tmp_path):
         path = tmp_path / "banks.json"
         _write_json(path, {"no_active_bank": True})
-        best = _make_best_ideas(tmp_path)
         with pytest.raises(ValueError):
-            load_memory_cards(path, best)
+            load_memory_cards(path)
 
 
 # ===========================================================================
 # Typed snapshot rows
 # ===========================================================================
-
-
-class TestBestIdeasRows:
-    def test_parse_returns_typed_rows(self, tmp_path):
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[
-                {
-                    "idea_id": "i1",
-                    "quartile": Quartile.ALL,
-                    "description": "d",
-                    "IntroGain_best_median": 0.5,
-                }
-            ],
-        )
-        idea_ids, by_id = parse_best_ideas(best)
-        assert idea_ids == ["i1"]
-        row = by_id["i1"]
-        assert isinstance(row, IdeaStats)
-        assert row.description == "d"
-        assert row.IntroGain_best_median == 0.5
-
-    def test_duplicate_and_blank_ids_skipped(self, tmp_path):
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[
-                {"idea_id": "i1", "quartile": Quartile.ALL},
-                {"idea_id": "i1", "quartile": Quartile.ALL},
-                {"idea_id": " ", "quartile": Quartile.ALL},
-            ],
-        )
-        idea_ids, _ = parse_best_ideas(best)
-        assert idea_ids == ["i1"]
 
 
 class TestProgramRow:
@@ -556,49 +485,6 @@ class TestTypedCardBuilders:
             ConnectedIdea(idea_id="i1", description="idea desc")
         ]
         assert card.description == "idea desc"
-
-    def test_load_best_idea_bank_cards_returns_typed(self, tmp_path):
-        banks = _make_banks(tmp_path, active_bank=[{"id": "i1", "description": "d"}])
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[
-                {
-                    "idea_id": "i1",
-                    "quartile": Quartile.ALL,
-                    "IntroGain_best_median": 0.25,
-                }
-            ],
-        )
-        cards = load_best_idea_bank_cards(banks, best)
-        assert len(cards) == 1
-        assert isinstance(cards[0], MemoryCard)
-        snapshot = cards[0].evolution_statistics.best_ideas_snapshot
-        assert isinstance(snapshot, CardStatsBlock)
-        assert snapshot.IntroGain_best_median == 0.25
-
-    def test_best_idea_description_fills_missing_card_description(self, tmp_path):
-        banks = _make_banks(tmp_path, active_bank=[{"id": "i1"}])
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[
-                {"idea_id": "i1", "quartile": Quartile.ALL, "description": "from best"}
-            ],
-        )
-        cards = load_best_idea_bank_cards(banks, best)
-        assert cards[0].description == "from best"
-
-    def test_best_idea_description_does_not_overwrite(self, tmp_path):
-        banks = _make_banks(
-            tmp_path, active_bank=[{"id": "i1", "description": "original"}]
-        )
-        best = _make_best_ideas(
-            tmp_path,
-            best_ideas=[
-                {"idea_id": "i1", "quartile": Quartile.ALL, "description": "from best"}
-            ],
-        )
-        cards = load_best_idea_bank_cards(banks, best)
-        assert cards[0].description == "original"
 
 
 class TestWriteStats:

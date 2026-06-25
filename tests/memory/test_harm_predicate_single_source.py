@@ -1,6 +1,6 @@
 """Single-source harm predicate + threshold-free decision expressions.
 
-Every admission/eviction harm decision must resolve to the one
+Every eviction harm decision must resolve to the one
 ``BetaBinomialReputation.is_confidently_harmful``; a second concrete definition
 anywhere under ``gigaevo/memory`` is copy drift. Decision comparisons in the
 core gate/posterior modules must take thresholds from constructor fields —
@@ -14,7 +14,6 @@ import ast
 from pathlib import Path
 
 import gigaevo.memory
-from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 
@@ -24,7 +23,6 @@ _ALLOWED_PREDICATE_FILES = {
     _MEMORY_ROOT / "core" / "reputation.py",
 }
 _DECISION_MODULES = (
-    "core/admitter.py",
     "core/auctioneer.py",
     "core/budgeter.py",
     "core/evictor.py",
@@ -53,9 +51,9 @@ def test_is_confidently_harmful_defined_only_in_core_reputation_and_protocol():
     assert _MEMORY_ROOT / "core" / "reputation.py" in definitions
 
 
-def test_evictor_and_admitters_resolve_to_the_same_predicate_symbol():
+def test_evictor_resolves_to_the_same_predicate_symbol():
     canonical = BetaBinomialReputation.is_confidently_harmful
-    for site in (HarmEvictor(), SignBasedAdmitter(), PermissiveAdmitter()):
+    for site in (HarmEvictor(),):
         assert site.reputation.is_confidently_harmful.__func__ is canonical
 
 

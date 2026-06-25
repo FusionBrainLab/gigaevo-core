@@ -1,7 +1,7 @@
 """The one assembled memory subsystem.
 
 Hydra recursively builds the component leaves (reputation, dedup, backend, llm,
-retriever, selector, auction, budget) plus the ``_partial_`` admitter/evictor/
+retriever, selector, auction, budget) plus the ``_partial_`` evictor/
 provider/tracker under a single ``_target_: gigaevo.memory.MemorySystem`` node
 and passes them here as kwargs. This class is the *assembler*: it completes the
 partials with the ONE shared reputation, threads the ONE dedup config + the
@@ -34,7 +34,6 @@ class MemorySystem:
         selector: Any = None,
         auction: Any = None,
         budget: Any = None,
-        admitter: Any = None,
         evictor: Any = None,
         excluder: Any = None,
         provider: Any = None,
@@ -69,7 +68,6 @@ class MemorySystem:
             self.tracker = tracker(
                 backend=backend,
                 llm=llm,
-                admitter=admitter(reputation=reputation),
                 evictor=evictor(reputation=reputation),
                 deduplicator=dedup,
                 reputation=reputation,

@@ -7,7 +7,6 @@ contract pinned in tests/memory/test_core_efficacy.py. The renderer adds a
 ``mechanism:`` line and the budgeter enforces ``max_cards`` post-auction.
 """
 
-from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import (
     AuctionBid,
     AuctionCandidate,
@@ -37,7 +36,6 @@ from gigaevo.memory.core.protocols import (
     CardShortlister,
     Deduplicator,
     Evictor,
-    MemoryAdmitter,
     ReputationModel,
 )
 from gigaevo.memory.core.random_drop import RandomDropExcluder
@@ -68,7 +66,6 @@ __all__ = [
     "LLMCardSelector",
     "LLMDeduplicator",
     "LineageExcluder",
-    "MemoryAdmitter",
     "MEMORY_EVENT_SCHEMA_VERSION",
     "MemoryEventRecord",
     "MemoryReadPipeline",
@@ -76,10 +73,8 @@ __all__ = [
     "MemoryWritePipeline",
     "NullDeduplicator",
     "NullExcluder",
-    "PermissiveAdmitter",
     "RandomDropExcluder",
     "ReputationModel",
-    "SignBasedAdmitter",
     "EVThompsonAuctioneer",
     "ThompsonAuctioneer",
     "TopBidBudgeter",

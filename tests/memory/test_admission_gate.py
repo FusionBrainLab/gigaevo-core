@@ -9,16 +9,25 @@ before (the auction treats thin cards as near-cold).
 
 from __future__ import annotations
 
-from gigaevo.memory.efficacy import beta_binomial_posterior
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from tests.fakes.agentic_memory import make_test_memory
 
 
-def _harmful_stats() -> dict:
-    return {"ALL": beta_binomial_posterior([-0.01, -0.02, -0.03, -0.04])}
+def _events(gains: list[float]) -> list[ContextualGain]:
+    return [
+        ContextualGain(
+            context=DecisionContext(parent_metrics={"min_area": 0.5}), gain=g
+        )
+        for g in gains
+    ]
 
 
-def _healthy_stats() -> dict:
-    return {"ALL": beta_binomial_posterior([0.01, 0.02, 0.03, 0.04])}
+def _harmful_events() -> list[ContextualGain]:
+    return _events([-0.01, -0.02, -0.03, -0.04])
+
+
+def _healthy_events() -> list[ContextualGain]:
+    return _events([0.01, 0.02, 0.03, 0.04])
 
 
 class TestAdmissionGate:
@@ -29,7 +38,7 @@ class TestAdmissionGate:
             {
                 "id": "bad-1",
                 "description": "harmful lever",
-                "evolution_statistics": _harmful_stats(),
+                "gain_events": _harmful_events(),
             }
         )
         # rejected cards return no id — a final_id must reference a card
@@ -44,7 +53,7 @@ class TestAdmissionGate:
             {
                 "id": "good-1",
                 "description": "useful lever",
-                "evolution_statistics": _healthy_stats(),
+                "gain_events": _healthy_events(),
             }
         )
         assert "good-1" in mem.card_store.cards
@@ -55,9 +64,7 @@ class TestAdmissionGate:
             {
                 "id": "thin-1",
                 "description": "unproven lever",
-                "evolution_statistics": {
-                    "ALL": beta_binomial_posterior([-0.01, -0.02])
-                },
+                "gain_events": _events([-0.01, -0.02]),
             }
         )
         assert "thin-1" in mem.card_store.cards
@@ -73,7 +80,7 @@ class TestAdmissionGate:
             {
                 "id": "idea-1",
                 "description": "lever",
-                "evolution_statistics": _healthy_stats(),
+                "gain_events": _healthy_events(),
             }
         )
         assert "idea-1" in mem.card_store.cards
@@ -81,7 +88,7 @@ class TestAdmissionGate:
             {
                 "id": "idea-1",
                 "description": "lever",
-                "evolution_statistics": _harmful_stats(),
+                "gain_events": _harmful_events(),
             }
         )
         assert "idea-1" not in mem.card_store.cards
@@ -96,7 +103,7 @@ class TestAdmissionGate:
                 "category": "program",
                 "description": "exemplar",
                 "fitness": 0.5,
-                "evolution_statistics": _harmful_stats(),
+                "gain_events": _harmful_events(),
             }
         )
         assert "program-abc" not in mem.card_store.cards

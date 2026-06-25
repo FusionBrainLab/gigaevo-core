@@ -1,5 +1,5 @@
 # Write-side tracker (engine post-run hook + live-refresh). MemorySystem injects
-# backend/llm/admitter/evictor/deduplicator/reputation (the shared instances)
+# backend/llm/evictor/deduplicator/reputation (the shared instances)
 # when it completes this partial; only the scalar knobs live here.
 _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
 _partial_: true

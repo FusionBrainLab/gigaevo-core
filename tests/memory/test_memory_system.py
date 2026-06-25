@@ -1,7 +1,7 @@
 """Unit tests for the one assembled MemorySystem node.
 
 These pin the shared-singleton invariants the old ${ref:memory.*} web faked:
-ONE reputation reaches provider + admitter + evictor; ONE backend (model_copy'd
+ONE reputation reaches provider + evictor; ONE backend (model_copy'd
 once with the shared llm + the single dedup config) reaches provider + tracker;
 the two enable flags select real components vs Null variants.
 """
@@ -17,7 +17,6 @@ import pytest
 
 from gigaevo.evolution.engine.hooks import NullPostRunHook
 from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
-from gigaevo.memory.core.admitter import SignBasedAdmitter
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.provider import NullMemoryProvider
@@ -63,7 +62,6 @@ def _full(tmp_path, **over):
         selector=object(),
         auction=object(),
         budget=object(),
-        admitter=functools.partial(SignBasedAdmitter),
         evictor=functools.partial(HarmEvictor),
         provider=provider,
         tracker=tracker,
@@ -76,7 +74,6 @@ def test_full_shares_one_reputation(tmp_path):
     _sys, seen, rep, _ = _full(tmp_path)
     assert seen["provider"]["reputation"] is rep
     assert seen["tracker"]["reputation"] is rep
-    assert seen["tracker"]["admitter"].reputation is rep
     assert seen["tracker"]["evictor"].reputation is rep
 
 
@@ -169,9 +166,8 @@ def test_compose_full_shares_singletons(_llm_env, tmp_path):
 
     sys = instantiate(_compose("memory=full", f"checkpoint_dir={tmp_path}").memory)
     assert isinstance(sys.provider, SelectorMemoryProvider)
-    # ONE reputation reaches provider + the IdeaTracker itself + admitter + evictor
+    # ONE reputation reaches provider + the IdeaTracker itself + evictor
     assert sys.provider._reputation is sys.tracker._reputation
-    assert sys.provider._reputation is sys.tracker._log._admitter.reputation
     assert sys.provider._reputation is sys.tracker._evictor.reputation
     # ONE backend (model_copy'd once, carrying the shared llm) reaches both sides
     assert sys.tracker._backend is sys.provider._backend_factory

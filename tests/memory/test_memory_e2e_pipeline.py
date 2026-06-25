@@ -1,9 +1,8 @@
 """End-to-end pipeline test: ideas_tracker → normalize_memory_card → load_memory_cards.
 
 Covers the typed integration boundary between the tracker's serialized cards
-and the write pipeline: alias version history validates into CardAlias,
-quartile stats blocks into typed models, and load_memory_cards preserves
-the full card metadata.
+and the write pipeline: alias version history validates into CardAlias, and
+load_memory_cards preserves the full card metadata.
 """
 
 import json
@@ -65,9 +64,6 @@ def make_ideas_tracker_card(
         "programs": ["p1", "p2"],
         "aliases": aliases,  # dict version history, NOT string list
         "keywords": ["retrieval", "chunking"],
-        "evolution_statistics": {
-            "ALL": {"intro_events": 3, "IntroGain_best_median": 0.01}
-        },
         "explanation": {
             "explanations": ["Found effective chunking strategy"],
             "summary": "Improved retrieval via adaptive chunking",
@@ -99,16 +95,6 @@ class TestNormalizeWithIdeasTrackerOutput:
         assert isinstance(result.aliases[0], CardAlias)
         assert result.aliases[0].key == "exp1-prog1"
         assert result.aliases[1].programs == ["p1", "p2"]
-
-    def test_preserve_evolution_statistics(self):
-        """Quartile blocks in evolution_statistics validate into typed models."""
-        card = make_ideas_tracker_card(
-            "idea-2", "Pooling strategy", has_version_history=False
-        )
-        result = normalize_memory_card(card)
-
-        assert result.evolution_statistics.ALL.intro_events == 3
-        assert result.evolution_statistics.ALL.IntroGain_best_median == 0.01
 
     def test_preserve_explanation_structure(self):
         """explanation dict with explanations list and summary preserved."""
@@ -166,21 +152,8 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
             ],
         )
 
-        best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas_path,
-            [
-                {
-                    "best_ideas": [
-                        {"idea_id": "idea-1", "quartile": "ALL"},
-                        {"idea_id": "idea-2", "quartile": "ALL"},
-                    ]
-                }
-            ],
-        )
-
         # Load and validate
-        cards = load_memory_cards(banks_path, best_ideas_path)
+        cards = load_memory_cards(banks_path)
         assert len(cards) == 2
 
         card1 = cards[0]
@@ -189,7 +162,6 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         assert len(card1.aliases) == 2
         assert isinstance(card1.aliases[0], CardAlias)
         assert card1.description == "Chunking"
-        assert card1.evolution_statistics.ALL.intro_events == 3
 
         card2 = cards[1]
         assert isinstance(card2, MemoryCard)
@@ -210,12 +182,6 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
                     ]
                 }
             ],
-        )
-
-        best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas_path,
-            [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}],
         )
 
         programs_path = tmp_path / "programs.json"
@@ -239,7 +205,6 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         # Load with programs
         cards = load_memory_cards(
             banks_path,
-            best_ideas_path,
             programs_path=programs_path,
             best_programs_percent=100.0,
         )
@@ -256,70 +221,13 @@ class TestLoadMemoryCardsWithIdeasTrackerOutput:
         assert prog.program_id == "prog-1"
         assert prog.fitness == 85.5
 
-    def test_e2e_missing_idea_is_skipped(self, tmp_path):
-        """If best_ideas references an idea absent from banks, skip it — no ghost cards."""
+    def test_e2e_empty_active_bank_yields_no_cards(self, tmp_path):
+        """An empty active bank seeds nothing — no ghost cards."""
         banks_path = tmp_path / "banks.json"
         _write_json(banks_path, [{"active_bank": []}])
 
-        best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas_path,
-            [
-                {
-                    "best_ideas": [
-                        {
-                            "idea_id": "missing-idea",
-                            "quartile": "ALL",
-                            "description": "Reconstructed from best_ideas",
-                        }
-                    ]
-                }
-            ],
-        )
-
-        cards = load_memory_cards(banks_path, best_ideas_path)
+        cards = load_memory_cards(banks_path)
         assert cards == []
-
-    def test_e2e_decision_stats_blocks_survive(self, tmp_path):
-        """Decision-vocabulary stats blocks load back into typed models."""
-        complex_card = make_ideas_tracker_card(
-            "idea-nested", "Complex", has_version_history=True
-        )
-        complex_card["evolution_statistics"] = {
-            "ALL": {
-                "intro_events": 8,
-                "IntroGain_best_median": 0.02,
-                "posterior_a": 4.0,
-                "posterior_b": 2.0,
-            },
-        }
-        banks_path = tmp_path / "banks.json"
-        _write_json(banks_path, [{"active_bank": [complex_card]}])
-
-        best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas_path,
-            [
-                {
-                    "best_ideas": [
-                        {
-                            "idea_id": "idea-nested",
-                            "quartile": "ALL",
-                            "IntroGain_best_median": 0.02,
-                        }
-                    ]
-                }
-            ],
-        )
-
-        cards = load_memory_cards(banks_path, best_ideas_path)
-        card = cards[0]
-
-        assert card.evolution_statistics.ALL.intro_events == 8
-        assert card.evolution_statistics.ALL.posterior_a == 4.0
-        assert card.evolution_statistics.best_ideas_snapshot.IntroGain_best_median == (
-            0.02
-        )
 
 
 # ===========================================================================
@@ -348,20 +256,7 @@ class TestMainLoopSimulation:
                 }
             ],
         )
-        best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas_path,
-            [
-                {
-                    "best_ideas": [
-                        {"idea_id": "idea-1", "quartile": "ALL"},
-                        {"idea_id": "idea-2", "quartile": "ALL"},
-                    ]
-                }
-            ],
-        )
-
-        cards = load_memory_cards(banks_path, best_ideas_path)
+        cards = load_memory_cards(banks_path)
         for card in cards:
             card_type = classify_card_type(card)
             assert card_type == "ideas"
@@ -381,11 +276,6 @@ class TestMainLoopSimulation:
                     ]
                 }
             ],
-        )
-        best_ideas_path = tmp_path / "best_ideas.json"
-        _write_json(
-            best_ideas_path,
-            [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}],
         )
         programs_path = tmp_path / "programs.json"
         _write_json(
@@ -407,7 +297,6 @@ class TestMainLoopSimulation:
 
         cards = load_memory_cards(
             banks_path,
-            best_ideas_path,
             programs_path=programs_path,
             best_programs_percent=100.0,
         )
@@ -449,14 +338,10 @@ def test_write_pipeline_main_full_loop(tmp_path):
             ]
         }
     ]
-    best_ideas_data = [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}]
-
     banks_file = tmp_path / "banks.json"
-    best_ideas_file = tmp_path / "best_ideas.json"
     memory_dir = tmp_path / "memory"
 
     banks_file.write_text(json.dumps(banks_data))
-    best_ideas_file.write_text(json.dumps(best_ideas_data))
     memory_dir.mkdir()
 
     saved_cards = []
@@ -501,7 +386,6 @@ def test_write_pipeline_main_full_loop(tmp_path):
 
     result = main(
         banks_path=banks_file,
-        best_ideas_path=best_ideas_file,
         backend=factory,
         checkpoint_dir=memory_dir,
     )
@@ -543,13 +427,9 @@ def test_write_pipeline_main_swallows_llm_error(tmp_path):
             ]
         }
     ]
-    best_ideas_data = [{"best_ideas": [{"idea_id": "idea-1", "quartile": "ALL"}]}]
-
     banks_file = tmp_path / "banks.json"
-    best_ideas_file = tmp_path / "best_ideas.json"
     memory_dir = tmp_path / "memory"
     banks_file.write_text(json.dumps(banks_data))
-    best_ideas_file.write_text(json.dumps(best_ideas_data))
     memory_dir.mkdir()
 
     closed = []
@@ -584,7 +464,6 @@ def test_write_pipeline_main_swallows_llm_error(tmp_path):
 
     result = main(
         banks_path=banks_file,
-        best_ideas_path=best_ideas_file,
         backend=factory,
         checkpoint_dir=memory_dir,
     )

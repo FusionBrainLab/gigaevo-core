@@ -6,10 +6,9 @@ Pin down validation behavior: required fields, defaults, extra="forbid".
 from pydantic import ValidationError
 import pytest
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.shared_memory.models import (
     CardAlias,
-    CardStatsBlock,
-    EvolutionStatistics,
     LocalMemorySnapshot,
     MemoryCard,
     MemoryCardExplanation,
@@ -58,7 +57,7 @@ class TestMemoryCard:
         assert c.programs == []
         assert c.aliases == []
         assert c.keywords == []
-        assert c.evolution_statistics == EvolutionStatistics()
+        assert c.gain_events is None
         assert c.explanation.explanations == []
         assert c.explanation.summary == ""
         assert c.works_with == []
@@ -76,13 +75,19 @@ class TestMemoryCard:
             programs=["p1"],
             aliases=[CardAlias(key="a1", description="superseded wording")],
             keywords=["k1"],
-            evolution_statistics={"ALL": {"intro_events": 1}},
+            gain_events=[
+                ContextualGain(
+                    context=DecisionContext(parent_metrics={"min_area": 0.5}),
+                    gain=0.01,
+                )
+            ],
             explanation=MemoryCardExplanation(explanations=["e"], summary="s"),
             works_with=["w1"],
             links=["l1"],
         )
         assert c.strategy == "exploration"
         assert c.last_generation == 5
+        assert len(c.gain_events) == 1
 
     def test_missing_id_raises(self):
         with pytest.raises(ValidationError):
@@ -111,12 +116,6 @@ class TestMemoryCard:
         c2 = MemoryCard(id="b", description="d")
         c1.programs.append("p1")
         assert c2.programs == []
-
-    def test_statistics_are_independent_instances(self):
-        c1 = MemoryCard(id="a", description="d")
-        c2 = MemoryCard(id="b", description="d")
-        c1.evolution_statistics.ALL = CardStatsBlock(intro_events=1)
-        assert c2.evolution_statistics == EvolutionStatistics()
 
 
 # ===========================================================================

@@ -182,7 +182,7 @@ Cards are represented locally in a normalized schema (`shared_memory/models.py`)
 - `id`, `category`, `description`, `task_description`, `task_description_summary`, `strategy`
 - `keywords`, `links`, `works_with`
 - `explanation.summary`
-- optional maps: `evolution_statistics`
+- optional: `gain_events` (use-attributed, base-relative gain events; reputation computes efficacy stats from these at read time)
 
 ### API write mapping
 

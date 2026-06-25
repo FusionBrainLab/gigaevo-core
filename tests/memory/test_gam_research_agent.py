@@ -69,14 +69,12 @@ class _FakePage:
                 "explanation": {"summary": f"why {card_id}"},
                 "works_with": ["ally-card"],
                 "links": ["related-card"],
-                "evolution_statistics": {
-                    "ALL": {
-                        "intro_events": 4,
-                        "efficacy_confident": True,
-                        "IntroGain_best_adj_median": 0.25,
-                        "DownsideRate_best": 0.1,
+                "gain_events": [
+                    {
+                        "context": {"parent_metrics": {"min_area": 0.5}},
+                        "gain": 0.25,
                     }
-                },
+                ],
             },
         }
 
@@ -324,10 +322,14 @@ def test_decision_prompt_includes_compact_candidate_context():
     assert "kw-c1" in prompt
     assert '"works_with": [' in prompt
     assert '"links": [' in prompt
-    assert (
-        '"efficacy": "introduced in 4 children; median improvement vs cohort +0.2500; downside 10% (confident)"'
-        in prompt
-    )
+    # Memory cards no longer carry an efficacy line in the GAM candidate context:
+    # the per-card endorsement is resolved at read time from gain_events, and the
+    # cohort adjustment is gone. The rendered candidate JSON exposes no efficacy.
+    ideas_json = prompt.split("RETRIEVED_IDEAS:\n", 1)[1].split(
+        "\n\nDecision rules:", 1
+    )[0]
+    assert '"efficacy"' not in ideas_json
+    assert "vs cohort" not in prompt
 
 
 # --- canonical telemetry ------------------------------------------------------

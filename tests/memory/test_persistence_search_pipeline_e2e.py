@@ -226,29 +226,12 @@ class TestFullPipelineE2E:
             encoding="utf-8",
         )
 
-    def _write_best_ideas(self, path: Path, idea_ids: list[str]) -> None:
-        """Write best_ideas.json referencing the given idea IDs."""
-        path.write_text(
-            json.dumps(
-                [
-                    {
-                        "best_ideas": [
-                            {"idea_id": iid, "quartile": "ALL"} for iid in idea_ids
-                        ],
-                        "timestamp": "2026-04-09 12:00:00",
-                    }
-                ],
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-
     def test_write_pipeline_cards_are_stored_and_retrievable(
         self, tmp_path: Path
     ) -> None:
         """Full loop: write_pipeline writes ideas to memory, new AmemGamMemory reads them.
 
-        Phase 1 (build memory): simulate ideas_tracker output as banks.json + best_ideas.json,
+        Phase 1 (build memory): simulate ideas_tracker output as banks.json,
           run write_pipeline.main() to ingest into AmemGamMemory at cfg.memory_dir.
         Phase 2 (launch with memory): open a fresh AmemGamMemory at the same path,
           verify cards are present and searchable.
@@ -274,15 +257,10 @@ class TestFullPipelineE2E:
         ]
 
         banks_path = tmp_path / "banks.json"
-        best_ideas_path = tmp_path / "best_ideas.json"
         self._write_banks(banks_path, ideas)
-        self._write_best_ideas(
-            best_ideas_path, ["pipeline-idea-001", "pipeline-idea-002"]
-        )
 
         stats = pipeline_main(
             banks_path=banks_path,
-            best_ideas_path=best_ideas_path,
             backend=LocalMemoryBackendFactory(),
             checkpoint_dir=tmp_path / "pipeline_mem",
         )
@@ -312,32 +290,28 @@ class TestFullPipelineE2E:
         assert isinstance(search_result, str)
         assert len(search_result) > 0
 
-    def test_write_pipeline_partial_best_ideas_filter(self, tmp_path: Path) -> None:
-        """best_ideas.json acts as a filter — only referenced ideas are written."""
+    def test_write_pipeline_seeds_every_active_bank_idea(self, tmp_path: Path) -> None:
+        """The whole active bank is seeded — the auction, not an upstream filter, decides."""
         from gigaevo.memory.write_pipeline import main as pipeline_main
 
         ideas = [
             {
-                "id": "filtered-001",
-                "description": "included idea: gradient clipping technique",
+                "id": "seeded-001",
+                "description": "gradient clipping technique",
                 "category": "general",
             },
             {
-                "id": "filtered-002",
-                "description": "excluded idea: unrelated algorithm",
+                "id": "seeded-002",
+                "description": "an unrelated algorithm",
                 "category": "general",
             },
         ]
 
         banks_path = tmp_path / "banks.json"
-        best_ideas_path = tmp_path / "best_ideas.json"
         self._write_banks(banks_path, ideas)
-        # Only reference idea-001 in best_ideas
-        self._write_best_ideas(best_ideas_path, ["filtered-001"])
 
         pipeline_main(
             banks_path=banks_path,
-            best_ideas_path=best_ideas_path,
             backend=LocalMemoryBackendFactory(),
             checkpoint_dir=tmp_path / "pipeline_mem",
         )
@@ -351,9 +325,9 @@ class TestFullPipelineE2E:
             )
         )
 
-        # filtered-001 is in best_ideas → must be stored
-        assert mem.get_card("filtered-001") is not None, "Best idea must be written"
-        # filtered-002 is NOT in best_ideas → should be absent
-        assert mem.get_card("filtered-002") is None, (
-            "Non-best idea must be filtered out"
+        assert mem.get_card("seeded-001") is not None, (
+            "Every active-bank idea is seeded"
+        )
+        assert mem.get_card("seeded-002") is not None, (
+            "Every active-bank idea is seeded"
         )

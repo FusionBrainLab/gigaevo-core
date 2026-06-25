@@ -65,7 +65,6 @@ Retrieved pages represent memory cards with this structure:
     "task_description": "<string>",
     "strategy": "<string>",
     "keywords": [<string>, ...],
-    "evolution_statistics": {{ ... }},
     "explanation": {{
       "explanations": [<string>, ...],
       "summary": "<string>"

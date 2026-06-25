@@ -7,24 +7,22 @@ from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import beta
 
 from gigaevo.memory.context import DecisionContext
-from gigaevo.memory.efficacy import EfficacyScorer, beta_binomial_posterior
-from gigaevo.memory.shared_memory.injection_posterior import (
-    InjectionOutcome,
-    compute_injection_posterior,
+from gigaevo.memory.efficacy import (
+    beta_binomial_posterior,
+    block_from_events,
 )
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     CardStatsBlock,
-    EvolutionStatistics,
 )
 
 
 class BetaBinomialReputation(BaseModel):
     """Downside Beta-Binomial reputation over per-card injection gains.
 
-    Configurable façade over ``gigaevo.memory.efficacy.EfficacyScorer`` — one
-    implementation, bound here to injectable thresholds. Also the single home
-    of the ``is_confidently_harmful`` predicate (pinned by
+    Configurable façade over ``gigaevo.memory.efficacy.block_from_events`` —
+    one implementation, bound here to injectable thresholds. Also the single
+    home of the ``is_confidently_harmful`` predicate (pinned by
     tests/memory/test_harm_predicate_single_source.py).
     """
 
@@ -50,35 +48,14 @@ class BetaBinomialReputation(BaseModel):
         default=0.5,
         description="Confident iff the pessimistic P(help) read clears this.",
     )
-    baseline_neighbors: int = Field(
-        default=15,
-        description="Parent-fitness neighbors forming the local counterfactual cohort.",
-    )
     noise_band_k: float = Field(
         default=1.0,
         description="Robust noise-scale multiplier; gains within the band are not harm.",
-    )
-    noise_floor_rel: float = Field(
-        default=1e-4,
-        description="Minimum dead-band as a fraction of the cohort's parent-fitness "
-        "scale; keeps a zero-MAD plateau from flagging float jitter as harm.",
     )
     cold_prior: tuple[float, float] = Field(
         default=(1.0, 1.0),
         description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
     )
-
-    def scorer(self) -> EfficacyScorer:
-        """The gain-scoring policy under this reputation's thresholds — the one
-        parameterization both the card-side injection posterior and the
-        idea-side origin aggregation must use."""
-        return EfficacyScorer(
-            baseline_neighbors=self.baseline_neighbors,
-            noise_band_k=self.noise_band_k,
-            noise_floor_rel=self.noise_floor_rel,
-            confident_quantile=self.confident_quantile,
-            confident_threshold=self.confident_threshold,
-        )
 
     def posterior(
         self, gains: Sequence[float], *, threshold: float = 0.0
@@ -90,13 +67,27 @@ class BetaBinomialReputation(BaseModel):
             confident_threshold=self.confident_threshold,
         )
 
+    def card_stats(
+        self, card: AnyCard, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        """The single statistics block every per-card efficacy view resolves
+        through: the global, unadjusted block computed from the card's gain
+        events (``None`` when the card has none). ``context`` is the additive
+        read-seam hook contextual reputations condition on; ignored here."""
+        return block_from_events(
+            card.gain_events or [],
+            noise_band_k=self.noise_band_k,
+            confident_quantile=self.confident_quantile,
+            confident_threshold=self.confident_threshold,
+        )
+
     def card_posterior(
         self, card: AnyCard, context: DecisionContext | None = None
     ) -> tuple[float, float]:
-        """(alpha, beta) of the card's stamped ``ALL`` downside posterior;
-        ``cold_prior`` when the card carries no posterior. ``context`` is the
-        additive read-seam hook contextual reputations condition on; ignored here."""
-        block = card.evolution_statistics.ALL
+        """(alpha, beta) of the card's resolved downside posterior; ``cold_prior``
+        when the card carries no posterior. Resolved through ``card_stats``, so
+        contextual reputations condition it on ``context``."""
+        block = self.card_stats(card, context)
         if block is None or block.posterior_a is None or block.posterior_b is None:
             return self.cold_prior
         a = float(block.posterior_a)
@@ -110,25 +101,20 @@ class BetaBinomialReputation(BaseModel):
     def card_magnitude(
         self, card: AnyCard, context: DecisionContext | None = None
     ) -> float | None:
-        """The card's stamped expected gain (``IntroGain_best_adj_median`` of the
-        ``ALL`` block) — the EV auction's magnitude. ``None`` when the card never
-        stamped one (cold), so the auction falls back to its optimistic prior.
-        ``context`` is the additive read-seam hook; ignored here."""
-        block = card.evolution_statistics.ALL
-        if block is None or block.IntroGain_best_adj_median is None:
+        """The card's resolved expected gain (``IntroGain_best_median``) — the EV
+        auction's magnitude. ``None`` when the card has no events (cold), so the
+        auction falls back to its optimistic prior. Resolved through
+        ``card_stats``, so contextual reputations condition it on ``context``."""
+        block = self.card_stats(card, context)
+        if block is None or block.IntroGain_best_median is None:
             return None
-        return float(block.IntroGain_best_adj_median)
+        return float(block.IntroGain_best_median)
 
-    def is_confidently_harmful(
-        self, evolution_statistics: EvolutionStatistics | None
-    ) -> bool:
-        """True iff the ALL-block posterior excludes the card as harmful: at least
-        ``harm_min_events`` intro events and even the optimistic ``harm_quantile``
-        read of P(not harmful) stays below ``harm_threshold``. Missing or thin
-        statistics are never harmful."""
-        if evolution_statistics is None:
-            return False
-        block = evolution_statistics.ALL
+    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool:
+        """True iff the resolved stats block excludes the card as harmful: at
+        least ``harm_min_events`` intro events and even the optimistic
+        ``harm_quantile`` read of P(not harmful) stays below ``harm_threshold``.
+        A missing block or one without posterior parameters is never harmful."""
         if block is None or block.posterior_a is None or block.posterior_b is None:
             return False
         a = float(block.posterior_a)
@@ -141,17 +127,3 @@ class BetaBinomialReputation(BaseModel):
         ):
             return False
         return float(beta.ppf(self.harm_quantile, a, b)) < self.harm_threshold
-
-    def compute_injection_posteriors(
-        self,
-        programs: Sequence[InjectionOutcome],
-        *,
-        higher_is_better: bool = True,
-    ) -> dict[str, CardStatsBlock]:
-        """Per-card downside posteriors over injection outcomes, as typed blocks
-        ready to stamp into ``evolution_statistics.ALL``."""
-        return compute_injection_posterior(
-            programs,
-            higher_is_better=higher_is_better,
-            scorer=self.scorer(),
-        )

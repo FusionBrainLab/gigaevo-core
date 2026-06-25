@@ -71,6 +71,10 @@ def _as_list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _as_dict(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _card_id(card: Mapping[str, Any]) -> str:
     value = card.get("id", "")
     return str(value) if value is not None else ""
@@ -409,9 +413,12 @@ def summarize_memory_events(
         "posterior_bridge": {
             "events": len(bridge_events),
             "last_card_count": last_bridge.get("card_count"),
-            "last_scorable_child_count": last_bridge.get("scorable_child_count"),
-            "last_confident_count": last_bridge.get("confident_count"),
-            "last_epsilon": last_bridge.get("epsilon"),
+            "last_event_count": sum(
+                _safe_int(count) or 0
+                for count in _as_dict(
+                    last_bridge.get("event_count_by_card_id")
+                ).values()
+            ),
         },
     }
 
@@ -624,9 +631,7 @@ def format_report(summary: Mapping[str, Any]) -> str:
             "Injection Posterior Bridge",
             f"  events: {bridge['events']}",
             f"  last card count: {bridge['last_card_count']}",
-            f"  last scorable children: {bridge['last_scorable_child_count']}",
-            f"  last confident count: {bridge['last_confident_count']}",
-            f"  last epsilon: {bridge['last_epsilon']}",
+            f"  last event count: {bridge['last_event_count']}",
         ]
     )
     return "\n".join(lines) + "\n"

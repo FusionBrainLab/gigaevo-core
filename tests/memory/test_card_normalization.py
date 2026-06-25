@@ -6,6 +6,7 @@ Pin down the exact normalization behavior so refactoring can be validated.
 from pydantic import ValidationError
 import pytest
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.shared_memory.card_conversion import (
     RawCardRecord,
     normalize_memory_card,
@@ -172,21 +173,20 @@ class TestNormalizeGeneralCard:
         assert result.explanation.explanations == ["a", "b"]
         assert result.explanation.summary == "sum"
 
-    def test_evolution_statistics_non_dict_rejected(self):
-        with pytest.raises(ValidationError):
-            normalize_memory_card({"evolution_statistics": "bad"})
+    def test_gain_events_non_list_becomes_none(self):
+        result = normalize_memory_card({"gain_events": "bad"})
+        assert result.gain_events is None
 
-    def test_evolution_statistics_dict_validated_into_typed_blocks(self):
-        stats = {"ALL": {"intro_events": 5, "efficacy_confident": True}}
-        result = normalize_memory_card({"evolution_statistics": stats})
-        assert result.evolution_statistics.model_dump() == stats
-        assert result.evolution_statistics.ALL.intro_events == 5
+    def test_gain_events_list_validated_into_typed_events(self):
+        events = [{"context": {"parent_metrics": {"min_area": 0.5}}, "gain": 0.01}]
+        result = normalize_memory_card({"gain_events": events})
+        assert len(result.gain_events) == 1
+        assert isinstance(result.gain_events[0], ContextualGain)
+        assert result.gain_events[0].gain == 0.01
 
-    def test_evolution_statistics_undeclared_keys_rejected(self):
+    def test_gain_events_malformed_event_rejected(self):
         with pytest.raises(ValidationError):
-            normalize_memory_card({"evolution_statistics": {"gen": 5}})
-        with pytest.raises(ValidationError):
-            normalize_memory_card({"evolution_statistics": {"ALL": {"improved": 1}}})
+            normalize_memory_card({"gain_events": [{"gain": 0.01}]})
 
     def test_lists_coerced_via_to_list(self):
         result = normalize_memory_card({"programs": "single"})
@@ -224,7 +224,9 @@ class TestNormalizeGeneralCard:
             "programs": ["p1", "p2"],
             "aliases": [{"key": "test-1-update", "description": "SA (initial)"}],
             "keywords": ["annealing", "local-search"],
-            "evolution_statistics": {"ALL": {"intro_events": 3}},
+            "gain_events": [
+                {"context": {"parent_metrics": {"min_area": 0.5}}, "gain": 0.01}
+            ],
             "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
             "works_with": ["idea-2"],
             "links": ["idea-3"],
@@ -383,10 +385,19 @@ class TestNormalizeEdgeCases:
         assert result.aliases[0].key == "idea-1-update"
         assert result.aliases[1].programs == ["p3"]
 
-    def test_stats_blocks_in_evolution_statistics(self):
-        stats = {"ALL": {"posterior_a": 2.0, "posterior_b": 1.0}}
-        result = normalize_memory_card({"evolution_statistics": stats})
-        assert result.evolution_statistics.ALL.posterior_a == 2.0
+    def test_gain_events_survive_normalize_from_typed_card(self):
+        original = MemoryCard(
+            id="x",
+            gain_events=[
+                ContextualGain(
+                    context=DecisionContext(parent_metrics={"min_area": 0.5}),
+                    gain=0.02,
+                )
+            ],
+        )
+        rebuilt = normalize_memory_card(original.model_dump())
+        assert len(rebuilt.gain_events) == 1
+        assert rebuilt.gain_events[0].gain == 0.02
 
 
 # ===========================================================================

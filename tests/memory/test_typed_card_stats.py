@@ -1,10 +1,9 @@
-"""Typed evolution-statistics contract: cards carry CardStatsBlock /
-EvolutionStatistics models, and every consumer reads typed fields — no
-Mapping/getattr dual paths anywhere in the card decision paths."""
+"""Typed card-stats contract: cards carry only raw gain events, reputation
+computes every CardStatsBlock from them at read time, and every consumer reads
+typed fields — no Mapping/getattr dual paths anywhere in the card decision paths."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import re
 
@@ -12,6 +11,7 @@ import numpy as np
 from pydantic import ValidationError
 import pytest
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core.auctioneer import (
     AuctionBid,
     AuctionCandidate,
@@ -19,190 +19,83 @@ from gigaevo.memory.core.auctioneer import (
 )
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.evictor import HarmEvictor
-from gigaevo.memory.core.idea_stats import IdeaStats
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.core.selection import MemorySelection
-from gigaevo.memory.efficacy import CardStatsStamper
 from gigaevo.memory.shared_memory.card_search import format_card_efficacy
-from gigaevo.memory.shared_memory.injection_posterior import InjectionOutcome
 from gigaevo.memory.shared_memory.models import (
-    AuditMetrics,
     CardAlias,
     CardStatsBlock,
     DecisionMetrics,
-    EvolutionStatistics,
     MemoryCard,
     ProgramCard,
-    Quartile,
 )
-from gigaevo.memory.write_pipeline import fold_best_idea_metrics, parse_best_ideas
-
-BANK_STATS = {
-    "ALL": {
-        "intro_events": 7,
-        "k_harm": 1,
-        "IntroGain_best_median": 0.004,
-        "IntroGain_best_adj_median": 0.006,
-        "DownsideRate_best": 0.142857,
-        "posterior_a": 7.0,
-        "posterior_b": 2.0,
-        "p_help_mean": 0.7778,
-        "p_help_lo20": 0.62,
-        "efficacy_confident": True,
-    },
-    "best_ideas_snapshot": {
-        "IntroGain_best_median": 0.004,
-        "DownsideRate_best": None,
-    },
-}
 
 
-class TestEvolutionStatisticsModel:
-    def test_bank_shaped_dict_roundtrips_losslessly(self):
-        stats = EvolutionStatistics.model_validate(BANK_STATS)
-        assert stats.model_dump() == BANK_STATS
+def _events(gains: list[float]) -> list[ContextualGain]:
+    return [
+        ContextualGain(
+            context=DecisionContext(parent_metrics={"min_area": 0.5}), gain=g
+        )
+        for g in gains
+    ]
 
-    def test_typed_reads_on_all_block(self):
-        stats = EvolutionStatistics.model_validate(BANK_STATS)
-        assert stats.ALL is not None
-        assert stats.ALL.posterior_a == 7.0
-        assert stats.ALL.posterior_b == 2.0
-        assert stats.ALL.intro_events == 7
-        assert stats.ALL.k_harm == 1
-        assert stats.ALL.efficacy_confident is True
-        assert stats.ALL.IntroGain_best_adj_median == 0.006
-        assert stats.ALL.DownsideRate_best == 0.142857
 
+# Six wins and one loss: the MAD noise band collapses to 0, so exactly k_harm = 1
+# of n = 7 events fall below threshold -> Beta(7, 2) downside posterior, +0.01
+# median magnitude, confidently helpful.
+CONFIDENT_EVENTS = _events([0.01] * 6 + [-0.5])
+
+
+class TestStatsVocabulary:
     def test_metric_vocabulary_is_first_class_and_described(self):
         decision = set(DecisionMetrics.model_fields)
-        audit = set(AuditMetrics.model_fields)
-        identity = {"idea_id", "quartile", "description"}
-        assert not decision & audit
         assert set(CardStatsBlock.model_fields) == decision
-        assert set(IdeaStats.model_fields) == identity | decision | audit
-        assert IdeaStats.model_config["extra"] == "forbid"
         undescribed = [
             f"{model.__name__}.{name}"
-            for model in (DecisionMetrics, AuditMetrics, CardStatsBlock, IdeaStats)
+            for model in (DecisionMetrics, CardStatsBlock)
             for name, field in model.model_fields.items()
             if not field.description
         ]
         assert not undescribed
 
-    def test_quartile_is_a_first_class_type(self):
-        assert [q.value for q in Quartile] == ["Q1", "Q2", "Q3", "Q4", "ALL"]
-        assert Quartile.quarters() == (
-            Quartile.Q1,
-            Quartile.Q2,
-            Quartile.Q3,
-            Quartile.Q4,
-        )
-        assert IdeaStats.model_fields["quartile"].annotation is Quartile
-        row = IdeaStats(idea_id="i1", quartile="ALL")
-        assert row.quartile is Quartile.ALL
-
     def test_stats_blocks_reject_undeclared_keys(self):
         assert CardStatsBlock.model_config["extra"] == "forbid"
-        assert EvolutionStatistics.model_config["extra"] == "forbid"
         with pytest.raises(ValidationError):
             CardStatsBlock(SiblingWinRate=0.5)
-        with pytest.raises(ValidationError):
-            EvolutionStatistics.model_validate({"Q4": {"intro_events": 1}})
-
-    def test_idea_stats_projects_only_decision_metrics(self):
-        row = IdeaStats(
-            idea_id="i1",
-            quartile=Quartile.ALL,
-            description="d",
-            intro_events=3,
-            IntroGain_best_median=float("nan"),
-            posterior_a=3.0,
-            SiblingWinRate=0.9,
-        )
-        block = row.to_stats_block()
-        assert isinstance(block, CardStatsBlock)
-        assert block.IntroGain_best_median is None
-        assert block.posterior_a == 3.0
-        assert block.model_extra in (None, {})
-        assert "SiblingWinRate" not in type(block).model_fields
-
-    def test_harm_statistics_carries_no_identity_keys(self):
-        row = IdeaStats(idea_id="i1", quartile=Quartile.ALL, posterior_a=1.0)
-        stats = CardStatsStamper().harm_statistics(row)
-        assert stats.ALL is not None
-        assert stats.ALL.model_extra in (None, {})
-
-    def test_stamper_keeps_only_all_rows_per_idea(self):
-        rows = [
-            IdeaStats(idea_id="i1", quartile=Quartile.ALL, intro_events=5),
-            IdeaStats(idea_id="i1", quartile=Quartile.Q1, intro_events=2),
-            IdeaStats(idea_id="i2", quartile=Quartile.Q4, intro_events=3),
-        ]
-        stats_by_idea = CardStatsStamper().idea_statistics(rows)
-        assert set(stats_by_idea) == {"i1"}
-        assert stats_by_idea["i1"].ALL.intro_events == 5
-
-    def test_absent_blocks_stay_absent_in_dump(self):
-        stats = EvolutionStatistics.model_validate({"ALL": {"intro_events": 1}})
-        dumped = stats.model_dump()
-        assert dumped == {"ALL": {"intro_events": 1}}
-        assert "best_ideas_snapshot" not in dumped
-
-    def test_empty_statistics_dump_to_empty_dict(self):
-        assert EvolutionStatistics().model_dump() == {}
-
-    def test_cards_coerce_raw_dict_statistics(self):
-        card = MemoryCard(id="idea-1", evolution_statistics=BANK_STATS)
-        assert isinstance(card.evolution_statistics, EvolutionStatistics)
-        assert card.evolution_statistics.ALL.p_help_lo20 == 0.62
-        prog = ProgramCard(id="program-p1", program_id="p1")
-        assert prog.evolution_statistics.ALL is None
 
 
 class TestReputationTypedReads:
-    def test_card_posterior_reads_stamped_block(self):
+    def test_card_posterior_computes_from_gain_events(self):
         rep = BetaBinomialReputation()
-        card = MemoryCard(id="idea-1", evolution_statistics=BANK_STATS)
+        card = MemoryCard(id="idea-1", gain_events=CONFIDENT_EVENTS)
         assert rep.card_posterior(card) == (7.0, 2.0)
 
-    def test_card_posterior_cold_prior_without_all_block(self):
+    def test_card_posterior_cold_prior_without_events(self):
         rep = BetaBinomialReputation()
         assert rep.card_posterior(MemoryCard(id="idea-2")) == rep.cold_prior
 
-    def test_card_posterior_cold_prior_when_posterior_fields_missing(self):
+    def test_card_posterior_cold_prior_on_empty_events(self):
         rep = BetaBinomialReputation()
-        card = MemoryCard(
-            id="idea-3", evolution_statistics={"ALL": {"intro_events": 4}}
+        assert rep.card_posterior(MemoryCard(id="idea-3", gain_events=[])) == (
+            rep.cold_prior
         )
-        assert rep.card_posterior(card) == rep.cold_prior
 
     def test_is_confidently_harmful_takes_typed_statistics(self):
         rep = BetaBinomialReputation()
-        harmful = EvolutionStatistics(
-            ALL=CardStatsBlock(posterior_a=1.0, posterior_b=9.0, intro_events=8)
-        )
-        helpful = EvolutionStatistics(
-            ALL=CardStatsBlock(posterior_a=9.0, posterior_b=1.0, intro_events=8)
-        )
-        thin = EvolutionStatistics(
-            ALL=CardStatsBlock(posterior_a=1.0, posterior_b=9.0, intro_events=2)
-        )
+        harmful = CardStatsBlock(posterior_a=1.0, posterior_b=9.0, intro_events=8)
+        helpful = CardStatsBlock(posterior_a=9.0, posterior_b=1.0, intro_events=8)
+        thin = CardStatsBlock(posterior_a=1.0, posterior_b=9.0, intro_events=2)
         assert rep.is_confidently_harmful(harmful) is True
         assert rep.is_confidently_harmful(helpful) is False
         assert rep.is_confidently_harmful(thin) is False
-        assert rep.is_confidently_harmful(EvolutionStatistics()) is False
+        assert rep.is_confidently_harmful(CardStatsBlock()) is False
         assert rep.is_confidently_harmful(None) is False
 
 
 class TestEvictorTypedReads:
     def test_should_evict_reads_card_statistics(self):
         evictor = HarmEvictor(reputation=BetaBinomialReputation())
-        harmful = MemoryCard(
-            id="bad",
-            evolution_statistics={
-                "ALL": {"posterior_a": 1.0, "posterior_b": 9.0, "intro_events": 8}
-            },
-        )
+        harmful = MemoryCard(id="bad", gain_events=_events([-0.5] * 8))
         assert evictor.should_evict(harmful) is True
         assert evictor.should_evict(MemoryCard(id="cold")) is False
         assert evictor.sweep({"bad": harmful, "cold": MemoryCard(id="cold")}) == ["bad"]
@@ -210,25 +103,19 @@ class TestEvictorTypedReads:
 
 class TestEfficacyRenderingTypedReads:
     def test_confident_memory_card_renders_endorsement(self):
-        card = MemoryCard(id="idea-1", evolution_statistics=BANK_STATS)
+        card = MemoryCard(id="idea-1", gain_events=CONFIDENT_EVENTS)
         line = format_card_efficacy(card)
         assert line is not None
         assert "introduced in 7 children" in line
-        assert "vs cohort" in line
+        assert "median improvement +0.0100" in line
         assert "(confident)" in line
+        assert "vs cohort" not in line
 
     def test_non_confident_card_stays_silent(self):
-        stats = {
-            "ALL": {
-                "intro_events": 2,
-                "IntroGain_best_median": 0.01,
-                "efficacy_confident": False,
-            }
-        }
-        assert (
-            format_card_efficacy(MemoryCard(id="idea-2", evolution_statistics=stats))
-            is None
-        )
+        # A single positive event: median > 0 but the pessimistic lower bound on
+        # P(help) stays under the threshold, so the card stays silent.
+        card = MemoryCard(id="idea-2", gain_events=_events([0.01]))
+        assert format_card_efficacy(card) is None
 
     def test_program_card_renders_exemplar_fitness(self):
         card = ProgramCard(id="program-p1", program_id="p1", fitness=0.8712)
@@ -236,98 +123,6 @@ class TestEfficacyRenderingTypedReads:
         assert (
             format_card_efficacy(ProgramCard(id="program-p2", program_id="p2")) is None
         )
-
-
-class TestStampCardPosteriorTyped:
-    def test_stamp_replaces_all_block_and_keeps_snapshot(self):
-        card = MemoryCard(
-            id="idea-1",
-            evolution_statistics={
-                "best_ideas_snapshot": {"IntroGain_best_median": 0.004}
-            },
-        )
-        posterior = CardStatsBlock(
-            posterior_a=5.0, posterior_b=1.0, intro_events=4, efficacy_confident=True
-        )
-        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
-        assert stamped.evolution_statistics.ALL == posterior
-        assert (
-            stamped.evolution_statistics.best_ideas_snapshot.IntroGain_best_median
-            == 0.004
-        )
-        assert card.evolution_statistics.ALL is None
-
-    def test_stamp_overwrites_preexisting_all_block(self):
-        card = MemoryCard(
-            id="idea-1",
-            evolution_statistics={
-                "ALL": {"intro_events": 9, "posterior_a": 1.0, "posterior_b": 8.0}
-            },
-        )
-        posterior = CardStatsBlock(
-            posterior_a=5.0, posterior_b=1.0, intro_events=4, efficacy_confident=True
-        )
-        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
-        assert stamped.evolution_statistics.ALL == posterior
-
-    def test_cards_without_posterior_pass_through_cold(self):
-        card = MemoryCard(id="idea-2")
-        assert CardStatsStamper().stamp_posterior(card, {}) is card
-
-    def test_stamp_merges_prior_introgain_fields(self):
-        card = MemoryCard(
-            id="idea-1",
-            evolution_statistics={
-                "ALL": {
-                    "intro_events": 9,
-                    "IntroGain_best_median": 0.02,
-                    "IntroGain_best_adj_median": 0.015,
-                    "DownsideRate_best": 0.1,
-                }
-            },
-        )
-        posterior = CardStatsBlock(
-            posterior_a=5.0, posterior_b=1.0, intro_events=4, efficacy_confident=True
-        )
-        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
-        merged = stamped.evolution_statistics.ALL
-        assert merged.IntroGain_best_median == 0.02
-        assert merged.IntroGain_best_adj_median == 0.015
-        assert merged.DownsideRate_best == 0.1
-        assert merged.posterior_a == 5.0
-        assert merged.intro_events == 4
-
-    def test_render_survives_posterior_stamp(self):
-        card = MemoryCard(id="idea-1", evolution_statistics=BANK_STATS)
-        posterior = CardStatsBlock(
-            posterior_a=3.0,
-            posterior_b=1.0,
-            intro_events=2,
-            k_harm=0,
-            p_help_mean=0.75,
-            p_help_lo20=0.58,
-            efficacy_confident=True,
-        )
-        stamped = CardStatsStamper().stamp_posterior(card, {"idea-1": posterior})
-        line = format_card_efficacy(stamped)
-        assert line is not None
-        assert "vs cohort" in line
-
-    def test_compute_injection_posteriors_returns_typed_blocks(self):
-        rep = BetaBinomialReputation()
-        rng = np.random.default_rng(0)
-        programs = [
-            InjectionOutcome(
-                id=f"p{i}",
-                fitness=0.5 + 0.01 * i + float(rng.normal(0, 0.001)),
-                parents=[f"p{i - 1}"] if i else [],
-                selected_ids=["idea-1"] if i % 2 else [],
-            )
-            for i in range(30)
-        ]
-        posteriors = rep.compute_injection_posteriors(programs)
-        assert posteriors
-        assert all(isinstance(b, CardStatsBlock) for b in posteriors.values())
 
 
 def _bid(card_id: str, theta: float) -> AuctionBid:
@@ -404,40 +199,6 @@ class TestCardAlias:
             if not field.description
         ]
         assert not undocumented, undocumented
-
-
-class TestTypedBestIdeas:
-    def test_fold_stamps_typed_snapshot(self):
-        row = IdeaStats(
-            idea_id="i1",
-            quartile=Quartile.ALL,
-            description="seed desc",
-            IntroGain_best_median=0.004,
-        )
-        folded = fold_best_idea_metrics(MemoryCard(id="i1"), row)
-        snapshot = folded.evolution_statistics.best_ideas_snapshot
-        assert isinstance(snapshot, CardStatsBlock)
-        assert snapshot.IntroGain_best_median == 0.004
-        assert folded.description == "seed desc"
-
-    def test_parse_best_ideas_returns_idea_stats_rows(self, tmp_path):
-        row = IdeaStats(
-            idea_id="i1",
-            quartile=Quartile.ALL,
-            intro_events=3,
-            IntroGain_best_median=float("nan"),
-        )
-        path = tmp_path / "best_ideas.json"
-        path.write_text(
-            json.dumps([{"timestamp": "t", "best_ideas": [row.as_json_row()]}]),
-            encoding="utf-8",
-        )
-        idea_ids, rows_by_id = parse_best_ideas(path)
-        assert idea_ids == ["i1"]
-        parsed = rows_by_id["i1"]
-        assert isinstance(parsed, IdeaStats)
-        assert parsed.intro_events == 3
-        assert parsed.IntroGain_best_median is None
 
 
 class TestNoDictPlumbingInCardPaths:

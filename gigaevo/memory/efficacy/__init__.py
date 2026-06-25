@@ -1,17 +1,13 @@
-from gigaevo.memory.efficacy.bucketing import GenerationBucketer
-from gigaevo.memory.efficacy.events import EfficacyEvent
 from gigaevo.memory.efficacy.scorer import (
-    EfficacyScorer,
-    GainObservation,
     beta_binomial_posterior,
+    block_from_events,
+    robust_noise_band,
 )
 from gigaevo.memory.efficacy.stamping import CardStatsStamper
 
 __all__ = [
     "CardStatsStamper",
-    "EfficacyEvent",
-    "EfficacyScorer",
-    "GainObservation",
-    "GenerationBucketer",
     "beta_binomial_posterior",
+    "block_from_events",
+    "robust_noise_band",
 ]

@@ -12,7 +12,6 @@ from omegaconf import OmegaConf
 import pytest
 
 import gigaevo.memory.core as core
-from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
@@ -26,7 +25,6 @@ from gigaevo.memory.core.protocols import (
     CardShortlister,
     Deduplicator,
     Evictor,
-    MemoryAdmitter,
     ReputationModel,
 )
 from gigaevo.memory.core.renderer import EfficacyCardRenderer
@@ -38,10 +36,6 @@ CONFIG_MEMORY = REPO_ROOT / "config" / "memory"
 
 
 class TestProtocolConformance:
-    @pytest.mark.parametrize("impl", [SignBasedAdmitter(), PermissiveAdmitter()])
-    def test_admitters(self, impl):
-        assert isinstance(impl, MemoryAdmitter)
-
     def test_reputation(self):
         assert isinstance(BetaBinomialReputation(), ReputationModel)
 
@@ -75,19 +69,6 @@ class TestHydraComposition:
     def test_reputation_group(self):
         obj = instantiate(self._load("reputation", "beta_binomial.yaml"))
         assert obj == BetaBinomialReputation()
-
-    @pytest.mark.parametrize(
-        ("leaf", "cls"),
-        [
-            ("sign_based.yaml", SignBasedAdmitter),
-        ],
-    )
-    def test_admitter_group(self, leaf, cls):
-        # _partial_ leaf: MemorySystem completes it with the shared reputation.
-        rep = instantiate(self._load("reputation", "beta_binomial.yaml"))
-        obj = instantiate(self._load("admitter", leaf))(reputation=rep)
-        assert isinstance(obj, cls)
-        assert obj.reputation == BetaBinomialReputation()
 
     def test_auction_group(self):
         obj = instantiate(self._load("auction", "thompson.yaml"))
@@ -154,7 +135,6 @@ class TestNoHardcodedConstants:
         "module",
         [
             "reputation.py",
-            "admitter.py",
             "auctioneer.py",
             "budgeter.py",
             "card_selector.py",

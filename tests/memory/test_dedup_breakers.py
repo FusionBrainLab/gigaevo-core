@@ -14,6 +14,7 @@ from pydantic import ValidationError
 import pytest
 
 from gigaevo.exceptions import LLMAPIError
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_dedup import (
     _MAX_CONSECUTIVE_DEDUP_LLM_FAILURES,
@@ -145,18 +146,19 @@ class TestDedupLLMFailures:
         """F6: The dedup prompt surfaces each card's measured track record and
         instructs the LLM to prefer the better-evidenced variant."""
         mem = _make_full_memory(tmp_path, card_update_dedup_config={"enabled": True})
+        # Three equal positive gains -> Beta(4,1), intro 3, median +0.012,
+        # confident -> renders "introduced in 3 children".
         mem.save_card(
             {
                 "id": "existing",
                 "description": "original",
-                "evolution_statistics": {
-                    "ALL": {
-                        "intro_events": 3,
-                        "IntroGain_best_median": 0.012,
-                        "DownsideRate_best": 0.0,
-                        "efficacy_confident": True,
-                    }
-                },
+                "gain_events": [
+                    ContextualGain(
+                        context=DecisionContext(parent_metrics={"min_area": 0.5}),
+                        gain=0.012,
+                    ).model_dump()
+                    for _ in range(3)
+                ],
             }
         )
 

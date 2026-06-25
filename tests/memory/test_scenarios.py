@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.ideas_tracker.idea_bank import IdeaBank
 from gigaevo.memory.ideas_tracker.models import Idea
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -30,7 +31,12 @@ from tests.fakes.read_pipeline import make_read_pipeline
 
 
 _SEED = 20260604
-_PROVEN_STATS = {"ALL": {"posterior_a": 200.0, "posterior_b": 1.0}}
+# A run of clean wins: the downside posterior resolves to Beta(9, 1), a proven
+# helpful card the auction passes deterministically.
+_PROVEN_GAIN_EVENTS = [
+    ContextualGain(context=DecisionContext(parent_metrics={"min_area": 0.5}), gain=1.0)
+    for _ in range(8)
+]
 
 
 def _make_memory(tmp_path, **overrides):
@@ -60,7 +66,7 @@ class TestScenarioTwoRunCycle:
     """
 
     def _create_ideas_from_programs(self, tmp_path):
-        """Simulate IdeaTracker: programs → ideas bank → best_ideas → memory cards."""
+        """Simulate IdeaTracker: programs → ideas bank → memory cards."""
         # Programs from evolution run (simulated Redis export)
         programs = [
             {
@@ -122,7 +128,7 @@ class TestScenarioTwoRunCycle:
             )
         )
 
-        # Write banks.json and best_ideas.json (IdeaTracker output)
+        # Write banks.json (IdeaTracker output)
         all_ideas = ideas_bank.all_ideas()
         active_bank = []
         for idea in all_ideas:
@@ -142,26 +148,18 @@ class TestScenarioTwoRunCycle:
         banks_path = tmp_path / "logs" / "banks.json"
         _write_json(banks_path, [{"active_bank": active_bank}])
 
-        best_ideas = [
-            {"idea_id": idea.id, "quartile": "ALL", "description": idea.description}
-            for idea in all_ideas
-        ]
-        best_ideas_path = tmp_path / "logs" / "best_ideas.json"
-        _write_json(best_ideas_path, [{"best_ideas": best_ideas}])
-
         programs_path = tmp_path / "logs" / "programs.json"
         _write_json(programs_path, [{"programs": programs}])
 
-        return banks_path, best_ideas_path, programs_path, ideas_bank
+        return banks_path, programs_path, ideas_bank
 
     def test_full_two_run_cycle(self, tmp_path):
         """Run 1: fill memory. Run 2: load and search."""
-        banks, best_ideas, programs, _ = self._create_ideas_from_programs(tmp_path)
+        banks, programs, _ = self._create_ideas_from_programs(tmp_path)
 
         # --- Run 1: Write to memory ---
         cards = load_memory_cards(
             banks,
-            best_ideas,
             programs_path=programs,
             best_programs_percent=50.0,
         )
@@ -201,13 +199,13 @@ class TestScenarioTwoRunCycle:
 
     def test_memory_guides_mutation(self, tmp_path):
         """Full cycle: fill memory → MemoryReadPipeline.select() → cards in mutation."""
-        banks, best_ideas, _, _ = self._create_ideas_from_programs(tmp_path)
-        cards = load_memory_cards(banks, best_ideas)
+        banks, _, _ = self._create_ideas_from_programs(tmp_path)
+        cards = load_memory_cards(banks)
 
         # Fill memory; PROVEN posterior so the auction passes them deterministically.
         mem = _make_memory(tmp_path)
         for card in cards:
-            card.evolution_statistics = _PROVEN_STATS
+            card.gain_events = list(_PROVEN_GAIN_EVENTS)
             mem.save_card(card)
 
         # Reload (simulating new process)
@@ -494,13 +492,6 @@ class TestScenarioWritePipeline:
         banks = tmp_path / "banks.json"
         _write_json(banks, [{"active_bank": active_bank}])
 
-        best_ideas = [
-            {"idea_id": f"idea-{i}", "quartile": "ALL", "description": f"Technique {i}"}
-            for i in range(n_ideas)
-        ]
-        best = tmp_path / "best_ideas.json"
-        _write_json(best, [{"best_ideas": best_ideas}])
-
         programs = []
         for i in range(n_programs):
             programs.append(
@@ -517,11 +508,11 @@ class TestScenarioWritePipeline:
         progs = tmp_path / "programs.json"
         _write_json(progs, [{"programs": programs}])
 
-        return banks, best, progs
+        return banks, progs
 
     def test_full_pipeline_ideas_only(self, tmp_path):
-        banks, best, _ = self._setup_tracker_output(tmp_path, n_ideas=5, n_programs=0)
-        cards = load_memory_cards(banks, best)
+        banks, _ = self._setup_tracker_output(tmp_path, n_ideas=5, n_programs=0)
+        cards = load_memory_cards(banks)
         assert len(cards) == 5
 
         mem = _make_memory(tmp_path)
@@ -536,9 +527,9 @@ class TestScenarioWritePipeline:
         assert "idea-3" in result
 
     def test_full_pipeline_with_programs(self, tmp_path):
-        banks, best, progs = self._setup_tracker_output(tmp_path)
+        banks, progs = self._setup_tracker_output(tmp_path)
         cards = load_memory_cards(
-            banks, best, programs_path=progs, best_programs_percent=100.0
+            banks, programs_path=progs, best_programs_percent=100.0
         )
 
         idea_cards = [c for c in cards if not isinstance(c, ProgramCard)]
@@ -556,8 +547,8 @@ class TestScenarioWritePipeline:
 
     def test_pipeline_repeated_writes_idempotent(self, tmp_path):
         """Re-running the write pipeline with same IDs updates, doesn't duplicate."""
-        banks, best, _ = self._setup_tracker_output(tmp_path, n_ideas=3)
-        cards = load_memory_cards(banks, best)
+        banks, _ = self._setup_tracker_output(tmp_path, n_ideas=3)
+        cards = load_memory_cards(banks)
 
         mem = _make_memory(tmp_path)
         for card in cards:

@@ -19,7 +19,7 @@ from gigaevo.config.validation import validate_reputation_island_compat
 
 _REF = "${ref:behavior_space}"
 _BD = "gigaevo.memory.core.bd_proximity.BDProximityReputation"
-_RW = "gigaevo.memory.core.reward.RewardWeightedReputation"
+_BB = "gigaevo.memory.core.reputation.BetaBinomialReputation"
 
 
 def _cfg(*, n_islands: int, reputation: dict | None) -> object:
@@ -37,7 +37,7 @@ def test_multi_island_with_bd_reputation_raises() -> None:
 
 
 def test_multi_island_with_nested_behavior_space_ref_raises() -> None:
-    rep = {"_target_": _RW, "fallback": {"_target_": _BD, "behavior_space": _REF}}
+    rep = {"_target_": _BB, "fallback": {"_target_": _BD, "behavior_space": _REF}}
     with pytest.raises(NotImplementedError):
         validate_reputation_island_compat(_cfg(n_islands=2, reputation=rep))
 
@@ -48,7 +48,7 @@ def test_single_island_with_bd_reputation_is_allowed() -> None:
 
 
 def test_multi_island_with_non_bd_reputation_is_allowed() -> None:
-    validate_reputation_island_compat(_cfg(n_islands=2, reputation={"_target_": _RW}))
+    validate_reputation_island_compat(_cfg(n_islands=2, reputation={"_target_": _BB}))
 
 
 def test_multi_island_without_reputation_is_allowed() -> None:

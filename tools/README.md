@@ -512,6 +512,26 @@ gigaevo -r chains/hotpotqa/static@4:O lineage --top-n 1 --depth 5
 
 ---
 
+### `analyze_card_use.py` — Memory-card injection→use funnel (offline)
+
+Read-only audit of whether injected memory cards are actually *read* by the mutator and
+whether using them helps. For each disk-storage child it joins the frozen
+`memory_injected_idea_ids` (extra/GAM channel) with the mutator-declared `card_ids_used`
+(a card counts as *used* when it is in `base_selected ∩ card_ids_used` — the same credit
+rule as `gain_events`). Mirrors the arm layout of `analyze_bandit_health.py`.
+
+```bash
+python tools/analyze_card_use.py outputs/<run_root> \
+    --out docs/audits/card_use_funnel.md \
+    --arms BD1,BD2,AP1,AP2
+```
+
+Emits per arm: injection→use funnel (`unread_frac`), use-conditional median child−base-parent
+gain (cited vs unread), and the basin profile (share of positive gains < 0.007). Pre-registration
+and decision thresholds: `docs/audits/card_use_offline_prereg_2026-06-25.md`.
+
+---
+
 ## Protocol Gates
 
 ### `check_phase_order.sh` — Pre-launch gate
