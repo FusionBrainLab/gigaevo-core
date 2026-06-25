@@ -437,7 +437,6 @@ python run.py \
   pipeline_builder.fresh_context_reorder=true \
   model_name=Qwen3-235B-A22B-Thinking-2507 \
   llm_base_url=http://localhost:8000/v1 \
-  +llm.structured_output_method=auto \
   max_mutants=800
 ```
 
