@@ -10,4 +10,9 @@ max_mutants: 250
 strip_comments_and_docstrings: false
 pre_step_hook: null
 post_step_hook: null
+# Wall-clock bound (seconds) on a single post_step_hook invocation. 300s suits
+# the CPU-bound production CompositionInjectionHook; the network-bound
+# LiveMemoryRefreshHook (LLM enrichment) raises it via the memory recipe.
+# Override per run: post_step_hook_timeout_s=<seconds>.
+post_step_hook_timeout_s: 300.0
 max_in_flight: 8

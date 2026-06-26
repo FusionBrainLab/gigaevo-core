@@ -244,6 +244,7 @@ Pair with `tools/telegram_notify.notify(...)` from your monitoring shell for mil
 |---------|-------|--------:|--------|
 | `intra_max_children` | `pipeline_builder` block | `24` | Cap on the descendant pool the analyst sees. Lower = cheaper but shallower context. |
 | `refresh_every` | `post_step_hook` block | `10` | Ingestor sweeps between live refreshes. Lower = fresher cards, more LLM calls. |
+| `post_step_hook_timeout_s` | top-level (recipe) | `900` (`300` global) | Wall-clock budget (s) for one live-refresh increment. Raised above the CPU-hook-sized 300 s global default so LLM enrichment under shared-endpoint load completes instead of being cancelled (frozen idea bank). Bounds a hung hook. Override per run: `post_step_hook_timeout_s=<s>`. |
 | `max_insights` | top-level | inherited | Bound on memory-card count `MemoryContextStage` surfaces. |
 | `max_code_length` | top-level | inherited | Truncation guard for parent code in the intra prompt. |
 | `stage_timeout` | top-level | inherited | Per-stage timeout; respected by `IntraMemoryStage` and `MutationSuggestionStage`. |

@@ -58,10 +58,17 @@ dag_blueprint:
 # mid-run hook and the post-run hook share tracker state (idea bank, seen ids).
 # refresh_every counts ingestor sweeps that landed >=1 program. K=10 ≈ one
 # refresh per ~10 newly-evaluated mutants.
-# max_programs_per_sweep caps each refresh to the N newest programs so the
-# post_step_hook stays inside the engine's 300 s budget; combined with the
-# analyzer's parallel classifier (analyzer_max_concurrent_classifications)
+# max_programs_per_sweep caps each refresh to the N newest programs; combined
+# with the analyzer's parallel classifier (analyzer_max_concurrent_classifications)
 # this prevents sweep time from growing linearly with storage size.
+#
+# post_step_hook_timeout_s raises the engine's per-invocation wall-clock budget
+# from the 300 s global default (sized for the CPU-bound CompositionInjectionHook)
+# to 900 s for the network-bound LLM-enrichment refresh: under shared-endpoint
+# load a single capped (24-program) increment can exceed 300 s and gets
+# cancelled, freezing the idea bank. 900 s (3×) absorbs that latency while still
+# bounding a genuinely-hung hook to 15 min. Override per run: post_step_hook_timeout_s=<s>.
+post_step_hook_timeout_s: 900.0
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
   tracker: ${ref:memory::tracker}
