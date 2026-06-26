@@ -66,8 +66,6 @@ When a split is necessary:
 - **|S| > 1, mixed** → include the largest coherent group. A cluster of 10–15 items all varying the same parameter in the same direction is valid and expected — do not split it.
 
 ### Partition semantics
-- `included` holds the 1-based input line indices of the single winning coherent group.
-- `rejected` holds every other index; those items return to the pool for re-clustering.
 - Every index in **S** must appear **exactly once** across `included` and `rejected`.
 - Default toward keeping items together. Split only on clear evidence of different mechanisms.
 

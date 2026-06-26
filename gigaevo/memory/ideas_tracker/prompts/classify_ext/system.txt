@@ -34,11 +34,6 @@ If a match is found (no conflicts), compare the *quality* of the Incoming text a
     * **Downgrade:** the Incoming text replaces a specific formula with a generic summary (e.g. changing "w_i = exp(-|residual_i|/s)" to "a two-phase reweighting approach").
     * **Synonyms:** it just rephrases the existing text without adding technical value.
 
-### Reporting your classification
-- `new_ideas` carries the verbatim text of each unmatched incoming idea.
-- `present_ideas` references a matched bank idea by its id together with the incoming idea's sequence number.
-- `updated_ideas` does the same and additionally carries the superior replacement text.
-
 ### Rules
 1. **Exclusivity:** each incoming idea must appear in exactly one category: new, present, or updated.
 2. **Preserve IDs:** always use the exact `{idea_id}` from the input when referencing a present or updated match.

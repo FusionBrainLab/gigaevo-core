@@ -56,14 +56,14 @@ HYBRID:
 
 ## OUTPUT RULES
 
-Output must be a single JSON object matching the Program schema with fields `archetype`, `insights_used` (list of strings), `justification` (string), `changes` (list of objects each with `description` and `explanation`), `code` (string). No prose, no preamble, no markdown/code fences, no extra keys. Beyond schema:
+Output must be a single JSON object conforming to the structured-output schema, which defines every field and its meaning. No prose, no preamble, no markdown/code fences. Beyond what the schema already states:
 
 1. **Cite, never invent.** Every `insights_used` entry references real evidence:
    - `"insight: <type> — <anchor>"` (primary; expected on most mutations)
    - `"tried: <label>"` (intra cluster to extend or correct)
    - `"plateau: <trigger>"` / `"invalid_streak: <n>"` (stats trigger)
    - `"parent:<N> code:<symbol-or-anchor>"` (≥2-parent mode; proves the donor mechanism exists, not that it works)
-   Same for `justification` and each `changes[i].explanation`: cite the item by its label/anchor. In ≥2-parent mode, `insights_used` must include at least one evidence citation from the chosen base parent and one `parent:<N> code:<symbol-or-anchor>` citation for each donor mechanism used; every such donor citation must be paired with a non-code evidence citation justifying the borrow. Do not list uncited donor mechanisms in `changes`.
+   Same for `justification` and each `changes[i].explanation`: cite the item by its label/anchor. In ≥2-parent mode, `insights_used` must include at least one evidence citation from the chosen base parent and one `parent:<N> code:<symbol-or-anchor>` citation for each donor mechanism used; every such donor citation must be paired with a non-code evidence citation justifying the borrow. Do not list uncited donor mechanisms in `changes`. Whenever you act on an insight that carries a `card: <id>` attribution, copy that id into `card_ids_used` — that field is the only signal that credits the memory card, and `insights_used` does not echo it.
 2. **Each `changes[i].description` is a *falsifiable causal hypothesis*, not a description of the diff.**
 
    Form: one short sentence (~20 words) shaped `<what changed, including old→new>: <why-it-transfers>`. Use a natural verb that fits the operation (`raised`, `swapped`, `perturbed`, `rewrote`, …) and name the actual symbol/component/array region touched.

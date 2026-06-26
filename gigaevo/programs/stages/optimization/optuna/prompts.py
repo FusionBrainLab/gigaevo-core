@@ -134,15 +134,9 @@ Parametrize the code below for Optuna hyperparameter optimization. \
 Each trial has a hard timeout of {eval_timeout}s; {total_trials} trials will run \
 ({n_trials} TPE + startup). Optimization direction: {direction} ``{score_key}``.
 {task_description_section}{runtime_section}{total_budget_section}
-Return:
-- ``parameters``: list of ParamSpec — name, param_type, bounds/choices, \
-initial_value (the literal currently in the code), reason (required, one sentence \
-justifying why this parameter can move ``{score_key}``)
-- ``modifications``: non-overlapping line-range patches using the ``N | `` \
-line numbers shown
-- ``new_imports``: only if new import statements are needed
-- ``reasoning``: explain your parametrization strategy and why these parameters \
-will move ``{score_key}``
+Return an ``OptunaSearchSpace`` as defined by the structured-output schema (its \
+fields and their meaning are specified there). Patches in ``modifications`` use the \
+``N | `` line numbers shown and must not overlap.
 
 Select at most {max_params} parameters. For each, ``reason`` must explain \
 why this parameter will move ``{score_key}`` more than other candidates you \
