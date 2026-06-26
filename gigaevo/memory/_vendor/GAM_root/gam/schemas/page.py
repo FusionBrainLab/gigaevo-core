@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -64,11 +66,23 @@ class InMemoryPageStore:
         self._pages = pages
         if self._dir_path:
             self._dir_path.mkdir(parents=True, exist_ok=True)
+            # atomic write: serialize to a sibling temp file then os.replace, so a
+            # torn or cancelled write can never truncate pages.json in place.
+            tmp_name: str | None = None
             try:
                 pages_data = [page.model_dump() for page in pages]
-                with open(self._pages_file, "w", encoding="utf-8") as f:
+                tmp_fd, tmp_name = tempfile.mkstemp(
+                    dir=self._dir_path, prefix="pages.", suffix=".tmp"
+                )
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                     json.dump(pages_data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_name, self._pages_file)
             except Exception as e:
+                if tmp_name is not None:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
                 logger.error(
                     "[Memory][GAM][PageStore] Failed to save pages to {}: {}",
                     self._pages_file,
