@@ -1,23 +1,16 @@
 """
-IdeaTracker: PostRunHook that extracts, classifies, enriches, and stores
-improvement ideas from a completed evolutionary run.
-
-_SessionLog accumulates log entries in memory and writes all files to a
-timestamped directory in a single flush() call at session end.
+IdeaTracker: PostRunHook that authors memory cards from a completed
+evolutionary run via the librarian write path (one card per mutation diff,
+plus a clean card for each top-fitness exemplar).
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime
-from functools import cached_property
-import json
 import math
 import os
 from pathlib import Path
-import threading
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -27,36 +20,40 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_OUTPUT_METADATA_KEY,
 )
+
+# LLM-first write path (librarian): authors clean cards from a mutation diff and
+# routes every verdict through the single admission gate.
+from gigaevo.llm.agents.factories import (
+    create_consolidate_agent,
+    create_program_author_agent,
+    create_reconcile_agent,
+)
+from gigaevo.llm.agents.task_summary import TaskSummaryAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.context import ContextualGain
+from gigaevo.memory.core.admission_gate import CardAdmissionGate
 from gigaevo.memory.core.events import emit_memory_event
+from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.protocols import (
-    Deduplicator,
     Evictor,
     ReputationModel,
 )
 from gigaevo.memory.core.reputation import BetaBinomialReputation
-from gigaevo.memory.ideas_tracker.analyzers import (
-    Analyzer,
-    ClassifyingAnalyzer,
-    ClusteringAnalyzer,
-)
-from gigaevo.memory.ideas_tracker.idea_bank import (
-    MACHINE_KEYWORD_PREFIXES,
-    IdeaBank,
-)
+from gigaevo.memory.core.write_ledger import WriteLedger
+from gigaevo.memory.efficacy.stamping import CardStatsStamper
+from gigaevo.memory.ideas_tracker.consolidation import consolidate
+from gigaevo.memory.ideas_tracker.librarian import Librarian
+from gigaevo.memory.ideas_tracker.librarian_retriever import ChromaNeighborSource
 from gigaevo.memory.ideas_tracker.models import (
-    Idea,
-    IdeaExplanation,
     ProgramRecord,
     program_to_record,
 )
-from gigaevo.memory.ideas_tracker.schemas import KeywordsResponse, SummaryResponse
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
     compute_contextual_gains,
 )
+from gigaevo.memory.shared_memory.models import ProgramCard
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
@@ -140,102 +137,6 @@ def _load_task_description(redis_prefix: str, package_path: Path) -> str:
             exc,
         )
     return "No description available"
-
-
-def _summarise_task_description(analyzer: Analyzer, task_description: str) -> str:
-    """Ask the LLM for a compact summary of the task description."""
-    text = str(task_description or "").strip()
-    if not text:
-        return "Task summary unavailable"
-    try:
-        parsed = analyzer.call_structured(
-            "task_description_summary", SummaryResponse, text
-        )
-        summary = parsed.summary.strip()
-        return summary or text[:240].strip()
-    except Exception as exc:
-        logger.warning(
-            "[Memory][IdeaTracker] Task description summarization failed, using truncated text: {}",
-            exc,
-        )
-        return text[:240].strip()
-
-
-def _select_ideas_needing_enrichment(
-    ideas: list[Idea], last_entry_count: dict[str, int]
-) -> list[Idea]:
-    return [
-        idea
-        for idea in ideas
-        if last_entry_count.get(idea.id, -1) != len(idea.explanation.entries)
-    ]
-
-
-@dataclass(frozen=True)
-class _EnrichmentOutcome:
-    """Enriched idea plus whether every LLM step succeeded; failed ideas stay
-    stale so the next sweep retries them."""
-
-    idea: Idea
-    ok: bool
-
-
-async def _enrich_ideas_with_keywords_and_summaries(
-    ideas: list[Idea], analyzer: Analyzer, task_summary: str
-) -> list[_EnrichmentOutcome]:
-    """Enrich all ideas concurrently with keywords and explanation summaries."""
-
-    async def _enrich_one(idea: Idea) -> _EnrichmentOutcome:
-        ok = True
-        # On LLM failure the old keywords stay; on success the machine tokens
-        # (verification gate, canonical-dedup) survive the topical refresh.
-        keywords = list(idea.keywords)
-        try:
-            kw_parsed = await analyzer.call_structured_async(
-                "keywords", KeywordsResponse, idea.description
-            )
-            machine = [
-                kw for kw in idea.keywords if kw.startswith(MACHINE_KEYWORD_PREFIXES)
-            ]
-            keywords = machine + [kw for kw in kw_parsed.keywords if kw not in machine]
-        except Exception as exc:
-            ok = False
-            logger.warning(
-                "[Memory][IdeaTracker] Keyword extraction failed for idea {!r}: {}",
-                idea.id,
-                exc,
-            )
-
-        # On LLM failure the previously synthesized summary stays.
-        summary = idea.explanation.summary
-        entries = idea.explanation.entries
-        if len(entries) == 1:
-            summary = entries[0]
-        elif len(entries) > 1:
-            explanations_text = "\n".join(f"- {e}" for e in entries)
-            try:
-                sum_parsed = await analyzer.call_structured_async(
-                    "usage_summary", SummaryResponse, explanations_text
-                )
-                summary = sum_parsed.summary
-            except Exception as exc:
-                ok = False
-                logger.warning(
-                    "[Memory][IdeaTracker] Summary generation failed for idea {!r}: {}",
-                    idea.id,
-                    exc,
-                )
-
-        enriched = idea.model_copy(
-            update={
-                "keywords": keywords,
-                "explanation": IdeaExplanation(entries=entries, summary=summary),
-                "task_description_summary": task_summary,
-            }
-        )
-        return _EnrichmentOutcome(idea=enriched, ok=ok)
-
-    return list(await asyncio.gather(*[_enrich_one(idea) for idea in ideas]))
 
 
 def _valid_fitness(
@@ -355,224 +256,43 @@ def _card_gain_events_from_programs(
     return compute_contextual_gains(rows, higher_is_better=higher_is_better)
 
 
-# A cancelled sweep abandons its to_thread writer mid-ingest; the next sweep
-# (or on_run_complete) must not interleave a second backend build with it.
-_WRITE_PIPELINE_LOCK = threading.Lock()
+# ---------------------------------------------------------------------------
+# Librarian write-path helpers
+# ---------------------------------------------------------------------------
 
 
-def _run_write_pipeline(
-    enabled: bool,
-    banks_path: Path | None,
-    programs_path: Path | None,
-    backend: MemoryBackendFactory | None,
-    checkpoint_dir: str | Path | None = None,
-    best_programs_percent: float = 5.0,
-    higher_is_better: bool = True,
-    gain_events: dict[str, list[ContextualGain]] | None = None,
-    evictor: Evictor | None = None,
-    deduplicator: Deduplicator | None = None,
-) -> None:
-    """Optionally trigger the downstream memory write pipeline.
-
-    ``backend`` (a Hydra-composed ``memory/backend`` factory) builds the card
-    bank; it must be non-None whenever ``enabled`` is True (IdeaTracker
-    enforces this at construction). ``checkpoint_dir`` pins per-run artefacts
-    under the Hydra output dir.
-    """
-    if not enabled:
-        return
-    with _WRITE_PIPELINE_LOCK:
-        _run_write_pipeline_locked(
-            banks_path,
-            programs_path,
-            backend=backend,
-            checkpoint_dir=checkpoint_dir,
-            best_programs_percent=best_programs_percent,
-            higher_is_better=higher_is_better,
-            gain_events=gain_events,
-            evictor=evictor,
-            deduplicator=deduplicator,
-        )
-
-
-def _run_write_pipeline_locked(
-    banks_path: Path | None,
-    programs_path: Path | None,
-    backend: MemoryBackendFactory | None,
-    checkpoint_dir: str | Path | None,
-    best_programs_percent: float,
-    higher_is_better: bool,
-    gain_events: dict[str, list[ContextualGain]] | None,
-    evictor: Evictor | None,
-    deduplicator: Deduplicator | None,
-) -> None:
-    if backend is None:
-        raise ValueError(
-            "memory write pipeline enabled but no backend factory provided; "
-            "compose one via the Hydra `memory/backend` group "
-            "(ideas_tracker configs override the shared `memory.backend` singleton to `local`)."
-        )
-    if banks_path is None:
-        logger.warning(
-            "[Memory][IdeaTracker] write pipeline skipped: log paths unavailable."
-        )
-        return
-    if not banks_path.exists():
-        logger.warning(
-            "[Memory][IdeaTracker] write pipeline skipped: missing {}.", banks_path
-        )
-        return
-
-    effective_programs_path = (
-        programs_path if (programs_path and programs_path.exists()) else None
+def _record_note(record: ProgramRecord) -> str:
+    """One-line mutation note from a record's normalised improvements."""
+    note = "; ".join(
+        imp.description.strip()
+        for imp in record.improvements
+        if imp.description.strip()
     )
-
-    from gigaevo.memory.write_pipeline import main as _write_main
-
-    snapshot = _write_main(
-        banks_path=banks_path,
-        programs_path=effective_programs_path,
-        backend=backend,
-        checkpoint_dir=checkpoint_dir,
-        best_programs_percent=best_programs_percent,
-        higher_is_better=higher_is_better,
-        gain_events=gain_events,
-        evictor=evictor,
-        deduplicator=deduplicator,
-    )
-    if snapshot is not None:
-        logger.info(
-            "[Memory][IdeaTracker] write: processed={}, added={}, updated={}, rejected={}",
-            snapshot.stats.processed,
-            snapshot.stats.added,
-            snapshot.stats.updated,
-            snapshot.stats.rejected,
-        )
+    return note or "Unspecified change"
 
 
-# ---------------------------------------------------------------------------
-# _SessionLog
-# ---------------------------------------------------------------------------
-
-
-class _SessionLog:
-    """
-    Accumulates log entries in memory during a tracker run and writes all
-    files to a timestamped session directory in a single flush() call.
-
-    Replaces the per-event read-modify-write pattern of IdeasTrackerLogger.
-    Files written: log.txt, banks.json, programs.json.
-    """
-
-    def __init__(self, logs_dir: Path) -> None:
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.session_dir: Path = logs_dir / ts
-        self._entries: list[str] = []
-
-    # ------ file paths ------
-    @property
-    def banks_file(self) -> Path:
-        return self.session_dir / "banks.json"
-
-    @property
-    def programs_file(self) -> Path:
-        return self.session_dir / "programs.json"
-
-    # ------ recording ------
-
-    def record(self, action: str, **params: Any) -> None:
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        lines = [f"[{ts}]: {action}"]
-        for k, v in params.items():
-            lines.append(f"  {k}: {v}")
-        self._entries.append("\n".join(lines))
-
-    # ------ flush ------
-
-    def flush(
-        self,
-        bank: IdeaBank,
-        *,
-        records: list[ProgramRecord],
-    ) -> None:
-        """Write all accumulated data to the timestamped session directory."""
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        (self.session_dir / "log.txt").write_text(
-            "\n\n".join(self._entries), encoding="utf-8"
-        )
-
-        ideas = bank.all_ideas()
-        self.write_bank_snapshot(ideas, ts)
-
-        programs_data = [
-            {
-                "timestamp": ts,
-                "programs": [r.model_dump() for r in records],
-            }
-        ]
-        self.programs_file.write_text(
-            json.dumps(programs_data, indent=2), encoding="utf-8"
-        )
-
-    def write_bank_snapshot(self, ideas: list[Idea], timestamp: str) -> None:
-        """Write banks.json as a single active-bank snapshot of typed ideas."""
-        banks_data = [
-            {
-                "active_bank": [idea.model_dump() for idea in ideas],
-                "timestamp": timestamp,
-            }
-        ]
-        self.banks_file.write_text(json.dumps(banks_data, indent=2), encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Hydra / YAML factory (config/ideas_tracker/*.yaml)
-# ---------------------------------------------------------------------------
-
-_CLUSTERING_ANALYZER_KEYS = frozenset(
-    {
-        "embeddings_model",
-        "batch_size",
-        "min_samples_for_dbscan",
-        "dbscan_eps",
-        "dbscan_min_samples",
-        "max_attempts",
-        "max_rounds",
-        "refine_subgroup_size",
-    }
-)
-
-
-def _build_analyzer_from_hydra_fields(
+def _select_top_programs(
+    programs: list[Program],
     *,
-    analyzer_type: str,
-    llm: MultiModelRouter,
-    analyzer_fast_settings: dict[str, Any] | None,
-    description_rewriting: bool,
-    analyzer_max_concurrent_classifications: int = 8,
-) -> ClassifyingAnalyzer | ClusteringAnalyzer:
-    """Construct ClassifyingAnalyzer or ClusteringAnalyzer from flat Hydra kwargs."""
-    kind = (analyzer_type or "default").strip().lower()
-
-    if kind == "fast":
-        fast = dict(analyzer_fast_settings or {})
-        extra = {k: v for k, v in fast.items() if k in _CLUSTERING_ANALYZER_KEYS}
-        unknown = sorted(set(fast) - _CLUSTERING_ANALYZER_KEYS)
-        if unknown:
-            logger.warning(
-                "[Memory][IdeaTracker] ignoring unrecognized analyzer_fast_settings "
-                "keys: {}",
-                unknown,
-            )
-        return ClusteringAnalyzer(llm=llm, **extra)
-
-    return ClassifyingAnalyzer(
-        llm=llm,
-        description_rewriting=description_rewriting,
-        max_concurrent_classifications=analyzer_max_concurrent_classifications,
-    )
+    best_programs_percent: float,
+    fitness_key: str,
+    higher_is_better: bool,
+    metrics_context: MetricsContext | None,
+) -> list[tuple[Program, float]]:
+    """The top-fitness slice of valid programs, as (program, fitness) pairs."""
+    if best_programs_percent <= 0:
+        return []
+    scored = [
+        (prog, fit)
+        for prog in programs
+        for fit in (_valid_fitness(prog, fitness_key, metrics_context),)
+        if fit is not None
+    ]
+    if not scored:
+        return []
+    scored.sort(key=lambda pair: (pair[1], pair[0].id), reverse=higher_is_better)
+    count = max(1, math.ceil(len(scored) * best_programs_percent / 100.0))
+    return scored[:count]
 
 
 # ---------------------------------------------------------------------------
@@ -582,62 +302,65 @@ def _build_analyzer_from_hydra_fields(
 
 class IdeaTracker(IncrementalPostRunHook):
     """
-    PostRunHook that extracts, classifies, enriches, and stores improvement
-    ideas from a completed evolutionary run.
+    PostRunHook that authors memory cards from a completed evolutionary run via
+    the librarian write path: each eligible mutation diff is reconciled into
+    clean idea cards, each top-fitness exemplar gets a program card, and one
+    harm-eviction sweep runs per increment.
 
-    Instantiated by Hydra. Accepts a ClassifyingAnalyzer or ClusteringAnalyzer —
-    both implement the Analyzer protocol, so the pipeline is identical for both.
+    Instantiated by Hydra. ``MemorySystem`` threads in the shared backend, llm
+    router, and evictor so the writer and reader share one card bank.
 
     Args:
-        analyzer: Explicit analyser instance. When omitted, one is built from
-            ``llm`` and the Hydra-style fields below.
-        llm: Memory LLM router for the analyser (Hydra ``memory/llm`` group,
-            threaded in by ``MemorySystem``). Required when ``analyzer`` is None.
-        analyzer_type: ``"default"`` → ClassifyingAnalyzer; ``"fast"`` → ClusteringAnalyzer.
-        analyzer_fast_settings: Extra kwargs for ClusteringAnalyzer when ``fast``.
+        llm: Memory LLM router for the librarian agents (Hydra ``memory/llm``
+            group, threaded in by ``MemorySystem``). Required when
+            ``memory_write_enabled`` is True.
+        memory_write_enabled: If True, run the librarian write path.
         memory_write_best_programs_percent: Share of top-fitness programs
-            converted into program cards by the write pipeline.
-        backend: Memory backend factory (Hydra ``memory/backend`` group) used
-            by the write pipeline to build the card bank. Required whenever
-            ``memory_write_enabled`` is True — ``MemorySystem`` threads in the
-            shared backend it built for the read provider, so the writer and
-            reader share one card bank.
+            authored into program cards.
+        ingest_call_timeout_s: Per-call wall-clock bound on each librarian LLM
+            call (reconcile/author); a stalled call past this is skipped and the
+            record retried on a later increment.
+        consolidation_every_n: After this many cards are written across sweeps,
+            schedule one background near-duplicate consolidation pass over the
+            whole bank. 0 (default) disables it; ``librarian.yaml`` sets it on.
+        consolidation_eps: Cosine-distance threshold below which two bank cards
+            are folded into one during a consolidation pass.
+        backend: Memory backend factory (Hydra ``memory/backend`` group) used to
+            build the card bank. Required whenever ``memory_write_enabled`` is
+            True — ``MemorySystem`` threads in the shared backend it built for the
+            read provider, so the writer and reader share one card bank.
         checkpoint_dir: Pins per-run memory cards under the Hydra output dir.
         task_description: Human-readable description of the current task. If empty,
             loaded from the matching problems/ directory using redis_prefix.
         redis_prefix: Redis key prefix (e.g. "chains/hotpotqa/static") used to
             locate the task_description.txt file when task_description is empty.
-        chunk_size: Number of ideas per LLM classification batch.
-        memory_write_enabled: If True, trigger the downstream memory write pipeline.
         fitness_key: Metric key to use as fitness (default "fitness").
+        fitness_higher_is_better: Sort direction for the exemplar slice and the
+            sign of gain attribution.
         metrics_context: When wired, programs whose fitness equals the
             metric's sentinel value are excluded from records and posteriors.
-        logs_dir: Directory for timestamped session logs. Defaults to
-            gigaevo/memory/ideas_tracker/logs/.
+        evictor: Harm evictor shared with the read provider; defaults to a
+            reputation-backed ``HarmEvictor`` when not threaded in.
+        reputation: Reputation model backing the default evictor.
     """
 
     def __init__(
         self,
         *,
-        analyzer: Analyzer | None = None,
         llm: MultiModelRouter | None = None,
-        analyzer_type: str = "default",
-        analyzer_fast_settings: dict[str, Any] | None = None,
-        analyzer_max_concurrent_classifications: int = 8,
-        description_rewriting: bool = True,
         memory_write_enabled: bool = True,
         memory_write_best_programs_percent: float = 5.0,
+        ingest_call_timeout_s: float = 300.0,
+        consolidation_every_n: int = 0,
+        consolidation_eps: float = 0.05,
         backend: MemoryBackendFactory | None = None,
         checkpoint_dir: str | Path | None = None,
         task_description: str = "",
         redis_prefix: str = "",
-        chunk_size: int = 5,
         fitness_key: str = "fitness",
         fitness_higher_is_better: bool = True,
         metrics_context: MetricsContext | None = None,
-        logs_dir: str | Path | None = None,
         evictor: Evictor | None = None,
-        deduplicator: Deduplicator | None = None,
         reputation: ReputationModel | None = None,
         **extras: Any,
     ) -> None:
@@ -652,49 +375,44 @@ class IdeaTracker(IncrementalPostRunHook):
                 "`memory=full` (MemorySystem assembles the backend and threads "
                 "it in), or pass memory_write_enabled=False."
             )
-
-        _ensure_writable_hf_cache()
-        if analyzer is None:
-            if llm is None:
-                raise ValueError(
-                    "IdeaTracker: building an analyzer requires an LLM router. "
-                    "Enable the writer via `memory=writer` or `memory=full` "
-                    "(MemorySystem threads in the `memory/llm` router; swap it "
-                    "with `memory/llm=qwen_instruct`), or pass an explicit analyzer."
-                )
-            analyzer = cast(
-                Analyzer,
-                _build_analyzer_from_hydra_fields(
-                    analyzer_type=analyzer_type,
-                    llm=llm,
-                    analyzer_fast_settings=analyzer_fast_settings,
-                    description_rewriting=description_rewriting,
-                    analyzer_max_concurrent_classifications=analyzer_max_concurrent_classifications,
-                ),
+        if memory_write_enabled and llm is None:
+            raise ValueError(
+                "IdeaTracker: memory_write_enabled=True requires an LLM router "
+                "for the librarian. Enable the writer via `memory=writer` or "
+                "`memory=full` (MemorySystem threads in the `memory/llm` router; "
+                "swap it with `memory/llm=qwen_instruct`)."
             )
 
-        self._analyzer: Analyzer = analyzer
-        self._bank = IdeaBank(chunk_size=chunk_size)
+        _ensure_writable_hf_cache()
+        self._llm = llm
         self._fitness_key = fitness_key
         self._fitness_higher_is_better = fitness_higher_is_better
         self._metrics_context = metrics_context
         self._memory_write_enabled = memory_write_enabled
         self._best_programs_percent = memory_write_best_programs_percent
+        self._ingest_call_timeout_s = ingest_call_timeout_s
+        self._consolidation_every_n = consolidation_every_n
+        self._consolidation_eps = consolidation_eps
+        self._writes_since_consolidation = 0
+        self._consolidation_task: asyncio.Task | None = None
+        self._consolidation_agent: Any | None = None
+        self._consolidation_neighbors: Any | None = None
         self._backend = backend
         self._checkpoint_dir = checkpoint_dir
         self._evictor = evictor
-        self._deduplicator = deduplicator
         self._reputation = (
             reputation if reputation is not None else BetaBinomialReputation()
         )
         self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
-        self._classification_failures: dict[str, int] = {}
-        self._max_classification_failures = 3
-        self._last_entry_count: dict[str, int] = {}
         # the live hook and the post-run hook share one tracker; overlapping
-        # sweeps would interleave bank mutations and _seen_ids bookkeeping
+        # sweeps would interleave store writes and _seen_ids bookkeeping
         self._run_lock = asyncio.Lock()
+        # built lazily on the first sweep: backend.build is heavy I/O and needs
+        # the resolved per-run checkpoint dir
+        self._store: Any | None = None
+        self._gate: CardAdmissionGate | None = None
+        self._librarian: Librarian | None = None
 
         if task_description:
             self._task_description = task_description
@@ -702,19 +420,70 @@ class IdeaTracker(IncrementalPostRunHook):
             self._task_description = _load_task_description(
                 redis_prefix, Path(__file__).resolve()
             )
+        # genuine LLM-condensed one-liner, produced once per run on the first
+        # write sweep; None until then so the call is memoised.
+        self._task_description_summary: str | None = None
 
-        resolved_logs = (
-            Path(logs_dir)
-            if logs_dir is not None
-            else Path(__file__).resolve().parent / "logs"
+    async def _ensure_task_summary(self) -> None:
+        """Condense the task description into a one-line summary, once per run.
+
+        Falls back to the full task description on any LLM failure (and to the
+        empty string when there is no task text), so a memory-LLM hiccup can
+        never block the write path.
+        """
+        if self._task_description_summary is not None:
+            return
+        if not self._task_description:
+            self._task_description_summary = ""
+            return
+        try:
+            resp = await TaskSummaryAgent(self._llm).arun(
+                task_description=self._task_description
+            )
+            self._task_description_summary = (
+                resp.summary.strip() or self._task_description
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Memory][IdeaTracker] task-summary LLM failed ({}); falling back "
+                "to the full task description",
+                exc,
+            )
+            self._task_description_summary = self._task_description
+
+    def _ensure_write_stack(self) -> None:
+        """Build the store, admission gate, and librarian once, lazily."""
+        if self._librarian is not None:
+            return
+        store = self._backend.build(
+            checkpoint_dir=self._checkpoint_dir, evictor=self._evictor
         )
-        resolved_logs.mkdir(parents=True, exist_ok=True)
-        self._log = _SessionLog(resolved_logs)
-
-    @cached_property
-    def _task_summary(self) -> str:
-        """Computed once on first access; cached for the lifetime of this instance."""
-        return _summarise_task_description(self._analyzer, self._task_description)
+        self._store = store
+        self._gate = CardAdmissionGate(
+            store=store,
+            evictor=self._evictor
+            if self._evictor is not None
+            else HarmEvictor(reputation=self._reputation),
+            ledger=WriteLedger(store.config.checkpoint_path / "write_ledger.jsonl"),
+        )
+        # one neighbor source feeds both the online pre-gate and the batch
+        # consolidation pass; it reuses the store's populated A-MEM Chroma index.
+        neighbors = ChromaNeighborSource(store)
+        self._librarian = Librarian(
+            agent=create_reconcile_agent(self._llm, self._task_description),
+            program_author=create_program_author_agent(
+                self._llm, self._task_description
+            ),
+            gate=self._gate,
+            store=store,
+            neighbors=neighbors,
+            task_description=self._task_description,
+            task_description_summary=self._task_description_summary or "",
+        )
+        self._consolidation_neighbors = neighbors
+        self._consolidation_agent = create_consolidate_agent(
+            self._llm, self._task_description
+        )
 
     # ------------------------------------------------------------------
     # PostRunHook interface
@@ -748,9 +517,10 @@ class IdeaTracker(IncrementalPostRunHook):
         *,
         posterior_programs: list[Program] | None = None,
     ) -> None:
-        """Full pipeline: filter → analyse → enrich → log → write.
+        """Full pipeline: filter eligible records → reconcile each diff into
+        cards → author exemplar cards → stamp gain events → harm-evict.
 
-        ``programs`` feeds the expensive LLM analyzer and may be a bounded
+        ``programs`` feeds the expensive librarian agents and may be a bounded
         window (the live hook caps it to keep each sweep inside the engine's
         time budget). ``posterior_programs`` feeds the cheap, pure
         gain-event attribution, which needs the full program set so
@@ -769,70 +539,51 @@ class IdeaTracker(IncrementalPostRunHook):
         *,
         posterior_programs: list[Program] | None,
     ) -> None:
+        if not self._memory_write_enabled:
+            return
+        await self._ensure_task_summary()
         records = self._eligible_records(
             programs, posterior_programs=posterior_programs
         )
+        self._ensure_write_stack()
 
-        try:
-            result = await self._analyzer.analyze_async(records, self._bank)
-        except BaseException:
-            # CancelledError included: records were marked seen before analysis;
-            # without rollback the window's ideas are permanently lost.
-            self._forget_records({r.id for r in records})
-            raise
-        self._bank.apply(result)
-
-        failed_ids = set(result.failed_program_ids)
-        if failed_ids:
-            # Without this the ids stay in _seen_ids and the LLM outage
-            # permanently loses those programs' ideas. Poison programs whose
-            # ideas never classify are retired after the failure cap so they
-            # stop re-burning analyzer calls while inside the window.
-            retry_ids: set[str] = set()
-            for pid in failed_ids:
-                failures = self._classification_failures.get(pid, 0) + 1
-                self._classification_failures[pid] = failures
-                if failures < self._max_classification_failures:
-                    retry_ids.add(pid)
-                else:
-                    logger.warning(
-                        "[Memory][IdeaTracker] program {} failed classification "
-                        "{} times, retiring it from future sweeps.",
-                        pid,
-                        failures,
-                    )
-            self._forget_records(retry_ids)
-
-        if records:
-            stale_ideas = _select_ideas_needing_enrichment(
-                self._bank.all_ideas(), self._last_entry_count
-            )
-            failed_enrichment: set[str] = set()
-            if stale_ideas:
-                outcomes = await _enrich_ideas_with_keywords_and_summaries(
-                    stale_ideas, self._analyzer, self._task_summary
+        cards_written = 0
+        for rec in records:
+            try:
+                written = await asyncio.wait_for(
+                    self._librarian.ingest_idea(
+                        base_parent_id=rec.parents[0] if rec.parents else "",
+                        base_parent_code=rec.parent_code,
+                        child_id=rec.id,
+                        child_code=rec.code,
+                        note=_record_note(rec),
+                    ),
+                    timeout=self._ingest_call_timeout_s,
                 )
-                for outcome in outcomes:
-                    if not outcome.ok:
-                        failed_enrichment.add(outcome.idea.id)
-                        continue
-                    self._bank.enrich(
-                        outcome.idea.id,
-                        keywords=outcome.idea.keywords,
-                        summary=outcome.idea.explanation.summary,
-                        task_summary=self._task_summary,
-                    )
-            # Failed ideas are left unstamped so the next sweep retries them.
-            self._last_entry_count = {
-                idea.id: len(idea.explanation.entries)
-                for idea in self._bank.all_ideas()
-                if idea.id not in failed_enrichment
-            }
+                cards_written += len(written)
+            except TimeoutError:
+                # A stalled memory-LLM call must not starve the rest of the
+                # sweep (sibling ingests, exemplars, harm eviction). Drop this
+                # record so it is retried on a later increment, and continue.
+                logger.warning(
+                    "[Memory][IdeaTracker] ingest of {} timed out after {}s; "
+                    "skipping record for retry next sweep",
+                    rec.id,
+                    self._ingest_call_timeout_s,
+                )
+                self._forget_records({rec.id})
+                continue
+            except BaseException:
+                # CancelledError included: the record was marked seen before
+                # ingest; without rollback the window's idea is lost.
+                self._forget_records({rec.id})
+                raise
 
-        self._log.record("pipeline_complete", total_ideas=len(self._bank.all_ideas()))
+        pool = programs if posterior_programs is None else posterior_programs
+        await self._author_exemplars(pool)
 
         card_gain_events = _card_gain_events_from_programs(
-            programs if posterior_programs is None else posterior_programs,
+            pool,
             fitness_key=self._fitness_key,
             higher_is_better=self._fitness_higher_is_better,
             metrics_context=self._metrics_context,
@@ -847,26 +598,113 @@ class IdeaTracker(IncrementalPostRunHook):
                 },
             },
         )
+        # re-stamping (per-card store writes) and harm eviction are blocking
+        # I/O; keep them off the event loop so in-flight mutations don't stall
+        await asyncio.to_thread(self._restamp_and_sweep, card_gain_events)
+        self._note_writes_and_maybe_consolidate(cards_written)
 
-        # flush (bank serialization) and the write pipeline (backend build +
-        # card ingest) are blocking I/O; keep them off the event loop so
-        # in-flight mutations don't stall for the sweep
-        def _flush_and_write() -> None:
-            self._log.flush(self._bank, records=self._all_records)
-            _run_write_pipeline(
-                self._memory_write_enabled,
-                self._log.banks_file,
-                self._log.programs_file,
-                backend=self._backend,
-                checkpoint_dir=self._checkpoint_dir,
-                best_programs_percent=self._best_programs_percent,
-                higher_is_better=self._fitness_higher_is_better,
-                gain_events=card_gain_events,
-                evictor=self._evictor,
-                deduplicator=self._deduplicator,
+    def _note_writes_and_maybe_consolidate(self, written: int) -> None:
+        """Accumulate cards written and schedule one consolidation pass per
+        ``consolidation_every_n``. The pass runs as a background task so it never
+        blocks the sweep; it is idempotent and safe to skip."""
+        if self._consolidation_every_n <= 0 or written <= 0:
+            return
+        self._writes_since_consolidation += written
+        if self._writes_since_consolidation >= self._consolidation_every_n:
+            self._writes_since_consolidation = 0
+            self._schedule_consolidation()
+
+    def _schedule_consolidation(self) -> None:
+        if self._store is None or self._gate is None:
+            return
+        if self._consolidation_task is not None and not self._consolidation_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop (sync context); defer to a later increment
+        self._consolidation_task = loop.create_task(self._run_consolidation())
+
+    async def _run_consolidation(self) -> None:
+        try:
+            merged = await consolidate(
+                store=self._store,
+                gate=self._gate,
+                neighbors=self._consolidation_neighbors,
+                agent=self._consolidation_agent,
+                eps=self._consolidation_eps,
+            )
+            if merged:
+                logger.info(
+                    "[Memory][IdeaTracker] consolidation merged {} near-dup cards",
+                    merged,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[Memory][IdeaTracker] consolidation pass failed ({}); skipping", exc
             )
 
-        await asyncio.to_thread(_flush_and_write)
+    async def _author_exemplars(self, pool: list[Program]) -> None:
+        """Author a clean ProgramCard for each top-fitness exemplar.
+
+        ``author_program`` is cached on ``program-<id>`` so a re-selected
+        exemplar never re-pays the LLM; the gate re-admits the card (its
+        gain events are restamped immediately after from the full pool).
+        """
+        selected = _select_top_programs(
+            pool,
+            best_programs_percent=self._best_programs_percent,
+            fitness_key=self._fitness_key,
+            higher_is_better=self._fitness_higher_is_better,
+            metrics_context=self._metrics_context,
+        )
+        for prog, fitness in selected:
+            try:
+                authored = await asyncio.wait_for(
+                    self._librarian.author_program(
+                        program_id=prog.id,
+                        code=prog.code,
+                        fitness=fitness,
+                    ),
+                    timeout=self._ingest_call_timeout_s,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "[Memory][IdeaTracker] authoring exemplar {} timed out "
+                    "after {}s; skipping",
+                    prog.id,
+                    self._ingest_call_timeout_s,
+                )
+                continue
+            self._gate.admit(
+                ProgramCard(
+                    id=f"program-{prog.id}",
+                    program_id=prog.id,
+                    task_description=self._task_description,
+                    task_description_summary=self._task_description_summary or "",
+                    description=authored.description,
+                    fitness=fitness,
+                    code=prog.code,
+                    keywords=authored.keywords or [],
+                )
+            )
+
+    def _restamp_and_sweep(
+        self, card_gain_events: dict[str, list[ContextualGain]]
+    ) -> None:
+        """Attach this sweep's use-attributed gain events onto credited cards,
+        then run one harm-eviction pass. Gain events are a pure function of the
+        full pool, so each sweep overwrites them wholesale."""
+        stamper = CardStatsStamper()
+        cards = self._store.card_store.cards
+        for cid in card_gain_events:
+            card = cards.get(cid)
+            if card is None:
+                continue
+            self._store.save_card_direct(
+                stamper.stamp_gain_events(card, card_gain_events)
+            )
+        self._gate.sweep()
 
     def _forget_records(self, ids: set[str]) -> None:
         if not ids:
@@ -909,7 +747,7 @@ class IdeaTracker(IncrementalPostRunHook):
             program_to_record(
                 p,
                 self._task_description,
-                self._task_summary,
+                self._task_description_summary or "",
                 self._fitness_key,
                 parent_codes=parent_codes,
             )

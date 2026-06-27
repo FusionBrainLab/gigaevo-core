@@ -15,7 +15,6 @@ import gigaevo.memory.core as core
 from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
-from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
 from gigaevo.memory.core.evictor import HarmEvictor
 from gigaevo.memory.core.protocols import (
     Auctioneer,
@@ -23,7 +22,6 @@ from gigaevo.memory.core.protocols import (
     CardRenderer,
     CardRetriever,
     CardShortlister,
-    Deduplicator,
     Evictor,
     ReputationModel,
 )
@@ -54,10 +52,6 @@ class TestProtocolConformance:
     def test_renderer(self):
         assert isinstance(EfficacyCardRenderer(), CardRenderer)
 
-    @pytest.mark.parametrize("impl", [NullDeduplicator(), LLMDeduplicator()])
-    def test_deduplicators(self, impl):
-        assert isinstance(impl, Deduplicator)
-
     def test_evictor(self):
         assert isinstance(HarmEvictor(), Evictor)
 
@@ -82,24 +76,6 @@ class TestHydraComposition:
     def test_budget_group(self):
         obj = instantiate(self._load("budget", "top_theta.yaml"))
         assert isinstance(obj, TopThetaBudgeter)
-
-    def test_dedup_none_group(self):
-        obj = instantiate(self._load("dedup", "none.yaml"))
-        assert isinstance(obj, NullDeduplicator)
-
-    def test_dedup_llm_group(self):
-        obj = instantiate(self._load("dedup", "llm.yaml"))
-        assert isinstance(obj, LLMDeduplicator)
-        cfg = obj.config
-        assert cfg.enabled is True
-        assert cfg.top_k_per_query == 10
-        assert cfg.final_top_n == 10
-        assert cfg.min_final_score == 0.05
-        assert cfg.llm_max_retries == 2
-        assert cfg.weights.description == 0.35
-        assert cfg.weights.explanation_summary == 0.2
-        assert cfg.weights.description_explanation_summary == 0.3
-        assert cfg.weights.description_task_description_summary == 0.15
 
     def test_evictor_harm_group(self):
         # _partial_ leaf: MemorySystem completes it with the shared reputation.
@@ -141,9 +117,7 @@ class TestNoHardcodedConstants:
             "read_pipeline.py",
             "renderer.py",
             "retriever.py",
-            "deduplicator.py",
             "evictor.py",
-            "write_pipeline.py",
         ],
     )
     def test_no_literal_thresholds_in_function_bodies(self, module):

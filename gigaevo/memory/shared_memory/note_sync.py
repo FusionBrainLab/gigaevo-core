@@ -46,9 +46,9 @@ class NoteSync:
             "content": str(card.description or ""),
             "category": str(card.category or "general"),
             "context": context,
-            "strategy": str(card.strategy or ""),
+            "strategy": "",
             "keywords": list(card.keywords or []),
-            "links": list(card.links or []),
+            "links": [],
         }
 
     def create_or_update_note(

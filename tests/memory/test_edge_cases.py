@@ -4,15 +4,13 @@ Each test pins current (buggy) behavior so that intentional fixes are
 explicit. When a bug is fixed, update the assertion to match correct behavior.
 """
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import uuid
 
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_update_dedup import append_unique_text
 from gigaevo.memory.shared_memory.models import ProgramCard
 from tests.fakes.agentic_memory import make_test_memory
 
@@ -146,35 +144,6 @@ class TestBug11PersistScaling:
 
 
 # ===========================================================================
-# BUG 12 (MEDIUM): append_unique_text drops short text
-# ===========================================================================
-
-
-class TestBug12AppendUniqueTextSubstring:
-    def test_short_text_is_substring_of_long(self):
-        """'retrieval' is a substring of 'deep retrieval pipeline' →
-        silently discarded even though it could be a separate concept.
-        """
-        result = append_unique_text(
-            "deep retrieval pipeline for multi-hop verification",
-            "retrieval",
-        )
-        # BUG: "retrieval" is dropped because it's a substring of existing text
-        assert result == "deep retrieval pipeline for multi-hop verification"
-        # The new text "retrieval" is silently lost
-
-    def test_unrelated_short_text_appended(self):
-        """Short text that isn't a substring gets appended correctly."""
-        result = append_unique_text("deep retrieval pipeline", "crossover")
-        assert "crossover" in result
-
-    def test_exact_duplicate_correctly_dropped(self):
-        """Exact duplicates should be dropped (correct behavior)."""
-        result = append_unique_text("same text", "same text")
-        assert result == "same text"
-
-
-# ===========================================================================
 # BUG (documented): program_id=0 silently lost
 # ===========================================================================
 
@@ -203,56 +172,6 @@ class TestBugFalsyProgramIdFixed:
         card = normalize_memory_card({"program_id": False, "description": "d"})
         assert card.category == "program"
         assert card.program_id == "False"
-
-
-# ===========================================================================
-# BUG 7 (MEDIUM): Update action falls through to add
-# ===========================================================================
-
-
-class TestBug7UpdateFallthrough:
-    def test_update_target_deleted_between_score_and_apply(self, tmp_path):
-        """If LLM says 'update card X' but card X no longer exists,
-        the update returns empty and falls through to add.
-        """
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card({"id": "existing", "description": "original"})
-
-        # Set up LLM mock returning update action
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps(
-                {
-                    "action": "update",
-                    "updates": [
-                        {
-                            "card_id": "existing",
-                            "update_explanation": True,
-                            "explanation_append": "new info",
-                        }
-                    ],
-                }
-            ),
-            {},
-            None,
-            None,
-        )
-        mem.llm_service = mock_llm
-        mem.dedup.score_duplicate_candidates = MagicMock(
-            return_value=[{"card_id": "existing", "score": 0.8}]
-        )
-
-        # Delete the target card BEFORE the dedup processes
-        # (simulating concurrent deletion)
-        del mem.card_store.cards["existing"]
-
-        # Now save a new card — dedup will try to update "existing" but it's gone
-        mem.save_card({"description": "should be deduped"})
-        # BUG: Falls through to add because apply_merges returns []
-        stats = mem.get_card_write_stats()
-        assert (
-            stats["added"] >= 2
-        )  # Both cards added despite dedup identifying duplicate
 
 
 # ===========================================================================

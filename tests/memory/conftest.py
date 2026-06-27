@@ -15,7 +15,6 @@ def make_memory(tmp_path: Path):
 
         mem = make_memory()                                       # defaults
         mem = make_memory(search_limit=10)                        # override
-        mem = make_memory(card_update_dedup_config={"enabled": True})
     """
 
     def _make_memory(**overrides):

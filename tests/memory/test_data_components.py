@@ -3,10 +3,10 @@ normalize_improvements.
 
 Pure data helpers — no external dependencies.
 
-NOTE: RecordBank, RecordCardExtended, RecordListV2, IncomingIdeas, and the old
-ProgramRecord were removed in the ideas-tracker refactor. Their tests have been
-deleted along with the source code they tested.
-The replacement types are: IdeaBank (idea_bank.py), Idea/ProgramRecord (models.py).
+NOTE: the analyzer / idea-bank machinery was removed in the librarian-write-path
+refactor. Their tests were deleted along with the source they tested. The
+surviving data helpers — normalize_improvement_item, normalize_improvements,
+ProgramRecord — live in models.py.
 """
 
 from gigaevo.memory.ideas_tracker.models import (

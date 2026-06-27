@@ -1,7 +1,7 @@
 # memory=full — read + write both on (the old `memory=local ideas_tracker=default`).
 # ONE assembled MemorySystem node: Hydra builds the component leaves below and
-# passes them to MemorySystem, which threads the shared reputation/backend/dedup/
-# llm in Python (no ${ref:memory.*} sibling web). Swap a component with e.g.
+# passes them to MemorySystem, which threads the shared reputation/backend/llm
+# in Python (no ${ref:memory.*} sibling web). Swap a component with e.g.
 # `memory/llm=qwen_instruct`; tune via `memory.auction.baseline_prior=[5,2]`.
 # Default stack = the EV contextual-bandit treatment: absolute-progress value
 # channel + EV-bid auction + bid-ranked budgeter (works on every algorithm).
@@ -11,7 +11,6 @@
 defaults:
   - llm: gemini
   - reputation: absolute_progress
-  - dedup: llm
   - evictor: harm
   - retriever: gam
   - selector: llm
@@ -20,7 +19,7 @@ defaults:
   - backend: local
   - excluder: none
   - provider: selector
-  - tracker: ideas
+  - tracker: librarian
   - _self_
 
 _target_: gigaevo.memory.MemorySystem

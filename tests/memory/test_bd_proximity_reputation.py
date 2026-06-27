@@ -25,7 +25,7 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core.bd_proximity import BDProximityReputation
 from gigaevo.memory.core.reputation import BetaBinomialReputation
-from gigaevo.memory.shared_memory.models import MemoryCard, MemoryCardExplanation
+from gigaevo.memory.shared_memory.models import MemoryCard
 
 
 def _bs(num_bins: int = 10, max_val: float = 1.0) -> BehaviorSpace:
@@ -48,7 +48,6 @@ def _card(events: list[ContextualGain] | None = None) -> MemoryCard:
         description="d",
         keywords=[],
         gain_events=events,
-        explanation=MemoryCardExplanation(summary=""),
     )
 
 

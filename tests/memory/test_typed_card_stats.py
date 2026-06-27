@@ -23,7 +23,6 @@ from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.core.selection import MemorySelection
 from gigaevo.memory.shared_memory.card_search import format_card_efficacy
 from gigaevo.memory.shared_memory.models import (
-    CardAlias,
     CardStatsBlock,
     DecisionMetrics,
     MemoryCard,
@@ -170,37 +169,6 @@ class TestTypedAuctionSlate:
             assert not undocumented, undocumented
 
 
-class TestCardAlias:
-    def test_aliases_validate_into_typed_entries(self):
-        card = MemoryCard(
-            id="x",
-            aliases=[
-                {
-                    "key": "x-update",
-                    "description": "old wording",
-                    "programs": ["p1"],
-                    "explanations": ["why it was replaced"],
-                }
-            ],
-        )
-        alias = card.aliases[0]
-        assert isinstance(alias, CardAlias)
-        assert alias.key == "x-update"
-        assert alias.description == "old wording"
-
-    def test_alias_rejects_undeclared_keys(self):
-        with pytest.raises(ValidationError):
-            CardAlias(key="k", description="d", wrong=1)
-
-    def test_alias_fields_are_described(self):
-        undocumented = [
-            name
-            for name, field in CardAlias.model_fields.items()
-            if not field.description
-        ]
-        assert not undocumented, undocumented
-
-
 class TestNoDictPlumbingInCardPaths:
     """Source-scan guard: the card decision paths must not re-grow Mapping/
     getattr dual-path fetches (prior directive: typed fields, mypy-checkable)."""
@@ -209,20 +177,14 @@ class TestNoDictPlumbingInCardPaths:
         "gigaevo/memory/core/reputation.py",
         "gigaevo/memory/core/evictor.py",
         "gigaevo/memory/core/renderer.py",
-        "gigaevo/memory/core/deduplicator.py",
-        "gigaevo/memory/core/write_pipeline.py",
         "gigaevo/memory/core/read_pipeline.py",
         "gigaevo/memory/core/protocols.py",
         "gigaevo/memory/shared_memory/card_search.py",
         "gigaevo/memory/shared_memory/card_conversion.py",
         "gigaevo/memory/shared_memory/injection_posterior.py",
-        "gigaevo/memory/shared_memory/card_loader.py",
         "gigaevo/memory/shared_memory/amem_gam_retriever.py",
         "gigaevo/memory/ideas_tracker/models.py",
-        "gigaevo/memory/ideas_tracker/idea_bank.py",
-        "gigaevo/memory/ideas_tracker/analyzers.py",
         "gigaevo/memory/efficacy/stamping.py",
-        "gigaevo/memory/write_pipeline.py",
     ]
     FORBIDDEN = (
         r"getattr\(card",

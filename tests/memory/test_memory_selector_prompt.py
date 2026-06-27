@@ -25,12 +25,6 @@ def test_prompt_drops_numeric_ranking_and_grammar_tax():
     assert "packed-grammar" not in rendered.lower()
 
 
-def test_prompt_keeps_semantic_caveats():
-    rendered = MemorySelectorPrompts.system().format()
-    assert "verified:false" in rendered
-    assert "mechanism_unverified:true" in rendered
-
-
 def test_prompt_within_size_budget():
     raw = MemorySelectorPrompts.system()
     assert len(raw) <= 4000

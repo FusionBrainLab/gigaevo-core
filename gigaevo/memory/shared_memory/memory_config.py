@@ -15,7 +15,6 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_allowed_gam_tools,
     normalize_gam_top_k_by_tool,
 )
-from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 
 
 class GamConfig(BaseModel):
@@ -70,7 +69,6 @@ class MemoryConfig(BaseModel):
     enable_llm_card_enrichment: bool = False
     api: ApiConfig | None = None
     gam: GamConfig = Field(default_factory=GamConfig)
-    dedup: CardUpdateDedupConfig = Field(default_factory=CardUpdateDedupConfig)
 
     @property
     def index_file(self) -> Path:

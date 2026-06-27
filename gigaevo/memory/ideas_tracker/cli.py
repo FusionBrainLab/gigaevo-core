@@ -44,14 +44,6 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--logs-dir",
-        default=None,
-        help=(
-            "Write ideas_tracker logs into this existing directory. "
-            "A timestamped subfolder will be created per run."
-        ),
-    )
-    parser.add_argument(
         "--memory-write",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -125,7 +117,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     tracker = IdeaTracker(
         llm=build_router(args.model, args.base_url, args.api_key),
-        logs_dir=args.logs_dir,
         redis_prefix=args.redis_prefix or "",
         checkpoint_dir=args.checkpoint_dir,
         backend=backend,

@@ -235,9 +235,8 @@ When clustering by what the CODE actually changed, read `diff` for `change_form=
 1. **Cluster by what the CODE actually changed**, not by self-reported archetype. Each child's index MUST appear in EXACTLY ONE cluster's `child_indices`. Union of `child_indices` MUST cover every index 0..n-1 once.
 2. **Labels** — short (≤5 words), mutually exclusive, discriminating (e.g. `threshold tighten`, `loop unroll`, `early termination`).
 3. **representative_anchors** — for each cluster, 1–3 LITERAL strings copied verbatim from the cluster's diff/code: numeric constants that changed, identifiers added/removed, or distinctive expressions. These anchor the cluster so the downstream suggester can talk about specific code, not vague labels.
-4. **failure_signature** — when ANY child in the cluster has `is_valid=false`, set this to a concrete failure-mode string named from `error_summary` (e.g. "IndexError when k=4 reached", "NaN from sqrt of negative", "timeout in inner loop"). Empty when all children in the cluster were valid.
-5. **mechanism_note** — for clusters with at least one valid child, a brief sentence explaining what the cluster's code change does (mechanistically) and how it would move the primary metric. Empty when the entire cluster failed (use `failure_signature` instead).
-6. **Summary** — one sentence naming the dominant outcome qualitatively (e.g. "Three threshold tweaks; loop-structure rewrites; one early-termination attempt; nothing structural has shifted yet").
+4. **failure_signature** / **mechanism_note** — populate per their schema descriptions, which define the per-cluster validity gate (which one to fill for failed vs valid children) and carry worked examples.
+5. **Summary** — one sentence naming the dominant outcome qualitatively (e.g. "Three threshold tweaks; loop-structure rewrites; one early-termination attempt; nothing structural has shifted yet").
 
 ## OUTPUT
 

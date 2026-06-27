@@ -9,16 +9,12 @@ if TYPE_CHECKING:
 from loguru import logger
 
 from gigaevo.exceptions import MemoryRetrieverError
-from gigaevo.memory.core.deduplicator import LLMDeduplicator
 from gigaevo.memory.core.events import (
     emit_memory_event,
     memory_event_context,
     resolve_memory_event_path,
 )
-from gigaevo.memory.core.evictor import HarmEvictor
-from gigaevo.memory.core.protocols import Deduplicator, Evictor
-from gigaevo.memory.core.write_ledger import WriteLedger
-from gigaevo.memory.core.write_pipeline import MemoryWritePipeline
+from gigaevo.memory.core.protocols import Evictor
 from gigaevo.memory.shared_memory.agentic_runtime import (
     AgenticRuntime,
     init_agentic_storage,
@@ -30,7 +26,6 @@ from gigaevo.memory.shared_memory.card_conversion import (
     AnyCard,
     normalize_memory_card,
 )
-from gigaevo.memory.shared_memory.card_dedup import CardDedup
 from gigaevo.memory.shared_memory.card_search import (
     format_search_results,
     search_cards_by_keyword,
@@ -76,7 +71,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
         llm_service: LLMServiceProtocol | None = None,
         generator: GeneratorProtocol | None = None,
         evictor: Evictor | None = None,
-        deduplicator: Deduplicator | None = None,
     ) -> None:
         self.config = config
 
@@ -132,38 +126,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 card_store=self.card_store,
             )
         self.research_agent: ResearchAgentProtocol | None = None
-
-        # --- Card dedup (always created; config.enabled gates scoring) ---
-        # An injected LLMDeduplicator carries its own config, which must drive
-        # the engine — reconcile() consults engine.config, not wrapper config.
-        engine_dedup_cfg = (
-            deduplicator.config
-            if isinstance(deduplicator, LLMDeduplicator)
-            else cfg.dedup
-        )
-        self.dedup = CardDedup(
-            card_store=self.card_store,
-            llm_service=self.llm_service,
-            config=engine_dedup_cfg,
-            allowed_gam_tools=cfg.gam.normalized_allowed_tools,
-            gam_store_dir=cfg.gam_store_dir,
-            export_file=cfg.export_file,
-            checkpoint_dir=cfg.checkpoint_path,
-            embedding_model_name=cfg.embedding_model_name,
-        )
-        if deduplicator is None:
-            deduplicator = LLMDeduplicator(config=cfg.dedup, engine=self.dedup)
-        elif isinstance(deduplicator, LLMDeduplicator):
-            # Always rebind: the write path builds a fresh backend per sweep,
-            # so a shared singleton must not stay bound to a stale engine.
-            deduplicator.engine = self.dedup
-        self.write_pipeline = MemoryWritePipeline(
-            store=self,
-            evictor=evictor if evictor is not None else HarmEvictor(),
-            deduplicator=deduplicator,
-            ledger=WriteLedger(cfg.checkpoint_path / "write_ledger.jsonl"),
-            event_path=self._event_path,
-        )
 
         # --- GAM search ---
         self.gam: GamSearch | None = None
@@ -326,8 +288,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         the returned list may be shorter than ``merges``. The bank index is
         persisted once at the end iff at least one merge landed.
 
-        Called by ``MemoryWritePipeline`` after the dedup LLM returns an
-        ``update`` decision; the pipeline owns write_stats and ledger rows.
+        Called by ``CardAdmissionGate.merge`` when the librarian's reconcile
+        hop folds a new idea into an existing card.
 
         Returns:
             The card ids that were successfully updated, in input order.
@@ -390,7 +352,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
 
         if self.note_sync is not None:
             self.note_sync.sync_card_to_amem_with_evolution(store.cards[card_id])
-        self.dedup.invalidate_retrievers()
 
         rebuilt = False
         self._iters_after_rebuild += 1
@@ -408,7 +369,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 "sync_mode": "api" if sync is not None else "local",
                 "note_sync_enabled": self.note_sync is not None,
                 "enriched_fields": sorted(enrichments),
-                "dedup_retrievers_invalidated": True,
                 "iters_after_rebuild": self._iters_after_rebuild,
                 "rebuild_interval": self.config.rebuild_interval,
                 "rebuild_triggered": rebuilt,
@@ -417,16 +377,12 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return card_id, rebuilt
 
     def save_card_direct(self, card: AnyCard) -> str:
-        """Persist one already-normalized card, bypassing the write pipeline.
+        """Persist one already-normalized card straight into the bank.
 
-        Skips the harm gate, dedup reconciliation, write_stats, and the write
-        ledger — the card is inserted as-is (with optional LLM enrichment and
-        API/A-mem sync) and the bank index is flushed to disk, unless the
-        insert already triggered a periodic rebuild (which persists itself).
-
-        Use only when the ingest verdict is already decided: the pipeline's
-        known-id update, program fast-path, and post-dedup add branches.
-        External callers should go through ``save_card`` instead.
+        The card is inserted as-is (with optional LLM enrichment and API/A-mem
+        sync) and the bank index is flushed to disk, unless the insert already
+        triggered a periodic rebuild (which persists itself). Admission and
+        dedup decisions live upstream in the librarian and ``CardAdmissionGate``.
 
         Returns:
             The id the card was stored under (minted if the card had none).
@@ -437,19 +393,18 @@ class AmemGamMemory(GigaEvoMemoryBase):
         return card_id
 
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
-        """Save a memory card via the modular write pipeline.
+        """Persist a memory card (raw dict or model) directly into the bank.
+
+        Admission decisions live upstream in the librarian and
+        ``CardAdmissionGate``; the store only normalizes and persists.
 
         Args:
             card: Raw dict or Pydantic card to save. Normalized internally.
 
         Returns:
-            Card ID of the saved (or deduplicated) card.
+            Card ID the card was stored under (minted if it had none).
         """
-        return self.write_pipeline.ingest(card)
-
-    def sweep_harmful(self) -> list[str]:
-        """Evict every card whose injection posterior is confidently harmful."""
-        return self.write_pipeline.sweep()
+        return self.save_card_direct(normalize_memory_card(card))
 
     def save(self, data: str, category: str = "general") -> str:
         """Save a text description as a new memory card."""
@@ -752,11 +707,8 @@ class AmemGamMemory(GigaEvoMemoryBase):
         """Return a card by ID, or None if not found."""
         return self.card_store.cards.get(card_id)
 
-    def get_card_write_stats(self) -> dict[str, int]:
-        return dict(self.card_store.write_stats)
-
     def rebuild(self) -> None:
-        """Persist cards, re-export JSONL, rebuild GAM index and dedup retrievers."""
+        """Persist cards, re-export JSONL, and rebuild the GAM index."""
         started = perf_counter()
         serialized = self.card_store.serialize_all()
         self._persist_index(serialized=serialized)
@@ -797,7 +749,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 outcome = "gam_build_failed"
                 if track_state:
                     self._state.mark_error(f"GAM build failed: {exc}")
-        self.dedup.invalidate_retrievers()
         self._iters_after_rebuild = 0
         self._emit_store_event(
             "store.rebuild",
@@ -808,7 +759,6 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 "exported": exported,
                 "export_file": self.config.export_file,
                 "research_agent_ready": self.research_agent is not None,
-                "dedup_retrievers_invalidated": True,
                 "duration_ms": round((perf_counter() - started) * 1000.0, 3),
             },
             level="INFO" if outcome != "gam_build_failed" else "WARNING",

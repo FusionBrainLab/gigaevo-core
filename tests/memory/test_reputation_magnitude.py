@@ -10,10 +10,7 @@ from __future__ import annotations
 
 from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core.reputation import BetaBinomialReputation
-from gigaevo.memory.shared_memory.models import (
-    MemoryCard,
-    MemoryCardExplanation,
-)
+from gigaevo.memory.shared_memory.models import MemoryCard
 
 
 def _card(gain_events: list[ContextualGain] | None) -> MemoryCard:
@@ -22,7 +19,6 @@ def _card(gain_events: list[ContextualGain] | None) -> MemoryCard:
         description="d",
         keywords=[],
         gain_events=gain_events,
-        explanation=MemoryCardExplanation(summary=""),
     )
 
 

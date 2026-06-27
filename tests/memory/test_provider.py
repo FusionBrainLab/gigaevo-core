@@ -260,8 +260,8 @@ class TestSelectorMemoryProvider:
         assert provider._backend_factory is factory
 
     def test_read_backend_receives_no_write_components(self) -> None:
-        """The read-side backend never ingests; evictor/deduplicator are
-        write-path components plumbed via IdeaTracker, not the provider."""
+        """The read-side backend never ingests; the evictor is a write-path
+        component plumbed via IdeaTracker, not the provider."""
         with patch.object(
             LocalMemoryBackendFactory, "build", return_value=MagicMock()
         ) as mock_build:
@@ -271,7 +271,6 @@ class TestSelectorMemoryProvider:
             )
             provider._get_pipeline()
             assert "evictor" not in mock_build.call_args.kwargs
-            assert "deduplicator" not in mock_build.call_args.kwargs
 
     def test_unbound_retriever_research_raises(self) -> None:
         with pytest.raises(RuntimeError, match="bind"):

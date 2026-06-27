@@ -169,10 +169,6 @@ class TestCliCsvPath:
                 "gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker.run"
             ) as mock_run,
             patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-                return_value="s",
-            ),
-            patch(
                 "gigaevo.memory.ideas_tracker.cli.build_router",
                 return_value=FakeMemoryRouter(),
             ),
@@ -192,10 +188,6 @@ class TestCliCsvPath:
             patch(
                 "gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker.run"
             ) as mock_run,
-            patch(
-                "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-                return_value="s",
-            ),
             patch(
                 "gigaevo.memory.ideas_tracker.cli.build_router",
                 return_value=FakeMemoryRouter(),

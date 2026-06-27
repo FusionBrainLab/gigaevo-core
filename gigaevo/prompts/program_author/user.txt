@@ -1,0 +1,11 @@
+Author one library card for this high-fitness exemplar program.
+
+## FITNESS
+{fitness}
+
+## PROGRAM
+```python
+{code}
+```
+
+Return one card matching the structured-output schema and the WHAT-MAKES-A-GOOD-EXEMPLAR-CARD and RULES contracts in the system prompt. No prose, no preamble, no fences.

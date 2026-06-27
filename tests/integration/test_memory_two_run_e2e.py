@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
 import pytest
@@ -375,17 +375,13 @@ class TestTwoRunMemoryLifecycle:
         run_a_programs = _make_run_a_programs()
 
         # 1. IdeaTracker filters programs and converts to records
-        with patch(
-            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-            return_value="Multi-hop fact verification",
-        ):
-            from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
-            tracker = IdeaTracker(
-                llm=FakeMemoryRouter(),
-                task_description="Verify multi-hop claims using evidence chains",
-                memory_write_enabled=False,
-            )
+        tracker = IdeaTracker(
+            llm=FakeMemoryRouter(),
+            task_description="Verify multi-hop claims using evidence chains",
+            memory_write_enabled=False,
+        )
 
         records = tracker._eligible_records(run_a_programs)
         # Root (no parents) is filtered, 3 children remain
@@ -626,17 +622,13 @@ class TestRunAIdeaTrackerProgramNative:
 
     def test_idea_tracker_filters_correctly(self) -> None:
         """IdeaTracker._get_new_programs filters roots and zero-fitness."""
-        with patch(
-            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-            return_value="Summary",
-        ):
-            from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
-            tracker = IdeaTracker(
-                llm=FakeMemoryRouter(),
-                task_description="Test",
-                memory_write_enabled=False,
-            )
+        tracker = IdeaTracker(
+            llm=FakeMemoryRouter(),
+            task_description="Test",
+            memory_write_enabled=False,
+        )
 
         programs = _make_run_a_programs()
         records = tracker._eligible_records(programs)
@@ -651,17 +643,13 @@ class TestRunAIdeaTrackerProgramNative:
     @pytest.mark.asyncio
     async def test_on_run_complete_calls_pipeline(self) -> None:
         """on_run_complete fetches programs from storage and runs pipeline."""
-        with patch(
-            "gigaevo.memory.ideas_tracker.ideas_tracker._summarise_task_description",
-            return_value="Summary",
-        ):
-            from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
+        from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
-            tracker = IdeaTracker(
-                llm=FakeMemoryRouter(),
-                task_description="Test",
-                memory_write_enabled=False,
-            )
+        tracker = IdeaTracker(
+            llm=FakeMemoryRouter(),
+            task_description="Test",
+            memory_write_enabled=False,
+        )
 
         tracker.run_increment = AsyncMock()
 

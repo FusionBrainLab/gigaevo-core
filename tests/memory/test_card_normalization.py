@@ -12,9 +12,7 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_memory_card,
 )
 from gigaevo.memory.shared_memory.models import (
-    CardAlias,
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
 )
 from gigaevo.memory.shared_memory.utils import _to_int, _to_list
@@ -157,21 +155,31 @@ class TestNormalizeGeneralCard:
         result = normalize_memory_card({"context_summary": "s"})
         assert result.task_description_summary == "s"
 
-    def test_explanation_string_becomes_summary(self):
-        result = normalize_memory_card({"explanation": "just a string"})
-        assert result.explanation.explanations == []
-        assert result.explanation.summary == "just a string"
-
-    def test_explanation_list_becomes_empty(self):
-        result = normalize_memory_card({"explanation": [1, 2, 3]})
-        assert result.explanation.explanations == []
-        assert result.explanation.summary == ""
-
-    def test_explanation_dict_preserved(self):
-        expl = {"explanations": ["a", "b"], "summary": "sum"}
-        result = normalize_memory_card({"explanation": expl})
-        assert result.explanation.explanations == ["a", "b"]
-        assert result.explanation.summary == "sum"
+    def test_legacy_dropped_keys_are_ignored(self):
+        result = normalize_memory_card(
+            {
+                "id": "c1",
+                "description": "d",
+                "explanation": {"explanations": ["a"], "summary": "s"},
+                "strategy": "exploration",
+                "last_generation": 9,
+                "aliases": [{"key": "c1-v1", "description": "old"}],
+                "works_with": ["idea-2"],
+                "links": ["idea-3"],
+            }
+        )
+        assert isinstance(result, MemoryCard)
+        assert result.description == "d"
+        assert set(result.model_dump()).isdisjoint(
+            {
+                "explanation",
+                "strategy",
+                "last_generation",
+                "aliases",
+                "works_with",
+                "links",
+            }
+        )
 
     def test_gain_events_non_list_becomes_none(self):
         result = normalize_memory_card({"gain_events": "bad"})
@@ -196,22 +204,6 @@ class TestNormalizeGeneralCard:
         result = normalize_memory_card({"keywords": None})
         assert result.keywords == []
 
-    def test_last_generation_non_int(self):
-        result = normalize_memory_card({"last_generation": "abc"})
-        assert result.last_generation == 0
-
-    def test_last_generation_valid(self):
-        result = normalize_memory_card({"last_generation": 42})
-        assert result.last_generation == 42
-
-    def test_strategy_preserved(self):
-        result = normalize_memory_card({"strategy": "exploration"})
-        assert result.strategy == "exploration"
-
-    def test_strategy_empty_when_missing(self):
-        result = normalize_memory_card({})
-        assert result.strategy == ""
-
     def test_full_roundtrip(self):
         card = {
             "id": "test-1",
@@ -219,25 +211,19 @@ class TestNormalizeGeneralCard:
             "description": "Use simulated annealing",
             "task_description": "Solve TSP",
             "task_description_summary": "TSP solver",
-            "strategy": "exploitation",
-            "last_generation": 15,
             "programs": ["p1", "p2"],
-            "aliases": [{"key": "test-1-update", "description": "SA (initial)"}],
             "keywords": ["annealing", "local-search"],
             "gain_events": [
                 {"context": {"parent_metrics": {"min_area": 0.5}}, "gain": 0.01}
             ],
-            "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
-            "works_with": ["idea-2"],
-            "links": ["idea-3"],
         }
         result = normalize_memory_card(card)
         assert result.id == "test-1"
         assert result.category == "insight"
         assert result.description == "Use simulated annealing"
-        assert result.last_generation == 15
         assert result.programs == ["p1", "p2"]
-        assert result.explanation.summary == "SA works"
+        assert result.keywords == ["annealing", "local-search"]
+        assert len(result.gain_events) == 1
 
     def test_does_not_mutate_input(self):
         original = {"id": "x", "description": "d", "programs": ["p"]}
@@ -279,30 +265,24 @@ class TestNormalizeProgramCard:
         result = normalize_memory_card({"category": "program", "fitness": "abc"})
         assert result.fitness is None
 
-    def test_connected_ideas_preserved(self):
-        ideas = [{"idea_id": "i1", "description": "d1"}]
-        result = normalize_memory_card(
-            {"category": "program", "connected_ideas": ideas}
-        )
-        assert len(result.connected_ideas) == 1
-        assert result.connected_ideas[0].idea_id == "i1"
-        assert result.connected_ideas[0].description == "d1"
-
-    def test_extra_fields_stripped(self):
+    def test_legacy_keys_dropped_keeps_kept_program_fields(self):
         result = normalize_memory_card(
             {
                 "category": "program",
                 "program_id": "p1",
+                "connected_ideas": [{"idea_id": "i1", "description": "d1"}],
                 "links": ["l1"],
                 "strategy": "hybrid",
                 "keywords": ["k1"],
                 "aliases": [{"key": "a1", "description": "d1"}],
             }
         )
-        assert "links" not in result
-        assert "strategy" not in result
-        assert "keywords" not in result
-        assert "aliases" not in result
+        assert isinstance(result, ProgramCard)
+        assert result.program_id == "p1"
+        assert result.keywords == ["k1"]
+        assert set(result.model_dump()).isdisjoint(
+            {"connected_ideas", "links", "strategy", "aliases"}
+        )
 
     def test_code_preserved(self):
         result = normalize_memory_card({"category": "program", "code": "def f(): pass"})
@@ -352,38 +332,6 @@ class TestNormalizeEdgeCases:
     def test_none_program_id_does_not_trigger(self):
         result = normalize_memory_card({"program_id": None})
         assert isinstance(result, MemoryCard)
-
-    def test_explanation_with_extra_keys_preserved(self):
-        """explanation dict may have extra keys beyond explanations/summary."""
-        expl = {"explanations": ["a"], "summary": "s", "extra": "val"}
-        normalize_memory_card({"explanation": expl})
-        # Only explanations and summary are extracted
-        assert "extra" not in MemoryCardExplanation.model_fields
-
-    def test_aliases_validate_into_card_alias(self):
-        """Alias version history validates into typed CardAlias entries."""
-        aliases = [
-            {
-                "key": "idea-1-update",
-                "description": "old description",
-                "programs": ["p1", "p2"],
-                "explanations": ["initial explanation"],
-            },
-            {
-                "key": "idea-1-canonical-merge",
-                "description": "updated description",
-                "programs": ["p3"],
-                "explanations": ["revised"],
-            },
-        ]
-        result = normalize_memory_card(
-            {"id": "idea-1", "description": "current", "aliases": aliases}
-        )
-        assert isinstance(result, MemoryCard)
-        assert len(result.aliases) == 2
-        assert all(isinstance(a, CardAlias) for a in result.aliases)
-        assert result.aliases[0].key == "idea-1-update"
-        assert result.aliases[1].programs == ["p3"]
 
     def test_gain_events_survive_normalize_from_typed_card(self):
         original = MemoryCard(
@@ -444,11 +392,6 @@ class TestRawCardRecord:
         card = RawCardRecord.model_validate({"program_id": 0}).to_card()
         assert isinstance(card, ProgramCard)
         assert card.program_id == "0"
-
-    def test_string_explanation_becomes_summary(self):
-        record = RawCardRecord.model_validate({"explanation": "why it works"})
-        assert record.explanation.summary == "why it works"
-        assert record.explanation.explanations == []
 
     def test_program_card_category_roundtrips(self):
         raw = {"program_id": "p1", "category": "program-seed"}

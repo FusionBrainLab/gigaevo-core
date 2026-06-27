@@ -4,16 +4,13 @@ All HTTP calls are mocked via httpx mock transport.
 """
 
 import json
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
-from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.utils import truncate_text
-from tests.fakes.agentic_memory import make_test_memory
 
 # ---------------------------------------------------------------------------
 # _ConceptApiClient
@@ -221,130 +218,3 @@ class TestTruncateText:
         result = truncate_text(text)
         assert len(result) == 1200
         assert result.endswith("...")
-
-
-# ---------------------------------------------------------------------------
-# _decide_card_action with mocked LLM
-# ---------------------------------------------------------------------------
-
-
-def _make_memory(tmp_path, **overrides):
-    return make_test_memory(tmp_path, **overrides)
-
-
-class TestDecideCardAction:
-    def test_unreachable_llm_defaults_to_discard(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.dedup.llm_service = MagicMock()
-        mem.dedup.llm_service.generate.side_effect = RuntimeError("unreachable")
-        result = mem.dedup.ask_llm_for_dedup_decision(
-            normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
-        )
-        assert result["action"] == "discard"
-        assert result["reason"] == "dedup llm unavailable"
-
-    def test_no_llm_configured_defaults_to_add(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        result = mem.dedup.ask_llm_for_dedup_decision(
-            normalize_memory_card({"description": "test"}), [{"card_id": "c1"}]
-        )
-        assert result["action"] == "add"
-
-    def test_no_candidates_returns_add(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.llm_service = MagicMock()
-        result = mem.dedup.ask_llm_for_dedup_decision(
-            normalize_memory_card({"description": "test"}), []
-        )
-        assert result["action"] == "add"
-        mem.llm_service.generate.assert_not_called()
-
-    def test_llm_discard_parsed(self, tmp_path):
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card({"id": "existing", "description": "original"})
-
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps({"action": "discard", "duplicate_of": "existing"}),
-            {},
-            None,
-            None,
-        )
-        mem.llm_service = mock_llm
-        mem.dedup.llm_service = mock_llm
-
-        candidates = [{"card_id": "existing", "final_score": 0.9}]
-        result = mem.dedup.ask_llm_for_dedup_decision(
-            normalize_memory_card({"description": "dup"}), candidates
-        )
-        assert result["action"] == "discard"
-        assert result["duplicate_of"] == "existing"
-
-    def test_llm_exception_retries(self, tmp_path):
-        mem = _make_memory(
-            tmp_path,
-            card_update_dedup_config={
-                "enabled": True,
-                "llm": {"max_retries": 3},
-            },
-        )
-        mem.save_card({"id": "c1", "description": "test"})
-
-        mock_llm = MagicMock()
-        mock_llm.generate.side_effect = [
-            Exception("fail 1"),
-            Exception("fail 2"),
-            (json.dumps({"action": "add"}), {}, None, None),
-        ]
-        mem.llm_service = mock_llm
-        mem.dedup.llm_service = mock_llm
-
-        candidates = [{"card_id": "c1", "final_score": 0.5}]
-        result = mem.dedup.ask_llm_for_dedup_decision(
-            normalize_memory_card({"description": "new"}), candidates
-        )
-        assert result["action"] == "add"
-        assert mock_llm.generate.call_count == 3
-
-
-# ---------------------------------------------------------------------------
-# _dedup_candidates_for_llm
-# ---------------------------------------------------------------------------
-
-
-class TestDedupCandidatesForLlm:
-    def test_builds_payload(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card(
-            {
-                "id": "c1",
-                "description": "Use simulated annealing",
-                "task_description_summary": "TSP",
-                "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
-            }
-        )
-
-        candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
-        result = mem.dedup.format_dedup_candidates_for_llm(candidates)
-        assert len(result) == 1
-        assert result[0]["card_id"] == "c1"
-        assert "simulated annealing" in result[0]["description"]
-        assert result[0]["explanation_summary"] == "SA works"
-
-    def test_missing_card_skipped(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        candidates = [{"card_id": "nonexistent", "final_score": 0.5}]
-        result = mem.dedup.format_dedup_candidates_for_llm(candidates)
-        assert result == []
-
-    def test_truncates_long_text(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card(
-            {
-                "id": "c1",
-                "description": "x" * 5000,
-            }
-        )
-        candidates = [{"card_id": "c1", "final_score": 0.8, "scores": {}}]
-        result = mem.dedup.format_dedup_candidates_for_llm(candidates)
-        assert len(result[0]["description"]) <= 1200

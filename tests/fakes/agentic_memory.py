@@ -85,7 +85,6 @@ class FakeRetriever:
                     continue
                 jaccard = len(tokens & doc_tokens) / len(union)
                 if jaccard > 0:
-                    # Put score in meta so dedup.score_duplicate_candidates can read it
                     hit_meta = {**meta, "score": jaccard}
                     scored.append(
                         FakeSearchResult(
@@ -439,18 +438,13 @@ def make_test_memory(
     Common overrides:
         search_limit, rebuild_interval, enable_llm_synthesis,
         enable_memory_evolution, enable_llm_card_enrichment,
-        card_update_dedup_config (dict),
         api (ApiConfig instance or None),
         gam (GamConfig instance or None).
     """
     from pathlib import Path
 
-    from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
     from gigaevo.memory.shared_memory.memory import AmemGamMemory
     from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
-
-    dedup_raw = overrides.pop("card_update_dedup_config", None)
-    dedup = CardUpdateDedupConfig.model_validate(dedup_raw or {})
 
     api = overrides.pop("api", None)
     gam = overrides.pop("gam", None) or GamConfig()
@@ -464,7 +458,6 @@ def make_test_memory(
         enable_llm_card_enrichment=overrides.pop("enable_llm_card_enrichment", False),
         api=api,
         gam=gam,
-        dedup=dedup,
     )
     return AmemGamMemory(config=config, **overrides)
 
@@ -498,12 +491,8 @@ def make_test_memory_with_agentic(
     from pathlib import Path
     from unittest.mock import MagicMock
 
-    from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
     from gigaevo.memory.shared_memory.memory import AmemGamMemory
     from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
-
-    dedup_raw = overrides.pop("card_update_dedup_config", None)
-    dedup = CardUpdateDedupConfig.model_validate(dedup_raw or {})
 
     api = overrides.pop("api", None)
     gam = overrides.pop("gam", None) or GamConfig()
@@ -517,7 +506,6 @@ def make_test_memory_with_agentic(
         enable_llm_card_enrichment=overrides.pop("enable_llm_card_enrichment", False),
         api=api,
         gam=gam,
-        dedup=dedup,
     )
 
     mock_llm = MagicMock()

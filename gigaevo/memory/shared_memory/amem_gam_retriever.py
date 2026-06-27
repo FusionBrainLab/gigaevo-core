@@ -67,24 +67,15 @@ def render_card_text(card: AnyCard) -> str:
         f"task_description_summary: {card.task_description_summary}",
         f"task_description: {card.task_description}",
         f"category: {card.category}",
-        f"strategy: {card.strategy}",
         f"keywords: {', '.join(topical_keywords(card.keywords))}",
     ]
     if isinstance(card, ProgramCard):
         parts += [
             f"program_id: {card.program_id}",
             f"fitness: {card.fitness if card.fitness is not None else ''}",
-            f"connected_ideas: {[idea.model_dump() for idea in card.connected_ideas]}",
         ]
     else:
-        parts += [
-            f"last_generation: {card.last_generation}",
-            f"programs: {card.programs}",
-            f"aliases: {card.aliases}",
-            f"explanation_summary: {card.explanation.summary}",
-            f"works_with: {card.works_with}",
-        ]
-    parts.append(f"links: {card.links}")
+        parts.append(f"programs: {card.programs}")
     efficacy = format_card_efficacy(card)
     if efficacy:
         parts.append(efficacy)

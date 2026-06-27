@@ -24,7 +24,6 @@ from gigaevo.memory.shared_memory.card_search import (
 from gigaevo.memory.shared_memory.models import (
     CardStatsBlock,
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
 )
 
@@ -44,14 +43,12 @@ def _events(gains: list[float]) -> list[ContextualGain]:
 def _mcard(
     id: str = "m1",
     gain_events: list[ContextualGain] | None = None,
-    mechanism: str = "",
 ) -> MemoryCard:
     return MemoryCard(
         id=id,
         description=_DESC,
         keywords=[],
         gain_events=gain_events,
-        explanation=MemoryCardExplanation(summary=mechanism),
     )
 
 
@@ -67,7 +64,6 @@ def _pcard(
         keywords=[],
         fitness=fitness,
         gain_events=gain_events,
-        connected_ideas=[],
     )
 
 
@@ -212,41 +208,6 @@ class TestMutatorFacingRender:
         rendered = EfficacyCardRenderer().render(_pcard(fitness=None), None)
         assert "efficacy:" not in rendered
 
-    def test_render_card_includes_mechanism_line(self) -> None:
-        rendered = EfficacyCardRenderer().render(
-            _mcard(mechanism="ratio features expose interactions to tree splits"), None
-        )
-        assert rendered == (
-            f"{_DESC}\nmechanism: ratio features expose interactions to tree splits"
-        )
-
-    def test_render_card_mechanism_precedes_efficacy(self) -> None:
-        block = CardStatsBlock(
-            intro_events=3, IntroGain_best_median=0.012, efficacy_confident=True
-        )
-        rendered = EfficacyCardRenderer().render(
-            _mcard(mechanism="caps target leakage at fold boundaries"), block
-        )
-        lines = rendered.splitlines()
-        assert lines[0] == _DESC
-        assert lines[1] == "mechanism: caps target leakage at fold boundaries"
-        assert lines[2].startswith("efficacy:")
-
-    def test_render_card_skips_mechanism_identical_to_description(self) -> None:
-        rendered = EfficacyCardRenderer().render(_mcard(mechanism=_DESC), None)
-        assert rendered == _DESC
-
-    def test_render_card_coerced_explanation_summary(self) -> None:
-        rendered = EfficacyCardRenderer().render(
-            MemoryCard(
-                id="m-expl",
-                description=_DESC,
-                explanation={"summary": "smooths sparse categories"},
-            ),
-            None,
-        )
-        assert "mechanism: smooths sparse categories" in rendered
-
 
 class TestRetrievalCorpusRender:
     """``make_card_text`` (GAM corpus) drops the dead ``usage`` blob and emits the
@@ -311,12 +272,6 @@ class TestRetrievalCorpusRender:
     def test_content_alias_resolves_into_description_line(self) -> None:
         text = make_card_text({"id": "m1", "content": "alias body"})
         assert "description: alias body" in text
-
-    def test_string_explanation_renders_as_summary(self) -> None:
-        text = make_card_text(
-            {"id": "m2", "description": _DESC, "explanation": "why it works"}
-        )
-        assert "explanation_summary: why it works" in text
 
     def test_program_record_renders_program_fields_only(self) -> None:
         text = make_card_text(

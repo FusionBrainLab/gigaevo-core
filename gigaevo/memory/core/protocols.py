@@ -5,7 +5,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.memory.context import DecisionContext
 from gigaevo.memory.core.auctioneer import AuctionBid, AuctionCandidate
-from gigaevo.memory.shared_memory.card_dedup import DedupDecision
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
     CardStatsBlock,
@@ -117,16 +116,6 @@ class CardRenderer(Protocol):
     def render(
         self, card: AnyCard | None, block: CardStatsBlock | None = None
     ) -> str: ...
-
-
-@runtime_checkable
-class Deduplicator(Protocol):
-    """Reconciles an incoming card against the existing bank into a
-    DedupDecision (add / discard / update-with-merges)."""
-
-    def reconcile(
-        self, card: AnyCard, bank: Mapping[str, AnyCard]
-    ) -> DedupDecision: ...
 
 
 @runtime_checkable

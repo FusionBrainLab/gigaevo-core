@@ -5,22 +5,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from pydantic import ValidationError
-
-from gigaevo.memory.ideas_tracker.analyzers import ClassifyingAnalyzer
 from gigaevo.memory.ideas_tracker.models import (
-    AnalysisResult,
-    ClassificationChunk,
-    Idea,
-    IdeaUpdate,
     Improvement,
     normalize_improvement_item,
     normalize_improvements,
     program_to_record,
     programs_to_records,
 )
-from gigaevo.memory.ideas_tracker.schemas import ClassifyExtResponse, PresentIdeaRef
-from tests.fakes.llm_router import FakeMemoryRouter
 
 
 class TestNormalizeImprovementItem:
@@ -73,42 +64,6 @@ class TestNormalizeImprovements:
         result = normalize_improvements("Single change")
         assert len(result) == 1
         assert result[0].description == "Single change"
-
-
-class TestIdeaModel:
-    def test_id_auto_generated(self) -> None:
-        idea = Idea(description="Use BFS")
-        assert len(idea.id) == 36  # UUID4 length
-
-    def test_two_ideas_have_different_ids(self) -> None:
-        a = Idea(description="A")
-        b = Idea(description="B")
-        assert a.id != b.id
-
-    def test_explanation_defaults_to_empty(self) -> None:
-        idea = Idea(description="test")
-        assert idea.explanation.entries == []
-        assert idea.explanation.summary == ""
-
-    def test_model_dump_is_serialisable(self) -> None:
-        idea = Idea(description="test", programs=["p1"])
-        d = idea.model_dump()
-        assert d["description"] == "test"
-        assert d["programs"] == ["p1"]
-
-
-class TestAnalysisResult:
-    def test_defaults_to_empty_lists(self) -> None:
-        result = AnalysisResult()
-        assert result.new_ideas == []
-        assert result.updates == []
-
-    def test_holds_ideas_and_updates(self) -> None:
-        idea = Idea(description="Cache retrieval")
-        update = IdeaUpdate(idea_id="abc-123", programs=["p1"])
-        result = AnalysisResult(new_ideas=[idea], updates=[update])
-        assert len(result.new_ideas) == 1
-        assert len(result.updates) == 1
 
 
 class TestProgramToRecord:
@@ -170,101 +125,3 @@ class TestProgramToRecord:
         records, ids = programs_to_records(progs, "task", "summary")
         assert len(records) == 3
         assert ids == {"id-0", "id-1", "id-2"}
-
-
-class TestClassifyAgainstBankStructuredOutput:
-    """Classification resilience under the structured-output contract.
-
-    Malformed payloads now surface as ValidationError from call_structured;
-    after retries exhaust, items must simply remain unclassified — no crash.
-    """
-
-    def _make_analyzer(self, respond) -> tuple[ClassifyingAnalyzer, FakeMemoryRouter]:
-        llm = FakeMemoryRouter(respond=respond)
-        analyzer = ClassifyingAnalyzer(
-            llm=llm, retry_attempts=2, description_rewriting=False
-        )
-        return analyzer, llm
-
-    def _make_chunk(self, short_id: str = "abc123") -> ClassificationChunk:
-        return ClassificationChunk(
-            text=f"[{short_id}]: Some idea description \n ",
-            short_ids=[
-                {
-                    "id": f"{short_id}-full-uuid",
-                    "short_id": short_id,
-                    "description": "Some idea",
-                }
-            ],
-        )
-
-    def _make_pending(self) -> object:
-        from gigaevo.memory.ideas_tracker.analyzers import _PendingIdeas
-
-        return _PendingIdeas.from_improvements(
-            [Improvement(description="Add cache", explanation="faster")]
-        )
-
-    def test_validation_error_leaves_items_unclassified(self) -> None:
-        try:
-            ClassifyExtResponse.model_validate_json("not json at all")
-        except ValidationError as exc:
-            validation_error = exc
-
-        def raise_validation(schema, messages):
-            raise validation_error
-
-        analyzer, llm = self._make_analyzer(raise_validation)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [self._make_chunk()])
-        assert pending.items[0].classified is False
-        assert len(llm.calls) == 2
-
-    def test_transport_error_leaves_items_unclassified(self) -> None:
-        def raise_transport(schema, messages):
-            raise RuntimeError("connection reset")
-
-        analyzer, _ = self._make_analyzer(raise_transport)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [self._make_chunk()])
-        assert pending.items[0].classified is False
-
-    def test_valid_present_idea_classifies(self) -> None:
-        chunk = self._make_chunk("abc123")
-        full_id = chunk.short_ids[0].id
-        response = ClassifyExtResponse(
-            new_ideas=[],
-            present_ideas=[PresentIdeaRef(idea_id="abc123", sequence=1)],
-            updated_ideas=[],
-        )
-        analyzer, _ = self._make_analyzer(lambda schema, messages: response)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [chunk])
-        assert pending.items[0].classified is True
-        assert pending.items[0].target_id == full_id
-
-    def test_bracketed_idea_id_normalized_by_schema(self) -> None:
-        """LLM echoing "[abc123]" instead of "abc123" still resolves."""
-        chunk = self._make_chunk("abc123")
-        full_id = chunk.short_ids[0].id
-        response = ClassifyExtResponse(
-            new_ideas=[],
-            present_ideas=[PresentIdeaRef(idea_id="[abc123]", sequence=1)],
-            updated_ideas=[],
-        )
-        analyzer, _ = self._make_analyzer(lambda schema, messages: response)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [chunk])
-        assert pending.items[0].classified is True
-        assert pending.items[0].target_id == full_id
-
-    def test_unknown_idea_id_skipped(self) -> None:
-        response = ClassifyExtResponse(
-            new_ideas=[],
-            present_ideas=[PresentIdeaRef(idea_id="zzz999", sequence=1)],
-            updated_ideas=[],
-        )
-        analyzer, _ = self._make_analyzer(lambda schema, messages: response)
-        pending = self._make_pending()
-        analyzer._classify_against_bank(pending, [self._make_chunk()])
-        assert pending.items[0].classified is False

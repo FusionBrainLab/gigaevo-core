@@ -3,20 +3,16 @@
 Covers:
 1. State mutation fix: _insert_new_card uses model_copy, not direct mutation
 2. Namespace filtering fix: api_sync excludes None/empty namespace rows when namespace is set
-3. Dedup meta type guard: score_duplicate_candidates handles non-dict meta safely
-4. LLM retry fallback logging: warning logged when all retries fail
-5. gam_search.invalidate wired: rebuild() calls invalidate() on GAM build failure
+3. gam rebuild failure: rebuild() clears research_agent and sets the failure flag
 """
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
 from gigaevo.exceptions import MemoryRetrieverError
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_store import CardStore
-from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 from tests.fakes.agentic_memory import (
     make_test_memory,
     make_test_memory_with_agentic,
@@ -99,7 +95,6 @@ class TestNamespaceFiltering:
     def _make_api_sync(self, tmp_path, namespace: str):
         """Create ApiSync with a mock client."""
         from gigaevo.memory.shared_memory.api_sync import ApiSync
-        from gigaevo.memory.shared_memory.card_store import CardStore
 
         store = CardStore(index_file=tmp_path / "index.json")
         client = MagicMock()
@@ -173,219 +168,12 @@ class TestNamespaceFiltering:
 
 
 # ---------------------------------------------------------------------------
-# 3. Dedup meta type guard
-# ---------------------------------------------------------------------------
-
-
-class _FakeHit:
-    """Fake retriever hit object."""
-
-    def __init__(self, page_id: str, meta: Any):
-        self.page_id = page_id
-        self.meta = meta
-
-
-class TestDedupMetaTypeGuard:
-    """score_duplicate_candidates must safely handle non-dict meta values."""
-
-    def _make_dedup(self, tmp_path) -> Any:
-        from gigaevo.memory.shared_memory.card_dedup import CardDedup
-
-        store = CardStore(index_file=tmp_path / "index.json")
-        config = CardUpdateDedupConfig.model_validate(
-            {"enabled": True, "top_k_per_query": 5}
-        )
-        return CardDedup(
-            card_store=store,
-            llm_service=None,
-            config=config,
-            allowed_gam_tools={"vector_description"},
-            gam_store_dir=tmp_path / "gam",
-            export_file=tmp_path / "export.jsonl",
-            checkpoint_dir=tmp_path / "checkpoints",
-        )
-
-    def _hit_with_meta(self, page_id: str, meta: Any) -> _FakeHit:
-        return _FakeHit(page_id=page_id, meta=meta)
-
-    def test_string_meta_does_not_crash(self, tmp_path):
-        """If hit.meta is a string (invalid), score should default to 0.0 (no score)."""
-        dedup = self._make_dedup(tmp_path)
-        # Add a card to the store so it can be found
-        card = normalize_memory_card(
-            {"id": "card-x", "description": "test card", "category": "general"}
-        )
-        dedup._card_store.cards["card-x"] = card
-
-        hit = self._hit_with_meta("card-x", "not-a-dict")
-
-        # Inject a fake retriever that returns this hit
-        fake_retriever = MagicMock()
-        fake_retriever.search.return_value = [[hit]]
-
-        def _resolve_x(_tool_name: str) -> Any:
-            return fake_retriever
-
-        # Should not raise; string meta treated as empty dict → score=0.0 → no result
-        incoming = normalize_memory_card(
-            {"description": "similar card", "category": "general"}
-        )
-        candidates = dedup.score_duplicate_candidates(
-            incoming, resolve_retriever_fn=_resolve_x
-        )
-        assert isinstance(candidates, list)
-
-    def test_none_meta_does_not_crash(self, tmp_path):
-        """If hit.meta is None, score should default to 0.0 (no crash)."""
-        dedup = self._make_dedup(tmp_path)
-        card = normalize_memory_card(
-            {"id": "card-y", "description": "test card", "category": "general"}
-        )
-        dedup._card_store.cards["card-y"] = card
-
-        hit = self._hit_with_meta("card-y", None)
-        fake_retriever = MagicMock()
-        fake_retriever.search.return_value = [[hit]]
-
-        def _resolve_y(_tool_name: str) -> Any:
-            return fake_retriever
-
-        incoming = normalize_memory_card(
-            {"description": "similar card", "category": "general"}
-        )
-        candidates = dedup.score_duplicate_candidates(
-            incoming, resolve_retriever_fn=_resolve_y
-        )
-        assert isinstance(candidates, list)
-
-    def test_dict_meta_with_score_works(self, tmp_path):
-        """Normal dict meta with score > 0 produces a candidate."""
-        dedup = self._make_dedup(tmp_path)
-        card = normalize_memory_card(
-            {"id": "card-z", "description": "test card", "category": "general"}
-        )
-        dedup._card_store.cards["card-z"] = card
-
-        hit = self._hit_with_meta("card-z", {"score": 0.85})
-        fake_retriever = MagicMock()
-        fake_retriever.search.return_value = [[hit]]
-
-        def _resolve_z(_tool_name: str) -> Any:
-            return fake_retriever
-
-        incoming = normalize_memory_card(
-            {"description": "similar card", "category": "general"}
-        )
-        candidates = dedup.score_duplicate_candidates(
-            incoming, resolve_retriever_fn=_resolve_z
-        )
-        # card-z should appear as a candidate
-        assert any(c["card_id"] == "card-z" for c in candidates)
-
-
-# ---------------------------------------------------------------------------
-# 4. LLM retry fallback logging
-# ---------------------------------------------------------------------------
-
-
-class TestDedupLLMRetryFallback:
-    """ask_llm_for_dedup_decision logs a warning when all retries are exhausted."""
-
-    def _make_dedup_with_failing_llm(self, tmp_path, num_retries: int = 2) -> Any:
-        from gigaevo.memory.shared_memory.card_dedup import CardDedup
-
-        store = CardStore(index_file=tmp_path / "index.json")
-        config = CardUpdateDedupConfig.model_validate(
-            {"enabled": True, "llm_max_retries": num_retries}
-        )
-
-        # LLM that always raises
-        failing_llm = MagicMock()
-        failing_llm.generate.side_effect = RuntimeError("LLM unavailable")
-
-        return CardDedup(
-            card_store=store,
-            llm_service=failing_llm,
-            config=config,
-            allowed_gam_tools=set(),
-            gam_store_dir=tmp_path / "gam",
-            export_file=tmp_path / "export.jsonl",
-            checkpoint_dir=tmp_path / "checkpoints",
-        )
-
-    def test_warning_logged_when_all_retries_fail(self, tmp_path):
-        """When all LLM retries fail, default action is discard (warning logged)."""
-        dedup = self._make_dedup_with_failing_llm(tmp_path, num_retries=2)
-        incoming = normalize_memory_card(
-            {"id": "card-incoming", "description": "new idea", "category": "general"}
-        )
-        # Provide a candidate so the LLM is actually called
-        candidates = [{"card_id": "card-existing"}]
-
-        result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
-
-        assert result["action"] == "discard"
-        assert result["reason"] == "dedup llm unavailable"
-
-    def test_default_action_is_discard_when_llm_returns_bad_json(self, tmp_path):
-        """When LLM returns invalid JSON every time, action defaults to discard."""
-        from gigaevo.memory.shared_memory.card_dedup import CardDedup
-
-        store = CardStore(index_file=tmp_path / "index.json")
-        config = CardUpdateDedupConfig.model_validate(
-            {"enabled": True, "llm_max_retries": 2}
-        )
-        bad_llm = MagicMock()
-        bad_llm.generate.return_value = ("not valid json !!!", None, None, None)
-
-        dedup = CardDedup(
-            card_store=store,
-            llm_service=bad_llm,
-            config=config,
-            allowed_gam_tools=set(),
-            gam_store_dir=tmp_path / "gam",
-            export_file=tmp_path / "export.jsonl",
-            checkpoint_dir=tmp_path / "checkpoints",
-        )
-        incoming = normalize_memory_card(
-            {"id": "card-incoming-bad", "description": "idea", "category": "general"}
-        )
-        candidates = [{"card_id": "card-e1"}]
-
-        result = dedup.ask_llm_for_dedup_decision(incoming, candidates)
-
-        assert result["action"] == "discard"
-        assert result["reason"] == "dedup llm unavailable"
-
-
-# ---------------------------------------------------------------------------
-# 5. gam_search.invalidate wired on build failure
+# 3. gam rebuild failure handling
 # ---------------------------------------------------------------------------
 
 
 class TestGamSearchInvalidateOnBuildFailure:
-    """rebuild() must call gam.invalidate() and clear research_agent on build failure."""
-
-    def test_rebuild_calls_invalidate_on_gam_build_failure(self, tmp_path):
-        """When gam.build_research_agent() raises MemoryRetrieverError, invalidate_retrievers() is called."""
-        mem, _ = make_test_memory_with_agentic(tmp_path)
-
-        # Inject a mock GamSearch that raises on build_research_agent
-        mock_gam = MagicMock()
-        mock_gam.build_research_agent.side_effect = MemoryRetrieverError(
-            "index corrupt"
-        )
-        mock_gam.agent = None
-        mem.gam = mock_gam
-        mem.research_agent = MagicMock()  # Pretend it was set previously
-
-        # Mock dedup to verify invalidate_retrievers is called
-        mock_dedup = MagicMock()
-        mem.dedup = mock_dedup
-
-        mem.rebuild()
-
-        mock_dedup.invalidate_retrievers.assert_called_once()
+    """rebuild() must clear research_agent and set the failure flag on build failure."""
 
     def test_rebuild_clears_research_agent_on_build_failure(self, tmp_path):
         """After a failed rebuild, research_agent must be None."""
@@ -479,57 +267,46 @@ def test_parse_string_list_with_whitespace():
 
 
 # ---------------------------------------------------------------------------
-# 7. _run ordering — LLM not called when no eligible programs
+# 7. Task-summary LLM is condensed once per run, then memoised
 # ---------------------------------------------------------------------------
 
 
-def _make_invalid_program(pid: str = "p1") -> MagicMock:
-    """Program that is_valid=0 — skipped by eligibility filter."""
-    from gigaevo.programs.program import Program
-
-    prog = MagicMock(spec=Program)
-    prog.lineage = MagicMock()
-    prog.lineage.parents = ["parent-1"]
-    # is_valid=0 → filtered out by _eligible_records
-    prog.metrics = {"is_valid": 0.0}
-    prog.id = pid
-    # _eligible_records iterates all programs for the parent_codes dict;
-    # mocks need .code present. Empty string is falsy → excluded from dict.
-    prog.code = ""
-    return prog
-
-
-def test_no_llm_call_when_no_eligible_programs(tmp_path):
-    """_run should not access _task_summary (LLM) when no eligible programs."""
+def test_task_summary_llm_is_memoised_across_increments():
+    """The one-line task summary is condensed by the LLM at most once per run:
+    repeated write sweeps reuse the cached summary rather than re-billing the
+    memory model."""
     import asyncio
-    from unittest.mock import AsyncMock
 
+    from gigaevo.llm.agents.task_summary import TaskSummaryResponse
     from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
-    task_summary_accessed = []
+    class _CountingStructured:
+        def __init__(self) -> None:
+            self.calls = 0
 
-    class TrackedTracker(IdeaTracker):
-        @property  # type: ignore[override]
-        def _task_summary(self) -> str:
-            task_summary_accessed.append(True)
-            return "summary"
+        async def ainvoke(self, messages):  # noqa: ANN001
+            self.calls += 1
+            return TaskSummaryResponse(summary="condensed")
 
-    analyzer = MagicMock()
-    analyzer.analyze_async = AsyncMock(return_value=MagicMock(ideas=[]))
-    tracker = TrackedTracker(
-        analyzer=analyzer,
-        task_description="test task",
+    class _CountingLLM:
+        def __init__(self) -> None:
+            self.structured = _CountingStructured()
+
+        def with_structured_output(self, schema, **kw):  # noqa: ANN001
+            return self.structured
+
+    llm = _CountingLLM()
+    tracker = IdeaTracker(
+        llm=llm,
         memory_write_enabled=False,
-        logs_dir=tmp_path,
+        task_description="Maximise the minimum triangle area over N points.",
     )
 
-    # All programs are invalid — should be filtered out completely
-    programs = [_make_invalid_program(f"p{i}") for i in range(3)]
-    asyncio.run(tracker.run_increment(programs))
+    asyncio.run(tracker._ensure_task_summary())
+    asyncio.run(tracker._ensure_task_summary())
 
-    assert task_summary_accessed == [], (
-        "_task_summary (LLM) must not be called when no eligible/valid programs exist"
-    )
+    assert tracker._task_description_summary == "condensed"
+    assert llm.structured.calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -573,55 +350,6 @@ class TestMemoryWriteE2E:
         assert retrieved2.description == "batch normalization technique"
 
 
-class TestCardLoaderE2E:
-    """E2E tests for CardLoader streaming and filtering."""
-
-    def test_card_loader_streams_large_files(self, tmp_path):
-        """E2E: CardLoader streams JSONL without loading entire file into memory."""
-        from gigaevo.memory.shared_memory.card_loader import CardLoader
-
-        # Create a large JSONL file (100 cards)
-        export_file = tmp_path / "export.jsonl"
-        with open(export_file, "w") as f:
-            for i in range(100):
-                f.write(
-                    f'{{"id": "card-{i:03d}", "description": "card {i}", "category": "general"}}\n'
-                )
-
-        loader = CardLoader(
-            export_file=export_file,
-            include_programs=False,
-        )
-
-        cards = loader.load()
-
-        # Verify all cards loaded and filtered
-        assert len(cards) == 100
-        assert all(isinstance(c, dict) for c in cards)
-        assert all(c.get("category") != "program" for c in cards)
-
-    def test_card_loader_handles_malformed_lines(self, tmp_path):
-        """E2E: CardLoader skips malformed JSON and continues."""
-        from gigaevo.memory.shared_memory.card_loader import CardLoader
-
-        export_file = tmp_path / "export.jsonl"
-        with open(export_file, "w") as f:
-            f.write('{"id": "card-001", "description": "valid"}\n')
-            f.write("NOT VALID JSON\n")
-            f.write('{"id": "card-002", "description": "also valid"}\n')
-
-        loader = CardLoader(
-            export_file=export_file,
-        )
-
-        cards = loader.load()
-
-        # Malformed line should be skipped
-        assert len(cards) == 2
-        assert cards[0]["id"] == "card-001"
-        assert cards[1]["id"] == "card-002"
-
-
 class TestMemorySearchE2E:
     """E2E tests for memory search functionality."""
 
@@ -653,33 +381,3 @@ class TestMemorySearchE2E:
         assert len(results) > 0
         # Results should be a list of strings (card IDs)
         assert all(isinstance(r, str) for r in results)
-
-
-# ---------------------------------------------------------------------------
-# Task 6: CardLoader streaming + card_update_dedup JSON logging
-# ---------------------------------------------------------------------------
-
-
-def test_card_loader_reads_jsonl_line_by_line(tmp_path, monkeypatch):
-    """CardLoader._load_from_export must not read the entire file at once."""
-    from gigaevo.memory.shared_memory.card_loader import CardLoader
-
-    jsonl = tmp_path / "export.jsonl"
-    jsonl.write_text('{"id": "a"}\n{"id": "b"}\n')
-
-    loader = CardLoader(export_file=jsonl)
-
-    read_text_called = []
-    original_read_text = type(jsonl).read_text
-
-    def tracking_read_text(self, *a, **kw):
-        read_text_called.append(self)
-        return original_read_text(self, *a, **kw)
-
-    monkeypatch.setattr(type(jsonl), "read_text", tracking_read_text)
-    cards = loader._load_from_export()
-
-    assert read_text_called == [], (
-        "_load_from_export must not call Path.read_text(); use open() for streaming"
-    )
-    assert len(cards) == 2

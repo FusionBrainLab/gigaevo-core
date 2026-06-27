@@ -252,18 +252,15 @@ _RENDER_GOLDENS = [
         MemoryCard(
             id="m-ratios",
             description="Use pairwise ratios",
-            explanation={"summary": "exposes scale-free structure"},
             gain_events=_RATIOS_EVENTS,
         ),
         "Use pairwise ratios\n"
-        "mechanism: exposes scale-free structure\n"
         "efficacy: introduced in 4 children; median improvement +0.0500 (confident)",
     ),
     (
         MemoryCard(
             id="m-same",
             description="Same text",
-            explanation={"summary": "Same text"},
         ),
         "Same text",
     ),
@@ -283,14 +280,6 @@ _RENDER_GOLDENS = [
             fitness=0.8123,
         ),
         "Exemplar\nefficacy: exemplar fitness 0.8123",
-    ),
-    (
-        MemoryCard(
-            id="m-mech",
-            description="Mechanism only",
-            explanation={"summary": "attr mechanism"},
-        ),
-        "Mechanism only\nmechanism: attr mechanism",
     ),
 ]
 

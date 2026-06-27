@@ -18,7 +18,6 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from gigaevo.exceptions import MemoryStorageError
-from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 from gigaevo.memory.shared_memory.memory_config import GamConfig, MemoryConfig
 
 
@@ -52,7 +51,6 @@ class MemoryBackendFactory(BaseModel, ABC):
         checkpoint_dir: str | Path | None = None,
         gam: GamConfig | None = None,
         evictor: Any | None = None,
-        deduplicator: Any | None = None,
     ) -> Any:
         """Construct the backend.
 
@@ -61,7 +59,7 @@ class MemoryBackendFactory(BaseModel, ABC):
                 (the engine pins per-run artefacts under the Hydra output dir).
             gam: retrieval knobs, normally derived from the configured
                 ``GamRetriever``.
-            evictor / deduplicator: optional write-side components.
+            evictor: optional write-side component.
 
         Raises:
             MemoryStorageError: if construction fails or no checkpoint dir
@@ -82,8 +80,6 @@ class MemoryBackendFactory(BaseModel, ABC):
 class LocalMemoryBackendFactory(MemoryBackendFactory):
     """Canonical local card-bank backend (``memory/backend=local``)."""
 
-    dedup: CardUpdateDedupConfig = CardUpdateDedupConfig()
-
     def backend_class(self) -> type[Any]:
         from gigaevo.memory.shared_memory.memory import AmemGamMemory
 
@@ -95,7 +91,6 @@ class LocalMemoryBackendFactory(MemoryBackendFactory):
         checkpoint_dir: str | Path | None = None,
         gam: GamConfig | None = None,
         evictor: Any | None = None,
-        deduplicator: Any | None = None,
     ) -> Any:
         target = self.resolve_checkpoint_dir(checkpoint_dir)
         config = MemoryConfig(
@@ -108,14 +103,12 @@ class LocalMemoryBackendFactory(MemoryBackendFactory):
             enable_llm_card_enrichment=self.enable_llm_card_enrichment,
             api=None,
             gam=gam if gam is not None else GamConfig(),
-            dedup=self.dedup,
         )
         try:
             memory = self.backend_class()(
                 config=config,
                 **({"llm_service": self.llm} if self.llm is not None else {}),
                 **({"evictor": evictor} if evictor is not None else {}),
-                **({"deduplicator": deduplicator} if deduplicator is not None else {}),
             )
         except Exception as exc:
             logger.error("[Memory][BackendFactory] Local backend init failed: {}", exc)

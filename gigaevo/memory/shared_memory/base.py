@@ -23,7 +23,7 @@ class GigaEvoMemoryBase(ABC):
 
     @abstractmethod
     def save_card(self, card: dict[str, Any] | AnyCard) -> str:
-        """Save a memory card, with optional dedup against existing cards."""
+        """Persist a memory card directly into the bank."""
         ...
 
     @abstractmethod
@@ -42,13 +42,8 @@ class GigaEvoMemoryBase(ABC):
         ...
 
     @abstractmethod
-    def get_card_write_stats(self) -> dict[str, int]:
-        """Return write statistics for cards."""
-        ...
-
-    @abstractmethod
     def rebuild(self) -> None:
-        """Persist cards, re-export JSONL, rebuild GAM index and dedup retrievers."""
+        """Persist cards, re-export JSONL, and rebuild the GAM index."""
         ...
 
     @abstractmethod

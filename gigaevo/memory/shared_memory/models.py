@@ -78,38 +78,6 @@ class CardStatsBlock(DecisionMetrics):
         }
 
 
-class CardAlias(BaseModel):
-    """Archived superseded version of a card: when a merge or update replaces
-    the description, the previous wording is preserved here."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    key: str = Field(description="Archive key, e.g. '<card_id>-update'.")
-    description: str = Field(description="The superseded description text.")
-    programs: list[str] = Field(
-        default_factory=list,
-        description="Program ids the card referenced at archival time.",
-    )
-    explanations: list[str] = Field(
-        default_factory=list,
-        description="Explanation entries the card carried at archival time.",
-    )
-
-
-class MemoryCardExplanation(BaseModel):
-    """Explanation field with history and summary."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    explanations: list[str] = Field(
-        default_factory=list,
-        description="Accumulated explanation entries, oldest first.",
-    )
-    summary: str = Field(
-        default="", description="LLM-condensed summary of the explanation history."
-    )
-
-
 class MemoryCard(BaseModel):
     """Canonical general memory card (ideas, insights)."""
 
@@ -129,18 +97,8 @@ class MemoryCard(BaseModel):
     task_description_summary: str = Field(
         default="", description="LLM-condensed one-line task summary."
     )
-    strategy: str = Field(
-        default="", description="Mutation archetype the idea originated from."
-    )
-    last_generation: int = Field(
-        default=0, description="Last generation in which the idea was observed."
-    )
     programs: list[str] = Field(
         default_factory=list, description="Program ids that exhibited the idea."
-    )
-    aliases: list[CardAlias] = Field(
-        default_factory=list,
-        description="Archived superseded versions of this card.",
     )
     keywords: list[str] = Field(
         default_factory=list, description="Search keywords for retrieval ranking."
@@ -148,27 +106,6 @@ class MemoryCard(BaseModel):
     gain_events: list[ContextualGain] | None = Field(
         default=None,
         description="Use-attributed base-relative injection events; reputation computes this card's efficacy block from them.",
-    )
-    explanation: MemoryCardExplanation = Field(
-        default_factory=MemoryCardExplanation,
-        description="Why the idea works, with history and summary.",
-    )
-    works_with: list[str] = Field(
-        default_factory=list, description="Ids of cards observed to combine well."
-    )
-    links: list[str] = Field(
-        default_factory=list, description="Ids of semantically related cards."
-    )
-
-
-class ConnectedIdea(BaseModel):
-    """Reference to an idea card linked to a program."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    idea_id: str = Field(default="", description="Bank id of the linked idea card.")
-    description: str = Field(
-        default="", description="Description of the linked idea at link time."
     )
 
 
@@ -198,18 +135,8 @@ class ProgramCard(BaseModel):
         default=None, description="Fitness of the exemplar program at capture time."
     )
     code: str = Field(default="", description="Source code of the exemplar program.")
-    connected_ideas: list[ConnectedIdea] = Field(
-        default_factory=list,
-        description="Idea cards observed in this program's lineage.",
-    )
     keywords: list[str] = Field(
         default_factory=list, description="Search keywords for retrieval ranking."
-    )
-    strategy: str = Field(
-        default="", description="Mutation archetype of the exemplar program."
-    )
-    links: list[str] = Field(
-        default_factory=list, description="Ids of semantically related cards."
     )
     gain_events: list[ContextualGain] | None = Field(
         default=None,
@@ -232,13 +159,10 @@ class LocalMemorySnapshot(BaseModel):
 
 __all__ = [
     "AnyCard",
-    "CardAlias",
     "CardStatsBlock",
-    "ConnectedIdea",
     "DecisionMetrics",
     "LocalMemorySnapshot",
     "MemoryCard",
-    "MemoryCardExplanation",
     "ProgramCard",
     "Strategy",
 ]

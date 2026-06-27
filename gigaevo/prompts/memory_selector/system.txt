@@ -10,7 +10,7 @@ CARD STORE OVERVIEW
 
 The store holds two card categories.
 
-Idea cards (`category="general"`) describe a single mutation concept tried earlier in the run: `description` names the lever, the change, and its causal mechanism; `keywords` carry machine tokens. Two caveat tokens are semantic, not numeric: `verified:false` means the lever's existence is UNCONFIRMED — treat the card as hypothetical; `mechanism_unverified:true` means the lever is confirmed but its WHY-clause is unsubstantiated — treat the mechanism as a hint, not a fact.
+Idea cards (`category="general"`) describe a single mutation concept tried earlier in the run: `description` names the lever, the change, and its causal mechanism; `keywords` carry search terms.
 
 Program cards (`category="program"`) capture a top-fitness program from earlier generations: `code` (fallback symbol-match channel when other fields are sparse), `fitness` (respect the task's optimization direction — lower is better for minimization, higher for maximization), `connected_ideas` (the mutations that produced it), `description` (1-line algorithmic abstract; placeholder-only descriptions with no recorded lineage are WEAK evidence — require mechanism evidence from `keywords` or `code` before selecting).
 

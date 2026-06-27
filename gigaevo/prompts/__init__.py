@@ -122,3 +122,45 @@ class MemorySelectorPrompts:
     def system(prompts_dir: str | Path | None = None) -> str:
         """System prompt for memory selector."""
         return load_prompt("memory_selector", "system", prompts_dir=prompts_dir)
+
+
+class ReconcilePrompts:
+    """Librarian reconcile agent prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for the reconcile (diff→cards) hop."""
+        return load_prompt("reconcile", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for the reconcile hop."""
+        return load_prompt("reconcile", "user", prompts_dir=prompts_dir)
+
+
+class ConsolidatePrompts:
+    """Librarian consolidate agent prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for the consolidate (fold two near-dups) hop."""
+        return load_prompt("consolidate", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for the consolidate hop."""
+        return load_prompt("consolidate", "user", prompts_dir=prompts_dir)
+
+
+class ProgramAuthorPrompts:
+    """Librarian program-author agent prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for the exemplar program-author hop."""
+        return load_prompt("program_author", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for the program-author hop."""
+        return load_prompt("program_author", "user", prompts_dir=prompts_dir)

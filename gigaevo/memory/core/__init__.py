@@ -15,7 +15,6 @@ from gigaevo.memory.core.auctioneer import (
 )
 from gigaevo.memory.core.budgeter import TopBidBudgeter, TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
-from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
 from gigaevo.memory.core.events import (
     DEFAULT_MEMORY_EVENTS_FILENAME,
     MEMORY_EVENT_SCHEMA_VERSION,
@@ -34,7 +33,6 @@ from gigaevo.memory.core.protocols import (
     CardRenderer,
     CardRetriever,
     CardShortlister,
-    Deduplicator,
     Evictor,
     ReputationModel,
 )
@@ -45,7 +43,6 @@ from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.core.retriever import GamRetriever
 from gigaevo.memory.core.selection import MemorySelection
 from gigaevo.memory.core.write_ledger import WriteLedger, WriteLedgerRecord
-from gigaevo.memory.core.write_pipeline import MemoryWritePipeline
 
 __all__ = [
     "AuctionBid",
@@ -57,21 +54,17 @@ __all__ = [
     "CardRenderer",
     "CardRetriever",
     "CardShortlister",
-    "Deduplicator",
     "EfficacyCardRenderer",
     "Evictor",
     "DEFAULT_MEMORY_EVENTS_FILENAME",
     "GamRetriever",
     "HarmEvictor",
     "LLMCardSelector",
-    "LLMDeduplicator",
     "LineageExcluder",
     "MEMORY_EVENT_SCHEMA_VERSION",
     "MemoryEventRecord",
     "MemoryReadPipeline",
     "MemorySelection",
-    "MemoryWritePipeline",
-    "NullDeduplicator",
     "NullExcluder",
     "RandomDropExcluder",
     "ReputationModel",

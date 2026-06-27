@@ -13,7 +13,6 @@ Public API:
     MemoryCard         — general idea/insight card
     ProgramCard        — top-performing program card
     AnyCard            — union type (MemoryCard | ProgramCard)
-    ConnectedIdea      — idea reference linked to a program
     normalize_memory_card — normalize raw dict into typed card model
     GigaEvoMemoryBase  — abstract base for memory backends
 """
@@ -30,10 +29,8 @@ from gigaevo.memory.shared_memory.memory_config import (
 )
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
-    ConnectedIdea,
     LocalMemorySnapshot,
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
     Strategy,
 )
@@ -43,12 +40,10 @@ __all__ = [
     "AmemGamMemory",
     "ApiConfig",
     "AnyCard",
-    "ConnectedIdea",
     "GamConfig",
     "GigaEvoMemoryBase",
     "LocalMemorySnapshot",
     "MemoryCard",
-    "MemoryCardExplanation",
     "MemoryConfig",
     "MemorySystem",
     "ProgramCard",

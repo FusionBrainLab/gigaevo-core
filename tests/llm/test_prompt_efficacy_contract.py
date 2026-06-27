@@ -19,7 +19,6 @@ from gigaevo.memory.shared_memory.card_search import format_block_efficacy
 from gigaevo.memory.shared_memory.models import (
     CardStatsBlock,
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
 )
 from gigaevo.prompts import MutationSuggestionsPrompts, load_prompt
@@ -31,7 +30,6 @@ def _mcard() -> MemoryCard:
         description="d",
         keywords=[],
         gain_events=None,
-        explanation=MemoryCardExplanation(summary=""),
     )
 
 
@@ -62,7 +60,6 @@ def _exemplar_line() -> str:
             keywords=[],
             fitness=0.85,
             gain_events=None,
-            connected_ideas=[],
         ),
         None,
     )

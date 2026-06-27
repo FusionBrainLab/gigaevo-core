@@ -1,3 +1,0 @@
-REPRESENTATIVE — choose the **narrowest, most technically specific** line (representative_index in 1..n). Avoid umbrella summaries.
-
-<INSERT>

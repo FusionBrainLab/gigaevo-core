@@ -103,11 +103,10 @@ class TestLocalFactory:
     def test_write_side_components_passed_through(self, tmp_path, monkeypatch):
         _capture(monkeypatch, LocalMemoryBackendFactory)
         evictor = object()
-        dedup = object()
         memory = LocalMemoryBackendFactory(checkpoint_dir=tmp_path).build(
-            evictor=evictor, deduplicator=dedup
+            evictor=evictor
         )
-        assert memory.kwargs == {"evictor": evictor, "deduplicator": dedup}
+        assert memory.kwargs == {"evictor": evictor}
 
     def test_write_side_components_omitted_by_default(self, tmp_path, monkeypatch):
         _capture(monkeypatch, LocalMemoryBackendFactory)

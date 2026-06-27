@@ -251,7 +251,6 @@ class TestSynthesizeResults:
                     "task_description_summary": "HoVer verification",
                     "task_description": "Multi-hop fact verification",
                     "keywords": ["SA", "annealing"],
-                    "explanation": {"summary": "SA works well", "explanations": []},
                 }
             )
         ]
@@ -263,7 +262,6 @@ class TestSynthesizeResults:
         assert "SA optimization" in prompt
         assert "retrieval" in prompt
         assert "HoVer verification" in prompt
-        assert "SA works well" in prompt
 
 
 # ===========================================================================

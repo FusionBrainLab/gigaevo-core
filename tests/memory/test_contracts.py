@@ -7,21 +7,13 @@ behavioral contract. Each test documents WHY the contract matters.
 
 import json
 
-from pydantic import ValidationError
-import pytest
-
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.memory.core import MemorySelection
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_dedup import DedupAction, DedupDecision
-from gigaevo.memory.shared_memory.card_update_dedup import (
-    parse_llm_card_decision,
-)
 from gigaevo.memory.shared_memory.models import (
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
 )
 from tests.fakes.agentic_memory import make_test_memory
@@ -60,17 +52,9 @@ class TestNormalizeCardContract:
         assert isinstance(card.description, str)
         assert isinstance(card.task_description, str)
         assert isinstance(card.task_description_summary, str)
-        assert isinstance(card.strategy, str)
-        assert isinstance(card.last_generation, int)
         assert isinstance(card.programs, list)
-        assert isinstance(card.aliases, list)
         assert isinstance(card.keywords, list)
         assert card.gain_events is None
-        assert isinstance(card.explanation, MemoryCardExplanation)
-        assert isinstance(card.explanation.explanations, list)
-        assert isinstance(card.explanation.summary, str)
-        assert isinstance(card.works_with, list)
-        assert isinstance(card.links, list)
 
     def test_program_card_field_types(self):
         card = normalize_memory_card(
@@ -81,7 +65,6 @@ class TestNormalizeCardContract:
         assert isinstance(card.program_id, str)
         assert isinstance(card.description, str)
         assert isinstance(card.code, str)
-        assert isinstance(card.connected_ideas, list)
         assert card.fitness is None or isinstance(card.fitness, float)
 
 
@@ -100,11 +83,8 @@ class TestSaveGetRoundtrip:
             "description": "Use simulated annealing for local search",
             "task_description": "Solve TSP efficiently",
             "task_description_summary": "TSP solver",
-            "strategy": "exploitation",
-            "last_generation": 15,
             "programs": ["prog-1", "prog-2"],
             "keywords": ["SA", "local-search"],
-            "explanation": {"explanations": ["tried SA"], "summary": "SA works"},
         }
         mem.save_card(original)
         stored = mem.get_card("c1")
@@ -113,12 +93,8 @@ class TestSaveGetRoundtrip:
         assert stored.description == original["description"]
         assert stored.task_description == original["task_description"]
         assert stored.task_description_summary == original["task_description_summary"]
-        assert stored.strategy == original["strategy"]
-        assert stored.last_generation == original["last_generation"]
         assert stored.programs == original["programs"]
         assert stored.keywords == original["keywords"]
-        assert stored.explanation.summary == "SA works"
-        assert stored.explanation.explanations == ["tried SA"]
 
     def test_program_card_roundtrip(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -129,7 +105,6 @@ class TestSaveGetRoundtrip:
             "description": "Top evolved program",
             "fitness": 95.5,
             "code": "def solve(x):\n    return sorted(x)\n",
-            "connected_ideas": [{"idea_id": "i1", "description": "SA"}],
             "task_description": "Solve TSP",
             "task_description_summary": "TSP",
         }
@@ -140,7 +115,6 @@ class TestSaveGetRoundtrip:
         assert stored.program_id == "prog-1"
         assert stored.fitness == 95.5
         assert stored.code == original["code"]
-        assert len(stored.connected_ideas) == 1
 
     def test_persist_reload_roundtrip(self, tmp_path):
         mem1 = _make_memory(tmp_path)
@@ -149,16 +123,12 @@ class TestSaveGetRoundtrip:
                 "id": "c1",
                 "description": "test idea",
                 "keywords": ["k1", "k2"],
-                "explanation": {"explanations": ["e1"], "summary": "s"},
-                "last_generation": 7,
             }
         )
         mem2 = _make_memory(tmp_path)
         stored = mem2.get_card("c1")
         assert stored.description == "test idea"
         assert stored.keywords == ["k1", "k2"]
-        assert stored.explanation.explanations == ["e1"]
-        assert stored.last_generation == 7
 
 
 # ===========================================================================
@@ -241,86 +211,7 @@ class TestIndexPersistenceContract:
 
 
 # ===========================================================================
-# Contract 5: card_write_stats shape
-# ===========================================================================
-
-
-class TestWriteStatsContract:
-    def test_stats_keys(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        stats = mem.get_card_write_stats()
-        assert set(stats.keys()) == {
-            "processed",
-            "added",
-            "rejected",
-            "updated",
-            "updated_target_cards",
-        }
-
-    def test_stats_all_int(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        stats = mem.get_card_write_stats()
-        for key, val in stats.items():
-            assert isinstance(val, int), f"{key} should be int, got {type(val)}"
-
-    def test_stats_increment_correctly(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "first"})
-        mem.save_card({"id": "c1", "description": "update"})
-        mem.save_card({"description": "new"})
-        stats = mem.get_card_write_stats()
-        assert stats["processed"] == 3
-        assert stats["added"] == 2
-        assert stats["updated"] == 1
-
-
-# ===========================================================================
-# Contract 6: dedup decision shape
-# ===========================================================================
-
-
-class TestDedupDecisionContract:
-    def test_parse_decision_shape(self):
-        result = parse_llm_card_decision(
-            json.dumps({"action": "add"}),
-            candidate_ids={"c1"},
-        )
-        assert set(result.keys()) == {"action", "reason", "duplicate_of", "updates"}
-
-    def test_parse_decision_actions(self):
-        for action in ("add", "discard", "update"):
-            if action == "discard":
-                text = json.dumps({"action": action, "duplicate_of": "c1"})
-            elif action == "update":
-                text = json.dumps(
-                    {
-                        "action": action,
-                        "updates": [
-                            {
-                                "card_id": "c1",
-                                "update_explanation": True,
-                                "explanation_append": "x",
-                            }
-                        ],
-                    }
-                )
-            else:
-                text = json.dumps({"action": action})
-            result = parse_llm_card_decision(text, candidate_ids={"c1"})
-            assert result["action"] == action
-
-    def test_action_field_coerces_strings_to_strict_enum(self):
-        decision = DedupDecision(action="add", reason="", duplicate_of="", merges=[])
-        assert decision.action is DedupAction.ADD
-        assert decision.action == "add"
-
-    def test_action_field_rejects_unknown_values(self):
-        with pytest.raises(ValidationError):
-            DedupDecision(action="bogus", reason="", duplicate_of="", merges=[])
-
-
-# ===========================================================================
-# Contract 7: MemorySelection shape
+# Contract 5: MemorySelection shape
 # ===========================================================================
 
 

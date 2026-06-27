@@ -8,32 +8,9 @@ import pytest
 
 from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.shared_memory.models import (
-    CardAlias,
     LocalMemorySnapshot,
     MemoryCard,
-    MemoryCardExplanation,
 )
-
-# ===========================================================================
-# MemoryCardExplanation
-# ===========================================================================
-
-
-class TestMemoryCardExplanation:
-    def test_defaults(self):
-        e = MemoryCardExplanation()
-        assert e.explanations == []
-        assert e.summary == ""
-
-    def test_with_values(self):
-        e = MemoryCardExplanation(explanations=["a", "b"], summary="sum")
-        assert e.explanations == ["a", "b"]
-        assert e.summary == "sum"
-
-    def test_extra_field_raises(self):
-        with pytest.raises(ValidationError):
-            MemoryCardExplanation(foo="bar")
-
 
 # ===========================================================================
 # MemoryCard
@@ -52,16 +29,9 @@ class TestMemoryCard:
         assert c.description == ""
         assert c.task_description == ""
         assert c.task_description_summary == ""
-        assert c.strategy == ""
-        assert c.last_generation == 0
         assert c.programs == []
-        assert c.aliases == []
         assert c.keywords == []
         assert c.gain_events is None
-        assert c.explanation.explanations == []
-        assert c.explanation.summary == ""
-        assert c.works_with == []
-        assert c.links == []
 
     def test_full_card(self):
         c = MemoryCard(
@@ -70,10 +40,7 @@ class TestMemoryCard:
             category="insight",
             task_description="td",
             task_description_summary="tds",
-            strategy="exploration",
-            last_generation=5,
             programs=["p1"],
-            aliases=[CardAlias(key="a1", description="superseded wording")],
             keywords=["k1"],
             gain_events=[
                 ContextualGain(
@@ -81,12 +48,9 @@ class TestMemoryCard:
                     gain=0.01,
                 )
             ],
-            explanation=MemoryCardExplanation(explanations=["e"], summary="s"),
-            works_with=["w1"],
-            links=["l1"],
         )
-        assert c.strategy == "exploration"
-        assert c.last_generation == 5
+        assert c.category == "insight"
+        assert c.programs == ["p1"]
         assert len(c.gain_events) == 1
 
     def test_missing_id_raises(self):
@@ -100,15 +64,6 @@ class TestMemoryCard:
     def test_extra_field_raises(self):
         with pytest.raises(ValidationError):
             MemoryCard(id="x", description="d", unknown_field="val")
-
-    def test_strategy_valid_values(self):
-        for s in ("exploration", "exploitation", "hybrid"):
-            c = MemoryCard(id="x", description="d", strategy=s)
-            assert c.strategy == s
-
-    def test_strategy_accepts_any_string(self):
-        c = MemoryCard(id="x", strategy="custom_approach")
-        assert c.strategy == "custom_approach"
 
     def test_list_fields_are_independent_instances(self):
         """Default factory creates new lists per instance."""

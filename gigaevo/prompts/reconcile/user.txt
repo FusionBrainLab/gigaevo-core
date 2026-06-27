@@ -1,0 +1,19 @@
+Distil the mutation below into transferable library cards, and reconcile each lever against the nearest existing cards.
+
+## BASE PARENT
+```python
+{base_parent_code}
+```
+
+## CHILD
+```python
+{child_code}
+```
+
+## MUTATOR NOTE (hint — corroborate against the diff, discount where they disagree)
+{note}
+
+## NEAREST EXISTING CARDS
+{neighbors}
+
+Return 0..N items matching the structured-output schema and the WHAT-MAKES-A-LEVER, DECISION, and RULES contracts in the system prompt. Empty items means the diff carried no generalizable lever — that is a valid answer. No prose, no preamble, no fences.
