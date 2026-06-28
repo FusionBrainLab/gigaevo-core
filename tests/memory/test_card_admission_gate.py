@@ -5,11 +5,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core.admission_gate import CardAdmissionGate
 from gigaevo.memory.core.write_ledger import WriteLedger
-from gigaevo.memory.shared_memory.models import MemoryCard
+from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
 
 _IDX = Path("/tmp/claude-1000/_gate_test_idx.json")
+
+
+def _gain(value: float) -> ContextualGain:
+    return ContextualGain(
+        context=DecisionContext(parent_metrics={"f": value}), gain=value
+    )
 
 
 class _FakeStore:
@@ -22,6 +29,12 @@ class _FakeStore:
         self.card_store.cards.clear()
         self.saved: list[MemoryCard] = []
         self.deleted: list[str] = []
+
+    def get_card(self, card_id: str) -> MemoryCard | None:
+        return self.card_store.cards.get(card_id)
+
+    def all_cards_snapshot(self) -> dict[str, MemoryCard]:
+        return dict(self.card_store.cards)
 
     def save_card_direct(self, card: MemoryCard) -> str:
         self.card_store.cards[card.id] = card
@@ -107,6 +120,50 @@ class TestMerge:
         assert final_id == "mem-A"
         assert store.card_store.cards["mem-A"].description == "synthesized union"
 
+    def test_merge_preserves_target_evidence_and_unions_provenance(self) -> None:
+        store = _FakeStore()
+        gate = CardAdmissionGate(store=store, evictor=_NeverHarmful())
+        store.save_card_direct(
+            MemoryCard(
+                id="mem-A",
+                description="original",
+                keywords=["k1"],
+                programs=["p1"],
+                gain_events=[_gain(0.1)],
+            )
+        )
+        incoming = MemoryCard(
+            id="", description="union prose", keywords=["k2"], programs=["p2"]
+        )
+        final_id = gate.merge("mem-A", incoming)
+        survivor = store.card_store.cards["mem-A"]
+        assert final_id == "mem-A"
+        assert survivor.description == "union prose"
+        assert survivor.programs == ["p1", "p2"]
+        # Provenance (programs, gain_events) is unioned/preserved, but keywords
+        # follow the prose: a librarian merge carries an agent-curated union
+        # keyword set, so the merge takes it verbatim rather than re-unioning the
+        # target's old list (which would re-bloat the survivor).
+        assert survivor.keywords == ["k2"]
+        assert survivor.gain_events == [_gain(0.1)]
+
+    def test_merge_resulting_in_harmful_card_evicts_target(self) -> None:
+        store = _FakeStore()
+        store.save_card_direct(_card("mem-A", "original"))
+        gate = CardAdmissionGate(store=store, evictor=_AlwaysHarmful())
+        final_id = gate.merge("mem-A", _card("", "union prose"))
+        assert final_id == ""
+        assert "mem-A" not in store.card_store.cards
+
+    def test_bump_provenance_does_not_mutate_original_target(self) -> None:
+        store = _FakeStore()
+        gate = CardAdmissionGate(store=store, evictor=_NeverHarmful())
+        gate.admit(_card("mem-D"))
+        original = store.card_store.cards["mem-D"]
+        gate.bump_provenance("mem-D", "child-7")
+        assert original.programs == []
+        assert store.card_store.cards["mem-D"].programs == ["child-7"]
+
     def test_bump_provenance_appends_child_and_returns_target(self) -> None:
         store = _FakeStore()
         gate = CardAdmissionGate(store=store, evictor=_NeverHarmful())
@@ -120,6 +177,14 @@ class TestMerge:
         store = _FakeStore()
         gate = CardAdmissionGate(store=store, evictor=_NeverHarmful())
         assert gate.bump_provenance("ghost", "child-7") == ""
+
+    def test_bump_provenance_on_program_card_target_returns_empty(self) -> None:
+        store = _FakeStore()
+        gate = CardAdmissionGate(store=store, evictor=_NeverHarmful())
+        store.save_card_direct(
+            ProgramCard(id="program-7", program_id="7", description="exemplar")
+        )
+        assert gate.bump_provenance("program-7", "child-7") == ""
 
 
 class TestSweep:
@@ -157,3 +222,29 @@ class TestLedger:
         (row,) = self._rows(ledger_path)
         assert row["outcome"] == "rejected_harm"
         assert row["final_id"] == ""
+
+    def test_harmful_merge_emits_rejected_harm_row(self, tmp_path) -> None:
+        store = _FakeStore()
+        ledger_path = tmp_path / "write_ledger.jsonl"
+        store.save_card_direct(_card("mem-A", "original"))
+        gate = CardAdmissionGate(
+            store=store, evictor=_AlwaysHarmful(), ledger=WriteLedger(ledger_path)
+        )
+        gate.merge("mem-A", _card("", "union prose"))
+        (row,) = self._rows(ledger_path)
+        assert row["outcome"] == "rejected_harm"
+        assert row["final_id"] == ""
+
+    def test_merge_row_reports_submitted_incoming_id_and_target(self, tmp_path) -> None:
+        store = _FakeStore()
+        ledger_path = tmp_path / "write_ledger.jsonl"
+        store.save_card_direct(_card("mem-A", "original"))
+        gate = CardAdmissionGate(
+            store=store, evictor=_NeverHarmful(), ledger=WriteLedger(ledger_path)
+        )
+        gate.merge("mem-A", _card("", "union prose"))
+        (row,) = self._rows(ledger_path)
+        assert row["outcome"] == "merged"
+        assert row["incoming_id"] == ""
+        assert row["final_id"] == "mem-A"
+        assert row["merge_targets"] == ["mem-A"]

@@ -245,6 +245,25 @@ def test_filter_tools_drops_zero_top_k_tools():
     assert agent._filter_tools(["vector", "page_index"]) == ["page_index"]
 
 
+def test_extract_explanation_summary_prefers_top_level_field():
+    # Cards now model_dump to a top-level ``explanation_summary``; the final
+    # top-ideas renderer must read it, not only the legacy nested
+    # ``explanation.summary`` shape, or WHEN_TO_USE renders "(not provided)".
+    assert (
+        ResearchAgent._extract_explanation_summary({"explanation_summary": "why X"})
+        == "why X"
+    )
+
+
+def test_extract_explanation_summary_falls_back_to_legacy_nested():
+    assert (
+        ResearchAgent._extract_explanation_summary(
+            {"explanation": {"summary": "legacy why"}}
+        )
+        == "legacy why"
+    )
+
+
 # --- prompt hygiene -----------------------------------------------------------
 
 
@@ -366,3 +385,43 @@ def test_pipeline_emits_canonical_gam_events(tmp_path):
     reflection = [row for row in rows if row["event_type"] == "gam.reflection"][-1]
     assert reflection["payload"]["mode"] == "final"
     assert reflection["payload"]["top_idea_ids"] == ["c1"]
+
+
+# --- page_index hits must carry the card id, not the numeric page index ------
+
+
+def test_index_retriever_emits_amem_id_not_numeric_page_index(tmp_path):
+    """The live page_index retriever must surface the card's ``amem_id`` as the
+    Hit page_id; the numeric store index belongs in meta, not as the card id.
+    Emitting ``str(pid)`` makes the hit unfetchable from the card store.
+    """
+    from gigaevo.memory._vendor.GAM_root.gam.retriever.index_retriever import (
+        IndexRetriever,
+    )
+    from gigaevo.memory._vendor.GAM_root.gam.schemas import InMemoryPageStore, Page
+
+    source = InMemoryPageStore()
+    source._pages = [
+        Page(header="[A-MEM] mem-a", content="card a body", meta={"amem_id": "mem-a"})
+    ]
+    retriever = IndexRetriever({"index_dir": str(tmp_path)})
+    retriever.build(source)
+
+    [hits] = retriever.search(["0"], top_k=1)
+
+    assert [h.page_id for h in hits] == ["mem-a"]
+    assert hits[0].meta.get("page_index") == 0
+
+
+def test_agent_page_index_fallback_emits_amem_id_not_numeric_index():
+    """The agent's in-method page_index fallback (used when no page_index
+    retriever is wired) is the twin of the IndexRetriever path and must also
+    resolve the numeric index to the page's ``amem_id``.
+    """
+    agent, _ = _make_agent(card_ids=("mem-a",))
+    assert agent.retrievers.get("page_index") is None  # fallback loop runs
+
+    [hits] = agent._search_by_page_index([0])
+
+    assert [h.page_id for h in hits] == ["mem-a"]
+    assert hits[0].meta.get("page_index") == 0

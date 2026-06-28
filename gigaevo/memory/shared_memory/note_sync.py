@@ -56,7 +56,7 @@ class NoteSync:
         card: AnyCard,
         existing: MemoryNoteProtocol | None = None,
     ) -> MemoryNoteProtocol:
-        card_id = str(card.id or "")
+        card_id = card.id
         if existing is None:
             existing = self.memory_system.read(card_id)
         note_kwargs = self._extract_note_fields_from_card(card)
@@ -98,7 +98,7 @@ class NoteSync:
 
     def sync_card_to_amem_fast(self, card: AnyCard) -> bool:
         """Synchronize card into local A-MEM/Chroma without LLM evolution."""
-        card_id = str(card.id or "")
+        card_id = card.id
         existing = self.memory_system.read(card_id)
         note = self.create_or_update_note(card, existing=existing)
         changed = existing is None or self.note_differs_from_card(
@@ -136,7 +136,7 @@ class NoteSync:
 
     def sync_card_to_amem_with_evolution(self, card: AnyCard) -> bool:
         """Add/update card in local A-MEM using the agentic add/update path."""
-        card_id = str(card.id or "").strip()
+        card_id = card.id.strip()
         if not card_id:
             return False
 

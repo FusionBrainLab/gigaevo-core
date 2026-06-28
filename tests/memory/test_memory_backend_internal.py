@@ -10,7 +10,10 @@ from gigaevo.memory.shared_memory.card_conversion import (
     concept_to_card,
     normalize_memory_card,
 )
-from tests.fakes.agentic_memory import make_test_memory
+from tests.fakes.agentic_memory import (
+    make_test_memory,
+    make_test_memory_with_agentic,
+)
 
 
 def _make_memory(tmp_path, **overrides):
@@ -52,6 +55,30 @@ class TestApplyMerges:
         result = mem.apply_merges(merges)
         assert set(result) == {"c1", "c2"}
 
+    def test_failed_note_sync_leaves_target_untouched(self, tmp_path):
+        # The bank commit must land only after the A-MEM note sync succeeds, so a
+        # sync failure leaves the bank consistent with the index instead of
+        # holding a card the index never received. apply_merges swallows the
+        # failure (reports the merge as not landed), so the target must be left
+        # exactly as it was.
+        mem, _ = make_test_memory_with_agentic(tmp_path)
+        mem.save_card({"id": "c1", "description": "original", "programs": ["p1"]})
+
+        def boom(card):
+            raise RuntimeError("amem sync down")
+
+        mem.note_sync.sync_card_to_amem_with_evolution = boom
+
+        merged = normalize_memory_card(
+            {"id": "c1", "description": "overwritten", "programs": ["p1", "p2"]}
+        )
+        result = mem.apply_merges([("c1", merged)])
+
+        assert result == []  # merge did not land
+        card = mem.get_card("c1")
+        assert card.description == "original"  # bank untouched by the failed sync
+        assert card.programs == ["p1"]
+
 
 # ===========================================================================
 # _insert_new_card rebuild trigger
@@ -77,6 +104,27 @@ class TestSaveCardCoreRebuild:
 # ===========================================================================
 # _ensure_card_id
 # ===========================================================================
+
+
+class TestAllCardsSnapshot:
+    """all_cards_snapshot is the writer layer's read-only view of the bank, so
+    it never reaches into card_store.cards directly. It is a copy: mutating the
+    returned dict must not touch the live index."""
+
+    def test_returns_every_card_keyed_by_id(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "one"})
+        mem.save_card({"id": "c2", "description": "two"})
+        snap = mem.all_cards_snapshot()
+        assert set(snap) == {"c1", "c2"}
+        assert snap["c1"].description == "one"
+
+    def test_snapshot_is_a_copy(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "one"})
+        snap = mem.all_cards_snapshot()
+        snap.pop("c1")
+        assert mem.get_card("c1") is not None
 
 
 class TestEnsureCardId:

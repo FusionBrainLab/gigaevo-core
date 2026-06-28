@@ -1,4 +1,4 @@
-Fold these two drifted library cards into one canonical union card.
+Decide whether these two near library cards name the SAME generalizable lever. If they do, fold them into one canonical union card; if they prescribe different moves, keep them apart.
 
 ## CARD A
 {card_a}
@@ -6,4 +6,4 @@ Fold these two drifted library cards into one canonical union card.
 ## CARD B
 {card_b}
 
-Return one card matching the structured-output schema and the WHAT-MAKES-A-GOOD-UNION and RULES contracts in the system prompt. No prose, no preamble, no fences.
+Return one object matching the structured-output schema: set `merge: true` with the union `card` (following the DECIDE, WHAT-MAKES-A-GOOD-UNION, and RULES contracts in the system prompt) when they are the same lever, or `merge: false` with no card when they are distinct. No prose, no preamble, no fences.

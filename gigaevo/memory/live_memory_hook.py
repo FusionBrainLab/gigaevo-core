@@ -43,7 +43,7 @@ class LiveMemoryRefreshHook:
         refresh_every: Number of post-step invocations between refreshes.
             ``1`` refreshes on every ingestor sweep that lands a program.
             Defaults to ``10``.
-        max_programs_per_sweep: If set, cap the LLM *analyzer* window to the N
+        max_programs_per_sweep: If set, cap the librarian's window to the N
             newest programs by ``created_at`` so each sweep stays inside the
             engine's time budget; ``None`` (default) is unbounded. The injection
             posterior always sees the full program set regardless of this cap —

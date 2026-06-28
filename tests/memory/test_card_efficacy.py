@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core import EfficacyCardRenderer
-from gigaevo.memory.shared_memory.amem_gam_retriever import make_card_text
+from gigaevo.memory.shared_memory.amem_gam_retriever import (
+    build_gam_store,
+    make_card_text,
+)
 from gigaevo.memory.shared_memory.card_search import (
     format_block_efficacy,
     format_card_efficacy,
@@ -284,6 +287,100 @@ class TestRetrievalCorpusRender:
         )
         assert "program_id: abc" in text
         assert "explanation_summary:" not in text
+
+    def test_idea_record_renders_explanation_summary(self) -> None:
+        text = make_card_text(
+            {
+                "id": "m1",
+                "description": "spectral gap widening",
+                "explanation_summary": "why the gap widens under this lever",
+            }
+        )
+        assert "explanation_summary: why the gap widens under this lever" in text
+
+
+class TestGamMemoryAbstract:
+    """The GAM long-term-memory abstract is the always-on planning-context
+    channel (``_planning`` injects each as ``Page {i}: {abstract}``), distinct
+    from page-content retrieval. Idea-card abstracts must carry the why-text;
+    program exemplar abstracts stay description-only (their explanation rides
+    page metadata, matching the page-text projection)."""
+
+    def test_idea_abstract_includes_explanation_summary(self, tmp_path) -> None:
+        memory_store, _, _ = build_gam_store(
+            [
+                {
+                    "id": "m1",
+                    "description": "widen the spectral gap before pruning",
+                    "explanation_summary": (
+                        "pruning collapses the gap that carries the signal"
+                    ),
+                }
+            ],
+            tmp_path,
+        )
+        (abstract,) = memory_store.load().abstracts
+        assert "pruning collapses the gap that carries the signal" in abstract
+        assert "widen the spectral gap before pruning" in abstract
+
+    def test_program_abstract_stays_description_only(self, tmp_path) -> None:
+        memory_store, _, _ = build_gam_store(
+            [
+                {
+                    "id": "program-abc",
+                    "category": "program",
+                    "program_id": "abc",
+                    "description": "CatBoost ensemble",
+                    "explanation_summary": "ensembling lowers variance",
+                }
+            ],
+            tmp_path,
+        )
+        (abstract,) = memory_store.load().abstracts
+        assert abstract == "CatBoost ensemble"
+
+
+class TestGamAbstractStoreOverwrite:
+    """Each rebuild overwrites the planning-abstract store with ONLY the current
+    cards' abstracts, mirroring the page store. Edited or removed cards must not
+    leave a stale abstract behind in the always-on planning channel."""
+
+    def test_rebuild_drops_stale_abstract_when_card_edited(self, tmp_path) -> None:
+        build_gam_store(
+            [
+                {
+                    "id": "m1",
+                    "description": "widen the gap",
+                    "explanation_summary": "old",
+                }
+            ],
+            tmp_path,
+        )
+        memory_store, _, _ = build_gam_store(
+            [
+                {
+                    "id": "m1",
+                    "description": "widen the gap",
+                    "explanation_summary": "new",
+                }
+            ],
+            tmp_path,
+        )
+        assert memory_store.load().abstracts == ["widen the gap — new"]
+
+    def test_rebuild_drops_abstract_of_removed_card(self, tmp_path) -> None:
+        build_gam_store(
+            [
+                {"id": "m1", "description": "keep me", "explanation_summary": "a"},
+                {"id": "m2", "description": "drop me", "explanation_summary": "b"},
+            ],
+            tmp_path,
+        )
+        memory_store, _, _ = build_gam_store(
+            [{"id": "m1", "description": "keep me", "explanation_summary": "a"}],
+            tmp_path,
+        )
+        assert memory_store.load().abstracts == ["keep me — a"]
 
 
 class TestGamPageMetaEnvelope:

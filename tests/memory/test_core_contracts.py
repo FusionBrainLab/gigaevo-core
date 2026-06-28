@@ -61,31 +61,31 @@ class TestHydraComposition:
         return OmegaConf.load(CONFIG_MEMORY.joinpath(*parts))
 
     def test_reputation_group(self):
-        obj = instantiate(self._load("reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("common", "reputation", "beta_binomial.yaml"))
         assert obj == BetaBinomialReputation()
 
     def test_auction_group(self):
-        obj = instantiate(self._load("auction", "thompson.yaml"))
+        obj = instantiate(self._load("reader", "auction", "thompson.yaml"))
         assert isinstance(obj, ThompsonAuctioneer)
         assert tuple(obj.baseline_prior) == (3.0, 3.0)
 
     def test_selector_group(self):
-        obj = instantiate(self._load("selector", "llm.yaml"))
+        obj = instantiate(self._load("reader", "selector", "llm.yaml"))
         assert isinstance(obj, LLMCardSelector)
 
     def test_budget_group(self):
-        obj = instantiate(self._load("budget", "top_theta.yaml"))
+        obj = instantiate(self._load("reader", "budget", "top_theta.yaml"))
         assert isinstance(obj, TopThetaBudgeter)
 
     def test_evictor_harm_group(self):
         # _partial_ leaf: MemorySystem completes it with the shared reputation.
-        rep = instantiate(self._load("reputation", "beta_binomial.yaml"))
-        obj = instantiate(self._load("evictor", "harm.yaml"))(reputation=rep)
+        rep = instantiate(self._load("common", "reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("writer", "evictor", "harm.yaml"))(reputation=rep)
         assert isinstance(obj, HarmEvictor)
         assert obj.reputation == BetaBinomialReputation()
 
     def test_retriever_gam_group(self):
-        obj = instantiate(self._load("retriever", "gam.yaml"))
+        obj = instantiate(self._load("reader", "retriever", "gam.yaml"))
         assert isinstance(obj, GamRetriever)
         assert obj.max_iters == 3
         assert list(obj.allowed_tools) == ["page_index", "vector"]

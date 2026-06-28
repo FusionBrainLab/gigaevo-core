@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
@@ -15,11 +15,11 @@ class DecisionMetrics(BaseModel):
 
     Exactly the fields the Thompson auction, the reputation harm predicate, and
     the prompt renderer consume — the vocabulary reputation computes from a
-    card's gain events, and nothing more. Field names are the banks.json
-    contract, including the analyzer-cased ``IntroGain_*`` keys.
+    card's gain events, and nothing more. Field names are the serialized-card
+    contract, including the mixed-case ``IntroGain_*`` keys.
 
     "Gain" is always the child-minus-parent best-fitness delta in
-    positive-is-improvement space (the analysis negates for minimize metrics).
+    positive-is-improvement space (negated for minimize metrics).
     """
 
     posterior_a: float | None = Field(
@@ -69,7 +69,7 @@ class CardStatsBlock(DecisionMetrics):
     ) -> dict[str, Any]:
         """Serialize exactly the keys the source block carried: explicitly set
         fields (including explicit nulls) plus extras; unset defaults stay out
-        so a banks.json block roundtrips to its original keys."""
+        so a serialized card block roundtrips to its original keys."""
         declared = type(self).model_fields
         return {
             key: value
@@ -86,10 +86,14 @@ class MemoryCard(BaseModel):
     id: str = Field(description="Stable bank id of the card.")
     category: str = Field(
         default="general",
-        description="Free-form topical category assigned by the producing analyzer.",
+        description="Free-form topical category assigned by the authoring librarian agent.",
     )
     description: str = Field(
         default="", description="The idea itself — the text injected into prompts."
+    )
+    explanation_summary: str = Field(
+        default="",
+        description="One-line condensed reason the lever works; a distinct retrieval channel from the fuller description.",
     )
     task_description: str = Field(
         default="", description="Task description of the run that produced the card."
@@ -131,6 +135,10 @@ class ProgramCard(BaseModel):
     description: str = Field(
         default="", description="What the exemplar program does and why it scores well."
     )
+    explanation_summary: str = Field(
+        default="",
+        description="One-line condensed reason the exemplar scores well; a distinct retrieval channel from the fuller description.",
+    )
     fitness: float | None = Field(
         default=None, description="Fitness of the exemplar program at capture time."
     )
@@ -145,23 +153,14 @@ class ProgramCard(BaseModel):
 
 
 AnyCard = MemoryCard | ProgramCard
-
-
-class LocalMemorySnapshot(BaseModel):
-    """Persisted local memory state."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    memory_cards: dict[str, MemoryCard] = Field(
-        default_factory=dict, description="All bank cards keyed by card id."
-    )
+CardT = TypeVar("CardT", bound=AnyCard)
 
 
 __all__ = [
     "AnyCard",
+    "CardT",
     "CardStatsBlock",
     "DecisionMetrics",
-    "LocalMemorySnapshot",
     "MemoryCard",
     "ProgramCard",
     "Strategy",

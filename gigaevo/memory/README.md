@@ -24,7 +24,7 @@ API-backed mode wraps local A-MEM + GAM retrieval with cloud persistence:
 Memory is **one Hydra knob with four presets**. It assembles a single
 `MemorySystem` node that owns *both* the read side (the `MemoryProvider` that
 injects cards into the mutation context) and the write side (the `IdeaTracker`
-that authors cards via the librarian write path using the `memory/llm` router).
+that authors cards via the librarian write path using the `memory/common/llm` router).
 Two booleans inside that node — `reader_enabled` and `writer_enabled` — are what
 each preset flips:
 
@@ -32,11 +32,11 @@ each preset flips:
 |---|---|---|---|---|
 | `memory=none` | off | off | `NullMemoryProvider` + `NullPostRunHook` | none |
 | `memory=reader` | on | off | injects cards from an existing bank; no extraction | read only |
-| `memory=writer` | off | on | authors cards into a bank for a *later* run; injects nothing | `memory/llm` spend |
-| `memory=full` | on | on | reader + writer share **one** card bank | `memory/llm` spend |
+| `memory=writer` | off | on | authors cards into a bank for a *later* run; injects nothing | `memory/common/llm` spend |
+| `memory=full` | on | on | reader + writer share **one** card bank | `memory/common/llm` spend |
 
-The **writer** spends money on `memory/llm` (default `gemini`, swap with
-`memory/llm=qwen_instruct`); the **reader** changes fitness. `full` shares a
+The **writer** spends money on `memory/common/llm` (default `gemini`, swap with
+`memory/common/llm=qwen_instruct`); the **reader** changes fitness. `full` shares a
 single backend/reputation between the two — that sharing is a Python fact
 inside `MemorySystem`, not a `${ref:memory.*}` YAML web.
 
@@ -44,10 +44,10 @@ inside `MemorySystem`, not a `${ref:memory.*}` YAML web.
 - **True no-memory baseline**: `pipeline=standard memory=none`
 - **Seed a bank for later** (`memory=writer`): authors cards but injects
   nothing. **Do not** use this as a "no-memory" run — it pays full
-  `memory/llm` cost for cards nobody reads.
+  `memory/common/llm` cost for cards nobody reads.
 - **`memory=reader`** injects from a pre-populated bank without paying to write.
 
-> ⚠️ **Picking `writer` or `full` turns the `memory/llm` writer on and bills it.**
+> ⚠️ **Picking `writer` or `full` turns the `memory/common/llm` writer on and bills it.**
 > A no-memory baseline is `memory=none` + `pipeline=standard` — a single preset
 > disables both sides, so the old "writer left on" footgun
 > (`docs/audits/NOMEM_BASELINE_WRITER_LEFT_ON.md`) is gone: there is no second
@@ -81,7 +81,7 @@ The startup banner states the *resolved* wiring — check it, don't assume:
 
 A no-memory run shows `provider=NullMemoryProvider tracker=NullPostRunHook
 pipeline_builder=IntraMemoryPipelineBuilder`. Any `IdeaTracker` in the banner means the
-**writer is on and will spend** on `memory/llm`.
+**writer is on and will spend** on `memory/common/llm`.
 
 ## Memory Flow for New Users
 
@@ -105,7 +105,7 @@ periodic rebuild (every N writes, or after API sync):
 
 `save_card` is a pure persist primitive — it does no admission or dedup. In the
 production write path the `IdeaTracker` librarian authors and dedups card prose
-with the `memory/llm` router, then routes each result through
+with the `memory/common/llm` router, then routes each result through
 `CardAdmissionGate` (`admit` / `merge` / `bump_provenance`), which is the sole
 harm gate, records every verdict to `write_ledger.jsonl`, and calls
 `save_card_direct` to land admitted cards. A periodic `gate.sweep()` evicts cards
@@ -184,6 +184,7 @@ Cards are represented locally in a normalized schema (`shared_memory/models.py`)
 
 - `id`, `category`, `description`, `task_description`, `task_description_summary`
 - `keywords`
+- `explanation_summary` (one-line condensed "why the lever works"; indexed as its own retrieval channel, distinct from `description`)
 - optional: `gain_events` (use-attributed, base-relative gain events; reputation computes efficacy stats from these at read time)
 
 ### API write mapping
@@ -243,25 +244,31 @@ If no OpenRouter key is provided:
 
 ## Configuration
 
-This package reads **no environment variables** — enforced by
-`tests/memory/test_no_env_in_memory.py`. All wiring comes from Hydra:
+This package takes all **configuration** through Hydra — no env-var cascade. The
+only `os.environ` interaction is a small allowlist of HuggingFace/Langfuse runtime
+shims (HF cache dir + hub download timeouts, redirected to writable/longer
+defaults before the embedding model downloads); `tests/memory/test_no_env_in_memory.py`
+enforces that nothing else under `gigaevo/memory/` reads env or imports dotenv. All
+wiring comes from Hydra:
 
 - `memory={none,reader,writer,full}` selects the assembled `MemorySystem`
   (`config/memory/`) — one preset flips the `reader_enabled` / `writer_enabled`
   booleans that own the read-side provider and the write-side tracker.
-- `config/memory/backend/local.yaml` builds the shared card-bank backend via
-  `LocalMemoryBackendFactory`; its fields are the tuning surface.
-- The memory LLM is the `config/memory/llm/` group (`gemini` default,
-  `qwen_instruct`); `MemorySystem` threads it into the backend in Python.
+- `config/memory/common/backend/local.yaml` builds the shared card-bank backend: a
+  Hydra `_partial_` over `build_local_backend` (`shared_memory/backend.py`)
+  bound to a `MemoryConfig` node, whose fields are the tuning surface.
+- The memory LLM is the `config/memory/common/llm/` group (`gemini` default,
+  `qwen_instruct`); `MemorySystem` binds it into the backend partial in Python.
 
-Effective defaults shipped by `LocalMemoryBackendFactory`:
+Effective defaults of the `MemoryConfig` the backend node ships:
 - `search_limit` (default `5`)
 - `rebuild_interval` (default `30`)
 - `enable_llm_synthesis` (default `false`)
 - `embedding_model_name` (default `all-MiniLM-L6-v2`)
 
 `MemoryConfig` (`shared_memory/memory_config.py`) is the validated runtime
-config object the factory assembles; construct it directly only in tests.
+config object `build_local_backend` consumes; construct it directly only in
+tests.
 
 ## Quick Start
 

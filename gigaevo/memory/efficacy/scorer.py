@@ -48,8 +48,8 @@ def beta_binomial_posterior(
     ``a = 1 + (n - k_harm)``, ``b = 1 + k_harm`` with ``k_harm`` the count of
     events whose gain is below ``threshold`` (default 0); ``efficacy_confident``
     iff the ``confident_quantile`` of Beta(a, b) exceeds ``confident_threshold``.
-    The ``p_help_lo20`` field name is part of the banks.json contract regardless
-    of the configured quantile. ``invalid_events`` are evaluated-and-judged-
+    The ``p_help_lo20`` field name is part of the serialized-card stats contract
+    regardless of the configured quantile. ``invalid_events`` are evaluated-and-judged-
     invalid children: each is one forced harm event with no gain magnitude.
     """
     finite = [float(g) for g in gains if g is not None and math.isfinite(float(g))]

@@ -20,7 +20,13 @@ def test_stamp_gain_events_attaches_list():
     assert stamped.gain_events[0].gain == 0.1
 
 
-def test_stamp_gain_events_passthrough_when_absent():
+def test_stamp_gain_events_none_when_card_uncredited():
     card = MemoryCard(id="other")
+    stamped = CardStatsStamper().stamp_gain_events(card, {"card-y": [_gain()]})
+    assert stamped.gain_events is None
+
+
+def test_stamp_gain_events_clears_stale_when_card_uncredited():
+    card = MemoryCard(id="other", gain_events=[_gain()])
     stamped = CardStatsStamper().stamp_gain_events(card, {"card-y": [_gain()]})
     assert stamped.gain_events is None

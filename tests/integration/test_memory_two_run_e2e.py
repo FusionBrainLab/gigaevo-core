@@ -47,9 +47,8 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
-from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.ideas_tracker.models import (
-    programs_to_records,
+    program_to_record,
 )
 from gigaevo.memory.provider import MemoryProvider, SelectorMemoryProvider
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
@@ -383,7 +382,9 @@ class TestTwoRunMemoryLifecycle:
             memory_write_enabled=False,
         )
 
-        records = tracker._eligible_records(run_a_programs)
+        records = tracker._extractor.extract(
+            run_a_programs, task_description_summary=""
+        )
         # Root (no parents) is filtered, 3 children remain
         assert len(records) == 3
         assert all(r.fitness > 0 for r in records)
@@ -444,9 +445,7 @@ class TestTwoRunMemoryLifecycle:
         assert len(selection.card_ids) > 0
 
         # Wire pipeline into SelectorMemoryProvider
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = pipeline
 
         # Run actual evolution with memory-aware DAG
@@ -504,9 +503,7 @@ class TestTwoRunMemoryLifecycle:
         pipeline = _make_pipeline(memory, mock_card_ids=["idea-relevance"])
 
         # MemoryContextStage produces card text
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = pipeline
 
         memory_stage = MemoryContextStage(
@@ -603,12 +600,12 @@ class TestRunAIdeaTrackerProgramNative:
     def test_records_converter_maps_all_fields(self) -> None:
         """program_to_record correctly maps Program → ProgramRecord."""
         programs = _make_run_a_programs()
-        records, ids = programs_to_records(
-            programs, "Verify claims", "Multi-hop verification"
-        )
+        records = [
+            program_to_record(p, "Verify claims", "Multi-hop verification")
+            for p in programs
+        ]
 
         assert len(records) == len(programs)
-        assert ids == {p.id for p in programs}
 
         # Best program record
         best = max(records, key=lambda r: r.fitness)
@@ -621,7 +618,7 @@ class TestRunAIdeaTrackerProgramNative:
         assert "Combine BFS" in best.improvements[0].description
 
     def test_idea_tracker_filters_correctly(self) -> None:
-        """IdeaTracker._get_new_programs filters roots and zero-fitness."""
+        """The record extractor filters roots and zero-fitness programs."""
         from gigaevo.memory.ideas_tracker.ideas_tracker import IdeaTracker
 
         tracker = IdeaTracker(
@@ -631,14 +628,14 @@ class TestRunAIdeaTrackerProgramNative:
         )
 
         programs = _make_run_a_programs()
-        records = tracker._eligible_records(programs)
+        records = tracker._extractor.extract(programs, task_description_summary="")
 
         # Root (seed, no parents) is filtered
         assert len(records) == 3
         # All records have positive fitness
         assert all(r.fitness > 0 for r in records)
         # IDs tracked for deduplication
-        assert len(tracker._seen_ids) == 3
+        assert len(tracker._extractor.seen_ids) == 3
 
     @pytest.mark.asyncio
     async def test_on_run_complete_calls_pipeline(self) -> None:

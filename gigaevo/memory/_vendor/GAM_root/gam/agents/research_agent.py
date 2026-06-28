@@ -594,6 +594,9 @@ class ResearchAgent:
 
     @staticmethod
     def _extract_explanation_summary(card: dict[str, Any]) -> str:
+        top_level = str(card.get("explanation_summary") or "").strip()
+        if top_level:
+            return top_level
         explanation = card.get("explanation")
         if isinstance(explanation, dict):
             return str(explanation.get("summary") or "").strip()
@@ -1255,12 +1258,13 @@ class ResearchAgent:
         for idx in page_index:
             p = self.page_store.get(idx)
             if p:
+                amem_id = str((getattr(p, "meta", None) or {}).get("amem_id") or "")
                 out.append(
                     Hit(
-                        page_id=str(idx),
+                        page_id=amem_id.strip() or str(idx),
                         snippet=p.content,
                         source="page_index",
-                        meta={},
+                        meta={"page_index": idx},
                     )
                 )
         return [out]

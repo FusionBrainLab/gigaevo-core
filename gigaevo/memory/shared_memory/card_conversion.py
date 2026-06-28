@@ -60,8 +60,6 @@ class MemoryNoteProtocol(Protocol):
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_NAME = "openai/gpt-4.1-mini"
-
 VECTOR_GAM_TOOLS = {
     "vector",
     "vector_description",
@@ -95,7 +93,7 @@ DEFAULT_GAM_TOP_K_BY_TOOL = {
 
 
 class RawCardRecord(BaseModel):
-    """Boundary envelope for one raw card payload (JSON, API concept, Redis).
+    """Boundary envelope for one raw card payload (JSON dict or API concept).
 
     Validates and coerces every loosely-typed field once, at the boundary;
     `to_card()` is the only raw-payload → AnyCard path. Legacy alias keys
@@ -119,6 +117,9 @@ class RawCardRecord(BaseModel):
     )
     description: str = Field(
         default="", description="Card text — the idea or program summary."
+    )
+    explanation_summary: str = Field(
+        default="", description="One-line condensed reason the card's lever works."
     )
     content: str = Field(
         default="", description="Legacy alias of description; loses ties to it."
@@ -156,6 +157,7 @@ class RawCardRecord(BaseModel):
     @field_validator(
         "id",
         "description",
+        "explanation_summary",
         "content",
         "task_description",
         "context",
@@ -211,6 +213,7 @@ class RawCardRecord(BaseModel):
                 task_description=task_description,
                 task_description_summary=task_description_summary,
                 description=description,
+                explanation_summary=self.explanation_summary,
                 fitness=self.fitness,
                 code=self.code,
                 keywords=self.keywords,
@@ -221,6 +224,7 @@ class RawCardRecord(BaseModel):
             id=card_id,
             category=self.category,
             description=description,
+            explanation_summary=self.explanation_summary,
             task_description=task_description,
             task_description_summary=task_description_summary,
             programs=self.programs,
@@ -319,8 +323,13 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
             "task_description": card.task_description,
             "task_description_summary": card.task_description_summary,
             "description": card.description,
+            "explanation_summary": card.explanation_summary,
             "fitness": card.fitness,
             "code": card.code,
+            "keywords": dedupe_keep_order(list(card.keywords)),
+            "gain_events": (
+                [g.model_dump() for g in card.gain_events] if card.gain_events else None
+            ),
         }
 
     return {
@@ -331,7 +340,9 @@ def card_to_concept_content(card: AnyCard) -> dict[str, Any]:
         "task_description": card.task_description,
         "task_description_summary": card.task_description_summary,
         "description": card.description,
+        "explanation_summary": card.explanation_summary,
         "code": "",
+        "programs": dedupe_keep_order(list(card.programs)),
         "keywords": dedupe_keep_order(list(card.keywords)),
         "gain_events": (
             [g.model_dump() for g in card.gain_events] if card.gain_events else None

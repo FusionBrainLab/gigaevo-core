@@ -22,9 +22,10 @@ class CardStatsStamper(BaseModel):
     def stamp_gain_events(
         self, card: AnyCard, gain_events: dict[str, list[ContextualGain]]
     ) -> AnyCard:
-        """Card with its use-attributed gain events attached; cards without
-        events pass through unchanged."""
+        """Card with the current sweep's authoritative gain events attached.
+
+        The full pool is authoritative each sweep: a credited card carries this
+        sweep's events; an uncredited card has any stale events cleared to None.
+        """
         events = gain_events.get(card.id.strip())
-        if not events:
-            return card
-        return card.model_copy(update={"gain_events": list(events)})
+        return card.model_copy(update={"gain_events": list(events) if events else None})

@@ -147,10 +147,10 @@ def test_gam_retriever_threads_dose_to_backend():
 
 
 def test_hydra_random_drop_config_builds_the_excluder():
-    cfg = OmegaConf.load(_CONFIG / "excluder" / "random_drop.yaml")
+    cfg = OmegaConf.load(_CONFIG / "reader" / "excluder" / "random_drop.yaml")
     assert isinstance(instantiate(cfg), RandomDropExcluder)
 
 
 def test_hydra_default_excluder_is_null():
-    cfg = OmegaConf.load(_CONFIG / "excluder" / "none.yaml")
+    cfg = OmegaConf.load(_CONFIG / "reader" / "excluder" / "none.yaml")
     assert isinstance(instantiate(cfg), NullExcluder)

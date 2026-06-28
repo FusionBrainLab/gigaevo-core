@@ -8,7 +8,6 @@ import pytest
 
 from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.shared_memory.models import (
-    LocalMemorySnapshot,
     MemoryCard,
 )
 
@@ -71,24 +70,3 @@ class TestMemoryCard:
         c2 = MemoryCard(id="b", description="d")
         c1.programs.append("p1")
         assert c2.programs == []
-
-
-# ===========================================================================
-# LocalMemorySnapshot
-# ===========================================================================
-
-
-class TestLocalMemorySnapshot:
-    def test_empty(self):
-        s = LocalMemorySnapshot()
-        assert s.memory_cards == {}
-
-    def test_with_cards(self):
-        card = MemoryCard(id="c1", description="desc")
-        s = LocalMemorySnapshot(memory_cards={"c1": card})
-        assert "c1" in s.memory_cards
-        assert s.memory_cards["c1"].description == "desc"
-
-    def test_extra_field_raises(self):
-        with pytest.raises(ValidationError):
-            LocalMemorySnapshot(extra="bad")

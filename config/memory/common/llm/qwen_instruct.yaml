@@ -1,0 +1,23 @@
+# @package memory.llm
+# Memory-subsystem LLM router — large Qwen instruct via the in-cluster LiteLLM
+# proxy. Heavier card enrichment/dedup than gemini; `memory/llm=qwen_instruct`.
+_target_: gigaevo.llm.models.MultiModelRouter
+_convert_: all
+name: memory
+models:
+  - _target_: langchain_openai.ChatOpenAI
+    model: Qwen/Qwen3-235B-A22B-Instruct-2507
+    # OPENAI_API_KEY holds the in-cluster LiteLLM proxy key (sk-gigaevo in .env).
+    # OpenRouter-backed main LLMs read OPENROUTER_API_KEY instead, so the two
+    # endpoints never share a key — no override juggling, no extra env var.
+    api_key: ${oc.env:OPENAI_API_KEY}
+    base_url: http://localhost:8000/v1
+    temperature: 0.0
+    max_tokens: null
+probabilities:
+  - 1.0
+max_concurrent: 100
+writer: ${ref:writer}
+# auto: the Qwen vLLM proxy rejects forced tool_choice, so negotiate
+# json_schema -> function_calling -> json_mode and cache the winning method.
+structured_output_method: auto

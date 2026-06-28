@@ -7,6 +7,8 @@ collaborator and assert on what reaches the gate, never on internal calls.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from gigaevo.llm.agents.program_author import ProgramAuthorResponse
@@ -15,6 +17,7 @@ from gigaevo.llm.agents.reconcile import (
     ReconcileItem,
     ReconcileResponse,
 )
+from gigaevo.memory.core.events import memory_event_context
 from gigaevo.memory.ideas_tracker.librarian import Librarian
 from gigaevo.memory.shared_memory.models import MemoryCard, ProgramCard
 
@@ -27,33 +30,62 @@ class _FakeCardStore:
 class _FakeStore:
     def __init__(self) -> None:
         self.card_store = _FakeCardStore()
+        self.deleted: list = []
+
+    def get_card(self, card_id: str):  # noqa: ANN201
+        return self.card_store.cards.get(card_id)
+
+    def all_cards_snapshot(self) -> dict:
+        return dict(self.card_store.cards)
+
+    def delete(self, card_id: str) -> None:
+        self.deleted.append(card_id)
+        self.card_store.cards.pop(card_id, None)
 
 
 class _FakeGate:
-    def __init__(self) -> None:
+    """Records what reaches the gate. With ``store`` set, merge/bump mirror the
+    real CardAdmissionGate: a target absent from the bank yields ``""`` (the
+    no-op the librarian must treat as 'author the idea anyway, never drop it')."""
+
+    def __init__(self, store=None) -> None:  # noqa: ANN001
+        self._store = store
         self.admitted: list = []
         self.merged: list = []
         self.bumped: list = []
+
+    def _target_missing(self, target_id) -> bool:  # noqa: ANN001
+        return self._store is not None and not isinstance(
+            self._store.card_store.cards.get(target_id), MemoryCard
+        )
 
     def admit(self, card) -> str:  # noqa: ANN001
         self.admitted.append(card)
         return card.id or "mem-new"
 
     def merge(self, target_id, card) -> str:  # noqa: ANN001
+        if self._target_missing(target_id):
+            return ""
         self.merged.append((target_id, card))
         return target_id
 
     def bump_provenance(self, target_id, child_id) -> str:  # noqa: ANN001
+        if self._target_missing(target_id):
+            return ""
         self.bumped.append((target_id, child_id))
         return target_id
 
 
 class _FakeNeighbors:
+    """Mirrors the production ChromaNeighborSource type contract: ``nearest``
+    surfaces only cards of the requested ``card_type`` — so idea dedup gets
+    ``MemoryCard`` hits and exemplar twin dedup gets ``ProgramCard`` hits."""
+
     def __init__(self, hits) -> None:  # noqa: ANN001
         self._hits = hits
 
-    def nearest(self, note, k):  # noqa: ANN001
-        return self._hits
+    def nearest(self, note, k, card_type):  # noqa: ANN001
+        return [(c, d) for c, d in self._hits if isinstance(c, card_type)]
 
 
 class _FakeAgent:
@@ -99,7 +131,6 @@ def _lib(agent, gate, store, neighbors, program_author=None, **kw) -> Librarian:
 
 async def _ingest(lib: Librarian, **over) -> list[str]:  # noqa: ANN003
     kwargs = dict(
-        base_parent_id="p",
         base_parent_code="def f(): return 1",
         child_id="c",
         child_code="def f(): return 2",
@@ -173,7 +204,33 @@ async def test_merge_routes_to_gate_merge() -> None:
 
 
 @pytest.mark.asyncio
-async def test_duplicate_without_target_is_dropped() -> None:
+async def test_duplicate_with_target_bumps_provenance_not_merge() -> None:
+    gate, store, agent = (
+        _FakeGate(),
+        _FakeStore(),
+        _FakeAgent(
+            ReconcileResponse(
+                items=[
+                    ReconcileItem(
+                        decision="DUPLICATE",
+                        card=LibrarianCard(description="dup prose"),
+                        target_id="mem-T",
+                    )
+                ]
+            )
+        ),
+    )
+    ids = await _ingest(_lib(agent, gate, store, _FakeNeighbors([])), child_id="c")
+    assert gate.bumped == [("mem-T", "c")]
+    assert gate.merged == []
+    assert gate.admitted == []
+    assert ids == ["mem-T"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_without_target_admits_as_new() -> None:
+    # A DUPLICATE the agent never named a target for cannot bump anything; the
+    # idea must still land (authored as NEW), never be silently dropped.
     gate, store, agent = (
         _FakeGate(),
         _FakeStore(),
@@ -190,9 +247,57 @@ async def test_duplicate_without_target_is_dropped() -> None:
         ),
     )
     ids = await _ingest(_lib(agent, gate, store, _FakeNeighbors([])))
-    assert ids == []
+    assert ids == ["mem-new"]
     assert gate.merged == []
-    assert gate.admitted == []
+    assert gate.bumped == []
+    assert [c.description for c in gate.admitted] == ["dup"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_with_stale_target_admits_as_new() -> None:
+    # The agent named a DUPLICATE target that has since left the bank, so the
+    # gate's bump is a no-op (returns ""). The idea must be authored as NEW
+    # rather than dropped — the gate is faithful (store-aware) here.
+    store = _FakeStore()
+    gate = _FakeGate(store)
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="DUPLICATE",
+                    card=LibrarianCard(description="dup of a ghost"),
+                    target_id="mem-ghost",
+                )
+            ]
+        )
+    )
+    ids = await _ingest(_lib(agent, gate, store, _FakeNeighbors([])))
+    assert ids == ["mem-new"]
+    assert gate.bumped == []
+    assert [c.description for c in gate.admitted] == ["dup of a ghost"]
+
+
+@pytest.mark.asyncio
+async def test_merge_with_stale_target_admits_as_new() -> None:
+    # Same for MERGE: a target that has left the bank makes the merge a no-op
+    # (returns ""), so the unioned prose must be authored as NEW, not lost.
+    store = _FakeStore()
+    gate = _FakeGate(store)
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="MERGE",
+                    card=LibrarianCard(description="union onto a ghost"),
+                    target_id="mem-ghost",
+                )
+            ]
+        )
+    )
+    ids = await _ingest(_lib(agent, gate, store, _FakeNeighbors([])))
+    assert ids == ["mem-new"]
+    assert gate.merged == []
+    assert [c.description for c in gate.admitted] == ["union onto a ghost"]
 
 
 @pytest.mark.asyncio
@@ -222,6 +327,73 @@ async def test_far_neighbor_does_not_short_circuit() -> None:
     assert agent.calls == 1
     assert gate.bumped == []
     assert ids == ["mem-new"]
+
+
+@pytest.mark.asyncio
+async def test_program_card_neighbor_is_skipped_not_treated_as_duplicate() -> None:
+    """A program exemplar card within eps must NOT short-circuit the idea write.
+
+    ProgramCards live in the same bank as idea cards and leak into the neighbor
+    source. Bumping a ProgramCard's provenance is a no-op that would silently
+    drop the idea, so program cards are filtered out of the neighbor set and the
+    idea is authored through the reconcile path instead.
+    """
+    gate, store = _FakeGate(), _FakeStore()
+    program_neighbor = ProgramCard(
+        id="program-7",
+        program_id="7",
+        description="greedy spectral exemplar",
+        code="def s(): ...",
+    )
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="widen gap")
+                )
+            ]
+        )
+    )
+    ids = await _ingest(
+        _lib(agent, gate, store, _FakeNeighbors([(program_neighbor, 0.0)])),
+        child_id="c",
+    )
+    assert gate.bumped == []
+    assert agent.calls == 1
+    assert len(gate.admitted) == 1
+    assert gate.admitted[0].description == "widen gap"
+    assert ids == ["mem-new"]
+
+
+@pytest.mark.asyncio
+async def test_neighbor_failure_emits_event_and_still_admits(tmp_path) -> None:
+    """A NeighborSource failure must be observable and must NOT drop the idea.
+
+    Chroma can fail (cold index, disk hiccup). The librarian swallows the error
+    so the write path survives, but a silent swallow hides a degraded dedup
+    surface; the failure is recorded as a canonical memory event and the idea is
+    still authored through the reconcile path with an empty neighbor set.
+    """
+    gate, store = _FakeGate(), _FakeStore()
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[ReconcileItem(decision="NEW", card=LibrarianCard(description="x"))]
+        )
+    )
+
+    class _BoomNeighbors:
+        def nearest(self, note, k, card_type):  # noqa: ANN001
+            raise RuntimeError("chroma down")
+
+    path = tmp_path / "memory_events.jsonl"
+    with memory_event_context(event_path=path):
+        ids = await _ingest(_lib(agent, gate, store, _BoomNeighbors()))
+
+    assert ids == ["mem-new"]
+    assert agent.calls == 1
+    assert path.exists()
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    assert any(r["event_type"] == "neighbor.retrieval_failed" for r in rows)
 
 
 @pytest.mark.asyncio
@@ -296,6 +468,201 @@ async def test_author_program_authors_new_program() -> None:
     assert resp.description == "greedy spectral"
     assert resp.keywords == ["spectral"]
     assert author.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_new_card_carries_authored_explanation_summary() -> None:
+    # The librarian must thread the reconcile agent's authored explanation_summary
+    # onto the admitted card so A-MEM's explanation_summary Chroma channel is fed.
+    gate, store = _FakeGate(), _FakeStore()
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW",
+                    card=LibrarianCard(
+                        description="clamp the update step",
+                        explanation_summary="raw steps diverge where the landscape is steepest",
+                    ),
+                )
+            ]
+        )
+    )
+    await _ingest(_lib(agent, gate, store, _FakeNeighbors([])))
+    assert len(gate.admitted) == 1
+    assert (
+        gate.admitted[0].explanation_summary
+        == "raw steps diverge where the landscape is steepest"
+    )
+
+
+@pytest.mark.asyncio
+async def test_author_program_cached_preserves_explanation_summary() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    store.card_store.cards["program-42"] = ProgramCard(
+        id="program-42",
+        program_id="42",
+        description="already authored",
+        code="def s(): ...",
+        explanation_summary="why this exemplar scores",
+    )
+    author = _FakeProgramAuthor(ProgramAuthorResponse(description="greedy spectral"))
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([]),
+        program_author=author,
+    )
+    resp = await lib.author_program(program_id="42", code="x", fitness=0.5)
+    assert resp.explanation_summary == "why this exemplar scores"
+    assert author.calls == 0
+
+
+def _prog(pid, *, fitness=None, description="strat X") -> ProgramCard:  # noqa: ANN001
+    return ProgramCard(
+        id=f"program-{pid}",
+        program_id=str(pid),
+        description=description,
+        code="def s(): ...",
+        fitness=fitness,
+    )
+
+
+def test_admit_program_with_no_twin_admits() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    lib = _lib(_FakeAgent(ReconcileResponse(items=[])), gate, store, _FakeNeighbors([]))
+    fid = lib.admit_program(_prog("a", fitness=0.5), higher_is_better=True)
+    assert fid == "program-a"
+    assert [c.id for c in gate.admitted] == ["program-a"]
+    assert store.deleted == []
+
+
+def test_admit_program_skips_equal_fitness_twin() -> None:
+    # The strict-better contract: an equally-good same-strategy twin is kept and
+    # the redundant incoming card is dropped (no churn).
+    gate, store = _FakeGate(), _FakeStore()
+    twin = _prog("a", fitness=0.9)
+    store.card_store.cards["program-a"] = twin
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(twin, 0.0)]),
+    )
+    fid = lib.admit_program(_prog("b", fitness=0.9), higher_is_better=True)
+    assert fid == ""
+    assert gate.admitted == []
+    assert store.deleted == []
+    assert store.get_card("program-a") is twin
+
+
+def test_admit_program_skips_worse_incoming_twin() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    twin = _prog("a", fitness=0.9)
+    store.card_store.cards["program-a"] = twin
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(twin, 0.0)]),
+    )
+    fid = lib.admit_program(_prog("b", fitness=0.5), higher_is_better=True)
+    assert fid == ""
+    assert gate.admitted == []
+    assert store.deleted == []
+
+
+def test_admit_program_replaces_worse_twin_when_strictly_better() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    twin = _prog("a", fitness=0.5)
+    store.card_store.cards["program-a"] = twin
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(twin, 0.0)]),
+    )
+    fid = lib.admit_program(_prog("b", fitness=0.9), higher_is_better=True)
+    assert fid == "program-b"
+    assert store.deleted == ["program-a"]
+    assert [c.id for c in gate.admitted] == ["program-b"]
+
+
+def test_admit_program_ignores_idea_card_neighbor() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    idea = MemoryCard(id="mem-x", description="strat X", keywords=[])
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(idea, 0.0)]),
+    )
+    fid = lib.admit_program(_prog("b", fitness=0.5), higher_is_better=True)
+    assert fid == "program-b"
+    assert [c.id for c in gate.admitted] == ["program-b"]
+    assert store.deleted == []
+
+
+def test_admit_program_ignores_far_program_twin() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    far = _prog("a", fitness=0.9, description="different strat")
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(far, 0.5)]),
+    )
+    fid = lib.admit_program(_prog("b", fitness=0.5), higher_is_better=True)
+    assert fid == "program-b"
+    assert [c.id for c in gate.admitted] == ["program-b"]
+    assert store.deleted == []
+
+
+def test_admit_program_readmit_same_id_is_not_a_twin() -> None:
+    # Re-admitting an exemplar already in the bank must not see ITSELF as a
+    # duplicate; it flows to the gate as an UPDATE, not a self-replace/skip.
+    gate, store = _FakeGate(), _FakeStore()
+    self_card = _prog("a", fitness=0.5)
+    store.card_store.cards["program-a"] = self_card
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(self_card, 0.0)]),
+    )
+    fid = lib.admit_program(_prog("a", fitness=0.6), higher_is_better=True)
+    assert fid == "program-a"
+    assert [c.id for c in gate.admitted] == ["program-a"]
+    assert store.deleted == []
+
+
+def test_admit_program_lower_is_better_replaces_on_lower_fitness() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+    twin = _prog("a", fitness=0.9)
+    store.card_store.cards["program-a"] = twin
+    lib = _lib(
+        _FakeAgent(ReconcileResponse(items=[])),
+        gate,
+        store,
+        _FakeNeighbors([(twin, 0.0)]),
+    )
+    fid = lib.admit_program(_prog("b", fitness=0.5), higher_is_better=False)
+    assert fid == "program-b"
+    assert store.deleted == ["program-a"]
+
+
+def test_admit_program_survives_neighbor_failure() -> None:
+    gate, store = _FakeGate(), _FakeStore()
+
+    class _BoomNeighbors:
+        def nearest(self, note, k, card_type):  # noqa: ANN001
+            raise RuntimeError("chroma down")
+
+    lib = _lib(_FakeAgent(ReconcileResponse(items=[])), gate, store, _BoomNeighbors())
+    fid = lib.admit_program(_prog("b", fitness=0.5), higher_is_better=True)
+    assert fid == "program-b"
+    assert [c.id for c in gate.admitted] == ["program-b"]
 
 
 @pytest.mark.asyncio

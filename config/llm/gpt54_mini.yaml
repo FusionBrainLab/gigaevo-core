@@ -10,7 +10,7 @@
 #
 # Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
 #   (read directly so OPENAI_API_KEY stays free for the in-cluster LiteLLM proxy,
-#    e.g. memory/llm=qwen_instruct — the two endpoints never share a key.)
+#    e.g. memory/common/llm=qwen_instruct — the two endpoints never share a key.)
 #
 # Usage:
 #   python run.py ... llm=gpt54_mini

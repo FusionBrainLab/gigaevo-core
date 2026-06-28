@@ -94,6 +94,27 @@ async def test_reconcile_passes_neighbor_ids_into_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconcile_passes_neighbor_why_and_keywords_into_prompt() -> None:
+    fake = _FakeLLM(ReconcileResponse(items=[]))
+    agent = _agent(fake)
+    neighbor = MemoryCard(
+        id="mem-N",
+        description="existing lever",
+        explanation_summary="WHY_MARKER it escapes the trap",
+        keywords=["KW_MARKER"],
+    )
+    await agent.arun(
+        base_parent_code="a",
+        child_code="b",
+        note="n",
+        neighbors=[neighbor],
+    )
+    rendered = str(fake._structured.calls[0])
+    assert "WHY_MARKER it escapes the trap" in rendered
+    assert "KW_MARKER" in rendered
+
+
+@pytest.mark.asyncio
 async def test_reconcile_bakes_task_description_into_system_prompt() -> None:
     fake = _FakeLLM(ReconcileResponse(items=[]))
     agent = _agent(fake, task="PACK_TRIANGLES_TASK_MARKER")

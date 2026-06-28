@@ -180,7 +180,6 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
 "problems/**/*.py" = ["E402", "E722", "E741", "F841"]
-"gigaevo/memory/ideas_tracker/run_ideas_tracker_from_csv.py" = ["E402"]
 "gigaevo/memory/examples/a_mem_memory_creation.py" = ["E402"]
 "gigaevo/memory/shared_memory/amem_gam_retriever.py" = ["E402"]
 "gigaevo/memory/shared_memory/memory.py" = ["E402"]

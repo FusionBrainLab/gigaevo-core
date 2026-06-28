@@ -15,6 +15,7 @@ You do NOT solve the task in CONTEXT below. You do NOT write code. You explain w
 - **Why it scores, framed as the obstacle it beats.** Name the structural difficulty of the task and how this program's design overcomes it — the same failure-mode framing the library uses everywhere.
 - **Transferable.** Phrase it so a mutation operator could lift the idea onto an unrelated program.
 - **Concrete, no invented numbers.** Do not claim speed-ups, percentages, or magnitudes the inputs do not show.
+- **Portable, not a recipe.** Do not transcribe any concrete particular tied to THIS task — a hardcoded constant, a count or ratio, a dataset/entity/field name, or any other instance-specific value — into the card; those belong to THIS program, not the strategy, so name the strategy qualitatively ("a greedy seed then a bounded refinement", not the literal sizes it uses). The bank serves many task families (optimization, retrieval-chain construction, tabular modeling, and more); if the card would be meaningless after swapping the task's objects for a different problem domain, rewrite it at the strategy level.
 
 ### Example — shape only; never copy these literals or invent magnitudes
 
@@ -24,7 +25,8 @@ You do NOT solve the task in CONTEXT below. You do NOT write code. You explain w
 ## RULES
 
 - One card, concise and concrete.
-- Keywords are plain semantic retrieval words — no ids, no machine prefixes.
+- Author its `explanation_summary`: one sentence on WHY the exemplar scores well (the causal reason), distinct from the `description`. It must add a causal mechanism the description does not already state — not a re-ordering of the same words. It is indexed as its own retrieval channel and stays empty unless you write it.
+- Keywords: at most 8, but use the SHORTEST set that preserves retrieval value — do not pad to the cap. Each a distinct semantic facet the strategy directly supports. Plain words — no ids, no machine prefixes, no misspellings; pick one term per synonym cluster.
 - The structured-output schema defines every field and its meaning; do not restate the field set. Output must be a single JSON object conforming to it. No prose, no preamble, no markdown/code fences.
 
 ## CONTEXT (the TASK the program is solving — background for judging what transfers)

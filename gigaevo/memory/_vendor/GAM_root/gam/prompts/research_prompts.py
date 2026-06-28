@@ -20,7 +20,7 @@ TOOL_GUIDANCE = {
      Write queries in "vector_task_description_queries" that describe the task framing, constraints, or problem setting whose cards you want.""",
     "vector_explanation_summary": """"vector_explanation_summary"
    - WHAT IT DOES:
-     Semantic retrieval over only the "explanation.summary" field of each card.
+     Semantic retrieval over only the "explanation_summary" field of each card.
    - HOW TO USE:
      Write queries in "vector_explanation_summary_queries" based on problems/program insights: failures, weaknesses, instability, and "why" signals.""",
     "page_index": """"page_index"
@@ -65,10 +65,7 @@ Retrieved pages represent memory cards with this structure:
     "task_description": "<string>",
     "strategy": "<string>",
     "keywords": [<string>, ...],
-    "explanation": {{
-      "explanations": [<string>, ...],
-      "summary": "<string>"
-    }},
+    "explanation_summary": "<string>",
     "links": [<string>, ...]
   }}
 }}
@@ -77,8 +74,8 @@ Important mapping notes:
 - `amem_id` and `amem.id` refer to the same card identity.
 - `description` is the core memory claim/fact.
 - `task_description` is the task/problem context and constraints.
-- `explanation.summary` is the compact rationale/"why".
-- Retrieval snippets may be full card text OR a field-focused snippet (e.g., description-only, task_description-only, explanation.summary-only).
+- `explanation_summary` is the compact rationale/"why".
+- Retrieval snippets may be full card text OR a field-focused snippet (e.g., description-only, task_description-only, explanation_summary-only).
 
 PLANNING PROCEDURE
 1. Interpret the REQUEST using the context in MEMORY. Identify what information is needed to select the best memory cards.

@@ -43,7 +43,7 @@ class SearchPlan(BaseModel):
     vector_explanation_summary_queries: list[str] = Field(
         default_factory=list,
         description=(
-            "Semantic queries over only the explanation.summary field, max 2. "
+            "Semantic queries over only the explanation_summary field, max 2. "
             "Empty when the vector_explanation_summary tool is not selected"
         ),
     )

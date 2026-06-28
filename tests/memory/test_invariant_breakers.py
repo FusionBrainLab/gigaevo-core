@@ -221,9 +221,10 @@ class TestPersistenceDivergence:
         # Card is NOT in memory — the exception interrupted before line 228
         assert "test-card" not in mem.card_store.cards
 
-    def test_note_sync_raises_card_in_memory_not_in_vector(self, tmp_path):
-        """B2: If sync_card_to_amem_with_evolution raises AFTER store.cards is updated,
-        the card is in memory but NOT in the vector store."""
+    def test_note_sync_raises_leaves_card_in_neither_store(self, tmp_path):
+        """B2: The bank commit lands only after the A-MEM note sync succeeds, so a
+        sync failure leaves the card in NEITHER the bank NOR the vector store —
+        the two stay consistent instead of diverging into a bank-only orphan."""
         mem, _ = make_test_memory_with_agentic(tmp_path)
         assert mem.note_sync is not None
 
@@ -236,9 +237,8 @@ class TestPersistenceDivergence:
         with pytest.raises(RuntimeError, match="Chroma write failed"):
             mem._insert_new_card(card)
 
-        # Card IS in memory (line 228 executed before line 231)
-        assert "orphan" in mem.card_store.cards
-        # But NOT in the vector store
+        # The failed sync rolled forward to nothing: bank and vector agree.
+        assert "orphan" not in mem.card_store.cards
         assert "orphan" not in mem.note_sync.memory_system.memories
 
     def test_rebuild_triggered_skips_redundant_persist(self, tmp_path):

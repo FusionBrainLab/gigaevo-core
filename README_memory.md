@@ -7,10 +7,10 @@ that wires a read-side provider (`memory=reader` or `memory=full`).
 
 ## Required environment
 
-Both flows need an OpenRouter key for the IdeaTracker analyzers
-(`google/gemini-3-flash-preview`) and any agentic memory retrieval.
-Without it the GAM/IdeaTracker calls 401 silently and zero cards are
-written:
+The default memory LLM (`memory/common/llm=gemini`,
+`google/gemini-3-flash-preview`) and the agentic memory retrieval both
+reach OpenRouter, so both flows need an OpenRouter key. Without it the
+GAM and librarian calls 401 silently and zero cards are written:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
@@ -21,8 +21,8 @@ export HTTPS_PROXY=http://...           # if your egress is proxied
 
 The `intra_extra_memory` pipeline runs the mutator with an intra-process
 card store that the `LiveMemoryRefreshHook` keeps in sync with the
-end-of-run write pipeline, so reading and writing share state via the
-tracker's `_run_lock`.
+end-of-run librarian write path, so reading and writing share state via
+the tracker's `_run_lock`.
 
 ```bash
 OPENAI_API_KEY=sk-gigaevo python run.py \
@@ -56,8 +56,9 @@ python run.py problem.name=heilbron memory=reader \
   checkpoint_dir=outputs/memory_bank_01
 ```
 
-After step 1 the run folder contains `memory_write_stats.json` with
-per-run `updated` / `rejected` counts.
+After step 1 the run folder contains `write_ledger.jsonl` — one
+append-only row per ingest/eviction verdict (`added` / `updated` /
+`merged` / `discarded` / `rejected_harm` / `evicted`).
 
 ## How `checkpoint_dir` is applied
 
@@ -70,7 +71,7 @@ per-run `updated` / `rejected` counts.
 
 - Pipeline: [`config/pipeline/`](config/pipeline/) — `intra_extra_memory`, `standard`, ...
 - Memory: [`config/memory/`](config/memory/) — `none`, `reader`, `writer`, `full`
-- Writer LLM: [`config/memory/llm/`](config/memory/llm/) — `gemini` (default), `qwen_instruct`
+- Memory LLM: [`config/memory/common/llm/`](config/memory/common/llm/) — `gemini` (default), `qwen_instruct`
 
 ## Paper arm matrix
 

@@ -302,10 +302,10 @@ def test_task_summary_llm_is_memoised_across_increments():
         task_description="Maximise the minimum triangle area over N points.",
     )
 
-    asyncio.run(tracker._ensure_task_summary())
-    asyncio.run(tracker._ensure_task_summary())
+    asyncio.run(tracker._stack.ensure_summary())
+    asyncio.run(tracker._stack.ensure_summary())
 
-    assert tracker._task_description_summary == "condensed"
+    assert tracker._stack.task_description_summary == "condensed"
     assert llm.structured.calls == 1
 
 

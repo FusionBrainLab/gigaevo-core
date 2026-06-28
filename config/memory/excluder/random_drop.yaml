@@ -1,4 +1,0 @@
-# Dose-matched random-drop control: excludes nothing by id but drops as many
-# random pool hits as the lineage closure would have excluded. Isolates the
-# DOSE of lineage exclusion from its AWARENESS.
-_target_: gigaevo.memory.core.random_drop.RandomDropExcluder

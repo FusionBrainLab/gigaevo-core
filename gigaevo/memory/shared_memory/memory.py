@@ -4,6 +4,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pathlib import Path
     import types
 
 from loguru import logger
@@ -36,6 +37,8 @@ from gigaevo.memory.shared_memory.concept_api import _ConceptApiClient
 from gigaevo.memory.shared_memory.gam_search import GamSearch
 from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 from gigaevo.memory.shared_memory.memory_state import MemoryState
+from gigaevo.memory.shared_memory.models import CardT
+from gigaevo.memory.shared_memory.neighbor_source import ChromaNeighborSource
 from gigaevo.memory.shared_memory.note_sync import NoteSync
 from gigaevo.memory.shared_memory.protocols import ResearchOutput
 
@@ -62,6 +65,10 @@ class AmemGamMemory(GigaEvoMemoryBase):
     def is_ready(self) -> bool:
         """True if memory is fully initialized and ready for operations."""
         return self._state.is_ready
+
+    @property
+    def checkpoint_path(self) -> Path:
+        return self.config.checkpoint_path
 
     def __init__(
         self,
@@ -343,15 +350,21 @@ class AmemGamMemory(GigaEvoMemoryBase):
                 card = card.model_copy(update=enrichments)
 
         store = self.card_store
+        normalized = normalize_memory_card(card, fallback_id=card_id)
         sync = self._get_api_sync()
         if sync is not None:
             sync.save_card_to_api(card, card_id)
         else:
             store.clear_entity(card_id)
-        store.cards[card_id] = normalize_memory_card(card, fallback_id=card_id)
 
         if self.note_sync is not None:
-            self.note_sync.sync_card_to_amem_with_evolution(store.cards[card_id])
+            self.note_sync.sync_card_to_amem_with_evolution(normalized)
+
+        # Commit to the bank only after the A-MEM note sync succeeds: a sync
+        # failure raises here and leaves the bank unchanged (and consistent with
+        # the index) rather than holding a card the index never received — the
+        # merge path swallows the failure and reports the target as not updated.
+        store.cards[card_id] = normalized
 
         rebuilt = False
         self._iters_after_rebuild += 1
@@ -703,9 +716,27 @@ class AmemGamMemory(GigaEvoMemoryBase):
         self._emit_store_event("store.search", payload)
         return text
 
+    def nearest(
+        self, note: str, k: int, card_type: type[CardT]
+    ) -> list[tuple[CardT, float]]:
+        """The writer's nearest-card primitive over this backend's A-MEM index,
+        parametrized by the kind wanted (idea ``MemoryCard`` or exemplar
+        ``ProgramCard``)."""
+        return ChromaNeighborSource(self).nearest(note, k, card_type)
+
     def get_card(self, card_id: str) -> AnyCard | None:
         """Return a card by ID, or None if not found."""
         return self.card_store.cards.get(card_id)
+
+    def all_cards_snapshot(self) -> dict[str, AnyCard]:
+        """Read-only view of the whole bank, keyed by id.
+
+        The single accessor the write-path orchestration (gate sweep,
+        consolidation, stats restamp) uses instead of reaching into
+        ``card_store.cards``. A shallow copy so a pass stays stable while the
+        live index mutates, and a caller cannot mutate the index by accident.
+        """
+        return dict(self.card_store.cards)
 
     def rebuild(self) -> None:
         """Persist cards, re-export JSONL, and rebuild the GAM index."""

@@ -119,11 +119,10 @@ def normalize_improvements(ideas: Any) -> list[Improvement]:
 
 
 class ProgramRecord(BaseModel):
-    """
-    Metadata extracted from a Program for idea analysis.
+    """Metadata extracted from a Program for the librarian write path.
 
-    Created from a raw Program object; carries only the fields that
-    analysers need (no stage results, no raw execution data).
+    Created from a raw Program object; carries only the fields the librarian
+    needs (no stage results, no raw execution data).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -148,9 +147,13 @@ class ProgramRecord(BaseModel):
         default="", description="Condensed form of the task description."
     )
     code: str = Field(default="", description="Program source code.")
+    base_parent_id: str = Field(
+        default="",
+        description="Id of the base parent the mutator anchored the child to.",
+    )
     parent_code: str = Field(
         default="",
-        description="Source code of the first parent, when available.",
+        description="Source code of the base parent, when available.",
     )
 
 
@@ -166,11 +169,20 @@ class MutationOutput(BaseModel):
     archetype: str = Field(
         default="", description="Mutation archetype label; empty when absent."
     )
+    base_parent: int = Field(
+        default=1,
+        description="1-based index of the parent the mutator anchored the child to.",
+    )
 
     @field_validator("archetype", mode="before")
     @classmethod
     def coerce_none_archetype(cls, value: Any) -> Any:
         return value or ""
+
+    @field_validator("base_parent", mode="before")
+    @classmethod
+    def coerce_none_base_parent(cls, value: Any) -> Any:
+        return value or 1
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +197,7 @@ def program_to_record(
     fitness_key: str = "fitness",
     parent_codes: dict[str, str] | None = None,
 ) -> ProgramRecord:
-    """Convert a Program to a ProgramRecord for analyser consumption.
+    """Convert a Program to a ProgramRecord for the librarian write path.
 
     The program must carry a metric under ``fitness_key`` (callers filter
     eligibility first); a missing key raises rather than minting a default.
@@ -197,9 +209,15 @@ def program_to_record(
         else MutationOutput()
     )
     parents = list(program.lineage.parents)
-    parent_code = ""
-    if parent_codes and parents:
-        parent_code = parent_codes.get(parents[0], "")
+    # The librarian diffs the child against the parent the mutator anchored it to
+    # (1-based ``base_parent``), not whichever parent the selector happened to list
+    # first; in ≥2-parent rewrite mode the base may be a later donor's sibling. Out
+    # of range falls back to the first parent, matching freeze_base_parent_snapshot.
+    base_index = mutation_output.base_parent - 1
+    if base_index < 0 or base_index >= len(parents):
+        base_index = 0
+    base_parent_id = parents[base_index] if parents else ""
+    parent_code = parent_codes.get(base_parent_id, "") if parent_codes else ""
     return ProgramRecord(
         id=program.id,
         fitness=program.metrics[fitness_key],
@@ -210,26 +228,6 @@ def program_to_record(
         task_description=task_description,
         task_description_summary=task_description_summary,
         code=program.code,
+        base_parent_id=base_parent_id,
         parent_code=parent_code,
     )
-
-
-def programs_to_records(
-    programs: list[Any],
-    task_description: str,
-    task_description_summary: str,
-    fitness_key: str = "fitness",
-    parent_codes: dict[str, str] | None = None,
-) -> tuple[list[ProgramRecord], set[str]]:
-    """Convert a list of Programs to (list[ProgramRecord], set of their ids).
-
-    Every program must carry a metric under ``fitness_key``; filter
-    eligibility before calling (a missing key raises).
-    """
-    records = [
-        program_to_record(
-            p, task_description, task_description_summary, fitness_key, parent_codes
-        )
-        for p in programs
-    ]
-    return records, {p.id for p in programs}

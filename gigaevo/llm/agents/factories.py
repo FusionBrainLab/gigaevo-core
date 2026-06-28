@@ -23,6 +23,7 @@ from gigaevo.llm.agents.mutation import MutationAgent
 from gigaevo.llm.agents.mutation_suggestions import MutationSuggestionAgent
 from gigaevo.llm.agents.program_author import ProgramAuthorAgent
 from gigaevo.llm.agents.reconcile import ReconcileAgent
+from gigaevo.llm.agents.task_summary import TaskSummaryAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -33,6 +34,7 @@ from gigaevo.prompts import (
     MutationSuggestionsPrompts,
     ProgramAuthorPrompts,
     ReconcilePrompts,
+    TaskSummaryPrompts,
 )
 
 if TYPE_CHECKING:
@@ -340,6 +342,33 @@ def create_program_author_agent(
     user_template = ProgramAuthorPrompts.user(prompts_dir=prompts_dir)
     system_prompt = system_template.format(task_description=task_description)
     return ProgramAuthorAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+    )
+
+
+def create_task_summary_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    prompts_dir: str | Path | None = None,
+) -> TaskSummaryAgent:
+    """Create the librarian's task-summary agent (one-line condensation).
+
+    Unlike the other librarian factories the task is not baked into the system
+    prompt: the task description is this agent's per-run *input*, injected into
+    the user template at call time.
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``TaskSummaryAgent``.
+    """
+    system_prompt = TaskSummaryPrompts.system(prompts_dir=prompts_dir)
+    user_template = TaskSummaryPrompts.user(prompts_dir=prompts_dir)
+    return TaskSummaryAgent(
         llm=llm,
         system_prompt=system_prompt,
         user_prompt_template=user_template,

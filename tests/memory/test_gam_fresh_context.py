@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
-from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.core import MemorySelection
 from gigaevo.memory.core.card_selector import LLMCardSelector
 from gigaevo.memory.provider import MemoryProvider, SelectorMemoryProvider
@@ -281,9 +280,7 @@ class TestProviderThreadsParentContext:
     async def test_selector_provider_passes_parent_contexts_list(self) -> None:
         mock_pipeline = AsyncMock()
         mock_pipeline.select.return_value = MemorySelection(cards=[], card_ids=[])
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_pipeline
 
         await provider.select_cards(
@@ -300,9 +297,7 @@ class TestProviderThreadsParentContext:
     async def test_none_parent_context_threads_none(self) -> None:
         mock_pipeline = AsyncMock()
         mock_pipeline.select.return_value = MemorySelection(cards=[], card_ids=[])
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_pipeline
 
         await provider.select_cards(

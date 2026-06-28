@@ -90,6 +90,27 @@ def format_card_efficacy(
     return format_block_efficacy(card, block)
 
 
+def format_card_brief(card: AnyCard) -> str:
+    """Compact card projection for the librarian judging prompts (reconcile /
+    consolidate): description + why-text + keywords on one line, empty fields
+    omitted. The reconcile caller prepends the id (it needs it as the
+    DUPLICATE/MERGE target); consolidate uses the body alone.
+
+    Carries ``explanation_summary`` and ``keywords`` so the judge can tell apart
+    overlapping descriptions with different causal rationales and preserve a
+    partner's rationale in an authored union — the dedup INDEX stays mechanism-
+    keyed, only the post-recall judging prompt is enriched.
+    """
+    parts = [card.description]
+    why = (card.explanation_summary or "").strip()
+    if why:
+        parts.append(f"why: {why}")
+    kws = topical_keywords(card.keywords)
+    if kws:
+        parts.append(f"keywords: {', '.join(kws)}")
+    return " | ".join(parts)
+
+
 def format_search_results(query: str, cards: list[AnyCard]) -> str:
     """Format search results as numbered card list for LLM card-selector parsing."""
     lines = [f"Query: {query}", "", "Top relevant memory cards:"]
@@ -128,6 +149,7 @@ def search_cards_by_keyword(
         haystack_text = " ".join(
             [
                 str(card.description or ""),
+                str(card.explanation_summary or ""),
                 str(card.task_description_summary or ""),
                 str(card.task_description or ""),
                 " ".join(topical_keywords(card.keywords)),
@@ -174,6 +196,7 @@ def synthesize_search_results(
                     f"task_description_summary: {card.task_description_summary}",
                     f"task_description: {card.task_description}",
                     f"description: {card.description}",
+                    f"explanation_summary: {card.explanation_summary}",
                     f"keywords: {topical_keywords(card.keywords)}",
                 ]
             )

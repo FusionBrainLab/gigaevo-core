@@ -13,7 +13,7 @@ Absent slots are omitted — do not fabricate content.
 - **Base parent** — the program before the edit.
 - **Child** — the program after the edit. The base→child difference is the only authoritative account of what changed; trust it over the note.
 - **Mutator note** — the operator's freeform claim about its own intent. Corroborate it against the diff; discount it wherever the diff disagrees; an empty note is normal and not a defect.
-- **Nearest existing cards** — the closest library cards already in the bank, each shown as `<id>: <description>`. These are the ONLY ids you may name as a DUPLICATE/MERGE target.
+- **Nearest existing cards** — the closest library cards already in the bank, each shown as `<id>: <description> | why: <explanation_summary> | keywords: <keywords>` (the `why:` and `keywords:` parts appear only when that card carries them). Two cards can share a description yet differ in `why:` — judge identity by the underlying mechanism, not the description alone. These are the ONLY ids you may name as a DUPLICATE/MERGE target.
 
 ## WHAT MAKES A LEVER — author this, drop everything else
 
@@ -22,6 +22,7 @@ A lever is a mechanism that **transfers**: it would help on another program faci
 - **Frame it as a failure mode bypassed.** State the obstacle the change escapes and why the change escapes it: `<mechanism> — <the failure pattern it avoids and the program property that makes that pattern bite>`.
 - **A lesson, not a trace.** "added a guard before the division" is a trace; "guard a divisor that can reach zero on degenerate inputs, because a single NaN voids the whole score" is a lever.
 - **Concrete, not a tautology.** Reject prose that would stay true even if the cited obstacle were absent ("improves performance", "makes it more robust", "optimizes the result"). Reject bare factoids that name a technique without its purpose ("uses a heap", "adds a cache").
+- **Portable, not a recipe.** State the mechanism so it survives swapping this task's objects for a different problem domain — the bank serves many task families (optimization, retrieval-chain construction, tabular modeling, and more), so a lever must not assume this one. Do NOT copy any concrete particular tied to THIS task — a hardcoded constant, a count or ratio, a dataset/entity/field name, or any other instance-specific value — from ANY input (the diff, the note, the nearest cards, or the task CONTEXT); name the mechanism qualitatively instead (e.g. "a small bounded perturbation" not "step 0.05"; "an added verification pass" not "a second retrieval hop over 5 documents"). If the card would be meaningless after that object-swap, generalize it to the mechanism level or return no item for it.
 
 **Return NO item for** a difference that is cosmetic (rename, reformat, comment, reorder with no effect), trivially local with no rule that travels, or empty. Zero items is the correct, expected answer whenever the diff carries no generalizable lever — never pad the list to look productive.
 
@@ -44,7 +45,8 @@ Retrieval proximity is not identity: two cards can sit close in the ranking yet 
 
 - Author at most a few cards — one per *distinct* lever. Group hunks that implement ONE logical change into ONE lever rather than splitting them.
 - The diff is ground truth: never author a lever the diff does not support, even if the note asserts it.
-- Keywords are plain semantic retrieval words — no ids, no machine prefixes, no punctuation noise.
+- For every card author its `explanation_summary`: one sentence on WHY the lever works (the causal reason it beats the failure mode), distinct from the `description`. It must add a causal mechanism the description does not already state — reject an explanation that only re-orders the description's own action and failure words. It is indexed as its own retrieval channel and stays empty unless you write it.
+- Keywords: at most 8, but use the SHORTEST set that preserves retrieval value — do not pad to the cap. Each a distinct semantic facet the card's mechanism or failure mode directly supports. Plain words — no ids, no machine prefixes, no punctuation noise, no misspellings. Pick one term per synonym cluster (never list two keywords that mean the same thing), and on a MERGE select the few most distinctive across the union rather than concatenating both cards' lists.
 - The structured-output schema defines every field and its meaning; do not restate the field set. Output must be a single JSON object conforming to it. No prose, no preamble, no markdown/code fences.
 
 ## CONTEXT (the TASK the programs are solving — background for judging what transfers)

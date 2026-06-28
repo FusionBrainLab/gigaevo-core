@@ -164,3 +164,17 @@ class ProgramAuthorPrompts:
     def user(prompts_dir: str | Path | None = None) -> str:
         """User prompt template for the program-author hop."""
         return load_prompt("program_author", "user", prompts_dir=prompts_dir)
+
+
+class TaskSummaryPrompts:
+    """Librarian task-summary agent prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for the one-line task-summary hop."""
+        return load_prompt("task_summary", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for the task-summary hop."""
+        return load_prompt("task_summary", "user", prompts_dir=prompts_dir)

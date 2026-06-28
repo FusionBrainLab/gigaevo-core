@@ -4,6 +4,10 @@ The librarian stamps every card with both the full ``task_description`` and a
 short ``task_description_summary``. This agent produces that summary once per run
 from the run's task text, so the summary is a genuine condensation rather than
 the full task text duplicated verbatim.
+
+Prompts follow the insights/lineage convention: the (task-agnostic) system
+prompt and the ``{task_description}`` user template are injected at construction
+via :func:`gigaevo.llm.agents.factories.create_task_summary_agent`.
 """
 
 from __future__ import annotations
@@ -16,12 +20,6 @@ from pydantic import BaseModel, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
-
-_SYSTEM = (
-    "You are the memory librarian. Condense the task description into a single "
-    "concise line that names the objective. No preamble, no list — just the "
-    "summary line."
-)
 
 
 class TaskSummaryResponse(BaseModel):
@@ -41,13 +39,24 @@ class TaskSummaryState(TypedDict, total=False):
 class TaskSummaryAgent(LangGraphAgent):
     StateSchema = TaskSummaryState
 
-    def __init__(self, llm: ChatOpenAI | MultiModelRouter) -> None:
+    def __init__(
+        self,
+        llm: ChatOpenAI | MultiModelRouter,
+        system_prompt: str,
+        user_prompt_template: str,
+    ) -> None:
+        self.system_prompt = system_prompt
+        self.user_prompt_template = user_prompt_template
         super().__init__(llm.with_structured_output(TaskSummaryResponse))
 
     def build_prompt(self, state: TaskSummaryState) -> TaskSummaryState:
         state["messages"] = [
-            SystemMessage(content=_SYSTEM),
-            HumanMessage(content=f"TASK DESCRIPTION:\n{state['task_description']}"),
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(
+                content=self.user_prompt_template.format(
+                    task_description=state["task_description"]
+                )
+            ),
         ]
         return state
 

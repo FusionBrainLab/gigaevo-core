@@ -25,8 +25,8 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.memory.context import ContextualGain
 from gigaevo.memory.core.reputation import BetaBinomialReputation
-from gigaevo.memory.ideas_tracker.ideas_tracker import (
-    _card_gain_events_from_programs,
+from gigaevo.memory.ideas_tracker.card_stats import (
+    card_gain_events_from_programs as _card_gain_events_from_programs,
 )
 from gigaevo.memory.shared_memory.models import CardStatsBlock, MemoryCard
 from gigaevo.programs.metrics.context import (

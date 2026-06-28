@@ -89,6 +89,7 @@ def test_thompson_ev_calibrated_yaml_instantiates() -> None:
         Path(__file__).resolve().parents[2]
         / "config"
         / "memory"
+        / "reader"
         / "auction"
         / "thompson_ev_calibrated.yaml"
     )

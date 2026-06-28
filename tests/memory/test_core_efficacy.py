@@ -107,7 +107,7 @@ def test_beta_binomial_yaml_surfaces_every_reputation_knob() -> None:
     shipped config so an experimenter can tune it without reading source."""
     repo_root = Path(__file__).resolve().parents[2]
     cfg = yaml.safe_load(
-        (repo_root / "config/memory/reputation/beta_binomial.yaml").read_text()
+        (repo_root / "config/memory/common/reputation/beta_binomial.yaml").read_text()
     )
     yaml_keys = {key for key in cfg if not key.startswith("_")}
     assert set(BetaBinomialReputation.model_fields) <= yaml_keys

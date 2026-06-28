@@ -11,7 +11,6 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.context import MemoryMutationContext
-from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.core import AuctionBid, MemorySelection
 from gigaevo.memory.provider import (
     MemoryProvider,
@@ -100,9 +99,7 @@ class TestMemoryContextStageWithSelectorProvider:
             card_ids=["card-abc", "card-def"],
         )
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -126,9 +123,7 @@ class TestMemoryContextStageWithSelectorProvider:
             card_ids=["card-abc-123"],
         )
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=1
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=1)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -149,9 +144,7 @@ class TestMemoryContextStageWithSelectorProvider:
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -177,9 +170,7 @@ class TestMemoryContextStageWithSelectorProvider:
             cards=["idea1"], card_ids=["card-abc"], slate=slate
         )
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -205,9 +196,7 @@ class TestMemoryContextStageWithSelectorProvider:
             cards=[], card_ids=[], slate=slate
         )
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -230,9 +219,7 @@ class TestMemoryContextStageWithSelectorProvider:
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -288,9 +275,7 @@ class TestMemoryContextStageWithSelectorProvider:
         mock_selector = AsyncMock()
         mock_selector.select.return_value = MemorySelection(cards=[], card_ids=[])
 
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -319,9 +304,7 @@ class TestMemoryContextStageCardNumbering:
             cards=["lever A description", "lever B description"],
             card_ids=["card-abc", "card-def"],
         )
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
 
         stage = MemoryContextStage(
@@ -347,9 +330,7 @@ class TestExposureCounter:
     ) -> MemoryContextStage:
         mock_selector = AsyncMock()
         mock_selector.select.return_value = selection
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=3
-        )
+        provider = SelectorMemoryProvider(backend=lambda **_kw: None, max_cards=3)
         provider._pipeline = mock_selector
         return MemoryContextStage(
             memory_provider=provider,

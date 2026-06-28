@@ -27,6 +27,12 @@ class ProgramAuthorResponse(BaseModel):
         description="What the exemplar does and why it scores well; transferable "
         "mechanism, not a line-by-line trace."
     )
+    explanation_summary: str = Field(
+        default="",
+        description="One sentence condensing WHY the exemplar scores well — the "
+        "causal reason, not a restatement of the description. Indexed as its own "
+        "retrieval channel, so always author it.",
+    )
     keywords: list[str] = Field(
         default_factory=list,
         description="Semantic retrieval tags; plain words, no machine prefixes.",

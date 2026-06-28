@@ -61,8 +61,6 @@ class MemoryConfig(BaseModel):
     checkpoint_path: Path
     embedding_model_name: str = "all-MiniLM-L6-v2"
     search_limit: int = Field(default=5, gt=0)
-    # defaults mirror MemoryBackendFactory — a directly-built MemoryConfig
-    # must behave like a factory-built one
     rebuild_interval: int = Field(default=30, gt=0)
     enable_llm_synthesis: bool = False
     enable_memory_evolution: bool = False

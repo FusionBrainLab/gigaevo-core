@@ -10,7 +10,6 @@ from gigaevo.memory.ideas_tracker.models import (
     normalize_improvement_item,
     normalize_improvements,
     program_to_record,
-    programs_to_records,
 )
 
 
@@ -118,10 +117,44 @@ class TestProgramToRecord:
         record = program_to_record(prog, "task", "summary", fitness_key="accuracy")
         assert record.fitness == 0.95
 
-    def test_programs_to_records_returns_ids(self) -> None:
-        progs = [self._make_program() for _ in range(3)]
-        for i, p in enumerate(progs):
-            p.id = f"id-{i}"
-        records, ids = programs_to_records(progs, "task", "summary")
-        assert len(records) == 3
-        assert ids == {"id-0", "id-1", "id-2"}
+    def test_base_parent_index_selects_mutator_named_parent(self) -> None:
+        prog = self._make_program(
+            parents=["p1", "p2"],
+            mutation_output={"base_parent": 2, "archetype": "exploration"},
+        )
+        record = program_to_record(
+            prog,
+            "task",
+            "summary",
+            parent_codes={"p1": "CODE_ONE", "p2": "CODE_TWO"},
+        )
+        assert record.base_parent_id == "p2"
+        assert record.parent_code == "CODE_TWO"
+
+    def test_base_parent_defaults_to_first_when_absent(self) -> None:
+        prog = self._make_program(
+            parents=["p1", "p2"],
+            mutation_output={"archetype": "exploration"},
+        )
+        record = program_to_record(
+            prog,
+            "task",
+            "summary",
+            parent_codes={"p1": "CODE_ONE", "p2": "CODE_TWO"},
+        )
+        assert record.base_parent_id == "p1"
+        assert record.parent_code == "CODE_ONE"
+
+    def test_base_parent_out_of_range_clamps_to_first(self) -> None:
+        prog = self._make_program(
+            parents=["p1", "p2"],
+            mutation_output={"base_parent": 5},
+        )
+        record = program_to_record(
+            prog,
+            "task",
+            "summary",
+            parent_codes={"p1": "CODE_ONE", "p2": "CODE_TWO"},
+        )
+        assert record.base_parent_id == "p1"
+        assert record.parent_code == "CODE_ONE"
