@@ -97,6 +97,46 @@ def test_explanation_summary_kept_from_target_on_provenance_bump() -> None:
     assert merged.explanation_summary == "canonical why"
 
 
+def test_absorbed_ids_records_incoming_id_on_merge() -> None:
+    # A consolidation MERGE folds an existing partner card (non-empty id) into the
+    # survivor; the survivor must record the absorbed id so the next authoritative
+    # restamp can re-credit it the gain events the program pool still attributes to
+    # that now-deleted id (frozen on children at mutation time).
+    target = MemoryCard(id="mem-A", description="t")
+    incoming = MemoryCard(id="mem-B", description="i")
+    merged = merge_cards(target, incoming, replace_description=True)
+    assert merged.absorbed_ids == ["mem-B"]
+
+
+def test_absorbed_ids_skips_blank_incoming_id() -> None:
+    # The librarian online MERGE folds a freshly-authored card (id="") into the
+    # survivor; there is no prior bank id to alias, so nothing is recorded.
+    target = MemoryCard(id="mem-A", description="t")
+    incoming = MemoryCard(id="", description="i")
+    merged = merge_cards(target, incoming, replace_description=True)
+    assert merged.absorbed_ids == []
+
+
+def test_absorbed_ids_chain_unions_incoming_absorbed_ids() -> None:
+    # A partner that had itself already absorbed another card carries that alias
+    # forward; folding it onto the survivor must union the whole chain so the
+    # earliest absorbed id keeps re-aliasing to the final survivor.
+    target = MemoryCard(id="mem-A", description="t", absorbed_ids=["mem-X"])
+    incoming = MemoryCard(id="mem-B", description="i", absorbed_ids=["mem-Y"])
+    merged = merge_cards(target, incoming, replace_description=True)
+    assert merged.absorbed_ids == ["mem-X", "mem-Y", "mem-B"]
+
+
+def test_absorbed_ids_never_records_target_self_id() -> None:
+    # A self-merge (incoming.id == target.id) must not list the survivor as having
+    # absorbed itself — that would alias the card's live id onto itself and double
+    # its own events at the next restamp fold.
+    target = MemoryCard(id="mem-A", description="t")
+    incoming = MemoryCard(id="mem-A", description="i")
+    merged = merge_cards(target, incoming, replace_description=True)
+    assert merged.absorbed_ids == []
+
+
 def test_survivor_keeps_target_id_and_category() -> None:
     target = MemoryCard(id="mem-A", category="general", description="t")
     incoming = MemoryCard(id="mem-B", category="other", description="i")

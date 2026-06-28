@@ -32,6 +32,7 @@ def merge_cards(
             if replace_description
             else _union(target.keywords, incoming.keywords),
             "programs": _union(target.programs, incoming.programs),
+            "absorbed_ids": _absorbed_ids(target, incoming),
             "gain_events": _union_events(target.gain_events, incoming.gain_events),
             "task_description": target.task_description or incoming.task_description,
             "task_description_summary": target.task_description_summary
@@ -45,6 +46,18 @@ def _union(a: list[str], b: list[str]) -> list[str]:
     for item in [*a, *b]:
         if item not in out:
             out.append(item)
+    return out
+
+
+def _absorbed_ids(target: MemoryCard, incoming: MemoryCard) -> list[str]:
+    # The survivor keeps target's id; the folded-away incoming id (and any ids the
+    # incoming card had itself absorbed) become aliases of the survivor. Skip blank
+    # ids (the librarian folds freshly-authored id="" cards) and never alias the
+    # survivor onto itself.
+    out = list(target.absorbed_ids)
+    for aid in [*incoming.absorbed_ids, incoming.id]:
+        if aid and aid != target.id and aid not in out:
+            out.append(aid)
     return out
 
 

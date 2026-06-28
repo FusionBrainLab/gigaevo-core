@@ -107,6 +107,10 @@ class MemoryCard(BaseModel):
     keywords: list[str] = Field(
         default_factory=list, description="Search keywords for retrieval ranking."
     )
+    absorbed_ids: list[str] = Field(
+        default_factory=list,
+        description="Bank ids merged/consolidated into this survivor; children's frozen card_ids_used pointing at them re-alias here at restamp.",
+    )
     gain_events: list[ContextualGain] | None = Field(
         default=None,
         description="Use-attributed base-relative injection events; reputation computes this card's efficacy block from them.",

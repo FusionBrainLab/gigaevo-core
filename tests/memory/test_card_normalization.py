@@ -204,6 +204,20 @@ class TestNormalizeGeneralCard:
         result = normalize_memory_card({"keywords": None})
         assert result.keywords == []
 
+    def test_absorbed_ids_preserved(self):
+        # A merged survivor's absorbed_ids re-alias absorbed cards' frozen gain
+        # attribution at restamp; the index roundtrip must carry them through.
+        result = normalize_memory_card({"id": "c1", "absorbed_ids": ["mem-P"]})
+        assert result.absorbed_ids == ["mem-P"]
+
+    def test_absorbed_ids_default_empty(self):
+        result = normalize_memory_card({})
+        assert result.absorbed_ids == []
+
+    def test_absorbed_ids_coerced_via_to_list(self):
+        result = normalize_memory_card({"absorbed_ids": "mem-P"})
+        assert result.absorbed_ids == ["mem-P"]
+
     def test_full_roundtrip(self):
         card = {
             "id": "test-1",

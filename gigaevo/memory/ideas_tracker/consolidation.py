@@ -94,6 +94,10 @@ async def consolidate(
                         # partner's raw list here would re-bloat the survivor.
                         keywords=list(union.keywords),
                         programs=list(partner.programs),
+                        # Carry the partner's own absorbed-id chain forward so a
+                        # multi-hop absorption keeps re-aliasing the earliest id
+                        # onto this survivor (merge_cards adds partner.id itself).
+                        absorbed_ids=list(partner.absorbed_ids),
                         gain_events=partner.gain_events,
                         task_description=card.task_description
                         or partner.task_description,

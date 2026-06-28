@@ -153,6 +153,10 @@ class RawCardRecord(BaseModel):
         default=None,
         description="Use-attributed, base-relative gain events the card earned.",
     )
+    absorbed_ids: list[Any] = Field(
+        default_factory=list,
+        description="Bank ids merged into this survivor; preserved so a resume re-aliases absorbed gain events (memory cards only).",
+    )
 
     @field_validator(
         "id",
@@ -185,7 +189,7 @@ class RawCardRecord(BaseModel):
     def coerce_fitness(cls, value: Any) -> float | None:
         return to_float(value, default=None)
 
-    @field_validator("programs", "keywords", mode="before")
+    @field_validator("programs", "keywords", "absorbed_ids", mode="before")
     @classmethod
     def coerce_list(cls, value: Any) -> list[Any]:
         return _to_list(value)
@@ -230,6 +234,7 @@ class RawCardRecord(BaseModel):
             programs=self.programs,
             keywords=self.keywords,
             gain_events=self.gain_events,
+            absorbed_ids=self.absorbed_ids,
         )
 
 

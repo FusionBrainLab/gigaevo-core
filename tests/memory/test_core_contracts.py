@@ -15,7 +15,7 @@ import gigaevo.memory.core as core
 from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
-from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.core.evictor import HarmEvictor, NullEvictor
 from gigaevo.memory.core.protocols import (
     Auctioneer,
     Budgeter,
@@ -55,6 +55,9 @@ class TestProtocolConformance:
     def test_evictor(self):
         assert isinstance(HarmEvictor(), Evictor)
 
+    def test_null_evictor(self):
+        assert isinstance(NullEvictor(), Evictor)
+
 
 class TestHydraComposition:
     def _load(self, *parts: str):
@@ -83,6 +86,13 @@ class TestHydraComposition:
         obj = instantiate(self._load("writer", "evictor", "harm.yaml"))(reputation=rep)
         assert isinstance(obj, HarmEvictor)
         assert obj.reputation == BetaBinomialReputation()
+
+    def test_evictor_none_group(self):
+        # _partial_ leaf: MemorySystem completes it with the shared reputation,
+        # which NullEvictor accepts and ignores.
+        rep = instantiate(self._load("common", "reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("writer", "evictor", "none.yaml"))(reputation=rep)
+        assert isinstance(obj, NullEvictor)
 
     def test_retriever_gam_group(self):
         obj = instantiate(self._load("reader", "retriever", "gam.yaml"))

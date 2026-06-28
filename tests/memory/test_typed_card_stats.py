@@ -18,7 +18,7 @@ from gigaevo.memory.core.auctioneer import (
     ThompsonAuctioneer,
 )
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
-from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.core.evictor import HarmEvictor, NullEvictor
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.core.selection import MemorySelection
 from gigaevo.memory.shared_memory.card_search import format_card_efficacy
@@ -98,6 +98,14 @@ class TestEvictorTypedReads:
         assert evictor.should_evict(harmful) is True
         assert evictor.should_evict(MemoryCard(id="cold")) is False
         assert evictor.sweep({"bad": harmful, "cold": MemoryCard(id="cold")}) == ["bad"]
+
+
+class TestNullEvictorBehavior:
+    def test_null_evictor_never_evicts_even_a_harmful_card(self):
+        evictor = NullEvictor()
+        harmful = MemoryCard(id="bad", gain_events=_events([-0.5] * 8))
+        assert evictor.should_evict(harmful) is False
+        assert evictor.sweep({"bad": harmful, "cold": MemoryCard(id="cold")}) == []
 
 
 class TestEfficacyRenderingTypedReads:

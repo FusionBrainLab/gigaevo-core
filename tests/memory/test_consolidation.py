@@ -232,6 +232,35 @@ async def test_consolidation_records_absorbed_partner_id_as_merge_incoming() -> 
 
 
 @pytest.mark.asyncio
+async def test_consolidation_records_absorbed_id_on_survivor() -> None:
+    # Consolidation folds an existing partner (non-empty id) into the survivor and
+    # deletes it. The survivor must record the absorbed partner id so the next
+    # authoritative restamp re-aliases the partner's pool-attributed gain events
+    # onto the survivor instead of orphaning them on the deleted id.
+    survivor = _card("mem-a", "g1", ["p1"])
+    partner = _card("mem-b", "g1", ["p2"])
+    store, gate, neighbors, agent = _stack(survivor, partner)
+    merges = await consolidate(store=store, gate=gate, neighbors=neighbors, agent=agent)
+    assert merges == 1
+    assert store.card_store.cards["mem-a"].absorbed_ids == ["mem-b"]
+
+
+@pytest.mark.asyncio
+async def test_consolidation_forwards_partner_absorbed_id_chain() -> None:
+    # A partner that already absorbed an earlier card carries that alias; when the
+    # partner is itself absorbed the survivor must inherit the whole chain, so the
+    # earliest absorbed id still re-aliases its events onto the final survivor.
+    survivor = _card("mem-a", "g1", ["p1"])
+    partner = _card("mem-b", "g1", ["p2"]).model_copy(
+        update={"absorbed_ids": ["mem-x"]}
+    )
+    store, gate, neighbors, agent = _stack(survivor, partner)
+    merges = await consolidate(store=store, gate=gate, neighbors=neighbors, agent=agent)
+    assert merges == 1
+    assert store.card_store.cards["mem-a"].absorbed_ids == ["mem-x", "mem-b"]
+
+
+@pytest.mark.asyncio
 async def test_consolidation_unions_gain_events_onto_survivor() -> None:
     a = _card("mem-a", "g1", ["p1"]).model_copy(update={"gain_events": [_gain(0.1)]})
     b = _card("mem-b", "g1", ["p2"]).model_copy(update={"gain_events": [_gain(0.2)]})

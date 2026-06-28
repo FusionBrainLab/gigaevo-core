@@ -1,0 +1,3 @@
+# @package memory.evictor
+_target_: gigaevo.memory.core.evictor.NullEvictor
+_partial_: true   # reputation injected by MemorySystem, then ignored

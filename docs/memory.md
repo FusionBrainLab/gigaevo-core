@@ -312,7 +312,13 @@ probability-only behavior, override all three:
 The `evictor` singleton is a write-side component: the read backend never
 ingests, so the `MemorySystem` threads it into the `CardAdmissionGate`, which
 the librarian routes every write through and which sweeps confidently harmful
-cards after each ingest pass.
+cards after each ingest pass. The sweep verdict is **global** (the card's whole
+gain-event pool, `context=None`) by design: an eviction sweep has no query
+parent, so there is no cell to reweight toward — see the rationale note in
+`docs/audits/gain_event_sparsity_smoke_2026-06-28.md`. Override
+`memory/writer/evictor=none` (`NullEvictor`) to keep the harm sweep off and let
+cards accumulate uncapped — the write-side twin of `memory=none` on the read
+side, useful as an admit-only ablation.
 
 Swap a stage by overriding its group, tune a knob by path, switch the writer
 LLM by its group:
@@ -354,7 +360,7 @@ The **default** variant of each group is in **bold** (this is what `memory=full`
 | `memory/reader/auction` | `thompson`, **`thompson_ev`**, `thompson_ev_calibrated` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` / `CalibratedColdPriorAuctioneer` | Card auction (`thompson_ev` bids `θ × magnitude` and abstains below `ev_floor`; `thompson_ev_calibrated` is `thompson_ev` with the cold-card bid calibrated per slate; `thompson` bids `θ` only) |
 | `memory/reader/budget` | `top_theta`, **`top_bid`** | `TopThetaBudgeter` / `TopBidBudgeter` | Caps cards per injection (`top_bid` ranks by EV bid, `top_theta` by `θ`) |
 | `memory/common/reputation` | `beta_binomial`, **`absolute_progress`**, `bd_proximity` | `BetaBinomialReputation` / `BetaBinomialReputation` / `BDProximityReputation` | Per-card efficacy posterior + value channel (`absolute_progress` is now an alias of `beta_binomial`; `bd_proximity` = cell-local, single-island only) |
-| `memory/writer/evictor` | **`harm`** | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the `CardAdmissionGate`) |
+| `memory/writer/evictor` | **`harm`**, `none` | `HarmEvictor` / `NullEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the `CardAdmissionGate`); `none` disables the sweep so cards are only ever admitted, never evicted |
 | `memory/reader/excluder` | **`none`**, `lineage` | `NullExcluder` / `LineageExcluder` | Filter-first gate (`lineage` drops cards already applied in this lineage) |
 | `memory/reader/provider` | **`selector`** | `SelectorMemoryProvider` | Read-side provider (`shortlist_k` recall width, `max_cards` budget) |
 | `memory/writer/tracker` | **`librarian`** | `IdeaTracker` | Writer side of `memory=` (librarian authors cards + routes verdicts through `CardAdmissionGate`) |
@@ -657,6 +663,7 @@ Internally, a memory card is a structured object with these fields:
         {"context": {"parent_metrics": {"min_area": 0.55}}, "gain": 0.0, "invalid": True},
     ],                                        # reputation derives the posterior at read time
     "programs": ["prog-1", "prog-2"],       # programs that produced this idea
+    "absorbed_ids": [],                       # ids merged into this survivor; re-alias absorbed cards' gain events at restamp
 }
 ```
 
