@@ -88,6 +88,22 @@ class _FakeNeighbors:
         return [(c, d) for c, d in self._hits if isinstance(c, card_type)]
 
 
+class _QueryNeighbors:
+    """Query-aware NeighborSource fake keyed on the exact query text.
+
+    The pre-gate queries on the raw mutation NOTE; the post-authoring re-query
+    queries on the AUTHORED description. Those are different strings, so this
+    fake can surface different neighbors for each — the very asymmetry the
+    post-authoring dedup closes. Unknown queries return no hits."""
+
+    def __init__(self, by_query) -> None:  # noqa: ANN001
+        self._by_query = by_query
+
+    def nearest(self, text, k, card_type):  # noqa: ANN001
+        hits = self._by_query.get((text or "").strip(), [])
+        return [(c, d) for c, d in hits if isinstance(c, card_type)][:k]
+
+
 class _FakeAgent:
     def __init__(self, response: ReconcileResponse) -> None:
         self._response = response
@@ -326,6 +342,203 @@ async def test_far_neighbor_does_not_short_circuit() -> None:
     ids = await _ingest(_lib(agent, gate, store, _FakeNeighbors([(far, 0.5)])))
     assert agent.calls == 1
     assert gate.bumped == []
+    assert ids == ["mem-new"]
+
+
+@pytest.mark.asyncio
+async def test_new_authored_description_near_existing_bumps_provenance() -> None:
+    """The confirmed dedup miss: the pre-gate compares the raw NOTE against
+    indexed AUTHORED card docs (cross-domain), so an idea the agent then authors
+    into an existing card's description slips past it as NEW. A post-authoring
+    re-query on the authored description catches it and downgrades NEW ->
+    provenance bump rather than banking a twin."""
+    gate, store = _FakeGate(), _FakeStore()
+    near = MemoryCard(id="mem-near", description="same lever", keywords=[])
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="same lever")
+                )
+            ]
+        )
+    )
+    # Pre-gate queries the note ("bumped k") -> miss; post-gate queries the
+    # authored description ("same lever") -> hit within eps.
+    neighbors = _QueryNeighbors({"same lever": [(near, 0.01)]})
+    ids = await _ingest(_lib(agent, gate, store, neighbors), child_id="c")
+    assert agent.calls == 1
+    assert gate.bumped == [("mem-near", "c")]
+    assert gate.admitted == []
+    assert ids == ["mem-near"]
+
+
+@pytest.mark.asyncio
+async def test_authored_hit_beyond_online_eps_admits_as_new() -> None:
+    """The post-authoring gate uses the tight online eps (0.05), not the
+    consolidation recall eps (0.2): a 0.15 hit is NOT a near-dup here, so the
+    card is admitted as NEW (consolidation's LLM arbiter handles the looser
+    band, never a silent bump)."""
+    gate, store = _FakeGate(), _FakeStore()
+    near = MemoryCard(id="mem-near", description="adjacent lever", keywords=[])
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="adjacent lever")
+                )
+            ]
+        )
+    )
+    neighbors = _QueryNeighbors({"adjacent lever": [(near, 0.15)]})
+    ids = await _ingest(_lib(agent, gate, store, neighbors))
+    assert gate.bumped == []
+    assert [c.description for c in gate.admitted] == ["adjacent lever"]
+    assert ids == ["mem-new"]
+
+
+@pytest.mark.asyncio
+async def test_post_authoring_dup_with_stale_target_admits_as_new() -> None:
+    """The post-authoring near-dup target may have left the bank between the
+    re-query and the bump (the gate's bump is then a no-op, returns ""). The
+    idea must be authored as NEW, never dropped — the NEW branch carries its own
+    admit fallback (the pre-existing fallback only covers DUPLICATE/MERGE)."""
+    store = _FakeStore()
+    gate = _FakeGate(store)  # store-aware: a target absent from the bank -> ""
+    ghost = MemoryCard(id="mem-ghost", description="ghost lever", keywords=[])
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="ghost lever")
+                )
+            ]
+        )
+    )
+    neighbors = _QueryNeighbors({"ghost lever": [(ghost, 0.01)]})
+    ids = await _ingest(_lib(agent, gate, store, neighbors))
+    assert gate.bumped == []
+    assert [c.description for c in gate.admitted] == ["ghost lever"]
+    assert ids == ["mem-new"]
+
+
+@pytest.mark.asyncio
+async def test_post_authoring_neighbor_failure_admits_as_new(tmp_path) -> None:
+    """A post-authoring re-query failure (Chroma hiccup) must be observable and
+    must NOT drop the idea — same contract as the pre-gate retrieval."""
+    gate, store = _FakeGate(), _FakeStore()
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[ReconcileItem(decision="NEW", card=LibrarianCard(description="x"))]
+        )
+    )
+
+    class _NoteOkDescBoom:
+        """Pre-gate note query succeeds (empty); post-authoring description
+        query raises."""
+
+        def nearest(self, text, k, card_type):  # noqa: ANN001
+            if (text or "").strip() == "bumped k":
+                return []
+            raise RuntimeError("chroma down")
+
+    path = tmp_path / "memory_events.jsonl"
+    with memory_event_context(event_path=path):
+        ids = await _ingest(_lib(agent, gate, store, _NoteOkDescBoom()))
+
+    assert ids == ["mem-new"]
+    assert [c.description for c in gate.admitted] == ["x"]
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    assert any(r["event_type"] == "neighbor.retrieval_failed" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_two_new_items_same_authored_description_second_bumps_first() -> None:
+    """Intra-batch twins: two NEW items the agent authors into the same
+    description in one reconcile response. The first admits; the second's
+    post-authoring re-query sees it (admit syncs to the index before returning)
+    and bumps it instead of banking a second twin."""
+
+    class _ReflectingNeighbors:
+        def __init__(self) -> None:
+            self._cards: list = []
+
+        def register(self, card) -> None:  # noqa: ANN001
+            self._cards.append(card)
+
+        def nearest(self, text, k, card_type):  # noqa: ANN001
+            t = (text or "").strip()
+            return [
+                (c, 0.0)
+                for c in self._cards
+                if isinstance(c, card_type) and (c.description or "").strip() == t
+            ][:k]
+
+    class _RegisteringGate:
+        """admit assigns an id and registers the card so a later re-query in the
+        same call can see it (mirrors admit -> Chroma sync)."""
+
+        def __init__(self, neighbors) -> None:  # noqa: ANN001
+            self._neighbors = neighbors
+            self.admitted: list = []
+            self.bumped: list = []
+            self._n = 0
+
+        def admit(self, card) -> str:  # noqa: ANN001
+            self._n += 1
+            saved = card.model_copy(update={"id": f"mem-{self._n}"})
+            self.admitted.append(saved)
+            self._neighbors.register(saved)
+            return saved.id
+
+        def bump_provenance(self, target_id, child_id) -> str:  # noqa: ANN001
+            self.bumped.append((target_id, child_id))
+            return target_id
+
+    neighbors = _ReflectingNeighbors()
+    gate = _RegisteringGate(neighbors)
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="dup lever")
+                ),
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="dup lever")
+                ),
+            ]
+        )
+    )
+    ids = await _ingest(_lib(agent, gate, _FakeStore(), neighbors), child_id="c")
+    assert [c.description for c in gate.admitted] == ["dup lever"]
+    assert gate.bumped == [("mem-1", "c")]
+    assert ids == ["mem-1", "mem-1"]
+
+
+@pytest.mark.asyncio
+async def test_post_authoring_program_card_hit_is_ignored() -> None:
+    """The post-authoring re-query is MemoryCard-only (idea dedup), so a program
+    exemplar within eps must not trigger a bump — the idea is authored as NEW."""
+    gate, store = _FakeGate(), _FakeStore()
+    program_neighbor = ProgramCard(
+        id="program-7",
+        program_id="7",
+        description="widen gap",
+        code="def s(): ...",
+    )
+    agent = _FakeAgent(
+        ReconcileResponse(
+            items=[
+                ReconcileItem(
+                    decision="NEW", card=LibrarianCard(description="widen gap")
+                )
+            ]
+        )
+    )
+    neighbors = _QueryNeighbors({"widen gap": [(program_neighbor, 0.0)]})
+    ids = await _ingest(_lib(agent, gate, store, neighbors))
+    assert gate.bumped == []
+    assert [c.description for c in gate.admitted] == ["widen gap"]
     assert ids == ["mem-new"]
 
 

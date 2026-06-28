@@ -118,7 +118,7 @@ class Librarian:
                 task_description_summary=self._task_description_summary,
             )
             if item.decision == "NEW":
-                fid = self._gate.admit(card)
+                fid = self._admit_or_bump_authored(card, child_id)
             elif item.decision == "DUPLICATE":
                 fid = (
                     self._gate.bump_provenance(item.target_id, child_id)
@@ -135,6 +135,36 @@ class Librarian:
             if fid:
                 out.append(fid)
         return out
+
+    def _admit_or_bump_authored(self, card: MemoryCard, child_id: str) -> str:
+        """Admit a NEW card, but first re-check its AUTHORED description.
+
+        The pre-gate compares the raw note against the bank's indexed AUTHORED
+        card documents — a cross-domain compare, so an idea the agent authors
+        into an existing card's description slips past it as NEW. This symmetric
+        re-query (authored description vs the same authored docs) catches that
+        twin and bumps the existing card's provenance instead of banking a
+        duplicate. A no-op bump (the near-dup left the bank) or no near-dup
+        falls through to admit — never a drop. The just-authored card is not yet
+        in the index (admit syncs it), so the re-query never self-hits."""
+        for hit in self._authored_near_dups(card, child_id):
+            bumped = self._gate.bump_provenance(hit.id, child_id)
+            if bumped:
+                return bumped
+        return self._gate.admit(card)
+
+    def _authored_near_dups(self, card: MemoryCard, child_id: str) -> list[MemoryCard]:
+        try:
+            hits = self._neighbors.nearest(card.description, self._top_k, MemoryCard)
+        except Exception as exc:
+            emit_memory_event(
+                component="librarian",
+                event_type="neighbor.retrieval_failed",
+                payload={"error": str(exc), "child_id": child_id},
+                level="WARNING",
+            )
+            return []
+        return [c for c, d in hits if d <= self._eps]
 
     async def author_program(
         self, *, program_id: str, code: str, fitness: float | None
