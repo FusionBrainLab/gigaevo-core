@@ -463,8 +463,13 @@ async def test_stress_invariants(
         )
         last_tm, last_pp = tm, pp
 
-    # Final snapshot values agree with in-process metrics.
-    assert engine._snapshot.total_mutants == engine.metrics.iteration
+    # Final snapshot values agree with the in-process metrics they mirror.
+    # snapshot.total_mutants <- mutations_created (persisted count); snapshot
+    # .next_iteration <- iteration (next ordinal, reserved before persist), so
+    # the two diverge by any reserved-but-unpersisted ordinals — never equate
+    # total_mutants with iteration.
+    assert engine._snapshot.total_mutants == engine.metrics.mutations_created
+    assert engine._snapshot.next_iteration == engine.metrics.iteration
     assert engine._snapshot.programs_processed == engine.metrics.programs_processed
 
 

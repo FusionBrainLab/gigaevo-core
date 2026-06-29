@@ -226,7 +226,12 @@ def _build_engine(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(60)
+# Single timeout authority: pytest-timeout dumps every thread/task stack on
+# trip. The run() calls below are deliberately NOT wrapped in a tighter inner
+# wait_for — a 30s inner bound tripped spuriously on a loaded CI process (the
+# run merely ran slow, ~2.5s locally; it never hangs) and threw a stackless
+# TimeoutError. 90s leaves ample headroom under the suite-wide --timeout=120.
+@pytest.mark.timeout(90)
 async def test_resume_after_kill_continues_from_snapshot() -> None:
     """Engine A runs to cap=5, is torn down, engine B picks up at the same
     storage with cap=10 and finishes the remaining mutants."""
@@ -248,18 +253,23 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
     dag_a = _TimedDag(storage_a)
     dag_a.start()
     try:
-        await asyncio.wait_for(engine_a.run(), timeout=30.0)
+        await engine_a.run()
     finally:
         await dag_a.stop()
 
     assert 5 <= engine_a.metrics.iteration <= 5 + 2, (
         f"engine A finished outside cap window: {engine_a.metrics.iteration}"
     )
-    a_total_mutants = engine_a.metrics.iteration
+    a_next_iteration = engine_a.metrics.iteration
     a_programs_processed = engine_a.metrics.programs_processed
 
-    # Engine A snapshot survived the run.
-    assert engine_a._snapshot.total_mutants == a_total_mutants
+    # Engine A snapshot mirrors the metrics it tracks: total_mutants follows
+    # mutations_created (persisted count), next_iteration follows iteration
+    # (next ordinal, reserved before persist). The two diverge by any
+    # reserved-but-unpersisted ordinals — never equate total_mutants with
+    # iteration.
+    assert engine_a._snapshot.total_mutants == engine_a.metrics.mutations_created
+    assert engine_a._snapshot.next_iteration == a_next_iteration
     assert engine_a._snapshot.programs_processed == a_programs_processed
 
     # ---- Simulate process death: close A, drop the instance ----
@@ -280,7 +290,7 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
         if p is not None and p.state == ProgramState.DONE
     ]
     strategy_b = _StubStrategy(done_programs)
-    operator_b = _UniqueValueOperator(start=a_total_mutants)
+    operator_b = _UniqueValueOperator(start=a_next_iteration)
 
     engine_b = _build_engine(
         storage_b,
@@ -292,16 +302,16 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
 
     # Restore counters from the snapshot persisted by engine A.
     await engine_b.restore_state()
-    assert engine_b.metrics.iteration == a_total_mutants, (
-        f"restore_state did not hydrate total_mutants: "
-        f"got {engine_b.metrics.iteration}, expected {a_total_mutants}"
+    assert engine_b.metrics.iteration == a_next_iteration, (
+        f"restore_state did not hydrate next_iteration: "
+        f"got {engine_b.metrics.iteration}, expected {a_next_iteration}"
     )
     assert engine_b.metrics.programs_processed == a_programs_processed
 
     dag_b = _TimedDag(storage_b)
     dag_b.start()
     try:
-        await asyncio.wait_for(engine_b.run(), timeout=30.0)
+        await engine_b.run()
     finally:
         await dag_b.stop()
         await storage_b.close()
@@ -321,7 +331,7 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
     )
 
     # ---- Invariant: progress is strictly forward across the resume ----
-    assert engine_b.metrics.iteration > a_total_mutants, (
+    assert engine_b.metrics.iteration > a_next_iteration, (
         "resumed engine did not produce additional mutants"
     )
     assert engine_b.metrics.programs_processed >= a_programs_processed, (
@@ -329,8 +339,11 @@ async def test_resume_after_kill_continues_from_snapshot() -> None:
         f"{a_programs_processed} -> {engine_b.metrics.programs_processed}"
     )
 
-    # ---- Invariant: snapshot is consistent with metrics at end ----
-    assert engine_b._snapshot.total_mutants == engine_b.metrics.iteration
+    # ---- Invariant: snapshot mirrors the metrics it tracks at end ----
+    # total_mutants <- mutations_created, next_iteration <- iteration (see the
+    # engine A note above); never equate total_mutants with iteration.
+    assert engine_b._snapshot.total_mutants == engine_b.metrics.mutations_created
+    assert engine_b._snapshot.next_iteration == engine_b.metrics.iteration
     assert engine_b._snapshot.programs_processed == engine_b.metrics.programs_processed
 
 
