@@ -88,7 +88,7 @@ async def test_bounded_sweep_passes_only_newest_n(five_programs):
 
 @pytest.mark.asyncio
 async def test_bounded_sweep_posterior_gets_full_pool(five_programs):
-    """Capping the analyzer window must NOT starve the injection posterior:
+    """Capping the writer window must NOT starve the injection posterior:
     the full program pool (parent lineage intact) is passed as posterior_programs."""
     tracker = _RecordingTracker()
     storage = _StubStorage(five_programs)
@@ -101,12 +101,12 @@ async def test_bounded_sweep_posterior_gets_full_pool(five_programs):
 
     await hook()
 
-    # Analyzer window stays capped to the 2 newest.
+    # Writer window stays capped to the 2 newest.
     assert {p.id for p in tracker.calls[0]} == {
         five_programs[3].id,
         five_programs[4].id,
     }
-    # Posterior population is the FULL pool, regardless of the analyzer cap.
+    # Posterior population is the FULL pool, regardless of the writer cap.
     assert {p.id for p in tracker.posterior_calls[0]} == {p.id for p in five_programs}
 
 
@@ -197,7 +197,7 @@ class _FlakyTracker(IncrementalPostRunHook):
     ) -> None:
         if self._failures_left > 0:
             self._failures_left -= 1
-            raise RuntimeError("analyzer LLM unavailable")
+            raise RuntimeError("writer LLM unavailable")
         self.successes += 1
 
 
@@ -221,7 +221,7 @@ async def test_refresh_failure_logs_error_and_reraises(five_programs, error_log)
         tracker=tracker, storage=_StubStorage(five_programs), refresh_every=1
     )
 
-    with pytest.raises(RuntimeError, match="analyzer LLM unavailable"):
+    with pytest.raises(RuntimeError, match="writer LLM unavailable"):
         await hook()
 
     failures = [m for m in error_log if "[Memory][LiveRefresh] refresh FAILED" in m]

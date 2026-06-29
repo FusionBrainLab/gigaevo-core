@@ -7,18 +7,16 @@ Uses FakeDagRunner + fakeredis + FakeAgenticMemorySystem + FakeResearchAgent.
 Scenarios:
 1. Knowledge accumulation: ideas from gen 1-5 help gen 6-10
 2. Memory-guided search relevance: search returns ideas matching the task
-3. Dedup prevents idea bloat across multiple tracker runs
-4. Cross-experiment memory transfer: ideas from experiment A help experiment B
-5. Memory corruption recovery: truncated index → rebuild from agentic system
-6. API sync simulation: remote cards sync to local, stale cards pruned
-7. Concurrent-style writes: rapid save_card interleaved with search
+3. Cross-experiment memory transfer: ideas from experiment A help experiment B
+4. Memory corruption recovery: truncated index → rebuild from agentic system
+5. API sync simulation: remote cards sync to local, stale cards pruned
+6. Concurrent-style writes: rapid save_card interleaved with search
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import re
 from unittest.mock import MagicMock
 
@@ -40,7 +38,6 @@ from gigaevo.evolution.strategies.multi_island import MapElitesMultiIsland
 from gigaevo.evolution.strategies.removers import FitnessArchiveRemover
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.memory.shared_memory.card_conversion import (
-    is_program_card,
     normalize_allowed_gam_tools,
     normalize_memory_card,
 )
@@ -203,35 +200,8 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
             else None
         )
 
-    def _patched_dedup():
-        recs = [
-            c.model_dump()
-            for c in mem.card_store.cards.values()
-            if not is_program_card(c)
-        ]
-        if not recs:
-            return {}
-        _, ps, _ = fake_build_gam_store(recs, mem.config.gam_store_dir)
-        rets = fake_build_retrievers(
-            ps,
-            mem.config.gam_store_dir / "idx",
-            mem.config.checkpoint_path / "chroma",
-            allowed_tools=[
-                "vector_description",
-                "vector_explanation_summary",
-                "vector_description_explanation_summary",
-                "vector_description_task_description_summary",
-            ],
-        )
-        return {
-            n: r
-            for n, r in rets.items()
-            if n in normalize_allowed_gam_tools(mem.config.gam.allowed_tools or None)
-        }
-
     # Patch ALL paths BEFORE saving any cards
     mem.gam.build_research_agent = _patched_gam_build
-    mem.dedup.build_dedup_retrievers = _patched_dedup
 
     def _safe_rebuild():
         mem.card_store.persist()
@@ -244,7 +214,6 @@ def _make_full_memory(tmp_path, ideas=None, **kw):
             mem.research_agent = mem.gam.agent
         except Exception:
             mem.research_agent = None
-        mem.dedup.invalidate_retrievers()
         mem._iters_after_rebuild = 0
 
     mem.rebuild = _safe_rebuild
@@ -384,67 +353,6 @@ class TestMemorySearchRelevance:
         )
         result = mem.search("")
         assert "No relevant" in result
-
-
-# ===========================================================================
-# Scenario 3: Dedup prevents idea bloat
-# ===========================================================================
-
-
-class TestDedupPreventsIdeaBloat:
-    """Multiple tracker runs with similar ideas → dedup keeps memory lean."""
-
-    def test_repeated_similar_ideas_deduplicated(self, tmp_path):
-        mem, _ = _make_full_memory(
-            tmp_path,
-            ideas=[
-                {
-                    "id": "idea-1",
-                    "description": "simulated annealing for optimization",
-                    "keywords": ["annealing"],
-                },
-            ],
-            card_update_dedup_config={"enabled": True},
-        )
-
-        # Mock LLM to recognize duplicates
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps({"action": "discard", "duplicate_of": "idea-1"}),
-            {},
-            None,
-            None,
-        )
-        mem.llm_service = mock_llm
-        # CardDedup binds llm_service at construction; rebind it too.
-        mem.dedup.llm_service = mock_llm
-
-        # Try adding 5 similar ideas
-        for i in range(5):
-            mem.save_card({"description": f"SA annealing optimization variant {i}"})
-
-        # All should be deduped against idea-1
-        assert len(mem.card_store.cards) == 1
-        assert mem.get_card_write_stats()["rejected"] == 5
-
-    def test_genuinely_new_ideas_still_added(self, tmp_path):
-        mem, _ = _make_full_memory(
-            tmp_path,
-            ideas=[{"id": "i1", "description": "annealing", "keywords": ["annealing"]}],
-            card_update_dedup_config={"enabled": True},
-        )
-
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps({"action": "add"}),
-            {},
-            None,
-            None,
-        )
-        mem.llm_service = mock_llm
-
-        mem.save_card({"description": "quantum computing for protein folding"})
-        assert len(mem.card_store.cards) == 2
 
 
 # ===========================================================================
@@ -715,17 +623,3 @@ class TestFullEvolutionMemoryRebuildCycle:
         # Search after reload
         result2 = mem2.search("dynamic programming")
         assert "real-3" in result2
-
-    def test_unpatched_memory_stats_contract(self, tmp_path):
-        """UNPATCHED: verify card_write_stats shape and behavior."""
-        from gigaevo.memory.shared_memory.memory_config import MemoryConfig
-
-        mem = AmemGamMemory(config=MemoryConfig(checkpoint_path=tmp_path / "real"))
-        mem.save_card({"id": "c1", "description": "idea"})
-        mem.save_card({"id": "c1", "description": "updated"})
-        mem.save_card({"description": "new"})
-
-        stats = mem.get_card_write_stats()
-        assert stats["processed"] == 3
-        assert stats["added"] == 2
-        assert stats["updated"] == 1

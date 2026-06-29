@@ -1,4 +1,4 @@
-"""``_ensure_writable_hf_cache`` diagnostics must flow through loguru.
+"""``ensure_writable_hf_cache`` diagnostics must flow through loguru.
 
 The helper mutates process-wide HF env vars on shared clusters; its messages
 are operational warnings, so they must reach the configured log sinks instead
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from gigaevo.memory.ideas_tracker.ideas_tracker import _ensure_writable_hf_cache
+from gigaevo.memory.ideas_tracker.hf_cache import ensure_writable_hf_cache
 
 
 def test_unwritable_cache_fallback_warns_via_loguru(tmp_path, monkeypatch, capsys):
@@ -24,7 +24,7 @@ def test_unwritable_cache_fallback_warns_via_loguru(tmp_path, monkeypatch, capsy
     messages: list[str] = []
     handler_id = logger.add(messages.append, level="WARNING")
     try:
-        _ensure_writable_hf_cache()
+        ensure_writable_hf_cache()
     finally:
         logger.remove(handler_id)
 

@@ -24,6 +24,7 @@ engine_config:
   parent_selector: ${parent_selector}
   stopper: ${stopper}
   max_in_flight: ${max_in_flight}
+  post_step_hook_timeout_s: ${post_step_hook_timeout_s}
 
 metrics_tracker:
   _target_: gigaevo.utils.metrics_tracker.MetricsTracker

@@ -159,9 +159,7 @@ def _write_fixture(run_dir):
                 "injection_posterior.compute",
                 {
                     "card_count": 2,
-                    "scorable_child_count": 5,
-                    "confident_count": 1,
-                    "epsilon": 0.01,
+                    "event_count_by_card_id": {"idea-a": 3, "program-x": 7},
                 },
                 decision_id="",
             ),

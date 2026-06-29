@@ -7,10 +7,7 @@ from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.models import (
     AnyCard,
-    ConnectedIdea,
-    LocalMemorySnapshot,
     MemoryCard,
-    MemoryCardExplanation,
     ProgramCard,
     Strategy,
 )
@@ -18,11 +15,8 @@ from gigaevo.memory.shared_memory.models import (
 __all__ = [
     "AmemGamMemory",
     "AnyCard",
-    "ConnectedIdea",
     "GigaEvoMemoryBase",
-    "LocalMemorySnapshot",
     "MemoryCard",
-    "MemoryCardExplanation",
     "ProgramCard",
     "Strategy",
     "normalize_memory_card",

@@ -51,12 +51,13 @@ class IndexRetriever(AbsRetriever):
                 p = self.page_store.get(pid)
                 if not p:
                     continue
+                amem_id = str((getattr(p, "meta", None) or {}).get("amem_id") or "")
                 hits.append(
                     Hit(
-                        page_id=str(pid),
+                        page_id=amem_id.strip() or str(pid),
                         snippet=p.content,
                         source="page_index",
-                        meta={},
+                        meta={"page_index": pid},
                     )
                 )
         return [hits]

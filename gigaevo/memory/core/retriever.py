@@ -13,13 +13,13 @@ class GamRetriever:
     """Thin seam over a GAM memory backend: ``research`` runs the retrieval+
     selection pass; ``get_card`` resolves a shortlisted id, fail-to-None.
     The retrieval knobs ride along for Hydra composition; numeric values live
-    in config/memory/retriever/gam.yaml."""
+    in config/memory/reader/retriever/gam.yaml."""
 
     def __init__(
         self,
         backend: Any = None,
         *,
-        # Bare-construction defaults mirror config/memory/retriever/gam.yaml so a
+        # Bare-construction defaults mirror config/memory/reader/retriever/gam.yaml so a
         # directly-built retriever (tests, scripts) behaves like a Hydra run: an
         # empty allowed_tools means ALL tools, so the page_index+vector pair is
         # named explicitly.

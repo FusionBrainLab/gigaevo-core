@@ -22,7 +22,7 @@ class AuctionCandidate(BaseModel):
     )
     magnitude: float | None = Field(
         default=None,
-        description="Expected-gain magnitude (IntroGain_best_adj_median); None when "
+        description="Expected-gain magnitude (IntroGain_best_median); None when "
         "cold. Only the EV auction consumes it; the safety auction ignores it.",
     )
 
@@ -149,7 +149,7 @@ class EVThompsonAuctioneer(BaseModel):
 
     A winner must pass the safety gate AND clear the EV reserve ``ev_floor`` —
     its bid must be strictly positive (by default). Magnitude is signed, so a
-    proven-harmful card (negative ``IntroGain_best_adj_median``) can clear the
+    proven-harmful card (negative ``IntroGain_best_median``) can clear the
     safety gate yet bids negative; the floor abstains on it. Cold cards bid
     against the positive ``prior_magnitude`` so the floor never strands them. If
     every retrieved card is expected to hurt, the auction injects nothing.

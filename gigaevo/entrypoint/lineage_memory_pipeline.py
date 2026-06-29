@@ -333,7 +333,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
                                   IdeaTracker the LiveMemoryRefreshHook WRITES, sharing
                                   one card bank; memory=none collapses both to no-ops.
         OPENROUTER_API_KEY=...  — GAM extra-memory agents call OpenRouter directly
-                                  (default memory/llm=gemini; swap memory/llm=qwen_instruct).
+                                  (default memory/common/llm=gemini; swap memory/common/llm=qwen_instruct).
 
     Verify ``.hydra/config.yaml`` does not show ``Null*`` targets, and that
     ``/proc/<pid>/environ`` contains the OpenRouter key, before trusting

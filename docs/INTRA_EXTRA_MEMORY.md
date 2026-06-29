@@ -1,6 +1,6 @@
 # Intra/Extra Memory Pipeline (`pipeline=intra_extra_memory`)
 
-> Live, dual-track LLM memory for MAP-Elites: a **per-parent lineage card** (intra) and a **live global idea bank** (extra), both refreshed mid-run. The intra card reaches the mutator verbatim; the global cards reach it ONLY as suggester output — `MutationSuggestionStage` is the single source of hints.
+> Live, dual-track LLM memory for MAP-Elites: a **per-parent lineage card** (intra) and a **live global card bank** (extra), both refreshed mid-run. The intra card reaches the mutator verbatim; the global cards reach it ONLY as suggester output — `MutationSuggestionStage` is the single source of hints.
 
 This mode replaces the legacy lineage / insights stages with two strong-LLM analyst stages: a **descriptive** `IntraMemoryStage` (per-parent lineage card) and a **prescriptive** `MutationSuggestionStage` that digests the intra card, the cross-population memory cards, the ancestral-momentum trail, and run statistics into structured `ProgramInsights` for the mutation prompt.
 
@@ -116,7 +116,7 @@ The `extra` half of the pipeline name is provided by `LiveMemoryRefreshHook`, wi
 ```yaml
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
-  tracker: ${ideas_tracker}
+  tracker: ${ref:memory::tracker}
   storage: ${ref:program_storage}
   refresh_every: 10
 ```
@@ -244,6 +244,7 @@ Pair with `tools/telegram_notify.notify(...)` from your monitoring shell for mil
 |---------|-------|--------:|--------|
 | `intra_max_children` | `pipeline_builder` block | `24` | Cap on the descendant pool the analyst sees. Lower = cheaper but shallower context. |
 | `refresh_every` | `post_step_hook` block | `10` | Ingestor sweeps between live refreshes. Lower = fresher cards, more LLM calls. |
+| `post_step_hook_timeout_s` | top-level (recipe) | `900` (`300` global) | Wall-clock budget (s) for one live-refresh increment. Raised above the CPU-hook-sized 300 s global default so LLM enrichment under shared-endpoint load completes instead of being cancelled (frozen card bank). Bounds a hung hook. Override per run: `post_step_hook_timeout_s=<s>`. |
 | `max_insights` | top-level | inherited | Bound on memory-card count `MemoryContextStage` surfaces. |
 | `max_code_length` | top-level | inherited | Truncation guard for parent code in the intra prompt. |
 | `stage_timeout` | top-level | inherited | Per-stage timeout; respected by `IntraMemoryStage` and `MutationSuggestionStage`. |

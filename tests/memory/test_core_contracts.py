@@ -12,21 +12,17 @@ from omegaconf import OmegaConf
 import pytest
 
 import gigaevo.memory.core as core
-from gigaevo.memory.core.admitter import PermissiveAdmitter, SignBasedAdmitter
 from gigaevo.memory.core.auctioneer import ThompsonAuctioneer
 from gigaevo.memory.core.budgeter import TopThetaBudgeter
 from gigaevo.memory.core.card_selector import LLMCardSelector
-from gigaevo.memory.core.deduplicator import LLMDeduplicator, NullDeduplicator
-from gigaevo.memory.core.evictor import HarmEvictor
+from gigaevo.memory.core.evictor import HarmEvictor, NullEvictor
 from gigaevo.memory.core.protocols import (
     Auctioneer,
     Budgeter,
     CardRenderer,
     CardRetriever,
     CardShortlister,
-    Deduplicator,
     Evictor,
-    MemoryAdmitter,
     ReputationModel,
 )
 from gigaevo.memory.core.renderer import EfficacyCardRenderer
@@ -38,10 +34,6 @@ CONFIG_MEMORY = REPO_ROOT / "config" / "memory"
 
 
 class TestProtocolConformance:
-    @pytest.mark.parametrize("impl", [SignBasedAdmitter(), PermissiveAdmitter()])
-    def test_admitters(self, impl):
-        assert isinstance(impl, MemoryAdmitter)
-
     def test_reputation(self):
         assert isinstance(BetaBinomialReputation(), ReputationModel)
 
@@ -60,12 +52,11 @@ class TestProtocolConformance:
     def test_renderer(self):
         assert isinstance(EfficacyCardRenderer(), CardRenderer)
 
-    @pytest.mark.parametrize("impl", [NullDeduplicator(), LLMDeduplicator()])
-    def test_deduplicators(self, impl):
-        assert isinstance(impl, Deduplicator)
-
     def test_evictor(self):
         assert isinstance(HarmEvictor(), Evictor)
+
+    def test_null_evictor(self):
+        assert isinstance(NullEvictor(), Evictor)
 
 
 class TestHydraComposition:
@@ -73,62 +64,38 @@ class TestHydraComposition:
         return OmegaConf.load(CONFIG_MEMORY.joinpath(*parts))
 
     def test_reputation_group(self):
-        obj = instantiate(self._load("reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("common", "reputation", "beta_binomial.yaml"))
         assert obj == BetaBinomialReputation()
 
-    @pytest.mark.parametrize(
-        ("leaf", "cls"),
-        [
-            ("sign_based.yaml", SignBasedAdmitter),
-        ],
-    )
-    def test_admitter_group(self, leaf, cls):
-        # _partial_ leaf: MemorySystem completes it with the shared reputation.
-        rep = instantiate(self._load("reputation", "beta_binomial.yaml"))
-        obj = instantiate(self._load("admitter", leaf))(reputation=rep)
-        assert isinstance(obj, cls)
-        assert obj.reputation == BetaBinomialReputation()
-
     def test_auction_group(self):
-        obj = instantiate(self._load("auction", "thompson.yaml"))
+        obj = instantiate(self._load("reader", "auction", "thompson.yaml"))
         assert isinstance(obj, ThompsonAuctioneer)
         assert tuple(obj.baseline_prior) == (3.0, 3.0)
 
     def test_selector_group(self):
-        obj = instantiate(self._load("selector", "llm.yaml"))
+        obj = instantiate(self._load("reader", "selector", "llm.yaml"))
         assert isinstance(obj, LLMCardSelector)
 
     def test_budget_group(self):
-        obj = instantiate(self._load("budget", "top_theta.yaml"))
+        obj = instantiate(self._load("reader", "budget", "top_theta.yaml"))
         assert isinstance(obj, TopThetaBudgeter)
-
-    def test_dedup_none_group(self):
-        obj = instantiate(self._load("dedup", "none.yaml"))
-        assert isinstance(obj, NullDeduplicator)
-
-    def test_dedup_llm_group(self):
-        obj = instantiate(self._load("dedup", "llm.yaml"))
-        assert isinstance(obj, LLMDeduplicator)
-        cfg = obj.config
-        assert cfg.enabled is True
-        assert cfg.top_k_per_query == 10
-        assert cfg.final_top_n == 10
-        assert cfg.min_final_score == 0.05
-        assert cfg.llm_max_retries == 2
-        assert cfg.weights.description == 0.35
-        assert cfg.weights.explanation_summary == 0.2
-        assert cfg.weights.description_explanation_summary == 0.3
-        assert cfg.weights.description_task_description_summary == 0.15
 
     def test_evictor_harm_group(self):
         # _partial_ leaf: MemorySystem completes it with the shared reputation.
-        rep = instantiate(self._load("reputation", "beta_binomial.yaml"))
-        obj = instantiate(self._load("evictor", "harm.yaml"))(reputation=rep)
+        rep = instantiate(self._load("common", "reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("writer", "evictor", "harm.yaml"))(reputation=rep)
         assert isinstance(obj, HarmEvictor)
         assert obj.reputation == BetaBinomialReputation()
 
+    def test_evictor_none_group(self):
+        # _partial_ leaf: MemorySystem completes it with the shared reputation,
+        # which NullEvictor accepts and ignores.
+        rep = instantiate(self._load("common", "reputation", "beta_binomial.yaml"))
+        obj = instantiate(self._load("writer", "evictor", "none.yaml"))(reputation=rep)
+        assert isinstance(obj, NullEvictor)
+
     def test_retriever_gam_group(self):
-        obj = instantiate(self._load("retriever", "gam.yaml"))
+        obj = instantiate(self._load("reader", "retriever", "gam.yaml"))
         assert isinstance(obj, GamRetriever)
         assert obj.max_iters == 3
         assert list(obj.allowed_tools) == ["page_index", "vector"]
@@ -154,16 +121,13 @@ class TestNoHardcodedConstants:
         "module",
         [
             "reputation.py",
-            "admitter.py",
             "auctioneer.py",
             "budgeter.py",
             "card_selector.py",
             "read_pipeline.py",
             "renderer.py",
             "retriever.py",
-            "deduplicator.py",
             "evictor.py",
-            "write_pipeline.py",
         ],
     )
     def test_no_literal_thresholds_in_function_bodies(self, module):

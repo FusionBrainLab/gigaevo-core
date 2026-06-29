@@ -7,32 +7,38 @@ results via an LLM service.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from gigaevo.memory.ideas_tracker.idea_bank import MACHINE_KEYWORD_PREFIXES
-from gigaevo.memory.shared_memory.models import AnyCard, MemoryCard, ProgramCard
+from gigaevo.memory.shared_memory.models import (
+    AnyCard,
+    CardStatsBlock,
+    MemoryCard,
+    ProgramCard,
+)
 from gigaevo.memory.shared_memory.protocols import LLMServiceProtocol
+
+if TYPE_CHECKING:
+    from gigaevo.memory.core.protocols import ReputationModel
 
 
 def topical_keywords(keywords: list[str] | None) -> list[str]:
-    """Keywords minus machine tokens (verification gate / canonical dedup).
-
-    Machine tokens stay on the stored card for the selector prompt and dedup;
-    surfacing them as searchable/corpus text would let queries match on
-    bookkeeping rather than content.
-    """
-    return [
-        kw for kw in (keywords or []) if not kw.startswith(MACHINE_KEYWORD_PREFIXES)
-    ]
+    """Card keywords used as search/corpus text."""
+    return list(keywords or [])
 
 
-def format_card_efficacy(card: AnyCard | None) -> str | None:
+def format_block_efficacy(
+    card: AnyCard | None, block: CardStatsBlock | None
+) -> str | None:
     """One legible per-card endorsement line for the mutator, or None.
 
-    MemoryCard: rendered only when the Beta-Binomial downside posterior is
-    confident (``evolution_statistics.ALL.efficacy_confident``) — non-confident
-    and no-signal cards stay silent (description only). ProgramCard: exemplar fitness.
+    ``block`` is the reputation's ``card_stats`` for the decision context, so the
+    rendered line reflects the same locality the auction bid on — cell-local under
+    BD proximity, global otherwise. MemoryCard: rendered only when the
+    Beta-Binomial downside posterior is confident — non-confident and no-signal
+    cards stay silent (description only). ProgramCard: exemplar fitness
+    (block-independent).
     """
     if card is None:
         return None
@@ -41,36 +47,68 @@ def format_card_efficacy(card: AnyCard | None) -> str | None:
             return None
         return f"efficacy: exemplar fitness {card.fitness:.4f}"
 
-    block = card.evolution_statistics.ALL
     if block is None:
         return None
     intros = block.intro_events
-    # Raw child-minus-parent medians are dominated by weak parents regressing to
-    # the frontier; the cohort-adjusted median (gain minus the parent-local
-    # counterfactual the posterior already uses) is the honest effect size.
-    # Legacy banks without the field fall back to the raw median.
-    adj_median = block.IntroGain_best_adj_median
-    median = adj_median if adj_median is not None else block.IntroGain_best_median
+    median = block.IntroGain_best_median
     if intros <= 0 or median is None:
         return None
     if not block.efficacy_confident:
         return None
-    scale = " vs cohort" if adj_median is not None else ""
     # Gains are stored in "positive = improvement" space regardless of metric
     # direction (analyse() negates for minimize metrics), so the wording must be
     # direction-neutral — "fitness change +x" would read inverted on minimize.
     line = (
         f"efficacy: introduced in {intros} children; "
-        f"median improvement{scale} {float(median):+.4f}"
+        f"median improvement {float(median):+.4f}"
     )
-    downside = block.DownsideRate_best
-    if downside is not None:
-        line += f"; downside {float(downside):.0%}"
     # A noise-band-confident posterior with a losing median must never read as
     # an endorsement.
     if float(median) <= 0:
         return line + " (caution: non-positive median)"
     return line + " (confident)"
+
+
+def format_card_efficacy(
+    card: AnyCard | None, reputation: ReputationModel | None = None
+) -> str | None:
+    """Context-free efficacy line: the card's own global stats, computed by
+    reputation from its stored gain events (no decision context).
+
+    For callers without a decision context (dedup, GAM corpus build). The
+    decision render path resolves a context-aware block via ``card_stats`` and
+    calls ``format_block_efficacy`` directly. Defaults to the global
+    Beta-Binomial reputation when no model is supplied.
+    """
+    if card is None:
+        return None
+    if reputation is None:
+        from gigaevo.memory.core.reputation import BetaBinomialReputation
+
+        reputation = BetaBinomialReputation()
+    block = reputation.card_stats(card) if isinstance(card, MemoryCard) else None
+    return format_block_efficacy(card, block)
+
+
+def format_card_brief(card: AnyCard) -> str:
+    """Compact card projection for the librarian judging prompts (reconcile /
+    consolidate): description + why-text + keywords on one line, empty fields
+    omitted. The reconcile caller prepends the id (it needs it as the
+    DUPLICATE/MERGE target); consolidate uses the body alone.
+
+    Carries ``explanation_summary`` and ``keywords`` so the judge can tell apart
+    overlapping descriptions with different causal rationales and preserve a
+    partner's rationale in an authored union — the dedup INDEX stays mechanism-
+    keyed, only the post-recall judging prompt is enriched.
+    """
+    parts = [card.description]
+    why = (card.explanation_summary or "").strip()
+    if why:
+        parts.append(f"why: {why}")
+    kws = topical_keywords(card.keywords)
+    if kws:
+        parts.append(f"keywords: {', '.join(kws)}")
+    return " | ".join(parts)
 
 
 def format_search_results(query: str, cards: list[AnyCard]) -> str:
@@ -111,6 +149,7 @@ def search_cards_by_keyword(
         haystack_text = " ".join(
             [
                 str(card.description or ""),
+                str(card.explanation_summary or ""),
                 str(card.task_description_summary or ""),
                 str(card.task_description or ""),
                 " ".join(topical_keywords(card.keywords)),
@@ -149,7 +188,6 @@ def synthesize_search_results(
 
     cards_blob = []
     for card in cards:
-        expl_text = card.explanation.summary if isinstance(card, MemoryCard) else ""
         cards_blob.append(
             "\n".join(
                 [
@@ -158,8 +196,8 @@ def synthesize_search_results(
                     f"task_description_summary: {card.task_description_summary}",
                     f"task_description: {card.task_description}",
                     f"description: {card.description}",
+                    f"explanation_summary: {card.explanation_summary}",
                     f"keywords: {topical_keywords(card.keywords)}",
-                    f"explanation: {expl_text}",
                 ]
             )
         )

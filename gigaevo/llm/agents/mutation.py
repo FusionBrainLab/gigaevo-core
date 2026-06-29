@@ -78,8 +78,10 @@ class MutationStructuredOutput(BaseModel):
     card_ids_used: list[str] = Field(
         default_factory=list,
         description=(
-            "Exact ids of memory cards/insights you actually applied, from either "
-            "parent (verbatim; do not invent ids). Leave empty if you applied none."
+            "Exact ids of the memory cards you applied. When you act on an insight "
+            "carrying a `card: <id>` attribution, copy that id here verbatim — this "
+            "is the only signal that credits the card. Never invent ids; leave empty "
+            "if you applied no card-sourced insight."
         ),
     )
     changes: list[MutationChange] = Field(

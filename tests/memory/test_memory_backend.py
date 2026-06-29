@@ -1,11 +1,10 @@
 """Tests for AmemGamMemory — the core memory API.
 
 Tests use local-only mode (no API, no sync, no LLM, no agentic memory)
-to pin down behavior for safe refactoring. Dedup tests mock the LLM.
+to pin down behavior for safe refactoring.
 """
 
 import json
-from unittest.mock import MagicMock
 import uuid
 
 import pytest
@@ -56,18 +55,6 @@ class TestAmemGamMemoryInit:
         assert mem.api is None
         assert mem.api is None
 
-    def test_stats_start_at_zero(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        stats = mem.get_card_write_stats()
-        assert all(v == 0 for v in stats.values())
-        assert set(stats.keys()) == {
-            "processed",
-            "added",
-            "rejected",
-            "updated",
-            "updated_target_cards",
-        }
-
     def test_memory_cards_empty(self, tmp_path):
         mem = _make_memory(tmp_path)
         assert mem.card_store.cards == {}
@@ -109,22 +96,11 @@ class TestSaveCard:
         assert stored.description is not None
         assert stored.category is not None
 
-    def test_increments_processed_and_added(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card(_make_card(id="c1"))
-        stats = mem.get_card_write_stats()
-        assert stats["processed"] == 1
-        assert stats["added"] == 1
-
-    def test_save_same_id_twice_increments_updated(self, tmp_path):
+    def test_save_same_id_twice_overwrites(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card(_make_card(id="c1", description="v1"))
         mem.save_card(_make_card(id="c1", description="v2"))
-        stats = mem.get_card_write_stats()
-        assert stats["processed"] == 2
-        assert stats["updated"] == 1
-        assert stats["added"] == 1
-        # Second save should overwrite
+        assert len(mem.card_store.cards) == 1
         assert mem.get_card("c1").description == "v2"
 
     def test_multiple_cards(self, tmp_path):
@@ -132,29 +108,6 @@ class TestSaveCard:
         for i in range(5):
             mem.save_card(_make_card(id=f"c{i}"))
         assert len(mem.card_store.cards) == 5
-        stats = mem.get_card_write_stats()
-        assert stats["processed"] == 5
-        assert stats["added"] == 5
-
-    def test_program_card_bypasses_dedup(self, tmp_path):
-        """Program cards should always be added, never deduped."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        # Save a seed card first
-        mem.save_card(_make_card(id="seed"))
-
-        # Program card should bypass dedup even though dedup is enabled
-        mem.save_card(
-            {
-                "category": "program",
-                "program_id": "prog-1",
-                "description": "Top program",
-                "fitness": 95.0,
-                "code": "def f(): pass",
-            }
-        )
-        stats = mem.get_card_write_stats()
-        assert stats["added"] == 2  # seed + program
-        assert stats["rejected"] == 0
 
     def test_persists_to_index_file(self, tmp_path):
         mem = _make_memory(tmp_path)
@@ -310,87 +263,6 @@ class TestSaveConvenience:
 
 
 # ===========================================================================
-# Dedup with mocked LLM
-# ===========================================================================
-
-
-class TestDedup:
-    def test_dedup_disabled_always_adds(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card(_make_card(id="seed", description="seed idea"))
-        mem.save_card(_make_card(description="new idea"))
-        stats = mem.get_card_write_stats()
-        assert stats["added"] == 2
-        assert stats["rejected"] == 0
-
-    def test_dedup_enabled_no_llm_falls_back_to_add(self, tmp_path):
-        """When dedup is enabled but LLM is unavailable, cards are still added."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.dedup.llm_service = None  # force no-LLM path
-        mem.save_card(_make_card(id="seed"))
-        mem.save_card(_make_card(description="new"))
-        stats = mem.get_card_write_stats()
-        assert stats["added"] == 2
-        assert stats["rejected"] == 0
-
-    def test_dedup_discard_action(self, tmp_path):
-        """Mock LLM returns discard → card is rejected."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card(_make_card(id="existing", description="original idea"))
-
-        # Mock LLM service
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps({"action": "discard", "duplicate_of": "existing"}),
-            {},
-            None,
-            None,
-        )
-        mem.dedup.llm_service = mock_llm
-
-        # Mock dedup.score_duplicate_candidates to return a synthetic candidate
-        mem.dedup.score_duplicate_candidates = MagicMock(
-            return_value=[{"card_id": "existing", "score": 0.9}]
-        )
-
-        card_id = mem.save_card(_make_card(description="duplicate idea"))
-        assert card_id == "existing"
-        stats = mem.get_card_write_stats()
-        assert stats["rejected"] == 1
-
-    def test_dedup_add_action(self, tmp_path):
-        """Mock LLM returns add → card is added normally."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card(_make_card(id="existing"))
-
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps({"action": "add"}),
-            {},
-            None,
-            None,
-        )
-        mem.dedup.llm_service = mock_llm
-        mem.dedup.score_duplicate_candidates = MagicMock(
-            return_value=[{"card_id": "existing", "score": 0.3}]
-        )
-
-        mem.save_card(_make_card(description="new unique idea"))
-        stats = mem.get_card_write_stats()
-        assert stats["added"] == 2  # existing + new
-
-    def test_dedup_only_triggers_with_existing_cards(self, tmp_path):
-        """Dedup requires card_store.cards to be non-empty."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mock_llm = MagicMock()
-        mem.dedup.llm_service = mock_llm
-
-        # First card — card_store.cards is empty, should NOT call LLM
-        mem.save_card(_make_card(id="first"))
-        mock_llm.generate.assert_not_called()
-
-
-# ===========================================================================
 # Index persistence / reload
 # ===========================================================================
 
@@ -533,17 +405,3 @@ class TestRebuild:
         mem.save_card(_make_card(id="c1"))
         mem.rebuild()  # Should not crash
         assert mem.get_card("c1") is not None
-
-
-# ===========================================================================
-# get_card_write_stats
-# ===========================================================================
-
-
-class TestGetCardWriteStats:
-    def test_returns_copy(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        stats1 = mem.get_card_write_stats()
-        stats1["processed"] = 999
-        stats2 = mem.get_card_write_stats()
-        assert stats2["processed"] == 0  # not mutated

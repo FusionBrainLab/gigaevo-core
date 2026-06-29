@@ -1,0 +1,12 @@
+# @package memory.backend
+# Canonical local card-bank backend: a partial over build_local_backend bound
+# to a fully-resolved MemoryConfig. MemorySystem completes the partial with the
+# shared memory LLM (`memory.llm`) in Python — no second copy here; the
+# read/write callers complete it with the per-run checkpoint dir.
+_target_: gigaevo.memory.shared_memory.backend.build_local_backend
+_partial_: true
+config:
+  _target_: gigaevo.memory.shared_memory.memory_config.MemoryConfig
+  checkpoint_path: ${checkpoint_dir}
+  embedding_model_name: all-MiniLM-L6-v2
+  rebuild_interval: 30

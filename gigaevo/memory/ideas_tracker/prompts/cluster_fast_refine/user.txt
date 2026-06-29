@@ -1,3 +1,0 @@
-CLUSTER REFINEMENT — partition the lines below. Same method moved in the same direction stays together (numeric values may differ); different mechanisms split, even within the same pipeline stage. Use the **same** line indices as below when reporting `included`/`rejected`:
-
-<INSERT>

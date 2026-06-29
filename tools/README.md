@@ -205,6 +205,7 @@ Most read/write/plot functionality previously lived as standalone scripts here; 
 | Tool | Purpose | Key flags |
 |---|---|---|
 | `lineage.py` | Trace evolutionary ancestry chain back to seed | `python -m tools.lineage --run`, `--top-n 1`, `--depth N` |
+| `memory_card_health.py` | Read-only structural/attribute integrity snapshot across one or more run dirs. Loads each `<run>/memory/api_index.json` and flags `missing_description`, `self_absorbed`, `absorbed_id_still_live`, `cross_absorbed`, and `duplicate_description`; delegates read/write telemetry to `memory_event_report.py` (suppress with `--no-events`). Use to audit a live memory run for dedup/consolidation invariant violations. | `python tools/memory_card_health.py <run_roots...>`, `--json OUT`, `--no-events` |
 | `memory_event_report.py` | Summarize memory telemetry from `memory_events.jsonl`, `write_ledger.jsonl`, and exported cards. Use this first when debugging empty memory selections, auction rejects, repeated winners, budget drops, write outcomes/sweeps, GAM planner/search/reflection events, backend rebuild/search/refresh events, and posterior bridge activity. | `python tools/memory_event_report.py <run-dir-or-memory-dir>`, `--events PATH`, `--write-ledger PATH`, `--cards PATH`, `--json`, `--top-n N` |
 | `profiler.py` | Log → text summary + HTML dashboard (called by `gigaevo profiler`) | invoked via `gigaevo profiler`; importable as `from tools.profiler import Profiler` |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
@@ -509,6 +510,26 @@ gigaevo -r chains/hotpotqa/static@4:O lineage --program abc12345
 # Limit depth to 5 ancestor hops
 gigaevo -r chains/hotpotqa/static@4:O lineage --top-n 1 --depth 5
 ```
+
+---
+
+### `analyze_card_use.py` — Memory-card injection→use funnel (offline)
+
+Read-only audit of whether injected memory cards are actually *read* by the mutator and
+whether using them helps. For each disk-storage child it joins the frozen
+`memory_injected_idea_ids` (extra/GAM channel) with the mutator-declared `card_ids_used`
+(a card counts as *used* when it is in `base_selected ∩ card_ids_used` — the same credit
+rule as `gain_events`). Mirrors the arm layout of `analyze_bandit_health.py`.
+
+```bash
+python tools/analyze_card_use.py outputs/<run_root> \
+    --out docs/audits/card_use_funnel.md \
+    --arms BD1,BD2,AP1,AP2
+```
+
+Emits per arm: injection→use funnel (`unread_frac`), use-conditional median child−base-parent
+gain (cited vs unread), and the basin profile (share of positive gains < 0.007). Pre-registration
+and decision thresholds: `docs/audits/card_use_offline_prereg_2026-06-25.md`.
 
 ---
 

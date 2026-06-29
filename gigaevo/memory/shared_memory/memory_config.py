@@ -15,7 +15,6 @@ from gigaevo.memory.shared_memory.card_conversion import (
     normalize_allowed_gam_tools,
     normalize_gam_top_k_by_tool,
 )
-from gigaevo.memory.shared_memory.card_update_dedup import CardUpdateDedupConfig
 
 
 class GamConfig(BaseModel):
@@ -62,15 +61,12 @@ class MemoryConfig(BaseModel):
     checkpoint_path: Path
     embedding_model_name: str = "all-MiniLM-L6-v2"
     search_limit: int = Field(default=5, gt=0)
-    # defaults mirror MemoryBackendFactory — a directly-built MemoryConfig
-    # must behave like a factory-built one
     rebuild_interval: int = Field(default=30, gt=0)
     enable_llm_synthesis: bool = False
     enable_memory_evolution: bool = False
     enable_llm_card_enrichment: bool = False
     api: ApiConfig | None = None
     gam: GamConfig = Field(default_factory=GamConfig)
-    dedup: CardUpdateDedupConfig = Field(default_factory=CardUpdateDedupConfig)
 
     @property
     def index_file(self) -> Path:

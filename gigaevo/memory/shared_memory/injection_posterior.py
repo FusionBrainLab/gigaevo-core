@@ -1,33 +1,21 @@
-"""Per-program-card injection-efficacy posterior (Fix B bridge).
+"""Use-attributed, base-relative card gain events at the tracker write seam.
 
-The Thompson auction (``ThompsonAuctioneer``) draws each candidate's downside
-Beta-Binomial posterior, but its candidates are ``program-<uuid>`` cards. Their
-posterior must therefore be keyed in that id-space and derived from how a card
-performed *when injected into a mutation prompt*. Card selection is stamped on
-the PARENT (``selected_ids``) and the child is the outcome: the cards a child's
-prompt actually contained are the union of its parents' ``selected_ids``, so
-each such card receives the child's parent-relative improvement as one event.
-(A child's own ``selected_ids`` feed its future children's prompts and credit
-nothing at its own birth — crediting them would measure selection bias one
-generation off.)
-
-The gain -> posterior math (parent-local counterfactual, noise band, downside
-Beta-Binomial) lives in ``gigaevo.memory.efficacy.EfficacyScorer``;
-``BetaBinomialReputation`` (gigaevo/memory/core/reputation.py) is the
-injectable façade that binds its configured thresholds to that scorer.
+A memory card is credited for a child only when it was both selected for the
+mutator's named base parent (``base_selected_ids``) and declared applied by the
+mutator (``card_ids_used``) — the intersection. Each such credit is one
+``ContextualGain``: the child's base-relative fitness delta, tagged with the
+base parent's metrics as its decision context. Reputation
+(gigaevo/memory/core/reputation.py) computes every per-card statistic from these
+stored events at read time; this module only produces them.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.memory.context import ContextualGain, DecisionContext
-from gigaevo.memory.core.events import emit_memory_event
-from gigaevo.memory.efficacy import EfficacyScorer, GainObservation
-from gigaevo.memory.shared_memory.models import CardStatsBlock
 
 
 class InjectionOutcome(BaseModel):
@@ -125,90 +113,3 @@ def compute_contextual_gains(
         for card_id in credited:
             events.setdefault(card_id, []).append(gain_event)
     return events
-
-
-def compute_injection_posterior(
-    programs: Sequence[InjectionOutcome],
-    *,
-    higher_is_better: bool = True,
-    scorer: EfficacyScorer | None = None,
-) -> dict[str, CardStatsBlock]:
-    """Map each injected card id to its injection posterior.
-
-    For each child program, every card in its birth-time frozen slate
-    (``injected_ids``; legacy fallback: union of its resolvable parents'
-    current ``selected_ids``) receives one intro event. A valid child's gain
-    is the parent-relative improvement *minus* the parent-fitness-local
-    leave-one-out counterfactual; it counts as harm only if it falls below the
-    population's noise band. An evaluated-and-judged-invalid child is one
-    forced harm event per injected card and never enters the baseline cohort.
-    Cards never injected into a child with a valid parent baseline are absent
-    from the result, which the auction treats as COLD Beta(1, 1).
-    """
-    by_id = {p.id: p for p in programs if p.id}
-    cohort: list[GainObservation] = []
-    events: dict[str, list[GainObservation]] = {}
-    for p in programs:
-        legacy_union: set[str] = set()
-        parent_fits: list[float] = []
-        for par_id in p.parents:
-            parent = by_id.get(par_id)
-            if parent is None:
-                continue
-            legacy_union |= {c for c in parent.selected_ids if c}
-            if parent.fitness is not None:
-                parent_fits.append(parent.fitness)
-        if not parent_fits:
-            continue
-        card_ids = (
-            {c for c in p.injected_ids if c}
-            if p.injected_ids is not None
-            else legacy_union
-        )
-        ref = max(parent_fits) if higher_is_better else min(parent_fits)
-        if p.invalid:
-            if card_ids:
-                observation = GainObservation(
-                    child_id=p.id, parent_fitness=ref, gain=0.0, invalid=True
-                )
-                for card_id in card_ids:
-                    events.setdefault(card_id, []).append(observation)
-            continue
-        if p.fitness is None:
-            continue
-        gain = p.fitness - ref if higher_is_better else ref - p.fitness
-        observation = GainObservation(child_id=p.id, parent_fitness=ref, gain=gain)
-        cohort.append(observation)
-        for card_id in card_ids:
-            events.setdefault(card_id, []).append(observation)
-
-    if not events:
-        return {}
-
-    fitted = (scorer if scorer is not None else EfficacyScorer()).fit(cohort)
-    posteriors = {card_id: fitted.posterior(evs) for card_id, evs in events.items()}
-    confident_count = sum(
-        1 for block in posteriors.values() if block.efficacy_confident
-    )
-    emit_memory_event(
-        component="InjectionPosterior",
-        event_type="injection_posterior.compute",
-        payload={
-            "card_count": len(posteriors),
-            "scorable_child_count": len(cohort),
-            "epsilon": fitted.epsilon,
-            "confident_count": confident_count,
-            "event_count_by_card_id": {
-                card_id: len(card_events) for card_id, card_events in events.items()
-            },
-        },
-    )
-    logger.debug(
-        "[Memory][InjectionPosterior] {} card(s) credited from {} scorable child(ren); "
-        "noise band epsilon={:.4g}, confident={}",
-        len(posteriors),
-        len(cohort),
-        fitted.epsilon,
-        confident_count,
-    )
-    return posteriors

@@ -1,0 +1,36 @@
+**OBJECTIVE**: Implement an Optimizer that finds the global minimum of a black-box objective.
+
+**CONTRACT**:
+- `entrypoint()` returns an `Optimizer` — an object exposing `optimize(f, bounds, budget)`.
+- `optimize(f, bounds, budget)` returns a list of floats `x_best`, the lowest-`f` point found.
+
+**INPUTS to optimize**:
+- `f`: callable `f(x) -> float`, where `x` is a list of floats (minimize this).
+- `bounds`: list of (low, high) tuples, one per dimension.
+- `budget`: int, the maximum number of times you may call `f`.
+
+**LANDSCAPE STRUCTURE**:
+- Minima form a chain: a shallow basin leads to a deeper one, on down to the global minimum.
+- Basins are separated by barriers; deep basins are reachable only by traversing the chain in order.
+- Off the chain the surface rises steeply; direct jumps to a far basin are walled off.
+- The suite spans increasing difficulty: longer chains, higher dimension, branched and double-funnel topologies.
+
+**RULES**:
+- Do NOT call `f` more than `budget` times. Track your evaluations.
+- Dimensions range from 2 upward; all coordinates are real floats within bounds.
+- `numpy` and `scipy` are available — vectorize and use library routines for efficiency.
+- `f` accepts a list or a 1-D numpy array; return `x_best` as a list or 1-D numpy array of length `len(bounds)`.
+- Return the best point found, not its value.
+
+**OUTPUT**:
+```python
+def entrypoint():
+    import numpy as np
+
+    class Optimizer:
+        def optimize(self, f, bounds, budget):
+            # your implementation here
+            return x_best
+
+    return Optimizer()
+```

@@ -8,7 +8,10 @@ import json
 from unittest.mock import MagicMock
 
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.card_search import synthesize_search_results
+from gigaevo.memory.shared_memory.card_search import (
+    search_cards_by_keyword,
+    synthesize_search_results,
+)
 from tests.fakes.agentic_memory import make_test_memory
 
 
@@ -251,7 +254,6 @@ class TestSynthesizeResults:
                     "task_description_summary": "HoVer verification",
                     "task_description": "Multi-hop fact verification",
                     "keywords": ["SA", "annealing"],
-                    "explanation": {"summary": "SA works well", "explanations": []},
                 }
             )
         ]
@@ -263,7 +265,49 @@ class TestSynthesizeResults:
         assert "SA optimization" in prompt
         assert "retrieval" in prompt
         assert "HoVer verification" in prompt
-        assert "SA works well" in prompt
+
+    def test_synthesize_prompt_includes_explanation_summary(self):
+        # explanation_summary is a first-class "why" channel; the local synthesis
+        # blob must expose it so a card is not hidden when GAM is unavailable.
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = ("answer", {}, None, None)
+
+        cards = [
+            normalize_memory_card(
+                {
+                    "id": "c1",
+                    "description": "SA optimization",
+                    "category": "general",
+                    "explanation_summary": "anneals past local minima",
+                }
+            )
+        ]
+        synthesize_search_results(
+            query="test", memory_state=None, cards=cards, llm_service=mock_llm
+        )
+
+        prompt = mock_llm.generate.call_args[0][0]
+        assert "anneals past local minima" in prompt
+
+
+class TestKeywordSearchExplanationSummary:
+    """The local keyword fallback must match on the explanation_summary channel."""
+
+    def test_keyword_search_matches_on_explanation_summary(self):
+        cards = {
+            "c1": normalize_memory_card(
+                {
+                    "id": "c1",
+                    "description": "generic lever",
+                    "category": "general",
+                    "explanation_summary": "stabilizes the gradient via clipping",
+                }
+            )
+        }
+        results = search_cards_by_keyword(
+            cards, query="clipping", memory_state=None, search_limit=5
+        )
+        assert [c.id for c in results] == ["c1"]
 
 
 # ===========================================================================

@@ -5,15 +5,15 @@ _build_entity_meta, _concept_to_card, _ensure_card_id, and
 save_card branching logic.
 """
 
-import json
-from unittest.mock import MagicMock
-
 from gigaevo.memory.shared_memory.card_conversion import (
     build_entity_meta,
     concept_to_card,
     normalize_memory_card,
 )
-from tests.fakes.agentic_memory import make_test_memory
+from tests.fakes.agentic_memory import (
+    make_test_memory,
+    make_test_memory_with_agentic,
+)
 
 
 def _make_memory(tmp_path, **overrides):
@@ -21,81 +21,63 @@ def _make_memory(tmp_path, **overrides):
 
 
 # ===========================================================================
-# apply_merges (via dedup.compute_card_merge_updates)
+# apply_merges
 # ===========================================================================
 
 
-class TestApplyUpdateActions:
-    def _apply(self, mem, incoming, updates):
-        """Compute merges and apply them — replaces deleted _apply_update_actions."""
-        merges = mem.dedup.compute_card_merge_updates(incoming, updates)
-        return mem.apply_merges(merges)
+class TestApplyMerges:
+    """apply_merges overwrites each target card in place and returns the ids
+    that landed (the librarian's reconcile hop pre-computes the merged cards)."""
 
-    def test_updates_existing_card(self, tmp_path):
+    def test_overwrites_target_and_returns_id(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "old", "programs": ["p1"]})
 
-        incoming = normalize_memory_card(
-            {"description": "new info", "programs": ["p2"], "last_generation": 10}
+        merged = normalize_memory_card(
+            {"id": "c1", "description": "new info", "programs": ["p1", "p2"]}
         )
-        updates = [
-            {
-                "card_id": "c1",
-                "update_explanation": True,
-                "explanation_append": "extra detail",
-            }
-        ]
-        result = self._apply(mem, incoming, updates)
+        result = mem.apply_merges([("c1", merged)])
         assert result == ["c1"]
 
         card = mem.get_card("c1")
-        assert "extra detail" in card.explanation.explanations
-        # Programs should be merged
-        assert "p1" in card.programs
+        assert card.description == "new info"
         assert "p2" in card.programs
 
-    def test_skips_missing_card(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        updates = [{"card_id": "nonexistent", "update_explanation": True}]
-        result = self._apply(mem, normalize_memory_card({}), updates)
-        assert result == []
-
-    def test_skips_duplicate_card_id(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "test"})
-
-        updates = [
-            {"card_id": "c1", "update_explanation": True, "explanation_append": "a"},
-            {"card_id": "c1", "update_explanation": True, "explanation_append": "b"},
-        ]
-        result = self._apply(mem, normalize_memory_card({}), updates)
-        assert result == ["c1"]  # Only processed once
-
-    def test_skips_non_dict_update(self, tmp_path):
-        mem = _make_memory(tmp_path)
-        mem.save_card({"id": "c1", "description": "test"})
-        result = self._apply(mem, normalize_memory_card({}), ["not a dict", None])
-        assert result == []
-
-    def test_multiple_target_cards(self, tmp_path):
+    def test_applies_multiple_targets(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "card 1"})
         mem.save_card({"id": "c2", "description": "card 2"})
 
-        updates = [
-            {
-                "card_id": "c1",
-                "update_explanation": True,
-                "explanation_append": "info1",
-            },
-            {
-                "card_id": "c2",
-                "update_explanation": True,
-                "explanation_append": "info2",
-            },
+        merges = [
+            ("c1", normalize_memory_card({"id": "c1", "description": "updated 1"})),
+            ("c2", normalize_memory_card({"id": "c2", "description": "updated 2"})),
         ]
-        result = self._apply(mem, normalize_memory_card({}), updates)
+        result = mem.apply_merges(merges)
         assert set(result) == {"c1", "c2"}
+
+    def test_failed_note_sync_leaves_target_untouched(self, tmp_path):
+        # The bank commit must land only after the A-MEM note sync succeeds, so a
+        # sync failure leaves the bank consistent with the index instead of
+        # holding a card the index never received. apply_merges swallows the
+        # failure (reports the merge as not landed), so the target must be left
+        # exactly as it was.
+        mem, _ = make_test_memory_with_agentic(tmp_path)
+        mem.save_card({"id": "c1", "description": "original", "programs": ["p1"]})
+
+        def boom(card):
+            raise RuntimeError("amem sync down")
+
+        mem.note_sync.sync_card_to_amem_with_evolution = boom
+
+        merged = normalize_memory_card(
+            {"id": "c1", "description": "overwritten", "programs": ["p1", "p2"]}
+        )
+        result = mem.apply_merges([("c1", merged)])
+
+        assert result == []  # merge did not land
+        card = mem.get_card("c1")
+        assert card.description == "original"  # bank untouched by the failed sync
+        assert card.programs == ["p1"]
 
 
 # ===========================================================================
@@ -122,6 +104,27 @@ class TestSaveCardCoreRebuild:
 # ===========================================================================
 # _ensure_card_id
 # ===========================================================================
+
+
+class TestAllCardsSnapshot:
+    """all_cards_snapshot is the writer layer's read-only view of the bank, so
+    it never reaches into card_store.cards directly. It is a copy: mutating the
+    returned dict must not touch the live index."""
+
+    def test_returns_every_card_keyed_by_id(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "one"})
+        mem.save_card({"id": "c2", "description": "two"})
+        snap = mem.all_cards_snapshot()
+        assert set(snap) == {"c1", "c2"}
+        assert snap["c1"].description == "one"
+
+    def test_snapshot_is_a_copy(self, tmp_path):
+        mem = _make_memory(tmp_path)
+        mem.save_card({"id": "c1", "description": "one"})
+        snap = mem.all_cards_snapshot()
+        snap.pop("c1")
+        assert mem.get_card("c1") is not None
 
 
 class TestEnsureCardId:
@@ -233,23 +236,20 @@ class TestBuildEntityMeta:
 
 
 class TestSaveCardBranching:
-    def test_existing_id_goes_to_update_path(self, tmp_path):
+    def test_existing_id_overwrites(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "v1"})
         mem.save_card({"id": "c1", "description": "v2"})
-        stats = mem.get_card_write_stats()
-        assert stats["updated"] == 1
-        assert stats["added"] == 1
+        assert len(mem.card_store.cards) == 1
+        assert mem.get_card("c1").description == "v2"
 
-    def test_new_id_goes_to_add_path(self, tmp_path):
+    def test_new_id_adds_distinct_card(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card({"id": "c1", "description": "first"})
         mem.save_card({"id": "c2", "description": "second"})
-        stats = mem.get_card_write_stats()
-        assert stats["added"] == 2
-        assert stats["updated"] == 0
+        assert set(mem.card_store.cards) == {"c1", "c2"}
 
-    def test_program_card_always_added(self, tmp_path):
+    def test_program_card_is_stored(self, tmp_path):
         mem = _make_memory(tmp_path)
         mem.save_card(
             {
@@ -259,53 +259,4 @@ class TestSaveCardBranching:
                 "fitness": 80.0,
             }
         )
-        stats = mem.get_card_write_stats()
-        assert stats["added"] == 1
-
-    def test_dedup_update_path(self, tmp_path):
-        """Full dedup update flow: LLM says update, merges are applied."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.save_card({"id": "existing", "description": "original idea"})
-
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = (
-            json.dumps(
-                {
-                    "action": "update",
-                    "updates": [
-                        {
-                            "card_id": "existing",
-                            "update_explanation": True,
-                            "explanation_append": "merged info",
-                        }
-                    ],
-                }
-            ),
-            {},
-            None,
-            None,
-        )
-        mem.dedup.llm_service = mock_llm
-        mem.dedup.score_duplicate_candidates = MagicMock(
-            return_value=[{"card_id": "existing", "score": 0.8}]
-        )
-
-        card_id = mem.save_card({"description": "similar idea with extra detail"})
-        assert card_id == "existing"  # Updated existing card
-        stats = mem.get_card_write_stats()
-        assert stats["updated"] == 1
-        assert stats["updated_target_cards"] == 1
-
-    def test_dedup_warning_only_once(self, tmp_path):
-        """Missing LLM warning printed only once."""
-        mem = _make_memory(tmp_path, card_update_dedup_config={"enabled": True})
-        mem.dedup.llm_service = None  # force no-LLM path so warning fires
-        dedup = mem.write_pipeline._dedup
-        mem.save_card({"id": "seed", "description": "seed"})
-        # First save lands in an empty bank — dedup not applicable, no warning
-        assert not dedup._warned_no_llm
-        mem.save_card({"description": "new1"})
-        assert dedup._warned_no_llm
-        # Subsequent saves don't re-warn (flag stays True)
-        mem.save_card({"description": "new2"})
-        assert dedup._warned_no_llm
+        assert len(mem.card_store.cards) == 1

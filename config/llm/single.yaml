@@ -3,6 +3,9 @@
 llm:
   _target_: gigaevo.llm.models.MultiModelRouter
   _convert_: all
+  # Negotiate a working structured-output method per endpoint at call time
+  # rather than forwarding litellm's per-model default.
+  structured_output_method: auto
   models:
     - _target_: langchain_openai.ChatOpenAI
 

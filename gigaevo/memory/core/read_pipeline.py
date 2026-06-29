@@ -331,7 +331,12 @@ class MemoryReadPipeline:
         rendered = [
             (cid, text)
             for cid in budgeted_ids
-            if (text := self._renderer.render(fetched[cid]))
+            if (
+                text := self._renderer.render(
+                    fetched[cid],
+                    self._reputation.card_stats(fetched[cid], decision_context),
+                )
+            )
         ]
         render_ms = _elapsed_ms(started_render)
         rendered_id_set = {cid for cid, _ in rendered}

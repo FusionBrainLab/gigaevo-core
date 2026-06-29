@@ -12,12 +12,9 @@ def test_all_exports_complete():
         "AmemGamMemory",
         "ApiConfig",
         "AnyCard",
-        "ConnectedIdea",
         "GamConfig",
         "GigaEvoMemoryBase",
-        "LocalMemorySnapshot",
         "MemoryCard",
-        "MemoryCardExplanation",
         "MemoryConfig",
         "MemorySystem",
         "ProgramCard",
@@ -33,12 +30,9 @@ def test_import_from_package_root():
         AmemGamMemory,
         AnyCard,
         ApiConfig,
-        ConnectedIdea,
         GamConfig,
         GigaEvoMemoryBase,
-        LocalMemorySnapshot,
         MemoryCard,
-        MemoryCardExplanation,
         MemoryConfig,
         MemorySystem,
         ProgramCard,
@@ -54,9 +48,6 @@ def test_import_from_package_root():
     assert normalize_memory_card is not None
     assert GamConfig is not None
     assert GigaEvoMemoryBase is not None
-    assert ConnectedIdea is not None
-    assert MemoryCardExplanation is not None
-    assert LocalMemorySnapshot is not None
     assert MemoryConfig is not None
     assert MemorySystem is not None
     assert Strategy is not None
@@ -67,11 +58,8 @@ def test_import_from_shared_memory():
     from gigaevo.memory.shared_memory import (  # noqa: F401
         AmemGamMemory,
         AnyCard,
-        ConnectedIdea,
         GigaEvoMemoryBase,
-        LocalMemorySnapshot,
         MemoryCard,
-        MemoryCardExplanation,
         ProgramCard,
         Strategy,
         normalize_memory_card,

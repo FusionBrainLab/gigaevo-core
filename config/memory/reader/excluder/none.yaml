@@ -1,0 +1,3 @@
+# @package memory.excluder
+# Default read-side excluder: prune nothing (byte-identical to the un-gated path).
+_target_: gigaevo.memory.core.excluder.NullExcluder

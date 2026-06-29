@@ -17,12 +17,7 @@ Absent slots are omitted — do not fabricate content.
 
 ## OUTPUT — per insight
 
-- **strategy** — exactly one of:
-  - `imitation` — preserved or extended a working pattern.
-  - `avoidance` — removed or bypassed a failing pattern.
-  - `generalization` — added flexibility (parameterized constants, abstracted duplication, unified branches).
-  - `exploration` — introduced a novel approach (new policy / algorithm / representation).
-  - `refinement` — tuned an existing approach (thresholds, bounds, constants).
+- **strategy** — exactly one of `imitation` / `avoidance` / `generalization` / `exploration` / `refinement` (the schema defines each); pick the one the diff most directly implements.
 - **description** — ≤40 words, must include all three:
   1. **What changed** — reference the hunk(s) by header, e.g. `(@@ -12,3 +12,5 @@)`. Group hunks that implement ONE logical change into a single insight.
   2. **Mechanism + transferable rule** — the algorithmic / structural / logical mechanism that connects the change to the observed delta, plus the rule it implies for future mutations on this task (e.g. "preserve rate > 0.5 on rugged landscapes", "avoid grid layouts that crowd the base row"). Write a lesson, not a changelog.

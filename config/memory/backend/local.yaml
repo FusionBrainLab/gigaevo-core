@@ -1,6 +1,0 @@
-# Canonical local card-bank backend; all knobs are LocalMemoryBackendFactory fields.
-# MemorySystem threads in the shared memory LLM (`memory.llm`) and the single
-# dedup config (`memory.dedup.config`) once, in Python — no second copy here.
-_target_: gigaevo.memory.backend_factory.LocalMemoryBackendFactory
-checkpoint_dir: ${checkpoint_dir}
-embedding_model_name: all-MiniLM-L6-v2

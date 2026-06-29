@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+from collections.abc import Callable
+from typing import Any
 
 from loguru import logger
 
-from gigaevo.memory.backend_factory import MemoryBackendFactory
 from gigaevo.memory.core import (
     Auctioneer,
     BetaBinomialReputation,
@@ -68,23 +69,25 @@ class NullMemoryProvider(MemoryProvider):
 class SelectorMemoryProvider(MemoryProvider):
     """Assembles the modular ``MemoryReadPipeline`` lazily on first use.
 
-    The backend factory is required and Hydra-composed (``memory/backend``
-    group; ``config/memory/local.yaml`` wires it). Every other stage except
-    the renderer is Hydra-injectable (config/memory/<group>/; the renderer is
-    constructor-injectable only) and defaults to the production stack: GAM
-    retriever, LLM shortlist, Thompson auction, top-theta budget, efficacy
-    renderer. Backend construction is deferred to first use to avoid heavy
-    initialization at Hydra config resolution time.
+    The backend builder is required and Hydra-composed (``memory/common/backend``
+    group; ``config/memory/full.yaml`` wires it) — a ``_partial_`` over
+    ``build_local_backend`` that MemorySystem completes with the shared llm.
+    Every other stage except the renderer is Hydra-injectable
+    (config/memory/{common,reader,writer}/<group>/; the renderer is
+    constructor-injectable only) and
+    defaults to the production stack: GAM retriever, LLM shortlist, Thompson
+    auction, top-theta budget, efficacy renderer. Backend construction is
+    deferred to first use to avoid heavy initialization at Hydra config
+    resolution time.
 
-    Optional ``checkpoint_dir`` overrides the backend factory's configured
-    checkpoint dir at runtime (the engine pins per-run artefacts under the
-    Hydra output dir).
+    Optional ``checkpoint_dir`` overrides the configured checkpoint dir at
+    runtime (the engine pins per-run artefacts under the Hydra output dir).
     """
 
     def __init__(
         self,
         *,
-        backend: MemoryBackendFactory,
+        backend: Callable[..., Any],
         # matches config/memory/local.yaml — one card per mutation is the
         # experimental protocol the shipped configs run
         max_cards: int = 1,
@@ -105,7 +108,7 @@ class SelectorMemoryProvider(MemoryProvider):
         self._max_cards = max_cards
         self._shortlist_k = shortlist_k
         self._checkpoint_dir = checkpoint_dir
-        self._backend_factory = backend
+        self._backend = backend
         self._retriever = retriever
         self._selector = selector if selector is not None else LLMCardSelector()
         self._auctioneer = (
@@ -134,12 +137,9 @@ class SelectorMemoryProvider(MemoryProvider):
                 else {}
             ),
         )
-        # Read-side backend never ingests; evictor/dedup are write-path
-        # components plumbed through IdeaTracker into the write pipeline.
-        backend = self._backend_factory.build(
-            checkpoint_dir=self._checkpoint_dir,
-            gam=gam,
-        )
+        # Read-side backend never ingests; the evictor is a write-path
+        # component the IdeaTracker completes its own backend partial with.
+        backend = self._backend(checkpoint_dir=self._checkpoint_dir, gam=gam)
         return retriever.bind(backend)
 
     def _get_pipeline(self) -> MemoryReadPipeline:

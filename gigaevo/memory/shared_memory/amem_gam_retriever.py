@@ -1,10 +1,9 @@
-"""GAM retriever script that loads A-mem exports and runs research via LangChain."""
+"""GAM store/retriever builders: load A-mem JSONL exports into GAM stores and
+Chroma/index retrievers (consumed by ``gam_search``)."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +15,8 @@ from gigaevo.memory._vendor.GAM_root.gam import (
     IndexRetriever,
     InMemoryMemoryStore,
     InMemoryPageStore,
-    ResearchAgent,
 )
-from gigaevo.memory._vendor.GAM_root.gam.generator import AMemGenerator
-from gigaevo.memory._vendor.GAM_root.gam.schemas import Page
+from gigaevo.memory._vendor.GAM_root.gam.schemas import MemoryState, Page
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
 from gigaevo.memory.shared_memory.card_search import (
     format_card_efficacy,
@@ -67,28 +64,35 @@ def render_card_text(card: AnyCard) -> str:
         f"task_description_summary: {card.task_description_summary}",
         f"task_description: {card.task_description}",
         f"category: {card.category}",
-        f"strategy: {card.strategy}",
         f"keywords: {', '.join(topical_keywords(card.keywords))}",
     ]
     if isinstance(card, ProgramCard):
         parts += [
             f"program_id: {card.program_id}",
             f"fitness: {card.fitness if card.fitness is not None else ''}",
-            f"connected_ideas: {[idea.model_dump() for idea in card.connected_ideas]}",
         ]
     else:
-        parts += [
-            f"last_generation: {card.last_generation}",
-            f"programs: {card.programs}",
-            f"aliases: {card.aliases}",
-            f"explanation_summary: {card.explanation.summary}",
-            f"works_with: {card.works_with}",
-        ]
-    parts.append(f"links: {card.links}")
+        parts.append(f"explanation_summary: {card.explanation_summary}")
+        parts.append(f"programs: {card.programs}")
     efficacy = format_card_efficacy(card)
     if efficacy:
         parts.append(efficacy)
     return "\n".join(parts)
+
+
+def render_card_abstract(card: AnyCard) -> str:
+    """GAM long-term-memory abstract: the always-on planning-context summary.
+
+    Idea cards carry the why-text so the planner's remembered memory is not
+    description-only; program exemplars stay description-only, mirroring
+    ``render_card_text`` (their explanation rides page metadata)."""
+    base = (card.description or "").strip()
+    if not base:
+        return render_card_text(card)
+    if isinstance(card, ProgramCard):
+        return base
+    why = (card.explanation_summary or "").strip()
+    return f"{base} — {why}" if why else base
 
 
 def build_gam_store(
@@ -112,7 +116,9 @@ def build_gam_store(
 
     added = 0
     next_pages: list[Page] = []
+    next_abstracts: list[str] = []
     seen_ids: set[str] = set()
+    seen_abstracts: set[str] = set()
     for rec in records:
         typed = normalize_memory_card(rec)
         rid = typed.id.strip()
@@ -121,8 +127,10 @@ def build_gam_store(
         if rid:
             seen_ids.add(rid)
         card = render_card_text(typed)
-        abstract = typed.description or card
-        memory_store.add(abstract)
+        abstract = render_card_abstract(typed)
+        if abstract and abstract not in seen_abstracts:
+            seen_abstracts.add(abstract)
+            next_abstracts.append(abstract)
         header = f"[A-MEM] {rid}" if rid else "[A-MEM]"
         # Page meta keeps the raw record: the vendor GAM page contract.
         next_pages.append(
@@ -131,6 +139,9 @@ def build_gam_store(
         if rid and rid not in existing_ids:
             added += 1
 
+    # Overwrite (not append) so edited/removed cards leave no stale planning
+    # abstract behind, mirroring the page store's full rebuild below.
+    memory_store.save(MemoryState(abstracts=next_abstracts))
     page_store.save(next_pages)
     return memory_store, page_store, added
 
@@ -221,87 +232,3 @@ def build_retrievers(
             )
 
     return retrievers
-
-
-def main():
-    from langchain_openai import ChatOpenAI
-
-    from gigaevo.llm.models import MultiModelRouter
-
-    parser = argparse.ArgumentParser(
-        description="Run a GAM research query over an A-mem export."
-    )
-    parser.add_argument(
-        "--export-file", type=Path, default=Path("amem_exports/amem_memories.jsonl")
-    )
-    parser.add_argument("--model", default="google/gemini-3-flash-preview")
-    parser.add_argument("--base-url", default="https://openrouter.ai/api/v1")
-    parser.add_argument(
-        "--api-key",
-        default=os.getenv("OPENROUTER_API_KEY"),
-        help="Defaults to $OPENROUTER_API_KEY.",
-    )
-    parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
-    parser.add_argument(
-        "--question",
-        default="What changes improved the primary fitness metric the most and why?",
-    )
-    args = parser.parse_args()
-
-    if not args.api_key:
-        parser.error("--api-key not given and OPENROUTER_API_KEY is not set")
-    if not args.export_file.exists():
-        raise FileNotFoundError(f"A-mem export not found: {args.export_file}")
-
-    records = load_amem_records(args.export_file)
-    if not records:
-        raise RuntimeError("A-mem export is empty.")
-
-    store_dir = Path(__file__).resolve().parents[1] / "gam_shared" / "amem_store"
-    store_dir.mkdir(parents=True, exist_ok=True)
-    memory_store, page_store, added = build_gam_store(records, store_dir)
-    logger.info(
-        "[Memory][AmemGamRetriever] Loaded {} A-mem records, added {} new pages.",
-        len(records),
-        added,
-    )
-    logger.info("[Memory][AmemGamRetriever] LLM: {} at {}", args.model, args.base_url)
-
-    llm_service = MultiModelRouter(
-        models=[
-            ChatOpenAI(
-                model=args.model,
-                api_key=args.api_key,
-                base_url=args.base_url,
-                temperature=0.0,
-            )
-        ],
-        probabilities=[1.0],
-        name="memory",
-    )
-    generator = AMemGenerator({"llm_service": llm_service})
-
-    chroma_dir = Path(__file__).resolve().parents[1] / "chroma"
-    retrievers = build_retrievers(
-        page_store,
-        store_dir / "indexes",
-        chroma_dir,
-        embedding_model_name=args.embedding_model,
-    )
-    research_agent = ResearchAgent(
-        page_store=page_store,
-        memory_store=memory_store,
-        retrievers=retrievers,
-        generator=generator,
-        max_iters=3,
-    )
-
-    logger.info("[Memory][AmemGamRetriever] Research question: {}", args.question)
-    result = research_agent.research(args.question)
-    logger.info(
-        "[Memory][AmemGamRetriever] Research result:\n{}", result.integrated_memory
-    )
-
-
-if __name__ == "__main__":
-    main()

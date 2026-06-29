@@ -16,17 +16,25 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 
+from gigaevo.llm.agents.consolidate_cards import ConsolidateAgent
 from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
 from gigaevo.llm.agents.mutation import MutationAgent
 from gigaevo.llm.agents.mutation_suggestions import MutationSuggestionAgent
+from gigaevo.llm.agents.program_author import ProgramAuthorAgent
+from gigaevo.llm.agents.reconcile import ReconcileAgent
+from gigaevo.llm.agents.task_summary import TaskSummaryAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.prompts import (
+    ConsolidatePrompts,
     InsightsPrompts,
     LineagePrompts,
     MutationSuggestionsPrompts,
+    ProgramAuthorPrompts,
+    ReconcilePrompts,
+    TaskSummaryPrompts,
 )
 
 if TYPE_CHECKING:
@@ -254,4 +262,114 @@ def create_lineage_agent(
         user_prompt_template=user_template,
         task_description=task_description,
         metrics_formatter=metrics_formatter,
+    )
+
+
+def create_reconcile_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    task_description: str,
+    prompts_dir: str | Path | None = None,
+) -> ReconcileAgent:
+    """Create the librarian's reconcile agent (memory write path).
+
+    Bakes the task into the system prompt's CONTEXT once at construction — the
+    task is fixed for a run — and injects the user template, mirroring the
+    insights/lineage factories. No metrics: the librarian reasons over the diff
+    and existing cards, not over per-program metric blocks.
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        task_description: Description of the optimization task.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``ReconcileAgent``.
+    """
+    system_template = ReconcilePrompts.system(prompts_dir=prompts_dir)
+    user_template = ReconcilePrompts.user(prompts_dir=prompts_dir)
+    system_prompt = system_template.format(task_description=task_description)
+    return ReconcileAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+    )
+
+
+def create_consolidate_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    task_description: str,
+    prompts_dir: str | Path | None = None,
+) -> ConsolidateAgent:
+    """Create the librarian's consolidate agent (periodic dedup pass).
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        task_description: Description of the optimization task.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``ConsolidateAgent``.
+    """
+    system_template = ConsolidatePrompts.system(prompts_dir=prompts_dir)
+    user_template = ConsolidatePrompts.user(prompts_dir=prompts_dir)
+    system_prompt = system_template.format(task_description=task_description)
+    return ConsolidateAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+    )
+
+
+def create_program_author_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    task_description: str,
+    prompts_dir: str | Path | None = None,
+) -> ProgramAuthorAgent:
+    """Create the librarian's exemplar program-author agent.
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        task_description: Description of the optimization task.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``ProgramAuthorAgent``.
+    """
+    system_template = ProgramAuthorPrompts.system(prompts_dir=prompts_dir)
+    user_template = ProgramAuthorPrompts.user(prompts_dir=prompts_dir)
+    system_prompt = system_template.format(task_description=task_description)
+    return ProgramAuthorAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+    )
+
+
+def create_task_summary_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    prompts_dir: str | Path | None = None,
+) -> TaskSummaryAgent:
+    """Create the librarian's task-summary agent (one-line condensation).
+
+    Unlike the other librarian factories the task is not baked into the system
+    prompt: the task description is this agent's per-run *input*, injected into
+    the user template at call time.
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``TaskSummaryAgent``.
+    """
+    system_prompt = TaskSummaryPrompts.system(prompts_dir=prompts_dir)
+    user_template = TaskSummaryPrompts.user(prompts_dir=prompts_dir)
+    return TaskSummaryAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
     )

@@ -1,0 +1,4 @@
+# @package memory.excluder
+# Treatment: prune every card already applied up the parent's lineage so GAM's
+# single relevance pick is lineage-fresh. Reads the birth-frozen closure metadata.
+_target_: gigaevo.memory.core.excluder.LineageExcluder

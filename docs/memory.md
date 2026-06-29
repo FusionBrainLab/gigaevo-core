@@ -16,17 +16,14 @@ Memory lets the evolutionary algorithm learn from past experiments by feeding
 6. [Configuration Reference](#configuration-reference)
    - [Preset selection (memory=...)](#preset-selection-memoryname)
    - [Component groups](#component-groups)
-   - [Backend factory](#backend-factory)
-   - [The memory LLM (config/memory/llm/)](#the-memory-llm-configmemoryllm)
+   - [Backend builder](#backend-builder)
+   - [The memory LLM (config/memory/common/llm/)](#the-memory-llm-configmemorycommonllm)
 7. [The Ideas Tracker (Write Phase)](#the-ideas-tracker-write-phase)
    - [What It Does](#what-it-does)
-   - [Two Entry Points: PostRunHook vs CLI](#two-entry-points-postrunhook-vs-cli)
-   - [The Writer Side of memory= (config/memory/tracker/)](#the-writer-side-of-memory-configmemorytracker)
-   - [CLI Reference](#cli-reference)
-   - [CLI Examples](#cli-examples)
+   - [Entry Point: PostRunHook](#entry-point-postrunhook)
+   - [The Writer Side of memory= (config/memory/writer/tracker/)](#the-writer-side-of-memory-configmemorywritertracker)
    - [Pipeline Internals](#pipeline-internals)
-   - [Analyzer Types](#analyzer-types)
-   - [Memory Write Pipeline](#memory-write-pipeline)
+   - [Card Bank and Backend](#card-bank-and-backend)
    - [What a Memory Card Looks Like](#what-a-memory-card-looks-like)
    - [Logs and Checkpoints](#logs-and-checkpoints)
 8. [The Memory Search (Read Phase)](#the-memory-search-read-phase)
@@ -67,7 +64,7 @@ mechanism levers extracted from previous experiments:
 ```
 [card 1] id=idea-abc123
 Sort evidence by relevance score before chain traversal
-efficacy: introduced in 9 children; median improvement +0.012; downside 11% (confident)
+efficacy: introduced in 9 children; median improvement +0.012 (confident)
 
 [card 2] id=idea-def456
 Filter low-confidence hops using a learned threshold
@@ -97,7 +94,7 @@ The memory system has two completely separate phases:
 ║  Evolution Run A (no memory) ──> produces top programs            ║
 ║                                       │                           ║
 ║                                       ▼                           ║
-║                              Ideas Tracker (CLI tool)             ║
+║                              Ideas Tracker (PostRunHook)          ║
 ║                              extracts generalizable ideas         ║
 ║                                       │                           ║
 ║                                       ▼                           ║
@@ -120,8 +117,11 @@ The memory system has two completely separate phases:
 **Write phase** = Ideas Tracker extracts knowledge from completed runs.
 **Read phase** = Evolution reads that knowledge during mutation.
 
-They never run at the same time. The ideas tracker runs AFTER an evolution
-completes (or at checkpoints), and the next evolution reads from the database.
+In the two-pass build-then-read flow the phases are separate: the ideas tracker
+runs AFTER an evolution completes, and the next evolution reads from the
+database. Under `pipeline=intra_extra_memory` they interleave within one run —
+the `LiveMemoryRefreshHook` writes mid-run while mutation reads — sharing one
+card bank under the tracker's write lock.
 
 ---
 
@@ -250,10 +250,10 @@ no environment-variable cascade. ONE knob assembles everything:
    pipeline stage; each nests under `memory.<group>` (Hydra's natural
    packaging, no `@package` splats) and is injected into the `MemorySystem` via
    `${ref:...}` so every consumer shares one instance per component.
-3. **The memory LLM** (`config/memory/llm/*.yaml`) — a `MultiModelRouter`
-   shared by every consumer. The writer side spends money on `memory/llm`.
+3. **The memory LLM** (`config/memory/common/llm/*.yaml`) — a `MultiModelRouter`
+   shared by every consumer. The writer side spends money on `memory/common/llm`.
 
-The `MemorySystem` threads the shared memory LLM and the single dedup config
+The `MemorySystem` threads the shared memory LLM
 into ONE backend in Python — not via a `${ref:memory.*}` YAML web. It exposes
 `.provider` (a `NullMemoryProvider` when the reader is off) and `.tracker` (a
 `NullPostRunHook` when the writer is off). Consumers wire to it via
@@ -275,8 +275,8 @@ config/memory/
 |--------|--------|--------|-----------|------|
 | `memory=none` | off | off | `NullMemoryProvider` + `NullPostRunHook` | none |
 | `memory=reader` | on | off | injects cards from an existing bank; no extraction | read only |
-| `memory=writer` | off | on | extracts/enriches cards into a bank for a LATER run; injects nothing | memory/llm spend |
-| `memory=full` | on | on | reader + writer share ONE card bank | memory/llm spend |
+| `memory=writer` | off | on | extracts/enriches cards into a bank for a LATER run; injects nothing | memory/common/llm spend |
+| `memory=full` | on | on | reader + writer share ONE card bank | memory/common/llm spend |
 
 Each preset wires the `MemorySystem` from the per-component groups — what you
 see in the config is exactly what the system receives:
@@ -288,10 +288,10 @@ defaults:
   - auction: thompson_ev          # EV-bid auction (theta x magnitude), abstains <= ev_floor
   - budget: top_bid               # bid-ranked cap to max_cards
   - reputation: absolute_progress # value channel: median base-relative gain
-  - admitter: sign_based
-  - dedup: llm
   - evictor: harm
-  - tracker: ideas
+  - excluder: none
+  - provider: selector
+  - tracker: librarian
   - backend: local
   - llm: gemini
   - _self_
@@ -307,18 +307,25 @@ The default stack is the **EV contextual bandit**: cards bid their *expected
 fitness gain* (`θ × magnitude`) and the auction abstains rather than inject a
 card it expects to hurt. It works on every algorithm. To revert to the legacy
 probability-only behavior, override all three:
-`memory/auction=thompson memory/budget=top_theta memory/reputation=beta_binomial`.
+`memory/reader/auction=thompson memory/reader/budget=top_theta memory/common/reputation=beta_binomial`.
 
-The `dedup`/`evictor` singletons are write-side components: the read backend
-never ingests, so the `MemorySystem` threads them into the write pipeline,
-which sweeps confidently harmful cards after each ingest pass.
+The `evictor` singleton is a write-side component: the read backend never
+ingests, so the `MemorySystem` threads it into the `CardAdmissionGate`, which
+the librarian routes every write through and which sweeps confidently harmful
+cards after each ingest pass. The sweep verdict is **global** (the card's whole
+gain-event pool, `context=None`) by design: an eviction sweep has no query
+parent, so there is no cell to reweight toward — see the rationale note in
+`docs/audits/gain_event_sparsity_smoke_2026-06-28.md`. Override
+`memory/writer/evictor=none` (`NullEvictor`) to keep the harm sweep off and let
+cards accumulate uncapped — the write-side twin of `memory=none` on the read
+side, useful as an admit-only ablation.
 
 Swap a stage by overriding its group, tune a knob by path, switch the writer
 LLM by its group:
 
 ```bash
 python run.py memory=full \
-  memory/llm=qwen_instruct \
+  memory/common/llm=qwen_instruct \
   memory.auction.baseline_prior=[5,2] \
   checkpoint_dir=/workspace/experiments/hover/memory_store \
   problem.name=chains/hover/static
@@ -347,19 +354,17 @@ The **default** variant of each group is in **bold** (this is what `memory=full`
 
 | Group | Variants (default in bold) | Class | Role |
 |-------|----------|-------|------|
-| `memory/backend` | **`local`** | `LocalMemoryBackendFactory` | Card-bank construction (lazy, fail-fast) |
-| `memory/retriever` | **`gam`** | `GamRetriever` | Agentic GAM search (tools, top-k) |
-| `memory/selector` | **`llm`** | `LLMCardSelector` | Picks cards from retrieval hits |
-| `memory/auction` | `thompson`, **`thompson_ev`** | `ThompsonAuctioneer` / `EVThompsonAuctioneer` | Card auction (`thompson_ev` bids `θ × magnitude` and abstains below `ev_floor`; `thompson` bids `θ` only) |
-| `memory/budget` | `top_theta`, **`top_bid`** | `TopThetaBudgeter` / `TopBidBudgeter` | Caps cards per injection (`top_bid` ranks by EV bid, `top_theta` by `θ`) |
-| `memory/reputation` | `beta_binomial`, **`absolute_progress`**, `bd_proximity` | `BetaBinomialReputation` / `RewardWeightedReputation` / `BDProximityReputation` | Per-card efficacy posterior + value channel (`bd_proximity` = cell-local, single-island only) |
-| `memory/admitter` | **`sign_based`** | `SignBasedAdmitter` | Write-side admission gate |
-| `memory/dedup` | **`llm`**, `none` | `LLMDeduplicator` / `NullDeduplicator` | Write-side dedup (threaded into the write pipeline) |
-| `memory/evictor` | **`harm`** | `HarmEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the write pipeline) |
-| `memory/excluder` | **`none`**, `lineage` | `NullExcluder` / `LineageExcluder` | Filter-first gate (`lineage` drops cards already applied in this lineage) |
-| `memory/provider` | **`selector`** | `SelectorMemoryProvider` | Read-side provider (`shortlist_k` recall width, `max_cards` budget) |
-| `memory/tracker` | **`ideas`** | `IdeaTracker` | Writer side of `memory=` (extracts/enriches cards) |
-| `memory/llm` | **`gemini`**, `qwen_instruct` | `MultiModelRouter` | The memory LLM (writer-side spend) |
+| `memory/common/backend` | **`local`** | `build_local_backend` (partial) | Card-bank construction (lazy, fail-fast) |
+| `memory/reader/retriever` | **`gam`** | `GamRetriever` | Agentic GAM search (tools, top-k) |
+| `memory/reader/selector` | **`llm`** | `LLMCardSelector` | Picks cards from retrieval hits |
+| `memory/reader/auction` | `thompson`, **`thompson_ev`**, `thompson_ev_calibrated` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` / `CalibratedColdPriorAuctioneer` | Card auction (`thompson_ev` bids `θ × magnitude` and abstains below `ev_floor`; `thompson_ev_calibrated` is `thompson_ev` with the cold-card bid calibrated per slate; `thompson` bids `θ` only) |
+| `memory/reader/budget` | `top_theta`, **`top_bid`** | `TopThetaBudgeter` / `TopBidBudgeter` | Caps cards per injection (`top_bid` ranks by EV bid, `top_theta` by `θ`) |
+| `memory/common/reputation` | `beta_binomial`, **`absolute_progress`**, `bd_proximity` | `BetaBinomialReputation` / `BetaBinomialReputation` / `BDProximityReputation` | Per-card efficacy posterior + value channel (`absolute_progress` is now an alias of `beta_binomial`; `bd_proximity` = cell-local, single-island only) |
+| `memory/writer/evictor` | **`harm`**, `none` | `HarmEvictor` / `NullEvictor` | Evicts confidently harmful cards on each write sweep (threaded into the `CardAdmissionGate`); `none` disables the sweep so cards are only ever admitted, never evicted |
+| `memory/reader/excluder` | **`none`**, `lineage` | `NullExcluder` / `LineageExcluder` | Filter-first gate (`lineage` drops cards already applied in this lineage) |
+| `memory/reader/provider` | **`selector`** | `SelectorMemoryProvider` | Read-side provider (`shortlist_k` recall width, `max_cards` budget) |
+| `memory/writer/tracker` | **`librarian`** | `IdeaTracker` | Writer side of `memory=` (librarian authors cards + routes verdicts through `CardAdmissionGate`) |
+| `memory/common/llm` | **`gemini`**, `qwen_instruct` | `MultiModelRouter` | The memory LLM (writer-side spend) |
 
 ### Contextual-bandit card selection (EV auction)
 
@@ -374,9 +379,10 @@ is non-positive bids at or below `ev_floor` (default `0.0`) and the auction
 
 The value channel comes from the reputation arm:
 
-- `absolute_progress` (`RewardWeightedReputation` + `AbsoluteMedianReward`) — the
-  card's magnitude is the median base-relative child gain it has produced,
-  pooled across all cells.
+- `absolute_progress` (`BetaBinomialReputation`) — the card's magnitude is
+  `IntroGain_best_median`, the median base-relative child gain it has produced,
+  pooled across all cells. (`absolute_progress` and `beta_binomial` resolve to
+  the same class; the name is kept for config back-compat.)
 - `bd_proximity` (`BDProximityReputation`) — **single-island only.** Re-buckets
   each card's stored `gain_events` into the *query parent's current cell* and
   bids over the in-cell subset only, so a card that helped near cell A and hurt
@@ -385,6 +391,26 @@ The value channel comes from the reputation arm:
   `${ref:behavior_space}` (the `single_island*`, `topology_3d*`, and
   `tabular/2d_local_ood` algorithms); pairing it with `multi_island` fails fast
   with a `NotImplementedError`.
+
+#### `auction=thompson_ev_calibrated` (calibrated cold prior)
+
+Same gate and `ev_floor` as `thompson_ev`, but the cold-card bid is **calibrated
+per slate** instead of fixed. A cold card (no stamped magnitude) bids the
+`cold_quantile` (default `0.5` = median) of the proven magnitudes present on its
+own slate, so the cold bid tracks the substrate's fitness scale rather than the
+fixed `prior_magnitude=0.1` — which on heilbron was ~25–80× the learned card
+magnitudes and let untested cards out-bid proven ones
+(`docs/audits/bandit_health_report.md`, RQ1). When no proven magnitude is present
+(early run or an all-cold slate) every cold card bids `cold_floor` (default
+`1e-6`) and the EV auction degenerates to the plain Thompson safety gate.
+
+| field | default | meaning |
+|---|---|---|
+| `cold_quantile` | `0.5` | quantile of the slate's present magnitudes used as the cold bid; lower = more conservative exploration |
+| `cold_floor` | `1e-6` | strictly-positive cold bid for all-cold / non-positive-quantile slates; keeps a fresh card explorable |
+
+Opt-in only; `thompson_ev` remains the default. Intended to be A/B'd against
+`thompson_ev` (re-run `tools/analyze_bandit_health.py`) before any default flip.
 
 The gain evidence is **use-attributed**: a base-parent fitness snapshot is frozen
 at child birth, and a card is credited (`gain = child − base`) only when it was
@@ -408,39 +434,38 @@ python run.py \
   num_parents=2 \
   algorithm=single_island \
   memory=full \
-  memory/llm=qwen_instruct \
-  memory/excluder=lineage \
-  memory/reputation=bd_proximity \
-  memory/auction=thompson_ev \
-  memory/budget=top_bid \
+  memory/common/llm=qwen_instruct \
+  memory/reader/excluder=lineage \
+  memory/common/reputation=bd_proximity \
+  memory/reader/auction=thompson_ev \
+  memory/reader/budget=top_bid \
   memory.provider.shortlist_k=10 \
   post_step_hook.refresh_every=10 \
   pipeline_builder.fresh_context_reorder=true \
   model_name=Qwen3-235B-A22B-Thinking-2507 \
   llm_base_url=http://localhost:8000/v1 \
-  +llm.structured_output_method=auto \
   max_mutants=800
 ```
 
-Swap only `memory/reputation=absolute_progress` for the context-free control arm
+Swap only `memory/common/reputation=absolute_progress` for the context-free control arm
 (same auction/budget/shortlist stack). The full derivation (RL framing, Thompson
 sampling, the absolute-fitness value function, abstention proof) and a
 per-override breakdown live in `docs/reports/memory_bandit_system.pdf`.
 
-### Backend factory
+### Backend builder
 
-The `memory/backend` sub-group has exactly ONE backend.
-`config/memory/backend/local.yaml` instantiates
-`gigaevo.memory.backend_factory.LocalMemoryBackendFactory`. Factories are plain
-pydantic models — every knob (`checkpoint_dir`, `embedding_model_name`,
-`search_limit`, `rebuild_interval`) is a Hydra field. `build()` runs lazily on
-first card selection and raises `MemoryStorageError` on failure rather than
-degrading to a no-memory run.
+The `memory/common/backend` sub-group has exactly ONE backend.
+`config/memory/common/backend/local.yaml` is a Hydra `_partial_` over
+`gigaevo.memory.shared_memory.backend.build_local_backend` bound to a nested
+`MemoryConfig` node — every knob (`checkpoint_path`, `embedding_model_name`,
+`search_limit`, `rebuild_interval`) is a Hydra field on that config. The partial
+runs lazily on first card selection and raises `MemoryStorageError` on failure
+rather than degrading to a no-memory run.
 
-### The memory LLM (`config/memory/llm/`)
+### The memory LLM (`config/memory/common/llm/`)
 
-The writer side spends money on `memory/llm`. The default is `gemini`; swap it
-with `memory/llm=qwen_instruct`. The `MemorySystem` threads this one router into
+The writer side spends money on `memory/common/llm`. The default is `gemini`; swap it
+with `memory/common/llm=qwen_instruct`. The `MemorySystem` threads this one router into
 the backend in Python — the read side changes fitness, the writer side spends
 the tokens. The node is a `gigaevo.llm.models.MultiModelRouter` with
 `name: memory`, so its token usage is tracked separately from the evolution LLM
@@ -449,9 +474,8 @@ the credential, read as `${oc.env:OPENROUTER_API_KEY}` — model id, endpoint,
 temperature, reasoning effort, and `structured_output_method` are all YAML
 fields.
 
-The ideas-tracker analyzer (the writer side) shares the SAME router instance, so
-analyzer traffic is also booked under `llm/tokens/memory/<model>/...`. Standalone
-CLI runs build an equivalent router from `--model`/`--base-url`/`--api-key`.
+The ideas-tracker librarian (the writer side) shares the SAME router instance, so
+writer traffic is also booked under `llm/tokens/memory/<model>/...`.
 
 #### Which settings matter most?
 
@@ -463,12 +487,11 @@ CLI runs build an equivalent router from `--model`/`--base-url`/`--api-key`.
 | `memory.auction.prior_magnitude` | `0.1` | Optimistic cold-gain prior for a card with no value evidence; tune to the substrate's fitness scale (e.g. `0.05`) |
 | `memory.auction.baseline_prior` | `[3.0, 3.0]` | Beta prior on a cold card's success probability `θ` |
 | `memory.retriever.allowed_tools` | `[page_index, vector]` | Which GAM search tools the agent may call |
-| `memory.dedup.config.enabled` | `true` | LLM dedup on card writes |
 | `checkpoint_dir` | — | Where the card bank lives on disk (command line) |
-| `memory/llm` | `gemini` | Writer LLM group: `gemini` vs `qwen_instruct` (command line) |
+| `memory/common/llm` | `gemini` | Writer LLM group: `gemini` vs `qwen_instruct` (command line) |
 
-Component-level swaps (`memory/reputation=bd_proximity`, `memory/excluder=lineage`,
-`memory/auction=thompson`, …) are the coarse levers; the table above are the
+Component-level swaps (`memory/common/reputation=bd_proximity`, `memory/reader/excluder=lineage`,
+`memory/reader/auction=thompson`, …) are the coarse levers; the table above are the
 fine knobs. Everything else has sane defaults.
 
 ---
@@ -481,18 +504,31 @@ evolution run and writes them as memory cards. It lives in
 
 ### What It Does
 
-1. Loads programs from a completed evolution run (via Redis or CSV)
-2. Filters to non-root programs with positive fitness
-3. Uses an LLM to analyze each program's improvements and classify them as
-   **new ideas**, **updates** to existing ideas, or **rewrites** of existing ideas
-4. Deduplicates ideas against existing cards in active/inactive idea banks
-5. Enriches ideas with keywords, explanations, and task summaries (postprocessing)
-6. Optionally tracks which memory cards were used and their fitness impact
-7. Optionally writes the best ideas to the memory database for future runs
+1. Loads programs from the engine's storage — the full set at run end
+   (`on_run_complete`), or the newest window each increment under the live hook
+2. Filters to eligible records: non-root programs with positive fitness that
+   have not already been processed
+3. For each new program, the **Librarian** (`ideas_tracker/librarian.py`)
+   authors a clean memory card from the parent→child mutation diff,
+   reconciling it against the nearest existing cards (the memory LLM decides
+   *new card* vs. *merge into an existing one*)
+4. Routes every verdict through the **`CardAdmissionGate`** (`admit` / `merge` /
+   `bump_provenance`) — the sole harm gate, which records each verdict to
+   `write_ledger.jsonl`
+5. Authors a clean `ProgramCard` for each top-fitness exemplar (top
+   `memory_write_best_programs_percent`% of the pool)
+6. Stamps each credited card's use-attributed `gain_events` from the full pool
+   (reputation derives the Beta-Binomial posterior from them at read time)
+7. Sweeps confidently harmful cards (`gate.sweep()`)
+8. Every `consolidation_every_n` cards written, schedules one background
+   **consolidation** pass (`ideas_tracker/consolidation.py`) that runs the same
+   nearest-card primitive over the whole bank and folds drifted near-duplicate
+   cards (cosine distance ≤ `consolidation_eps`) into one — the standard fix for
+   the greedy, order-dependent online pre-gate. Idempotent and off the hot path
 
-### Two Entry Points: PostRunHook vs CLI
+### Entry Point: PostRunHook
 
-The IdeaTracker has two ways to run:
+The IdeaTracker runs as an engine PostRunHook:
 
 ```
                     ┌──────────────────────────────────┐
@@ -505,204 +541,111 @@ The IdeaTracker has two ways to run:
                     │  IdeaTracker fetches all programs │
                     │  from storage and runs pipeline   │
                     └──────────────────────────────────┘
-
-                    ┌──────────────────────────────────┐
-                    │       CLI (manual / standalone)   │
-                    │                                   │
-                    │  python -m gigaevo.memory         │
-                    │    .ideas_tracker.cli             │
-                    │    --redis-db 3                   │
-                    │    --redis-prefix chains/hover/.. │
-                    │          ↓                        │
-                    │  IdeaTracker loads from Redis/CSV │
-                    │  and runs the same pipeline       │
-                    └──────────────────────────────────┘
 ```
 
-**PostRunHook** (preferred for experiments): Turn the writer on with
-`memory=writer` (build-only) or `memory=full` (read+write) in your Hydra
-command. The engine fires `on_run_complete(storage)` in its `run()` method's
-`finally` block after evolution completes. Hook errors are caught and logged —
-they never crash the engine.
+Turn the writer on with `memory=writer` (build-only) or `memory=full`
+(read+write) in your Hydra command. The engine fires
+`on_run_complete(storage)` in its `run()` method's `finally` block after
+evolution completes; under `pipeline=intra_extra_memory` the
+`LiveMemoryRefreshHook` also calls `run_increment` mid-run on a cadence.
+Hook errors are caught and logged — they never crash the engine.
 
-**CLI** (for re-running on existing data): Use when you want to re-extract
-ideas from a run that's already in Redis, or from a CSV export. Useful for
-debugging, re-processing, or running on archived data.
-
-Both entry points call the same internal `_run_on_programs()` pipeline.
-
-### The Writer Side of `memory=` (`config/memory/tracker/`)
+### The Writer Side of `memory=` (`config/memory/writer/tracker/`)
 
 The IdeaTracker is the WRITER SIDE of the `memory=` knob. The `memory=writer`
 and `memory=full` presets flip `writer_enabled: true`; `memory=none` and
 `memory=reader` leave it off, so `MemorySystem.tracker` resolves to a
 `NullPostRunHook`. Consumers wire to it via `${ref:memory::tracker}`.
 
-There is a single tracker config — `config/memory/tracker/ideas.yaml` — with no
-`fast` vs `default` split:
+There is a single tracker config — `config/memory/writer/tracker/librarian.yaml`:
 
 ```yaml
 _target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
-analyzer_type: default
-analyzer_max_concurrent_classifications: 8
-description_rewriting: true
+_partial_: true
 memory_write_enabled: true
 memory_write_best_programs_percent: 5.0
+ingest_call_timeout_s: 300.0
+consolidation_every_n: 64
+dedup_policy:
+  _target_: gigaevo.memory.ideas_tracker.dedup_policy.DedupPolicy
+  online_eps: 0.05
+  online_top_k: 5
+  max_cards_per_diff: 3
+  consolidation_eps: 0.05
+  consolidation_k: 5
 fitness_higher_is_better: ${higher_is_better}
 checkpoint_dir: ${checkpoint_dir}
-redis_prefix: ${problem.name}
+task_description: ${ref:problem_context::task_description}
+prompts_dir: ${prompts.dir}
 ```
 
-The `MemorySystem` threads the shared `memory/llm` router, the `memory/backend`
-factory, the `memory/admitter`, and the single dedup config into the tracker in
-Python — the tracker does not assemble its own `${ref:memory.*}` web. The
-tracker uses the same router and backend instance as the read side, so its
-token usage is booked under `llm/tokens/memory/<model>/...`.
+The `MemorySystem` threads the shared `memory/common/llm` router, the `memory/common/backend`
+`_partial_` (over `build_local_backend`), and the shared `evictor` /
+`reputation` instances into the tracker in Python — the tracker does not
+assemble its own `${ref:memory.*}` web. The tracker uses the same router and the
+same backend builder (and on-disk checkpoint) as the read side, so its token
+usage is booked under `llm/tokens/memory/<model>/...`.
 
 #### Parameter reference
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `analyzer_type` | str | `"default"` | `"default"` = LLM-based sequential analysis. `"fast"` = embedding+DBSCAN batched analysis. |
-| `analyzer_max_concurrent_classifications` | int | `8` | Max concurrent classification LLM calls inside `ClassifyingAnalyzer` |
-| `description_rewriting` | bool | `true` | Allow the LLM to rewrite idea descriptions |
-| `memory_write_enabled` | bool | `true` | Write extracted ideas to the memory database |
-| `memory_write_best_programs_percent` | float | `5.0` | Share of top programs (by fitness) the write pipeline converts into program cards |
+| `memory_write_enabled` | bool | `true` | Author and admit cards into the memory bank |
+| `memory_write_best_programs_percent` | float | `5.0` | Share of top programs (by fitness) the librarian converts into program cards |
+| `ingest_call_timeout_s` | float | `300.0` | Per-call wall-clock bound on each librarian LLM call (reconcile/author). A call that stalls past this is skipped — the record is retried on a later sweep — so one hung memory-LLM request cannot freeze the whole write increment |
+| `consolidation_every_n` | int | `64` | After this many cards are written across sweeps, schedule one background consolidation pass that folds drifted near-duplicate cards the greedy online pre-gate let in separately. `0` disables it |
+| `dedup_policy` | `DedupPolicy` | `DedupPolicy()` | Frozen, Hydra-instantiable value object holding the dedup thresholds: `online_eps` / `online_top_k` / `max_cards_per_diff` for the online pre-gate, and `consolidation_eps` / `consolidation_k` for the batch pass |
 | `fitness_higher_is_better` | bool | `${higher_is_better}` | Metric direction; gains are stored in "positive = improvement" space |
-| `checkpoint_dir` | str or null | `null` | Directory for memory card storage. Defaults to `null` in `config/config.yaml`. **Not** resolved via Hydra output dir — must be set explicitly as a Hydra override (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). The same path must be used in the build phase (writer) and the read phase (reader) so the memory bank persists between phases. |
-| `redis_prefix` | str | `${problem.name}` | Redis key prefix for loading programs |
-
-### CLI Reference
-
-```
-python -m gigaevo.memory.ideas_tracker.cli [OPTIONS]
-```
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--api-key` | str | `$OPENROUTER_API_KEY` | Analyzer LLM API key (required: flag or env var) |
-| `--model` | str | `google/gemini-3-flash-preview` | Analyzer LLM model id |
-| `--base-url` | str | `https://openrouter.ai/api/v1` | Analyzer LLM API endpoint |
-| `--csv-path` | PATH | none | CSV exported by `tools/redis2pd.py`; when given, programs load from the CSV instead of Redis |
-| `--higher-is-better` / `--no-higher-is-better` | bool | higher | Fitness direction of the analyzed run |
-| `--checkpoint-dir` | PATH | none | Card-bank directory for the memory write pipeline (required unless `--no-memory-write`) |
-| `--logs-dir` | PATH | `ideas_tracker/logs/` | Directory for session logs (timestamped subdir created) |
-| `--memory-write` / `--no-memory-write` | bool | enabled | Toggle the final memory write pipeline |
-| `--redis-host` | str | `localhost` | Redis host |
-| `--redis-port` | int | `6379` | Redis port |
-| `--redis-db` | int | `0` | Redis DB |
-| `--redis-prefix` | str | `""` | Redis key prefix (usually matches `problem.name`) |
-| `--redis-label` | str | none | Optional label for logging/debugging |
-
-### CLI Examples
-
-```bash
-# Extract ideas from a Redis run (most common)
-PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --redis-db 3 \
-  --redis-prefix "chains/hover/static_soft" \
-  --checkpoint-dir experiments/hover/memory/memory_store \
-  --memory-write
-
-# Extract from a CSV export (offline analysis)
-PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --csv-path experiments/hover/memory/archives/M0/evolution_data.csv \
-  --checkpoint-dir experiments/hover/memory/memory_store
-
-# Dry run: extract ideas but don't write to memory DB
-PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --redis-db 3 \
-  --redis-prefix "chains/hover/static_soft" \
-  --no-memory-write
-
-# Write logs to a specific directory
-PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --redis-db 3 \
-  --redis-prefix "chains/hover/static_soft" \
-  --logs-dir experiments/hover/memory/tracker_logs
-```
+| `checkpoint_dir` | str | `${checkpoint_dir}` → `${hydra:runtime.output_dir}/memory` | Directory for memory card storage. Inherits the global `checkpoint_dir`, which defaults to the Hydra run's output dir (`config/config.yaml`). To reuse one bank across the build phase (writer) and read phase (reader), override it to a fixed path in both runs (e.g. `checkpoint_dir=experiments/hover/memory/memory_bank`). |
+| `task_description` | str | `${ref:problem_context::task_description}` | Human-readable task text; condensed once per run into the one-line summary stamped on every card |
+| `prompts_dir` | str or null | `${prompts.dir}` | Optional prompt-override directory for the librarian agents; `null` uses the packaged prompts |
 
 ### Pipeline Internals
 
-The core pipeline runs the same sequence regardless of entry point:
+The core pipeline (`run_increment`) runs this sequence:
 
 ```
 1. Load programs
    │  PostRunHook: storage.get_all(exclude=EXCLUDE_STAGE_RESULTS)
-   │  CLI/Redis:   RedisProgramStorage.get_all()
-   │  CLI/CSV:     parse CSV rows → Program objects
    │
-2. Filter programs
-   │  Remove: root programs (no parents)
-   │  Remove: fitness <= 0
-   │  Remove: already-processed (tracked in programs_ids set)
+2. Filter to eligible records (ProgramRecordExtractor.extract)
+   │  Skip: root programs (no parents)
+   │  Skip: no validated fitness (missing/non-positive is_valid;
+   │        missing, non-finite, or sentinel fitness)
+   │  Skip: already-seen ids
    │
-3. Compute injection-efficacy posteriors
-   │  For each child with memory_selected_idea_ids:
-   │    gain = child_fitness - parent-local baseline (sign-normalized
-   │    so positive = improvement) → Beta-Binomial posterior per card
+3. Reconcile each diff into idea cards (Librarian.ingest_idea)
+   │  ReconcileAgent authors a clean card from the parent→child diff and
+   │  decides new-card vs. merge against the nearest existing cards; the
+   │  CardAdmissionGate records every verdict to write_ledger.jsonl
    │
-4. Convert to ProgramRecords
-   │  Extract: id, fitness, generation, parents, code
-   │  Extract from metadata.mutation_output: insights, changes, archetype
+4. Author exemplar program cards (_author_exemplars)
+   │  ProgramAuthorAgent writes one ProgramCard per top-fitness exemplar
+   │  (top memory_write_best_programs_percent% of the pool), admitted
+   │  through the same gate
    │
-5. Run analyzer pipeline
-   │  "default": sequential LLM classification (process_program per record)
-   │  "fast":    batched embedding + DBSCAN clustering + async LLM refinement
+5. Stamp gain events + harm-evict (CardStatsUpdater.update)
+   │  Use-attributed base-relative gains from the full pool are stamped
+   │  onto each credited card (reputation derives the Beta-Binomial
+   │  posterior from them at read time); confidently harmful cards are
+   │  then evicted via gate.sweep
    │
-   │  For each program's improvements:
-   │    Classify as: NEW idea | UPDATE existing | REWRITE existing
-   │    Apply to active/inactive idea banks via RecordManager
-   │
-6. Attach efficacy statistics to idea banks
-   │  Merge per-card posteriors into evolution_statistics.ALL
-   │
-7. Enrich ideas (postprocessing)
-   │  For each idea in record bank:
-   │    Generate: keywords, explanation summary, task description summary
-   │
-8. Log final state
-   │  Write: idea banks, processed programs, evolutionary statistics
-   │  Output: timestamped directory with JSON/YAML files
-   │
-9. Memory write pipeline (if enabled)
-   │  Load cards from idea banks
-   │  Harm-gate (admitter) + dedup, then ingest
-   │  Write to memory backend (local disk or API)
+6. Schedule consolidation if due (ConsolidationScheduler.note_writes)
+   │  After consolidation_every_n cards, dispatch one background
+   │  near-duplicate consolidation pass under the run lock
 ```
 
-### Analyzer Types
+The store, admission gate, and librarian are built once, lazily, on the first
+sweep (`LibrarianWriteStack.ensure()`), so the heavy backend I/O is paid only
+when there is something to write.
 
-**Default analyzer** (`analyzer_type: default`):
-- Sequential, one program at a time
-- Uses the LLM to classify each improvement against existing idea banks
-- The LLM sees: the improvement, all active ideas, all inactive ideas
-- Decides: new idea, update to existing, or rewrite of existing
-- Best for small runs (< 100 programs) where accuracy matters
+### Card Bank and Backend
 
-**Fast analyzer** (`analyzer_type: fast`):
-- Batched, processes all programs at once
-- Step 1: Embed all improvements using a sentence transformer
-- Step 2: Cluster similar improvements using DBSCAN
-- Step 3: Use the LLM to refine clusters into idea cards
-- Step 4: Import all cards into the record bank with forced dedup
-- Best for large runs (100+ programs) where speed matters
-
-### Memory Write Pipeline
-
-When `memory_write_enabled=true`, after idea extraction completes:
-
-1. The best ideas (from top `memory_write_best_programs_percent`% of programs)
-   are selected from the idea banks
-2. Per-idea efficacy statistics (Beta-Binomial injection posterior) are
-   carried in each card's `evolution_statistics`
-3. Cards are written to the local memory backend (`memory/backend=local`, the
-   only backend): JSON files in `checkpoint_dir` with a search index
-
-The write pipeline receives its backend factory by injection: the PostRunHook
-path gets the `MemorySystem`'s shared backend factory (the same instance the
-read-side provider uses), and the ideas-tracker CLI constructs a
-`LocalMemoryBackendFactory` directly.
+Cards are written to the local memory backend (`memory/common/backend=local`, the only
+backend): JSON files under `checkpoint_dir` with a search index, shared with the
+read side. The backend builder is injected — the PostRunHook path gets the
+`MemorySystem`'s shared backend partial (the same llm-bound partial the
+read-side provider uses).
 
 ### What a Memory Card Looks Like
 
@@ -715,46 +658,32 @@ Internally, a memory card is a structured object with these fields:
     "category": "retrieval",
     "keywords": ["sort", "relevance", "evidence", "chain"],
     "task_description_summary": "Multi-hop fact verification using evidence chains",
-    "explanation": {
-        "explanations": ["Sorting evidence before traversal ensures high-quality..."],
-        "summary": "Pre-sort evidence to avoid low-quality chain hops",
-    },
-    "evolution_statistics": {
-        "ALL": {
-            "intro_events": 5,
-            "IntroGain_best_median": 0.03,
-            "IntroGain_best_adj_median": 0.012,
-            "DownsideRate_best": 0.1,
-            "posterior_a": 5.0,
-            "posterior_b": 2.0,
-            "p_help_lo20": 0.55,
-            "efficacy_confident": True,
-        }
-    },
+    "gain_events": [                          # raw use-attributed child gains
+        {"context": {"parent_metrics": {"min_area": 0.41}}, "gain": 0.03},
+        {"context": {"parent_metrics": {"min_area": 0.55}}, "gain": 0.0, "invalid": True},
+    ],                                        # reputation derives the posterior at read time
     "programs": ["prog-1", "prog-2"],       # programs that produced this idea
-    "last_generation": 15,                    # last generation where idea was seen
-    "strategy": "exploitation",               # mutation archetype
+    "absorbed_ids": [],                       # ids merged into this survivor; re-alias absorbed cards' gain events at restamp
 }
 ```
 
 The `description` is the core idea. Everything else is metadata for search
-ranking, deduplication, and efficacy-aware selection.
+ranking and efficacy-aware selection.
 
 ### Logs and Checkpoints
 
-The Ideas Tracker writes detailed logs to a timestamped directory:
+The write path leaves two append-only traces:
 
 ```
-ideas_tracker/logs/2026-04-03_14-30-00/
-  active_ideas.json        # Current active idea bank (final state)
-  inactive_ideas.json      # Ideas moved to inactive bank
-  programs_processed.json  # All ProgramRecord dicts
-  evolution_stats.json     # Evolutionary statistics (origin analysis)
-  init.json                # Initialization parameters (model, redis, etc.)
+<output>/memory/memory_events.jsonl   # structured event trace: admission.select,
+                                      # gam.search, read.selection,
+                                      # injection_posterior.compute, store.* ...
+<checkpoint_dir>/write_ledger.jsonl   # one row per card verdict:
+                                      # incoming_id, final_id, outcome, reason
 ```
 
-When running via CLI with `--logs-dir`, logs go into a timestamped subfolder
-of the specified directory.
+The card bank itself lives under `checkpoint_dir` (`api_index.json` plus the
+page store and amem exports), shared between the writer and the reader.
 
 ---
 
@@ -778,8 +707,8 @@ each program evaluation:
    bank has confident evidence — a trailing `efficacy:` line
 8. Card IDs are stored in program metadata for tracking
 
-The GAM pipeline is configurable via the `memory/retriever` Hydra group
-(`config/memory/retriever/gam.yaml`). The `allowed_tools` list controls which
+The GAM pipeline is configurable via the `memory/reader/retriever` Hydra group
+(`config/memory/reader/retriever/gam.yaml`). The `allowed_tools` list controls which
 retrieval strategies are used.
 
 ---
@@ -838,17 +767,6 @@ python run.py \
 After the run completes, check the memory bank:
 ```bash
 ls experiments/hover/memory/memory_bank/
-```
-
-**Alternative: Re-extract ideas from an existing run** (if the PostRunHook
-didn't run, or you want to re-process):
-
-```bash
-PYTHONPATH=. python -m gigaevo.memory.ideas_tracker.cli \
-  --redis-db 3 \
-  --redis-prefix "chains/hover/full7_no_deep" \
-  --checkpoint-dir experiments/hover/memory/memory_bank \
-  --memory-write
 ```
 
 ### Phase B: Controlled Experiment
@@ -947,9 +865,9 @@ gigaevo top \
 |------|-------------|
 | `gigaevo/memory/provider.py` | `SelectorMemoryProvider` — assembles the read pipeline lazily |
 | `gigaevo/memory/core/read_pipeline.py` | `MemoryReadPipeline` — retrieve → shortlist → auction → budget → render |
-| `gigaevo/memory/backend_factory.py` | Lazy fail-fast backend factory (`LocalMemoryBackendFactory`) |
+| `gigaevo/memory/shared_memory/backend.py` | Lazy fail-fast backend builder (`build_local_backend`) |
 | `gigaevo/memory/shared_memory/memory.py` | `AmemGamMemory` — local memory backend with GAM search |
-| `config/memory/backend/` | Hydra configs for the backend factories (checkpoint dir, embedding model, memory LLM) |
+| `config/memory/common/backend/` | Hydra config for the backend builder (checkpoint dir, embedding model, memory LLM) |
 
 ### Shared Memory Module (`gigaevo/memory/shared_memory/`)
 
@@ -959,12 +877,13 @@ via the `AgenticRuntime` DI container.
 | File | Responsibility |
 |------|---------------|
 | `memory.py` | `AmemGamMemory` orchestrator — coordinates save / search / rebuild / delete |
-| `memory_config.py` | Pydantic configs: `MemoryConfig`, `GamConfig`, `ApiConfig`, `CardUpdateDedupConfig` |
+| `memory_config.py` | Pydantic configs: `MemoryConfig`, `GamConfig`, `ApiConfig` |
 | `card_store.py` | Card dict + entity mappings + JSON index persistence |
+| `card_conversion.py` | Card <-> record/note/concept conversion + `RawCardRecord` validation |
 | `note_sync.py` | Bridges cards to the A-MEM vector store (Chroma) |
+| `neighbor_source.py` | `ChromaNeighborSource` — nearest existing cards (reuses the store's A-MEM Chroma index) for the online pre-gate and consolidation |
 | `api_sync.py` | Paginated fetch / full sync / remote search via concept API |
 | `gam_search.py` | GAM `ResearchAgent` build + invalidate lifecycle |
-| `card_dedup.py` | Vector scoring + LLM dedup decision + card merge |
 | `agentic_runtime.py` | `AgenticRuntime` factory: injects LLM + generator + agentic classes |
 | `protocols.py` | DI protocols (`LLMServiceProtocol`, `AgenticMemorySystemProtocol`, …) |
 
@@ -983,42 +902,29 @@ through on failure or empty result.
 
 | File | What it does |
 |------|-------------|
-| `gigaevo/memory/ideas_tracker/ideas_tracker.py` | `IdeaTracker(PostRunHook)` — core pipeline orchestrator |
-| `gigaevo/memory/ideas_tracker/cli.py` | CLI entry point (`python -m gigaevo.memory.ideas_tracker.cli`) |
-| `config/memory/tracker/ideas.yaml` | Hydra config: IdeaTracker (writer side of `memory=`) |
+| `gigaevo/memory/ideas_tracker/ideas_tracker.py` | `IdeaTracker(PostRunHook)` — thin orchestration shell over the four write-path collaborators |
+| `config/memory/writer/tracker/librarian.yaml` | Hydra config: IdeaTracker (writer side of `memory=`) |
 
 ### Ideas Tracker Modules
 
 | File | What it does |
 |------|-------------|
-| `analyzers.py` | LLM / embedding+DBSCAN idea classification |
-| `idea_bank.py` | Active/inactive idea bank management |
-| `models.py` | Data structures: `ProgramRecord`, banks, incoming ideas |
-| `schemas.py` | Structured-output schemas for tracker LLM calls |
-| `llm.py` | Tracker-side LLM service wiring |
-| `redis_loader.py` | Load programs from `ProgramStorage` (Redis) |
-| `csv_loader.py` | Load archived program dumps from CSV |
-| `run_ideas_tracker_from_csv.py` | Offline tracker replay over a CSV dump |
-
-### Origin Analysis (`utils/origin_analysis/`)
-
-| File | What it does |
-|------|-------------|
-| `pipeline.py` | `analyse()` entry point: banks+programs JSON → `AnalysisResult` (lists of `IdeaStats`), CSV writer |
-| `origin_analysis/events.py` | Intro-event detection (child introduces idea absent from parents) |
-| `aggregation.py` | Per idea×quartile `IdeaStats` rows (gains, posteriors via `EfficacyScorer`) |
-| `loader.py` | Banks/programs JSON loading |
-| `siblings.py` | Sibling win-rate computation |
-| `statistics.py` | NaN-aware medians/quantiles/rates (pure python) |
-| `types.py` | Event/row type definitions |
+| `record_extractor.py` | `ProgramRecordExtractor` — eligible programs → `ProgramRecord` (+ dedup bookkeeping); `program_to_record`, `record_note` |
+| `write_stack.py` | `LibrarianWriteStack` — lazy, off-event-loop assembly of store/gate/neighbors/librarian/consolidation-agent plus the one-line task summary |
+| `card_stats.py` | `CardStatsUpdater` — gain-event attribution + authoritative restamp + harm sweep |
+| `consolidation_scheduler.py` | `ConsolidationScheduler` — cadence-gated background consolidation pass dispatched under the tracker's run lock |
+| `librarian.py` | `Librarian` — authors clean cards from a mutation diff, reconciles NEW/DUPLICATE/MERGE, routes verdicts through the `CardAdmissionGate`; also `author_program` |
+| `consolidation.py` | `consolidate` — batch pass that folds drifted near-duplicate cards into one via the same `NeighborSource` primitive; idempotent |
+| `dedup_policy.py` | `DedupPolicy` — frozen, Hydra-instantiable value object unifying the online + consolidation dedup thresholds |
+| `fitness.py` | `select_top_programs` / `valid_fitness` — exemplar slice + sentinel-fitness filtering |
+| `hf_cache.py` | `ensure_writable_hf_cache` — redirect HF cache env vars to a writable dir before the embedding model loads |
+| `models.py` | Data structures: `ProgramRecord`, `program_to_record` |
 
 ### Efficacy core (`gigaevo/memory/efficacy/`)
 
 | File | What it does |
 |------|-------------|
-| `scorer.py` | `EfficacyScorer`: counterfactual baseline, MAD noise band, Beta-Binomial posterior over intro-gain events |
-| `events.py` | `EfficacyEvent`: one typed idea-introduction outcome (gain vs best parent) |
-| `bucketing.py` | `GenerationBucketer`: generation → quartile bucketing for `IdeaStats` rows |
+| `scorer.py` | `robust_noise_band`, `beta_binomial_posterior`, `block_from_events`: MAD noise band + Beta-Binomial posterior derived at read time from a card's raw `gain_events` |
 | `stamping.py` | `CardStatsStamper`: single writer of card-side stats (`DecisionMetrics` vocabulary only) |
 
 ### Tests
@@ -1028,10 +934,10 @@ through on failure or empty result.
 | `tests/memory/test_provider.py` | Provider abstraction (null, selector, lazy init) |
 | `tests/memory/test_memory_context_stage.py` | MemoryContextStage + MemoryMutationContext |
 | `tests/memory/test_dag_memory_flow.py` | End-to-end DAG flow, composite context, auto-derivation |
-| `tests/memory/test_ideas_tracker_pipeline.py` | IdeaTracker pipeline: records conversion, PostRunHook contract, program filtering, engine integration, Hydra composability, E2E |
+| `tests/memory/test_ideas_tracker.py` | IdeaTracker pipeline: record extraction, PostRunHook contract, program filtering, gain restamp, engine integration |
+| `tests/memory/test_consolidation_trigger.py` | ConsolidationScheduler: cadence, non-blocking dispatch, run-lock serialization, shutdown drain |
 | `tests/memory/test_data_components.py` | Data structures: RecordBank, RecordCardExtended, IncomingIdeas |
-| `tests/memory/test_efficacy_scorer.py` | `EfficacyScorer` contract: cohort dedup, parent-local baseline, noise band, posterior math |
-| `tests/memory/test_typed_card_stats.py` | Typed `CardStatsBlock`/`EvolutionStatistics`, DecisionMetrics/AuditMetrics split, stamper overwrite semantics |
+| `tests/memory/test_typed_card_stats.py` | Typed `CardStatsBlock`/`DecisionMetrics` reads, gain-event posteriors, typed auction slate, no dict-plumbing source scan |
 | `tests/integration/test_memory_e2e.py` | Full-loop E2E with real EvolutionEngine + fakeredis |
 
 ---
@@ -1058,12 +964,12 @@ loop. Now both engines use the same DAG pipeline.
 without memory guidance.
 
 **Q: How many cards are selected per mutation?**
-Configurable via `max_cards` in the Hydra config (default: 3). The memory
+Configurable via `max_cards` in `config/memory/reader/provider/selector.yaml`. The memory
 agent searches the database and returns the most relevant cards.
 
 **Q: What's the difference between `memory=reader` and `memory=full`?**
 Both turn the reader on, so both use `SelectorMemoryProvider` over the same
-`config/memory/backend/local.yaml` on-disk `AmemGamMemory` bank. They differ on
+`config/memory/common/backend/local.yaml` on-disk `AmemGamMemory` bank. They differ on
 the writer: `reader` leaves the writer off (it only consumes a bank built by an
 earlier run), while `full` also turns the writer on so the same run injects AND
 extracts cards into ONE shared bank.
@@ -1072,59 +978,53 @@ extracts cards into ONE shared bank.
 The GAM pipeline sends the parent code + task description as a query, then
 runs the configured retrieval tools (vector search, page index) to
 find matching cards. The `allowed_tools` and `top_k_by_tool` settings in
-`config/memory/retriever/gam.yaml` control which tools run and how many
+`config/memory/reader/retriever/gam.yaml` control which tools run and how many
 results each returns.
 
 ### Ideas Tracker (Write Phase)
 
-**Q: What's the difference between `analyzer_type: default` and `analyzer_type: fast`?**
-`default` uses a sequential LLM-based analyzer that processes each program
-one at a time. It classifies each improvement against the full bank of existing
-ideas. Slower but more accurate for small runs.
-`fast` uses sentence embeddings + DBSCAN clustering to batch-process all
-programs at once, then uses the LLM to refine clusters into idea cards.
-Much faster for large runs (100+ programs). Set it on the tracker config
-(`config/memory/tracker/ideas.yaml`) or via `memory.tracker.analyzer_type=fast`.
+**Q: How are cards authored?**
+The **Librarian** authors one clean idea card per eligible mutation diff
+(parent→child), and the memory LLM decides whether each diff is a *new card* or
+a *merge* into the nearest existing card. Each top-fitness exemplar additionally
+gets a clean `ProgramCard`. Every verdict is routed through the single
+`CardAdmissionGate` (admit / merge / bump-provenance / evict).
 
 **Q: When does the IdeaTracker run?**
-Two ways: (1) **Automatically**, as a PostRunHook after evolution completes
-(the writer side of `memory=writer` or `memory=full`). The engine calls
-`on_run_complete(storage)` in its `run()` finally block. (2) **Manually**, via
-CLI (`python -m gigaevo.memory.ideas_tracker.cli`), typically to re-extract
-ideas from a run that's already in Redis.
+As a PostRunHook after evolution completes (the writer side of `memory=writer`
+or `memory=full`): the engine calls `on_run_complete(storage)` in its `run()`
+finally block. Under `pipeline=intra_extra_memory` the `LiveMemoryRefreshHook`
+also drives `run_increment` mid-run on a cadence so the bank fills as the run
+progresses.
 
 **Q: What happens if the IdeaTracker crashes during the PostRunHook?**
 Nothing bad. The engine wraps the hook call in try/except — hook errors are
 logged but never crash the engine. The evolution results are already saved.
-You can re-run the tracker via CLI afterward.
-
-**Q: Can I run the IdeaTracker on a run that's already finished?**
-Yes, that's what the CLI is for. Point it at the Redis DB/prefix of the
-completed run, and it extracts ideas just as the PostRunHook would have.
-You can also pass `--csv-path` to run on a CSV export from `redis2pd.py`.
 
 **Q: What's `best_programs_percent` and why is it 5%?**
-The memory write pipeline only extracts ideas from the top N% of programs by
-fitness. This filters out noise from poorly-performing mutations. 5% is the
-default — for a run with 200 programs, only the top 10 contribute ideas.
+It bounds how many top programs (by fitness) the librarian turns into program
+cards — idea cards still come from every eligible mutation diff. 5% is the
+default; for a run with 200 programs, the top 10 become program cards.
 
-**Q: How do I check what ideas were extracted?**
-Look at the logs directory (default: `gigaevo/memory/ideas_tracker/logs/`).
-The `active_ideas.json` file contains the final idea bank with all extracted
-cards. Each card has `description`, `keywords`, `programs`, and
-`evolution_statistics` fields.
+**Q: How do I check what cards were written?**
+Read `write_ledger.jsonl` under the card bank (`checkpoint_dir`): one row per
+verdict (`incoming_id`, `final_id`, `outcome`, `reason`). The richer event trace
+(`<output>/memory/memory_events.jsonl`) carries `admission.select`,
+`store.insert`/`store.merge`, and `injection_posterior.compute`. The cards
+themselves live in `checkpoint_dir/api_index.json`.
 
-**Q: Can I disable memory write but still extract ideas?**
-Yes. Use `--no-memory-write` in the CLI, or set
-`memory_write_enabled: false` in the Hydra config. The tracker will still
-analyze programs and log ideas — it just won't write them to the memory backend.
+**Q: Can I disable the write path?**
+Yes. Set `memory_write_enabled: false` in the Hydra config (`memory=none` /
+`memory=reader` leave it off). Authoring and writing are one path now — with it
+off, the tracker is a no-op.
 
 ### General
 
 **Q: Can I add a new memory backend?**
-Yes. Implement a backend factory, drop a new variant under the `memory/backend`
-group (`config/memory/backend/your_backend.yaml`), and select it with
-`memory/backend=your_backend` alongside any reader/writer preset
+Yes. Implement a backend builder (like `build_local_backend`), drop a new variant
+under the `memory/common/backend` group (`config/memory/common/backend/your_backend.yaml`),
+and select it with
+`memory/common/backend=your_backend` alongside any reader/writer preset
 (`memory=reader|writer|full`). The pipeline doesn't need any changes.
 
 **Q: Where are cards stored on disk?**

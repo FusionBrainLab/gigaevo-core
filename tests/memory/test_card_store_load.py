@@ -14,6 +14,7 @@ import pytest
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.shared_memory.card_store import CardStore
+from gigaevo.memory.shared_memory.models import MemoryCard
 
 
 def test_missing_index_file_is_clean_cold_start(tmp_path):
@@ -70,6 +71,23 @@ def test_reload_picks_up_writer_additions(tmp_path):
     assert set(store.cards) == {"mem-1", "mem-2"}
     assert store.entity_by_card_id == {"mem-2": "entity-2"}
     assert store.card_id_by_entity == {"entity-2": "mem-2"}
+
+
+def test_persist_reload_preserves_absorbed_ids(tmp_path):
+    # A merged survivor's absorbed_ids re-alias absorbed cards' frozen gain
+    # attribution at the next restamp. persist() serializes them, but reload runs
+    # through normalize_memory_card — they must survive the roundtrip, or a resume
+    # (or reader reload) before the next restamp re-orphans the absorbed events.
+    index = tmp_path / "index.json"
+    store = CardStore(index_file=index)
+    store.put("mem-S", MemoryCard(id="mem-S", absorbed_ids=["mem-P"]))
+    store.persist()
+
+    reloaded = CardStore(index_file=index)
+
+    card = reloaded.get("mem-S")
+    assert isinstance(card, MemoryCard)
+    assert card.absorbed_ids == ["mem-P"]
 
 
 def test_reload_on_corrupt_index_keeps_last_good_snapshot(tmp_path):

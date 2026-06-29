@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from gigaevo.memory.context import ContextualGain, DecisionContext
 from gigaevo.memory.core import (
     EfficacyCardRenderer,
     LLMCardSelector,
@@ -70,11 +71,31 @@ class _StubMemory:
         return self._cards.get(card_id)
 
 
+def _events_for_posterior(posterior: tuple[float, float]) -> list[ContextualGain]:
+    # block_from_events: a = 1 + wins, b = 1 + losses with a uniform-sign set
+    # (MAD band 0 -> threshold 0), so (a, b) is (1 + #wins) wins and (1 + #losses)
+    # losses, all unit magnitude.
+    wins = int(posterior[0]) - 1
+    losses = int(posterior[1]) - 1
+    gains = [0.01] * wins + [-0.01] * losses
+    return [
+        ContextualGain(
+            context=DecisionContext(parent_metrics={"min_area": 0.5}), gain=g
+        )
+        for g in gains
+    ]
+
+
 def _card(description: str, posterior: tuple[float, float] | None = None) -> MemoryCard:
-    stats: dict = {}
-    if posterior is not None:
-        stats = {"ALL": {"posterior_a": posterior[0], "posterior_b": posterior[1]}}
-    return MemoryCard(id="idea-x", description=description, evolution_statistics=stats)
+    gain_events = _events_for_posterior(posterior) if posterior is not None else None
+    return MemoryCard(id="idea-x", description=description, gain_events=gain_events)
+
+
+# A _PROVEN card resolves to (200, 1): 199 unit wins -> confident, +0.0100 median,
+# so the renderer appends the endorsement line below the description.
+_PROVEN_EFFICACY = (
+    "\nefficacy: introduced in 199 children; median improvement +0.0100 (confident)"
+)
 
 
 def _make_program(code: str = "def solve(): return 1") -> Program:
@@ -133,7 +154,7 @@ async def test_select_resolves_description_from_typed_card():
         max_cards=1,
     )
 
-    assert selection.cards == ["Use a heap for sorted retrieval"]
+    assert selection.cards == ["Use a heap for sorted retrieval" + _PROVEN_EFFICACY]
     assert selection.card_ids == ["idea-1"]
 
 
@@ -260,7 +281,7 @@ async def test_select_skips_missing_cards_silently():
 
     # 'missing' is not fetchable -> excluded from the auction (not a phantom id).
     assert selection.card_ids == ["exists"]
-    assert selection.cards == ["real card"]
+    assert selection.cards == ["real card" + _PROVEN_EFFICACY]
     assert [bid.card_id for bid in selection.slate] == ["exists"]
 
 
@@ -312,7 +333,7 @@ async def test_auction_keeps_proven_drops_suspect():
     )
 
     assert selection.card_ids == ["good"]
-    assert selection.cards == ["proven move"]
+    assert selection.cards == ["proven move" + _PROVEN_EFFICACY]
     # The slate records BOTH candidates and the suspect's rejection (auditable).
     assert [bid.card_id for bid in selection.slate] == ["good", "bad"]
     assert [bid.selected for bid in selection.slate] == [True, False]

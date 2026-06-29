@@ -29,7 +29,13 @@ class ProgramInsight(BaseModel):
     fields when present.
     """
 
-    type: str = Field(description="Insight category")
+    type: str = Field(
+        description=(
+            "1-2 word snake_case label for the *specific* code issue "
+            "(e.g. early_termination, threshold_tuning, policy_bias). "
+            "Generic labels such as optimization or refactor are rejected."
+        )
+    )
     anchor_quote: str = Field(
         default="",
         description=(
@@ -47,7 +53,10 @@ class ProgramInsight(BaseModel):
     )
     mechanism: str = Field(
         default="",
-        description="One-clause explanation of why the anchor moves the primary metric.",
+        description=(
+            "One-clause explanation of why the anchor moves the primary metric. "
+            "Must be concrete — vague claims like 'improves performance' are rejected."
+        ),
     )
     mechanism_source: Literal[
         "",
@@ -62,6 +71,8 @@ class ProgramInsight(BaseModel):
         description=(
             "Which input the LEVER IDEA (mechanism) came from — distinct from "
             "evidence_source, which records where the anchor_quote came from. "
+            "A suggestion that transposes a card mechanism onto a code anchor "
+            "therefore has evidence_source=program but mechanism_source=memory_cards. "
             "Empty when the mechanism is the analyst's own synthesis."
         ),
     )
@@ -76,8 +87,9 @@ class ProgramInsight(BaseModel):
     substitute: str = Field(
         default="",
         description=(
-            "Concrete target value, replacement pattern, or specific guard. "
-            "NOT a direction."
+            "A concrete target value, replacement pattern, or specific guard — "
+            "never a bare direction (a direction such as 'reduce X' is rejected; "
+            "give an explicit replacement value or pattern)."
         ),
     )
     evidence_refs: list[str] = Field(
@@ -105,10 +117,14 @@ class ProgramInsight(BaseModel):
         ),
     )
     tag: Literal["beneficial", "harmful", "fragile", "rigid", "neutral"] = Field(
-        description="Tag for the insight"
+        description=(
+            "How to act on the insight: beneficial (preserve/extend) | "
+            "harmful (remove/replace) | fragile (robustify) | "
+            "rigid (parameterize/tune) | neutral (low priority)."
+        )
     )
     severity: Literal["high", "medium", "low"] = Field(
-        description="Severity of the insight"
+        description="Severity / priority of the insight: high | medium | low."
     )
 
 

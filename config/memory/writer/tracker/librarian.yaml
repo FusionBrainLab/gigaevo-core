@@ -1,0 +1,31 @@
+# @package memory.tracker
+# Write-side tracker (engine post-run hook + live-refresh). The librarian
+# authors clean cards from each mutation diff and routes every verdict through
+# the single admission gate. MemorySystem injects backend/llm/evictor/reputation
+# (the shared instances) when it completes this partial; only the scalar knobs
+# live here.
+_target_: gigaevo.memory.ideas_tracker.ideas_tracker.IdeaTracker
+_partial_: true
+memory_write_enabled: true
+memory_write_best_programs_percent: 5.0
+# Per-call wall-clock bound on each librarian LLM call (reconcile/author). A
+# stalled call past this is skipped (record retried next sweep) so one hung
+# memory-LLM request cannot freeze the whole write increment.
+ingest_call_timeout_s: 300.0
+# After this many cards are written across sweeps, schedule one background
+# near-duplicate consolidation pass over the whole bank (folds drifted same-lever
+# cards the greedy online pre-gate let in separately). 0 disables it.
+consolidation_every_n: 64
+# Near-duplicate thresholds for the online pre-gate (per mutation diff) and the
+# batch consolidation pass (across the whole bank).
+dedup_policy:
+  _target_: gigaevo.memory.ideas_tracker.dedup_policy.DedupPolicy
+  online_eps: 0.05
+  online_top_k: 5
+  max_cards_per_diff: 3
+  consolidation_eps: 0.05
+  consolidation_k: 5
+fitness_higher_is_better: ${higher_is_better}
+checkpoint_dir: ${checkpoint_dir}
+task_description: ${ref:problem_context::task_description}
+prompts_dir: ${prompts.dir}

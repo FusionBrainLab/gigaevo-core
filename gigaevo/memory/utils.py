@@ -1,7 +1,8 @@
 """Shared utility functions for the memory system.
 
-These helpers are used across csv_loader, idea_bank, and ideas_tracker.
-They live here so each module does not duplicate the definitions.
+Numeric coercion and cell-parsing helpers shared across the memory
+subsystem (e.g. card conversion). They live here so each module does not
+duplicate the definitions.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ def parse_cell(value: Any) -> Any:
     """JSON-decode strings that start with ``{`` or ``[``; return other values unchanged.
 
     Used when reading CSVs where nested structures were JSON-serialised into a
-    single cell (e.g. the ``parent_ids`` column produced by ``tools/redis2pd.py``).
+    single cell (e.g. a ``parent_ids`` column).
 
     Args:
         value: Any value.  Non-strings are returned as-is.

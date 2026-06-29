@@ -1,8 +1,8 @@
 """Guard: the memory subsystem takes all configuration through Hydra.
 
 ``os.getenv`` / ``os.environ`` / ``dotenv`` must not appear under
-``gigaevo/memory/`` outside the explicit allowlist (CLI entrypoint defaults
-and HF/Langfuse runtime fallbacks)."""
+``gigaevo/memory/`` outside the explicit allowlist (HF/Langfuse runtime
+fallbacks)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,8 @@ from pathlib import Path
 GIGAEVO_ROOT = Path(__file__).parent.parent.parent / "gigaevo"
 
 ENV_ALLOWLIST = {
-    "memory/ideas_tracker/cli.py",
-    "memory/ideas_tracker/ideas_tracker.py",
+    "memory/ideas_tracker/hf_cache.py",
     "memory/shared_memory/agentic_runtime.py",
-    "memory/shared_memory/amem_gam_retriever.py",
 }
 
 

@@ -16,7 +16,7 @@ interrupted at any point.
 from __future__ import annotations
 
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -33,7 +33,6 @@ from gigaevo.evolution.mutation.context import (
     MetricsMutationContext,
 )
 from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
-from gigaevo.memory.backend_factory import LocalMemoryBackendFactory
 from gigaevo.memory.core import MemorySelection
 from gigaevo.memory.provider import NullMemoryProvider, SelectorMemoryProvider
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
@@ -105,6 +104,11 @@ def _mutation_ctx_inputs(**overrides) -> dict:
     return defaults
 
 
+def _fake_backend(**kwargs):
+    """Stand-in for the `memory/common/backend` partial: a callable returning a bank."""
+    return MagicMock()
+
+
 def _make_selector_provider(
     cards: list[str], card_ids: list[str], max_cards: int = 3
 ) -> SelectorMemoryProvider:
@@ -113,9 +117,7 @@ def _make_selector_provider(
         cards=cards,
         card_ids=card_ids,
     )
-    provider = SelectorMemoryProvider(
-        backend=LocalMemoryBackendFactory(), max_cards=max_cards
-    )
+    provider = SelectorMemoryProvider(backend=_fake_backend, max_cards=max_cards)
     provider._pipeline = mock_pipeline
     return provider
 
@@ -671,10 +673,8 @@ class TestHydraConfigContracts:
         assert isinstance(provider, NullMemoryProvider)
 
     def test_selector_provider_target_with_max_cards(self) -> None:
-        """SelectorMemoryProvider accepts max_cards kwarg (from config/memory/local.yaml)."""
-        provider = SelectorMemoryProvider(
-            backend=LocalMemoryBackendFactory(), max_cards=5
-        )
+        """SelectorMemoryProvider accepts max_cards kwarg (from config/memory/full.yaml)."""
+        provider = SelectorMemoryProvider(backend=_fake_backend, max_cards=5)
         assert provider._max_cards == 5
 
     def test_selector_provider_target_with_all_params(self) -> None:
@@ -682,24 +682,22 @@ class TestHydraConfigContracts:
         provider = SelectorMemoryProvider(
             max_cards=3,
             checkpoint_dir="/tmp/test",
-            backend=LocalMemoryBackendFactory(),
+            backend=_fake_backend,
         )
         assert provider._max_cards == 3
         assert provider._checkpoint_dir == "/tmp/test"
-        assert isinstance(provider._backend_factory, LocalMemoryBackendFactory)
+        assert provider._backend is _fake_backend
 
     def test_selector_provider_passes_checkpoint_dir_to_backend(self) -> None:
-        """checkpoint_dir flows to the backend factory's build()."""
-        with patch.object(
-            LocalMemoryBackendFactory, "build", return_value=MagicMock()
-        ) as mock_build:
-            provider = SelectorMemoryProvider(
-                backend=LocalMemoryBackendFactory(),
-                max_cards=3,
-                checkpoint_dir="/data/memory",
-            )
-            # Trigger lazy creation
-            provider._get_pipeline()
+        """checkpoint_dir flows to the backend builder call."""
+        backend = MagicMock(return_value=MagicMock())
+        provider = SelectorMemoryProvider(
+            backend=backend,
+            max_cards=3,
+            checkpoint_dir="/data/memory",
+        )
+        # Trigger lazy creation
+        provider._get_pipeline()
 
-            mock_build.assert_called_once()
-            assert mock_build.call_args.kwargs["checkpoint_dir"] == "/data/memory"
+        backend.assert_called_once()
+        assert backend.call_args.kwargs["checkpoint_dir"] == "/data/memory"
