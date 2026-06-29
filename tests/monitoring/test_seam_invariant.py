@@ -56,8 +56,14 @@ CANONICAL_EVENT_NAMES = {
     "CELL_PICK",
 }
 
+# Shared emitter helpers that ARE a seam — callable from anywhere by design.
+# Unlike the adversarial emit_*() helpers (one call site each, whitelisted by
+# file), emit_memory_event() is the memory subsystem's single canonical-event
+# emitter (memory/core/events.py); every memory component records through it.
+SANCTIONED_SHARED_EMITTERS = frozenset({"emit_memory_event"})
+
 EMIT_CALL_RE = re.compile(r"\bemit\s*\(")
-EMIT_HELPER_RE = re.compile(r"\bemit_[a-z_]+\s*\(")
+EMIT_HELPER_RE = re.compile(r"\b(emit_[a-z_]+)\s*\(")
 FORGED_EVENT_RE = re.compile(r"\[([A-Z_]+)\]\s*\{")
 
 
@@ -88,17 +94,20 @@ def test_no_unapproved_emit_calls() -> None:
             line = text[: m.start()].count("\n") + 1
             violations.append(f"{rel}:{line}: bare `emit(` call outside seams")
         for m in EMIT_HELPER_RE.finditer(text):
+            name = m.group(1)
+            # Shared emitters are the seam — calling them is the sanctioned path.
+            if name in SANCTIONED_SHARED_EMITTERS:
+                continue
             # Skip imports / attribute access
             start = max(0, m.start() - 1)
             if start >= 0 and text[start] == ".":
                 continue
-            snippet = text[m.start() : m.start() + 40]
             # Imports are fine — they are where helpers travel to seams.
             # The `emit_*(` pattern only flags real call sites; import lines
             # look like `from X import emit_foo` (no `(`), so they won't match
             # EMIT_HELPER_RE at all.
             line = text[: m.start()].count("\n") + 1
-            violations.append(f"{rel}:{line}: `{snippet.split('(')[0]}(` outside seams")
+            violations.append(f"{rel}:{line}: `{name}(` outside seams")
     assert not violations, (
         "Canonical-event emission occurred outside whitelisted seams:\n"
         + "\n".join(violations)
