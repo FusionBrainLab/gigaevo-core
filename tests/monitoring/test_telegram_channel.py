@@ -274,7 +274,7 @@ class TestConsecutiveFailures:
 def _make_snapshot(
     label: str = "A",
     db: int = 1,
-    generation: int | None = 5,
+    iteration: int | None = 5,
     fitness: float | None = 0.762,
     invalid_rate_inputs: tuple[int, int] | None = (100, 80),
     val_mean: float | None = 639.0,
@@ -287,7 +287,7 @@ def _make_snapshot(
     total, valid = invalid_rate_inputs if invalid_rate_inputs else (None, None)
     return RunSnapshot(
         run_spec=RunSpec(prefix="chains/test/static", db=db, label=label),
-        generation=generation,
+        iteration=iteration,
         metrics={"fitness": fitness},
         total_programs=total,
         valid_programs=valid,
@@ -353,8 +353,8 @@ class TestSendStatus:
         update = StatusUpdate(
             experiment_name="hover/test-exp",
             snapshots=[
-                _make_snapshot(label="A", generation=5, fitness=0.762),
-                _make_snapshot(label="B", db=2, generation=8, fitness=0.831),
+                _make_snapshot(label="A", iteration=5, fitness=0.762),
+                _make_snapshot(label="B", db=2, iteration=8, fitness=0.831),
             ],
         )
 

@@ -216,7 +216,6 @@ _BUILTIN_EMITTED = frozenset(
     {
         "stage_timeout",
         "dag_timeout",
-        "max_elites_per_generation",
         "num_parents",
         "mutation_mode",
     }
@@ -264,7 +263,6 @@ def _build_run_cmd(
             f"stage_timeout={x.get('stage_timeout', 3000)}",
             f"dag_timeout={x.get('dag_timeout', 7200)}",
             f"max_mutants={manifest.contract.max_generations}",
-            f"max_elites_per_generation={x.get('max_elites_per_generation', 8)}",
             f"num_parents={x.get('num_parents', 1)}",
             f"model_name={run.model_name}",
             f'llm_base_url="{run.mutation_url}"'

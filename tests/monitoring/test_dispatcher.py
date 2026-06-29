@@ -50,7 +50,7 @@ def _make_update(
     snapshots = [
         RunSnapshot(
             run_spec=RunSpec(prefix="prefix", db=i, label=f"R{i}"),
-            generation=10 + i,
+            iteration=10 + i,
             metrics={"fitness": 0.7 + i * 0.01},
         )
         for i in range(n_snapshots)
@@ -279,7 +279,7 @@ class TestDispatchFanOut:
         u2 = ch2.send_status_calls[0]
         assert u1.experiment_name == u2.experiment_name
         assert len(u1.snapshots) == len(u2.snapshots) == 3
-        assert u1.snapshots[0].generation == u2.snapshots[0].generation
+        assert u1.snapshots[0].iteration == u2.snapshots[0].iteration
         assert u1.snapshots[0].metrics == u2.snapshots[0].metrics
         assert u1.alerts[0].message == u2.alerts[0].message
 
@@ -436,7 +436,7 @@ class TestNOT06Integration:
         snapshots = [
             RunSnapshot(
                 run_spec=RunSpec(prefix="chains/hover/static", db=i, label=label),
-                generation=gen,
+                iteration=gen,
                 metrics={"fitness": fitness},
                 pid=pid,
                 pid_alive=True,

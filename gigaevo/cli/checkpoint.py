@@ -15,7 +15,7 @@ def _snapshot_to_row(snap, metric_specs: dict[str, dict] | None = None) -> dict:
     row: dict = {
         "Label": snap.run_spec.label,
         "DB": snap.run_spec.db,
-        "Gen": snap.generation,
+        "Iter": snap.iteration,
     }
     specs = metric_specs or {}
     if snap.metrics:

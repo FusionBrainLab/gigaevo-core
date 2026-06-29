@@ -194,7 +194,6 @@ def _build_engine(
 
     config = SteadyStateEngineConfig(
         loop_interval=0.001,
-        max_elites_per_generation=max(1, max_in_flight),
         max_in_flight=max_in_flight,
         parent_selector=RandomParentSelector(num_parents=1),
         stopper=MaxMutantsStopper(n_mutants),

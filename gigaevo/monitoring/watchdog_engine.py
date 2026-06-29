@@ -269,7 +269,7 @@ class WatchdogEngine:
                             details={
                                 "fitness": fitness,
                                 "stagnation_cycles": n,
-                                "generation": snap.generation,
+                                "iteration": snap.iteration,
                             },
                         )
                     )
@@ -279,29 +279,29 @@ class WatchdogEngine:
         """Write Redis checkpoint markers at milestone percentages."""
         if self._heartbeat_redis is None or self.max_generations is None:
             return
-        min_gen = min(
-            (s.generation for s in snapshots if s.generation is not None),
+        min_iter = min(
+            (s.iteration for s in snapshots if s.iteration is not None),
             default=0,
         )
         milestones = [
             int(self.max_generations * p) for p in self.config.checkpoint_milestones
         ]
         for milestone in milestones:
-            if min_gen >= milestone > 0:
+            if min_iter >= milestone > 0:
                 key = f"experiments:{self.experiment_name}:checkpoint:{milestone}"
                 try:
                     if self._heartbeat_redis.exists(key):
                         continue
                     metrics = {
                         s.run_spec.label: {
-                            "gen": s.generation,
+                            "iter": s.iteration,
                             "fitness": s.metrics.get("fitness"),
                         }
                         for s in snapshots
                     }
                     data = json.dumps(
                         {
-                            "gen": milestone,
+                            "iter": milestone,
                             "timestamp": datetime.now(UTC).isoformat(),
                             "metrics": metrics,
                         }
@@ -323,7 +323,7 @@ class WatchdogEngine:
                     "run_states": [
                         {
                             "label": s.run_spec.label,
-                            "gen": s.generation,
+                            "iter": s.iteration,
                             "fitness": s.metrics.get("fitness"),
                         }
                         for s in snapshots

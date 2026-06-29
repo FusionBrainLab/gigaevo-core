@@ -198,7 +198,7 @@ def test_collect_snapshot_complete() -> None:
     r = _make_redis()
     spec = _make_spec()
 
-    # Populate progress (RunSnapshot.generation now reads programs_processed)
+    # Populate progress (RunSnapshot.iteration now reads programs_processed)
     write_engine_snapshot_sync(r, PREFIX, total_mutants=5, programs_processed=5)
 
     # Populate frontier fitness
@@ -233,7 +233,7 @@ def test_collect_snapshot_complete() -> None:
     snap = collect_snapshot(r, spec, metric_names=["fitness"])
 
     assert snap.run_spec == spec
-    assert snap.generation == 5
+    assert snap.iteration == 5
     assert snap.metrics == {"fitness": 0.76}
     assert snap.total_programs == 100
     assert snap.valid_programs == 85

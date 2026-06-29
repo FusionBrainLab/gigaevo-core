@@ -14,10 +14,12 @@ from gigaevo.monitoring.watchdog_config import WatchdogConfig
 from gigaevo.monitoring.watchdog_engine import WatchdogEngine
 
 
-def _make_snapshot(label: str = "A", gen: int = 5, fitness: float = 0.5) -> RunSnapshot:
+def _make_snapshot(
+    label: str = "A", iteration: int = 5, fitness: float = 0.5
+) -> RunSnapshot:
     return RunSnapshot(
         run_spec=RunSpec(prefix="test", db=1, label=label),
-        generation=gen,
+        iteration=iteration,
         metrics={"fitness": fitness},
         total_programs=100,
         valid_programs=90,
@@ -321,7 +323,7 @@ class TestStagnationDetection:
     def test_stagnation_detected_after_n_cycles(self):
         """If frontier fitness unchanged for stagnation_gens cycles, alert fires."""
         engine = _make_engine(config=WatchdogConfig(stagnation_gens=3))
-        snap = _make_snapshot(label="A", gen=10, fitness=0.5)
+        snap = _make_snapshot(label="A", iteration=10, fitness=0.5)
 
         # First 2 cycles: no stagnation (need 3)
         alerts = engine._check_stagnation([snap])
@@ -339,9 +341,9 @@ class TestStagnationDetection:
         """If frontier fitness changes within window, no stagnation alert."""
         engine = _make_engine(config=WatchdogConfig(stagnation_gens=3))
 
-        snap1 = _make_snapshot(label="A", gen=10, fitness=0.5)
-        snap2 = _make_snapshot(label="A", gen=11, fitness=0.6)
-        snap3 = _make_snapshot(label="A", gen=12, fitness=0.6)
+        snap1 = _make_snapshot(label="A", iteration=10, fitness=0.5)
+        snap2 = _make_snapshot(label="A", iteration=11, fitness=0.6)
+        snap3 = _make_snapshot(label="A", iteration=12, fitness=0.6)
 
         engine._check_stagnation([snap1])
         engine._check_stagnation([snap2])
@@ -393,7 +395,7 @@ class TestRedisCheckpoint:
     """Redis checkpoint and completion marker writing."""
 
     def test_write_redis_checkpoint_at_milestone(self):
-        """Writes checkpoint when min generation reaches milestone."""
+        """Writes checkpoint when min iteration reaches milestone."""
         import json
 
         server = fakeredis.FakeServer()
@@ -408,14 +410,14 @@ class TestRedisCheckpoint:
             heartbeat_redis=r,
         )
 
-        snap_a = _make_snapshot(label="A", gen=10, fitness=0.5)
-        snap_b = _make_snapshot(label="B", gen=12, fitness=0.6)
+        snap_a = _make_snapshot(label="A", iteration=10, fitness=0.5)
+        snap_b = _make_snapshot(label="B", iteration=12, fitness=0.6)
         engine._write_redis_checkpoint([snap_a, snap_b], cycle=1)
 
         key = "experiments:hover/test:checkpoint:5"
         assert r.exists(key)
         data = json.loads(r.get(key))
-        assert data["gen"] == 5
+        assert data["iter"] == 5
         assert "timestamp" in data
         assert "A" in data["metrics"]
 
@@ -423,7 +425,7 @@ class TestRedisCheckpoint:
         """No error when heartbeat_redis is None."""
         engine = _make_engine(max_generations=50)
         engine._heartbeat_redis = None
-        snap = _make_snapshot(gen=10)
+        snap = _make_snapshot(iteration=10)
         engine._write_redis_checkpoint([snap], cycle=1)
 
     def test_write_redis_checkpoint_skips_when_no_max_gen(self):
@@ -437,7 +439,7 @@ class TestRedisCheckpoint:
             max_generations=None,
             heartbeat_redis=r,
         )
-        snap = _make_snapshot(gen=10)
+        snap = _make_snapshot(iteration=10)
         engine._write_redis_checkpoint([snap], cycle=1)
         assert len(list(r.scan_iter("experiments:*:checkpoint:*"))) == 0
 
@@ -449,7 +451,7 @@ class TestRedisCheckpoint:
         r = fakeredis.FakeRedis(server=server, db=0, decode_responses=True)
 
         key = "experiments:test/exp:checkpoint:5"
-        r.set(key, '{"gen": 5, "original": true}')
+        r.set(key, '{"iter": 5, "original": true}')
 
         engine = WatchdogEngine(
             experiment_name="test/exp",
@@ -459,7 +461,7 @@ class TestRedisCheckpoint:
             max_generations=50,
             heartbeat_redis=r,
         )
-        snap = _make_snapshot(gen=10)
+        snap = _make_snapshot(iteration=10)
         engine._write_redis_checkpoint([snap], cycle=2)
 
         data = json.loads(r.get(key))
@@ -480,8 +482,8 @@ class TestRedisCheckpoint:
         )
 
         snaps = [
-            _make_snapshot(label="A", gen=50, fitness=0.8),
-            _make_snapshot(label="B", gen=50, fitness=0.75),
+            _make_snapshot(label="A", iteration=50, fitness=0.8),
+            _make_snapshot(label="B", iteration=50, fitness=0.75),
         ]
         engine._write_completion(snaps)
 
@@ -491,7 +493,7 @@ class TestRedisCheckpoint:
         assert "timestamp" in data
         assert len(data["run_states"]) == 2
         assert data["run_states"][0]["label"] == "A"
-        assert data["run_states"][0]["gen"] == 50
+        assert data["run_states"][0]["iter"] == 50
 
     def test_write_completion_skips_when_no_redis(self):
         """No error when heartbeat_redis is None."""

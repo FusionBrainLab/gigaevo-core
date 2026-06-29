@@ -24,7 +24,7 @@ from gigaevo.monitoring.run_spec import RunSpec
 def _make_snapshot(
     label: str = "A",
     db: int = 1,
-    generation: int | None = 5,
+    iteration: int | None = 5,
     fitness: float | None = 0.762,
     invalid_rate_inputs: tuple[int, int] | None = (100, 80),
     val_mean: float | None = 639.0,
@@ -37,7 +37,7 @@ def _make_snapshot(
     total, valid = invalid_rate_inputs if invalid_rate_inputs else (None, None)
     return RunSnapshot(
         run_spec=RunSpec(prefix="chains/test/static", db=db, label=label),
-        generation=generation,
+        iteration=iteration,
         metrics={"fitness": fitness},
         total_programs=total,
         valid_programs=valid,
@@ -310,7 +310,7 @@ class TestFormatStatusTableMarkdown:
         for col in [
             "Run",
             "DB",
-            "Gen",
+            "Iter",
             "Fitness",
             "Invalid%",
             "Val dur(s)",
@@ -350,11 +350,11 @@ class TestFormatStatusTableMarkdown:
         assert cells[7] == "-"
         assert cells[8] == "-"
 
-    def test_missing_generation(self) -> None:
-        md = format_status_table_markdown([_make_snapshot(generation=None)])
+    def test_missing_iteration(self) -> None:
+        md = format_status_table_markdown([_make_snapshot(iteration=None)])
         data_row = md.strip().split("\n")[2]
         cells = [c.strip() for c in data_row.split("|") if c.strip()]
-        assert cells[2] == "-"  # Gen column
+        assert cells[2] == "-"  # Iter column
 
     def test_missing_fitness(self) -> None:
         md = format_status_table_markdown([_make_snapshot(fitness=None)])
@@ -386,7 +386,7 @@ class TestFormatStatusTableTelegram:
 
     def test_contains_same_columns(self) -> None:
         tg = format_status_table_telegram([_make_snapshot()])
-        for col in ["Run", "DB", "Gen", "Fitness", "Keys", "PID", "Status"]:
+        for col in ["Run", "DB", "Iter", "Fitness", "Keys", "PID", "Status"]:
             assert col in tg
 
     def test_same_data_values(self) -> None:
@@ -449,7 +449,7 @@ class TestFormatAlertMessage:
         assert "stall" in msg
         assert "Run X stalled at gen 10" in msg
 
-    def test_stall_includes_generation(self) -> None:
+    def test_stall_includes_iteration(self) -> None:
         msg = format_alert_message(
             _make_alert(
                 alert_type=AlertType.STALL,
@@ -477,9 +477,9 @@ class TestFormatAlertMessage:
 class TestFormatterConsistency:
     def test_both_formatters_same_data(self) -> None:
         snaps = [
-            _make_snapshot(label="A", db=1, generation=5, fitness=0.762),
-            _make_snapshot(label="B", db=2, generation=10, fitness=0.881),
-            _make_snapshot(label="C", db=3, generation=15, fitness=0.550),
+            _make_snapshot(label="A", db=1, iteration=5, fitness=0.762),
+            _make_snapshot(label="B", db=2, iteration=10, fitness=0.881),
+            _make_snapshot(label="C", db=3, iteration=15, fitness=0.550),
         ]
 
         md = format_status_table_markdown(snaps)

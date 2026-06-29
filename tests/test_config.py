@@ -198,9 +198,6 @@ def test_evolution_constants_default_values():
     one-workday-at-parallelism-5 sweep.
     """
     cfg = _compose()
-    assert cfg.max_elites_per_generation == 5, (
-        "max_elites_per_generation changed from 5 — update CONTEXT.md for active experiments"
-    )
     assert cfg.num_parents == 2, (
         "num_parents changed from 2 — two-parent crossover mutation is the canonical "
         "operator. If you intentionally change it, update this assertion and "

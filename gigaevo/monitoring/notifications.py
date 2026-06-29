@@ -97,14 +97,14 @@ class NotificationChannel(ABC):
 def format_status_table_markdown(snapshots: list[RunSnapshot]) -> str:
     """Render snapshots as a GitHub-flavored markdown table.
 
-    Columns match tools/status.py output: Run, DB, Gen, Fitness,
+    Columns match the `gigaevo status` output: Run, DB, Iter, Fitness,
     Invalid%, Val dur(s), Keys, PID, Status.
     """
     if not snapshots:
         return "_No runs to display._"
 
     header = (
-        "| Run | DB | Gen | Fitness | Invalid% | Val dur(s) | Keys | PID | Status |"
+        "| Run | DB | Iter | Fitness | Invalid% | Val dur(s) | Keys | PID | Status |"
     )
     sep = "|-----|-----|-----|---------|----------|------------|------|-----|--------|"
     rows = [header, sep]
@@ -112,7 +112,7 @@ def format_status_table_markdown(snapshots: list[RunSnapshot]) -> str:
     for snap in snapshots:
         run = snap.run_spec.label
         db = str(snap.run_spec.db)
-        gen = str(snap.generation) if snap.generation is not None else "-"
+        iteration = str(snap.iteration) if snap.iteration is not None else "-"
         fitness = _format_fitness(snap.metrics.get("fitness"))
         invalid = _format_invalid_rate(snap.invalid_rate)
         val_dur = _format_validator_duration(
@@ -122,7 +122,7 @@ def format_status_table_markdown(snapshots: list[RunSnapshot]) -> str:
         pid = str(snap.pid) if snap.pid is not None else "-"
         status = _format_pid_status(snap.pid, snap.pid_alive)
         rows.append(
-            f"| {run} | {db} | {gen} | {fitness} | {invalid} "
+            f"| {run} | {db} | {iteration} | {fitness} | {invalid} "
             f"| {val_dur} | {keys} | {pid} | {status} |"
         )
 
@@ -138,14 +138,24 @@ def format_status_table_telegram(snapshots: list[RunSnapshot]) -> str:
     if not snapshots:
         return "<pre>No runs to display.</pre>"
 
-    headers = ["Run", "DB", "Gen", "Fitness", "Inv%", "Val(s)", "Keys", "PID", "Status"]
+    headers = [
+        "Run",
+        "DB",
+        "Iter",
+        "Fitness",
+        "Inv%",
+        "Val(s)",
+        "Keys",
+        "PID",
+        "Status",
+    ]
     table_rows: list[list[str]] = []
     for snap in snapshots:
         table_rows.append(
             [
                 snap.run_spec.label,
                 str(snap.run_spec.db),
-                str(snap.generation) if snap.generation is not None else "-",
+                str(snap.iteration) if snap.iteration is not None else "-",
                 _format_fitness(snap.metrics.get("fitness")),
                 _format_invalid_rate(snap.invalid_rate),
                 _format_validator_duration(snap.validator_mean_s, snap.validator_max_s),

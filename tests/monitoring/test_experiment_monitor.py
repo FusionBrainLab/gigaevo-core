@@ -19,25 +19,25 @@ def _populate_run(
     server: fakeredis.FakeServer,
     db: int,
     prefix: str,
-    generation: int,
+    iteration: int,
     fitness: float,
     total: int,
     valid: int,
 ) -> None:
     """Populate a fakeredis DB with standard run data."""
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    # RunSnapshot.generation is sourced from EngineSnapshot.programs_processed;
-    # mirror the ``generation`` arg into both counters so consumers reading
+    # RunSnapshot.iteration is sourced from EngineSnapshot.programs_processed;
+    # mirror the ``iteration`` arg into both counters so consumers reading
     # either field see the same value.
     write_engine_snapshot_sync(
         r,
         prefix,
-        total_mutants=generation,
-        programs_processed=generation,
+        total_mutants=iteration,
+        programs_processed=iteration,
     )
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
-        _metric_entry(generation, fitness),
+        _metric_entry(iteration, fitness),
     )
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:programs_total_count",
@@ -59,12 +59,12 @@ def _populate_run(
 def test_collect_multiple_runs() -> None:
     server = fakeredis.FakeServer()
     _populate_run(
-        server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85
+        server, 4, "prefix_a", iteration=10, fitness=0.76, total=100, valid=85
     )
     _populate_run(
-        server, 5, "prefix_b", generation=20, fitness=0.82, total=200, valid=190
+        server, 5, "prefix_b", iteration=20, fitness=0.82, total=200, valid=190
     )
-    _populate_run(server, 6, "prefix_c", generation=5, fitness=0.50, total=50, valid=40)
+    _populate_run(server, 6, "prefix_c", iteration=5, fitness=0.50, total=50, valid=40)
 
     monitor = ExperimentMonitor(
         redis_factory=lambda db: fakeredis.FakeRedis(
@@ -81,15 +81,15 @@ def test_collect_multiple_runs() -> None:
     snapshots = monitor.collect(runs)
     assert len(snapshots) == 3
 
-    assert snapshots[0].generation == 10
+    assert snapshots[0].iteration == 10
     assert snapshots[0].metrics["fitness"] == 0.76
     assert snapshots[0].total_programs == 100
 
-    assert snapshots[1].generation == 20
+    assert snapshots[1].iteration == 20
     assert snapshots[1].metrics["fitness"] == 0.82
     assert snapshots[1].total_programs == 200
 
-    assert snapshots[2].generation == 5
+    assert snapshots[2].iteration == 5
     assert snapshots[2].metrics["fitness"] == 0.50
     assert snapshots[2].total_programs == 50
 
@@ -150,9 +150,9 @@ def test_collect_with_different_metric_names() -> None:
 def test_collect_one_run_fails() -> None:
     server = fakeredis.FakeServer()
     _populate_run(
-        server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85
+        server, 4, "prefix_a", iteration=10, fitness=0.76, total=100, valid=85
     )
-    _populate_run(server, 6, "prefix_c", generation=5, fitness=0.50, total=50, valid=40)
+    _populate_run(server, 6, "prefix_c", iteration=5, fitness=0.50, total=50, valid=40)
 
     def failing_factory(db: int) -> fakeredis.FakeRedis:
         if db == 5:
@@ -171,7 +171,7 @@ def test_collect_one_run_fails() -> None:
     assert len(snapshots) == 3
 
     # First and third succeed
-    assert snapshots[0].generation == 10
+    assert snapshots[0].iteration == 10
     assert snapshots[0].error is None
 
     # Second has error
@@ -179,7 +179,7 @@ def test_collect_one_run_fails() -> None:
     assert "Connection refused" in snapshots[1].error
 
     # Third still succeeds despite second failing
-    assert snapshots[2].generation == 5
+    assert snapshots[2].iteration == 5
     assert snapshots[2].error is None
 
 
@@ -204,7 +204,7 @@ def test_collect_empty_runs() -> None:
 def test_collect_with_pid() -> None:
     server = fakeredis.FakeServer()
     _populate_run(
-        server, 4, "prefix_a", generation=10, fitness=0.76, total=100, valid=85
+        server, 4, "prefix_a", iteration=10, fitness=0.76, total=100, valid=85
     )
 
     monitor = ExperimentMonitor(

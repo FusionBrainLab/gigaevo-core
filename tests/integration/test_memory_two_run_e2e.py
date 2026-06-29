@@ -240,7 +240,6 @@ def _build_engine(
         mutation_operator=IncrementMutationOperator(),
         config=SteadyStateEngineConfig(
             loop_interval=0.005,
-            max_elites_per_generation=1,
             stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),

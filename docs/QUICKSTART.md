@@ -78,7 +78,7 @@ You should see:
 Open a new terminal:
 
 ```bash
-# Show current run status (fitness, gen count, invalidity, etc.)
+# Show current run status (fitness, iteration count, invalidity, etc.)
 # Preferred: use --experiment mode (auto-discovers runs from experiment.yaml)
 gigaevo status -e <task>/<name>
 # Or specify a single run directly:

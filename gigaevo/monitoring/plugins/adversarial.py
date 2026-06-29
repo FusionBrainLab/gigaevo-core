@@ -335,14 +335,16 @@ class AdversarialPlugin(WatchdogPlugin):
             if fit is not None and baseline is not None and baseline > 0:
                 ratio = fit / baseline
                 vs_sota = f" ({ratio:.1%} of SOTA)"
-            gen = s.generation or 0
+            iteration = s.iteration or 0
             max_g = f"/{max_generations}" if max_generations else ""
             stalled = (
-                s.running_programs is not None and s.running_programs == 0 and gen > 0
+                s.running_programs is not None
+                and s.running_programs == 0
+                and iteration > 0
             )
             flag = "!" if stalled else "ok"
             lines.append(
-                f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}{vs_sota}"
+                f"  {flag} {s.run_spec.label}: iter {iteration}{max_g} fit={fit_str}{vs_sota}"
             )
 
         if baseline is not None:
@@ -354,13 +356,17 @@ class AdversarialPlugin(WatchdogPlugin):
         for s in d_snaps:
             fit = s.metrics.get(metric)
             fit_str = f"{fit:.5f}" if fit is not None else "N/A"
-            gen = s.generation or 0
+            iteration = s.iteration or 0
             max_g = f"/{max_generations}" if max_generations else ""
             stalled = (
-                s.running_programs is not None and s.running_programs == 0 and gen > 0
+                s.running_programs is not None
+                and s.running_programs == 0
+                and iteration > 0
             )
             flag = "!" if stalled else "ok"
-            lines.append(f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}")
+            lines.append(
+                f"  {flag} {s.run_spec.label}: iter {iteration}{max_g} fit={fit_str}"
+            )
 
         if baseline is not None and g_snaps and d_snaps:
             lines.append("")
@@ -378,7 +384,7 @@ class AdversarialPlugin(WatchdogPlugin):
                 lines.append(f"  {pair_name}: {pair_str}{vs_sota}")
 
         if max_generations and all(
-            s.generation is not None and s.generation >= max_generations
+            s.iteration is not None and s.iteration >= max_generations
             for s in snapshots
         ):
             lines.append("")

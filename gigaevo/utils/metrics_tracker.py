@@ -53,7 +53,6 @@ class MetricsTracker:
           * frontier for valid only: "valid/frontier/<metric>" (step = iteration)
           * NEW (valid only):
               - per-iteration aggregates: "valid/iter/<metric>/{mean,std}" (step = iteration)
-              - per-generation aggregates: "valid/gen/<metric>/{mean,std}" (step = generation)
       - Frontier uses MetricsContext.specs[metric].higher_is_better (default True).
       - Frontier is the single source of truth: when NO_CACHE stages update
         metrics, the full frontier series is recomputed from all valid programs
@@ -94,8 +93,6 @@ class MetricsTracker:
 
         #   iter -> metric_key -> RunningStats
         self._iter_stats: dict[int, dict[str, _RunningStats]] = {}
-        #   generation -> metric_key -> RunningStats
-        self._gen_stats: dict[int, dict[str, _RunningStats]] = {}
 
     @property
     def metrics_context(self) -> MetricsContext:
@@ -259,7 +256,6 @@ class MetricsTracker:
 
         is_valid = bool(v >= 0.5)
         iteration = program.iteration
-        generation = program.generation
 
         # validity flag
         self._writer.scalar(VALIDITY_KEY, 1.0 if is_valid else 0.0)
@@ -309,18 +305,6 @@ class MetricsTracker:
             )
             self._writer.scalar(
                 f"valid/iter/{key}/std", rs_i.std_value(), step=iteration
-            )
-
-            gstats = self._gen_stats.setdefault(generation, {})
-            rs_g = gstats.get(key)
-            if rs_g is None:
-                rs_g = gstats[key] = _RunningStats()
-            rs_g.update(fval)
-            self._writer.scalar(
-                f"valid/gen/{key}/mean", rs_g.mean_value(), step=generation
-            )
-            self._writer.scalar(
-                f"valid/gen/{key}/std", rs_g.std_value(), step=generation
             )
 
         if frontier_improved:

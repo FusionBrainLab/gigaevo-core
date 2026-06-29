@@ -7,6 +7,8 @@ Several engine knobs were retired between v1 and v2:
 * ``refresh_passes``  (per-epoch archive refresh removed; JIT parent
   refresh handles this now)
 * ``refresh_order``   (ordering gone with the per-epoch sweep)
+* ``max_elites_per_generation`` (per-generation elite cap — concept gone
+  with the generational engine)
 
 External users still carry yaml configs that set these. To avoid breaking
 them on upgrade we accept the old keys, drop them silently from the
@@ -32,6 +34,7 @@ DEPRECATED_KEYS_WITH_DUMMY_VALUE: list[tuple[str, object]] = [
     ("generation_timeout", 60.0),
     ("refresh_passes", 2),
     ("refresh_order", "generation_bucketed"),
+    ("max_elites_per_generation", 8),
 ]
 
 

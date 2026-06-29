@@ -14,7 +14,7 @@ class RunSnapshot:
     """
 
     run_spec: RunSpec
-    generation: int | None = None
+    iteration: int | None = None
     metrics: dict[str, float | None] = field(default_factory=dict)
     total_programs: int | None = None
     valid_programs: int | None = None
@@ -51,19 +51,19 @@ class RunSnapshot:
     def is_stalled(self, previous: RunSnapshot) -> bool:
         """True if no progress between this snapshot and the previous one.
 
-        Multi-signal: generation unchanged AND no running programs AND
+        Multi-signal: iteration unchanged AND no running programs AND
         no new program submissions. All three must agree.
         """
-        if self.generation is None or previous.generation is None:
+        if self.iteration is None or previous.iteration is None:
             return False
-        gen_unchanged = self.generation == previous.generation
+        iter_unchanged = self.iteration == previous.iteration
         no_running = self.running_programs is not None and self.running_programs == 0
         no_new_submissions = (
             self.total_programs is not None
             and previous.total_programs is not None
             and self.total_programs == previous.total_programs
         )
-        return gen_unchanged and no_running and no_new_submissions
+        return iter_unchanged and no_running and no_new_submissions
 
     @classmethod
     def empty(cls, run_spec: RunSpec) -> RunSnapshot:

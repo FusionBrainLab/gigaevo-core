@@ -260,7 +260,6 @@ def _build_engine(
         mutation_operator=mutation_operator or IncrementMutationOperator(),
         config=SteadyStateEngineConfig(
             loop_interval=0.005,
-            max_elites_per_generation=max_elites,
             max_in_flight=max_in_flight,
             stopper=MaxMutantsStopper(max_generations),
         ),

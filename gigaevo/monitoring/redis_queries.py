@@ -255,9 +255,9 @@ def collect_snapshot(
         # completion_reason — fewer round-trips than two separate hget calls,
         # and keeps the two fields consistent (they share one JSON blob).
         snap = _read_engine_snapshot(r, run_spec.prefix)
-        # RunSnapshot.generation is populated from programs_processed for
-        # the steady-state engine — the field name stays for display compat.
-        gen = snap.programs_processed if snap is not None else None
+        # RunSnapshot.iteration is populated from programs_processed for
+        # the steady-state engine (the run-level evaluation counter).
+        iteration = snap.programs_processed if snap is not None else None
         completion_reason = snap.completion_reason if snap is not None else None
         metrics = get_frontier_metrics(r, run_spec.prefix, metric_names)
         total, valid = get_program_counts(r, run_spec.prefix)
@@ -293,7 +293,7 @@ def collect_snapshot(
 
         return RunSnapshot(
             run_spec=run_spec,
-            generation=gen,
+            iteration=iteration,
             metrics=metrics,
             total_programs=total,
             valid_programs=valid,

@@ -35,7 +35,6 @@ def dummy_experiment(tmp_path: Path, monkeypatch):
           config:
             stage_timeout: 99
             dag_timeout: 199
-            max_elites_per_generation: 4
             num_parents: 2
             mutation_mode: rewrite
           runs:
@@ -93,7 +92,6 @@ class TestGenerateProducesValidBash:
         result = generate(dummy_experiment)
         assert "stage_timeout=99" in result
         assert "dag_timeout=199" in result
-        assert "max_elites_per_generation=4" in result
         assert "num_parents=2" in result
 
     def test_contains_mutation_mode(self, dummy_experiment):

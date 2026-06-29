@@ -22,14 +22,14 @@ def _populate_run(
     server: fakeredis.FakeServer,
     db: int,
     prefix: str,
-    generation: int,
+    iteration: int,
     fitness: float,
 ) -> None:
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_mutants=generation)
+    write_engine_snapshot_sync(r, prefix, total_mutants=iteration)
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
-        _metric_entry(generation, fitness),
+        _metric_entry(iteration, fitness),
     )
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:programs_total_count",
@@ -60,13 +60,13 @@ class TestCheckpointRequiresExperiment:
 
 class TestCheckpointCollectsStatus:
     @pytest.mark.skip(
-        reason="Pre-existing CI failure on main: Gen field reads 0 instead of "
+        reason="Pre-existing CI failure on main: Iter field reads 0 instead of "
         "the seeded total_mutants=10. Unblocks CI; tracked separately."
     )
     def test_json_output_with_snapshots(self):
         """Checkpoint collects snapshots and outputs status JSON."""
         server = fakeredis.FakeServer()
-        _populate_run(server, 4, "test/prefix", generation=10, fitness=0.76)
+        _populate_run(server, 4, "test/prefix", iteration=10, fitness=0.76)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -80,14 +80,14 @@ class TestCheckpointCollectsStatus:
         assert isinstance(data, list)
         assert len(data) == 1
         assert data[0]["Label"] == "A"
-        assert data[0]["Gen"] == 10
+        assert data[0]["Iter"] == 10
 
 
 class TestCheckpointNoNotify:
     def test_no_notify_skips_dispatch(self):
         """--no-notify returns after status display without importing dispatcher."""
         server = fakeredis.FakeServer()
-        _populate_run(server, 4, "test/prefix", generation=10, fitness=0.76)
+        _populate_run(server, 4, "test/prefix", iteration=10, fitness=0.76)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -106,8 +106,8 @@ class TestCheckpointMultipleRuns:
     def test_multiple_runs_all_collected(self):
         """Checkpoint collects data from all runs."""
         server = fakeredis.FakeServer()
-        _populate_run(server, 1, "p", generation=10, fitness=0.76)
-        _populate_run(server, 2, "p", generation=20, fitness=0.82)
+        _populate_run(server, 1, "p", iteration=10, fitness=0.76)
+        _populate_run(server, 2, "p", iteration=20, fitness=0.82)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -132,7 +132,7 @@ class TestCheckpointMetricFormatting:
 
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="A"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": -1.0},
             total_programs=100,
             valid_programs=90,
@@ -147,7 +147,7 @@ class TestCheckpointMetricFormatting:
 
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="A"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.85},
             total_programs=100,
             valid_programs=90,
@@ -163,7 +163,7 @@ class TestCheckpointMetricFormatting:
 
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="A"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.76, "actual_fitness": -1.0},
             total_programs=100,
             valid_programs=90,

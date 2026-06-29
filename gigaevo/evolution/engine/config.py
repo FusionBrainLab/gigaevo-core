@@ -35,6 +35,10 @@ _DEPRECATED_FIELDS: dict[str, str] = {
         "ordering knob removed alongside the per-epoch refresh; JIT refresh "
         "order is implicit"
     ),
+    "max_elites_per_generation": (
+        "per-generation elite cap removed with the generational engine; "
+        "steady-state progress is bounded by the stopper and max_in_flight"
+    ),
 }
 
 
@@ -48,7 +52,6 @@ class EngineConfig(BaseModel):
     """
 
     loop_interval: float = Field(default=1.0, gt=0)
-    max_elites_per_generation: int = Field(default=20, gt=0)
     metrics_collection_interval: float = Field(
         default=1.0, gt=0, description="Interval in seconds for metrics collection"
     )

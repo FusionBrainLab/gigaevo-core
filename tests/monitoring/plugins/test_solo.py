@@ -15,7 +15,7 @@ from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, get_registry
 def _make_snapshot(label="A", db=1, gen=10, fitness=0.65, pid=1234, alive=True):
     return RunSnapshot(
         run_spec=RunSpec(prefix="chains/hover/static_soft", db=db, label=label),
-        generation=gen,
+        iteration=gen,
         metrics={"fitness": fitness},
         total_programs=200,
         valid_programs=180,
@@ -217,7 +217,7 @@ class TestSoloPluginFormatTelegramBody:
     def test_stalled_flag(self):
         snap = RunSnapshot(
             run_spec=RunSpec(prefix="test", db=1, label="X"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.5},
             running_programs=0,
         )
