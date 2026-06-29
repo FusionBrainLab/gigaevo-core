@@ -35,7 +35,7 @@ The **depth of a program in the parent graph**, not a global counter.
 - Lives on `Program.lineage.generation` (`gigaevo/programs/program.py`).
 - Seed programs are at the root depth; each mutation adds one to the
   maximum parent depth.
-- Bounded by `GENESIS_GENERATION` (`gigaevo/programs/constants.py`).
+- Bounded by `GENESIS_GENERATION` (`gigaevo/programs/program.py`).
 
 `lineage.generation` and `iteration` are independent: two programs with
 the same lineage depth are typically created at very different

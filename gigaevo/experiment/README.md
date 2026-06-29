@@ -23,13 +23,13 @@ from gigaevo.experiment.manifest import claim_dbs, refresh_db_claims, release_db
 
 ### `checks.py` — Pre-Launch Validation
 
-10 principled checks targeting real operator failure modes.
+12 principled checks targeting real operator failure modes.
 
 ```python
 from gigaevo.experiment.checks import run_checks, CheckResult, Severity
 ```
 
-Checks: status gate, `GIGAEVO_PYTHON`, server reachability, model IDs, Redis DBs empty, DB claims available, seed programs, test-set SHA, smoke test completed, treatment verification completed.
+Checks: status gate, `GIGAEVO_PYTHON`, server reachability, model IDs, resolved config matches pinned, config fingerprint stable, Redis DBs empty, DB claims available, seed programs, test-set SHA, smoke test completed, treatment verification completed.
 
 Returns `list[CheckResult]`. Any `CRITICAL` failure blocks launch.
 
@@ -87,9 +87,9 @@ preregistered
     ├─ implemented          (after smoke test + config)
     │   ├─ running          (after launch + PID recording)
     │   │   ├─ complete     (terminal: final)
-    │   │   └─ invalid      (terminal: broken mid-run)
+    │   │   └─ invalid      (broken mid-run)
     │   └─ implemented      (recovery: reset from running)
-    └─ implemented          (recovery: back to draft)
+    └─ preregistered        (recovery: from invalid)
 ```
 
 | Status | Required Fields |
@@ -98,7 +98,7 @@ preregistered
 | `implemented` | + runs[], servers[], config, smoke_test.completed |
 | `running` | + launch.time, launch.commit, all runs[].pid |
 | `complete` | same as running |
-| `invalid` | same as running (mid-experiment failure) |
+| `invalid` | identity.name, identity.task (mid-experiment failure) |
 
 Hard gate pattern (used in skills):
 ```bash
@@ -112,7 +112,7 @@ Redis-based mutual exclusion for DB allocations.
 ```python
 failed = claim_dbs("hover/my-exp", [15, 16])
 refresh_db_claims("hover/my-exp", [15, 16])  # watchdog calls each cycle
-release_db_claims([15, 16])                   # on experiment complete
+release_db_claims("hover/my-exp", [15, 16])  # on experiment complete
 ```
 
 Key: `experiments:db_claim:{db_number}`, Value: experiment name, TTL: 7 days.

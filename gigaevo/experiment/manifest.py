@@ -103,7 +103,6 @@ REQUIRES_RUNTIME: frozenset[Status] = frozenset(
 TERMINAL: frozenset[Status] = frozenset(
     {
         Status.COMPLETE,
-        Status.INVALID,
     }
 )
 

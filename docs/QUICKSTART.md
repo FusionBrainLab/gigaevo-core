@@ -257,7 +257,7 @@ gigaevo plot comparison -r <prefix>@<db>:A -r <prefix>@<db>:B -o plots/
 gigaevo flush --db 0 --confirm
 
 # View logs
-tail -f outputs/*/evolution_*.log
+tail -f outputs/*/*/evolution_*.log
 ```
 
 ## Getting Help

@@ -130,14 +130,14 @@ Evolution starts immediately. Logs are saved to `outputs/`.
 
 ```bash
 # Migration bus: parallel runs share rejected programs via Redis stream
-python run.py experiment=migration_bus problem.name=heilbron redis.db=0
-python run.py experiment=migration_bus problem.name=heilbron redis.db=1
+python run.py migration_bus=bus problem.name=heilbron redis.db=0
+python run.py migration_bus=bus problem.name=heilbron redis.db=1
 
 # Multi-island evolution (fitness + simplicity islands)
-python run.py experiment=multi_island_complexity problem.name=heilbron
+python run.py algorithm=multi_island metrics=code_complexity problem.name=heilbron
 
 # Multi-LLM exploration (diverse mutation models)
-python run.py experiment=multi_llm_exploration problem.name=heilbron
+python run.py llm=heterogeneous problem.name=heilbron
 
 # Prompt co-evolution (evolve mutation prompts alongside programs)
 python run.py experiment=prompt_coevolution problem.name=heilbron \
@@ -214,7 +214,7 @@ files are in `config/`:
 
 | Directory | Purpose | Key files |
 |-----------|---------|-----------|
-| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `migration_bus.yaml`, `multi_island_complexity.yaml`, `multi_llm_exploration.yaml`, `prompt_coevolution.yaml`, `steady_state_adversarial.yaml` |
+| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `prompt_coevolution.yaml` |
 | `algorithm/` | Evolution algorithms | `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
 | `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
 | `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |

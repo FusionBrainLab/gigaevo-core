@@ -119,10 +119,10 @@ Read-only. See "Redis Data Model" below for how metrics are keyed.
 gigaevo -e hover/my-exp events audit
 
 # Per-run event plots + summary.md (registry-driven)
-gigaevo -e hover/my-exp events plot -o plots/events/
+gigaevo events plot --log run_G1.log --out plots/events/
 
-# Grouped plot (e.g., G vs D arms)
-gigaevo -e ... events plot --paired G1:D1,G2:D2 -o plots/events/
+# Grouped plot — --group-by takes a regex with a named capture group
+gigaevo events plot --log run_G1.log --log run_D1.log --group-by '(?P<arm>G|D)' --out plots/events/
 ```
 
 #### Profiler — log → text summary + HTML dashboard
@@ -186,13 +186,10 @@ gigaevo -e hover/my-exp manifest pr-description --push
 ```bash
 # Launch — checks + start runs (use experiment-launch skill for full workflow)
 gigaevo -e hover/my-exp launch
-
-# Closeout — archive + analyze + update PR
-gigaevo -e hover/my-exp closeout --confirm
-
-# Restart — kill runs + flush + re-launch
-gigaevo -e hover/my-exp restart --confirm
 ```
+
+Closeout (archive + analyze + update PR) and restart (kill + flush + re-launch) are not
+CLI subcommands — they are driven by the `experiment-closeout` / `experiment-restart` skills.
 
 ---
 
@@ -207,7 +204,7 @@ Most read/write/plot functionality previously lived as standalone scripts here; 
 | `lineage.py` | Trace evolutionary ancestry chain back to seed | `python -m tools.lineage --run`, `--top-n 1`, `--depth N` |
 | `memory_card_health.py` | Read-only structural/attribute integrity snapshot across one or more run dirs. Loads each `<run>/memory/api_index.json` and flags `missing_description`, `self_absorbed`, `absorbed_id_still_live`, `cross_absorbed`, and `duplicate_description`; delegates read/write telemetry to `memory_event_report.py` (suppress with `--no-events`). Use to audit a live memory run for dedup/consolidation invariant violations. | `python tools/memory_card_health.py <run_roots...>`, `--json OUT`, `--no-events` |
 | `memory_event_report.py` | Summarize memory telemetry from `memory_events.jsonl`, `write_ledger.jsonl`, and exported cards. Use this first when debugging empty memory selections, auction rejects, repeated winners, budget drops, write outcomes/sweeps, GAM planner/search/reflection events, backend rebuild/search/refresh events, and posterior bridge activity. | `python tools/memory_event_report.py <run-dir-or-memory-dir>`, `--events PATH`, `--write-ledger PATH`, `--cards PATH`, `--json`, `--top-n N` |
-| `profiler.py` | Log → text summary + HTML dashboard (called by `gigaevo profiler`) | invoked via `gigaevo profiler`; importable as `from tools.profiler import Profiler` |
+| `profiler.py` | Throughput profiler — Redis ops, serialization, DAG construction, stage execution (the log → HTML dashboard is the separate `gigaevo profiler` subcommand) | `python -m tools.profiler --redis-url redis://localhost:6379/15` |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
 | `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |
 | `utils.py` | Shared utilities: `parse_run_arg`, Redis helpers | imported by other tools |
@@ -223,7 +220,7 @@ The former scripts (`status.py`, `trajectory.py`, `top_programs.py`, `comparison
 
 ### Live Monitoring (`gigaevo/monitoring/`)
 
-Library-level helpers a runner can start to surface metrics to the terminal while an experiment is in flight. Not CLI tools — embed via `from gigaevo.monitoring import ...`.
+Library-level helpers a runner can start to surface metrics to the terminal while an experiment is in flight. Not CLI tools — embed via `from gigaevo.monitoring.live_profiler import start_live_profiler` / `from gigaevo.monitoring.live_frontier_compare import start_live_frontier_compare`.
 
 | Symbol | Purpose |
 |---|---|
@@ -250,16 +247,11 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 | Tool | Purpose |
 |---|---|
 | `litellm.sh` | Start/stop/status LiteLLM proxy for chain server load balancing |
-| `litellm_bench.py` | Benchmark LiteLLM proxy (latency, throughput, error rate) |
-| `llm_contention_bench.py` | Measure LLM server contention under concurrent load |
 
 ### Benchmarking Tools
 
 | Tool | Purpose |
 |---|---|
-| `benchmark.py` | Run throughput benchmark suite (`tests/benchmarks/`) |
-| `bench_snapshot.py` | Before/after benchmark snapshots for comparison |
-| `benchmark_capture.py` | Capture benchmark results to `benchmark_history.jsonl` |
 | `canonical_benchmark/run_benchmark.py` | **Regression benchmark — run on every major breaking change.** 5 problems × 2 seeds, spawning `python run.py problem.name=<P> redis.db=<N> hydra.run.dir=<DIR> llm_base_url=<URL> model_name=<NAME>`. The LLM endpoint must be supplied via required `--llm-base-url` / `--model-name` CLI args — no default is shipped because the framework default in `config/constants/endpoints.yaml` (OpenRouter Gemini-3-Flash) is too slow for a 10-run sweep and the right replacement is environment-specific. Reads framework defaults: `pipeline=standard num_parents=2 max_mutants=250` (intra-memory pipeline, no cross-population channel, no IdeaTracker). Extracts best fitness via `gigaevo top`, appends to `BENCHMARK_HISTORY.md`. Uplift sweeps: opt in via `--override memory=full` and/or `--override pipeline=intra_extra_memory`. See `tools/canonical_benchmark/README.md`. |
 | `profiler.py` | Redis ops, DAG construction, stage execution profiling |
 
@@ -425,25 +417,6 @@ gigaevo -r chains/hotpotqa/static@4:O top -n 1 --json
 
 ---
 
-### `csv_comparison.py` - Compare CSV Exports
-
-Compares multiple exported CSVs by plotting rolling fitness statistics over iterations.
-
-**Usage:**
-```bash
-python -m tools.csv_comparison \
-  --run "outputs/runA.csv:Run_A" \
-  --run "outputs/runB.csv:Run_B" \
-  --iteration-rolling-window 5 \
-  --output-folder results/comparison
-```
-
-**Notes:**
-- Uses the same plotting logic as `comparison.py`
-- `--run` format is `path[:label]` (label defaults to filename stem)
-
----
-
 ### `gigaevo plot comparison` — Fitness curve plots
 
 Plots rolling fitness vs iteration across multiple runs. Always emits all three formats
@@ -502,13 +475,13 @@ Learned" — which mutations led to the best result?
 
 ```bash
 # Trace best program by fitness
-gigaevo -r chains/hotpotqa/static@4:O lineage --top-n 1
+python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1
 
 # Trace specific program by ID prefix
-gigaevo -r chains/hotpotqa/static@4:O lineage --program abc12345
+python tools/lineage.py --run chains/hotpotqa/static@4:O --program abc12345
 
 # Limit depth to 5 ancestor hops
-gigaevo -r chains/hotpotqa/static@4:O lineage --top-n 1 --depth 5
+python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1 --depth 5
 ```
 
 ---
@@ -567,7 +540,7 @@ Tools for the experiment lifecycle (used by Claude Code skills).
 
 | Tool | Purpose | Command |
 |---|---|---|
-| `manifest.py` | Load/update `experiment.yaml` programmatically | `from tools.experiment.manifest import load_manifest, update_manifest` |
+| `manifest.py` | Load/update `experiment.yaml` programmatically | `from gigaevo.experiment.manifest import load_manifest, update_manifest` |
 | `launch` | Preflight + generate script + exec + set running + spawn watchdog | `gigaevo -e task/name launch [--dry-run] [--skip-preflight]` |
 | `manifest record-pids` | Record launched PIDs into experiment.yaml | `gigaevo -e task/name manifest record-pids --pids-file pids.txt --labels "A B"` |
 | `manifest reset-status` | Force-reset experiment status (escape hatch) | `gigaevo -e task/name manifest reset-status implemented --reason '...'` |
@@ -800,7 +773,7 @@ Notes:
 
 ### Manifest helpers
 
-Python API (`gigaevo.monitoring.manifest`):
+Python API (`gigaevo.experiment.manifest`):
 
 | Function | Purpose |
 |---|---|
@@ -819,21 +792,6 @@ writes to `experiment.yaml.tmp`, `fsync`s, then renames — FUSE-safe.
 ---
 
 ## Benchmarking
-
-### `benchmark.py` — Throughput benchmark runner
-
-CLI wrapper that runs the benchmark test suite (`tests/benchmarks/`).
-
-```bash
-# Quick run with fakeredis
-python -m tools.benchmark
-
-# Full run with real Redis
-python -m tools.benchmark --redis-url redis://localhost:6379/15 --full
-
-# Also run profiler
-python -m tools.benchmark --profile
-```
 
 ### `profiler.py` — Redis and DAG throughput profiler
 
@@ -895,7 +853,7 @@ There are three independent key namespaces per run:
 | **Program storage** | `{prefix}:program:{id}` | string (JSON) | Serialized Program objects |
 | **Program status** | `{prefix}:status:{state}` | set | Sets of program IDs by state (PENDING, RUNNING, DONE, ERROR) |
 | **Status stream** | `{prefix}:status_events` | stream | Status change events |
-| **Run state** | `{prefix}:run_state` | hash | Engine counters (generation, migration) |
+| **Run state** | `{prefix}:run_state` | hash | Engine counters (iteration, migration) |
 | **Stage-output store** | `{prefix}:stage_output:{cache_id}` | string (b64) | Content-addressed parent stage outputs frozen at child birth (debug); child metadata holds `{parent_id: {stage: cache_id}}` references |
 | **Archive** | `{prefix}:archive` | hash | MAP-Elites archive: cell → program_id |
 | **Archive reverse** | `{prefix}:archive:reverse` | hash | Reverse index: program_id → cell |
@@ -948,9 +906,9 @@ Where `{metric}` = metric name from `problems/{problem_name}/metrics.yaml` (e.g.
 
 | What you want | Command | Notes |
 |---|---|---|
-| Current generation | `hget {prefix}:run_state engine:total_generations` | **Canonical** — never use other sources |
+| Current iteration / progress | `hget {prefix}:run_state engine:snapshot` | **Canonical** — JSON blob; read its `programs_processed` field. Never use other sources |
 | Best frontier fitness | `lindex {prefix}:metrics:history:program_metrics:valid_frontier_fitness -1` | Parse JSON → `"v"` field |
-| Per-gen mean fitness | `lrange {prefix}:metrics:history:program_metrics:valid_gen_fitness_mean 0 -1` | `"s"` = generation, `"v"` = mean |
+| Per-gen mean fitness | `lrange {prefix}:metrics:history:program_metrics:valid_gen_fitness_mean 0 -1` | `"s"` = lineage generation (depth), `"v"` = mean |
 | Total programs | `lindex {prefix}:metrics:history:program_metrics:programs_total_count -1` | `"v"` field |
 | Valid programs | `lindex {prefix}:metrics:history:program_metrics:programs_valid_count -1` | `"v"` field |
 | Validator duration | `lrange {prefix}:metrics:history:dag_runner:dag:internals:CallValidatorFunction:stage_duration -20 -1` | Mean/max of last 20 entries |
@@ -969,14 +927,14 @@ Archive data persists in Redis until explicitly flushed. However, the **programs
 
 ### Iteration vs. generation
 
-- **Iteration**: monotonically increasing program evaluation counter (1, 2, 3, ...)
-- **Generation**: MAP-Elites generation count (incremented after `max_mutations_per_generation` evaluations)
+- **Iteration**: monotonically increasing program evaluation counter (`Program.iteration`, 0, 1, 2, ...) — the run-level progress counter. The steady-state engine has no per-generation epoch; progress is governed entirely by the stopper (`max_mutants`).
+- **Generation**: a program's lineage depth (`Program.generation` = `lineage.generation` = max parent generation + 1) — genealogical, not a run-level epoch.
 
-`valid_iter_*` keys track per-iteration running aggregates. `valid_gen_*` keys track per-generation aggregates. The canonical generation count is `{prefix}:run_state` field `engine:total_generations` — never derive it from metric step values.
+`valid_iter_*` keys track running aggregates stepped by iteration. `valid_gen_*` keys track aggregates grouped by lineage generation (depth). The canonical progress counter is the `engine:snapshot` JSON blob in the `{prefix}:run_state` hash (read its `programs_processed` field) — never derive it from metric step values.
 
 ### Rules
 
-1. **Canonical generation count**: `hget {prefix}:run_state engine:total_generations`. Never use `llen(valid_frontier_fitness)` or `valid_iter_fitness_mean` last `"s"` — both can lag under high throughput.
+1. **Canonical progress counter**: `hget {prefix}:run_state engine:snapshot` (JSON blob; read its `programs_processed` field). Never use `llen(valid_frontier_fitness)` or `valid_iter_fitness_mean` last `"s"` — both can lag under high throughput.
 2. **Never write ad-hoc Redis queries** to answer questions the tools already answer. If a tool gives wrong results, fix the tool.
 3. **Never flush manually** with `redis-cli FLUSHDB` — use `gigaevo flush --db N --confirm` which kills workers first.
 4. **Never use log grep for gen count** — `grep -c "Phase 1: Idle confirmed" run.log` is brittle and has caused production crashes. Use `hget` on `run_state`.
