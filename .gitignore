@@ -307,6 +307,7 @@ check_openrouter_key.py
 experiments.txt
 AlgoTune-main/
 gigaevo/llm/ideas_tracker/utils/it_logger_description.md
+launches_*/
 
 # ---------------------------------------------------------------------------
 # Secrets / keys (belt and suspenders; .env is already ignored above)
