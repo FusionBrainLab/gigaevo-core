@@ -115,12 +115,15 @@ class ConsolidationScheduler:
         # Consolidation rewrites the bank, so it runs under the same write lock as
         # a sweep — never interleaved with one — but is dispatched in the
         # background so the triggering sweep is not blocked waiting for it.
+        neighbors = self._stack.neighbors
+        if neighbors is None:
+            return  # un-built stack (schedule() guards this) — nothing to fold
         async with self._run_lock:
             try:
                 merged = await consolidate(
                     store=self._stack.store,
                     gate=self._stack.gate,
-                    neighbors=self._stack.neighbors,
+                    neighbors=neighbors,
                     agent=self._stack.consolidation_agent,
                     eps=self._eps,
                     k=self._k,

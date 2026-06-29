@@ -21,7 +21,8 @@ from loguru import logger
 
 from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.memory.core.protocols import Evictor, ReputationModel
+from gigaevo.memory.core.protocols import Evictor
+from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.ideas_tracker.card_stats import CardStatsUpdater
 from gigaevo.memory.ideas_tracker.consolidation_scheduler import ConsolidationScheduler
 from gigaevo.memory.ideas_tracker.dedup_policy import DedupPolicy
@@ -102,7 +103,7 @@ class IdeaTracker(IncrementalPostRunHook):
         fitness_higher_is_better: bool = True,
         metrics_context: MetricsContext | None = None,
         evictor: Evictor | None = None,
-        reputation: ReputationModel | None = None,
+        reputation: BetaBinomialReputation | None = None,
     ) -> None:
         if memory_write_enabled and backend is None:
             raise ValueError(
@@ -217,7 +218,7 @@ class IdeaTracker(IncrementalPostRunHook):
             posterior_programs=posterior_programs,
         )
 
-        librarian = self._stack.librarian
+        librarian = self._stack.require_librarian()
         cards_written = 0
         for rec in records:
             try:
@@ -276,7 +277,7 @@ class IdeaTracker(IncrementalPostRunHook):
             higher_is_better=self._fitness_higher_is_better,
             metrics_context=self._metrics_context,
         )
-        librarian = self._stack.librarian
+        librarian = self._stack.require_librarian()
         for prog, fitness in selected:
             try:
                 authored = await asyncio.wait_for(

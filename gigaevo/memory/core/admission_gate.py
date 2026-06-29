@@ -53,7 +53,7 @@ class CardAdmissionGate:
         reason = "known id replaced" if known else "librarian-authored card"
         return self._ledger_record(card, final_id, outcome, reason)
 
-    def merge(self, target_id: str, card: AnyCard) -> str:
+    def merge(self, target_id: str, card: MemoryCard) -> str:
         target = self._store.get_card(target_id)
         if target is None or not isinstance(target, MemoryCard):
             return ""

@@ -25,7 +25,7 @@ from gigaevo.llm.agents.factories import (
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.core.admission_gate import CardAdmissionGate
 from gigaevo.memory.core.evictor import HarmEvictor
-from gigaevo.memory.core.protocols import Evictor, ReputationModel
+from gigaevo.memory.core.protocols import Evictor
 from gigaevo.memory.core.reputation import BetaBinomialReputation
 from gigaevo.memory.core.write_ledger import WriteLedger
 from gigaevo.memory.ideas_tracker.dedup_policy import DedupPolicy
@@ -48,7 +48,7 @@ class LibrarianWriteStack:
         llm: MultiModelRouter | None,
         task_description: str,
         evictor: Evictor | None = None,
-        reputation: ReputationModel | None = None,
+        reputation: BetaBinomialReputation | None = None,
         checkpoint_dir: str | Any | None = None,
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
@@ -85,6 +85,14 @@ class LibrarianWriteStack:
     def librarian(self) -> Librarian | None:
         return self._librarian
 
+    def require_librarian(self) -> Librarian:
+        if self._librarian is None:
+            raise RuntimeError(
+                "LibrarianWriteStack.require_librarian() called before ensure(); "
+                "await the build before writing."
+            )
+        return self._librarian
+
     @property
     def neighbors(self) -> Any | None:
         return self._neighbors
@@ -96,6 +104,16 @@ class LibrarianWriteStack:
     @property
     def task_description_summary(self) -> str:
         return self._summary or ""
+
+    @property
+    def _router(self) -> MultiModelRouter:
+        if self._llm is None:
+            raise RuntimeError(
+                "LibrarianWriteStack reached the write path with no LLM router; "
+                "enable the writer (memory=writer/full) so MemorySystem threads "
+                "one in."
+            )
+        return self._llm
 
     async def ensure(self) -> None:
         """Build the store, gate, neighbors, librarian, and consolidation agent
@@ -123,7 +141,9 @@ class LibrarianWriteStack:
             self._summary = ""
             return self._summary
         try:
-            agent = create_task_summary_agent(self._llm, prompts_dir=self._prompts_dir)
+            agent = create_task_summary_agent(
+                self._router, prompts_dir=self._prompts_dir
+            )
             resp = await agent.arun(task_description=self._task_description)
             self._summary = resp.summary.strip() or self._task_description
         except Exception as exc:
@@ -136,6 +156,12 @@ class LibrarianWriteStack:
         return self._summary
 
     def _build(self, summary: str) -> None:
+        if self._backend is None:
+            raise RuntimeError(
+                "LibrarianWriteStack reached the write path with no backend "
+                "builder; enable the writer (memory=writer/full) so MemorySystem "
+                "threads one in."
+            )
         # The embedding model the neighbor source loads next follows HF_HOME and
         # friends; redirect them to a writable dir before that download begins.
         ensure_writable_hf_cache()
@@ -155,10 +181,10 @@ class LibrarianWriteStack:
         neighbors = store
         librarian = Librarian(
             agent=create_reconcile_agent(
-                self._llm, self._task_description, prompts_dir=self._prompts_dir
+                self._router, self._task_description, prompts_dir=self._prompts_dir
             ),
             program_author=create_program_author_agent(
-                self._llm, self._task_description, prompts_dir=self._prompts_dir
+                self._router, self._task_description, prompts_dir=self._prompts_dir
             ),
             gate=gate,
             store=store,
@@ -174,5 +200,5 @@ class LibrarianWriteStack:
         self._neighbors = neighbors
         self._librarian = librarian
         self._consolidation_agent = create_consolidate_agent(
-            self._llm, self._task_description, prompts_dir=self._prompts_dir
+            self._router, self._task_description, prompts_dir=self._prompts_dir
         )

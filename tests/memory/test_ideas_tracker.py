@@ -217,6 +217,9 @@ class _FakeStack:
     def librarian(self) -> Any:
         return self._librarian
 
+    def require_librarian(self) -> Any:
+        return self._librarian
+
     @property
     def store(self) -> _FakeStore:
         return self._store
