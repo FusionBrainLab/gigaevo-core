@@ -39,19 +39,19 @@ def _higher_is_better(specs: dict[str, dict], metric: str) -> bool:
 def _fetch_trajectory_data(
     host: str, port: int, db: int, prefix: str, metric: str
 ) -> tuple[list[dict], list[dict]]:
-    """Fetch gen-mean and frontier entries from Redis.
+    """Fetch iter-mean and frontier entries from Redis.
 
-    Returns (gen_mean_entries, frontier_entries) as lists of parsed JSON dicts.
+    Returns (iter_mean_entries, frontier_entries) as lists of parsed JSON dicts.
     """
     r = redis_lib.Redis(host=host, port=port, db=db)
     try:
-        gen_mean_entries: list[dict] = []
+        iter_mean_entries: list[dict] = []
         raw_mean = r.lrange(
-            f"{prefix}:metrics:history:program_metrics:valid_gen_{metric}_mean", 0, -1
+            f"{prefix}:metrics:history:program_metrics:valid_iter_{metric}_mean", 0, -1
         )
         for raw in raw_mean:
             try:
-                gen_mean_entries.append(json.loads(raw))
+                iter_mean_entries.append(json.loads(raw))
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -65,13 +65,13 @@ def _fetch_trajectory_data(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        return gen_mean_entries, frontier_entries
+        return iter_mean_entries, frontier_entries
     finally:
         r.close()
 
 
 def _compute_per_iteration_stats(
-    gen_mean_entries: list[dict],
+    iter_mean_entries: list[dict],
     frontier_entries: list[dict],
     higher_is_better: bool,
 ) -> tuple[list[int], list[float], list[float], list[float]]:
@@ -79,14 +79,14 @@ def _compute_per_iteration_stats(
 
     Returns (iterations, best_values, mean_values, std_values).
     """
-    gen_vals: dict[int, list[float]] = {}
-    for entry in gen_mean_entries:
-        g = entry.get("s")
+    iter_vals: dict[int, list[float]] = {}
+    for entry in iter_mean_entries:
+        s = entry.get("s")
         v = entry.get("v")
-        if g is None or v is None:
+        if s is None or v is None:
             continue
         try:
-            gen_vals.setdefault(int(g), []).append(float(v))
+            iter_vals.setdefault(int(s), []).append(float(v))
         except (ValueError, TypeError):
             pass
 
@@ -101,15 +101,15 @@ def _compute_per_iteration_stats(
                 pass
     frontier_points.sort(key=lambda x: x[0])
 
-    sorted_gens = sorted(gen_vals.keys())
-    if not sorted_gens:
+    sorted_iters = sorted(iter_vals.keys())
+    if not sorted_iters:
         return [], [], [], []
 
-    frontier_at_gen: dict[int, float] = {}
+    frontier_at_iter: dict[int, float] = {}
     running_best: float | None = None
     fi = 0
-    for gen in sorted_gens:
-        while fi < len(frontier_points) and frontier_points[fi][0] <= gen:
+    for it in sorted_iters:
+        while fi < len(frontier_points) and frontier_points[fi][0] <= it:
             v = frontier_points[fi][1]
             if running_best is None:
                 running_best = v
@@ -119,26 +119,26 @@ def _compute_per_iteration_stats(
                 running_best = v
             fi += 1
         if running_best is not None:
-            frontier_at_gen[gen] = running_best
+            frontier_at_iter[it] = running_best
 
     iterations: list[int] = []
     best_values: list[float] = []
     mean_values: list[float] = []
     std_values: list[float] = []
 
-    for gen in sorted_gens:
-        vals = gen_vals[gen]
+    for it in sorted_iters:
+        vals = iter_vals[it]
         mean_val = vals[-1]
 
         import statistics
 
         std_val = statistics.stdev(vals) if len(vals) > 1 else 0.0
 
-        best_val = frontier_at_gen.get(gen)
+        best_val = frontier_at_iter.get(it)
         if best_val is None:
             continue
 
-        iterations.append(gen)
+        iterations.append(it)
         best_values.append(best_val)
         mean_values.append(mean_val)
         std_values.append(std_val)
@@ -178,11 +178,11 @@ def plot(
             specs = _load_metrics_yaml(problem_dir)
             higher = _higher_is_better(specs, metric)
 
-        gen_mean_entries, frontier_entries = _fetch_trajectory_data(
+        iter_mean_entries, frontier_entries = _fetch_trajectory_data(
             redis_host, redis_port, db, prefix, metric
         )
 
-        if not gen_mean_entries and not frontier_entries:
+        if not iter_mean_entries and not frontier_entries:
             click.echo(
                 json.dumps(
                     {
@@ -194,7 +194,7 @@ def plot(
             sys.exit(1)
 
         iterations, best_values, mean_values, std_values = _compute_per_iteration_stats(
-            gen_mean_entries, frontier_entries, higher
+            iter_mean_entries, frontier_entries, higher
         )
 
         if not iterations:

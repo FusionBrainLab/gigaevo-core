@@ -15,7 +15,7 @@ from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, get_registry
 def _make_code_snapshot(label="C1", db=9, gen=10, fitness=0.76):
     return RunSnapshot(
         run_spec=RunSpec(prefix="chains/hover/static_soft", db=db, label=label),
-        generation=gen,
+        iteration=gen,
         metrics={"fitness": fitness},
         total_programs=100,
         valid_programs=85,
@@ -28,7 +28,7 @@ def _make_code_snapshot(label="C1", db=9, gen=10, fitness=0.76):
 def _make_prompt_snapshot(label="P1", db=11, gen=8, fitness=0.25):
     return RunSnapshot(
         run_spec=RunSpec(prefix="prompt_evolution_hover", db=db, label=label),
-        generation=gen,
+        iteration=gen,
         metrics={"fitness": fitness},
         total_programs=50,
         valid_programs=45,
@@ -252,7 +252,7 @@ class TestPromptCoevoPluginFormatTelegramBody:
     def test_stalled_flag(self):
         snap = RunSnapshot(
             run_spec=RunSpec(prefix="chains/hover/static_soft", db=1, label="C1"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.5},
             running_programs=0,
         )

@@ -19,7 +19,6 @@ program_acceptor:
 engine_config:
   _target_: gigaevo.evolution.engine.SteadyStateEngineConfig
   loop_interval: ${loop_interval}
-  max_elites_per_generation: ${max_elites_per_generation}
   program_acceptor: ${program_acceptor}
   parent_selector: ${parent_selector}
   stopper: ${stopper}

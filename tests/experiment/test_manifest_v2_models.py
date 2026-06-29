@@ -245,7 +245,6 @@ class TestConfigSpec:
                 "max_generations": 50,
                 # untyped knobs flow into model_extra automatically
                 "num_parents": 1,
-                "max_elites_per_generation": 8,
                 "stage_timeout": 2400,
             }
         )

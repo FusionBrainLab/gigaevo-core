@@ -2,7 +2,7 @@
 
 The watchdog fires one generic alert when a registered canonical event with
 ``expected_after_gen > 0`` has zero count in the recent window AND the run's
-generation has passed that threshold. One predicate, all events.
+iteration has passed that threshold. One predicate, all events.
 
 The predicate reads event counts off ``RunSnapshot.event_window_counts`` so
 ``AlertDetector`` does not need a Redis connection — ``collect_snapshot``
@@ -46,12 +46,12 @@ class _TestGenerationBoundary(BaseEvent):
 def _snap(
     *,
     label: str = "A",
-    generation: int = 5,
+    iteration: int = 5,
     event_counts: dict[str, int] | None = None,
 ) -> RunSnapshot:
     return RunSnapshot(
         run_spec=RunSpec(prefix="p", db=3, label=label),
-        generation=generation,
+        iteration=iteration,
         event_window_counts=event_counts,
     )
 
@@ -60,7 +60,7 @@ class TestEventRateZeroPredicate:
     def test_fires_when_gen_past_threshold_and_count_zero(self):
         detector = AlertDetector()
         # gen=5, threshold=2, count=0 → ALERT
-        snap = _snap(generation=5, event_counts={"__B4_HOF_ROTATE__": 0})
+        snap = _snap(iteration=5, event_counts={"__B4_HOF_ROTATE__": 0})
         alerts = detector.check([snap])
 
         rate_zero = [a for a in alerts if a.alert_type == AlertType.EVENT_RATE_ZERO]
@@ -73,20 +73,20 @@ class TestEventRateZeroPredicate:
         # Details carry enough structured info for downstream consumers.
         assert alert.details is not None
         assert alert.details.get("event_name") == "__B4_HOF_ROTATE__"
-        assert alert.details.get("generation") == 5
+        assert alert.details.get("iteration") == 5
         assert alert.details.get("expected_after_gen") == 2
 
     def test_silent_when_gen_below_threshold(self):
         detector = AlertDetector()
         # gen=1, threshold=2 → still too early; no alert.
-        snap = _snap(generation=1, event_counts={"__B4_HOF_ROTATE__": 0})
+        snap = _snap(iteration=1, event_counts={"__B4_HOF_ROTATE__": 0})
         alerts = detector.check([snap])
 
         assert not any(a.alert_type == AlertType.EVENT_RATE_ZERO for a in alerts)
 
     def test_silent_when_count_is_positive(self):
         detector = AlertDetector()
-        snap = _snap(generation=5, event_counts={"__B4_HOF_ROTATE__": 7})
+        snap = _snap(iteration=5, event_counts={"__B4_HOF_ROTATE__": 7})
         alerts = detector.check([snap])
 
         assert not any(a.alert_type == AlertType.EVENT_RATE_ZERO for a in alerts)
@@ -96,7 +96,7 @@ class TestEventRateZeroPredicate:
         from the very start or intentionally on-demand. The watchdog must not
         spam for GENERATION_BOUNDARY-class events."""
         detector = AlertDetector()
-        snap = _snap(generation=5, event_counts={"__B4_GEN__": 0})
+        snap = _snap(iteration=5, event_counts={"__B4_GEN__": 0})
         alerts = detector.check([snap])
 
         assert not any(
@@ -108,7 +108,7 @@ class TestEventRateZeroPredicate:
         """Backward compatibility: snapshots without event counts collected
         (e.g. Redis unreachable at collect time) must not trigger."""
         detector = AlertDetector()
-        snap = _snap(generation=5, event_counts=None)
+        snap = _snap(iteration=5, event_counts=None)
         alerts = detector.check([snap])
 
         assert not any(a.alert_type == AlertType.EVENT_RATE_ZERO for a in alerts)
@@ -118,7 +118,7 @@ class TestEventRateZeroPredicate:
         suppresses it for N cycles — otherwise the watchdog would spam
         notifications for every poll while the condition persists."""
         detector = AlertDetector(cooldown_cycles=2)
-        snap = _snap(generation=5, event_counts={"__B4_HOF_ROTATE__": 0})
+        snap = _snap(iteration=5, event_counts={"__B4_HOF_ROTATE__": 0})
 
         first = detector.check([snap])
         second = detector.check([snap])
@@ -130,8 +130,8 @@ class TestEventRateZeroPredicate:
 
     def test_fires_per_run_independently(self):
         detector = AlertDetector()
-        a = _snap(label="A", generation=5, event_counts={"__B4_HOF_ROTATE__": 0})
-        b = _snap(label="B", generation=5, event_counts={"__B4_HOF_ROTATE__": 3})
+        a = _snap(label="A", iteration=5, event_counts={"__B4_HOF_ROTATE__": 0})
+        b = _snap(label="B", iteration=5, event_counts={"__B4_HOF_ROTATE__": 3})
         alerts = detector.check([a, b])
 
         rate = [x for x in alerts if x.alert_type == AlertType.EVENT_RATE_ZERO]
@@ -161,7 +161,7 @@ def test_predicate_matrix(gen, threshold, count, should_fire, monkeypatch):
         expected_after_gen: ClassVar[int] = threshold
 
     detector = AlertDetector()
-    snap = _snap(generation=gen, event_counts={_Ev.event: count})
+    snap = _snap(iteration=gen, event_counts={_Ev.event: count})
     alerts = detector.check([snap])
 
     rate = [

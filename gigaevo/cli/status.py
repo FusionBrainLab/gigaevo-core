@@ -68,7 +68,7 @@ def _snapshot_to_row(
     row: dict = {
         "Label": snapshot.run_spec.label,
         "DB": snapshot.run_spec.db,
-        "Gen": snapshot.generation,
+        "Iter": snapshot.iteration,
     }
 
     specs = metric_specs or {}
@@ -106,7 +106,7 @@ def _snapshot_to_row(
 
 def _build_columns(rows: list[dict]) -> list[str]:
     """Determine column order from available data."""
-    base = ["Label", "DB", "Gen"]
+    base = ["Label", "DB", "Iter"]
     metric_cols = []
     for row in rows:
         for key in row:
@@ -145,7 +145,7 @@ def _build_columns(rows: list[dict]) -> list[str]:
 def status(ctx: click.Context, format_name: str | None) -> None:
     """Show current run status from Redis.
 
-    Displays generation, all metrics (formatted per `problems/<name>/metrics.yaml`
+    Displays iteration, all metrics (formatted per `problems/<name>/metrics.yaml`
     specs), recent invalidity rate, validator timing, key count, and PID
     liveness for every resolved run.
 

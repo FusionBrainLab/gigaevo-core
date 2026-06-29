@@ -268,7 +268,7 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 
 ### `gigaevo status` — Live run status
 
-Shows generation, all metrics from `metrics.yaml`, invalidity rate, validator timing, and PID liveness.
+Shows iteration, all metrics from `metrics.yaml`, invalidity rate, validator timing, and PID liveness.
 Reads `metrics.yaml` from the problem directory to discover metric names and formatting (percentage vs raw value).
 
 ```bash
@@ -284,7 +284,7 @@ gigaevo -r chains/hotpotqa/static@4:O -r chains/hotpotqa/static_r@7:R status
 
 Output (with `--experiment` — shows all metrics per problem):
 ```
-Run       DB    Gen     Fitness  Prompt Length  Invalid%    Val dur(s)    Keys         PID  Status
+Run       DB    Iter    Fitness  Prompt Length  Invalid%    Val dur(s)    Keys         PID  Status
 ------------------------------------------------------------------------------------------------------
 C1         9      3      76.2%              ?        0%       639/980     157       49341  ALIVE
 C2        10      4      75.8%              ?       20%      654/1223     158       49342  ALIVE
@@ -296,7 +296,7 @@ Watchdog PID 50073: ALIVE
 
 Column notes:
 - **Metric columns** — auto-discovered from `problems/{problem_name}/metrics.yaml`. Fractional metrics (upper_bound=1.0) show as percentages; others show raw values. Decimal precision from `metrics.yaml`.
-- **Invalid%** — fraction of programs that failed validation; >75% at gen 3+ = stage_timeout too short
+- **Invalid%** — fraction of programs that failed validation; >75% at iteration 3+ = stage_timeout too short
 - **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
 
 **Watchdog**: started via `gigaevo -e <task>/<name> watchdog` at experiment launch.
@@ -304,30 +304,30 @@ The watchdog posts hourly PR comments with status, plots, and stagnation alerts.
 
 ---
 
-### `gigaevo trajectory` — Gen-by-gen trajectory (text mode)
+### `gigaevo trajectory` — Iteration-by-iteration trajectory (text mode)
 
-Prints a gen-by-gen table of best (frontier), mean fitness, and valid program count.
-Lightweight — reads metrics history keys directly, no full program fetch.
+Prints an iteration-by-iteration table of running best (frontier) and per-iteration mean.
+Values are raw (unsmoothed) metric values. Lightweight — reads metrics history keys
+directly, no full program fetch.
 
 ```bash
 # Full trajectory
 gigaevo -r chains/hotpotqa/static@4:O trajectory
 
-# Last 10 gens only
+# Last 10 iterations only
 gigaevo -r chains/hotpotqa/static@4:O trajectory --tail 10
 ```
 
 Output:
 ```
-Trajectory: O  (prefix=chains/hotpotqa/static, db=4)
-
-Gen  1: best=42.3%  mean=39.1%  n_valid=  6
-Gen  2: best=55.2%  mean=43.7%  n_valid=  7
-...
-Gen 42: best=66.0%  mean=57.3%  n_valid=  5
-
-  Last improvement: gen 38 (63.4% → 66.0%, +2.6pp)
-  Acceptance rate (gens 33–42): 8.5% (5 improvements / 59 valid programs)
+            Trajectory
+┏━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃ Iter ┃ Best  ┃ Mean  ┃
+┡━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ 1    │ 0.423 │ 0.391 │
+│ 2    │ 0.552 │ 0.437 │
+│ 42   │ 0.660 │ 0.573 │
+└──────┴───────┴───────┘
 ```
 
 ---
@@ -752,7 +752,6 @@ nohup "$PYTHON" "$PROJ/run.py" \
     stage_timeout=2400 \
     dag_timeout=2400 \
     max_mutants=50 \
-    max_elites_per_generation=8 \
     num_parents=1 \
     model_name=Qwen3-235B-A22B-Thinking-2507 \
     llm_base_url="http://localhost:8000/v1" \
@@ -890,8 +889,6 @@ for a metric tag is:
 | `valid_frontier_{metric}` | `program_metrics:valid_frontier_{metric}` | frontier best | On frontier improvement |
 | `valid_iter_{metric}_mean` | `program_metrics:valid_iter_{metric}_mean` | running mean | Each valid program |
 | `valid_iter_{metric}_std` | `program_metrics:valid_iter_{metric}_std` | running std | Each valid program |
-| `valid_gen_{metric}_mean` | `program_metrics:valid_gen_{metric}_mean` | per-gen mean | Each valid program |
-| `valid_gen_{metric}_std` | `program_metrics:valid_gen_{metric}_std` | per-gen std | Each valid program |
 
 Where `{metric}` = metric name from `problems/{problem_name}/metrics.yaml` (e.g. `fitness`, `prompt_length`).
 
@@ -908,7 +905,7 @@ Where `{metric}` = metric name from `problems/{problem_name}/metrics.yaml` (e.g.
 |---|---|---|
 | Current iteration / progress | `hget {prefix}:run_state engine:snapshot` | **Canonical** — JSON blob; read its `programs_processed` field. Never use other sources |
 | Best frontier fitness | `lindex {prefix}:metrics:history:program_metrics:valid_frontier_fitness -1` | Parse JSON → `"v"` field |
-| Per-gen mean fitness | `lrange {prefix}:metrics:history:program_metrics:valid_gen_fitness_mean 0 -1` | `"s"` = lineage generation (depth), `"v"` = mean |
+| Per-iteration mean fitness | `lrange {prefix}:metrics:history:program_metrics:valid_iter_fitness_mean 0 -1` | `"s"` = iteration, `"v"` = mean |
 | Total programs | `lindex {prefix}:metrics:history:program_metrics:programs_total_count -1` | `"v"` field |
 | Valid programs | `lindex {prefix}:metrics:history:program_metrics:programs_valid_count -1` | `"v"` field |
 | Validator duration | `lrange {prefix}:metrics:history:dag_runner:dag:internals:CallValidatorFunction:stage_duration -20 -1` | Mean/max of last 20 entries |
@@ -930,11 +927,11 @@ Archive data persists in Redis until explicitly flushed. However, the **programs
 - **Iteration**: monotonically increasing program evaluation counter (`Program.iteration`, 0, 1, 2, ...) — the run-level progress counter. The steady-state engine has no per-generation epoch; progress is governed entirely by the stopper (`max_mutants`).
 - **Generation**: a program's lineage depth (`Program.generation` = `lineage.generation` = max parent generation + 1) — genealogical, not a run-level epoch.
 
-`valid_iter_*` keys track running aggregates stepped by iteration. `valid_gen_*` keys track aggregates grouped by lineage generation (depth). The canonical progress counter is the `engine:snapshot` JSON blob in the `{prefix}:run_state` hash (read its `programs_processed` field) — never derive it from metric step values.
+`valid_iter_*` keys track running aggregates stepped by iteration. The canonical progress counter is the `engine:snapshot` JSON blob in the `{prefix}:run_state` hash (read its `programs_processed` field) — never derive it from metric step values.
 
 ### Rules
 
 1. **Canonical progress counter**: `hget {prefix}:run_state engine:snapshot` (JSON blob; read its `programs_processed` field). Never use `llen(valid_frontier_fitness)` or `valid_iter_fitness_mean` last `"s"` — both can lag under high throughput.
 2. **Never write ad-hoc Redis queries** to answer questions the tools already answer. If a tool gives wrong results, fix the tool.
 3. **Never flush manually** with `redis-cli FLUSHDB` — use `gigaevo flush --db N --confirm` which kills workers first.
-4. **Never use log grep for gen count** — `grep -c "Phase 1: Idle confirmed" run.log` is brittle and has caused production crashes. Use `hget` on `run_state`.
+4. **Never use log grep for progress count** — `grep -c "Phase 1: Idle confirmed" run.log` is brittle and has caused production crashes. Use `hget` on `run_state`.

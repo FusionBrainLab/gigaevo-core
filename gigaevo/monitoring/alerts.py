@@ -81,12 +81,12 @@ class AlertDetector:
     def __init__(
         self,
         invalidity_threshold: float = 0.75,
-        invalidity_min_generation: int = 3,
+        invalidity_min_iteration: int = 3,
         cooldown_cycles: int = 2,
         excluded_events: Iterable[str] | None = None,
     ):
         self._invalidity_threshold = invalidity_threshold
-        self._invalidity_min_gen = invalidity_min_generation
+        self._invalidity_min_iter = invalidity_min_iteration
         self._cooldown_cycles = cooldown_cycles
         self._excluded_events: set[str] = set(excluded_events or ())
 
@@ -117,7 +117,7 @@ class AlertDetector:
             prev = self._previous_snapshots.get(label)
             if prev is not None and snap.is_stalled(prev):
                 log.warning(
-                    f"Stall detected: gen={snap.generation}, "
+                    f"Stall detected: iter={snap.iteration}, "
                     f"running={snap.running_programs}, total={snap.total_programs}"
                 )
                 raw_alerts.append(
@@ -126,12 +126,12 @@ class AlertDetector:
                         severity=AlertSeverity.WARN,
                         run_label=label,
                         message=(
-                            f"Run {label} stalled at gen {snap.generation}: "
-                            f"no generation advancement, no running programs, "
+                            f"Run {label} stalled at iteration {snap.iteration}: "
+                            f"no iteration advancement, no running programs, "
                             f"no new submissions."
                         ),
                         details={
-                            "generation": snap.generation,
+                            "iteration": snap.iteration,
                             "running_programs": snap.running_programs,
                             "total_programs": snap.total_programs,
                         },
@@ -156,24 +156,26 @@ class AlertDetector:
             if (
                 inv_rate is not None
                 and inv_rate > self._invalidity_threshold
-                and snap.generation is not None
-                and snap.generation >= self._invalidity_min_gen
+                and snap.iteration is not None
+                and snap.iteration >= self._invalidity_min_iter
             ):
                 pct = inv_rate * 100
-                log.warning(f"High invalidity: {pct:.0f}% at gen {snap.generation}")
+                log.warning(
+                    f"High invalidity: {pct:.0f}% at iteration {snap.iteration}"
+                )
                 raw_alerts.append(
                     Alert(
                         alert_type=AlertType.HIGH_INVALIDITY,
                         severity=AlertSeverity.WARN,
                         run_label=label,
                         message=(
-                            f"Run {label}: {pct:.0f}% invalid programs at gen "
-                            f"{snap.generation} -- stage_timeout is likely too "
+                            f"Run {label}: {pct:.0f}% invalid programs at iteration "
+                            f"{snap.iteration} -- stage_timeout is likely too "
                             f"short for this eval workload."
                         ),
                         details={
                             "invalid_rate": inv_rate,
-                            "generation": snap.generation,
+                            "iteration": snap.iteration,
                             "total_programs": snap.total_programs,
                             "valid_programs": snap.valid_programs,
                         },
@@ -190,8 +192,8 @@ class AlertDetector:
             reasons = {
                 s.run_spec.label: s.completion_reason or "unknown" for s in snapshots
             }
-            gen_summary = ", ".join(
-                f"{s.run_spec.label}={s.generation}" for s in snapshots
+            iter_summary = ", ".join(
+                f"{s.run_spec.label}={s.iteration}" for s in snapshots
             )
             logger.bind(component="alerts").info(
                 "Experiment complete: all runs signaled completion"
@@ -203,11 +205,11 @@ class AlertDetector:
                     run_label="experiment",
                     message=(
                         f"All {len(snapshots)} runs completed: "
-                        f"{gen_summary}. Reasons: {reasons}"
+                        f"{iter_summary}. Reasons: {reasons}"
                     ),
                     details={
-                        "run_generations": {
-                            s.run_spec.label: s.generation for s in snapshots
+                        "run_iterations": {
+                            s.run_spec.label: s.iteration for s in snapshots
                         },
                         "run_reasons": reasons,
                     },
@@ -226,7 +228,7 @@ class AlertDetector:
     def _event_rate_zero_alerts(self, snap: RunSnapshot) -> list[Alert]:
         """Generic predicate: one alert per canonical event observed on this
         snapshot whose ``expected_after_gen`` threshold has been crossed by
-        the run's generation AND whose minute-window count is zero.
+        the run's iteration AND whose minute-window count is zero.
 
         Iterates ``snap.event_window_counts`` (what was actually measured),
         not the full registry — we only alert on signals we collected. This
@@ -251,7 +253,7 @@ class AlertDetector:
 
         if snap.event_window_counts is None:
             return []
-        if snap.generation is None:
+        if snap.iteration is None:
             return []
 
         alerts: list[Alert] = []
@@ -264,7 +266,7 @@ class AlertDetector:
             threshold = getattr(cls, "expected_after_gen", 0) or 0
             if threshold <= 0:
                 continue
-            if snap.generation < threshold:
+            if snap.iteration < threshold:
                 continue
             if count > 0:
                 continue
@@ -276,12 +278,12 @@ class AlertDetector:
                     run_label=snap.run_spec.label,
                     message=(
                         f"Run {snap.run_spec.label}: event {name} count is 0 at "
-                        f"gen {snap.generation} (expected after gen "
-                        f"{threshold}). {health_q}".rstrip()
+                        f"iteration {snap.iteration} (expected after "
+                        f"{threshold} iterations). {health_q}".rstrip()
                     ),
                     details={
                         "event_name": name,
-                        "generation": snap.generation,
+                        "iteration": snap.iteration,
                         "expected_after_gen": threshold,
                         "count": count,
                         "health_question": health_q,

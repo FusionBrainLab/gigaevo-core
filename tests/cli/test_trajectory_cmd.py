@@ -19,22 +19,22 @@ def _populate_trajectory(
     server: fakeredis.FakeServer,
     db: int,
     prefix: str,
-    generations: list[tuple[int, float, float]],
+    iterations: list[tuple[int, float, float]],
 ) -> None:
-    """Populate fakeredis with gen-by-gen trajectory data.
+    """Populate fakeredis with iteration-by-iteration trajectory data.
 
-    Each tuple is (gen, frontier_fitness, mean_fitness).
+    Each tuple is (iteration, frontier_fitness, mean_fitness).
     """
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_mutants=len(generations))
-    for gen, frontier, mean in generations:
+    write_engine_snapshot_sync(r, prefix, total_mutants=len(iterations))
+    for it, frontier, mean in iterations:
         r.rpush(
             f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
-            _metric_entry(gen, frontier),
+            _metric_entry(it, frontier),
         )
         r.rpush(
-            f"{prefix}:metrics:history:program_metrics:valid_gen_fitness_mean",
-            _metric_entry(gen, mean),
+            f"{prefix}:metrics:history:program_metrics:valid_iter_fitness_mean",
+            _metric_entry(it, mean),
         )
 
 
@@ -48,11 +48,11 @@ def _make_obj(server: fakeredis.FakeServer) -> dict:
 
 
 class TestTrajectoryBasic:
-    def test_json_output_has_per_gen_rows(self):
-        """Trajectory returns one row per generation in JSON."""
+    def test_json_output_has_per_iter_rows(self):
+        """Trajectory returns one row per iteration in JSON."""
         server = fakeredis.FakeServer()
-        gens = [(1, 0.42, 0.39), (2, 0.55, 0.44), (3, 0.60, 0.50)]
-        _populate_trajectory(server, 4, "test/prefix", gens)
+        iters = [(1, 0.42, 0.39), (2, 0.55, 0.44), (3, 0.60, 0.50)]
+        _populate_trajectory(server, 4, "test/prefix", iters)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -64,14 +64,14 @@ class TestTrajectoryBasic:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert len(data) == 3
-        assert data[0]["Gen"] == 1
-        assert data[2]["Gen"] == 3
+        assert data[0]["Iter"] == 1
+        assert data[2]["Iter"] == 3
 
-    def test_table_output_contains_gen_label(self):
-        """Trajectory table output contains generation numbers."""
+    def test_table_output_contains_iter_label(self):
+        """Trajectory table output contains iteration numbers."""
         server = fakeredis.FakeServer()
-        gens = [(1, 0.50, 0.40)]
-        _populate_trajectory(server, 4, "test/prefix", gens)
+        iters = [(1, 0.50, 0.40)]
+        _populate_trajectory(server, 4, "test/prefix", iters)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -85,10 +85,10 @@ class TestTrajectoryBasic:
 
 class TestTrajectoryTail:
     def test_tail_limits_output(self):
-        """--tail N shows only the last N generations."""
+        """--tail N shows only the last N iterations."""
         server = fakeredis.FakeServer()
-        gens = [(i, 0.40 + i * 0.01, 0.35 + i * 0.01) for i in range(1, 11)]
-        _populate_trajectory(server, 4, "test/prefix", gens)
+        iters = [(i, 0.40 + i * 0.01, 0.35 + i * 0.01) for i in range(1, 11)]
+        _populate_trajectory(server, 4, "test/prefix", iters)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -100,8 +100,8 @@ class TestTrajectoryTail:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert len(data) == 3
-        assert data[0]["Gen"] == 8
-        assert data[2]["Gen"] == 10
+        assert data[0]["Iter"] == 8
+        assert data[2]["Iter"] == 10
 
 
 class TestTrajectoryEmptyRedis:
@@ -156,11 +156,11 @@ class TestTrajectoryMetricOption:
             _metric_entry(2, 0.85),
         )
         r.rpush(
-            "test/prefix:metrics:history:program_metrics:valid_gen_accuracy_mean",
+            "test/prefix:metrics:history:program_metrics:valid_iter_accuracy_mean",
             _metric_entry(1, 0.70),
         )
         r.rpush(
-            "test/prefix:metrics:history:program_metrics:valid_gen_accuracy_mean",
+            "test/prefix:metrics:history:program_metrics:valid_iter_accuracy_mean",
             _metric_entry(2, 0.75),
         )
 
@@ -191,18 +191,18 @@ def _populate_metric_trajectory(
     db: int,
     prefix: str,
     metric: str,
-    generations: list[tuple[int, float, float]],
+    iterations: list[tuple[int, float, float]],
 ) -> None:
-    """Populate fakeredis with gen-by-gen trajectory data for a specific metric."""
+    """Populate fakeredis with iteration-by-iteration trajectory data for a specific metric."""
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    for gen, frontier, mean in generations:
+    for it, frontier, mean in iterations:
         r.rpush(
             f"{prefix}:metrics:history:program_metrics:valid_frontier_{metric}",
-            _metric_entry(gen, frontier),
+            _metric_entry(it, frontier),
         )
         r.rpush(
-            f"{prefix}:metrics:history:program_metrics:valid_gen_{metric}_mean",
-            _metric_entry(gen, mean),
+            f"{prefix}:metrics:history:program_metrics:valid_iter_{metric}_mean",
+            _metric_entry(it, mean),
         )
 
 

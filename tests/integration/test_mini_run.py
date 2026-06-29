@@ -237,7 +237,6 @@ def _build(
         mutation_operator=mutation_operator or IncrementMutationOperator(),
         config=SteadyStateEngineConfig(
             loop_interval=0.005,
-            max_elites_per_generation=max_elites,
             stopper=MaxMutantsStopper(max_generations),
         ),
         writer=writer,

@@ -604,7 +604,6 @@ async def _run_engine(storage, max_generations, *, mutation_operator, acceptor=N
     )
     config = SteadyStateEngineConfig(
         loop_interval=0.005,
-        max_elites_per_generation=1,
         stopper=MaxMutantsStopper(max_generations),
     )
     if acceptor is not None:

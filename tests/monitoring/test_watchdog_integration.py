@@ -30,7 +30,7 @@ from gigaevo.monitoring.watchdog_plugin import WatchdogPlugin, get_registry
 def _make_snapshot(label="A", gen=5, fitness=0.5):
     return RunSnapshot(
         run_spec=RunSpec(prefix="test/run", db=1, label=label),
-        generation=gen,
+        iteration=gen,
         metrics={"fitness": fitness},
         total_programs=100,
         valid_programs=90,
@@ -217,7 +217,7 @@ class TestAlertFlowIntegration:
         """A dead PID triggers a CRASH alert that reaches the channel."""
         dead_snap = RunSnapshot(
             run_spec=RunSpec(prefix="test", db=1, label="A"),
-            generation=5,
+            iteration=5,
             metrics={"fitness": 0.5},
             total_programs=100,
             valid_programs=90,

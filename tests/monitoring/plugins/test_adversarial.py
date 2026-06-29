@@ -24,7 +24,7 @@ def _make_snapshot(
 ):
     return RunSnapshot(
         run_spec=RunSpec(prefix=prefix, db=db, label=label),
-        generation=gen,
+        iteration=gen,
         metrics={
             "fitness": fitness,
             "actual_fitness": actual_fitness,
@@ -50,7 +50,7 @@ def _make_g_snapshot(label="G1", db=1, gen=10, fitness=0.03):
             label=snap.run_spec.label,
             role="constructor",
         ),
-        generation=snap.generation,
+        iteration=snap.iteration,
         metrics=snap.metrics,
         total_programs=snap.total_programs,
         valid_programs=snap.valid_programs,
@@ -72,7 +72,7 @@ def _make_d_snapshot(label="D1", db=2, gen=10, fitness=0.02):
             label=snap.run_spec.label,
             role="improver",
         ),
-        generation=snap.generation,
+        iteration=snap.iteration,
         metrics=snap.metrics,
         total_programs=snap.total_programs,
         valid_programs=snap.valid_programs,
@@ -390,7 +390,7 @@ class TestAdversarialPluginFormatTelegramBody:
             run_spec=RunSpec(
                 prefix="synthetic_pop_a", db=1, label="G1", role="constructor"
             ),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.03},
             running_programs=0,
         )

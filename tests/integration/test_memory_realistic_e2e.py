@@ -244,7 +244,6 @@ async def _evolve(
         mutation_operator=operator,
         config=SteadyStateEngineConfig(
             loop_interval=0.005,
-            max_elites_per_generation=1,
             stopper=MaxMutantsStopper(gens),
         ),
         writer=_writer(),

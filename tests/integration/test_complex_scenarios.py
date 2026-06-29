@@ -457,7 +457,6 @@ def _build_engine(storage, max_generations, *, mutation_operator):
         mutation_operator=mutation_operator,
         config=SteadyStateEngineConfig(
             loop_interval=0.005,
-            max_elites_per_generation=1,
             stopper=MaxMutantsStopper(max_generations),
         ),
         writer=_make_null_writer(),

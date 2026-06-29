@@ -180,16 +180,16 @@ class PromptCoevoPlugin(WatchdogPlugin):
             for s in group_snaps:
                 fit = s.metrics.get("fitness")
                 fit_str = f"{fit:.5f}" if fit is not None else "N/A"
-                gen = s.generation or 0
+                iteration = s.iteration or 0
                 max_g = f"/{max_generations}" if max_generations else ""
                 stalled = (
                     s.running_programs is not None
                     and s.running_programs == 0
-                    and gen > 0
+                    and iteration > 0
                 )
                 flag = "!" if stalled else "ok"
                 lines.append(
-                    f"  {flag} {s.run_spec.label}: gen {gen}{max_g} fit={fit_str}"
+                    f"  {flag} {s.run_spec.label}: iter {iteration}{max_g} fit={fit_str}"
                 )
             lines.append("")
 

@@ -1,4 +1,4 @@
-"""Trajectory subcommand -- gen-by-gen fitness trajectory."""
+"""Trajectory subcommand -- iteration-by-iteration fitness trajectory."""
 
 from __future__ import annotations
 
@@ -16,41 +16,41 @@ def _fetch_trajectory(
     prefix: str,
     metric: str,
 ) -> list[dict]:
-    """Fetch per-gen trajectory data from Redis. Returns list of row dicts."""
+    """Fetch per-iteration trajectory data from Redis. Returns list of row dicts."""
     frontier_key = f"{prefix}:metrics:history:program_metrics:valid_frontier_{metric}"
-    mean_key = f"{prefix}:metrics:history:program_metrics:valid_gen_{metric}_mean"
+    mean_key = f"{prefix}:metrics:history:program_metrics:valid_iter_{metric}_mean"
 
     frontier_raw = r.lrange(frontier_key, 0, -1)
     mean_raw = r.lrange(mean_key, 0, -1)
 
-    frontier_by_gen: dict[int, float] = {}
+    frontier_by_iter: dict[int, float] = {}
     for raw in frontier_raw:
         try:
             entry = json.loads(raw)
-            frontier_by_gen[int(entry["s"])] = float(entry["v"])
+            frontier_by_iter[int(entry["s"])] = float(entry["v"])
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             pass
 
-    mean_by_gen: dict[int, float] = {}
+    mean_by_iter: dict[int, float] = {}
     for raw in mean_raw:
         try:
             entry = json.loads(raw)
-            mean_by_gen[int(entry["s"])] = float(entry["v"])
+            mean_by_iter[int(entry["s"])] = float(entry["v"])
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             pass
 
-    all_gens = sorted(set(frontier_by_gen.keys()) | set(mean_by_gen.keys()))
+    all_iters = sorted(set(frontier_by_iter.keys()) | set(mean_by_iter.keys()))
     running_best: float | None = None
     rows: list[dict] = []
-    for gen in all_gens:
-        best = frontier_by_gen.get(gen)
+    for it in all_iters:
+        best = frontier_by_iter.get(it)
         if best is not None:
             if running_best is None or best > running_best:
                 running_best = best
-        mean = mean_by_gen.get(gen)
+        mean = mean_by_iter.get(it)
         rows.append(
             {
-                "Gen": gen,
+                "Iter": it,
                 "Best": running_best,
                 "Mean": mean,
             }
@@ -59,7 +59,7 @@ def _fetch_trajectory(
 
 
 @click.command()
-@click.option("--tail", type=int, default=None, help="Show only last N generations.")
+@click.option("--tail", type=int, default=None, help="Show only last N iterations.")
 @click.option(
     "--metric",
     multiple=True,
@@ -85,10 +85,10 @@ def trajectory(
     metric: tuple[str, ...],
     format_name: str | None,
 ) -> None:
-    """Show gen-by-gen metric trajectory (running best + per-gen mean).
+    """Show iteration-by-iteration metric trajectory (running best + per-iter mean).
 
     Reads `valid_frontier_<metric>` (running best, fitness-only monotone)
-    and `valid_gen_<metric>_mean` histories from Redis. Values are plain
+    and `valid_iter_<metric>_mean` histories from Redis. Values are plain
     (unsmoothed); use `gigaevo plot trajectory` for smoothed plots.
 
     Metric selection: if `--metric` is omitted, metrics are auto-discovered
@@ -165,7 +165,7 @@ def trajectory(
     if tail is not None and tail > 0:
         all_rows = all_rows[-tail:]
 
-    columns = ["Gen", "Best", "Mean"]
+    columns = ["Iter", "Best", "Mean"]
     if len(run_configs) > 1:
         columns = ["Label"] + columns
     if len(metrics_to_show) > 1:

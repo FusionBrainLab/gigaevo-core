@@ -23,17 +23,17 @@ def _populate_run(
     server: fakeredis.FakeServer,
     db: int,
     prefix: str,
-    generation: int,
+    iteration: int,
     fitness: float,
     total: int,
     valid: int,
 ) -> None:
     """Populate a fakeredis DB with standard run data."""
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_mutants=generation)
+    write_engine_snapshot_sync(r, prefix, total_mutants=iteration)
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
-        _metric_entry(generation, fitness),
+        _metric_entry(iteration, fitness),
     )
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:programs_total_count",
@@ -76,7 +76,7 @@ class TestStatusSingleRun:
         """Status shows the run label in table output."""
         server = fakeredis.FakeServer()
         _populate_run(
-            server, 4, "test/prefix", generation=10, fitness=0.76, total=100, valid=85
+            server, 4, "test/prefix", iteration=10, fitness=0.76, total=100, valid=85
         )
 
         invoke = _make_invoker(server)
@@ -85,14 +85,14 @@ class TestStatusSingleRun:
         assert "A" in result.output
 
     @pytest.mark.skip(
-        reason="Pre-existing CI failure on main: Gen field reads 0 instead of "
+        reason="Pre-existing CI failure on main: Iter field reads 0 instead of "
         "the seeded total_mutants=10. Unblocks CI; tracked separately."
     )
     def test_json_output_has_expected_fields(self):
         """Status JSON output includes run data from monitoring lib."""
         server = fakeredis.FakeServer()
         _populate_run(
-            server, 4, "test/prefix", generation=10, fitness=0.76, total=100, valid=85
+            server, 4, "test/prefix", iteration=10, fitness=0.76, total=100, valid=85
         )
 
         invoke = _make_invoker(server)
@@ -103,13 +103,13 @@ class TestStatusSingleRun:
         assert len(data) == 1
         row = data[0]
         assert row["Label"] == "A"
-        assert row["Gen"] == 10
+        assert row["Iter"] == 10
 
     def test_csv_output(self):
         """Status CSV output has header and data row."""
         server = fakeredis.FakeServer()
         _populate_run(
-            server, 4, "test/prefix", generation=5, fitness=0.50, total=20, valid=18
+            server, 4, "test/prefix", iteration=5, fitness=0.50, total=20, valid=18
         )
 
         invoke = _make_invoker(server)
@@ -124,8 +124,8 @@ class TestStatusMultipleRuns:
     def test_multiple_runs_all_shown(self):
         """Each run gets its own row in the output."""
         server = fakeredis.FakeServer()
-        _populate_run(server, 1, "p", generation=10, fitness=0.76, total=100, valid=85)
-        _populate_run(server, 2, "p", generation=20, fitness=0.82, total=200, valid=190)
+        _populate_run(server, 1, "p", iteration=10, fitness=0.76, total=100, valid=85)
+        _populate_run(server, 2, "p", iteration=20, fitness=0.82, total=200, valid=190)
 
         invoke = _make_invoker(server)
         result = invoke(["-r", "p@1:A", "-r", "p@2:B", "-f", "json", "status"])
@@ -149,7 +149,7 @@ class TestStatusEmptyRedis:
         assert len(data) == 1
         row = data[0]
         assert row["Label"] == "E"
-        assert row["Gen"] is None
+        assert row["Iter"] is None
 
 
 class TestStatusUsesMonitoringLib:
@@ -157,7 +157,7 @@ class TestStatusUsesMonitoringLib:
         """Status delegates to ExperimentMonitor.collect()."""
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="M"),
-            generation=42,
+            iteration=42,
             metrics={"fitness": 0.99},
             total_programs=500,
             valid_programs=450,
@@ -177,7 +177,7 @@ class TestStatusUsesMonitoringLib:
         assert result.exit_code == 0, result.output
         mock_instance.collect.assert_called_once()
         data = json.loads(result.output)
-        assert data[0]["Gen"] == 42
+        assert data[0]["Iter"] == 42
 
 
 class TestFormatMetricValue:
@@ -257,7 +257,7 @@ class TestSnapshotToRowWithSpecs:
 
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="A"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.76},
         )
         specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
@@ -270,7 +270,7 @@ class TestSnapshotToRowWithSpecs:
 
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="A"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": -1.0},
         )
         specs = {"fitness": {"decimals": 5, "upper_bound": 1.0, "sentinel_value": -1.0}}
@@ -283,7 +283,7 @@ class TestSnapshotToRowWithSpecs:
 
         snapshot = RunSnapshot(
             run_spec=RunSpec(prefix="p", db=4, label="A"),
-            generation=10,
+            iteration=10,
             metrics={"fitness": 0.76543},
         )
         row = _snapshot_to_row(snapshot)

@@ -307,8 +307,8 @@ Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `
 
 | Command | Purpose |
 |---------|---------|
-| `gigaevo -e EXP status` | Live monitoring: gen, metrics, PIDs, watchdog |
-| `gigaevo -r RUN trajectory` | Gen-by-gen fitness trajectory |
+| `gigaevo -e EXP status` | Live monitoring: iteration, metrics, PIDs, watchdog |
+| `gigaevo -r RUN trajectory` | Iteration-by-iteration fitness trajectory |
 | `gigaevo -r RUN top` | Inspect best programs by fitness |
 | `gigaevo -e EXP plot comparison -o DIR` | Multi-run fitness curve plots |
 | `gigaevo -e EXP plot arms-race -o DIR` | Dual-panel adversarial arms-race plot |

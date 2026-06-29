@@ -21,7 +21,7 @@ def test_full_construction() -> None:
     spec = _make_spec()
     snap = RunSnapshot(
         run_spec=spec,
-        generation=42,
+        iteration=42,
         metrics={"fitness": 0.76, "prompt_length": 299.0},
         total_programs=100,
         valid_programs=85,
@@ -36,7 +36,7 @@ def test_full_construction() -> None:
         error=None,
     )
     assert snap.run_spec == spec
-    assert snap.generation == 42
+    assert snap.iteration == 42
     assert snap.metrics["fitness"] == 0.76
     assert snap.total_programs == 100
     assert snap.valid_programs == 85
@@ -54,7 +54,7 @@ def test_full_construction() -> None:
 def test_construction_with_defaults() -> None:
     spec = _make_spec()
     snap = RunSnapshot(run_spec=spec)
-    assert snap.generation is None
+    assert snap.iteration is None
     assert snap.metrics == {}
     assert snap.total_programs is None
     assert snap.valid_programs is None
@@ -71,9 +71,9 @@ def test_construction_with_defaults() -> None:
 
 def test_frozen() -> None:
     spec = _make_spec()
-    snap = RunSnapshot(run_spec=spec, generation=10)
+    snap = RunSnapshot(run_spec=spec, iteration=10)
     with pytest.raises(AttributeError):
-        snap.generation = 20  # type: ignore[misc]
+        snap.iteration = 20  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -114,21 +114,21 @@ def test_has_error_false() -> None:
 def test_is_stalled_true() -> None:
     spec = _make_spec()
     prev = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=0, total_programs=50
+        run_spec=spec, iteration=10, running_programs=0, total_programs=50
     )
     curr = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=0, total_programs=50
+        run_spec=spec, iteration=10, running_programs=0, total_programs=50
     )
     assert curr.is_stalled(prev) is True
 
 
-def test_is_stalled_false_generation_advanced() -> None:
+def test_is_stalled_false_iteration_advanced() -> None:
     spec = _make_spec()
     prev = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=0, total_programs=50
+        run_spec=spec, iteration=10, running_programs=0, total_programs=50
     )
     curr = RunSnapshot(
-        run_spec=spec, generation=11, running_programs=0, total_programs=50
+        run_spec=spec, iteration=11, running_programs=0, total_programs=50
     )
     assert curr.is_stalled(prev) is False
 
@@ -136,10 +136,10 @@ def test_is_stalled_false_generation_advanced() -> None:
 def test_is_stalled_false_programs_running() -> None:
     spec = _make_spec()
     prev = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=0, total_programs=50
+        run_spec=spec, iteration=10, running_programs=0, total_programs=50
     )
     curr = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=2, total_programs=50
+        run_spec=spec, iteration=10, running_programs=2, total_programs=50
     )
     assert curr.is_stalled(prev) is False
 
@@ -147,18 +147,18 @@ def test_is_stalled_false_programs_running() -> None:
 def test_is_stalled_false_new_submissions() -> None:
     spec = _make_spec()
     prev = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=0, total_programs=50
+        run_spec=spec, iteration=10, running_programs=0, total_programs=50
     )
     curr = RunSnapshot(
-        run_spec=spec, generation=10, running_programs=0, total_programs=52
+        run_spec=spec, iteration=10, running_programs=0, total_programs=52
     )
     assert curr.is_stalled(prev) is False
 
 
-def test_is_stalled_false_when_generation_none() -> None:
+def test_is_stalled_false_when_iteration_none() -> None:
     spec = _make_spec()
-    prev = RunSnapshot(run_spec=spec, generation=None)
-    curr = RunSnapshot(run_spec=spec, generation=10)
+    prev = RunSnapshot(run_spec=spec, iteration=None)
+    curr = RunSnapshot(run_spec=spec, iteration=10)
     assert curr.is_stalled(prev) is False
 
 
@@ -171,7 +171,7 @@ def test_empty_factory() -> None:
     spec = _make_spec()
     snap = RunSnapshot.empty(spec)
     assert snap.run_spec == spec
-    assert snap.generation is None
+    assert snap.iteration is None
     assert snap.metrics == {}
     assert snap.total_programs is None
     assert snap.valid_programs is None

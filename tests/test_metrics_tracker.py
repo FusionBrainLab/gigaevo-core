@@ -263,8 +263,6 @@ class TestProcessProgram:
         # Iteration aggregates (single sample: mean=value, std=0)
         assert tag_to_val["valid/iter/score/mean"] == pytest.approx(99.0)
         assert tag_to_val["valid/iter/score/std"] == pytest.approx(0.0)
-        # Generation aggregates
-        assert tag_to_val["valid/gen/score/mean"] == pytest.approx(99.0)
         # Validity flag for valid program should be 1.0
         assert tag_to_val[VALIDITY_KEY] == pytest.approx(1.0)
 
@@ -273,10 +271,6 @@ class TestProcessProgram:
             (t, v, kw) for t, v, kw in writer.scalars if t == "valid/iter/score/mean"
         ]
         assert iter_mean[-1][2].get("step") == 3
-        gen_mean = [
-            (t, v, kw) for t, v, kw in writer.scalars if t == "valid/gen/score/mean"
-        ]
-        assert gen_mean[-1][2].get("step") == 2
         frontier = [
             (t, v, kw) for t, v, kw in writer.scalars if t == "valid/frontier/score"
         ]
@@ -687,25 +681,6 @@ class TestCrossIterationIsolation:
         assert tracker._iter_stats[2]["score"].n == 1
         assert tracker._iter_stats[1]["score"].mean_value() == pytest.approx(10.0)
         assert tracker._iter_stats[2]["score"].mean_value() == pytest.approx(30.0)
-
-    @pytest.mark.asyncio
-    async def test_gen_stats_separated_by_generation(self) -> None:
-        prog1 = _make_program(
-            metrics={VALIDITY_KEY: 1.0, "score": 5.0}, iteration=1, generation=1
-        )
-        prog2 = _make_program(
-            metrics={VALIDITY_KEY: 1.0, "score": 15.0}, iteration=2, generation=2
-        )
-        writer = RecordingWriter()
-        ctx = _make_metrics_context()
-        tracker = MetricsTracker(
-            storage=_mock_storage([]), metrics_context=ctx, writer=writer
-        )
-        await tracker._process_program(prog1)
-        await tracker._process_program(prog2)
-
-        assert tracker._gen_stats[1]["score"].mean_value() == pytest.approx(5.0)
-        assert tracker._gen_stats[2]["score"].mean_value() == pytest.approx(15.0)
 
 
 class TestFrontierNotWrittenWhenNotImproved:

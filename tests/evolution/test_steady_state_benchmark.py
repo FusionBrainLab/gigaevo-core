@@ -111,7 +111,6 @@ def _make_steady_state_engine(
     )
     config = SteadyStateEngineConfig(
         max_in_flight=max_in_flight,
-        max_elites_per_generation=10,
         stopper=stopper,
         loop_interval=0.01,
     )
