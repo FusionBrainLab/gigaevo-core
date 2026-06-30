@@ -22,6 +22,10 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from gigaevo.memory.context import ContextualGain
+from gigaevo.memory.efficacy import block_from_events
+from gigaevo.memory.shared_memory.models import CardStatsBlock
+
 DEFAULT_EVENTS = "memory_events.jsonl"
 DEFAULT_LEDGER = "write_ledger.jsonl"
 DEFAULT_EXPORT = "amem_exports/amem_memories.jsonl"
@@ -101,16 +105,20 @@ def _card_type_for_id(
     return _card_type_from_id(card_id)
 
 
-def _all_stats(card: Mapping[str, Any]) -> Mapping[str, Any]:
-    stats = card.get("evolution_statistics", {})
-    if not isinstance(stats, Mapping):
-        return {}
-    all_stats = stats.get("ALL", {})
-    return all_stats if isinstance(all_stats, Mapping) else {}
+def _card_block(card: Mapping[str, Any]) -> CardStatsBlock | None:
+    """Live reputation block from a card's persisted ``gain_events``.
 
-
-def _has_posterior(block: Mapping[str, Any]) -> bool:
-    return block.get("posterior_a") is not None and block.get("posterior_b") is not None
+    The same ``block_from_events`` math the auction reads on its own gain
+    events, so the monitor reports the real posterior rather than a removed
+    persisted field. ``None`` for a card with no events (cold prior only)."""
+    raw = card.get("gain_events")
+    if not isinstance(raw, list):
+        return None
+    events: list[ContextualGain] = []
+    for entry in raw:
+        if isinstance(entry, Mapping):
+            events.append(ContextualGain.model_validate(entry))
+    return block_from_events(events)
 
 
 def _safe_int(value: Any) -> int | None:
@@ -305,14 +313,13 @@ def summarize_memory_events(
     bank_type_counts: Counter[str] = Counter()
     for card in cards:
         bank_type_counts[_card_type(card)] += 1
-        block = _all_stats(card)
-        if _has_posterior(block):
-            posterior_count += 1
-        if bool(block.get("efficacy_confident")):
+        block = _card_block(card)
+        if block is None:
+            continue
+        posterior_count += 1
+        if block.efficacy_confident:
             confident_count += 1
-        events_count = _safe_int(block.get("intro_events"))
-        if events_count is not None:
-            intro_events.append(events_count)
+        intro_events.append(block.intro_events)
 
     bridge_payloads = [_event_payload(row) for row in bridge_events]
     last_bridge = bridge_payloads[-1] if bridge_payloads else {}

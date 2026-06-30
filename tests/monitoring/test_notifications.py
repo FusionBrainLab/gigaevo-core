@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from gigaevo.monitoring import Alert, AlertSeverity, AlertType, RunSnapshot
+from gigaevo.monitoring.alerts import Alert, AlertSeverity, AlertType
 from gigaevo.monitoring.notifications import (
     NotificationChannel,
     PlotAttachment,
@@ -17,6 +17,7 @@ from gigaevo.monitoring.notifications import (
     format_status_table_telegram,
 )
 from gigaevo.monitoring.run_spec import RunSpec
+from gigaevo.monitoring.snapshot import RunSnapshot
 
 # ── Factories ────────────────────────────────────────────────────────────────
 

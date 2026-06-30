@@ -243,7 +243,7 @@ no environment-variable cascade. ONE knob assembles everything:
 1. **Preset selection** (`config/memory/{none,reader,writer,full}.yaml`) —
    selected via `memory=<name>` on the command line. Each preset assembles a
    single `MemorySystem` node (`gigaevo/memory/system.py`,
-   `_target_: gigaevo.memory.MemorySystem`) that owns BOTH the read side and
+   `_target_: gigaevo.memory.system.MemorySystem`) that owns BOTH the read side and
    the write side. Two booleans inside that node — `reader_enabled` /
    `writer_enabled` — are what each preset flips.
 2. **Per-component groups** (`config/memory/<group>/*.yaml`) — one group per
@@ -296,7 +296,7 @@ defaults:
   - llm: gemini
   - _self_
 
-_target_: gigaevo.memory.MemorySystem
+_target_: gigaevo.memory.system.MemorySystem
 reader_enabled: true
 writer_enabled: true
 max_cards: 1
