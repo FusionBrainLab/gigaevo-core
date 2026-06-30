@@ -22,10 +22,16 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import json
 import math
 from pathlib import Path
+from typing import Any
+
+from gigaevo.memory.context import ContextualGain
+from gigaevo.memory.efficacy import block_from_events
+from gigaevo.memory.shared_memory.models import CardStatsBlock
 
 PRIOR_MAGNITUDE = 0.1  # EVThompsonAuctioneer cold-card bid magnitude
 BASELINE_MEAN = 0.5  # Beta(3,3) abstain-arm mean
@@ -136,6 +142,20 @@ def latest_posterior(arm: Arm):
     return out
 
 
+def _card_block(rec: Mapping[str, Any] | None) -> CardStatsBlock | None:
+    """Live reputation block from a card's persisted ``gain_events`` — the same
+    ``block_from_events`` math the auction reads, recomputed here because the
+    offline-stamped ``evolution_statistics["ALL"]`` field these reads relied on
+    was removed. ``None`` for a missing card or one with no events."""
+    if not rec:
+        return None
+    raw = rec.get("gain_events")
+    if not isinstance(raw, list):
+        return None
+    events = [ContextualGain.model_validate(e) for e in raw if isinstance(e, Mapping)]
+    return block_from_events(events)
+
+
 def gini(counts) -> float:
     xs = sorted(float(c) for c in counts)
     n = len(xs)
@@ -236,12 +256,10 @@ def rq2(arm: Arm) -> dict:
         q75 = sorted(counts.values())[int(0.75 * (len(counts) - 1))]
         for cid, n in counts.items():
             a, b = post.get(cid, (1.0, 1.0))
-            # prefer amem evolution_statistics if present (offline-stamped)
-            rec = arm.amem.get(cid)
-            if rec:
-                allb = (rec.get("evolution_statistics") or {}).get("ALL") or {}
-                if "posterior_a" in allb:
-                    a, b = allb["posterior_a"], allb["posterior_b"]
+            # prefer the live block recomputed from the card's gain_events
+            block = _card_block(arm.amem.get(cid))
+            if block is not None and block.posterior_a is not None:
+                a, b = block.posterior_a, block.posterior_b
             mean = a / (a + b)
             if n >= q75 and mean <= BASELINE_MEAN:
                 bad_arms.append((cid, n, round(mean, 3)))
@@ -285,19 +303,24 @@ def rq3(arm: Arm) -> dict:
     card_count_series = [p.get("card_count", 0) for p in arm.posteriors]
     last_conf = confident_series[-1] if confident_series else 0
     last_cards = card_count_series[-1] if card_count_series else 0
-    # directional consistency from amem ALL block: a == 1 + (intro-k_harm), b == 1 + k_harm
+    # reconciliation: the global block recomputed from each card's gain_events
+    # vs the (a,b) stamped on its latest slate row. Informational only (does not
+    # feed the verdict). Expect a HIGH match under a global reputation, but a LOW
+    # match under bd_proximity is BY DESIGN, not drift: BDProximityReputation
+    # stamps a cell-subset posterior on the slate while _card_block recomputes
+    # over all gain_events, so the two diverge by construction on BD arms.
     dir_ok = dir_total = 0
-    for rec in arm.amem.values():
-        allb = (rec.get("evolution_statistics") or {}).get("ALL") or {}
-        if "intro_events" in allb and "k_harm" in allb and "posterior_a" in allb:
-            dir_total += 1
-            exp_a = 1 + (allb["intro_events"] - allb["k_harm"])
-            exp_b = 1 + allb["k_harm"]
-            if (
-                abs(allb["posterior_a"] - exp_a) < 1e-6
-                and abs(allb["posterior_b"] - exp_b) < 1e-6
-            ):
-                dir_ok += 1
+    for cid, rec in arm.amem.items():
+        block = _card_block(rec)
+        slate = post.get(cid)
+        if block is None or block.posterior_a is None or slate is None:
+            continue
+        dir_total += 1
+        if (
+            abs(block.posterior_a - slate[0]) < 1e-6
+            and abs(block.posterior_b - slate[1]) < 1e-6
+        ):
+            dir_ok += 1
     # pathological if credit is too sparse to overrule the prior
     confident_share = (last_conf / last_cards) if last_cards else 0.0
     pathological = confident_share <= 0.34 or off_prior_frac < 0.5

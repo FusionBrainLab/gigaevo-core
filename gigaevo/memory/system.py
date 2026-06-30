@@ -2,7 +2,7 @@
 
 Hydra recursively builds the component leaves (reputation, backend, llm,
 retriever, selector, auction, budget) plus the ``_partial_`` evictor/
-provider/tracker under a single ``_target_: gigaevo.memory.MemorySystem`` node
+provider/tracker under a single ``_target_: gigaevo.memory.system.MemorySystem`` node
 and passes them here as kwargs. This class is the *assembler*: it completes the
 partials with the ONE shared reputation, binds the shared llm into the backend
 partial, and exposes ``.provider`` (read side) and ``.tracker`` (write

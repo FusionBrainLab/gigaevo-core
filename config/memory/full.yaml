@@ -26,6 +26,6 @@ defaults:
   - writer/evictor: harm
   - _self_
 
-_target_: gigaevo.memory.MemorySystem
+_target_: gigaevo.memory.system.MemorySystem
 reader_enabled: true
 writer_enabled: true

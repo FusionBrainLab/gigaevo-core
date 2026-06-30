@@ -6,7 +6,6 @@ Subpackages:
     ideas_tracker/  — Writer subsystem: the librarian authors cards from completed runs
 
 Public API:
-    AmemGamMemory      — main memory backend (local or API-backed)
     MemoryConfig       — configuration for AmemGamMemory (Pydantic)
     ApiConfig          — API connection settings
     GamConfig          — GAM retriever settings
@@ -15,13 +14,17 @@ Public API:
     AnyCard            — union type (MemoryCard | ProgramCard)
     normalize_memory_card — normalize raw dict into typed card model
     GigaEvoMemoryBase  — abstract base for memory backends
+
+The heavy nodes are intentionally NOT re-exported here, so ``import gigaevo``
+stays light for leaf tools. Import them from their submodules directly:
+    AmemGamMemory  → ``gigaevo.memory.shared_memory.memory``
+    MemorySystem   → ``gigaevo.memory.system`` (also the run ``_target_``)
 """
 
 from __future__ import annotations
 
 from gigaevo.memory.shared_memory.base import GigaEvoMemoryBase
 from gigaevo.memory.shared_memory.card_conversion import normalize_memory_card
-from gigaevo.memory.shared_memory.memory import AmemGamMemory
 from gigaevo.memory.shared_memory.memory_config import (
     ApiConfig,
     GamConfig,
@@ -33,17 +36,14 @@ from gigaevo.memory.shared_memory.models import (
     ProgramCard,
     Strategy,
 )
-from gigaevo.memory.system import MemorySystem
 
 __all__ = [
-    "AmemGamMemory",
     "ApiConfig",
     "AnyCard",
     "GamConfig",
     "GigaEvoMemoryBase",
     "MemoryCard",
     "MemoryConfig",
-    "MemorySystem",
     "ProgramCard",
     "Strategy",
     "normalize_memory_card",

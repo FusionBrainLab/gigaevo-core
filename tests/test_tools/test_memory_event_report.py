@@ -12,6 +12,14 @@ def _append_jsonl(path, rows):
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
+def _gain(value: float, *, invalid: bool = False) -> dict:
+    return {
+        "context": {"parent_metrics": {"fitness": 0.1}},
+        "gain": value,
+        "invalid": invalid,
+    }
+
+
 def _event(event_type: str, payload: dict, *, decision_id: str = "d1") -> dict:
     return {
         "schema_version": "memory_event.v1",
@@ -194,26 +202,24 @@ def _write_fixture(run_dir):
             {
                 "id": "idea-a",
                 "category": "general",
-                "evolution_statistics": {
-                    "ALL": {
-                        "posterior_a": 4.0,
-                        "posterior_b": 1.0,
-                        "intro_events": 3,
-                        "efficacy_confident": True,
-                    }
-                },
+                "gain_events": [_gain(0.01), _gain(0.02), _gain(0.015)],
             },
             {
                 "id": "program-x",
                 "program_id": "x",
                 "category": "program",
-                "evolution_statistics": {
-                    "ALL": {
-                        "posterior_a": 2.0,
-                        "posterior_b": 2.0,
-                        "intro_events": 7,
-                    }
-                },
+                "gain_events": [
+                    _gain(0.02),
+                    _gain(-0.03),
+                    _gain(0.01),
+                    _gain(-0.04),
+                    _gain(0.005),
+                ],
+            },
+            {
+                "id": "idea-c",
+                "category": "general",
+                "gain_events": [],
             },
         ],
     )
@@ -267,10 +273,10 @@ def test_build_report_summarizes_memory_events_and_artifacts(tmp_path) -> None:
     assert summary["gam_events"]["tools"] == {"keyword": 3}
     assert summary["gam_events"]["avg_duration_ms"] == 4.0
     assert summary["gam_events"]["max_duration_ms"] == 6.0
-    assert summary["bank"]["cards"] == 2
+    assert summary["bank"]["cards"] == 3
     assert summary["bank"]["posterior_cards"] == 2
     assert summary["bank"]["confident_cards"] == 1
-    assert summary["bank"]["intro_events_median"] == 5
+    assert summary["bank"]["intro_events_median"] == 4
     assert summary["posterior_bridge"]["last_card_count"] == 2
 
 

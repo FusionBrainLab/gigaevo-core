@@ -1,6 +1,9 @@
 """Tests for gigaevo.memory public API exports.
 
-Verifies that all public names are importable from the package root.
+Verifies the lightweight public names are importable from the package root.
+The heavy backend nodes ``AmemGamMemory`` and ``MemorySystem`` are deliberately
+NOT re-exported from the root (they drag the Redis/Chroma/engine closure); they
+live at their submodules so ``import gigaevo`` stays light for leaf tools.
 """
 
 
@@ -9,14 +12,12 @@ def test_all_exports_complete():
     import gigaevo.memory as mem_pkg
 
     expected = {
-        "AmemGamMemory",
         "ApiConfig",
         "AnyCard",
         "GamConfig",
         "GigaEvoMemoryBase",
         "MemoryCard",
         "MemoryConfig",
-        "MemorySystem",
         "ProgramCard",
         "Strategy",
         "normalize_memory_card",
@@ -25,22 +26,19 @@ def test_all_exports_complete():
 
 
 def test_import_from_package_root():
-    """All public API names importable from gigaevo.memory."""
+    """All lightweight public API names importable from gigaevo.memory."""
     from gigaevo.memory import (
-        AmemGamMemory,
         AnyCard,
         ApiConfig,
         GamConfig,
         GigaEvoMemoryBase,
         MemoryCard,
         MemoryConfig,
-        MemorySystem,
         ProgramCard,
         Strategy,
         normalize_memory_card,
     )
 
-    assert AmemGamMemory is not None
     assert ApiConfig is not None
     assert MemoryCard is not None
     assert ProgramCard is not None
@@ -49,14 +47,12 @@ def test_import_from_package_root():
     assert GamConfig is not None
     assert GigaEvoMemoryBase is not None
     assert MemoryConfig is not None
-    assert MemorySystem is not None
     assert Strategy is not None
 
 
 def test_import_from_shared_memory():
-    """All names also importable from gigaevo.memory.shared_memory."""
+    """Lightweight names also importable from gigaevo.memory.shared_memory."""
     from gigaevo.memory.shared_memory import (  # noqa: F401
-        AmemGamMemory,
         AnyCard,
         GigaEvoMemoryBase,
         MemoryCard,
@@ -78,8 +74,8 @@ def test_normalize_from_package(tmp_path):
 
 
 def test_amem_gam_memory_from_package(tmp_path):
-    """AmemGamMemory constructible from package-level import with MemoryConfig."""
-    from gigaevo.memory import AmemGamMemory
+    """AmemGamMemory constructible from its submodule with MemoryConfig."""
+    from gigaevo.memory.shared_memory.memory import AmemGamMemory
     from gigaevo.memory.shared_memory.memory_config import MemoryConfig
 
     cfg = MemoryConfig(checkpoint_path=tmp_path / "mem")
