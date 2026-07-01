@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_OUTPUT_METADATA_KEY,
@@ -102,6 +103,12 @@ def base_metrics(prog: Program) -> dict[str, float]:
     """The base parent's metric dict, frozen at birth."""
     metrics = prog.get_metadata(MUTATION_MEMORY_BASE_METRICS_METADATA_KEY)
     return dict(metrics) if isinstance(metrics, dict) else {}
+
+
+def base_id(prog: Program) -> str:
+    """The base parent's program id, frozen at birth ("" for legacy programs)."""
+    pid = prog.get_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY)
+    return pid if isinstance(pid, str) else ""
 
 
 def select_top_programs(

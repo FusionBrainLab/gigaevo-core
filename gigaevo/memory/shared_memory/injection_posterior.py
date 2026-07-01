@@ -12,6 +12,7 @@ stored events at read time; this module only produces them.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -62,10 +63,20 @@ class InjectionOutcome(BaseModel):
         description="The base parent's metric dict, frozen at birth — the decision "
         "context and the reward baseline source.",
     )
+    base_id: str = Field(
+        default="",
+        description="The base parent's program id, frozen at birth — the decision "
+        "context's parent identity.",
+    )
     base_fitness: float | None = Field(
         default=None,
         description="Base parent's fitness (base_metrics[fitness_key], resolved at "
         "the write seam); None means no base baseline, so no gain events.",
+    )
+    created_at: datetime | None = Field(
+        default=None,
+        description="This child's creation time (UTC) — the decision-outcome "
+        "timestamp stamped onto its gain events.",
     )
     card_ids_used: list[str] = Field(
         default_factory=list,
@@ -85,7 +96,8 @@ def compute_contextual_gains(
     the mutator (``card_ids_used``) — the intersection. Donor cards (used but
     selected for the other parent) and hallucinated ids (used but selected for
     neither) earn nothing. Reward is the base-relative fitness delta and context
-    is the base parent's metrics. An invalid child emits one forced-harm event
+    is the base parent's id and metrics plus the child's creation time. An
+    invalid child emits one forced-harm event
     (gain 0.0, invalid) per credited card. Children with no frozen base baseline
     (``base_fitness is None`` or empty ``base_selected_ids``) contribute nothing.
     """
@@ -98,7 +110,11 @@ def compute_contextual_gains(
         }
         if not credited:
             continue
-        context = DecisionContext(parent_metrics=dict(p.base_metrics))
+        context = DecisionContext(
+            parent_metrics=dict(p.base_metrics),
+            parent_id=p.base_id,
+            timestamp=p.created_at,
+        )
         if p.invalid:
             gain_event = ContextualGain(context=context, gain=0.0, invalid=True)
         elif p.fitness is None:

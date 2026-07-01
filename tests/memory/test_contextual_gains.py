@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from gigaevo.memory.context import DecisionContext
 from gigaevo.memory.shared_memory.injection_posterior import (
     InjectionOutcome,
@@ -62,3 +64,11 @@ def test_lower_is_better_flips_gain_sign():
     events = compute_contextual_gains([child], higher_is_better=False)
     (g,) = events["card-y"]
     assert g.gain == 0.80 - 0.70
+
+
+def test_base_id_and_created_at_flow_into_context():
+    ts = datetime(2026, 7, 1, 12, 0, 0)
+    events = compute_contextual_gains([_child(base_id="p2", created_at=ts)])
+    (g,) = events["card-y"]
+    assert g.context.parent_id == "p2"
+    assert g.context.timestamp == ts

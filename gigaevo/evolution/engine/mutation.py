@@ -6,6 +6,7 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
@@ -66,6 +67,7 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
             if card_id
         ],
         MUTATION_MEMORY_BASE_METRICS_METADATA_KEY: dict(base.metrics or {}),
+        MUTATION_MEMORY_BASE_ID_METADATA_KEY: base.id,
     }
 
 

@@ -15,6 +15,7 @@ from gigaevo.memory.core.events import emit_memory_event
 from gigaevo.memory.efficacy.stamping import CardStatsStamper
 from gigaevo.memory.ideas_tracker.fitness import (
     base_fitness,
+    base_id,
     base_metrics,
     base_selected_ids,
     card_ids_used,
@@ -54,7 +55,9 @@ def card_gain_events_from_programs(
                 invalid=evaluated_invalid(prog, fitness_key, metrics_context),
                 base_selected_ids=base_selected_ids(prog),
                 base_metrics=bm,
+                base_id=base_id(prog),
                 base_fitness=base_fitness(bm, fitness_key, metrics_context),
+                created_at=prog.created_at,
                 card_ids_used=card_ids_used(prog),
             )
         )
