@@ -2,6 +2,183 @@
 
 <!-- version list -->
 
+## v2.8.0 (2026-07-01)
+
+### Bug Fixes
+
+- **cli**: Exit cleanly on EPIPE when output is piped to a closing reader
+  ([#281](https://github.com/KhrulkovV/gigaevo-core-internal/pull/281),
+  [`af31550`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/af3155016e51b20794c1fd7f9d2e0e5a84ed7727))
+
+- **memory**: Align research protocol kwargs
+  ([`fa61b24`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/fa61b242d44dc03a02e2be93c67679517b1c4210))
+
+- **memory**: Atomic write for GAM PageStore pages.json
+  ([`79702fc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/79702fcf3caca2bd8c3f0e82a1b6102fa5597150))
+
+- **memory**: Make post_step_hook_timeout_s a tunable config knob
+  ([`ace2161`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ace21615b1c70605e9b35aef8c6098f2805fed47))
+
+- **memory**: Post-authoring near-dup re-query in librarian write path
+  ([`104b462`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/104b462532ed49d230cf493afb2c7b10df7e3ea2))
+
+- **memory**: Restore mypy on the idea-tracker write path
+  ([#286](https://github.com/KhrulkovV/gigaevo-core-internal/pull/286),
+  [`cfc29fc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/cfc29fc9911fcbb35f6781cd9efca9847452b161))
+
+- **memory**: Round-1 review fixes + multi-island BD guard + report
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **memory**: Round-2 review — finiteness guards + structural island check + canonical doc
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **memory**: Split shortlist_k from max_cards + add thompson_ev EV-bid auction
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **monitoring**: Disk-storage runs no longer leak event counters into Redis
+  ([`2e382d5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2e382d5928657df119b26cd4f403d54d34b640eb))
+
+- **tests**: Repair 3 chronically-red CI engine tests
+  ([`9f37899`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9f37899d3833e52620b116403398aa4c99b58fcd))
+
+- **types**: Make first-party mypy gate clean
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+### Chores
+
+- Remove leaked launch script
+  ([`fe9e59c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/fe9e59cd42ec77facd31e189dc39b84bb5165c50))
+
+- **agent**: Remove GitNexus MCP guidance
+  ([`191b04b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/191b04baa707cefad49050c4a7da8385562e9894))
+
+- **git**: Ignore launches_*/ experiment scratch dirs
+  ([`0a4ccf6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0a4ccf63afe3f7fbed7517ff754ddf109f32d0c0))
+
+- **infra**: Move Qwen Instruct to INTERNAL_IP after reboot
+  ([`11a21f8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/11a21f8a0abe7dce2bca3a46d2212d3cc971b000))
+
+- **infra**: Qwen Instruct on :8777, len 160000, served_model_name remap
+  ([`6067e73`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6067e73bd01b042f08635353551dee7db88ece29))
+
+- **infra**: Register INTERNAL_IP as mutation-7 (Qwen3-235B Thinking)
+  ([`3c1daad`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/3c1daadbe4fbd3f09ea199e17ae1dd81bab70351))
+
+- **infra**: Remove decommissioned GLM-5.2 server from inventory
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **prompts**: Align structured-output instructions
+  ([`ffffb4f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ffffb4f385cd99c7bcd2ecdfa88529901c76f44d))
+
+- **prompts**: De-bloat mutation prompts; bake structured_output_method=auto
+  ([`aa16137`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/aa1613778e546b6b091bf702db82627ab74c0455))
+
+### Code Style
+
+- Apply ruff fixes before push
+  ([`a5ee366`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a5ee366b358272e8f780df15a810a5b1ee5c8c6e))
+
+- Format files before push
+  ([`90fbb0b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/90fbb0b5a0aabbf6248ef402ea71a44c64079a50))
+
+- **memory**: Trim README whitespace
+  ([`8e838f5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/8e838f5c7bc180d120bd7699674cd81ce55e21c8))
+
+### Documentation
+
+- Reframe CLAUDE.md around the general meta-framework vision
+  ([#284](https://github.com/KhrulkovV/gigaevo-core-internal/pull/284),
+  [`25f0440`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/25f04401efcebb530b06a78ed6d1eed5c5deba2c))
+
+- Sync canonical docs + CLI reference to current code
+  ([#284](https://github.com/KhrulkovV/gigaevo-core-internal/pull/284),
+  [`25f0440`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/25f04401efcebb530b06a78ed6d1eed5c5deba2c))
+
+- **cli**: Align tooling on iteration vocabulary; fix manifest TERMINAL + stale smoke keys
+  ([#284](https://github.com/KhrulkovV/gigaevo-core-internal/pull/284),
+  [`25f0440`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/25f04401efcebb530b06a78ed6d1eed5c5deba2c))
+
+- **cli**: Align tooling on iteration vocabulary; fix stale Redis/manifest details
+  ([#284](https://github.com/KhrulkovV/gigaevo-core-internal/pull/284),
+  [`25f0440`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/25f04401efcebb530b06a78ed6d1eed5c5deba2c))
+
+- **memory**: Flag required non-memory overrides for the EV-auction recipe
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+### Features
+
+- **config**: Default num_parents to 2 + fix README env-var wiring
+  ([`b65e158`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b65e158cd5ece3a069d9d301af9572e587461a4a))
+
+- **infra**: Register GLM-5.2 backend on INTERNAL_IP:8000
+  ([`467b86a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/467b86a7b096886a0e293f8f87bd378a16886e01))
+
+- **memory**: Add canonical event telemetry
+  ([`e2c7efb`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e2c7efb953dab7e2be22689ce1a8d312e494cef1))
+
+- **memory**: Add event audit report tool
+  ([`5cb4732`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5cb47327e34e00c52499b01f009129bd4008f6b0))
+
+- **memory**: Contextual-bandit card reputation + GAM fresh-context reorder + LLM IO audit
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **memory**: Contextual-bandit card reputation + GAM fresh-context reorder + LLM IO audit trail
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **memory**: Expand canonical event logging
+  ([`02fcb78`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/02fcb78cfe51a61a2f1f69ccf0c387ae708c4396))
+
+- **memory**: Make the EV contextual-bandit stack the default
+  ([#282](https://github.com/KhrulkovV/gigaevo-core-internal/pull/282),
+  [`1c93712`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c9371266157a062ef693d9f945997d1250d44b3))
+
+- **memory**: NullEvictor + absorbed-id gain-attribution alias layer
+  ([`76a19eb`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/76a19eb4df41243db12d9e95f35b467b9cfd6caa))
+
+- **memory**: Stamp base parent id + timestamp onto gain-event context
+  ([`671e1d8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/671e1d8de0a51a8404faaad53e2093006acb8078))
+
+- **memory**: Structural CardExcluder ablation family (lineage + dose-matched random control)
+  ([`0c75508`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0c75508706dcfbfab1ad39c9b1698d27085c73cc))
+
+- **problems**: Add antenna and spherical benchmarks
+  ([`f22ed7f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f22ed7f3caf3c68b0178ef27518deacb15c9f42c))
+
+- **problems**: Sequential-landscape maze benchmark + looping-analysis spec
+  ([`9bce84f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/9bce84f595bb37c169f0437457d8027b78c9ee84))
+
+- **spherical**: General spherical-code improver (ImprovEvolve on Cohn catalogue)
+  ([`0c3b94a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0c3b94a782e82b874d3651afcae76721f7039427))
+
+- **tools**: Memory_card_health structural integrity snapshot
+  ([`0819ac6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0819ac6de020c853c278d30910a651acd197343c))
+
+### Refactoring
+
+- Lazy package init so leaf math imports cheaply
+  ([`ef20370`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ef2037044cdb7af4415a3af93e127dfdffd1d5ba))
+
+- Migrate run-level generation vocabulary to iteration
+  ([`858979d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/858979dd8ae683be6ef651578e4c22a560ee0e55))
+
+- **memory**: Collapse to pure-cards + land seam, calibrated cold-prior, card-usefulness
+  ([`dd33dc2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/dd33dc2da43e2887ec40804676a9c36e52f535a8))
+
+- **memory**: Config-group split, generic nearest, write-path resilience
+  ([`e033add`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e033addeee4f7862355523f2b06536e0c132b5b9))
+
+- **memory**: LLM-first librarian write path + externalized agent prompts
+  ([`ea22967`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ea22967d014653891a59e807f636199806f7eb1a))
+
+
 ## v2.7.0 (2026-06-14)
 
 ### Chores
