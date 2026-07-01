@@ -47,6 +47,10 @@ MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY = "memory_base_selected_idea_ids"
 #: write seam where fitness_key is known).
 MUTATION_MEMORY_BASE_METRICS_METADATA_KEY = "memory_base_metrics"
 
+#: Frozen onto a child at birth: the base parent's program id — the decision-context
+#: parent identity that accompanies base_metrics through use-attribution.
+MUTATION_MEMORY_BASE_ID_METADATA_KEY = "memory_base_id"
+
 #: Frozen onto a child at birth: per parent, the cache id of every parent stage
 #: output that produced the child (outputs live content-addressed in the storage
 #: stage-output store). Survives the parent's NO_CACHE stages being overwritten
