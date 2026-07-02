@@ -10,7 +10,7 @@ defaults:
   - /prompts: default
   - /prompt_fetcher: fixed
   - /evolution: default
-  - /algorithm: single_island
+  - /algorithm: single_island_no_distant_parents
   - /pipeline: auto
   - /runner: default
   - /scheduling: cached_first

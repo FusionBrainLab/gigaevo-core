@@ -71,6 +71,7 @@ nosetests.xml
 .ipynb_checkpoints/
 *.ipynb
 !tools/**/*.ipynb
+!notebooks/**/*.ipynb
 ipython_config.py
 profile_default/
 

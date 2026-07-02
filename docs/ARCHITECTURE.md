@@ -379,7 +379,7 @@ defaults:
   - /constants: base        # Load constants/base.yaml
   - /redis: default         # Load redis/default.yaml
   - /llm: single           # Load llm/single.yaml
-  - /algorithm: single_island
+  - /algorithm: single_island_no_distant_parents
   - /pipeline: auto
 
 # Hydra instantiation

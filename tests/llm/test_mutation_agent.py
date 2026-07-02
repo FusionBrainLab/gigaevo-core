@@ -9,6 +9,7 @@ import pytest
 
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.llm.agents.mutation import (
+    InsightCitation,
     MutationAgent,
     MutationPromptFields,
     MutationState,
@@ -314,11 +315,25 @@ class TestParseResponse:
 
 
 class TestCitationIntegrity:
-    """parse_response counts how many insights_used are grounded in the prompt.
+    """parse_response counts cited (parent, insight) pairs offered in the prompt.
 
     Passive observability only: counts land in parsed_output, nothing is
     gated or rejected.
     """
+
+    _INSIGHTS_BLOCK = (
+        "=== Parent 1 ===\n"
+        "## Program Insights\n\n"
+        "1. **[threshold_tuning][rigid][medium]** — tune the cutoff\n"
+        "2. **[early_termination][harmful][high]** — remove the early return"
+    )
+
+    _TWO_PARENT_BLOCK = (
+        _INSIGHTS_BLOCK + "\n\n"
+        "=== Parent 2 ===\n"
+        "## Program Insights\n\n"
+        "1. **[loop_fusion][beneficial][low]** — fuse the loops"
+    )
 
     def _state_with_prompt(self, prompt_text: str, output) -> MutationState:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -330,22 +345,29 @@ class TestCitationIntegrity:
 
     def test_grounded_citation_counted(self):
         agent = _make_agent()
-        output = _make_structured_output(insights_used=["insight_a"])
-        state = self._state_with_prompt("PROGRAM INSIGHTS:\n- insight_a", output)
+        output = _make_structured_output(
+            insight_ids_used=[
+                InsightCitation(parent=1, insight=1),
+                InsightCitation(parent=1, insight=2),
+            ]
+        )
+        state = self._state_with_prompt(self._INSIGHTS_BLOCK, output)
 
         result = agent.parse_response(state)
 
         assert result["parsed_output"]["citation_integrity"] == {
-            "cited": 1,
-            "grounded": 1,
+            "cited": 2,
+            "grounded": 2,
             "cards_cited": 0,
             "cards_grounded": 0,
         }
 
     def test_ungrounded_citation_counted(self):
         agent = _make_agent()
-        output = _make_structured_output(insights_used=["never rendered anywhere"])
-        state = self._state_with_prompt("PROGRAM INSIGHTS:\n- insight_a", output)
+        output = _make_structured_output(
+            insight_ids_used=[InsightCitation(parent=1, insight=7)]
+        )
+        state = self._state_with_prompt(self._INSIGHTS_BLOCK, output)
 
         result = agent.parse_response(state)
 
@@ -356,18 +378,28 @@ class TestCitationIntegrity:
             "cards_grounded": 0,
         }
 
-    def test_whitespace_differences_still_grounded(self):
+    def test_citation_grounded_within_cited_parent_only(self):
         agent = _make_agent()
-        output = _make_structured_output(insights_used=["use   caching\nfor speed"])
-        state = self._state_with_prompt("- use caching for speed", output)
+        output = _make_structured_output(
+            insight_ids_used=[
+                InsightCitation(parent=2, insight=1),
+                InsightCitation(parent=2, insight=2),
+            ]
+        )
+        state = self._state_with_prompt(self._TWO_PARENT_BLOCK, output)
 
         result = agent.parse_response(state)
 
-        assert result["parsed_output"]["citation_integrity"]["grounded"] == 1
+        assert result["parsed_output"]["citation_integrity"] == {
+            "cited": 2,
+            "grounded": 1,
+            "cards_cited": 0,
+            "cards_grounded": 0,
+        }
 
-    def test_empty_insights_used(self):
+    def test_empty_insight_ids_used(self):
         agent = _make_agent()
-        output = _make_structured_output(insights_used=[])
+        output = _make_structured_output(insight_ids_used=[])
         state = self._state_with_prompt("any prompt", output)
 
         result = agent.parse_response(state)
@@ -379,10 +411,15 @@ class TestCitationIntegrity:
             "cards_grounded": 0,
         }
 
-    def test_blank_citations_ignored(self):
+    def test_non_positive_numbers_ignored(self):
         agent = _make_agent()
-        output = _make_structured_output(insights_used=["  ", "insight_a"])
-        state = self._state_with_prompt("- insight_a", output)
+        output = _make_structured_output(
+            insight_ids_used=[
+                InsightCitation(parent=1, insight=0),
+                InsightCitation(parent=1, insight=1),
+            ]
+        )
+        state = self._state_with_prompt(self._INSIGHTS_BLOCK, output)
 
         result = agent.parse_response(state)
 
@@ -392,6 +429,19 @@ class TestCitationIntegrity:
             "cards_cited": 0,
             "cards_grounded": 0,
         }
+
+    def test_insight_ids_forwarded_to_parsed_output(self):
+        agent = _make_agent()
+        output = _make_structured_output(
+            insight_ids_used=[InsightCitation(parent=1, insight=2)]
+        )
+        state = self._state_with_prompt(self._INSIGHTS_BLOCK, output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["insight_ids_used"] == [
+            {"parent": 1, "insight": 2}
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +656,7 @@ class TestMutationStructuredOutput:
             "archetype",
             "justification",
             "insights_used",
+            "insight_ids_used",
             "base_parent",
             "card_ids_used",
             "changes",
