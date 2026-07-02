@@ -215,7 +215,7 @@ files are in `config/`:
 | Directory | Purpose | Key files |
 |-----------|---------|-----------|
 | `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `prompt_coevolution.yaml` |
-| `algorithm/` | Evolution algorithms | `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
+| `algorithm/` | Evolution algorithms | `single_island_no_distant_parents.yaml` (default), `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
 | `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
 | `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
 | `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |

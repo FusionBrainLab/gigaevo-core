@@ -94,7 +94,7 @@ python run.py problem.name=toy_example \
 | Group | Options |
 |-------|---------|
 | `experiment` | `base`, `full_featured`, `prompt_coevolution` |
-| `algorithm` | `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
+| `algorithm` | `single_island_no_distant_parents` (default), `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
 | `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini35_flash` |
 | `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
