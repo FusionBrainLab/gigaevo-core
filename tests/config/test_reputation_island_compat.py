@@ -18,8 +18,8 @@ import pytest
 from gigaevo.config.validation import validate_reputation_island_compat
 
 _REF = "${ref:behavior_space}"
-_BD = "gigaevo.memory.core.bd_proximity.BDProximityReputation"
-_BB = "gigaevo.memory.core.reputation.BetaBinomialReputation"
+_BD = "gigaevo.memory.read.reputation.BDProximityReputation"
+_BB = "gigaevo.memory.read.reputation.BetaBinomialReputation"
 
 
 def _cfg(*, n_islands: int, reputation: dict | None) -> object:

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 
 from tools.memory_event_report import build_report, format_report
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _append_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows) + "{truncated\n",
+        encoding="utf-8",
+    )
 
 
 def _gain(value: float, *, invalid: bool = False) -> dict:
@@ -20,17 +27,29 @@ def _gain(value: float, *, invalid: bool = False) -> dict:
     }
 
 
-def _event(event_type: str, payload: dict, *, decision_id: str = "d1") -> dict:
+def _event(event: str, fields: dict, *, decision_id: str = "d1") -> dict:
     return {
-        "schema_version": "memory_event.v1",
-        "event_id": f"event-{event_type}-{decision_id}",
-        "timestamp_utc": "2026-06-19T00:00:00+00:00",
-        "component": event_type.split(".", 1)[0],
-        "event_type": event_type,
+        "event": event,
+        "timestamp_utc": "2026-07-02T00:00:00+00:00",
         "decision_id": decision_id,
         "program_id": "p1",
-        "parent_ids": ["p1"],
-        "payload": payload,
+        "parent_ids": ["p0"],
+        **fields,
+    }
+
+
+def _bid(card_id: str, selected: bool) -> dict:
+    return {
+        "card_id": card_id,
+        "posterior_a": 2.0,
+        "posterior_b": 1.0,
+        "theta": 0.7,
+        "baseline_a": 3.0,
+        "baseline_b": 3.0,
+        "baseline_theta": 0.4,
+        "selected": selected,
+        "magnitude": 0.1,
+        "bid": 0.07,
     }
 
 
@@ -40,136 +59,129 @@ def _write_fixture(run_dir):
         memory_dir / "memory_events.jsonl",
         [
             _event(
-                "read.request",
-                {"max_cards": 1, "exclude_count": 0},
-            ),
-            _event(
-                "read.retrieval",
-                {"duration_ms": 12.5, "raw_memory": {"type": "dict"}},
-            ),
-            _event(
-                "read.selection",
+                "MEMORY_RESEARCH_STEP",
                 {
-                    "candidate_ids": ["idea-a", "program-x"],
-                    "candidate_count": 2,
-                    "fetched_ids": ["idea-a", "program-x"],
-                    "missing_ids": [],
-                    "auction_winner_ids": ["idea-a", "program-x"],
-                    "budgeted_ids": ["idea-a"],
-                    "render_dropped_ids": [],
-                    "selected_ids": ["idea-a"],
-                    "selected_count": 1,
-                    "empty_reason": "",
-                    "timing_ms": {"total": 20.0},
-                    "slate": [
-                        {"card_id": "idea-a", "selected": True},
-                        {"card_id": "program-x", "selected": True},
-                    ],
+                    "step": 1,
+                    "scopes": ["desc_expl"],
+                    "query_count": 2,
+                    "hit_ids": ["mem-a", "program-x", "mem-a"],
+                    "decision": "final",
+                    "duration_ms": 12.0,
                 },
             ),
             _event(
-                "auction.run",
+                "MEMORY_RESEARCH",
                 {
+                    "outcome": "ok",
+                    "iterations": 1,
+                    "query_chars": 80,
+                    "exclude_count": 0,
+                    "candidate_ids": ["mem-a", "program-x"],
+                    "duration_ms": 15.0,
+                },
+            ),
+            _event(
+                "MEMORY_AUCTION_RUN",
+                {
+                    "auction": "thompson_ev",
                     "candidate_count": 2,
                     "winner_count": 2,
-                    "winner_ids": ["idea-a", "program-x"],
+                    "winner_ids": ["mem-a", "program-x"],
+                    "baseline_prior": [3.0, 3.0],
+                    "prior_magnitude": 0.1,
+                    "ev_floor": 0.0,
+                    "bids": [_bid("mem-a", True), _bid("program-x", True)],
                 },
             ),
             _event(
-                "budget.cap",
+                "MEMORY_BUDGET_CAP",
                 {
+                    "rank_key": "bid",
                     "winner_count": 2,
                     "max_cards": 1,
-                    "kept_ids": ["idea-a"],
+                    "kept_ids": ["mem-a"],
                     "dropped_ids": ["program-x"],
+                    "rank_by_card_id": {"mem-a": 0.07, "program-x": 0.05},
                 },
             ),
             _event(
-                "read.selection",
+                "MEMORY_READ_SELECTION",
                 {
-                    "candidate_ids": ["idea-b"],
-                    "candidate_count": 1,
-                    "fetched_ids": ["idea-b"],
-                    "missing_ids": [],
+                    "mutation_mode": "rewrite",
+                    "max_cards": 1,
+                    "exclude_ids": [],
+                    "research_iterations": 1,
+                    "candidate_ids": ["mem-a", "program-x"],
+                    "auction_winner_ids": ["mem-a", "program-x"],
+                    "budgeted_ids": ["mem-a"],
+                    "render_dropped_ids": [],
+                    "selected_ids": ["mem-a"],
+                    "slate": [_bid("mem-a", True), _bid("program-x", True)],
+                    "empty_reason": "",
+                    "timing_ms": {"research": 15.0, "auction": 1.0, "total": 20.0},
+                    "error": "",
+                },
+            ),
+            _event(
+                "MEMORY_READ_SELECTION",
+                {
+                    "mutation_mode": "rewrite",
+                    "max_cards": 1,
+                    "exclude_ids": [],
+                    "research_iterations": 1,
+                    "candidate_ids": ["mem-b"],
                     "auction_winner_ids": [],
                     "budgeted_ids": [],
                     "render_dropped_ids": [],
                     "selected_ids": [],
-                    "selected_count": 0,
+                    "slate": [_bid("mem-b", False)],
                     "empty_reason": "auction_rejected",
-                    "timing_ms": {"total": 30.0},
-                    "slate": [{"card_id": "idea-b", "selected": False}],
+                    "timing_ms": {"research": 10.0, "auction": 1.0, "total": 30.0},
+                    "error": "",
                 },
                 decision_id="d2",
             ),
             _event(
-                "write.ingest",
+                "MEMORY_STORE_WRITE",
+                {"op": "save", "outcome": "ok", "card_ids": ["mem-a"], "bank_count": 3},
+            ),
+            _event(
+                "MEMORY_STORE_WRITE",
                 {
-                    "incoming_id": "idea-a",
-                    "final_id": "idea-a",
-                    "outcome": "added",
-                    "category": "general",
-                },
-            ),
-            _event(
-                "write.sweep",
-                {
-                    "incoming_id": "idea-b",
-                    "final_id": "idea-b",
-                    "outcome": "evicted",
-                    "category": "general",
-                },
-            ),
-            _event(
-                "store.research",
-                {"mode": "gam", "duration_ms": 18.0},
-            ),
-            _event(
-                "store.rebuild",
-                {"outcome": "rebuilt", "duration_ms": 42.0},
-            ),
-            _event(
-                "gam.plan",
-                {
+                    "op": "merge",
                     "outcome": "ok",
-                    "filtered_tools": ["keyword"],
-                    "duration_ms": 2.0,
+                    "card_ids": ["mem-a", "mem-z"],
+                    "bank_count": 2,
                 },
             ),
             _event(
-                "gam.search.tool",
-                {
-                    "mode": "no_integrate",
-                    "tool": "keyword",
-                    "hit_count": 3,
-                },
+                "MEMORY_STORE_SYNC",
+                {"op": "refresh", "outcome": "ok", "card_count": 3, "duration_ms": 5.0},
             ),
             _event(
-                "gam.search",
+                "MEMORY_STORE_SYNC",
                 {
-                    "outcome": "ideas",
-                    "mode": "no_integrate",
-                    "selected_tools": ["keyword"],
-                    "idea_count": 2,
-                    "duration_ms": 4.0,
-                },
-            ),
-            _event(
-                "gam.reflection",
-                {
+                    "op": "rebuild",
                     "outcome": "ok",
-                    "mode": "final",
-                    "top_idea_ids": ["idea-a"],
-                    "duration_ms": 6.0,
+                    "card_count": 3,
+                    "duration_ms": 42.0,
                 },
             ),
             _event(
-                "injection_posterior.compute",
+                "MEMORY_GAIN_RESTAMP",
                 {
-                    "card_count": 2,
-                    "event_count_by_card_id": {"idea-a": 3, "program-x": 7},
+                    "credited_card_count": 2,
+                    "event_count_by_card_id": {"mem-a": 3, "program-x": 5},
                 },
                 decision_id="",
+            ),
+            _event(
+                "MEMORY_EVICTION_SWEEP",
+                {"bank_count": 3, "evicted_ids": ["mem-z"]},
+            ),
+            _event(
+                "MEMORY_CONSOLIDATION_PASS",
+                {"outcome": "ok", "merged": 1, "failures": 0, "error": ""},
             ),
         ],
     )
@@ -177,8 +189,8 @@ def _write_fixture(run_dir):
         memory_dir / "write_ledger.jsonl",
         [
             {
-                "incoming_id": "idea-a",
-                "final_id": "idea-a",
+                "incoming_id": "mem-a",
+                "final_id": "mem-a",
                 "outcome": "added",
                 "category": "general",
             },
@@ -189,39 +201,45 @@ def _write_fixture(run_dir):
                 "category": "program",
             },
             {
-                "incoming_id": "idea-b",
+                "incoming_id": "mem-b",
                 "final_id": "",
                 "outcome": "rejected_harm",
                 "category": "general",
             },
         ],
     )
-    _append_jsonl(
-        memory_dir / "amem_exports" / "amem_memories.jsonl",
-        [
+    (memory_dir / "cards.json").write_text(
+        json.dumps(
             {
-                "id": "idea-a",
-                "category": "general",
-                "gain_events": [_gain(0.01), _gain(0.02), _gain(0.015)],
-            },
-            {
-                "id": "program-x",
-                "program_id": "x",
-                "category": "program",
-                "gain_events": [
-                    _gain(0.02),
-                    _gain(-0.03),
-                    _gain(0.01),
-                    _gain(-0.04),
-                    _gain(0.005),
-                ],
-            },
-            {
-                "id": "idea-c",
-                "category": "general",
-                "gain_events": [],
-            },
-        ],
+                "cards": {
+                    "mem-a": {
+                        "id": "mem-a",
+                        "kind": "insight",
+                        "description": "a",
+                        "gain_events": [_gain(0.01), _gain(0.02), _gain(0.015)],
+                    },
+                    "mem-b": {
+                        "id": "mem-b",
+                        "kind": "insight",
+                        "description": "b",
+                    },
+                    "program-x": {
+                        "id": "program-x",
+                        "kind": "program",
+                        "program_id": "x",
+                        "description": "p",
+                        "gain_events": [
+                            _gain(0.02),
+                            _gain(-0.03),
+                            _gain(0.01),
+                            _gain(-0.04),
+                            _gain(0.005),
+                        ],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
     )
     return memory_dir
 
@@ -232,52 +250,57 @@ def test_build_report_summarizes_memory_events_and_artifacts(tmp_path) -> None:
     summary = build_report(tmp_path, top_n=5)
 
     assert summary["files"]["checkpoint_dir"] == str(tmp_path / "memory")
-    assert summary["events"]["by_component"]["write"] == 2
+    assert summary["events"]["total"] == 14
+    assert summary["events"]["invalid_json"] == 1
+    assert summary["events"]["by_event"]["MEMORY_READ_SELECTION"] == 2
+    assert "None" not in summary["events"]["by_event"]
     assert summary["read"]["decisions"] == 2
-    assert summary["read"]["request_events"] == 1
-    assert summary["read"]["retrieval_events"] == 1
-    assert summary["read"]["avg_retrieval_ms"] == 12.5
-    assert summary["read"]["avg_total_ms"] == 25.0
     assert summary["read"]["selected_decisions"] == 1
+    assert summary["read"]["empty_decisions"] == 1
     assert summary["read"]["empty_reasons"] == {"selected": 1, "auction_rejected": 1}
     assert summary["read"]["empty_after_candidates"] == 1
-    assert summary["read"]["top_selected"] == [{"id": "idea-a", "count": 1}]
+    assert summary["read"]["candidate_total"] == 3
+    assert summary["read"]["top_selected"] == [{"id": "mem-a", "count": 1}]
+    assert summary["read"]["avg_total_ms"] == 25.0
+    assert summary["research"]["events"] == 1
+    assert summary["research"]["steps"] == 1
+    assert summary["research"]["outcomes"] == {"ok": 1}
+    assert summary["research"]["avg_duration_ms"] == 15.0
+    assert summary["research"]["step_decisions"] == {"final": 1}
+    assert summary["research"]["step_scopes"] == {"desc_expl": 1}
+    assert summary["auction"]["by_auction"] == {"thompson_ev": 1}
     assert summary["auction"]["slate_total"] == 3
+    assert summary["auction"]["slate_selected"] == 2
     assert summary["auction"]["slate_rejected"] == 1
+    assert summary["budget"]["cap_events"] == 1
     assert summary["budget"]["top_dropped"] == [{"id": "program-x", "count": 1}]
-    assert summary["card_types"]["candidate"] == {"idea": 2, "program": 1}
-    assert summary["card_types"]["selected"] == {"idea": 1}
+    assert summary["card_kinds"]["candidate"] == {"insight": 2, "program": 1}
+    assert summary["card_kinds"]["selected"] == {"insight": 1}
+    assert summary["card_kinds"]["bank"] == {"insight": 2, "program": 1}
+    assert summary["write_ledger"]["invalid_json"] == 1
     assert summary["write_ledger"]["outcomes"] == {
         "added": 1,
         "merged": 1,
         "rejected_harm": 1,
     }
-    assert summary["write_events"]["events"] == 2
-    assert summary["write_events"]["outcomes"] == {"added": 1, "evicted": 1}
-    assert summary["store_events"]["events"] == 2
-    assert summary["store_events"]["by_type"] == {
-        "store.research": 1,
-        "store.rebuild": 1,
-    }
-    assert summary["store_events"]["modes"] == {"gam": 1}
-    assert summary["store_events"]["outcomes"] == {"rebuilt": 1}
-    assert summary["gam_events"]["events"] == 4
-    assert summary["gam_events"]["by_type"] == {
-        "gam.plan": 1,
-        "gam.search.tool": 1,
-        "gam.search": 1,
-        "gam.reflection": 1,
-    }
-    assert summary["gam_events"]["outcomes"] == {"ok": 2, "ideas": 1}
-    assert summary["gam_events"]["modes"] == {"no_integrate": 2, "final": 1}
-    assert summary["gam_events"]["tools"] == {"keyword": 3}
-    assert summary["gam_events"]["avg_duration_ms"] == 4.0
-    assert summary["gam_events"]["max_duration_ms"] == 6.0
+    assert summary["write_ledger"]["categories"] == {"general": 2, "program": 1}
+    assert summary["store"]["write_events"] == 2
+    assert summary["store"]["write_ops"] == {"save:ok": 1, "merge:ok": 1}
+    assert summary["store"]["last_bank_count"] == 2
+    assert summary["store"]["sync_events"] == 2
+    assert summary["store"]["sync_ops"] == {"refresh:ok": 1, "rebuild:ok": 1}
+    assert summary["store"]["max_sync_ms"] == 42.0
+    assert summary["maintenance"]["eviction_sweeps"] == 1
+    assert summary["maintenance"]["top_evicted"] == [{"id": "mem-z", "count": 1}]
+    assert summary["maintenance"]["consolidation_passes"] == 1
+    assert summary["maintenance"]["consolidation_outcomes"] == {"ok": 1}
+    assert summary["maintenance"]["consolidation_merged"] == 1
     assert summary["bank"]["cards"] == 3
     assert summary["bank"]["posterior_cards"] == 2
     assert summary["bank"]["confident_cards"] == 1
     assert summary["bank"]["intro_events_median"] == 4
-    assert summary["posterior_bridge"]["last_card_count"] == 2
+    assert summary["gain_restamp"]["last_credited_card_count"] == 2
+    assert summary["gain_restamp"]["last_event_count"] == 8
 
 
 def test_format_report_contains_debug_sections(tmp_path) -> None:
@@ -287,25 +310,34 @@ def test_format_report_contains_debug_sections(tmp_path) -> None:
     assert "Read Decisions" in text
     assert "auction_rejected: 1" in text
     assert "Top Selected Cards" in text
-    assert "program-x: 1" in text
+    assert "mem-a: 1" in text
+    assert "Research" in text
+    assert "thompson_ev: 1" in text
     assert "Write Ledger" in text
-    assert "Write Events" in text
-    assert "Store Events" in text
-    assert "store.rebuild: 1" in text
-    assert "GAM Events" in text
-    assert "gam.reflection: 1" in text
-    assert "by component:" in text
-    assert "Exported Bank" in text
+    assert "save:ok: 1" in text
+    assert "Maintenance" in text
+    assert "Card Bank" in text
+    assert "Gain Restamp" in text
+    assert "by event:" in text
 
 
 def test_cli_json_output(tmp_path) -> None:
     _write_fixture(tmp_path)
 
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
     result = subprocess.run(
-        [sys.executable, "tools/memory_event_report.py", str(tmp_path), "--json"],
+        [
+            sys.executable,
+            str(_REPO_ROOT / "tools" / "memory_event_report.py"),
+            str(tmp_path),
+            "--json",
+        ],
         check=True,
         capture_output=True,
         text=True,
+        env=env,
+        cwd=_REPO_ROOT,
     )
 
     payload = json.loads(result.stdout)

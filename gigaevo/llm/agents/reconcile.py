@@ -22,8 +22,7 @@ from pydantic import BaseModel, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.memory.shared_memory.card_conversion import AnyCard
-from gigaevo.memory.shared_memory.card_search import format_card_brief
+from gigaevo.memory.cards import Card, card_brief
 
 
 class LibrarianCard(BaseModel):
@@ -68,7 +67,7 @@ class ReconcileState(TypedDict, total=False):
     base_parent_code: str
     child_code: str
     note: str
-    neighbors: list[AnyCard]
+    neighbors: list[Card]
     messages: list[BaseMessage]
     llm_response: Any
     result: ReconcileResponse
@@ -90,7 +89,7 @@ class ReconcileAgent(LangGraphAgent):
 
     def build_prompt(self, state: ReconcileState) -> ReconcileState:
         neighbors = "\n".join(
-            f"- {c.id}: {format_card_brief(c)}" for c in state.get("neighbors", [])
+            f"- {c.id}: {card_brief(c)}" for c in state.get("neighbors", [])
         )
         user = self.user_prompt_template.format(
             base_parent_code=state["base_parent_code"],
@@ -117,7 +116,7 @@ class ReconcileAgent(LangGraphAgent):
         base_parent_code: str,
         child_code: str,
         note: str,
-        neighbors: list[AnyCard],
+        neighbors: list[Card],
     ) -> ReconcileResponse:
         state: ReconcileState = {
             "base_parent_code": base_parent_code,

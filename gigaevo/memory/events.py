@@ -29,6 +29,7 @@ from typing import Any, ClassVar
 from uuid import uuid4
 
 from loguru import logger
+from pydantic import Field
 
 from gigaevo.monitoring.emit import emit
 from gigaevo.monitoring.events import BaseEvent
@@ -215,3 +216,103 @@ class MemoryResearchStep(MemoryEvent):
     # {"final", "continue"}
     decision: str = ""
     duration_ms: float = 0.0
+
+
+class MemoryAuctionRun(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_AUCTION_RUN"
+    description: ClassVar[str] = (
+        "One Thompson auction over retrieved candidates completed."
+    )
+    health_question: ClassVar[str] = "Are auction winners emerging at a healthy rate?"
+
+    # {"thompson", "thompson_ev"}
+    auction: str
+    candidate_count: int = 0
+    winner_count: int = 0
+    winner_ids: tuple[str, ...] = ()
+    baseline_prior: tuple[float, float] = (0.0, 0.0)
+    prior_magnitude: float | None = None
+    ev_floor: float | None = None
+    bids: tuple[dict[str, Any], ...] = ()
+
+
+class MemoryBudgetCap(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_BUDGET_CAP"
+    description: ClassVar[str] = (
+        "The budgeter capped auction winners to the injection budget."
+    )
+    health_question: ClassVar[str] = "Is the injection budget dropping strong winners?"
+
+    # {"theta", "bid"}
+    rank_key: str
+    winner_count: int = 0
+    max_cards: int = 0
+    kept_ids: tuple[str, ...] = ()
+    dropped_ids: tuple[str, ...] = ()
+    rank_by_card_id: dict[str, float] = Field(default_factory=dict)
+
+
+class MemoryGainRestamp(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_GAIN_RESTAMP"
+    description: ClassVar[str] = (
+        "Use-attributed gain events recomputed from the pool and restamped."
+    )
+    health_question: ClassVar[str] = (
+        "Is gain attribution crediting cards with injection events?"
+    )
+
+    credited_card_count: int = 0
+    event_count_by_card_id: dict[str, int] = Field(default_factory=dict)
+
+
+class MemoryEvictionSweep(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_EVICTION_SWEEP"
+    description: ClassVar[str] = (
+        "A harm sweep evicted confidently-harmful cards from the bank."
+    )
+    health_question: ClassVar[str] = "Is harm eviction firing, and how often?"
+
+    bank_count: int = 0
+    evicted_ids: tuple[str, ...] = ()
+
+
+class MemoryConsolidationPass(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_CONSOLIDATION_PASS"
+    description: ClassVar[str] = (
+        "One background near-duplicate consolidation pass finished."
+    )
+    health_question: ClassVar[str] = (
+        "Is consolidation folding drifted near-duplicates (or failing)?"
+    )
+
+    # {"ok", "failed"}
+    outcome: str
+    merged: int = 0
+    failures: int = 0
+    error: str = ""
+
+
+class MemoryReadSelection(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_READ_SELECTION"
+    description: ClassVar[str] = (
+        "One end-to-end read decision (research → auction → budget → render)."
+    )
+    health_question: ClassVar[str] = (
+        "Is the read path injecting cards — and when empty, at which stage?"
+    )
+
+    mutation_mode: str = ""
+    max_cards: int = 0
+    exclude_ids: tuple[str, ...] = ()
+    research_iterations: int = 0
+    candidate_ids: tuple[str, ...] = ()
+    auction_winner_ids: tuple[str, ...] = ()
+    budgeted_ids: tuple[str, ...] = ()
+    render_dropped_ids: tuple[str, ...] = ()
+    selected_ids: tuple[str, ...] = ()
+    slate: tuple[dict[str, Any], ...] = ()
+    # one of: "", "max_cards_nonpositive", "research_empty", "auction_rejected",
+    # "budget_empty", "render_empty", "exception"
+    empty_reason: str = ""
+    timing_ms: dict[str, float] = Field(default_factory=dict)
+    error: str = ""

@@ -5,7 +5,7 @@
 - ``NullPostRunHook`` — no-op (writer off: ``memory=none`` or ``memory=reader``)
 - ``IncrementalPostRunHook`` — abstract extension that also supports mid-run
   refreshes via ``run_increment`` (required by ``LiveMemoryRefreshHook``)
-- ``IdeaTracker`` — analyses programs and classifies ideas (writer on:
+- ``MemoryWriter`` — authors memory cards from run results (writer on:
   ``memory=writer`` or ``memory=full``)
 """
 

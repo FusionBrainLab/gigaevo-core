@@ -1,4 +1,0 @@
-# @package memory.budget
-# Bid-ranked budgeter (pairs with `auction=thompson_ev`). Caps winners to
-# max_cards by realized EV bid (theta x magnitude), not the gate's theta.
-_target_: gigaevo.memory.core.budgeter.TopBidBudgeter

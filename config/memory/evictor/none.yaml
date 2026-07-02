@@ -1,0 +1,3 @@
+# @package memory.evictor
+# No-op evictor: run the write path with the harm sweep disabled.
+_target_: gigaevo.memory.write.eviction.NullEvictor

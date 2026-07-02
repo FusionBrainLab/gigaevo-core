@@ -2,7 +2,7 @@ defaults:
   - experiment: base       # Base experiment setup (override with experiment=full_featured)
   - storage: redis         # Program/archive storage backend (override with storage=disk)
   - /migration_bus: disabled
-  - memory: none           # Memory subsystem: none | reader | writer | full (one assembled MemorySystem node)
+  - memory: none           # Memory subsystem: none | reader | writer | full | static (flat ${ref:} component graph)
   - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
   - chains/runner: none    # Chain runner preset for chain-task problems (override with chains/runner=simple|dataset|metrics|self_critic*)

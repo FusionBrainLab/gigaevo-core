@@ -1,9 +1,31 @@
-# memory=writer — write only (seed a card bank for a later `memory=reader` run;
-# the deliberate "build a bank" move). Inherits full's components; reader off.
-# NOTE: this spends memory-LLM tokens — see gigaevo/memory/README.md.
+# memory=writer — write only (seed a card bank for a later `memory=reader`
+# run; the deliberate "build a bank" move). The read side is unmounted: no
+# store/reader nodes, the provider injects nothing. Reputation is still
+# mounted — it is the harm evictor's scorer, pure math over stamped gain
+# events. NOTE: this spends memory-LLM tokens — see gigaevo/memory/README.md.
 defaults:
-  - full
+  - llm: gemini
+  - reputation: beta_binomial
+  - evictor: harm
   - _self_
 
-reader_enabled: false
-writer_enabled: true
+provider:
+  _target_: gigaevo.memory.provider.NullMemoryProvider
+
+writer:
+  _target_: gigaevo.memory.write.writer.MemoryWriter
+  llm: ${ref:memory.llm}
+  evictor: ${ref:memory.evictor}
+  checkpoint_dir: ${checkpoint_dir}
+  metrics_context: ${ref:problem_context::metrics_context}
+  task_description: ${ref:problem_context::task_description}
+  best_programs_percent: 5.0
+  ingest_call_timeout_s: 300.0
+  consolidation_every_n: 32
+  dedup_policy:
+    _target_: gigaevo.memory.write.merge.DedupPolicy
+    online_top_k: 5
+    max_cards_per_diff: 3
+    program_twin_eps: 0.05
+    consolidation_k: 5
+  prompts_dir: ${prompts.dir}

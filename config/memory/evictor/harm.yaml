@@ -1,0 +1,6 @@
+# @package memory.evictor
+# Harm evictor consulted by the admission gate and the post-increment sweep:
+# evicts cards whose injection posterior is confidently harmful. The scorer is
+# the read side's reputation — the one shared instance, wired by reference.
+_target_: gigaevo.memory.write.eviction.HarmEvictor
+scorer: ${ref:memory.reputation}

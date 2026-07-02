@@ -15,22 +15,13 @@ ways a prompt edit breaks the system:
 
 from __future__ import annotations
 
-from gigaevo.memory.shared_memory.card_search import format_block_efficacy
-from gigaevo.memory.shared_memory.models import (
-    CardStatsBlock,
-    MemoryCard,
-    ProgramCard,
-)
+from gigaevo.memory.cards import Card, CardKind, CardStatsBlock
+from gigaevo.memory.read.render import format_block_efficacy
 from gigaevo.prompts import MutationSuggestionsPrompts, load_prompt
 
 
-def _mcard() -> MemoryCard:
-    return MemoryCard(
-        id="m1",
-        description="d",
-        keywords=[],
-        gain_events=None,
-    )
+def _mcard() -> Card:
+    return Card(id="m1", description="d")
 
 
 def _confident_positive_line() -> str:
@@ -53,13 +44,12 @@ def _caution_line() -> str:
 
 def _exemplar_line() -> str:
     return format_block_efficacy(
-        ProgramCard(
+        Card(
             id="program-x",
+            kind=CardKind.PROGRAM,
             program_id="x",
             description="d",
-            keywords=[],
             fitness=0.85,
-            gain_events=None,
         ),
         None,
     )

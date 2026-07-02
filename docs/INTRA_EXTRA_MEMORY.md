@@ -8,7 +8,7 @@ This mode replaces the legacy lineage / insights stages with two strong-LLM anal
 - **Builder:** [`gigaevo/entrypoint/lineage_memory_pipeline.py`](../gigaevo/entrypoint/lineage_memory_pipeline.py)
 - **Stages:** [`gigaevo/programs/stages/lineage_memory.py`](../gigaevo/programs/stages/lineage_memory.py)
 - **Live refresh hook:** [`gigaevo/memory/live_memory_hook.py`](../gigaevo/memory/live_memory_hook.py)
-- **Related:** [MEMORY_ARCHITECTURE.md](MEMORY_ARCHITECTURE.md), [DAG_SYSTEM.md](DAG_SYSTEM.md), [memory.md](memory.md)
+- **Related:** [memory.md](memory.md), [`gigaevo/memory/README.md`](../gigaevo/memory/README.md), [DAG_SYSTEM.md](DAG_SYSTEM.md)
 
 ---
 
@@ -24,7 +24,7 @@ Default GigaEvo passes the mutator a flat list of "insights" derived from a pare
 | Track | Scope | Stage | Trigger |
 |-------|-------|-------|---------|
 | **Intra** (per-parent lineage card) | One parent's evaluated children | `IntraMemoryStage` | Cache-invalidated when a new child completes |
-| **Extra** (live global ideas) | All evaluated programs across runs | `LiveMemoryRefreshHook` → `IdeaTracker.run_increment` | Every `refresh_every` ingestor sweeps that landed ≥ 1 program (default `10`) |
+| **Extra** (live global ideas) | All evaluated programs across runs | `LiveMemoryRefreshHook` → `MemoryWriter.run_increment` | Every `refresh_every` ingestor sweeps that landed ≥ 1 program (default `10`) |
 
 The mutator sees the intra card verbatim (`MutationContextStage.memory`) plus the suggester's `ProgramInsights` (`MutationContextStage.insights`). The global cards are consumed only by the suggester — the mutator never sees card text.
 
@@ -117,15 +117,15 @@ The `extra` half of the pipeline name is provided by `LiveMemoryRefreshHook`, wi
 ```yaml
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
-  tracker: ${ref:memory::tracker}
+  tracker: ${ref:memory.writer}
   storage: ${ref:program_storage}
   refresh_every: 10
 ```
 
-It wraps `IdeaTracker.run_increment(...)`, so the **mid-run hook and the existing end-of-run `post_run_hook` share state** via the tracker's `_run_lock`. After each refresh:
+It wraps `MemoryWriter.run_increment(...)` on the **same writer instance** the engine holds as its end-of-run `post_run_hook` (`${ref:...}` declares it once), so mid-run and end-of-run writes are serialized by the writer's `_run_lock`. After each refresh:
 
-- New cards land in the local card store.
-- `MemoryContextStage`'s reload-on-read selector picks them up on the next stage invocation.
+- New cards land in the bank (`cards.json`) and vector index.
+- The reader's research pass sees them on the next `MemoryContextStage` invocation — the store refreshes from the bank's mtime watermark.
 - The framework's `InputHashCache` sees the cards block change and invalidates downstream stages (including `IntraMemoryStage` for any parent whose lineage card hadn't already been invalidated by a new child).
 
 `refresh_every: 10` ≈ one refresh per 10 newly-evaluated mutants, which on heilbron's smoke (~45 programs) gave 4 mid-run refreshes plus the end-of-run pass.
@@ -156,14 +156,15 @@ The mode depends on one upstream config node that Hydra's defaults-list cannot s
 
 ```
 memory=full              # one preset, both sides on: LiveMemoryRefreshHook
-                         # calls IdeaTracker.run_increment (writer) and
-                         # MemoryReadPipeline reads the card store it writes
+                         # calls MemoryWriter.run_increment (writer) and
+                         # ReaderMemoryProvider reads the bank it writes
                          # to between refreshes (reader)
 ```
 
 Under `pipeline=intra_extra_memory` the writer-off presets (`memory=none`,
 `memory=reader`) fail fast at startup — the live-refresh hook needs a real
-tracker. A true no-memory baseline is `pipeline=standard memory=none`.
+writer. A true no-memory baseline is `pipeline=standard memory=none`. For
+`memory=static` (no bank to refresh) add `post_step_hook=null`.
 
 ---
 
@@ -246,7 +247,7 @@ Pair with `tools/telegram_notify.notify(...)` from your monitoring shell for mil
 | `intra_max_children` | `pipeline_builder` block | `24` | Cap on the descendant pool the analyst sees. Lower = cheaper but shallower context. |
 | `refresh_every` | `post_step_hook` block | `10` | Ingestor sweeps between live refreshes. Lower = fresher cards, more LLM calls. |
 | `post_step_hook_timeout_s` | top-level (recipe) | `900` (`300` global) | Wall-clock budget (s) for one live-refresh increment. Raised above the CPU-hook-sized 300 s global default so LLM enrichment under shared-endpoint load completes instead of being cancelled (frozen card bank). Bounds a hung hook. Override per run: `post_step_hook_timeout_s=<s>`. |
-| `max_insights` | top-level | inherited | Bound on memory-card count `MemoryContextStage` surfaces. |
+| `memory.reader.max_cards` | `config/memory/full.yaml` | `1` | Injection budget — cards `MemoryContextStage` surfaces per mutation. |
 | `max_code_length` | top-level | inherited | Truncation guard for parent code in the intra prompt. |
 | `stage_timeout` | top-level | inherited | Per-stage timeout; respected by `IntraMemoryStage` and `MutationSuggestionStage`. |
 
@@ -271,7 +272,7 @@ After a run finishes, four artefacts should all be non-empty:
    p = program_storage.get(parent_id)
    assert p.metadata.get("intra_memory_card", "").startswith("# Intra Memory")
    ```
-2. **Chroma embedding count** — should grow from 0 → ~5 × card-count by end of run.
+2. **Chroma embedding count** — should grow from 0 → ~3 × card-count by end of run (one entry per configured embed scope: `description`, `desc_expl`, `desc_task`).
 3. **Mutation context** — at least one parent's `metadata["mutation_context"]["memory"]` contains the `## Intra Memory` lineage card, and `["insights"]` carries the suggester's `ProgramInsights` (cards reach the mutator only through these).
 4. **Captured prompts** — `MutationSuggestionStage` request payloads contain a `## Memory Cards` block with `[card N] id=<card-id>` headers; `MutationAgent` payloads contain the intra card and numbered `## Program Insights`, and NO card text.
 
@@ -293,11 +294,11 @@ The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) — run on the pre-
 
 ## 11. See also
 
-- [MEMORY_ARCHITECTURE.md](MEMORY_ARCHITECTURE.md) — the global memory subsystem this mode plugs into
+- [memory.md](memory.md) — the memory system this mode plugs into (arms, config graph, read/write paths, observability)
+- [`gigaevo/memory/README.md`](../gigaevo/memory/README.md) — package-internals map
 - [DAG_SYSTEM.md](DAG_SYSTEM.md) — `InputHashCache`, `ExecutionOrderDependency`, `add_data_flow_edge` semantics
-- [memory.md](memory.md) — broader card / idea taxonomy
 - [`config/pipeline/intra_extra_memory.yaml`](../config/pipeline/intra_extra_memory.yaml) — the canonical config
 
 ---
 
-*Last updated: 2026-06-09 (single-source hint wiring: cards → suggester only). Pipeline introduced in commit `89f01be5`.*
+*Last updated: 2026-07-02 (memory rebuild: `IdeaTracker` → `MemoryWriter`, YAML `${ref:}` assembly). Pipeline introduced in commit `89f01be5`.*

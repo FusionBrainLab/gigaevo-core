@@ -1,2 +1,0 @@
-# @package memory.selector
-_target_: gigaevo.memory.core.card_selector.LLMCardSelector

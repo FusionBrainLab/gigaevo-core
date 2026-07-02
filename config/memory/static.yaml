@@ -7,12 +7,13 @@
 #   memory=static memory.provider.levers_file=/abs/path/to/levers.md \
 #     post_step_hook=null
 # post_step_hook=null is mandatory under pipeline=intra_extra_memory: that
-# pipeline's LiveMemoryRefreshHook needs a writer-enabled tracker and fails
-# fast on this preset's NullPostRunHook (there is no bank to refresh).
-defaults:
-  - reader/provider: static_levers
-  - _self_
-
-_target_: gigaevo.memory.system.MemorySystem
-reader_enabled: true
-writer_enabled: false
+# pipeline's LiveMemoryRefreshHook needs a writer-enabled arm and fails fast
+# on this preset's NullPostRunHook (there is no bank to refresh).
+provider:
+  _target_: gigaevo.memory.provider.StaticLeverMemoryProvider
+  levers_file: ???
+  # Guards the treatment: a mangled `---` separator fails the launch instead
+  # of silently running a merged/shrunken arm.
+  expected_blocks: 6
+writer:
+  _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

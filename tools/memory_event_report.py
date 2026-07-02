@@ -6,10 +6,13 @@ Usage examples:
     python tools/memory_event_report.py outputs/run --top-n 20
     python tools/memory_event_report.py --events /tmp/memory_events.jsonl --json
 
-The tool is intentionally read-only and tolerant of missing files. A partial
-run can still answer useful questions such as why memory was empty, which cards
-won the auction, whether a few cards dominate prompts, and whether program cards
-are consuming most of the budget.
+Reads the three artifacts a memory-enabled run leaves under its checkpoint dir:
+``memory_events.jsonl`` (flat rows, one per ``MEMORY_*`` canonical event),
+``write_ledger.jsonl`` (one row per admission verdict) and ``cards.json``
+(the card bank). The tool is intentionally read-only and tolerant of missing
+files. A partial run can still answer useful questions such as why memory was
+empty, which cards won the auction, whether a few cards dominate prompts, and
+whether program cards are consuming most of the budget.
 """
 
 from __future__ import annotations
@@ -22,13 +25,12 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from gigaevo.memory.context import ContextualGain
-from gigaevo.memory.efficacy import block_from_events
-from gigaevo.memory.shared_memory.models import CardStatsBlock
+from gigaevo.memory.cards import CardStatsBlock, ContextualGain
+from gigaevo.memory.read.reputation import block_from_events
 
 DEFAULT_EVENTS = "memory_events.jsonl"
 DEFAULT_LEDGER = "write_ledger.jsonl"
-DEFAULT_EXPORT = "amem_exports/amem_memories.jsonl"
+DEFAULT_BANK = "cards.json"
 
 
 def _read_jsonl(path: Path | None) -> list[dict[str, Any]]:
@@ -55,20 +57,29 @@ def _read_jsonl(path: Path | None) -> list[dict[str, Any]]:
     return rows
 
 
+def _read_bank(path: Path | None) -> list[dict[str, Any]]:
+    """Card dicts from a ``cards.json`` bank file; empty on missing/corrupt."""
+    if path is None or not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    cards = payload.get("cards") if isinstance(payload, Mapping) else None
+    if not isinstance(cards, Mapping):
+        return []
+    return [card for card in cards.values() if isinstance(card, Mapping)]
+
+
 def _resolve_checkpoint_dir(path: Path | None) -> Path | None:
     if path is None:
         return None
-    if (path / DEFAULT_EVENTS).exists() or (path / DEFAULT_LEDGER).exists():
+    if (path / DEFAULT_EVENTS).exists() or (path / DEFAULT_BANK).exists():
         return path
     memory_dir = path / "memory"
-    if (memory_dir / DEFAULT_EVENTS).exists() or (memory_dir / DEFAULT_LEDGER).exists():
+    if (memory_dir / DEFAULT_EVENTS).exists() or (memory_dir / DEFAULT_BANK).exists():
         return memory_dir
     return path
-
-
-def _event_payload(row: Mapping[str, Any]) -> Mapping[str, Any]:
-    payload = row.get("payload", {})
-    return payload if isinstance(payload, Mapping) else {}
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -84,32 +95,26 @@ def _card_id(card: Mapping[str, Any]) -> str:
     return str(value) if value is not None else ""
 
 
-def _card_type_from_id(card_id: str) -> str:
-    return "program" if card_id.startswith("program-") else "idea"
+def _card_kind(card: Mapping[str, Any]) -> str:
+    return str(card.get("kind") or "insight")
 
 
-def _card_type(card: Mapping[str, Any]) -> str:
-    category = str(card.get("category", "") or "").lower()
-    card_id = _card_id(card)
-    if category == "program" or "program_id" in card or card_id.startswith("program-"):
-        return "program"
-    return "idea"
-
-
-def _card_type_for_id(
+def _card_kind_for_id(
     card_id: str, cards_by_id: Mapping[str, Mapping[str, Any]]
 ) -> str:
     card = cards_by_id.get(card_id)
     if card is not None:
-        return _card_type(card)
-    return _card_type_from_id(card_id)
+        return _card_kind(card)
+    if card_id.startswith("static:"):
+        return "static"
+    return "unknown"
 
 
 def _card_block(card: Mapping[str, Any]) -> CardStatsBlock | None:
     """Live reputation block from a card's persisted ``gain_events``.
 
     The same ``block_from_events`` math the auction reads on its own gain
-    events, so the monitor reports the real posterior rather than a removed
+    events, so the monitor reports the real posterior rather than a stale
     persisted field. ``None`` for a card with no events (cold prior only)."""
     raw = card.get("gain_events")
     if not isinstance(raw, list):
@@ -153,12 +158,17 @@ def _top_counts(items: Iterable[str], top_n: int) -> list[dict[str, Any]]:
     ]
 
 
-def _flatten_ids(read_events: Sequence[Mapping[str, Any]], key: str) -> list[str]:
+def _flatten_ids(rows: Sequence[Mapping[str, Any]], key: str) -> list[str]:
     ids: list[str] = []
-    for row in read_events:
-        payload = _event_payload(row)
-        ids.extend(str(card_id) for card_id in _as_list(payload.get(key)) if card_id)
+    for row in rows:
+        ids.extend(str(card_id) for card_id in _as_list(row.get(key)) if card_id)
     return ids
+
+
+def _by_event(
+    events: Sequence[Mapping[str, Any]], name: str
+) -> list[Mapping[str, Any]]:
+    return [row for row in events if row.get("event") == name]
 
 
 def summarize_memory_events(
@@ -169,32 +179,20 @@ def summarize_memory_events(
     top_n: int = 10,
 ) -> dict[str, Any]:
     cards_by_id = {_card_id(card): card for card in cards if _card_id(card)}
-    read_events = [row for row in events if row.get("event_type") == "read.selection"]
-    read_request_events = [
-        row for row in events if row.get("event_type") == "read.request"
-    ]
-    read_retrieval_events = [
-        row for row in events if row.get("event_type") == "read.retrieval"
-    ]
-    auction_events = [row for row in events if row.get("event_type") == "auction.run"]
-    budget_events = [row for row in events if row.get("event_type") == "budget.cap"]
-    write_events = [
-        row for row in events if str(row.get("event_type", "")).startswith("write.")
-    ]
-    store_events = [
-        row for row in events if str(row.get("event_type", "")).startswith("store.")
-    ]
-    gam_events = [
-        row for row in events if str(row.get("event_type", "")).startswith("gam.")
-    ]
-    bridge_events = [
-        row for row in events if row.get("event_type") == "injection_posterior.compute"
-    ]
+    read_events = _by_event(events, "MEMORY_READ_SELECTION")
+    research_events = _by_event(events, "MEMORY_RESEARCH")
+    research_steps = _by_event(events, "MEMORY_RESEARCH_STEP")
+    auction_events = _by_event(events, "MEMORY_AUCTION_RUN")
+    budget_events = _by_event(events, "MEMORY_BUDGET_CAP")
+    store_write_events = _by_event(events, "MEMORY_STORE_WRITE")
+    store_sync_events = _by_event(events, "MEMORY_STORE_SYNC")
+    eviction_events = _by_event(events, "MEMORY_EVICTION_SWEEP")
+    consolidation_events = _by_event(events, "MEMORY_CONSOLIDATION_PASS")
+    restamp_events = _by_event(events, "MEMORY_GAIN_RESTAMP")
 
     selected_ids = _flatten_ids(read_events, "selected_ids")
     candidate_ids = _flatten_ids(read_events, "candidate_ids")
-    fetched_ids = _flatten_ids(read_events, "fetched_ids")
-    missing_ids = _flatten_ids(read_events, "missing_ids")
+    render_dropped_ids = _flatten_ids(read_events, "render_dropped_ids")
 
     empty_reasons: Counter[str] = Counter()
     selected_decisions = 0
@@ -203,49 +201,51 @@ def summarize_memory_events(
     slate_selected = 0
     read_total_ms: list[float] = []
     for row in read_events:
-        payload = _event_payload(row)
-        selected_count = _safe_int(payload.get("selected_count")) or len(
-            _as_list(payload.get("selected_ids"))
-        )
-        if selected_count > 0:
+        if _as_list(row.get("selected_ids")):
             selected_decisions += 1
             empty_reasons["selected"] += 1
         else:
-            reason = str(payload.get("empty_reason") or "unknown_empty")
-            empty_reasons[reason] += 1
-            if (_safe_int(payload.get("candidate_count")) or 0) > 0:
+            empty_reasons[str(row.get("empty_reason") or "unknown_empty")] += 1
+            if _as_list(row.get("candidate_ids")):
                 empty_after_candidates += 1
-        slate = _as_list(payload.get("slate"))
+        slate = _as_list(row.get("slate"))
         slate_total += len(slate)
         slate_selected += sum(
             1 for bid in slate if isinstance(bid, Mapping) and bool(bid.get("selected"))
         )
-        timing = payload.get("timing_ms")
-        if isinstance(timing, Mapping):
-            total = _safe_float(timing.get("total"))
-            if total is not None:
-                read_total_ms.append(total)
+        total = _safe_float(_as_dict(row.get("timing_ms")).get("total"))
+        if total is not None:
+            read_total_ms.append(total)
 
-    retrieval_ms = [
+    research_ms = [
         duration
-        for row in read_retrieval_events
-        if (duration := _safe_float(_event_payload(row).get("duration_ms"))) is not None
+        for row in research_events
+        if (duration := _safe_float(row.get("duration_ms"))) is not None
     ]
-
-    selected_type_counts = Counter(
-        _card_type_for_id(card_id, cards_by_id) for card_id in selected_ids
+    research_outcomes = Counter(
+        str(row.get("outcome")) for row in research_events if row.get("outcome")
     )
-    candidate_type_counts = Counter(
-        _card_type_for_id(card_id, cards_by_id) for card_id in candidate_ids
+    research_iterations = [
+        n for row in research_events if (n := _safe_int(row.get("iterations")))
+    ]
+    step_decisions = Counter(
+        str(row.get("decision")) for row in research_steps if row.get("decision")
+    )
+    step_scopes: Counter[str] = Counter()
+    for row in research_steps:
+        step_scopes.update(str(scope) for scope in _as_list(row.get("scopes")))
+
+    selected_kind_counts = Counter(
+        _card_kind_for_id(card_id, cards_by_id) for card_id in selected_ids
+    )
+    candidate_kind_counts = Counter(
+        _card_kind_for_id(card_id, cards_by_id) for card_id in candidate_ids
     )
 
-    budget_dropped_ids: list[str] = []
-    for row in budget_events:
-        budget_dropped_ids.extend(
-            str(card_id)
-            for card_id in _as_list(_event_payload(row).get("dropped_ids"))
-            if card_id
-        )
+    auction_kinds = Counter(
+        str(row.get("auction")) for row in auction_events if row.get("auction")
+    )
+    budget_dropped_ids = _flatten_ids(budget_events, "dropped_ids")
 
     ledger_outcomes = Counter(
         str(row.get("outcome")) for row in ledger if row.get("outcome") is not None
@@ -253,66 +253,34 @@ def summarize_memory_events(
     ledger_categories = Counter(
         str(row.get("category")) for row in ledger if row.get("category")
     )
-    write_event_outcomes = Counter(
-        str(_event_payload(row).get("outcome"))
-        for row in write_events
-        if _event_payload(row).get("outcome") is not None
+    store_ops = Counter(
+        f"{row.get('op')}:{row.get('outcome')}" for row in store_write_events
     )
-    write_event_categories = Counter(
-        str(_event_payload(row).get("category"))
-        for row in write_events
-        if _event_payload(row).get("category")
+    sync_ops = Counter(
+        f"{row.get('op')}:{row.get('outcome')}" for row in store_sync_events
     )
-    write_event_final_ids = [
-        str(_event_payload(row).get("final_id"))
-        for row in write_events
-        if _event_payload(row).get("final_id")
-    ]
-    store_event_types = Counter(str(row.get("event_type")) for row in store_events)
-    store_outcomes = Counter(
-        str(_event_payload(row).get("outcome"))
-        for row in store_events
-        if _event_payload(row).get("outcome") is not None
-    )
-    store_modes = Counter(
-        str(_event_payload(row).get("mode"))
-        for row in store_events
-        if _event_payload(row).get("mode") is not None
-    )
-    store_durations = [
+    sync_durations = [
         duration
-        for row in store_events
-        if (duration := _safe_float(_event_payload(row).get("duration_ms"))) is not None
+        for row in store_sync_events
+        if (duration := _safe_float(row.get("duration_ms"))) is not None
     ]
-    gam_tools: list[str] = []
-    gam_modes: Counter[str] = Counter()
-    for row in gam_events:
-        payload = _event_payload(row)
-        tool = payload.get("tool")
-        if tool is not None:
-            gam_tools.append(str(tool))
-        for key in ("selected_tools", "filtered_tools", "plan_tools"):
-            gam_tools.extend(str(item) for item in _as_list(payload.get(key)) if item)
-        mode = payload.get("mode")
-        if mode is not None:
-            gam_modes[str(mode)] += 1
-    gam_outcomes = Counter(
-        str(_event_payload(row).get("outcome"))
-        for row in gam_events
-        if _event_payload(row).get("outcome") is not None
+    bank_counts = [
+        n for row in store_write_events if (n := _safe_int(row.get("bank_count")))
+    ]
+    evicted_ids = _flatten_ids(eviction_events, "evicted_ids")
+    consolidation_outcomes = Counter(
+        str(row.get("outcome")) for row in consolidation_events if row.get("outcome")
     )
-    gam_durations = [
-        duration
-        for row in gam_events
-        if (duration := _safe_float(_event_payload(row).get("duration_ms"))) is not None
-    ]
+    consolidation_merged = sum(
+        _safe_int(row.get("merged")) or 0 for row in consolidation_events
+    )
 
     intro_events: list[int] = []
     posterior_count = 0
     confident_count = 0
-    bank_type_counts: Counter[str] = Counter()
+    bank_kind_counts: Counter[str] = Counter()
     for card in cards:
-        bank_type_counts[_card_type(card)] += 1
+        bank_kind_counts[_card_kind(card)] += 1
         block = _card_block(card)
         if block is None:
             continue
@@ -321,8 +289,7 @@ def summarize_memory_events(
             confident_count += 1
         intro_events.append(block.intro_events)
 
-    bridge_payloads = [_event_payload(row) for row in bridge_events]
-    last_bridge = bridge_payloads[-1] if bridge_payloads else {}
+    last_restamp = restamp_events[-1] if restamp_events else {}
 
     total_selected = len(selected_ids)
     top_selected = _top_counts(selected_ids, top_n)
@@ -333,34 +300,42 @@ def summarize_memory_events(
         "events": {
             "total": len(events),
             "invalid_json": sum(1 for row in events if row.get("_invalid_json")),
-            "by_type": _counter_dict(
-                Counter(str(row.get("event_type")) for row in events)
-            ),
-            "by_component": _counter_dict(
-                Counter(str(row.get("component")) for row in events)
+            "by_event": _counter_dict(
+                Counter(
+                    str(row.get("event"))
+                    for row in events
+                    if not row.get("_invalid_json")
+                )
             ),
         },
         "read": {
-            "request_events": len(read_request_events),
-            "retrieval_events": len(read_retrieval_events),
             "decisions": len(read_events),
             "selected_decisions": selected_decisions,
             "empty_decisions": len(read_events) - selected_decisions,
             "empty_after_candidates": empty_after_candidates,
             "empty_reasons": _counter_dict(empty_reasons),
             "candidate_total": len(candidate_ids),
-            "fetched_total": len(fetched_ids),
-            "missing_total": len(missing_ids),
+            "render_dropped_total": len(render_dropped_ids),
             "selected_total": total_selected,
             "unique_selected": len(set(selected_ids)),
             "top_selected": top_selected,
             "top1_share_pct": _percent(top1_count, total_selected),
             "top5_share_pct": _percent(top5_count, total_selected),
-            "avg_retrieval_ms": _avg(retrieval_ms),
             "avg_total_ms": _avg(read_total_ms),
+        },
+        "research": {
+            "events": len(research_events),
+            "outcomes": _counter_dict(research_outcomes),
+            "avg_iterations": _avg([float(n) for n in research_iterations]),
+            "avg_duration_ms": _avg(research_ms),
+            "max_duration_ms": max(research_ms) if research_ms else None,
+            "steps": len(research_steps),
+            "step_decisions": _counter_dict(step_decisions),
+            "step_scopes": _counter_dict(step_scopes),
         },
         "auction": {
             "event_count": len(auction_events),
+            "by_auction": _counter_dict(auction_kinds),
             "slate_total": slate_total,
             "slate_selected": slate_selected,
             "slate_rejected": slate_total - slate_selected,
@@ -371,10 +346,10 @@ def summarize_memory_events(
             "dropped_total": len(budget_dropped_ids),
             "top_dropped": _top_counts(budget_dropped_ids, top_n),
         },
-        "card_types": {
-            "candidate": _counter_dict(candidate_type_counts),
-            "selected": _counter_dict(selected_type_counts),
-            "bank": _counter_dict(bank_type_counts),
+        "card_kinds": {
+            "candidate": _counter_dict(candidate_kind_counts),
+            "selected": _counter_dict(selected_kind_counts),
+            "bank": _counter_dict(bank_kind_counts),
         },
         "write_ledger": {
             "rows": len(ledger),
@@ -382,33 +357,22 @@ def summarize_memory_events(
             "outcomes": _counter_dict(ledger_outcomes),
             "categories": _counter_dict(ledger_categories),
         },
-        "write_events": {
-            "events": len(write_events),
-            "by_type": _counter_dict(
-                Counter(str(row.get("event_type")) for row in write_events)
-            ),
-            "outcomes": _counter_dict(write_event_outcomes),
-            "categories": _counter_dict(write_event_categories),
-            "top_final_ids": _top_counts(write_event_final_ids, top_n),
+        "store": {
+            "write_events": len(store_write_events),
+            "write_ops": _counter_dict(store_ops),
+            "last_bank_count": bank_counts[-1] if bank_counts else None,
+            "sync_events": len(store_sync_events),
+            "sync_ops": _counter_dict(sync_ops),
+            "avg_sync_ms": _avg(sync_durations),
+            "max_sync_ms": max(sync_durations) if sync_durations else None,
         },
-        "store_events": {
-            "events": len(store_events),
-            "by_type": _counter_dict(store_event_types),
-            "outcomes": _counter_dict(store_outcomes),
-            "modes": _counter_dict(store_modes),
-            "avg_duration_ms": _avg(store_durations),
-            "max_duration_ms": max(store_durations) if store_durations else None,
-        },
-        "gam_events": {
-            "events": len(gam_events),
-            "by_type": _counter_dict(
-                Counter(str(row.get("event_type")) for row in gam_events)
-            ),
-            "outcomes": _counter_dict(gam_outcomes),
-            "modes": _counter_dict(gam_modes),
-            "tools": _counter_dict(Counter(gam_tools)),
-            "avg_duration_ms": _avg(gam_durations),
-            "max_duration_ms": max(gam_durations) if gam_durations else None,
+        "maintenance": {
+            "eviction_sweeps": len(eviction_events),
+            "evicted_total": len(evicted_ids),
+            "top_evicted": _top_counts(evicted_ids, top_n),
+            "consolidation_passes": len(consolidation_events),
+            "consolidation_outcomes": _counter_dict(consolidation_outcomes),
+            "consolidation_merged": consolidation_merged,
         },
         "bank": {
             "cards": len(cards),
@@ -417,13 +381,13 @@ def summarize_memory_events(
             "intro_events_median": median(intro_events) if intro_events else None,
             "intro_events_max": max(intro_events) if intro_events else None,
         },
-        "posterior_bridge": {
-            "events": len(bridge_events),
-            "last_card_count": last_bridge.get("card_count"),
+        "gain_restamp": {
+            "events": len(restamp_events),
+            "last_credited_card_count": last_restamp.get("credited_card_count"),
             "last_event_count": sum(
                 _safe_int(count) or 0
                 for count in _as_dict(
-                    last_bridge.get("event_count_by_card_id")
+                    last_restamp.get("event_count_by_card_id")
                 ).values()
             ),
         },
@@ -441,11 +405,11 @@ def build_report(
     checkpoint = _resolve_checkpoint_dir(checkpoint_dir)
     events_file = events_path or (checkpoint / DEFAULT_EVENTS if checkpoint else None)
     ledger_file = ledger_path or (checkpoint / DEFAULT_LEDGER if checkpoint else None)
-    cards_file = cards_path or (checkpoint / DEFAULT_EXPORT if checkpoint else None)
+    cards_file = cards_path or (checkpoint / DEFAULT_BANK if checkpoint else None)
 
     events = _read_jsonl(events_file)
     ledger = _read_jsonl(ledger_file)
-    cards = _read_jsonl(cards_file)
+    cards = _read_bank(cards_file)
     summary = summarize_memory_events(
         events=events, ledger=ledger, cards=cards, top_n=top_n
     )
@@ -493,15 +457,15 @@ def format_report(summary: Mapping[str, Any]) -> str:
     files = summary["files"]
     events = summary["events"]
     read = summary["read"]
+    research = summary["research"]
     auction = summary["auction"]
     budget = summary["budget"]
-    card_types = summary["card_types"]
+    card_kinds = summary["card_kinds"]
     ledger = summary["write_ledger"]
-    write_events = summary["write_events"]
-    store_events = summary["store_events"]
-    gam_events = summary["gam_events"]
+    store = summary["store"]
+    maintenance = summary["maintenance"]
     bank = summary["bank"]
-    bridge = summary["posterior_bridge"]
+    restamp = summary["gain_restamp"]
 
     lines = [
         "Memory Event Audit",
@@ -513,25 +477,21 @@ def format_report(summary: Mapping[str, Any]) -> str:
         "",
         "Event Stream",
         f"  rows: {events['total']} invalid_json: {events['invalid_json']}",
-        "  by type:",
+        "  by event:",
     ]
-    lines.extend(_format_counts(events["by_type"], empty="no event rows"))
-    lines.append("  by component:")
-    lines.extend(_format_counts(events["by_component"], empty="no event rows"))
+    lines.extend(_format_counts(events["by_event"], empty="no event rows"))
     lines.extend(
         [
             "",
             "Read Decisions",
-            f"  request events: {read['request_events']}",
-            f"  retrieval events: {read['retrieval_events']}",
             f"  decisions: {read['decisions']}",
             f"  selected decisions: {read['selected_decisions']}",
             f"  empty decisions: {read['empty_decisions']}",
             f"  empty after candidates: {read['empty_after_candidates']}",
-            f"  candidates: {read['candidate_total']} fetched: {read['fetched_total']} missing: {read['missing_total']}",
+            f"  candidates: {read['candidate_total']} render-dropped: {read['render_dropped_total']}",
             f"  selected cards: {read['selected_total']} unique: {read['unique_selected']}",
             f"  top1 share: {_fmt_pct(read['top1_share_pct'])} top5 share: {_fmt_pct(read['top5_share_pct'])}",
-            f"  avg retrieval: {_fmt_ms(read['avg_retrieval_ms'])} avg total: {_fmt_ms(read['avg_total_ms'])}",
+            f"  avg total: {_fmt_ms(read['avg_total_ms'])}",
             "  empty reasons:",
         ]
     )
@@ -541,8 +501,29 @@ def format_report(summary: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "Research",
+            f"  events: {research['events']} steps: {research['steps']}",
+            f"  avg iterations: {research['avg_iterations']}",
+            f"  avg duration: {_fmt_ms(research['avg_duration_ms'])} max: {_fmt_ms(research['max_duration_ms'])}",
+            "  outcomes:",
+        ]
+    )
+    lines.extend(_format_counts(research["outcomes"], empty="none"))
+    lines.append("  step decisions:")
+    lines.extend(_format_counts(research["step_decisions"], empty="none"))
+    lines.append("  step scopes:")
+    lines.extend(_format_counts(research["step_scopes"], empty="none"))
+    lines.extend(
+        [
+            "",
             "Auction",
             f"  auction events: {auction['event_count']}",
+            "  by auction:",
+        ]
+    )
+    lines.extend(_format_counts(auction["by_auction"], empty="none"))
+    lines.extend(
+        [
             f"  slate bids: {auction['slate_total']}",
             f"  slate selected: {auction['slate_selected']}",
             f"  slate rejected: {auction['slate_rejected']}",
@@ -558,15 +539,15 @@ def format_report(summary: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Card Type Mix",
+            "Card Kind Mix",
             "  candidates:",
         ]
     )
-    lines.extend(_format_counts(card_types["candidate"]))
+    lines.extend(_format_counts(card_kinds["candidate"]))
     lines.append("  selected:")
-    lines.extend(_format_counts(card_types["selected"]))
+    lines.extend(_format_counts(card_kinds["selected"]))
     lines.append("  bank:")
-    lines.extend(_format_counts(card_types["bank"]))
+    lines.extend(_format_counts(card_kinds["bank"]))
     lines.extend(
         [
             "",
@@ -581,64 +562,50 @@ def format_report(summary: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Write Events",
-            f"  events: {write_events['events']}",
-            "  by type:",
+            "Store",
+            f"  write events: {store['write_events']} last bank count: {store['last_bank_count']}",
+            "  write ops:",
         ]
     )
-    lines.extend(_format_counts(write_events["by_type"], empty="none"))
-    lines.append("  outcomes:")
-    lines.extend(_format_counts(write_events["outcomes"], empty="none"))
-    lines.append("  categories:")
-    lines.extend(_format_counts(write_events["categories"], empty="none"))
-    lines.append("  top final ids:")
-    lines.extend(_format_top(write_events["top_final_ids"]))
+    lines.extend(_format_counts(store["write_ops"], empty="none"))
+    lines.extend(
+        [
+            f"  sync events: {store['sync_events']}",
+            f"  avg sync: {_fmt_ms(store['avg_sync_ms'])} max: {_fmt_ms(store['max_sync_ms'])}",
+            "  sync ops:",
+        ]
+    )
+    lines.extend(_format_counts(store["sync_ops"], empty="none"))
     lines.extend(
         [
             "",
-            "Store Events",
-            f"  events: {store_events['events']}",
-            f"  avg duration: {_fmt_ms(store_events['avg_duration_ms'])}",
-            f"  max duration: {_fmt_ms(store_events['max_duration_ms'])}",
-            "  by type:",
+            "Maintenance",
+            f"  eviction sweeps: {maintenance['eviction_sweeps']} evicted: {maintenance['evicted_total']}",
+            "  top evicted:",
         ]
     )
-    lines.extend(_format_counts(store_events["by_type"], empty="none"))
-    lines.append("  outcomes:")
-    lines.extend(_format_counts(store_events["outcomes"], empty="none"))
-    lines.append("  modes:")
-    lines.extend(_format_counts(store_events["modes"], empty="none"))
+    lines.extend(_format_top(maintenance["top_evicted"]))
+    lines.extend(
+        [
+            f"  consolidation passes: {maintenance['consolidation_passes']} merged: {maintenance['consolidation_merged']}",
+            "  consolidation outcomes:",
+        ]
+    )
+    lines.extend(_format_counts(maintenance["consolidation_outcomes"], empty="none"))
     lines.extend(
         [
             "",
-            "GAM Events",
-            f"  events: {gam_events['events']}",
-            f"  avg duration: {_fmt_ms(gam_events['avg_duration_ms'])}",
-            f"  max duration: {_fmt_ms(gam_events['max_duration_ms'])}",
-            "  by type:",
-        ]
-    )
-    lines.extend(_format_counts(gam_events["by_type"], empty="none"))
-    lines.append("  outcomes:")
-    lines.extend(_format_counts(gam_events["outcomes"], empty="none"))
-    lines.append("  modes:")
-    lines.extend(_format_counts(gam_events["modes"], empty="none"))
-    lines.append("  tools:")
-    lines.extend(_format_counts(gam_events["tools"], empty="none"))
-    lines.extend(
-        [
-            "",
-            "Exported Bank",
+            "Card Bank",
             f"  cards: {bank['cards']}",
             f"  posterior cards: {bank['posterior_cards']}",
             f"  confident cards: {bank['confident_cards']}",
             f"  median intro events: {bank['intro_events_median']}",
             f"  max intro events: {bank['intro_events_max']}",
             "",
-            "Injection Posterior Bridge",
-            f"  events: {bridge['events']}",
-            f"  last card count: {bridge['last_card_count']}",
-            f"  last event count: {bridge['last_event_count']}",
+            "Gain Restamp",
+            f"  events: {restamp['events']}",
+            f"  last credited cards: {restamp['last_credited_card_count']}",
+            f"  last event count: {restamp['last_event_count']}",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -658,7 +625,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-ledger", type=Path, help="Explicit write_ledger.jsonl path."
     )
-    parser.add_argument("--cards", type=Path, help="Explicit amem_memories.jsonl path.")
+    parser.add_argument("--cards", type=Path, help="Explicit cards.json bank path.")
     parser.add_argument(
         "--top-n", type=int, default=10, help="Number of card IDs to show."
     )

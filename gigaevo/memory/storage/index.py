@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.storage.config import EmbedConfig
+from gigaevo.memory.storage.hf_cache import ensure_writable_hf_cache
 
 
 class IndexHit(BaseModel):
@@ -47,12 +48,15 @@ class VectorIndex:
         self._embed = embed
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(persist_dir))
+        # sentence-transformers follows HF_HOME and friends; redirect them to a
+        # writable dir before the model download begins.
+        ensure_writable_hf_cache()
         embedding_fn = SentenceTransformerEmbeddingFunction(
             model_name=embed.embedding_model
         )
         self._collections = {
             scope: self._client.get_or_create_collection(
-                name=f"cards_{scope}", embedding_function=embedding_fn
+                name=f"cards_{scope}", embedding_function=cast(Any, embedding_fn)
             )
             for scope in embed.embed_scopes
         }
@@ -156,7 +160,8 @@ class VectorIndex:
             include=["distances"],
         )
         ids = result["ids"][0]
-        distances = result["distances"][0]
+        result_distances = result["distances"]
+        distances = result_distances[0] if result_distances else []
         return [
             IndexHit(card_id=cid, distance=float(dist))
             for cid, dist in zip(ids, distances, strict=True)

@@ -163,15 +163,14 @@ python run.py problem.name=heilbron \
 ```
 
 > **Required override:** launch with `memory=full` — the single preset that
-> turns *both* the reader (injects cards) and the writer (`IdeaTracker`
-> extracts + enriches them) on. Under `pipeline=intra_extra_memory` the
+> turns *both* the reader (injects cards) and the writer (`MemoryWriter`
+> distills diffs into cards) on. Under `pipeline=intra_extra_memory` the
 > writer-off presets (`memory=none`, `memory=reader`) **fail fast at
-> startup**: the live-refresh hook needs a real tracker. A true no-memory
-> baseline is `pipeline=standard memory=none`. The extra-memory (GAM) agents
-> call OpenRouter directly, so `OPENROUTER_API_KEY` must be exported —
-> without it every GAM call 401s and the extra channel ships zero cards
-> silently. Verify the arm from the startup `[Memory][Arm]` banner before
-> trusting results.
+> startup**: the live-refresh hook needs a real writer. A true no-memory
+> baseline is `pipeline=standard memory=none`. The default memory LLM
+> (`memory/llm=gemini`) calls OpenRouter, so `OPENROUTER_API_KEY` must be
+> exported — without it the research and librarian calls 401 and zero cards
+> flow. See docs/memory.md for the full arm matrix and observability.
 
 ### Tabular Suite (regression + classification, 10 datasets)
 

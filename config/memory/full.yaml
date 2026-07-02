@@ -1,31 +1,82 @@
-# memory=full — read + write both on (the old `memory=local ideas_tracker=default`).
-# ONE assembled MemorySystem node: Hydra builds the component leaves below and
-# passes them to MemorySystem, which threads the shared reputation/backend/llm
-# in Python (no ${ref:memory.*} sibling web). Component leaves are grouped by
-# role: `common/` (shared by reader + writer), `reader/` (the read provider),
-# and `writer/` (the librarian write path). Swap a component with e.g.
-# `memory/common/llm=qwen_instruct` or `memory/reader/auction=thompson`; tune a
-# leaf field with `memory.auction.baseline_prior=[5,2]` (the leaf still lands at
-# `memory.<kwarg>`, so dotted overrides are unchanged). Default stack = the EV
-# contextual-bandit treatment: absolute-progress value channel + EV-bid auction +
-# bid-ranked budgeter (works on every algorithm). Single-island runs can upgrade
-# to `memory/common/reputation=bd_proximity` for cell-local credit; revert to the
-# legacy probability-only stack with `memory/common/reputation=beta_binomial
-# memory/reader/auction=thompson memory/reader/budget=top_theta`.
+# memory=full — read + write both on.
+#
+# A flat ${ref:} graph: every component is declared once and shared by
+# reference (instantiate-once with write-back, exactly how algorithm configs
+# share behavior_space/program_storage). No assembler, no partials — Hydra
+# builds exactly what this file declares. Consumers read two nodes: pipelines
+# take ${ref:memory.provider}, engines take ${ref:memory.writer}.
+#
+# Swap a component group with e.g. `memory/llm=qwen_instruct` or
+# `memory/auction=thompson`; tune a leaf field with
+# `memory.auction.prior_magnitude=0.05`. Default stack = the EV
+# contextual-bandit treatment: EV-bid auction + bid-ranked budgeter over the
+# Beta-Binomial injection posterior. Single-island runs can upgrade to
+# `memory/reputation=bd_proximity` for cell-local credit; the legacy
+# probability-only stack is `memory/auction=thompson memory/budget=top_theta`.
 defaults:
-  - common/llm: gemini
-  - common/reputation: absolute_progress
-  - common/backend: local
-  - reader/retriever: gam
-  - reader/selector: llm
-  - reader/auction: thompson_ev
-  - reader/budget: top_bid
-  - reader/excluder: none
-  - reader/provider: selector
-  - writer/tracker: librarian
-  - writer/evictor: harm
+  - llm: gemini
+  - reputation: beta_binomial
+  - auction: thompson_ev
+  - budget: top_bid
+  - excluder: none
+  - evictor: harm
   - _self_
 
-_target_: gigaevo.memory.system.MemorySystem
-reader_enabled: true
-writer_enabled: true
+# One read-side store per run, owning bank + vector index + research agent
+# under the run's checkpoint dir. The writer builds its own store over the
+# same dir; the bank's mtime watermark keeps the two views coherent.
+store:
+  _target_: gigaevo.memory.storage.local.LocalMemoryStore
+  config:
+    _target_: gigaevo.memory.storage.config.StoreConfig
+    path: ${checkpoint_dir}
+  llm: ${ref:memory.llm}
+  prompts_dir: ${prompts.dir}
+
+reader:
+  _target_: gigaevo.memory.read.reader.MemoryReader
+  shortlister:
+    _target_: gigaevo.memory.read.shortlist.ResearchShortlister
+    store: ${ref:memory.store}
+  reputation: ${ref:memory.reputation}
+  auctioneer: ${ref:memory.auction}
+  budgeter: ${ref:memory.budget}
+  renderer:
+    _target_: gigaevo.memory.read.render.EfficacyCardRenderer
+  # Injection budget: cards the mutator sees per child. Recall width (research
+  # shortlist size) lives in memory.store.config.research.max_cards.
+  max_cards: 1
+
+provider:
+  _target_: gigaevo.memory.provider.ReaderMemoryProvider
+  reader: ${ref:memory.reader}
+  excluder: ${ref:memory.excluder}
+
+writer:
+  _target_: gigaevo.memory.write.writer.MemoryWriter
+  llm: ${ref:memory.llm}
+  evictor: ${ref:memory.evictor}
+  checkpoint_dir: ${checkpoint_dir}
+  metrics_context: ${ref:problem_context::metrics_context}
+  task_description: ${ref:problem_context::task_description}
+  best_programs_percent: 5.0
+  # Per-call wall-clock bound on each librarian LLM call (reconcile/author). A
+  # stalled call past this is skipped (record retried next sweep) so one hung
+  # memory-LLM request cannot freeze the whole write increment.
+  ingest_call_timeout_s: 300.0
+  # After this many cards are written across sweeps, schedule one background
+  # near-duplicate consolidation pass over the whole bank (folds drifted
+  # same-lever cards the greedy online path let in separately). Declined pair
+  # rulings are remembered across passes, so a pass only pays the consolidate
+  # LLM for pairs it has not already ruled on. 0 disables.
+  consolidation_every_n: 32
+  # Dedup knobs of the librarian write path: neighbor-context widths for the
+  # reconcile agent and the consolidation arbiter (pure top-k, no distance
+  # cut) plus the exemplar twin threshold.
+  dedup_policy:
+    _target_: gigaevo.memory.write.merge.DedupPolicy
+    online_top_k: 5
+    max_cards_per_diff: 3
+    program_twin_eps: 0.05
+    consolidation_k: 5
+  prompts_dir: ${prompts.dir}

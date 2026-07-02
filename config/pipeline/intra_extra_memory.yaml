@@ -3,14 +3,14 @@
 # Live intra/extra-memory pipeline.
 #
 # REQUIRED CLI co-override:
-#   memory=full   — the assembled MemorySystem supplies BOTH the provider this
-#                   pipeline reads AND the IdeaTracker the live refresh hook
-#                   writes; with memory=none both collapse to no-ops.
+#   memory=full   — the memory config graph supplies BOTH the provider this
+#                   pipeline reads AND the MemoryWriter the live refresh hook
+#                   writes; with memory=none both collapse to Null targets.
 #
 # Full acceptance command:
 #   OPENAI_API_KEY=sk-gigaevo python run.py \
-#     problem.name=heilbron llm_base_url=http://INTERNAL_IP:4000 \
-#     model_name=Qwen3-235B-A22B-Thinking-2507 redis.db=10 num_parents=1 \
+#     problem.name=heilbron llm_base_url=http://localhost:8000/v1 \
+#     model_name=Qwen/Qwen3-235B-A22B-Instruct-2507 redis.db=10 num_parents=1 \
 #     pipeline=intra_extra_memory memory=full
 #
 # Wiring:
@@ -19,9 +19,9 @@
 #                             feed ONLY MutationSuggestionStage — the suggester
 #                             is the single hint source for the mutator).
 #   - post_step_hook      = LiveMemoryRefreshHook(refresh_every=10) bound to
-#                            the same IdeaTracker that Hydra builds for
+#                            the same MemoryWriter that Hydra builds for
 #                            post_run_hook, so mid-run + end-of-run share
-#                            tracker state (card bank, seen ids).
+#                            writer state (card bank, seen ids).
 
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
@@ -30,7 +30,7 @@ evolution_context:
   storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${ref:memory::provider}
+  memory_provider: ${ref:memory.provider}
 
 pipeline_builder:
   _target_: gigaevo.entrypoint.lineage_memory_pipeline.IntraExtraMemoryPipelineBuilder
@@ -54,8 +54,8 @@ dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder
   builder: ${pipeline_builder}
 
-# Live external-memory refresh — wraps the same IdeaTracker instance so the
-# mid-run hook and the post-run hook share tracker state (card bank, seen ids).
+# Live external-memory refresh — wraps the same MemoryWriter instance so the
+# mid-run hook and the post-run hook share writer state (card bank, seen ids).
 # refresh_every counts ingestor sweeps that landed >=1 program. K=10 ≈ one
 # refresh per ~10 newly-evaluated mutants.
 # max_programs_per_sweep caps each refresh to the N newest programs, which
@@ -71,7 +71,7 @@ dag_blueprint:
 post_step_hook_timeout_s: 900.0
 post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
-  tracker: ${ref:memory::tracker}
+  tracker: ${ref:memory.writer}
   storage: ${ref:program_storage}
   refresh_every: 10
   max_programs_per_sweep: 24

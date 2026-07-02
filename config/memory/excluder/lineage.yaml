@@ -1,0 +1,5 @@
+# @package memory.excluder
+# Treatment: prune every card already applied up the parent's lineage so the
+# research pass ranks only lineage-fresh candidates. Reads the birth-frozen
+# closure metadata.
+_target_: gigaevo.memory.read.exclusion.LineageExcluder

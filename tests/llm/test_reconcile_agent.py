@@ -14,7 +14,7 @@ from gigaevo.llm.agents.reconcile import (
     ReconcileItem,
     ReconcileResponse,
 )
-from gigaevo.memory.shared_memory.models import MemoryCard
+from gigaevo.memory.cards import Card
 
 
 class _FakeStructuredLLM:
@@ -82,7 +82,7 @@ async def test_reconcile_empty_items_means_drop() -> None:
 async def test_reconcile_passes_neighbor_ids_into_prompt() -> None:
     fake = _FakeLLM(ReconcileResponse(items=[]))
     agent = _agent(fake)
-    neighbor = MemoryCard(id="mem-N", description="existing lever", keywords=[])
+    neighbor = Card(id="mem-N", description="existing lever", keywords=[])
     await agent.arun(
         base_parent_code="a",
         child_code="b",
@@ -97,7 +97,7 @@ async def test_reconcile_passes_neighbor_ids_into_prompt() -> None:
 async def test_reconcile_passes_neighbor_why_and_keywords_into_prompt() -> None:
     fake = _FakeLLM(ReconcileResponse(items=[]))
     agent = _agent(fake)
-    neighbor = MemoryCard(
+    neighbor = Card(
         id="mem-N",
         description="existing lever",
         explanation_summary="WHY_MARKER it escapes the trap",

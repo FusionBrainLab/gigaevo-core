@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 from loguru import logger
@@ -50,7 +51,7 @@ class MemoryExposureCounter:
         self.attempts = 0
         self.non_empty = 0
 
-    def record(self, *, program_id: str, card_ids: list[str]) -> None:
+    def record(self, *, program_id: str, card_ids: Sequence[str]) -> None:
         self.attempts += 1
         if card_ids:
             self.non_empty += 1

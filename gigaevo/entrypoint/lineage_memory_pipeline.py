@@ -61,8 +61,8 @@ Legacy stages stripped (superseded by intra + suggestion):
 
 The "extra" half of :class:`IntraExtraMemoryPipelineBuilder` is provided by
 :class:`LiveMemoryRefreshHook` (``gigaevo/memory/live_memory_hook.py``),
-which wraps :meth:`IdeaTracker.run_increment` and is wired into the engine's
-``post_step_hook`` slot via ``pipeline=intra_extra_memory``. The selector
+which wraps :meth:`MemoryWriter.run_increment` and is wired into the engine's
+``post_step_hook`` slot via ``pipeline=intra_extra_memory``. The provider
 inside :class:`MemoryContextStage` surfaces the freshest cards through
 reload-on-read.
 """
@@ -100,7 +100,7 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
     so problems without a ``context.py`` file (e.g. heilbron) are supported.
 
     Used by ``pipeline=standard``. The end-of-run external-memory extractor
-    (IdeaTracker) is independent of this builder — opt in by passing
+    (MemoryWriter) is independent of this builder — opt in by passing
     ``memory=writer`` on the CLI; the cards it writes are available
     for subsequent runs that use ``pipeline=intra_extra_memory``, but they
     are NOT consumed by this builder's DAG.
@@ -330,12 +330,12 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
     REQUIRED CLI co-override (the YAML cannot safely flip this from inside
     the ``pipeline/`` config group):
 
-        memory=full             — assembles ONE MemorySystem providing BOTH the
-                                  SelectorMemoryProvider this builder READS and the
-                                  IdeaTracker the LiveMemoryRefreshHook WRITES, sharing
-                                  one card bank; memory=none collapses both to no-ops.
-        OPENROUTER_API_KEY=...  — GAM extra-memory agents call OpenRouter directly
-                                  (default memory/common/llm=gemini; swap memory/common/llm=qwen_instruct).
+        memory=full             — composes the flat ``${ref:}`` graph providing BOTH
+                                  the ReaderMemoryProvider this builder READS and the
+                                  MemoryWriter the LiveMemoryRefreshHook WRITES, sharing
+                                  one card bank; memory=none collapses both to Null targets.
+        OPENROUTER_API_KEY=...  — the memory LLM agents call OpenRouter directly
+                                  (default memory/llm=gemini; swap memory/llm=qwen_instruct).
 
     Verify ``.hydra/config.yaml`` does not show ``Null*`` targets, and that
     ``/proc/<pid>/environ`` contains the OpenRouter key, before trusting

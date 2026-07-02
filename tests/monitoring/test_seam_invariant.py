@@ -39,6 +39,9 @@ ALLOWED_SEAMS: dict[str, tuple[str, ...]] = {
     "adversarial/dg_tracker.py": ("TRACKER_WRITE",),
     "adversarial/opponent_provider.py": ("HOF_FETCH", "HOF_ROTATE", "CELL_PICK"),
     "adversarial/tracker_coverage_stages.py": ("METRIC_EMIT",),
+    # Memory's shared emitter: stamps correlation fields, emits canonically,
+    # and appends to the memory_events.jsonl sink.
+    "memory/events.py": ("MEMORY_*",),
 }
 
 # Canonical event names the registry defines (used to scan for forged
@@ -54,12 +57,22 @@ CANONICAL_EVENT_NAMES = {
     "HOF_FETCH",
     "HOF_ROTATE",
     "CELL_PICK",
+    "MEMORY_STORE_WRITE",
+    "MEMORY_STORE_SYNC",
+    "MEMORY_RESEARCH",
+    "MEMORY_RESEARCH_STEP",
+    "MEMORY_AUCTION_RUN",
+    "MEMORY_BUDGET_CAP",
+    "MEMORY_GAIN_RESTAMP",
+    "MEMORY_EVICTION_SWEEP",
+    "MEMORY_CONSOLIDATION_PASS",
+    "MEMORY_READ_SELECTION",
 }
 
 # Shared emitter helpers that ARE a seam — callable from anywhere by design.
 # Unlike the adversarial emit_*() helpers (one call site each, whitelisted by
 # file), emit_memory_event() is the memory subsystem's single canonical-event
-# emitter (memory/core/events.py); every memory component records through it.
+# emitter (memory/events.py); every memory component records through it.
 SANCTIONED_SHARED_EMITTERS = frozenset({"emit_memory_event"})
 
 EMIT_CALL_RE = re.compile(r"\bemit\s*\(")

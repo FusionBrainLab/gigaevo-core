@@ -1,0 +1,253 @@
+"""Librarian ingest routing: reconcile decisions, exemplar twin dedup."""
+
+from __future__ import annotations
+
+import pytest
+
+from gigaevo.llm.agents.program_author import ProgramAuthorResponse
+from gigaevo.llm.agents.reconcile import LibrarianCard, ReconcileItem, ReconcileResponse
+from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.storage.base import ScoredCard
+from gigaevo.memory.write.admission import CardAdmissionGate
+from gigaevo.memory.write.eviction import NullEvictor
+from gigaevo.memory.write.librarian import Librarian, _strictly_better
+
+
+class FakeReconcileAgent:
+    def __init__(self, response: ReconcileResponse | None = None) -> None:
+        self.response = response or ReconcileResponse(items=[])
+        self.calls: list[dict] = []
+        self.raise_on_call = False
+
+    async def arun(self, **kwargs) -> ReconcileResponse:
+        self.calls.append(kwargs)
+        if self.raise_on_call:
+            raise RuntimeError("llm down")
+        return self.response
+
+
+class FakeProgramAuthor:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def arun(self, **kwargs) -> ProgramAuthorResponse:
+        self.calls.append(kwargs)
+        return ProgramAuthorResponse(
+            description="authored exemplar", keywords=["fresh"]
+        )
+
+
+def item(decision: str, *, description: str = "an idea", target_id: str = ""):
+    return ReconcileItem(
+        decision=decision,
+        card=LibrarianCard(description=description),
+        target_id=target_id,
+    )
+
+
+@pytest.fixture
+def author():
+    return FakeProgramAuthor()
+
+
+@pytest.fixture
+def make_librarian(store, author):
+    def _make(agent: FakeReconcileAgent, **overrides) -> Librarian:
+        params = {
+            "agent": agent,
+            "program_author": author,
+            "gate": CardAdmissionGate(store=store, evictor=NullEvictor()),
+            "store": store,
+            "neighbors": store,
+            "program_twin_eps": 0.05,
+            "top_k": 5,
+            "max_cards": 3,
+            "task_description": "task",
+            "task_description_summary": "summary",
+        }
+        params.update(overrides)
+        return Librarian(**params)
+
+    return _make
+
+
+async def ingest(librarian: Librarian, note: str = "note") -> list[str]:
+    return await librarian.ingest_idea(
+        base_parent_code="x = 0", child_id="child-1", child_code="x = 1", note=note
+    )
+
+
+async def test_near_duplicate_routed_through_agent(store, make_card, make_librarian):
+    near = make_card()
+    store.save(near)
+    store.hits = [ScoredCard(card=near, distance=0.01)]
+    agent = FakeReconcileAgent(
+        ReconcileResponse(items=[item("DUPLICATE", target_id=near.id)])
+    )
+    librarian = make_librarian(agent)
+    assert await ingest(librarian) == [near.id]
+    assert len(agent.calls) == 1
+    assert agent.calls[0]["neighbors"] == [near]
+    assert store.get(near.id).programs == ("child-1",)
+
+
+async def test_nearest_failure_still_reaches_agent(store, make_librarian, monkeypatch):
+    def broken_nearest(text, k, kind=None):
+        raise RuntimeError("index down")
+
+    monkeypatch.setattr(store, "nearest", broken_nearest)
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent)
+    ids = await ingest(librarian)
+    assert len(agent.calls) == 1
+    assert agent.calls[0]["neighbors"] == []
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "an idea"
+
+
+async def test_agent_failure_admits_note_verbatim(store, make_librarian):
+    agent = FakeReconcileAgent()
+    agent.raise_on_call = True
+    librarian = make_librarian(agent)
+    ids = await ingest(librarian, note="raw mutation note")
+    assert len(ids) == 1
+    banked = store.get(ids[0])
+    assert banked.description == "raw mutation note"
+    assert banked.programs == ("child-1",)
+    assert banked.task_description == "task"
+
+
+async def test_new_decision_admits_authored_card(store, make_librarian):
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent)
+    ids = await ingest(librarian)
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "an idea"
+
+
+async def test_duplicate_decision_bumps_target(store, make_card, make_librarian):
+    target = make_card()
+    store.save(target)
+    agent = FakeReconcileAgent(
+        ReconcileResponse(items=[item("DUPLICATE", target_id=target.id)])
+    )
+    librarian = make_librarian(agent)
+    assert await ingest(librarian) == [target.id]
+    assert store.get(target.id).programs == ("child-1",)
+
+
+async def test_duplicate_missing_target_falls_back_to_admit(store, make_librarian):
+    agent = FakeReconcileAgent(
+        ReconcileResponse(items=[item("DUPLICATE", target_id="gone")])
+    )
+    librarian = make_librarian(agent)
+    ids = await ingest(librarian)
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "an idea"
+
+
+async def test_merge_decision_folds_onto_target(store, make_card, make_librarian):
+    target = make_card()
+    store.save(target)
+    agent = FakeReconcileAgent(
+        ReconcileResponse(
+            items=[item("MERGE", description="union prose", target_id=target.id)]
+        )
+    )
+    librarian = make_librarian(agent)
+    assert await ingest(librarian) == [target.id]
+    assert store.get(target.id).description == "union prose"
+
+
+async def test_merge_empty_target_falls_back_to_admit(store, make_librarian):
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("MERGE")]))
+    librarian = make_librarian(agent)
+    ids = await ingest(librarian)
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "an idea"
+
+
+async def test_max_cards_truncates_items(store, make_librarian):
+    agent = FakeReconcileAgent(
+        ReconcileResponse(
+            items=[item("NEW", description=f"idea {i}") for i in range(5)]
+        )
+    )
+    librarian = make_librarian(agent, max_cards=2)
+    ids = await ingest(librarian)
+    assert len(ids) == 2
+
+
+async def test_author_program_cache_hit_skips_llm(
+    store, make_card, make_librarian, author
+):
+    banked = make_card(
+        id="program-p1",
+        kind=CardKind.PROGRAM,
+        program_id="p1",
+        description="cached exemplar",
+        code="x = 1",
+        fitness=0.4,
+    )
+    store.save(banked)
+    librarian = make_librarian(FakeReconcileAgent())
+    resp = await librarian.author_program(program_id="p1", code="x = 1", fitness=0.4)
+    assert resp.description == "cached exemplar"
+    assert author.calls == []
+
+    fresh = await librarian.author_program(program_id="p2", code="y = 2", fitness=0.5)
+    assert fresh.description == "authored exemplar"
+    assert len(author.calls) == 1
+
+
+def program_card(make_card, *, card_id: str, fitness: float) -> Card:
+    return make_card(
+        id=card_id,
+        kind=CardKind.PROGRAM,
+        program_id=card_id.removeprefix("program-"),
+        description="same strategy",
+        code="x = 1",
+        fitness=fitness,
+    )
+
+
+async def test_admit_program_without_twin_admits(store, make_card, make_librarian):
+    librarian = make_librarian(FakeReconcileAgent())
+    card = program_card(make_card, card_id="program-p1", fitness=0.5)
+    assert librarian.admit_program(card, higher_is_better=True) == card.id
+    assert store.get(card.id) is not None
+
+
+async def test_admit_program_replaces_strictly_worse_twin(
+    store, make_card, make_librarian
+):
+    twin = program_card(make_card, card_id="program-old", fitness=0.3)
+    store.save(twin)
+    store.hits = [ScoredCard(card=twin, distance=0.01)]
+    librarian = make_librarian(FakeReconcileAgent())
+    incoming = program_card(make_card, card_id="program-new", fitness=0.6)
+    assert librarian.admit_program(incoming, higher_is_better=True) == incoming.id
+    assert store.get(twin.id) is None
+    assert store.get(incoming.id) is not None
+
+
+async def test_admit_program_drops_when_not_strictly_better(
+    store, make_card, make_librarian
+):
+    twin = program_card(make_card, card_id="program-old", fitness=0.6)
+    store.save(twin)
+    store.hits = [ScoredCard(card=twin, distance=0.01)]
+    librarian = make_librarian(FakeReconcileAgent())
+    incoming = program_card(make_card, card_id="program-new", fitness=0.6)
+    assert librarian.admit_program(incoming, higher_is_better=True) == ""
+    assert store.get(twin.id) is not None
+    assert store.get(incoming.id) is None
+
+
+def test_strictly_better_direction_table():
+    assert _strictly_better(None, 0.5, True) is False
+    assert _strictly_better(0.5, None, True) is True
+    assert _strictly_better(0.6, 0.5, True) is True
+    assert _strictly_better(0.5, 0.5, True) is False
+    assert _strictly_better(0.4, 0.5, False) is True
+    assert _strictly_better(0.6, 0.5, False) is False

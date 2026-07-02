@@ -2,7 +2,7 @@
 """Memory-card health snapshot for live memory runs.
 
 Read-only. Gathers a compact, faithful snapshot of the on-disk card bank
-(``<run>/memory/api_index.json``) across one or more runs so a reviewer (human
+(``<run>/memory/cards.json``) across one or more runs so a reviewer (human
 or LLM) can judge how cards look and whether their attributes are adequate.
 
 The objective integrity checks here target the absorbed-id alias layer (the new
@@ -66,7 +66,12 @@ class RunHealth:
     flags: tuple[HealthFlag, ...] = field(default_factory=tuple)
 
 
-def _card_type(card_id: str) -> str:
+def _card_type(card_id: str, card: Mapping[str, Any] | None = None) -> str:
+    kind = (card or {}).get("kind")
+    if kind == "program":
+        return "program"
+    if kind == "insight":
+        return "mem"
     if card_id.startswith("mem-"):
         return "mem"
     if card_id.startswith(("prog-", "program-")):
@@ -82,7 +87,7 @@ def assess_card(card_id: str, card: Mapping[str, Any]) -> CardHealth:
     desc = card.get("description")
     return CardHealth(
         card_id=card_id,
-        card_type=_card_type(card_id),
+        card_type=_card_type(card_id, card),
         missing_description=not (isinstance(desc, str) and desc.strip()),
         n_keywords=len(_as_seq(card.get("keywords"))),
         n_programs=len(_as_seq(card.get("programs"))),
@@ -139,14 +144,16 @@ def assess_run(run: str, cards: Mapping[str, Mapping[str, Any]]) -> RunHealth:
 
 
 def load_card_bank(run_root: Path) -> dict[str, dict[str, Any]]:
-    index = run_root / "memory" / "api_index.json"
-    if not index.exists():
+    bank = run_root / "memory" / "cards.json"
+    if not bank.exists():
         return {}
     try:
-        payload = json.loads(index.read_text(encoding="utf-8"))
+        payload = json.loads(bank.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    cards = payload.get("memory_cards", payload) if isinstance(payload, dict) else {}
+    cards = payload.get("cards") if isinstance(payload, dict) else {}
+    if not isinstance(cards, dict):
+        return {}
     return {cid: c for cid, c in cards.items() if isinstance(c, dict)}
 
 
@@ -201,7 +208,7 @@ def _format_markdown(runs: Sequence[dict[str, Any]]) -> str:
         roll = r["rollup"]
         lines.append(f"## {r['run']}")
         if roll["n_cards"] == 0:
-            lines.append("- no cards yet (api_index.json absent or empty)")
+            lines.append("- no cards yet (cards.json absent or empty)")
             lines.append("")
             continue
         lines.append(

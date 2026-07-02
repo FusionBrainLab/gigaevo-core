@@ -16,7 +16,6 @@ from gigaevo.config.validation import validate_reputation_island_compat
 from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
-from gigaevo.memory.arm_banner import log_memory_arm_banner
 from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
     reset_event_counters,
@@ -52,13 +51,6 @@ async def run_experiment(cfg: DictConfig) -> None:
         dag_runner: DagRunner = config_with_instances.dag_runner
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
         writer = cast(LogWriter, config_with_instances.writer)
-
-        log_memory_arm_banner(
-            provider=config_with_instances.memory.provider,
-            tracker=config_with_instances.memory.tracker,
-            post_step_hook=config_with_instances.get("post_step_hook"),
-            pipeline_builder=config_with_instances.get("pipeline_builder"),
-        )
 
         if isinstance(storage, DiskProgramStorage):
             location = f"disk storage at {storage.config.root_dir}"

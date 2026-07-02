@@ -7,12 +7,12 @@
 # card) + MutationSuggestionStage (prescriptive insights) inside the DAG, but
 # leaves the cross-population "extra" memory channel OFF.
 #
-# End-of-run external-memory extraction (IdeaTracker post_run_hook) is
+# End-of-run external-memory extraction (MemoryWriter post_run_hook) is
 # independent of this builder. To turn it ON, opt in on the CLI:
 #
 #   python run.py problem.name=heilbron pipeline=standard memory=full
 #
-# The cards the IdeaTracker writes are available for subsequent runs that use
+# The cards the MemoryWriter writes are available for subsequent runs that use
 # `pipeline=intra_extra_memory`, but they are NOT consumed by this pipeline's
 # own DAG. The canonical regression benchmark uses bare `pipeline=standard`
 # (memory=none) — so the contract stays "what does the
@@ -29,7 +29,7 @@ evolution_context:
   storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${ref:memory::provider}
+  memory_provider: ${ref:memory.provider}
 
 pipeline_builder:
   _target_: gigaevo.entrypoint.lineage_memory_pipeline.IntraMemoryPipelineBuilder

@@ -1,6 +1,8 @@
-# memory=none — baseline, both switches off (the old `memory=none ideas_tracker=none`).
-# No component leaves are mounted; MemorySystem builds a NullMemoryProvider (read)
-# and a NullPostRunHook (write), so nothing is injected and no memory LLM is billed.
-_target_: gigaevo.memory.system.MemorySystem
-reader_enabled: false
-writer_enabled: false
+# memory=none — baseline, both sides off. No component leaves are mounted:
+# the provider injects nothing and the post-run hook is a no-op, so no memory
+# LLM is billed. Every arm defines the same two consumer-facing nodes —
+# pipelines read ${ref:memory.provider}, engines read ${ref:memory.writer}.
+provider:
+  _target_: gigaevo.memory.provider.NullMemoryProvider
+writer:
+  _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

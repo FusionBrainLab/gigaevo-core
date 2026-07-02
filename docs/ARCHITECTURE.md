@@ -478,6 +478,21 @@ Archive storage (MAP-Elites elite cells) is accessed via `ArchiveStorageFactory`
 
 Metrics history follows the same pattern: the run's writer (Hydra `writer` node) feeds a metrics backend (`RedisMetricsBackend` or `DiskMetricsBackend`, both under `gigaevo/utils/trackers/backends/`), and readers — `live_frontier_compare` and the end-of-run frontier render — go through the `MetricsHistoryReader` protocol via `gigaevo.utils.trackers.get_default_history_reader()`, so monitors are storage-agnostic.
 
+## Memory Subsystem
+
+Cross-run memory (`gigaevo/memory/`) is an optional subsystem that distills each run's mutation diffs and top exemplars into reusable cards, then researches that bank and injects the most promising cards into later mutation prompts. It is built as four strict layers, imports flowing one way only (an AST test enforces it):
+
+```
+cards.py → events.py → storage/ → { read/ │ write/ } → provider.py / live_memory_hook.py
+```
+
+- **`cards.py`** — the one `Card` model (`kind ∈ {insight, program}`), `GainEvent`, `DecisionContext`. Frozen Pydantic, `extra="forbid"`, zero aliases.
+- **`storage/`** — retrieval is an implementation detail of storage. `MemoryStore` answers `nearest(text, k, kind)` and `research(request)`; callers never see Chroma or the LangGraph research agent. `LocalMemoryStore` = card bank (atomic JSON persist under `checkpoint_dir`, mtime watermark for external-writer visibility) ∘ vector index ∘ research agent.
+- **`read/`** — `MemoryReader` facade: research shortlist → Beta-Binomial reputation → Thompson auction against a no-card baseline → budget → prompt render. Every stage fails to an empty selection, so a memory outage never sinks a mutation.
+- **`write/`** — `MemoryWriter` facade: extract valid parent→child records → librarian LLM reconciles each diff into NEW/DUPLICATE/MERGE cards → author program exemplars → restamp gain events → harm eviction → throttled background near-duplicate consolidation. `write/` never imports `read/`; eviction consumes a `CardScorer` Protocol that `read/reputation` implements (dependency inversion).
+
+Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (no Python assembler, no `_partial_`). Consumers read two nodes: pipelines take `${ref:memory.provider}`, engines take `${ref:memory.writer}` as their `post_run_hook`. The `memory={none,reader,writer,full,static}` arms differ only in which `_target_`s those two nodes carry (Null variants for disabled sides) — there is no enable flag. Full guide: [`docs/memory.md`](memory.md); package internals: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md); the live pipeline that consumes it: [`docs/INTRA_EXTRA_MEMORY.md`](INTRA_EXTRA_MEMORY.md).
+
 ## Quick Reference: Key Files
 
 | File | Purpose |
@@ -500,6 +515,7 @@ Metrics history follows the same pattern: the run's writer (Hydra `writer` node)
 | `gigaevo/database/redis/keys.py` | Redis key templates |
 | `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (legacy stage wiring; `IntraMemoryPipelineBuilder` is the v2 default) |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
+| `gigaevo/memory/` | Cross-run memory subsystem (cards → storage → read/write → provider); see [Memory Subsystem](#memory-subsystem) |
 
 ## Next Steps
 

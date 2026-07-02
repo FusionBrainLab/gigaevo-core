@@ -25,7 +25,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 | [Adversarial Co-Evolution](docs/adversarial_coevolution.md) | Two-population co-evolution guide (generator/discriminator pattern) |
 | [DAG System](docs/DAG_SYSTEM.md) | Execution engine: stages, dependencies, caching |
 | [Evolution Strategies](docs/EVOLUTION_STRATEGIES.md) | MAP-Elites, multi-island, migration |
-| [Memory System](docs/memory.md) | How memory-augmented mutation works (writers, readers, providers, ideas tracker) |
+| [Memory System](docs/memory.md) | How memory-augmented mutation works (arms, read/write paths, cards, observability) |
 | [Optuna Optimization](docs/OPTUNA_OPTIMIZATION.md) | LLM-driven hyperparameter sweeps for evolved programs |
 | [Prompt Co-Evolution](docs/COEVOLUTION.md) | Co-evolve mutation prompts alongside programs |
 | [Tools](tools/README.md) | Analysis, debugging, and problem scaffolding utilities |
@@ -239,16 +239,16 @@ shell before launching a run.
 
 | Variable | Effect |
 |----------|--------|
-| `OPENAI_API_KEY` | Primary LLM credential — read by the default mutation router (`config/llm/single.yaml`) and most LLM configs in `config/llm/`, plus the `qwen_instruct` memory router (`config/memory/common/llm/qwen_instruct.yaml`). Holds a LiteLLM-proxy key or a provider key depending on the configured `base_url`. |
-| `OPENROUTER_API_KEY` | Read only by the OpenRouter-keyed configs: the main routers `config/llm/gemini35_flash.yaml` and `config/llm/gpt54_mini.yaml`, and the default memory router `config/memory/common/llm/gemini.yaml`. Needed only when one of those is selected. |
+| `OPENAI_API_KEY` | Primary LLM credential — read by the default mutation router (`config/llm/single.yaml`) and most LLM configs in `config/llm/`, plus the `qwen_instruct` memory router (`config/memory/llm/qwen_instruct.yaml`). Holds a LiteLLM-proxy key or a provider key depending on the configured `base_url`. |
+| `OPENROUTER_API_KEY` | Read only by the OpenRouter-keyed configs: the main routers `config/llm/gemini35_flash.yaml` and `config/llm/gpt54_mini.yaml`, and the default memory router `config/memory/llm/gemini.yaml`. Needed only when one of those is selected. |
 
 The env-var name does **not** track the provider — e.g. the OpenRouter-targeted
 `openrouter_bandit`/`openrouter_ensemble` main routers read `OPENAI_API_KEY`, not
 `OPENROUTER_API_KEY`. Which key a run needs is determined by the selected `llm` and
-`memory/common/llm` configs, not by the model vendor.
+`memory/llm` configs, not by the model vendor.
 
 Memory-LLM model, endpoint, and structured-output method are Hydra knobs on the
-`memory/common/llm` group (`config/memory/common/llm/*.yaml`), not environment variables.
+`memory/llm` group (`config/memory/llm/*.yaml`), not environment variables.
 
 **Execution sandbox**
 

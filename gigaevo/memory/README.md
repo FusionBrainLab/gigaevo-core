@@ -1,301 +1,104 @@
-# GigaEvo Memory System
+# `gigaevo/memory` — architecture
 
-Core components:
-- **AmemGamMemory** (`shared_memory/memory.py`): Main orchestrator — saves cards, searches memory, manages lifecycle
-- **CardStore** (`shared_memory/card_store.py`): In-memory card catalog with persistence to disk
-- **NoteSync** (`shared_memory/note_sync.py`): Bridges cards ↔ local A-MEM vector store (Chroma)
-- **GamSearch** (`shared_memory/gam_search.py`): Manages GAM `ResearchAgent` lifecycle (build/rebuild/clear)
-- **AmemGamRetriever** (`shared_memory/amem_gam_retriever.py`): GAM store + retriever construction helpers
-- **CardSearch** (`shared_memory/card_search.py`): Lexical search, ranking, and optional LLM synthesis
-- **CardAdmissionGate** (`core/admission_gate.py`): sole harm gate + `WriteLedger` on the write path (the librarian owns dedup/prose authoring upstream)
-- **CardConversion** (`shared_memory/card_conversion.py`): Card ↔ A-MEM note conversion + JSONL export
-- **ApiSync** (`shared_memory/api_sync.py`): Optional API backend for remote concept sync
+Cross-run memory for the evolutionary loop: a **write system** distills each
+run's mutation diffs and top exemplars into reusable cards, and a **read
+system** researches that bank and injects the most promising cards into
+mutation prompts, tracking each card's realized fitness gain (reputation).
 
-All modules log under a uniform `[Memory][<Component>]` prefix —
-single-grep `\[Memory\]\[` covers the whole subsystem.
+User-facing guide (Hydra knobs, launch recipes, observability):
+[`docs/memory.md`](../../docs/memory.md).
 
-API-backed mode wraps local A-MEM + GAM retrieval with cloud persistence:
-- **Source of truth**: Remote API concepts (`/v1/concepts`)
-- **Local runtime**: Synchronized A-MEM notes + GAM retrievers in Chroma vectors
-- **Local cache**: `api_index.json` + `amem_exports/` + `gam_shared/` directories
-
-## One knob: `memory={none,reader,writer,full}` (read this before launching)
-
-Memory is **one Hydra knob with four presets**. It assembles a single
-`MemorySystem` node that owns *both* the read side (the `MemoryProvider` that
-injects cards into the mutation context) and the write side (the `IdeaTracker`
-that authors cards via the librarian write path using the `memory/common/llm` router).
-Two booleans inside that node — `reader_enabled` and `writer_enabled` — are what
-each preset flips:
-
-| Preset | reader | writer | What runs | Cost |
-|---|---|---|---|---|
-| `memory=none` | off | off | `NullMemoryProvider` + `NullPostRunHook` | none |
-| `memory=reader` | on | off | injects cards from an existing bank; no extraction | read only |
-| `memory=writer` | off | on | authors cards into a bank for a *later* run; injects nothing | `memory/common/llm` spend |
-| `memory=full` | on | on | reader + writer share **one** card bank | `memory/common/llm` spend |
-
-The **writer** spends money on `memory/common/llm` (default `gemini`, swap with
-`memory/common/llm=qwen_instruct`); the **reader** changes fitness. `full` shares a
-single backend/reputation between the two — that sharing is a Python fact
-inside `MemorySystem`, not a `${ref:memory.*}` YAML web.
-
-- **Memory arm ON** (read + write): `pipeline=intra_extra_memory memory=full`
-- **True no-memory baseline**: `pipeline=standard memory=none`
-- **Seed a bank for later** (`memory=writer`): authors cards but injects
-  nothing. **Do not** use this as a "no-memory" run — it pays full
-  `memory/common/llm` cost for cards nobody reads.
-- **`memory=reader`** injects from a pre-populated bank without paying to write.
-
-> ⚠️ **Picking `writer` or `full` turns the `memory/common/llm` writer on and bills it.**
-> A no-memory baseline is `memory=none` + `pipeline=standard` — a single preset
-> disables both sides, so the old "writer left on" footgun
-> (`docs/audits/NOMEM_BASELINE_WRITER_LEFT_ON.md`) is gone: there is no second
-> knob to forget.
-
-### Guards (fail-fast)
-
-`pipeline=intra_extra_memory` reads *and* writes; `memory=full` is the canonical
-arm. The two sides are validated **asymmetrically** at startup:
-
-- **Writer guard (raises):** `LiveMemoryRefreshHook.__init__` raises `TypeError`
-  unless its tracker is a real `IncrementalPostRunHook` — so the writer-off presets
-  (`memory=none`, `memory=reader`) fail fast under this pipeline; use
-  `pipeline=standard` for those.
-- **Reader guard (warns):** `IntraExtraMemoryPipelineBuilder.__init__` only
-  **warns** on a `NullMemoryProvider` — it does *not* raise, because `memory=writer`
-  is a legitimate write-cost-controlled baseline (cards written by the tracker,
-  never injected). `memory=full` turns the read path back on.
-
-For a true no-memory baseline use `pipeline=standard memory=none` (both sides off,
-no guard fires).
-
-### Verify the resolved arm from the log
-
-The startup banner states the *resolved* wiring — check it, don't assume:
+## Layers
 
 ```
-[Memory][Arm] provider=SelectorMemoryProvider tracker=IdeaTracker
-              post_step_hook=LiveMemoryRefreshHook pipeline_builder=IntraExtraMemoryPipelineBuilder
+cards  →  events  →  storage  →  { read │ write }  →  provider / live_memory_hook
 ```
 
-A no-memory run shows `provider=NullMemoryProvider tracker=NullPostRunHook
-pipeline_builder=IntraMemoryPipelineBuilder`. Any `IdeaTracker` in the banner means the
-**writer is on and will spend** on `memory/common/llm`.
+Strictly ordered — a layer imports only layers to its left; `read/` and
+`write/` never import each other (eviction consumes a `CardScorer` Protocol it
+declares, `read/reputation` implements it, config wires them). Only
+`storage/index.py` touches Chroma; LLM handles live only in
+`storage/research.py` and the write-side authoring modules
+(`librarian.py`, `consolidation.py`, `writer.py`).
+`tests/memory/test_layering.py` enforces all three rules over the AST.
 
-## Memory Flow for New Users
+Everything is Pydantic (frozen, `extra="forbid"`, no aliases); malformed
+persisted data raises instead of being coerced.
 
-### Writing a Memory (Step 1)
+## Module map
 
+| Module | What it owns |
+|---|---|
+| `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` + `DecisionContext` (gain events), `CardStatsBlock`, `card_brief()` |
+| `events.py` | Typed `MemoryEvent`s (canonical monitoring events + per-run `memory_events.jsonl` sink), `memory_event_context` correlation (decision/program/parent ids) |
+| `storage/base.py` | `MemoryStore` ABC: `save/get/delete/snapshot/apply_merges`, `nearest()`, `research()`, `rebuild/close/is_ready` |
+| `storage/bank.py` | `CardBank`: in-proc dict + atomic `cards.json` persist; mtime watermark for external-writer visibility |
+| `storage/index.py` | `VectorIndex` (Chroma, one collection per embed scope) |
+| `storage/research.py` | LangGraph research agent: plan → retrieve → reflect, ≤`max_iters`, fail-to-empty; prompts under `gigaevo/prompts/retrieval_{planner,reflection}/` |
+| `storage/config.py` | `StoreConfig` / `EmbedConfig` / `ResearchConfig` — embedding is config, not code (`embed_scopes` maps scope → card text fields) |
+| `storage/local.py` | `LocalMemoryStore` = CardBank ∘ VectorIndex ∘ ResearchAgent |
+| `storage/remote.py` | `RemoteMemoryStore` skeleton (httpx; retrieval raises until the remote port lands) |
+| `storage/state.py` | `StoreState` transition table (shared `validate_transition` pattern) |
+| `storage/hf_cache.py` | HuggingFace cache/timeout shims applied before the embedder downloads |
+| `read/reader.py` | `MemoryReader` facade: shortlist → reputation → auction → budget → render; every stage a Protocol; fails to empty selection |
+| `read/shortlist.py` | `ResearchShortlister`: mutation-grounded query → `store.research()` |
+| `read/reputation.py` | `BetaBinomialReputation` (+ `BDProximityReputation` cell-local variant); posterior/efficacy math over gain events (`block_from_events`) |
+| `read/auction.py` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` + `TopThetaBudgeter` / `TopBidBudgeter` |
+| `read/exclusion.py` | `NullExcluder`, `LineageExcluder` (filter-first lineage gate) |
+| `read/render.py` | `EfficacyCardRenderer` — card → mutator-facing block incl. efficacy endorsement |
+| `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): extract → reconcile → author exemplars → restamp gains → harm-evict, one lock |
+| `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards, author exemplar prose |
+| `write/admission.py` | `CardAdmissionGate` (sole harm gate) + `WriteLedger` (`write_ledger.jsonl`) |
+| `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp |
+| `write/merge.py` | `DedupPolicy` + card merge semantics |
+| `write/consolidation.py` | Throttled background near-duplicate consolidation pass |
+| `write/eviction.py` | `CardScorer` Protocol, `HarmEvictor`, `NullEvictor` |
+| `write/extraction.py` | `ProgramRecordExtractor` — eligible records via strict `MetricsContext` validity |
+| `provider.py` | `MemoryProvider` ABC + `NullMemoryProvider` / `ReaderMemoryProvider` / `StaticLeverMemoryProvider` |
+| `live_memory_hook.py` | `LiveMemoryRefreshHook` — periodic in-run writer sweeps (`post_step_hook`) |
+
+## Assembly — YAML `${ref:}` graph, no assembler
+
+There is no `MemorySystem`, no factory glue, no enable flags. Each
+`config/memory/{none,reader,writer,full,static}.yaml` arm declares the same
+two consumer-facing nodes and swaps `_target_`s (Null variants for disabled
+sides); components are declared once and shared by reference:
+
+- pipelines consume `${ref:memory.provider}`
+- engines consume `${ref:memory.writer}` as their `post_run_hook`
+
+See [`docs/memory.md`](../../docs/memory.md) for the arm matrix, component
+groups, and launch recipes.
+
+## Persistence layout (per run, under `checkpoint_dir`)
+
+| File | Writer | Contents |
+|---|---|---|
+| `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, atomic rewrite per save |
+| `chroma/` | `VectorIndex` | Vector collections, one per embed scope; rebuilt from the bank on demand |
+| `write_ledger.jsonl` | `WriteLedger` | Append-only admission/eviction verdicts |
+| `memory_events.jsonl` | `events.py` sink | Every memory event, one JSON row each |
+
+The bank is the source of truth; index writes are best-effort and heal on
+rebuild. A fresh store over an existing `checkpoint_dir` picks the bank up
+from disk (this is how a `memory=reader` run consumes a bank a prior
+`memory=writer` run built — covered end-to-end by `tests/memory/test_e2e.py`).
+
+## Observability
+
+All modules log under `[Memory][<Component>]`; single-grep `\[Memory\]\[`
+covers the subsystem. `memory_events.jsonl` is the primary trace
+(read decisions, research steps, auction slates, budget caps, store
+writes/syncs, gain restamps, eviction sweeps, consolidation passes).
+First stop for debugging:
+
+```bash
+python tools/memory_event_report.py <run-dir>   # summarizes events + ledger + bank
+python tools/analyze_bandit_health.py <run-dir> # auction/posterior health
 ```
-your code calls:  memory.save_card({"description": "...", ...})
-       ↓
-AmemGamMemory normalizes the card (CardStore assigns/verifies IDs)
-       ↓
-   (optional) write to API in legacy API-backed mode
-       ↓
-   store in CardStore (in-memory + persisted to disk)
-       ↓
-   sync with A-MEM (NoteSync exports JSONL → Chroma)
-       ↓
-periodic rebuild (every N writes, or after API sync):
-  - re-export all cards to JSONL
-  - rebuild GAM index (ResearchAgent for agentic retrieval)
-```
 
-`save_card` is a pure persist primitive — it does no admission or dedup. In the
-production write path the `IdeaTracker` librarian authors and dedups card prose
-with the `memory/common/llm` router, then routes each result through
-`CardAdmissionGate` (`admit` / `merge` / `bump_provenance`), which is the sole
-harm gate, records every verdict to `write_ledger.jsonl`, and calls
-`save_card_direct` to land admitted cards. A periodic `gate.sweep()` evicts cards
-whose injection posterior has turned confidently harmful.
+## Configuration boundaries
 
-### Searching Memory (Step 2)
-
-```
-your code calls:  memory.search(query)
-       ↓
-AmemGamMemory routes through fallback chain:
-  1. GAM agentic search (if ResearchAgent available)
-     └─ calls GAM ResearchAgent.research(query)
-          └─ semantic retrieval via Chroma vectors
-               └─ returns structured answer with memories
-
-  2. [fallback] API full-text search (if API mode enabled)
-     └─ calls API /v1/search endpoint
-
-  3. [fallback] Local lexical search (always available)
-     └─ token-overlap matching over CardStore.cards
-       ↓
-   optional: LLM synthesis (if enabled)
-     └─ summarizes results into natural answer
-       ↓
-   return results to caller
-```
-
-### Complete Lifecycle in Code
-
-```python
-# Initialize with optional API backend
-mem = AmemGamMemory(
-    config=MemoryConfig(...),
-    # Optional: set llm_service, generator, runtime for agentic features
-)
-
-# 1. Write
-mem.save_card({
-    "id": "idea_1",
-    "description": "Simulated annealing for optimization",
-    "category": "strategy"
-})  # → normalized, stored locally, synced to A-MEM
-
-# 2. Search
-results = mem.search("how to escape local minima?")
-# → tries GAM → API → local, returns ranked cards
-
-# 3. Manage lifecycle
-mem.rebuild()  # force export + retriever rebuild
-mem.close()    # clean shutdown
-```
-
-### Data ownership model
-
-- API is authoritative when API mode is enabled.
-- Local state is a synchronized, query-optimized cache:
-  - `api_index.json`: card ID <-> entity UUID mapping + known version IDs + normalized cards
-  - `memory_events.jsonl`: canonical read/write/backend event stream for debugging
-  - `write_ledger.jsonl`: append-only ingest/eviction verdict ledger
-  - `amem_exports/amem_memories.jsonl`: exported cards for GAM ingestion
-  - `gam_shared/amem_store/...`: GAM page/index store
-  - `chroma/...`: local vector index used by A-MEM/GAM components
-
-### Observability
-
-- `memory_events.jsonl` is the primary trace: read requests/retrievals/selections, auction draws, budget caps, write requests/verdicts/sweep summaries, backend init/persist/rebuild/search/refresh, GAM planner/search/reflection/iteration telemetry, and posterior bridge summaries.
-- `write_ledger.jsonl` mirrors write-path verdicts in a compact append-only ledger.
-- `python tools/memory_event_report.py <run-dir-or-memory-dir>` summarizes both files plus exported cards and should be the first stop for debugging empty selections, repeated winners, harmful-card evictions, GAM planner/search/reflection behavior, or backend rebuild/search failures.
-
-## API Mapping
-
-Cards are represented locally in a normalized schema (`shared_memory/models.py`) and mapped to API concept payloads.
-
-### Local card fields
-
-- `id`, `category`, `description`, `task_description`, `task_description_summary`
-- `keywords`
-- `explanation_summary` (one-line condensed "why the lever works"; indexed as its own retrieval channel, distinct from `description`)
-- optional: `gain_events` (use-attributed, base-relative gain events; reputation computes efficacy stats from these at read time)
-
-### API write mapping
-
-`save_card(...)` writes:
-- `content`: normalized concept content (card fields)
-- `meta.name`: derived from `id` + description/task text
-- `meta.tags`: category + keywords
-- `meta.when_to_use`: joined task summary/task description/description/keywords
-- `meta.namespace`, `meta.author`
-- `channel` (default `latest`)
-
-Writes use:
-- `POST /v1/concepts` for new cards
-- `PUT /v1/concepts/{entity_id}` for updates
-
-Reads/search use:
-- `GET /v1/search?entity_type=concept...`
-- `GET /v1/concepts/{entity_id}?channel=...`
-- `DELETE /v1/concepts/{entity_id}`
-
-## Sync + Rebuild Lifecycle
-
-### On initialization
-
-- Loads local `api_index.json` if present.
-- Initializes optional LLM/generator/A-MEM/GAM runtime.
-- If `sync_on_init=true` and API mode is enabled, performs full sync of concept entities.
-
-### Incremental sync during search
-
-- `search(...)` calls `_sync_from_api(force_full=False)`.
-- It fetches concept hits page-by-page (`sync_batch_size`) for the configured namespace.
-- Version IDs are used to skip unchanged entities.
-- Changed/new entities are fetched, converted back to cards, and upserted locally.
-- Deleted remote entities are removed locally.
-
-### Rebuild trigger
-
-Rebuild regenerates export + GAM retrievers:
-- automatic after sync if local state changed
-- periodic after writes (`rebuild_interval`, default 30 saves)
-- explicit via `memory.rebuild()`
-
-## Retrieval Strategy and Fallbacks
-
-`search(query, memory_state=None)` behavior:
-
-1. If available, use GAM `ResearchAgent.research(...)` (agentic retrieval).
-2. On GAM error/unavailability, use API full-text `/v1/search`.
-3. In local-only mode (`api=None`), use local token-overlap search.
-4. Optional LLM synthesis can post-process retrieved cards into a final answer.
-
-If no OpenRouter key is provided:
-- agentic retrieval/generator is disabled
-- output falls back to plain card listing or API search responses
-
-## Configuration
-
-This package takes all **configuration** through Hydra — no env-var cascade. The
-only `os.environ` interaction is a small allowlist of HuggingFace/Langfuse runtime
-shims (HF cache dir + hub download timeouts, redirected to writable/longer
-defaults before the embedding model downloads); `tests/memory/test_no_env_in_memory.py`
-enforces that nothing else under `gigaevo/memory/` reads env or imports dotenv. All
-wiring comes from Hydra:
-
-- `memory={none,reader,writer,full}` selects the assembled `MemorySystem`
-  (`config/memory/`) — one preset flips the `reader_enabled` / `writer_enabled`
-  booleans that own the read-side provider and the write-side tracker.
-- `config/memory/common/backend/local.yaml` builds the shared card-bank backend: a
-  Hydra `_partial_` over `build_local_backend` (`shared_memory/backend.py`)
-  bound to a `MemoryConfig` node, whose fields are the tuning surface.
-- The memory LLM is the `config/memory/common/llm/` group (`gemini` default,
-  `qwen_instruct`); `MemorySystem` binds it into the backend partial in Python.
-
-Effective defaults of the `MemoryConfig` the backend node ships:
-- `search_limit` (default `5`)
-- `rebuild_interval` (default `30`)
-- `enable_llm_synthesis` (default `false`)
-- `embedding_model_name` (default `all-MiniLM-L6-v2`)
-
-`MemoryConfig` (`shared_memory/memory_config.py`) is the validated runtime
-config object `build_local_backend` consumes; construct it directly only in
-tests.
-
-## Quick Start
-
-For end-to-end usage from an evolution run, see the root-level
-[`README_memory.md`](../../README_memory.md) (single-pass live pipeline,
-paper arm matrix).
-
-## Local-only Mode
-
-Local-only is the default and the only mode used by paper runs: construct
-with `api=None` in `MemoryConfig` (what the `memory=reader` / `memory=full`
-presets ship). Behavior:
-- no API writes/reads/sync
-- cards are kept locally
-- retrieval is local (agentic if LLM/runtime available, otherwise lexical fallback)
-
-The remote-API path (`api_sync.py`, `concept_api.py`) is legacy platform code,
-no longer wired to a Hydra preset, and not exercised by current experiments.
-
-## Troubleshooting
-
-- `Cannot connect to Memory API at ...`: API service is not running or wrong `MEMORY_API_URL`.
-- `OPENROUTER_API_KEY is not set...`: agentic retrieval disabled; fallback path still works.
-- `Agentic runtime dependencies are unavailable...`: A-MEM/GAM import/init failed; fallback to API/local search.
-- Empty results after writes: run `memory.rebuild()` to force export + retriever rebuild.
-
-## Current Limitation
-
-- Main API vector search endpoint (`/v1/search/vector`) is not used here.
-- Vector/agentic retrieval is done locally through synchronized A-MEM/GAM indexes.
+All wiring comes through Hydra — no env-var cascade. The only `os.environ`
+interaction is `storage/hf_cache.py` (HF cache dir + hub download timeouts,
+applied before the embedding model downloads).

@@ -1,42 +1,25 @@
-"""Memory provider abstraction for Hydra-injected memory selection.
+"""Engine-facing memory provider adapters, injected via Hydra.
 
-The provider is a strategy object injected into the DAG pipeline via Hydra.
-- ``NullMemoryProvider`` — no-op, returns empty selection (default: ``memory=none``)
-- ``SelectorMemoryProvider`` — assembles a ``MemoryReadPipeline`` over the shared
-  card bank (``memory=reader`` or ``memory=full``)
+The provider is the read-side strategy object the DAG pipeline consumes
+(``MemoryContextStage``). The ``memory={none,reader,writer,full,static}``
+config arms swap the ``_target_``:
+
+- ``NullMemoryProvider`` — no-op, returns empty selection (read side off)
+- ``ReaderMemoryProvider`` — wraps the :class:`MemoryReader` facade
+- ``StaticLeverMemoryProvider`` — fixed curated lever blocks, no bank
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-import asyncio
-from collections.abc import Callable
 from pathlib import Path
 import re
-from typing import Any
 
 from loguru import logger
 
 from gigaevo.exceptions import MemoryStorageError
-from gigaevo.memory.core import (
-    Auctioneer,
-    BetaBinomialReputation,
-    Budgeter,
-    CardExcluder,
-    CardRenderer,
-    CardShortlister,
-    EfficacyCardRenderer,
-    GamRetriever,
-    LLMCardSelector,
-    MemoryReadPipeline,
-    MemorySelection,
-    NullExcluder,
-    ReputationModel,
-    ThompsonAuctioneer,
-    TopThetaBudgeter,
-)
-from gigaevo.memory.core.events import resolve_memory_event_path
-from gigaevo.memory.shared_memory.memory_config import GamConfig
+from gigaevo.memory.read.exclusion import CardExcluder, NullExcluder
+from gigaevo.memory.read.reader import MemoryReader, MemorySelection
 from gigaevo.programs.program import Program
 
 
@@ -66,7 +49,42 @@ class NullMemoryProvider(MemoryProvider):
         metrics_description: str,
         parent_context: str | None = None,
     ) -> MemorySelection:
-        return MemorySelection(cards=[], card_ids=[])
+        return MemorySelection()
+
+
+class ReaderMemoryProvider(MemoryProvider):
+    """Adapts the :class:`MemoryReader` facade to the provider contract.
+
+    The excluder prunes lineage-applied card ids from the research pass before
+    the reader ranks candidates (filter-first lineage gate); ``NullExcluder``
+    is the un-gated default.
+    """
+
+    def __init__(
+        self,
+        *,
+        reader: MemoryReader,
+        excluder: CardExcluder | None = None,
+    ) -> None:
+        self._reader = reader
+        self._excluder = excluder if excluder is not None else NullExcluder()
+
+    async def select_cards(
+        self,
+        program: Program,
+        *,
+        task_description: str,
+        metrics_description: str,
+        parent_context: str | None = None,
+    ) -> MemorySelection:
+        return await self._reader.select(
+            parents=[program],
+            mutation_mode="rewrite",
+            task_description=task_description,
+            metrics_description=metrics_description,
+            exclude_ids=self._excluder.exclude_for(program),
+            parent_contexts=[parent_context] if parent_context is not None else None,
+        )
 
 
 class StaticLeverMemoryProvider(MemoryProvider):
@@ -74,11 +92,9 @@ class StaticLeverMemoryProvider(MemoryProvider):
 
     Loads a curated levers file once and returns the same selection for every
     child: one card per ``---``-separated block, ids ``static:<stem>:<n>`` so
-    gain-event stamping still attributes children to blocks post-hoc. The
-    assembler completes every provider partial with the shared component
-    kwargs; a static block needs none of them, so they are accepted and
-    ignored. A missing, empty, or wrong-block-count file fails the build — a
-    levers-file typo must surface at launch, not silently run a degraded arm.
+    gain-event stamping still attributes children to blocks post-hoc. A
+    missing, empty, or wrong-block-count file fails the build — a levers-file
+    typo must surface at launch, not silently run a degraded arm.
     """
 
     def __init__(
@@ -86,7 +102,6 @@ class StaticLeverMemoryProvider(MemoryProvider):
         *,
         levers_file: str | Path,
         expected_blocks: int | None = None,
-        **_components: Any,
     ) -> None:
         path = Path(levers_file)
         try:
@@ -105,8 +120,10 @@ class StaticLeverMemoryProvider(MemoryProvider):
                 f"expected {expected_blocks}"
             )
         self._selection = MemorySelection(
-            cards=blocks,
-            card_ids=[f"static:{path.stem}:{n}" for n in range(1, len(blocks) + 1)],
+            cards=tuple(blocks),
+            card_ids=tuple(
+                f"static:{path.stem}:{n}" for n in range(1, len(blocks) + 1)
+            ),
         )
         logger.info(
             "[Memory][Static] serving {} lever blocks from {}", len(blocks), path
@@ -121,133 +138,3 @@ class StaticLeverMemoryProvider(MemoryProvider):
         parent_context: str | None = None,
     ) -> MemorySelection:
         return self._selection
-
-
-class SelectorMemoryProvider(MemoryProvider):
-    """Assembles the modular ``MemoryReadPipeline`` lazily on first use.
-
-    The backend builder is required and Hydra-composed (``memory/common/backend``
-    group; ``config/memory/full.yaml`` wires it) — a ``_partial_`` over
-    ``build_local_backend`` that MemorySystem completes with the shared llm.
-    Every other stage except the renderer is Hydra-injectable
-    (config/memory/{common,reader,writer}/<group>/; the renderer is
-    constructor-injectable only) and
-    defaults to the production stack: GAM retriever, LLM shortlist, Thompson
-    auction, top-theta budget, efficacy renderer. Backend construction is
-    deferred to first use to avoid heavy initialization at Hydra config
-    resolution time.
-
-    Optional ``checkpoint_dir`` overrides the configured checkpoint dir at
-    runtime (the engine pins per-run artefacts under the Hydra output dir).
-    """
-
-    def __init__(
-        self,
-        *,
-        backend: Callable[..., Any],
-        # matches config/memory/local.yaml — one card per mutation is the
-        # experimental protocol the shipped configs run
-        max_cards: int = 1,
-        # GAM shortlist width (recall): how many cards the selector LLM may
-        # surface before the auction/budgeter rank and the budgeter caps to
-        # max_cards. Default 1 == the legacy collapse (shortlist fused with the
-        # injection budget); set > 1 to give the ranker a real pool.
-        shortlist_k: int = 1,
-        checkpoint_dir: str | None = None,
-        retriever: GamRetriever | None = None,
-        selector: CardShortlister | None = None,
-        auctioneer: Auctioneer | None = None,
-        budgeter: Budgeter | None = None,
-        renderer: CardRenderer | None = None,
-        reputation: ReputationModel | None = None,
-        excluder: CardExcluder | None = None,
-    ) -> None:
-        self._max_cards = max_cards
-        self._shortlist_k = shortlist_k
-        self._checkpoint_dir = checkpoint_dir
-        self._backend = backend
-        self._retriever = retriever
-        self._selector = selector if selector is not None else LLMCardSelector()
-        self._auctioneer = (
-            auctioneer if auctioneer is not None else ThompsonAuctioneer()
-        )
-        self._budgeter = budgeter if budgeter is not None else TopThetaBudgeter()
-        self._renderer = renderer if renderer is not None else EfficacyCardRenderer()
-        self._reputation = (
-            reputation if reputation is not None else BetaBinomialReputation()
-        )
-        self._excluder = excluder if excluder is not None else NullExcluder()
-        self._pipeline: MemoryReadPipeline | None = None
-        self._build_lock = asyncio.Lock()
-
-    def _build_retriever(self) -> GamRetriever:
-        retriever = self._retriever if self._retriever is not None else GamRetriever()
-        if retriever.backend is not None:
-            return retriever
-        gam = GamConfig(
-            allowed_tools=list(retriever.allowed_tools),
-            top_k_by_tool=dict(retriever.top_k_by_tool),
-            max_cards=self._shortlist_k,
-            **(
-                {"max_iters": retriever.max_iters}
-                if retriever.max_iters is not None
-                else {}
-            ),
-        )
-        # Read-side backend never ingests; the evictor is a write-path
-        # component the IdeaTracker completes its own backend partial with.
-        backend = self._backend(checkpoint_dir=self._checkpoint_dir, gam=gam)
-        return retriever.bind(backend)
-
-    def _get_pipeline(self) -> MemoryReadPipeline:
-        if self._pipeline is None:
-            retriever = self._build_retriever()
-            logger.info(
-                "[Memory][Provider] Assembled MemoryReadPipeline "
-                "(checkpoint_dir={}, backend={})",
-                self._checkpoint_dir,
-                type(retriever.backend).__module__,
-            )
-            self._pipeline = MemoryReadPipeline(
-                retriever=retriever,
-                selector=self._selector,
-                auctioneer=self._auctioneer,
-                budgeter=self._budgeter,
-                renderer=self._renderer,
-                reputation=self._reputation,
-                event_path=resolve_memory_event_path(self._checkpoint_dir),
-            )
-        return self._pipeline
-
-    async def _ensure_pipeline(self) -> MemoryReadPipeline:
-        if self._pipeline is not None:
-            return self._pipeline
-        # Build off the event loop — loading the embedding model is seconds of
-        # blocking work that would otherwise stall every other program-stage
-        # sharing the loop; the lock collapses a concurrent first-selection
-        # race down to a single build.
-        async with self._build_lock:
-            if self._pipeline is None:
-                return await asyncio.to_thread(self._get_pipeline)
-            return self._pipeline
-
-    async def select_cards(
-        self,
-        program: Program,
-        *,
-        task_description: str,
-        metrics_description: str,
-        parent_context: str | None = None,
-    ) -> MemorySelection:
-        pipeline = await self._ensure_pipeline()
-        return await pipeline.select(
-            parents=[program],
-            mutation_mode="rewrite",
-            task_description=task_description,
-            metrics_description=metrics_description,
-            max_cards=self._max_cards,
-            shortlist_k=self._shortlist_k,
-            exclude_ids=self._excluder.exclude_for(program),
-            random_drop_dose=self._excluder.dose_for(program),
-            parent_contexts=[parent_context] if parent_context is not None else None,
-        )
