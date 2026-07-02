@@ -51,6 +51,24 @@ class MutationChange(BaseModel):
     )
 
 
+class InsightCitation(BaseModel):
+    """One cited entry from a parent's numbered '## Program Insights' list."""
+
+    parent: int = Field(
+        default=1,
+        description=(
+            "1-based parent number (as labelled '=== Parent N ===') whose "
+            "insight list this refers to. Always 1 in single-parent mode."
+        ),
+    )
+    insight: int = Field(
+        description=(
+            "The `N.` number of the insight in that parent's "
+            "'## Program Insights' list."
+        )
+    )
+
+
 class MutationStructuredOutput(BaseModel):
     """Structured output from the mutation LLM.
 
@@ -66,6 +84,16 @@ class MutationStructuredOutput(BaseModel):
     insights_used: list[str] = Field(
         default_factory=list,
         description="Flat list of insight strings that were acted on (verbatim from input)",
+    )
+    insight_ids_used: list[InsightCitation] = Field(
+        default_factory=list,
+        description=(
+            "Program Insights entries acted on, each cited as the parent number "
+            "plus the `N.` number in that parent's numbered insight list. Each "
+            "parent's list numbers from 1, so the parent number disambiguates. "
+            "Empty when the lists are empty or none were used. Never invent "
+            "numbers."
+        ),
     )
     base_parent: int = Field(
         default=1,
@@ -482,16 +510,22 @@ class MutationAgent(LangGraphAgent):
             structured_dict = structured_output.model_dump()
 
             citation_integrity = self._citation_integrity(
-                structured_output.insights_used,
+                structured_output.insight_ids_used,
                 structured_output.card_ids_used,
                 state.get("messages", []),
             )
-            if citation_integrity["grounded"] < citation_integrity["cited"]:
+            if (
+                citation_integrity["grounded"] < citation_integrity["cited"]
+                or citation_integrity["cards_grounded"]
+                < citation_integrity["cards_cited"]
+            ):
                 logger.info(
-                    "[MutationAgent] Citation integrity: {}/{} cited insights "
-                    "found verbatim in the prompt",
+                    "[MutationAgent] Citation integrity: insights {}/{}, "
+                    "cards {}/{} cited ids offered in the prompt",
                     citation_integrity["grounded"],
                     citation_integrity["cited"],
+                    citation_integrity["cards_grounded"],
+                    citation_integrity["cards_cited"],
                 )
 
             state["parsed_output"] = {
@@ -500,6 +534,9 @@ class MutationAgent(LangGraphAgent):
                 "archetype": structured_output.archetype,
                 "justification": structured_output.justification,
                 "insights_used": structured_output.insights_used,
+                "insight_ids_used": [
+                    c.model_dump() for c in structured_output.insight_ids_used
+                ],
                 "base_parent": structured_output.base_parent,
                 "card_ids_used": structured_output.card_ids_used,
                 "changes": structured_output.changes,
@@ -528,27 +565,31 @@ class MutationAgent(LangGraphAgent):
 
     @staticmethod
     def _citation_integrity(
-        insights_used: list[str],
+        insight_ids_used: list[InsightCitation],
         card_ids_used: list[str],
         messages: list[BaseMessage],
     ) -> dict[str, int]:
-        """Count cited insights and card ids that appear verbatim in the rendered
-        prompt.
+        """Count cited insight and card references that were offered in the prompt.
 
-        Whitespace-normalized substring match; purely observational (the counts
-        land in child metadata, nothing is gated on them — the hard credit gate
-        is the base_selected ∩ used intersection at the write path).
+        Each parent block ('=== Parent N ===') carries its own '## Program
+        Insights' list numbered from 1, so an insight citation is a (parent,
+        insight) pair: grounded when the insight's rendered list marker
+        ('\\n<N>. **[' — the numbering emitted by InsightsMutationContext.format)
+        appears inside that parent's block. Card ids match exactly anywhere.
+        Purely observational (the counts land in child metadata for run
+        statistics, nothing is gated on them — the hard credit gate is the
+        base_selected ∩ used intersection at the write path).
         """
-
-        def _norm(s: str) -> str:
-            return " ".join(s.split())
-
-        rendered = _norm(" ".join(str(m.content) for m in messages))
-        cited = [_norm(s) for s in insights_used if s.strip()]
+        rendered = "\n".join(str(m.content) for m in messages)
+        parts = re.split(r"=== Parent (\d+) ===", rendered)
+        blocks = {int(n): block for n, block in zip(parts[1::2], parts[2::2])}
+        cited = [c for c in insight_ids_used if c.parent > 0 and c.insight > 0]
         cards = [c.strip() for c in card_ids_used if c.strip()]
         return {
             "cited": len(cited),
-            "grounded": sum(1 for s in cited if s in rendered),
+            "grounded": sum(
+                1 for c in cited if f"\n{c.insight}. **[" in blocks.get(c.parent, "")
+            ),
             "cards_cited": len(cards),
             "cards_grounded": sum(1 for c in cards if c in rendered),
         }
