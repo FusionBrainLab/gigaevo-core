@@ -514,19 +514,14 @@ class MutationAgent(LangGraphAgent):
                 structured_output.card_ids_used,
                 state.get("messages", []),
             )
-            if (
-                citation_integrity["grounded"] < citation_integrity["cited"]
-                or citation_integrity["cards_grounded"]
-                < citation_integrity["cards_cited"]
-            ):
-                logger.info(
-                    "[MutationAgent] Citation integrity: insights {}/{}, "
-                    "cards {}/{} cited ids offered in the prompt",
-                    citation_integrity["grounded"],
-                    citation_integrity["cited"],
-                    citation_integrity["cards_grounded"],
-                    citation_integrity["cards_cited"],
-                )
+            logger.info(
+                "[MutationAgent] Citation integrity: insights {}/{} grounded, "
+                "cards {}/{} grounded",
+                citation_integrity["grounded"],
+                citation_integrity["cited"],
+                citation_integrity["cards_grounded"],
+                citation_integrity["cards_cited"],
+            )
 
             state["parsed_output"] = {
                 "code": final_code,
