@@ -1,0 +1,7 @@
+REQUEST:
+{request}
+
+{context_section}AVAILABLE SCOPES
+{scopes_section}
+
+Produce the retrieval plan now.
