@@ -11,10 +11,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
+import re
 from typing import Any
 
 from loguru import logger
 
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.core import (
     Auctioneer,
     BetaBinomialReputation,
@@ -64,6 +67,60 @@ class NullMemoryProvider(MemoryProvider):
         parent_context: str | None = None,
     ) -> MemorySelection:
         return MemorySelection(cards=[], card_ids=[])
+
+
+class StaticLeverMemoryProvider(MemoryProvider):
+    """Fixed lever-block provider for static-injection baselines (``memory=static``).
+
+    Loads a curated levers file once and returns the same selection for every
+    child: one card per ``---``-separated block, ids ``static:<stem>:<n>`` so
+    gain-event stamping still attributes children to blocks post-hoc. The
+    assembler completes every provider partial with the shared component
+    kwargs; a static block needs none of them, so they are accepted and
+    ignored. A missing, empty, or wrong-block-count file fails the build — a
+    levers-file typo must surface at launch, not silently run a degraded arm.
+    """
+
+    def __init__(
+        self,
+        *,
+        levers_file: str | Path,
+        expected_blocks: int | None = None,
+        **_components: Any,
+    ) -> None:
+        path = Path(levers_file)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise MemoryStorageError(f"levers file unreadable: {path}") from exc
+        blocks = [b.strip() for b in re.split(r"^---\s*$", text, flags=re.M)]
+        blocks = [b for b in blocks if b]
+        if not blocks:
+            raise MemoryStorageError(f"levers file has no lever blocks: {path}")
+        # A mangled separator silently shrinks the treatment to fewer, merged
+        # cards — the one failure mode that poisons an A/B arm undetected.
+        if expected_blocks is not None and len(blocks) != expected_blocks:
+            raise MemoryStorageError(
+                f"levers file {path} parsed into {len(blocks)} blocks, "
+                f"expected {expected_blocks}"
+            )
+        self._selection = MemorySelection(
+            cards=blocks,
+            card_ids=[f"static:{path.stem}:{n}" for n in range(1, len(blocks) + 1)],
+        )
+        logger.info(
+            "[Memory][Static] serving {} lever blocks from {}", len(blocks), path
+        )
+
+    async def select_cards(
+        self,
+        program: Program,
+        *,
+        task_description: str,
+        metrics_description: str,
+        parent_context: str | None = None,
+    ) -> MemorySelection:
+        return self._selection
 
 
 class SelectorMemoryProvider(MemoryProvider):

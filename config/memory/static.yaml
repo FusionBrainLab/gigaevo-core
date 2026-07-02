@@ -1,0 +1,18 @@
+# memory=static — reader-only static lever injection, writer off.
+# Serves a fixed curated block of lever recipes into the same memory slot the
+# dynamic system feeds (MutationSuggestionStage.memory_cards under
+# pipeline=intra_extra_memory) for every child; no bank, no embedder, no
+# memory LLM is mounted (zero memory-LLM billing). The static-lever baseline
+# arms of the memory experiments run this. Required overrides:
+#   memory=static memory.provider.levers_file=/abs/path/to/levers.md \
+#     post_step_hook=null
+# post_step_hook=null is mandatory under pipeline=intra_extra_memory: that
+# pipeline's LiveMemoryRefreshHook needs a writer-enabled tracker and fails
+# fast on this preset's NullPostRunHook (there is no bank to refresh).
+defaults:
+  - reader/provider: static_levers
+  - _self_
+
+_target_: gigaevo.memory.system.MemorySystem
+reader_enabled: true
+writer_enabled: false
