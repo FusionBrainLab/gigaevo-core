@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.9.0 (2026-07-02)
+
+### Bug Fixes
+
+- **memory**: Orient intra-card deltas, honest recency window, crossover attribution
+  ([`7f131e0`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7f131e040c915c5e093e3e476bc5ecd73ab31f92))
+
+### Features
+
+- **memory**: Static-lever prompt baseline (memory=static provider + experiment)
+  ([`fa1f2ce`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/fa1f2cee9474e8761efcf09cf3b2c19724d05835))
+
+
 ## v2.8.0 (2026-07-01)
 
 ### Bug Fixes
