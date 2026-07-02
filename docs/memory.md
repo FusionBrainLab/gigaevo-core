@@ -44,6 +44,8 @@ python run.py memory=none   ...  # No memory (default): reader off, writer off
 python run.py memory=reader ...  # Inject cards from an existing bank; no extraction
 python run.py memory=writer ...  # Extract/enrich cards for a LATER run; inject nothing
 python run.py memory=full   ...  # Reader + writer share ONE card bank
+python run.py memory=static memory.provider.levers_file=/abs/levers.md ...
+                                 # Inject a FIXED curated card block; no bank, no memory LLM
 ```
 
 One Hydra override assembles the whole `MemorySystem`. Everything else is automatic.
@@ -207,12 +209,13 @@ class MemoryProvider(ABC):
         falls back to the legacy per-parent metadata block)."""
 ```
 
-Two implementations:
+Three implementations:
 
 | Provider | Config | What it does |
 |----------|--------|-------------|
 | `NullMemoryProvider` | `memory=none` or `memory=writer` (reader off) | Returns empty. Zero overhead. |
 | `SelectorMemoryProvider` | `memory=reader` or `memory=full` (reader on) | Queries memory DB via a `MemoryReadPipeline` (retrieve → shortlist → auction → budget → render) |
+| `StaticLeverMemoryProvider` | `memory=static` (reader on, writer off) | Serves the same fixed `---`-separated card blocks from `memory.provider.levers_file` to every child; no bank, no embedder, no memory LLM. Baseline arm for content-injection A/Bs. Under `pipeline=intra_extra_memory` add `post_step_hook=null` (no bank to refresh) |
 
 The provider is reached as `MemorySystem.provider`; consumers wire to it via
 `${ref:memory::provider}`. When the reader is off (`memory=none`,
@@ -269,6 +272,7 @@ config/memory/
   reader.yaml  →  reader on  + writer off  (inject from an existing bank; no extraction)
   writer.yaml  →  reader off + writer on   (extract/enrich cards for a LATER run; inject nothing)
   full.yaml    →  reader on  + writer on   (reader + writer share ONE card bank)
+  static.yaml  →  reader on  + writer off  (fixed curated card block from a levers file; no bank)
 ```
 
 | Preset | reader | writer | What runs | Cost |
@@ -277,6 +281,7 @@ config/memory/
 | `memory=reader` | on | off | injects cards from an existing bank; no extraction | read only |
 | `memory=writer` | off | on | extracts/enriches cards into a bank for a LATER run; injects nothing | memory/common/llm spend |
 | `memory=full` | on | on | reader + writer share ONE card bank | memory/common/llm spend |
+| `memory=static` | on | off | `StaticLeverMemoryProvider` injects a fixed curated card block from `memory.provider.levers_file`; no bank | none |
 
 Each preset wires the `MemorySystem` from the per-component groups — what you
 see in the config is exactly what the system receives:
@@ -571,7 +576,6 @@ dedup_policy:
   online_eps: 0.05
   online_top_k: 5
   max_cards_per_diff: 3
-  consolidation_eps: 0.05
   consolidation_k: 5
 fitness_higher_is_better: ${higher_is_better}
 checkpoint_dir: ${checkpoint_dir}

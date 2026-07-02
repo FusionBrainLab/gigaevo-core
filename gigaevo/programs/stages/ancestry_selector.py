@@ -8,7 +8,7 @@ from loguru import logger
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 
-AncestrySelectionStrategy = Literal["random", "best_fitness"]
+AncestrySelectionStrategy = Literal["random", "best_fitness", "recent"]
 
 
 class AncestrySelector:
@@ -17,6 +17,9 @@ class AncestrySelector:
     Strategies:
       - "random": random sample up to N
       - "best_fitness": rank by primary metric (direction-aware), take top N
+      - "recent": last N in input order (callers pass lineage append order,
+        i.e. chronological); no fitness filtering, so failed children stay
+        visible
     """
 
     def __init__(
@@ -49,6 +52,9 @@ class AncestrySelector:
 
             scored.sort(key=lambda t: t[0], reverse=higher_better)
             return [program for _, program in scored[: self.max_selected]]
+
+        elif self.strategy == "recent":
+            return programs[-self.max_selected :]
 
         elif self.strategy == "random":
             return random.sample(programs, min(self.max_selected, len(programs)))

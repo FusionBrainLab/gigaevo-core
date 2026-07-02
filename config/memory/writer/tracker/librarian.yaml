@@ -23,7 +23,6 @@ dedup_policy:
   online_eps: 0.05
   online_top_k: 5
   max_cards_per_diff: 3
-  consolidation_eps: 0.05
   consolidation_k: 5
 fitness_higher_is_better: ${higher_is_better}
 checkpoint_dir: ${checkpoint_dir}

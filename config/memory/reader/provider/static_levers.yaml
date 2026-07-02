@@ -1,0 +1,11 @@
+# @package memory.provider
+# Read-side provider serving a fixed, curated lever block to every child
+# (static-injection baseline arms). `levers_file` is mandatory: point it at a
+# markdown file of `---`-separated lever recipes. `expected_blocks` guards the
+# treatment: a mangled separator fails the launch instead of silently running
+# a merged/shrunken arm. MemorySystem completes this partial with the shared
+# component kwargs; the static provider ignores them.
+_target_: gigaevo.memory.provider.StaticLeverMemoryProvider
+_partial_: true
+levers_file: ???
+expected_blocks: 6
