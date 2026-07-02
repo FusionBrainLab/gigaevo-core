@@ -222,6 +222,47 @@ class TestRandomStrategy:
 
 
 # ---------------------------------------------------------------------------
+# select() — "recent" strategy
+# ---------------------------------------------------------------------------
+
+
+class TestRecentStrategy:
+    async def test_recent_returns_last_n_preserving_order(self) -> None:
+        """recent takes the LAST max_selected programs in input order (the
+        input is lineage append order, i.e. chronological)."""
+        ctx = _make_metrics_context()
+        sel = AncestrySelector(ctx, strategy="recent", max_selected=3)
+
+        programs = [_make_program(fitness=float(i)) for i in range(5)]
+        result = await sel.select(programs)
+        assert result == programs[-3:]
+
+    async def test_recent_keeps_programs_missing_fitness_key(self) -> None:
+        """recent must NOT filter on fitness — failed/invalid children are part
+        of the recent history the analyst needs to see."""
+        ctx = _make_metrics_context()
+        sel = AncestrySelector(ctx, strategy="recent", max_selected=2)
+
+        no_fitness = _make_program(fitness=None)
+        has_fitness = _make_program(fitness=7.0)
+        result = await sel.select([has_fitness, no_fitness])
+        assert result == [has_fitness, no_fitness]
+
+    async def test_recent_returns_all_when_fewer_than_max(self) -> None:
+        ctx = _make_metrics_context()
+        sel = AncestrySelector(ctx, strategy="recent", max_selected=10)
+
+        programs = [_make_program(fitness=float(i)) for i in range(3)]
+        result = await sel.select(programs)
+        assert result == programs
+
+    async def test_recent_empty_list_returns_empty(self) -> None:
+        ctx = _make_metrics_context()
+        sel = AncestrySelector(ctx, strategy="recent", max_selected=2)
+        assert await sel.select([]) == []
+
+
+# ---------------------------------------------------------------------------
 # select() — unknown strategy
 # ---------------------------------------------------------------------------
 

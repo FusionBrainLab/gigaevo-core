@@ -43,7 +43,7 @@ The builder (`IntraExtraMemoryPipelineBuilder`, subclassing the intra-only `Intr
  ┌────────────────────────┐
  │ DescendantProgramIds   │
  │ (max_selected=24,      │
- │  strategy=best_fitness)│
+ │  strategy=recent)      │
  └──────────┬─────────────┘
             │ "children_ids"
             ▼
@@ -73,7 +73,7 @@ The builder (`IntraExtraMemoryPipelineBuilder`, subclassing the intra-only `Intr
 
 **Stages kept and reconfigured:**
 
-- `DescendantProgramIds` — widened from `max_selected=1` (the default builder's LineageStage-tuned setting) to `intra_max_children=24` so the analyst sees the bulk of recent children, not just the single best.
+- `DescendantProgramIds` — widened from `max_selected=1` (the default builder's LineageStage-tuned setting) to `intra_max_children=24` with `strategy="recent"`: a chronological recency window, so failed and regressed children stay visible to the analyst (a fitness-ranked selection would silently drop exactly the failures the card exists to report).
 
 ---
 
@@ -85,23 +85,24 @@ The builder (`IntraExtraMemoryPipelineBuilder`, subclassing the intra-only `Intr
 IntraCardStructuredOutput
 ├── parent_id: str
 ├── parent_fitness: float
-├── n_mutations: int
+├── n_attempts: int                 — children in the recency window, not lifetime total
 ├── delta_distribution: IntraDeltaDistribution
 │   ├── min / median / max         (float | None)  — VALID children only
 │   ├── improving / neutral / catastrophic         — VALID children only
 │   └── n_failed                                    — INVALID children, tracked separately
 ├── tried_strategies: list[IntraTriedStrategy]
 │   ├── label, n_attempts, mean_delta (float | None), verdict, n_failed, notes
-├── untried_directions: list[str]
 └── summary: str
 ```
+
+All deltas are **oriented**: positive always means the child improved on the parent, for maximize and minimize metrics alike (same convention as the ancestral trail's `step_delta`). Multi-parent (crossover) children additionally carry `crossover_role` in the analyst payload — `"base"` when this parent is the base the mutator transformed, `"donor"` when this parent only contributed mechanisms (a donor-side diff mostly reflects the other parent's code, and the prompt tells the analyst not to cluster it as a mutation move).
 
 **Invalid-child handling (heilbron `-1000` sentinel, etc.):** any child with `is_valid=false` is **excluded** from every distribution field and from per-cluster `mean_delta`, then **counted separately** in `n_failed`. The rendered card surfaces failures as a parenthesised count, e.g.:
 
 ```
 - *naive_loop* — 5 attempt(s) (2 failed), mean delta 0.018, verdict: improved
 - *radius_blowup* — 3 attempt(s) (3 failed), mean delta n/a, verdict: failed
-Delta distribution (valid children only): min=0.01, median=0.015, max=0.02;
+Delta distribution (valid children only; + = improvement): min=0.01, median=0.015, max=0.02;
   improving=2, neutral=0, catastrophic=0; n_failed=2 (excluded from stats above)
 ```
 
@@ -284,7 +285,7 @@ The 2026-05-15 smoke (40 mutants, heilbron, Qwen3-235B-A22B) — run on the pre-
 |---------|--------------|-----|
 | `MemoryContextStage` block always empty | `memory=full` not set | Add it to the CLI. |
 | Intra card never appears on parents | The mutator never visited any parent twice (run too short) | `max_mutants >= 2 * num_parents`. |
-| `IntraMemoryStage` runs every iteration (no cache hits) | Different `children_ids` order on each visit | Confirm `DescendantProgramIds` uses `strategy="best_fitness"`. |
+| `IntraMemoryStage` runs every iteration (no cache hits) | Different `children_ids` order on each visit | Confirm `DescendantProgramIds` uses `strategy="recent"` (chronological, stable across visits). |
 | Rendered card shows `min=-1000.0` etc. | Pre-fix build (`< 89f01be5`) | Pull main, rebuild. The current schema excludes invalid children from delta stats and routes them to `n_failed`. |
 | `LiveMemoryRefreshHook` never fires | Ingestor never landed ≥ 1 program in `refresh_every` sweeps | Lower `refresh_every`, or check ingestor health. |
 

@@ -24,6 +24,10 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from gigaevo.database.program_storage import ProgramStorage
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_ID_METADATA_KEY,
+    MUTATION_OUTPUT_METADATA_KEY,
+)
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -206,7 +210,7 @@ def _select_code_form(
 INTRA_SYSTEM_PROMPT_TEMPLATE = """\
 ## ROLE
 
-You are the **lineage analyst** in an LLM-guided evolutionary algorithm. You read ONE parent Python program plus EVERY child the algorithm has produced from it so far (with deltas, validity, error_summary). You emit ONE compact, **purely descriptive** clustering: which children share the same code-level move, and HOW failures failed.
+You are the **lineage analyst** in an LLM-guided evolutionary algorithm. You read ONE parent Python program plus a window of its most recent children (with deltas, validity, error_summary) — earlier children may have been trimmed for size. You emit ONE compact, **purely descriptive** clustering: which children share the same code-level move, and HOW failures failed.
 
 You do NOT solve the task in CONTEXT below. You do NOT prescribe what to try next — a separate downstream stage does that. Your job is the HISTORY.
 
@@ -222,9 +226,10 @@ You do NOT solve the task in CONTEXT below. You do NOT prescribe what to try nex
 | children[i].change_form | "diff" or "full_code"; discriminates which field below carries the child source |
 | children[i].diff | unified diff of child vs parent.code (present iff change_form=="diff") |
 | children[i].code | full child source (present iff change_form=="full_code"; used when diff isn't smaller, or when child is invalid) |
-| children[i].delta | child.fitness − parent.fitness (+ better, − worse) — informational only; Python re-aggregates |
+| children[i].delta | ORIENTED fitness delta vs the parent: positive ALWAYS means the child improved, negative regressed, for maximize AND minimize metrics alike — informational only; Python re-aggregates |
 | children[i].is_valid | whether the child compiled AND ran cleanly |
 | children[i].error_summary | LLM-friendly stage-error text for FAILED children (empty for successes) |
+| children[i].crossover_role | present only for multi-parent (crossover) children: "base" = this parent is the base the mutator transformed; "donor" = this parent only donated mechanisms, so the diff mostly reflects the OTHER parent's code — do NOT read a donor diff as a mutation move tried on this parent |
 | children[i].mutation_archetype | mutator self-report (may be absent) |
 | children[i].mutation_justification | mutator rationale (may be absent) |
 
@@ -232,7 +237,7 @@ When clustering by what the CODE actually changed, read `diff` for `change_form=
 
 ## CARD CONSTRUCTION
 
-1. **Cluster by what the CODE actually changed**, not by self-reported archetype. Each child's index MUST appear in EXACTLY ONE cluster's `child_indices`. Union of `child_indices` MUST cover every index 0..n-1 once.
+1. **Cluster by what the CODE actually changed**, not by self-reported archetype. Each child's index MUST appear in EXACTLY ONE cluster's `child_indices`. Union of `child_indices` MUST cover every index 0..n-1 once. Keep `crossover_role=="donor"` children in their own merge cluster(s) rather than mixed into mutation-move clusters — unless you can identify the specific mechanism this parent contributed.
 2. **Labels** — short (≤5 words), mutually exclusive, discriminating (e.g. `threshold tighten`, `loop unroll`, `early termination`).
 3. **representative_anchors** — for each cluster, 1–3 LITERAL strings copied verbatim from the cluster's diff/code: numeric constants that changed, identifiers added/removed, or distinctive expressions. These anchor the cluster so the downstream suggester can talk about specific code, not vague labels.
 4. **failure_signature** / **mechanism_note** — populate per their schema descriptions, which define the per-cluster validity gate (which one to fill for failed vs valid children) and carry worked examples.
@@ -253,6 +258,10 @@ Available metrics:
 
 class IntraDeltaDistribution(BaseModel):
     """Aggregate stats over child fitness deltas for one parent.
+
+    Deltas are ORIENTED (positive = child improved on parent regardless of
+    the primary metric's direction), so improving/catastrophic hold for
+    minimize metrics too.
 
     All distribution fields cover ONLY children with ``is_valid=true``. Invalid
     children are excluded from min/median/max/improving/neutral/catastrophic
@@ -368,7 +377,12 @@ class IntraCardStructuredOutput(BaseModel):
 
     parent_id: str = Field(description="Parent program id (copied from input).")
     parent_fitness: float = Field(description="Parent's evaluated primary fitness.")
-    n_attempts: int = Field(description="Total evaluated children for this parent.")
+    n_attempts: int = Field(
+        description=(
+            "Evaluated children covered by this card — the recency window, "
+            "not necessarily the parent's lifetime total."
+        )
+    )
     delta_distribution: IntraDeltaDistribution = Field(
         description="Aggregate distribution of fitness deltas across children."
     )
@@ -485,13 +499,14 @@ def _render_intra_card_text(
     n_attempts = card.get("n_attempts", 0)
     lines.append(
         f"Parent `{parent_id[:8] if isinstance(parent_id, str) else parent_id}` "
-        f"(fitness={_fmt(parent_fitness)}) has been mutated {n_attempts} time(s)."
+        f"(fitness={_fmt(parent_fitness)}) — card covers its {n_attempts} "
+        f"most recent evaluated child(ren)."
     )
 
     dist = card.get("delta_distribution") or {}
     if dist:
         dist_line = (
-            f"Delta distribution (valid children only): "
+            f"Delta distribution (valid children only; + = improvement): "
             f"min={_fmt(dist.get('min'), signed=True)}, "
             f"median={_fmt(dist.get('median'), signed=True)}, "
             f"max={_fmt(dist.get('max'), signed=True)}; "
@@ -825,8 +840,8 @@ class IntraMemoryStage(Stage):
 
     InputsModel: type[StageIO] = IntraMemoryInputs
     OutputModel: type[StageIO] = StringContainer
-    # Framework default (InputHashCache): re-run only when children_ids or
-    # memory_cards change. No bespoke parent-side signature needed.
+    # Framework default (InputHashCache): re-run only when children_ids
+    # change. No bespoke parent-side signature needed.
 
     def __init__(
         self,
@@ -853,6 +868,7 @@ class IntraMemoryStage(Stage):
     def _collect_evaluated(
         self,
         children: list[Program],
+        parent_id: str,
         parent_fitness: float,
         parent_code: str,
     ) -> list[dict[str, Any]]:
@@ -863,19 +879,32 @@ class IntraMemoryStage(Stage):
         (for invalid children — full context for error_summary line refs —
         and for structural rewrites where the diff would be no smaller than
         the file itself). ``change_form`` discriminates the two.
+
+        ``delta`` is ORIENTED with the same sign convention as
+        ``collect_ancestral_trail``: positive ALWAYS means the child improved
+        on the parent, regardless of the primary metric's direction. Downstream
+        bucketing (``_bucket_delta``) and verdicts consume it as-is.
+
+        Crossover children (>1 lineage parent) additionally carry
+        ``crossover_role`` relative to THIS parent: ``"base"`` when the mutator
+        chose this parent as the base it transformed, ``"donor"`` when this
+        parent only contributed mechanisms — a donor-side diff mostly reflects
+        the base parent's code, not a mutation move tried on this parent.
         """
         primary_key = self._metrics_context.get_primary_key()
+        sign: float = (
+            1.0 if self._metrics_context.is_higher_better(primary_key) else -1.0
+        )
         evaluated: list[dict[str, Any]] = []
         for child in children:
             child_fitness = child.metrics.get(primary_key)
             if child_fitness is None:
                 continue
-            mutation_meta = child.metadata.get("mutation", {}) or {}
-            archetype = None
-            justification = None
-            if isinstance(mutation_meta, dict):
-                archetype = mutation_meta.get("archetype")
-                justification = mutation_meta.get("justification")
+            mutation_output = child.metadata.get(MUTATION_OUTPUT_METADATA_KEY)
+            if not isinstance(mutation_output, dict):
+                mutation_output = {}
+            archetype = mutation_output.get("archetype")
+            justification = mutation_output.get("justification")
             is_valid = self._metrics_context.is_valid(child.metrics)
             error_summary = ""
             if not is_valid:
@@ -885,12 +914,27 @@ class IntraMemoryStage(Stage):
                     error_summary = ""
             entry: dict[str, Any] = {
                 "index": len(evaluated),
-                "delta": child_fitness - parent_fitness,
+                "delta": (child_fitness - parent_fitness) * sign,
                 "is_valid": is_valid,
                 "error_summary": error_summary,
                 "mutation_archetype": archetype,
                 "mutation_justification": justification,
             }
+            child_parents = list(child.lineage.parents) if child.lineage else []
+            if len(child_parents) > 1:
+                base_id = child.get_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY)
+                if not base_id:
+                    # Recover from the mutator's 1-based base_parent index;
+                    # out of range → parents[0], matching
+                    # freeze_base_parent_snapshot.
+                    base_idx = mutation_output.get("base_parent")
+                    if not (
+                        isinstance(base_idx, int)
+                        and 1 <= base_idx <= len(child_parents)
+                    ):
+                        base_idx = 1
+                    base_id = child_parents[base_idx - 1]
+                entry["crossover_role"] = "base" if base_id == parent_id else "donor"
             code_form = _select_code_form(
                 parent_code=parent_code,
                 child_code=child.code,
@@ -921,7 +965,9 @@ class IntraMemoryStage(Stage):
             return StringContainer(data="")
 
         children = await self._storage.mget(child_ids[-self._max_children :])
-        evaluated = self._collect_evaluated(children, parent_fitness, program.code)
+        evaluated = self._collect_evaluated(
+            children, program.id, parent_fitness, program.code
+        )
         if not evaluated:
             logger.debug(
                 "[Memory][IntraStage] {} has no evaluated children; no-op",

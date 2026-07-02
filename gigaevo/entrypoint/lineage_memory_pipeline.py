@@ -145,11 +145,13 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
 
         # Override the default DescendantProgramIds (which the default builder
         # configures with max_selected=1 for LineageStage) with a wider one
-        # tailored to intra-memory analysis: the analyst LLM needs to see the
-        # bulk of recent children, not just the single best.
+        # tailored to intra-memory analysis: a chronological recency window,
+        # NOT best_fitness — ranking by fitness would drop exactly the failed
+        # and regressed children whose failure modes the card exists to
+        # report, and would lose chronology.
         intra_descendant_selector = AncestrySelector(
             metrics_context=metrics_context,
-            strategy="best_fitness",
+            strategy="recent",
             max_selected=intra_max_children_val,
         )
         self.replace_stage(
