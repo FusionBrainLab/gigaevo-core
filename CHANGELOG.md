@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v2.10.0 (2026-07-02)
+
+### Code Style
+
+- **notebooks**: Ruff-clean gigaevo_basics tutorial
+  ([`d59f437`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d59f437c611ea74b56a55b083b38865a250be009))
+
+### Documentation
+
+- **notebooks**: Add gigaevo_basics tutorial notebook
+  ([`a7b4cb8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a7b4cb89a6ebaaee759060198e23f60c40808072))
+
+### Features
+
+- **config**: Default algorithm to single_island_no_distant_parents
+  ([`0b636bf`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0b636bfd4acf6412e4bd894a24d5b1f986a91548))
+
+- **mutation**: Always log citation-integrity counts
+  ([`5f78357`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5f7835733fc96adab531c9172801ceddd9d0e4b0))
+
+- **mutation**: Ground citation integrity on structured insight ids
+  ([`c2fe32d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c2fe32d477aad1071713b8304345c3b5c5713ee1))
+
+
 ## v2.9.0 (2026-07-02)
 
 ### Bug Fixes
