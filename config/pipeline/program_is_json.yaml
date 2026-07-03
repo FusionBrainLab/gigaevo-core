@@ -1,7 +1,9 @@
 # @package _global_
-# Pipeline: standard (intra-memory) pipeline for JSON chain genomes — ValidateCodeStage and
-# CallProgramFunction are swapped for ParseJsonProgram, and initial programs load as *.json.
-# Launch: python run.py problem.name=chains/summarizer pipeline=summarizer_json ...
+# Pipeline for problems whose genome IS a JSON document (not Python source):
+# the standard (intra-memory) pipeline with ValidateCodeStage and
+# CallProgramFunction swapped for ParseJsonProgram, and initial programs loaded
+# as *.json. Problem-agnostic — the problem's own validate() consumes the parsed
+# document. Launch: python run.py problem.name=<json-genome problem> pipeline=program_is_json ...
 
 # Problem-local prompts (chain-flavored mutation + structured_diff prompts);
 # files absent here fall back to package defaults per-file.
@@ -18,7 +20,7 @@ evolution_context:
   memory_provider: ${ref:memory::provider}
 
 pipeline_builder:
-  _target_: problems.chains.summarizer.pipeline.JsonChainPipelineBuilder
+  _target_: problems.chains.json_pipeline.JsonChainPipelineBuilder
   ctx: ${evolution_context}
   stage_timeout: ${stage_timeout}
   dag_timeout: ${dag_timeout}

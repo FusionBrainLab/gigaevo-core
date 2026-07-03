@@ -8,7 +8,7 @@ gold article matches, regardless of their position in the chain.
 
 from statistics import mean
 
-from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
 from problems.chains.hover.full7.config import FULL_CHAIN_CONFIG
@@ -91,8 +91,9 @@ def validate(chain_spec: dict) -> dict:
     try:
         client = LLMClient(**llm_config)
 
-        # 4. Build tool registry: two retrieve tools with different k
-        tool_registry = {
+        # make_retrieve_fn is a batch fn (list[dict] -> list[str]) — dispatched
+        # via batch_tool_registry, not the per-sample tool_registry.
+        batch_tool_registry = {
             "retrieve": make_retrieve_fn(
                 context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
             ),
@@ -101,9 +102,13 @@ def validate(chain_spec: dict) -> dict:
             ),
         }
 
-        # 5. Run chain on dataset
-        results = run_chain_on_dataset(
-            chain, client, dataset, outer_context_builder, tool_registry
+        # 5. Run chain on dataset (step-batched for optimal vLLM batching)
+        results = run_chain_on_dataset_stepwise(
+            chain,
+            client,
+            dataset,
+            outer_context_builder,
+            batch_tool_registry=batch_tool_registry,
         )
 
         # 6. Adaptive soft coverage scoring
