@@ -111,6 +111,76 @@ async def test_run_increment_ingests_and_authors_exemplars(
     assert len(librarian.ingest_calls) == 1
 
 
+async def test_run_increment_folds_same_batch_duplicate_ideas(
+    store, make_program, metrics_context, tmp_path
+):
+    # Two co-batch children whose ideas are the same lever: the librarian banks a
+    # real card for each, and the inline intra-batch consolidation must fold them
+    # to one before the increment returns — no waiting for the every_n cadence.
+    from types import SimpleNamespace
+
+    from gigaevo.llm.agents.reconcile import LibrarianCard
+    from gigaevo.memory.storage.base import ScoredCard
+
+    class DupLibrarian:
+        def __init__(self, store) -> None:
+            self._store = store
+
+        async def ingest_idea(self, *, child_id, **kwargs) -> list[str]:
+            cid = f"card-{child_id}"
+            self._store.save(
+                Card(
+                    id=cid,
+                    kind=CardKind.INSIGHT,
+                    description="same lever",
+                    explanation_summary="why",
+                )
+            )
+            return [cid]
+
+        async def author_program(self, *, program_id, code, fitness):
+            return ProgramAuthorResponse(description=f"exemplar {program_id}")
+
+        def admit_program(self, card, *, higher_is_better):
+            return self._store.save(card)
+
+    class MergingAgent:
+        async def arun(self, *, card_a, card_b):
+            return SimpleNamespace(
+                merge=True,
+                card=LibrarianCard(
+                    description="union", explanation_summary="u", keywords=["u"]
+                ),
+            )
+
+    def note(text: str) -> dict:
+        return {MUTATION_OUTPUT_METADATA_KEY: {"changes": [{"description": text}]}}
+
+    p1 = make_program(fitness=0.7, parents=["p"], metadata=note("lever A"))
+    p2 = make_program(fitness=0.6, parents=["p"], metadata=note("lever A"))
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        consolidation_every_n=2,
+        best_programs_percent=0.0,
+    )
+    writer._stack._librarian = DupLibrarian(store)
+    writer._stack._consolidation_agent = MergingAgent()
+
+    def nearest(text, k, kind=None):
+        insights = [c for c in store.snapshot() if c.kind is CardKind.INSIGHT]
+        return [ScoredCard(card=c, distance=0.1) for c in insights][:k]
+
+    store.nearest = nearest
+
+    await writer.run_increment([p1, p2])
+    await writer._consolidation.drain()
+
+    insights = [c for c in store.snapshot() if c.kind is CardKind.INSIGHT]
+    assert len(insights) == 1
+
+
 async def test_ingest_timeout_forgets_record_for_retry(
     store, make_program, metrics_context, tmp_path
 ):

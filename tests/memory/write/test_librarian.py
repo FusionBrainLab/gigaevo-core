@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from gigaevo.llm.agents.admission_novelty import NoveltyVerdict
 from gigaevo.llm.agents.program_author import ProgramAuthorResponse
 from gigaevo.llm.agents.reconcile import LibrarianCard, ReconcileItem, ReconcileResponse
 from gigaevo.memory.cards import Card, CardKind
@@ -37,6 +38,19 @@ class FakeProgramAuthor:
         )
 
 
+class FakeAdmissionJudge:
+    def __init__(self, *, keep: bool = True) -> None:
+        self.keep = keep
+        self.calls: list[dict] = []
+        self.raise_on_call = False
+
+    async def arun(self, **kwargs) -> NoveltyVerdict:
+        self.calls.append(kwargs)
+        if self.raise_on_call:
+            raise RuntimeError("judge down")
+        return NoveltyVerdict(keep=self.keep, reason="test verdict")
+
+
 def item(decision: str, *, description: str = "an idea", target_id: str = ""):
     return ReconcileItem(
         decision=decision,
@@ -59,7 +73,6 @@ def make_librarian(store, author):
             "gate": CardAdmissionGate(store=store, evictor=NullEvictor()),
             "store": store,
             "neighbors": store,
-            "program_twin_eps": 0.05,
             "top_k": 5,
             "max_cards": 3,
             "task_description": "task",
@@ -123,6 +136,88 @@ async def test_new_decision_admits_authored_card(store, make_librarian):
     ids = await ingest(librarian)
     assert len(ids) == 1
     assert store.get(ids[0]).description == "an idea"
+
+
+async def test_novelty_gate_admits_novel_new_card(store, make_librarian):
+    judge = FakeAdmissionJudge(keep=True)
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent, admission_judge=judge)
+    ids = await ingest(librarian)
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "an idea"
+    assert len(judge.calls) == 1
+
+
+async def test_novelty_gate_rejects_prior_known_new_card(store, make_librarian):
+    judge = FakeAdmissionJudge(keep=False)
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent, admission_judge=judge)
+    ids = await ingest(librarian)
+    assert ids == []
+    assert store.snapshot() == ()
+    assert len(judge.calls) == 1
+
+
+async def test_novelty_gate_receives_card_prose(store, make_librarian):
+    judge = FakeAdmissionJudge(keep=True)
+    agent = FakeReconcileAgent(
+        ReconcileResponse(items=[item("NEW", description="novel lever")])
+    )
+    librarian = make_librarian(agent, admission_judge=judge)
+    await ingest(librarian)
+    assert judge.calls[0]["description"] == "novel lever"
+    assert "explanation_summary" in judge.calls[0]
+
+
+async def test_novelty_gate_failure_admits_fail_open(store, make_librarian):
+    judge = FakeAdmissionJudge(keep=False)
+    judge.raise_on_call = True
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent, admission_judge=judge)
+    ids = await ingest(librarian)
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "an idea"
+
+
+async def test_novelty_gate_rejects_fallback_new_from_missing_target(
+    store, make_librarian
+):
+    # A DUPLICATE whose target is gone re-authors as NEW; that fallback NEW must
+    # also pass the novelty gate, or prior-known cards leak in through it.
+    judge = FakeAdmissionJudge(keep=False)
+    agent = FakeReconcileAgent(
+        ReconcileResponse(items=[item("DUPLICATE", target_id="gone")])
+    )
+    librarian = make_librarian(agent, admission_judge=judge)
+    ids = await ingest(librarian)
+    assert ids == []
+    assert store.snapshot() == ()
+
+
+async def test_novelty_gate_skipped_on_reconcile_failure_verbatim(
+    store, make_librarian
+):
+    # The reconcile-failed verbatim path must never be gated: it is the
+    # never-silent-drop degrade path, and the judge would likely fail too.
+    judge = FakeAdmissionJudge(keep=False)
+    agent = FakeReconcileAgent()
+    agent.raise_on_call = True
+    librarian = make_librarian(agent, admission_judge=judge)
+    ids = await ingest(librarian, note="raw note")
+    assert len(ids) == 1
+    assert store.get(ids[0]).description == "raw note"
+    assert judge.calls == []
+
+
+async def test_novelty_gate_does_not_gate_program_exemplars(
+    store, make_card, make_librarian
+):
+    judge = FakeAdmissionJudge(keep=False)
+    librarian = make_librarian(FakeReconcileAgent(), admission_judge=judge)
+    card = program_card(make_card, card_id="program-p1", fitness=0.5)
+    assert librarian.admit_program(card, higher_is_better=True) == card.id
+    assert store.get(card.id) is not None
+    assert judge.calls == []
 
 
 async def test_duplicate_decision_bumps_target(store, make_card, make_librarian):
@@ -242,6 +337,61 @@ async def test_admit_program_drops_when_not_strictly_better(
     assert librarian.admit_program(incoming, higher_is_better=True) == ""
     assert store.get(twin.id) is not None
     assert store.get(incoming.id) is None
+
+
+async def test_admit_program_dedupes_identical_code_regardless_of_prose(
+    store, make_card, make_librarian
+):
+    # Byte-identical code, independently-authored (different) prose, and NO
+    # neighbor surfaced: the prose-cosine gate missed this exact case (two
+    # program cards of the same code banked as twins). Code identity must catch
+    # it, and must not depend on nearest() returning anything.
+    twin = make_card(
+        id="program-old",
+        kind=CardKind.PROGRAM,
+        program_id="old",
+        description="grid init raises min-area",
+        code="def solve():\n    return 1\n",
+        fitness=0.5,
+    )
+    store.save(twin)
+    store.hits = []
+    librarian = make_librarian(FakeReconcileAgent())
+    incoming = make_card(
+        id="program-new",
+        kind=CardKind.PROGRAM,
+        program_id="new",
+        description="component substitution borrowed from parent 1",
+        code="def solve():\n    return 1\n",
+        fitness=0.5,
+    )
+    assert librarian.admit_program(incoming, higher_is_better=True) == ""
+    assert store.get("program-old") is not None
+    assert store.get("program-new") is None
+
+
+async def test_admit_program_keeps_distinct_code(store, make_card, make_librarian):
+    first = make_card(
+        id="program-a",
+        kind=CardKind.PROGRAM,
+        program_id="a",
+        description="strategy A",
+        code="def solve():\n    return 1\n",
+        fitness=0.5,
+    )
+    store.save(first)
+    librarian = make_librarian(FakeReconcileAgent())
+    second = make_card(
+        id="program-b",
+        kind=CardKind.PROGRAM,
+        program_id="b",
+        description="strategy B",
+        code="def solve():\n    return 2\n",
+        fitness=0.5,
+    )
+    assert librarian.admit_program(second, higher_is_better=True) == "program-b"
+    assert store.get("program-a") is not None
+    assert store.get("program-b") is not None
 
 
 def test_strictly_better_direction_table():

@@ -87,12 +87,19 @@ writer:
   # LLM for pairs it has not already ruled on. 0 disables.
   consolidation_every_n: 32
   # Dedup knobs of the librarian write path: neighbor-context widths for the
-  # reconcile agent and the consolidation arbiter (pure top-k, no distance
-  # cut) plus the exemplar twin threshold.
+  # reconcile agent and the consolidation arbiter (pure top-k, no distance cut).
+  # Program exemplars dedup by exact code identity in the librarian, so there is
+  # no exemplar distance threshold.
   dedup_policy:
     _target_: gigaevo.memory.write.merge.DedupPolicy
     online_top_k: 5
     max_cards_per_diff: 3
-    program_twin_eps: 0.05
     consolidation_k: 5
+  # Novelty-admission gate: an LLM judge rejects freshly-authored idea cards that
+  # a strong model would already reach for unprompted (the bank's binding
+  # constraint is an excess of prior-known cards, not plumbing). One extra
+  # memory-LLM hop per authored insight card; fails open on judge error. Insight
+  # cards only — program exemplars carry concrete code+fitness and dedup by exact
+  # code identity, so prose-novelty is the wrong axis for them.
+  novelty_admission_gate: true
   prompts_dir: ${prompts.dir}

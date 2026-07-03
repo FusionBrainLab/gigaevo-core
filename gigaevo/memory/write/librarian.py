@@ -10,6 +10,13 @@ embedding-distance threshold anywhere in it (raw notes and authored prose sit
 too far apart in embedding space for a cosine gate to fire on real twins). An
 LLM failure admits the note verbatim — never a silent drop.
 
+An optional ``admission_judge`` gates freshly-authored cards on novelty against
+the mutator's prior: a lever a strong model would already reach for unprompted
+is rejected before it enters the bank (the bank's binding constraint is an
+excess of prior-known cards, not plumbing). Off by default; a judge error fails
+open and admits. The reconcile-failed verbatim path is never gated — it is the
+never-silent-drop degrade path, and a second LLM hop would likely fail too.
+
 ``author_program`` fills exemplar card prose, cached by program id so a
 re-seeded exemplar never re-pays the LLM.
 """
@@ -20,6 +27,7 @@ from typing import Protocol
 
 from loguru import logger
 
+from gigaevo.llm.agents.admission_novelty import NoveltyAdmissionAgent
 from gigaevo.llm.agents.program_author import ProgramAuthorAgent, ProgramAuthorResponse
 from gigaevo.llm.agents.reconcile import ReconcileAgent
 from gigaevo.memory.cards import Card, CardKind
@@ -42,22 +50,22 @@ class Librarian:
         gate: CardAdmissionGate,
         store: MemoryStore,
         neighbors: NeighborSource,
-        program_twin_eps: float = 0.05,
         top_k: int = 5,
         max_cards: int = 3,
         task_description: str = "",
         task_description_summary: str = "",
+        admission_judge: NoveltyAdmissionAgent | None = None,
     ) -> None:
         self._agent = agent
         self._program_author = program_author
         self._gate = gate
         self._store = store
         self._neighbors = neighbors
-        self._program_twin_eps = program_twin_eps
         self._top_k = top_k
         self._max_cards = max_cards
         self._task_description = task_description
         self._task_description_summary = task_description_summary
+        self._admission_judge = admission_judge
 
     async def ingest_idea(
         self,
@@ -116,7 +124,7 @@ class Librarian:
                 task_description_summary=self._task_description_summary,
             )
             if item.decision == "NEW":
-                fid = self._gate.admit(card)
+                fid = await self._admit_new(card)
             elif item.decision == "DUPLICATE":
                 fid = (
                     self._gate.bump_provenance(item.target_id, child_id)
@@ -127,12 +135,42 @@ class Librarian:
                 fid = self._gate.merge(item.target_id, card) if item.target_id else ""
             # A DUPLICATE/MERGE whose target is empty or already gone from the
             # bank makes the gate a no-op (returns ""): author the idea as NEW
-            # rather than silently dropping it.
+            # rather than silently dropping it — through the same novelty gate.
             if not fid and item.decision != "NEW":
-                fid = self._gate.admit(card)
+                fid = await self._admit_new(card)
             if fid:
                 out.append(fid)
         return out
+
+    async def _admit_new(self, card: Card) -> str:
+        """Admit a fresh idea card, gating it through the novelty judge first.
+
+        With no judge wired (the default) this is a plain gate admit. With a
+        judge, a card the mutator would already reach for unprompted is rejected
+        before it enters the bank (returns ""); a judge error fails open and
+        admits, so the gate can never silently drop the write path.
+        """
+        if self._admission_judge is not None:
+            try:
+                verdict = await self._admission_judge.arun(
+                    description=card.description,
+                    explanation_summary=card.explanation_summary,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Memory][Librarian] novelty gate failed ({}); admitting card "
+                    "(fail-open).",
+                    exc,
+                )
+            else:
+                if not verdict.keep:
+                    logger.info(
+                        "[Memory][Librarian] novelty gate rejected prior-known "
+                        "card: {}",
+                        verdict.reason,
+                    )
+                    return ""
+        return self._gate.admit(card)
 
     async def author_program(
         self, *, program_id: str, code: str, fitness: float | None
@@ -147,41 +185,40 @@ class Librarian:
         return await self._program_author.arun(code=code, fitness=fitness)
 
     def admit_program(self, card: Card, *, higher_is_better: bool) -> str:
-        """Admit an exemplar card, deduping same-strategy twins by fitness.
+        """Admit an exemplar card, deduping code-identical twins by fitness.
 
         Exemplar cards are program-id-keyed, so two distinct programs that
-        converge on the same strategy would otherwise bank two near-identical
-        cards. The NeighborSource surfaces such a twin (a different-id program
-        card within ``program_twin_eps``); we keep the higher-fitness exemplar — replacing the
-        banked twin only when the incoming card is strictly better, otherwise
-        dropping the redundant card — so the bank holds one best representative
-        per strategy. Re-admitting an exemplar already in the bank flows straight
-        to the gate as an UPDATE (its own id is never its twin).
+        evolution produced with identical code (a no-op crossover that returns a
+        parent verbatim is common) would otherwise bank two identical cards. A
+        twin is an existing program card with the same normalized code — exact
+        identity, not a prose-embedding cosine (independently-authored
+        descriptions of the same code sit too far apart for any cosine gate to
+        fire). We keep the higher-fitness exemplar — replacing the banked twin
+        only when the incoming card is strictly better, otherwise dropping the
+        redundant card — so the bank holds one best representative per program.
+        The bank is updated synchronously, so a co-batch twin admitted earlier in
+        the same sweep is already visible here (intra-batch safe). Re-admitting an
+        exemplar already in the bank flows straight to the gate as an UPDATE (its
+        own id is never its twin).
         """
-        twin = self._nearest_program_twin(card)
+        twin = self._code_twin(card)
         if twin is not None:
             if not _strictly_better(card.fitness, twin.fitness, higher_is_better):
                 return ""
             self._store.delete(twin.id)
         return self._gate.admit(card)
 
-    def _nearest_program_twin(self, card: Card) -> Card | None:
-        try:
-            hits = self._neighbors.nearest(
-                card.description, self._top_k, CardKind.PROGRAM
-            )
-        except Exception as exc:
-            logger.warning(
-                "[Memory][Librarian] neighbor retrieval failed for card {}: {}",
-                card.id,
-                exc,
-            )
+    def _code_twin(self, card: Card) -> Card | None:
+        key = _code_key(card.code)
+        if not key:
             return None
-        for hit in hits:
-            if hit.distance > self._program_twin_eps:
-                break
-            if hit.card.id != card.id:
-                return hit.card
+        for other in self._store.snapshot():
+            if (
+                other.kind is CardKind.PROGRAM
+                and other.id != card.id
+                and _code_key(other.code) == key
+            ):
+                return other
         return None
 
 
@@ -193,3 +230,11 @@ def _strictly_better(
     if banked is None:
         return True
     return incoming > banked if higher_is_better else incoming < banked
+
+
+def _code_key(code: str) -> str:
+    """Normalize program source for exact-twin comparison: strip surrounding
+    blank lines and per-line trailing whitespace so trailing-whitespace noise
+    can't split a genuine code twin. Deliberately does not reformat — two
+    differently-structured programs are different exemplars, not twins."""
+    return "\n".join(line.rstrip() for line in code.strip().splitlines())

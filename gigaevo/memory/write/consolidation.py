@@ -12,8 +12,12 @@ abstains otherwise so generous candidate recall can never force-merge distinct
 cards. On abstain the pass tries the next-nearest candidate. The absorbed card's
 provenance is preserved on the survivor; the absorbed id is then removed.
 Idempotent — a second run over a deduped bank finds no foldable pair and merges
-nothing. ``ConsolidationScheduler`` throttles the pass to one background run per
-``every_n`` cards written, serialized under the shared write lock.
+nothing. ``ConsolidationScheduler`` runs it two ways, both under the shared write
+lock: one throttled *background* pass over the whole bank per ``every_n`` cards
+written (catches cross-batch drift without blocking a sweep), and one *inline*
+pass scoped to each increment's freshly-written ids (``consolidate_written``, the
+intra-batch layer — folds same-batch duplicates immediately, before the next read
+can inject them into the mutator).
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ async def consolidate(
     agent: ConsolidateAgent,
     k: int = 5,
     reviewed: set[frozenset[tuple[str, str]]] | None = None,
+    subset: set[str] | None = None,
 ) -> int:
     """Fold near-duplicate idea cards into canonical cards. Returns merge count.
 
@@ -58,6 +63,13 @@ async def consolidate(
     changes. Pass a caller-owned set to carry declines across passes — without
     a distance cut every standing near-pair would otherwise re-pay its arbiter
     call on every pass.
+
+    ``subset`` restricts the outer loop to just those card ids (the intra-batch
+    pass passes one increment's freshly-written ids); neighbors are still ranked
+    over the whole bank, so a batch card also folds against an older twin. None
+    (the default) queries every card — the periodic whole-bank pass. Since a
+    fold fires from either direction of an unordered pair, querying only the
+    subset still catches every subset-vs-anything duplicate.
     """
     cards = store.snapshot()
     consumed: set[str] = set()
@@ -76,6 +88,8 @@ async def consolidate(
             # Only idea cards drift into duplicates; program exemplar cards are
             # identity-keyed and re-authored each sweep, so never merge them.
             if card.kind is not CardKind.INSIGHT or card.id in consumed:
+                continue
+            if subset is not None and card.id not in subset:
                 continue
             desc = (card.description or "").strip()
             if not desc:
@@ -280,43 +294,81 @@ class ConsolidationScheduler:
                 timeout,
             )
 
+    async def consolidate_written(
+        self, ids: set[str], *, timeout: float | None = None
+    ) -> int:
+        """Fold near-duplicates among the cards one increment just wrote, inline
+        and immediately — the intra-batch counterpart to the periodic background
+        pass. The outer loop is restricted to ``ids`` while neighbors still rank
+        over the whole bank, so a batch card also folds against an older twin.
+
+        The caller (``_run_increment_locked``) already holds the run lock, so
+        unlike ``_run`` this MUST NOT re-acquire it (the lock is not reentrant).
+        No-op when consolidation is disabled (``every_n <= 0``) or the batch
+        wrote nothing. Bounded by ``timeout`` because it blocks the write sweep;
+        an overrun degrades to a skip rather than stalling the increment.
+        """
+        if self._every_n <= 0 or not ids:
+            return 0
+        return await self._consolidate_once(subset=set(ids), timeout=timeout)
+
     async def _run(self) -> None:
         # Consolidation rewrites the bank, so it runs under the same write lock as
         # a sweep — never interleaved with one — but is dispatched in the
         # background so the triggering sweep is not blocked waiting for it.
+        async with self._run_lock:
+            await self._consolidate_once()
+
+    async def _consolidate_once(
+        self, *, subset: set[str] | None = None, timeout: float | None = None
+    ) -> int:
         store = self._stack.store
         gate = self._stack.gate
         neighbors = self._stack.neighbors
         agent = self._stack.consolidation_agent
         if store is None or gate is None or neighbors is None or agent is None:
-            return  # un-built stack (schedule() guards this) — nothing to fold
-        async with self._run_lock:
-            try:
-                merged = await consolidate(
-                    store=store,
-                    gate=gate,
-                    neighbors=neighbors,
-                    agent=agent,
-                    k=self._k,
-                    reviewed=self._reviewed,
+            return 0  # un-built stack (schedule() guards the background path)
+        coro = consolidate(
+            store=store,
+            gate=gate,
+            neighbors=neighbors,
+            agent=agent,
+            k=self._k,
+            reviewed=self._reviewed,
+            subset=subset,
+        )
+        try:
+            merged = await (asyncio.wait_for(coro, timeout) if timeout else coro)
+        except TimeoutError:
+            self._failures += 1
+            logger.warning(
+                "[Memory][Consolidation] intra-batch pass exceeded {}s; skipping",
+                timeout,
+            )
+            emit_memory_event(
+                MemoryConsolidationPass(
+                    outcome="failed", failures=self._failures, error="timeout"
                 )
-            except Exception as exc:
-                self._failures += 1
-                logger.warning(
-                    "[Memory][Consolidation] pass failed ({}); skipping",
-                    exc,
+            )
+            return 0
+        except Exception as exc:
+            self._failures += 1
+            logger.warning(
+                "[Memory][Consolidation] pass failed ({}); skipping",
+                exc,
+            )
+            emit_memory_event(
+                MemoryConsolidationPass(
+                    outcome="failed",
+                    failures=self._failures,
+                    error=str(exc),
                 )
-                emit_memory_event(
-                    MemoryConsolidationPass(
-                        outcome="failed",
-                        failures=self._failures,
-                        error=str(exc),
-                    )
-                )
-                return
-            if merged:
-                logger.info(
-                    "[Memory][Consolidation] merged {} near-dup cards",
-                    merged,
-                )
-            emit_memory_event(MemoryConsolidationPass(outcome="ok", merged=merged))
+            )
+            return 0
+        if merged:
+            logger.info(
+                "[Memory][Consolidation] merged {} near-dup cards",
+                merged,
+            )
+        emit_memory_event(MemoryConsolidationPass(outcome="ok", merged=merged))
+        return merged

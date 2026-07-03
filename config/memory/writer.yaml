@@ -37,6 +37,5 @@ writer:
     _target_: gigaevo.memory.write.merge.DedupPolicy
     online_top_k: 5
     max_cards_per_diff: 3
-    program_twin_eps: 0.05
     consolidation_k: 5
   prompts_dir: ${prompts.dir}

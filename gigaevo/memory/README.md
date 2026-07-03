@@ -47,7 +47,8 @@ persisted data raises instead of being coerced.
 | `read/exclusion.py` | `NullExcluder`, `LineageExcluder` (filter-first lineage gate) |
 | `read/render.py` | `EfficacyCardRenderer` — card → mutator-facing block incl. efficacy endorsement |
 | `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): extract → reconcile → author exemplars → restamp gains → harm-evict, one lock |
-| `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards, author exemplar prose |
+| `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards, author exemplar prose; optional novelty-admission gate on NEW idea cards |
+| `llm/agents/admission_novelty.py` | `NoveltyAdmissionAgent`: keep/reject an idea card on novelty vs the mutator's prior (`writer.novelty_admission_gate`, on in `memory=full`) |
 | `write/admission.py` | `CardAdmissionGate` (sole harm gate) + `WriteLedger` (`write_ledger.jsonl`) |
 | `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp |
 | `write/merge.py` | `DedupPolicy` + card merge semantics |

@@ -22,6 +22,7 @@ from gigaevo.evolution.engine.hooks import IncrementalPostRunHook
 from gigaevo.llm.agents.consolidate_cards import ConsolidateAgent
 from gigaevo.llm.agents.factories import (
     create_consolidate_agent,
+    create_novelty_admission_agent,
     create_program_author_agent,
     create_reconcile_agent,
     create_task_summary_agent,
@@ -65,6 +66,7 @@ class LibrarianWriteStack:
         task_description: str = "",
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
+        novelty_admission_gate: bool = False,
     ) -> None:
         self._llm = llm
         self._evictor = evictor
@@ -73,6 +75,7 @@ class LibrarianWriteStack:
         self._task_description = task_description
         self._dedup_policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._prompts_dir = prompts_dir
+        self._novelty_admission_gate = novelty_admission_gate
         self._gate: CardAdmissionGate | None = None
         self._librarian: Librarian | None = None
         self._neighbors: NeighborSource | None = None
@@ -176,6 +179,16 @@ class LibrarianWriteStack:
             evictor=self._evictor,
             ledger=WriteLedger(self._checkpoint_dir / "write_ledger.jsonl"),
         )
+        # Optional novelty-admission judge: gates freshly-authored idea cards on
+        # novelty against the mutator's prior. Off unless the arm turns it on
+        # (the extra LLM hop per authored card is not free).
+        admission_judge = (
+            create_novelty_admission_agent(
+                self._llm, self._task_description, prompts_dir=self._prompts_dir
+            )
+            if self._novelty_admission_gate
+            else None
+        )
         # the store IS the neighbor source: its nearest-card contract method
         # feeds the reconcile agent's context, exemplar twin dedup, and the
         # batch consolidation pass.
@@ -189,11 +202,11 @@ class LibrarianWriteStack:
             gate=gate,
             store=store,
             neighbors=store,
-            program_twin_eps=policy.program_twin_eps,
             top_k=policy.online_top_k,
             max_cards=policy.max_cards_per_diff,
             task_description=self._task_description,
             task_description_summary=summary,
+            admission_judge=admission_judge,
         )
         self._store = store
         self._gate = gate
@@ -237,10 +250,15 @@ class MemoryWriter(IncrementalPostRunHook):
             schedule one background near-duplicate consolidation pass over the
             whole bank. 0 disables it.
         dedup_policy: Dedup knobs of the librarian write path (reconcile-agent
-            context width, exemplar twin threshold, consolidation candidate
-            width); defaults to ``DedupPolicy()``.
+            context width, consolidation candidate width); defaults to
+            ``DedupPolicy()``.
         prompts_dir: Optional prompts directory for the librarian agents (e.g.
             ``config.prompts.dir``); None uses the package default prompts.
+        novelty_admission_gate: When true, a novelty-admission LLM judge gates
+            each freshly-authored idea card, rejecting levers a strong model
+            would already reach for unprompted (the bank's binding constraint is
+            an excess of prior-known cards). Off by default; the extra hop per
+            authored card is not free, and it fails open on any judge error.
     """
 
     def __init__(
@@ -258,6 +276,7 @@ class MemoryWriter(IncrementalPostRunHook):
         consolidation_every_n: int = 0,
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
+        novelty_admission_gate: bool = False,
     ) -> None:
         # Default to the task's primary metric, not a literal "fitness": on a
         # task whose primary key differs, a hardcoded key would resolve to no
@@ -282,6 +301,7 @@ class MemoryWriter(IncrementalPostRunHook):
             task_description=task_description,
             dedup_policy=policy,
             prompts_dir=prompts_dir,
+            novelty_admission_gate=novelty_admission_gate,
         )
         self._extractor = ProgramRecordExtractor(
             task_description=task_description,
@@ -349,7 +369,7 @@ class MemoryWriter(IncrementalPostRunHook):
         )
 
         librarian = self._stack.require_librarian()
-        cards_written = 0
+        written_ids: list[str] = []
         for rec in records:
             try:
                 written = await asyncio.wait_for(
@@ -361,7 +381,7 @@ class MemoryWriter(IncrementalPostRunHook):
                     ),
                     timeout=self._ingest_call_timeout_s,
                 )
-                cards_written += len(written)
+                written_ids.extend(written)
             except TimeoutError:
                 # A stalled memory-LLM call must not starve the rest of the
                 # sweep (sibling ingests, exemplars, harm eviction). Drop this
@@ -391,7 +411,14 @@ class MemoryWriter(IncrementalPostRunHook):
             store=self._stack.require_store(),
             gate=self._stack.require_gate(),
         )
-        self._consolidation.note_writes(cards_written)
+        # Intra-batch dedup: fold this increment's own same-lever idea cards now,
+        # inline under the run lock, so a duplicate can't be injected into the
+        # mutator before the periodic whole-bank pass' cadence trips. Bounded so
+        # its consolidate-agent calls can't stall the sweep.
+        await self._consolidation.consolidate_written(
+            set(written_ids), timeout=self._ingest_call_timeout_s
+        )
+        self._consolidation.note_writes(len(written_ids))
 
     async def _author_exemplars(self, pool: list[Program], summary: str) -> None:
         """Author a clean program card for each top-fitness exemplar.

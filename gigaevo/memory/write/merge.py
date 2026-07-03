@@ -24,14 +24,14 @@ class DedupPolicy(BaseModel):
     """The dedup knobs of the librarian write path.
 
     One frozen value object groups every dedup knob — the reconcile agent's
-    neighbor-context width per mutation diff, the exemplar twin threshold, and
-    the batch consolidation candidate width — so they live in one
-    Hydra-instantiable node instead of scattered scalar defaults on the
-    Librarian, the consolidation pass, and the scheduler. Idea-card dedup is
-    LLM-arbitrated end to end: recall is top-k by rank, with no embedding
-    distance threshold anywhere (same-lever cards average only ~0.78 cosine
-    similarity on this geometry, so any useful cosine gate would either be
-    inert or force-merge distinct levers).
+    neighbor-context width per mutation diff and the batch consolidation
+    candidate width — so they live in one Hydra-instantiable node instead of
+    scattered scalar defaults on the Librarian, the consolidation pass, and the
+    scheduler. Idea-card dedup is LLM-arbitrated end to end: recall is top-k by
+    rank, with no embedding distance threshold anywhere (same-lever cards average
+    only ~0.78 cosine similarity on this geometry, so any useful cosine gate
+    would either be inert or force-merge distinct levers). Exemplar cards dedup
+    by exact code identity in the librarian — also threshold-free.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -44,13 +44,6 @@ class DedupPolicy(BaseModel):
     max_cards_per_diff: int = Field(
         default=3,
         description="Upper bound on cards authored from a single mutation diff.",
-    )
-    program_twin_eps: float = Field(
-        default=0.05,
-        description="Cosine distance below which a banked program exemplar with "
-        "a different id counts as a same-strategy twin of an incoming exemplar; "
-        "the higher-fitness one is kept. Exemplar dedup has no LLM arbiter, so "
-        "this is the only distance threshold in the write path.",
     )
     consolidation_k: int = Field(
         default=5,

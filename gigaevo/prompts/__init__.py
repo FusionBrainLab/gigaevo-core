@@ -152,6 +152,20 @@ class ConsolidatePrompts:
         return load_prompt("consolidate", "user", prompts_dir=prompts_dir)
 
 
+class AdmissionNoveltyPrompts:
+    """Librarian novelty-admission judge prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for the novelty-admission (keep/reject) hop."""
+        return load_prompt("admission_novelty", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for the novelty-admission hop."""
+        return load_prompt("admission_novelty", "user", prompts_dir=prompts_dir)
+
+
 class ProgramAuthorPrompts:
     """Librarian program-author agent prompt templates."""
 

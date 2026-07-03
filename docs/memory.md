@@ -71,11 +71,23 @@ stamped with the selected card ids (see [Tracking](#tracking-did-memory-actually
 ```
 extract    eligible parent→child records (strict metric validity)
 reconcile  librarian LLM turns each diff into NEW / DUPLICATE / MERGE cards
+admit      novelty gate (optional) — reject NEW idea cards inside the mutator's prior
 exemplars  author program cards for top-fitness programs (best_programs_percent)
 restamp    base-relative fitness gain events across the full lineage pool
 evict      harm sweep — confidently-harmful cards leave the bank
 consolidate throttled background near-duplicate folding
 ```
+
+When `writer.novelty_admission_gate` is on (the default in `memory=full`), a
+`NoveltyAdmissionAgent` scores each freshly-authored idea card on one axis —
+*would a strong optimizer LLM already reach for this lever unprompted on this
+task?* — and drops the card if so, before it enters the bank. It is a subtraction
+gate for the prior-known majority (generic metaheuristic boilerplate the mutator
+emits cold), not a quality or correctness check; a sound-but-obvious card is
+rejected, a non-obvious card is kept even if wrong. It fails open (judge error →
+admit) and never touches the reconcile-failed verbatim path. Insight cards only —
+program exemplars carry concrete code+fitness and already dedup by exact code
+identity, so prose-novelty is the wrong axis for them.
 
 Under `pipeline=intra_extra_memory` the `LiveMemoryRefreshHook` additionally
 triggers bounded writer sweeps every `refresh_every` post-step invocations, so
@@ -167,8 +179,9 @@ Embedding is config, not code. `embed.embed_scopes` maps a scope name to the
 card text fields concatenated into that scope's vector collection (defaults:
 `description`, `desc_expl`, `desc_task`); `embed.nearest_scope` (default
 `desc_expl`) backs the write path's nearest-card lookups (reconcile-agent
-context, exemplar twins, consolidation candidates — all pure top-k; the only
-distance threshold left is the exemplar `program_twin_eps`);
+context, consolidation candidates — all pure top-k; there is no distance
+threshold anywhere in the write path — program exemplars dedup by exact
+normalized-code identity, not by embedding distance);
 `embed.embedding_model` defaults to `Snowflake/snowflake-arctic-embed-m-v1.5`.
 `embed.query_prefix` is the instruction prepended to every retrieval *query*
 before it is embedded (never to the indexed card documents) — the asymmetric

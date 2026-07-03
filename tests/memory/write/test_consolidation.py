@@ -265,3 +265,108 @@ async def test_successful_pass_emits_ok(store, make_card, monkeypatch):
 def test_schedule_without_running_loop_returns_false(store):
     scheduler = make_scheduler(store, FakeConsolidateAgent())
     assert scheduler.schedule() is False
+
+
+async def test_subset_restricts_queries_but_folds_against_full_bank(store, make_card):
+    # The intra-batch pass queries only the batch's ids, yet neighbors rank over
+    # the whole bank — so a batch card folds an OLDER twin, while a duplicate pair
+    # outside the subset is never queried and stays untouched.
+    batch = make_card(description="batch card")
+    old = make_card(description="older twin")
+    other_a = make_card(description="other a")
+    other_b = make_card(description="other b")
+    for card in (batch, old, other_a, other_b):
+        store.save(card)
+
+    def nearest(text, k, kind=None):
+        table = {
+            batch.description: [ScoredCard(card=old, distance=0.1)],
+            old.description: [ScoredCard(card=batch, distance=0.1)],
+            other_a.description: [ScoredCard(card=other_b, distance=0.1)],
+            other_b.description: [ScoredCard(card=other_a, distance=0.1)],
+        }
+        return table.get(text, [])
+
+    store.nearest = nearest
+    merged = await run_consolidate(store, FakeConsolidateAgent(), subset={batch.id})
+
+    assert merged == 1
+    assert store.get(batch.id) is not None
+    assert store.get(old.id) is None
+    assert store.get(other_a.id) is not None
+    assert store.get(other_b.id) is not None
+
+
+async def test_consolidate_written_folds_same_batch_pair(store, make_card):
+    a = make_card()
+    b = make_card()
+    store.save(a)
+    store.save(b)
+    pair_neighbors(store, a, b)
+    scheduler = make_scheduler(store, FakeConsolidateAgent())
+
+    merged = await scheduler.consolidate_written({a.id, b.id})
+
+    assert merged == 1
+    survivors = [c for c in (a, b) if store.get(c.id) is not None]
+    assert len(survivors) == 1
+
+
+async def test_consolidate_written_noop_when_disabled(store, make_card):
+    a = make_card()
+    b = make_card()
+    store.save(a)
+    store.save(b)
+    pair_neighbors(store, a, b)
+    agent = FakeConsolidateAgent()
+    scheduler = make_scheduler(store, agent, every_n=0)
+
+    assert await scheduler.consolidate_written({a.id, b.id}) == 0
+    assert agent.calls == []
+    assert store.get(a.id) is not None
+    assert store.get(b.id) is not None
+
+
+async def test_consolidate_written_noop_on_empty_ids(store):
+    agent = FakeConsolidateAgent()
+    scheduler = make_scheduler(store, agent)
+    assert await scheduler.consolidate_written(set()) == 0
+    assert agent.calls == []
+
+
+async def test_consolidate_written_shares_reviewed_memo(store, make_card):
+    a = make_card()
+    b = make_card()
+    store.save(a)
+    store.save(b)
+    pair_neighbors(store, a, b)
+    agent = FakeConsolidateAgent(merge=False)
+    scheduler = make_scheduler(store, agent)
+
+    assert await scheduler.consolidate_written({a.id, b.id}) == 0
+    assert len(agent.calls) == 1
+    # the periodic whole-bank pass must not re-pay the arbiter for a pair the
+    # inline pass already declined — both share the scheduler's reviewed memo
+    assert scheduler.schedule() is True
+    await scheduler.drain()
+    assert len(agent.calls) == 1
+
+
+async def test_consolidate_written_timeout_degrades_to_skip(store, make_card):
+    a = make_card()
+    b = make_card()
+    store.save(a)
+    store.save(b)
+    pair_neighbors(store, a, b)
+
+    class SlowAgent(FakeConsolidateAgent):
+        async def arun(self, *, card_a, card_b):
+            await asyncio.sleep(1)
+            return await super().arun(card_a=card_a, card_b=card_b)
+
+    scheduler = make_scheduler(store, SlowAgent())
+
+    assert await scheduler.consolidate_written({a.id, b.id}, timeout=0.01) == 0
+    assert scheduler.failures == 1
+    assert store.get(a.id) is not None
+    assert store.get(b.id) is not None

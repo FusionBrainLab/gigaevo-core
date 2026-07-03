@@ -93,7 +93,6 @@ def test_dedup_policy_defaults_and_frozen():
     policy = DedupPolicy()
     assert policy.online_top_k == 5
     assert policy.max_cards_per_diff == 3
-    assert policy.program_twin_eps == 0.05
     assert policy.consolidation_k == 5
     with pytest.raises(ValidationError):
-        policy.program_twin_eps = 0.1
+        policy.consolidation_k = 7
