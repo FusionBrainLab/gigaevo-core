@@ -234,6 +234,24 @@ async def test_crossover_role_falls_back_to_mutation_output_base_parent() -> Non
 
 
 @pytest.mark.asyncio
+async def test_crossover_role_recovers_base_from_letter_base_parent() -> None:
+    """Diff-operator children emit ``base_parent`` as a namespace LETTER ('B' =
+    parent 2). The stamp-less fallback must resolve it via base_parent_index, not
+    treat the letter as a non-int and mis-default to parents[0]."""
+    parent = _program(score=0.1)
+    child = _program(score=0.15, parents=["other-id", parent.id])
+    child.set_metadata(
+        MUTATION_OUTPUT_METADATA_KEY,
+        {"archetype": "explore", "justification": "swap base", "base_parent": "B"},
+    )
+    parent.lineage.children = [child.id]
+
+    llm, _ = await _run_stage(parent, child)
+    (entry,) = _payload_children(llm)
+    assert entry["crossover_role"] == "base"
+
+
+@pytest.mark.asyncio
 async def test_invalid_crossover_child_carries_role_and_full_code() -> None:
     parent = _program(score=0.1)
     child = _program(

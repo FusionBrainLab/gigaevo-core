@@ -924,14 +924,15 @@ class IntraMemoryStage(Stage):
             if len(child_parents) > 1:
                 base_id = child.get_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY)
                 if not base_id:
-                    # Recover from the mutator's 1-based base_parent index;
-                    # out of range → parents[0], matching
-                    # freeze_base_parent_snapshot.
-                    base_idx = mutation_output.get("base_parent")
-                    if not (
-                        isinstance(base_idx, int)
-                        and 1 <= base_idx <= len(child_parents)
-                    ):
+                    # Deferred import: engine.mutation pulls in the operator stack,
+                    # cyclic at this module's load time.
+                    from gigaevo.evolution.engine.mutation import base_parent_index
+
+                    # Recover from the mutator's base_parent (wire-JSON emits a
+                    # 1-based int, structured diffs a namespace letter); out of
+                    # range → parents[0], matching freeze_base_parent_snapshot.
+                    base_idx = base_parent_index(mutation_output.get("base_parent"))
+                    if not 1 <= base_idx <= len(child_parents):
                         base_idx = 1
                     base_id = child_parents[base_idx - 1]
                 entry["crossover_role"] = "base" if base_id == parent_id else "donor"
