@@ -122,6 +122,7 @@ class DiffMutationAgent(LangGraphAgent):
                         latency_ms=(time.monotonic() - t0) * 1000.0,
                         tokens_in=usage.context if usage else 0,
                         tokens_out=usage.generated if usage else 0,
+                        tokens_reasoning=usage.reasoning if usage else 0,
                         error_type=error_type,
                     )
                 )
