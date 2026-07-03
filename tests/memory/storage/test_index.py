@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import CardKind
 from gigaevo.memory.storage.config import EmbedConfig
 from gigaevo.memory.storage.index import VectorIndex, render_scope_document
@@ -16,7 +17,11 @@ SCOPES = {
 
 @pytest.fixture
 def index(tmp_path):
-    embed = EmbedConfig(embed_scopes=dict(SCOPES), nearest_scope="description")
+    # Symmetric embedder for the retrieval-mechanics tests below; the asymmetric
+    # query_prefix is exercised separately in test_query_prefix_*.
+    embed = EmbedConfig(
+        embed_scopes=dict(SCOPES), nearest_scope="description", query_prefix=""
+    )
     return VectorIndex(tmp_path / "chroma", embed)
 
 
@@ -86,6 +91,35 @@ def test_kind_and_exclude_filters(index, make_card):
     assert combined == []
 
 
+def test_query_prefix_applies_to_queries_not_documents(
+    tmp_path, make_card, fake_embedder
+):
+    embed = EmbedConfig(
+        embed_scopes={"description": ("description",)},
+        nearest_scope="description",
+        query_prefix="INSTRUCT: ",
+    )
+    index = VectorIndex(tmp_path / "chroma", embed)
+    index.upsert([make_card(description="alpha beta")])
+    assert fake_embedder.embedded == ["alpha beta"]
+    fake_embedder.embedded.clear()
+    index.query("description", "alpha", 3)
+    assert fake_embedder.embedded == ["INSTRUCT: alpha"]
+
+
+def test_empty_query_prefix_is_noop(tmp_path, make_card, fake_embedder):
+    embed = EmbedConfig(
+        embed_scopes={"description": ("description",)},
+        nearest_scope="description",
+        query_prefix="",
+    )
+    index = VectorIndex(tmp_path / "chroma", embed)
+    index.upsert([make_card(description="alpha")])
+    fake_embedder.embedded.clear()
+    index.query("description", "alpha", 3)
+    assert fake_embedder.embedded == ["alpha"]
+
+
 def test_unknown_scope_raises(index):
     with pytest.raises(KeyError, match="unknown embed scope"):
         index.query("nope", "text", 3)
@@ -136,3 +170,36 @@ def test_remove_is_idempotent(index, make_card):
     index.remove([card.id])
     assert index.query("description", "alpha", 5) == []
     index.remove([card.id])
+
+
+def _embed(model: str, *, query_prefix: str = "") -> EmbedConfig:
+    return EmbedConfig(
+        embedding_model=model,
+        embed_scopes=dict(SCOPES),
+        nearest_scope="description",
+        query_prefix=query_prefix,
+    )
+
+
+def test_reused_dir_with_changed_embedder_raises(tmp_path):
+    # Chroma keys collections by name, so a reused persist dir keeps vectors from
+    # the old embedder; the new embedder would rank against incompatible vectors.
+    # Fail loudly rather than silently corrupt retrieval.
+    persist = tmp_path / "chroma"
+    VectorIndex(persist, _embed("model-a"))
+    with pytest.raises(StorageError, match="[Ee]mbedding config changed"):
+        VectorIndex(persist, _embed("model-b"))
+
+
+def test_reused_dir_with_same_embed_config_is_ok(tmp_path):
+    persist = tmp_path / "chroma"
+    VectorIndex(persist, _embed("model-a"))
+    VectorIndex(persist, _embed("model-a"))
+
+
+def test_changed_query_prefix_does_not_invalidate(tmp_path):
+    # query_prefix conditions only queries, never the stored documents, so it is
+    # not part of the fingerprint and must not trip the guard.
+    persist = tmp_path / "chroma"
+    VectorIndex(persist, _embed("model-a", query_prefix="A: "))
+    VectorIndex(persist, _embed("model-a", query_prefix="B: "))

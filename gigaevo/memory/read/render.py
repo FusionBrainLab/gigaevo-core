@@ -37,7 +37,7 @@ def format_block_efficacy(card: Card, block: CardStatsBlock | None) -> str:
         f"efficacy: introduced in {intros} children; "
         f"median improvement {float(median):+.4f}"
     )
-    # A noise-band-confident posterior with a losing median must never read as
+    # An efficacy-confident posterior with a losing median must never read as
     # an endorsement.
     if float(median) <= 0:
         return line + " (caution: non-positive median)"

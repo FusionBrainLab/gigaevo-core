@@ -99,7 +99,10 @@ defaults:
 
 store:      # LocalMemoryStore = card bank + vector index + research agent
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
-  config: { _target_: gigaevo.memory.storage.config.StoreConfig, path: <checkpoint_dir> }
+  config:
+    _target_: gigaevo.memory.storage.config.StoreConfig
+    path: <checkpoint_dir>
+    research: { _target_: gigaevo.memory.storage.config.ResearchConfig, default_top_k: 10, max_cards: 10 }
   llm: ${ref:memory.llm}
 
 reader:
@@ -125,7 +128,7 @@ writer:     # ← engines consume this as post_run_hook
 
 Swap a component group (`memory/auction=thompson`,
 `memory/reputation=bd_proximity`, `memory/llm=qwen_instruct`) or tune a leaf
-(`memory.auction.prior_magnitude=0.05`, `memory.reader.max_cards=2`).
+(`memory.auction.ev_floor=0.01`, `memory.reader.max_cards=2`).
 
 ### Component groups
 
@@ -138,12 +141,25 @@ Swap a component group (`memory/auction=thompson`,
 | `memory/excluder` | `none` (default), `lineage` | `lineage` excludes cards already applied on the parent's lineage before research |
 | `memory/evictor` | `harm` (default), `none` | harm evictor is scored by the shared reputation instance |
 
-### Two different `max_cards`
+### The read funnel — three distinct widths
 
-- `memory.store.config.research.max_cards` — **recall width**: how many
-  candidates the research agent may shortlist (default 3).
-- `memory.reader.max_cards` — **injection budget**: how many auction winners
-  reach the mutation prompt (default 1).
+A card travels through three narrowing stages, each with its own knob:
+
+1. `memory.store.config.research.default_top_k` — **retrieval fan-out**: how
+   many nearest cards *each* scoped vector query pulls from Chroma. The research
+   agent may issue several queries across several iterations; their hits
+   aggregate (deduped by card id) into one candidate pool.
+2. `memory.store.config.research.max_cards` — **recall width (the shortlist)**:
+   how many of that candidate pool the reflector may select. This shortlist is
+   the population the auction ranks.
+3. `memory.reader.max_cards` — **injection budget**: how many auction winners
+   the budgeter actually renders into the mutation prompt.
+
+So `default_top_k` and `research.max_cards` feed the auction; `reader.max_cards`
+gates the auction's output. The shipped `memory=full`/`memory=reader` arms set
+`default_top_k: 10` and `research.max_cards: 10` (a 10-wide shortlist) with
+`reader.max_cards: 1` (one injected winner). The bare `ResearchConfig` Pydantic
+defaults are 3/3 — the arms override them.
 
 ### Store and embedding knobs (`memory.store.config`)
 
@@ -154,7 +170,21 @@ card text fields concatenated into that scope's vector collection (defaults:
 context, exemplar twins, consolidation candidates — all pure top-k; the only
 distance threshold left is the exemplar `program_twin_eps`);
 `embed.embedding_model` defaults to `Snowflake/snowflake-arctic-embed-m-v1.5`.
-`research.{max_iters,default_top_k,query_scopes}` bound the research loop.
+`embed.query_prefix` is the instruction prepended to every retrieval *query*
+before it is embedded (never to the indexed card documents) — the asymmetric
+query prompt arctic-embed-m-v1.5 was trained with, defaulting to
+`"Represent this sentence for searching relevant passages: "`; set it to `""`
+for a symmetric embedder that takes no query instruction.
+`research.{max_iters,default_top_k,max_cards,query_scopes}` bound the research
+loop.
+
+The index fingerprints its embedding config (`embedding_model` + each scope's
+field set) beside the Chroma data. Reopening a checkpoint dir under a *changed*
+embedder fails loudly — the old vectors are incompatible with the new one, and
+Chroma keys collections by name, so they would otherwise linger and silently
+corrupt retrieval. **Changing the embedder means a fresh `checkpoint_dir`.**
+(`query_prefix`/`nearest_scope` tune only queries, not stored vectors, so
+they are not fingerprinted and can change freely against an existing bank.)
 
 ### `memory=static` — curated lever baseline
 

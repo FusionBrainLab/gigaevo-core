@@ -8,6 +8,7 @@ document per card — the labeled concatenation of that scope's card fields.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 from pathlib import Path
 import threading
 from typing import Any, cast
@@ -16,9 +17,27 @@ import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from pydantic import BaseModel, ConfigDict
 
+from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.storage.config import EmbedConfig
 from gigaevo.memory.storage.hf_cache import ensure_writable_hf_cache
+
+# Written beside the Chroma data. Records the embedding config the persisted
+# vectors were built with, so reopening the dir under a changed embedder fails
+# loudly instead of ranking new queries against incompatible stored vectors.
+_FINGERPRINT_FILE = "embed_fingerprint.json"
+
+
+def _embed_fingerprint(embed: EmbedConfig) -> dict[str, Any]:
+    """The embedding settings that determine the stored vectors: the model and
+    each scope's field set. query_prefix/nearest_scope condition only queries,
+    never the indexed documents, so they are deliberately excluded."""
+    return {
+        "embedding_model": embed.embedding_model,
+        "embed_scopes": {
+            scope: list(fields) for scope, fields in sorted(embed.embed_scopes.items())
+        },
+    }
 
 
 class IndexHit(BaseModel):
@@ -52,6 +71,7 @@ class VectorIndex:
         # query/upsert/remove on the one client cannot race.
         self._lock = threading.Lock()
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
+        self._guard_embed_fingerprint(Path(persist_dir), embed)
         self._client = chromadb.PersistentClient(path=str(persist_dir))
         # sentence-transformers follows HF_HOME and friends; redirect them to a
         # writable dir before the model download begins.
@@ -65,6 +85,33 @@ class VectorIndex:
             )
             for scope in embed.embed_scopes
         }
+
+    @staticmethod
+    def _guard_embed_fingerprint(persist_dir: Path, embed: EmbedConfig) -> None:
+        """Refuse to reopen a persist dir whose vectors were built with a
+        different embedding config; stamp the fingerprint on first use.
+
+        Chroma keys collections by name only, so a reused dir keeps the old
+        embedder's vectors even after ``rebuild`` (which diffs by document
+        text). Ranking new-embedder queries against them silently corrupts
+        retrieval — or hard-fails on a dimension mismatch. Reject up front and
+        point the user at a fresh ``checkpoint_dir``.
+        """
+        fingerprint = _embed_fingerprint(embed)
+        path = persist_dir / _FINGERPRINT_FILE
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing = None
+            if existing is not None and existing != fingerprint:
+                raise StorageError(
+                    f"Embedding config changed for memory index {persist_dir}: "
+                    f"persisted vectors were built with {existing}, but the run "
+                    f"requests {fingerprint}. The old vectors are incompatible "
+                    f"with the new embedder — use a fresh checkpoint_dir."
+                )
+        path.write_text(json.dumps(fingerprint, sort_keys=True), encoding="utf-8")
 
     @property
     def scopes(self) -> tuple[str, ...]:
@@ -162,8 +209,11 @@ class VectorIndex:
         with self._lock:
             if k <= 0 or not text.strip() or collection.count() == 0:
                 return []
+            # Asymmetric embedding: the retrieval query carries the embedder's
+            # query instruction; the indexed card documents never do (upsert
+            # embeds render_scope_document verbatim). Empty prefix is a no-op.
             result = collection.query(
-                query_texts=[text],
+                query_texts=[f"{self._embed.query_prefix}{text}"],
                 n_results=k,
                 where=self._where(kind, exclude_ids),
                 include=["distances"],

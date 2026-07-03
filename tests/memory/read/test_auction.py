@@ -14,6 +14,7 @@ from gigaevo.memory.read.auction import (
     TopBidBudgeter,
     TopThetaBudgeter,
 )
+from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 
 def _candidate(
@@ -21,6 +22,19 @@ def _candidate(
 ) -> AuctionCandidate:
     return AuctionCandidate(
         card_id=card_id, posterior_a=a, posterior_b=b, magnitude=magnitude
+    )
+
+
+def _metrics(significant_change: float | None) -> MetricsContext:
+    return MetricsContext(
+        specs={
+            "primary": MetricSpec(
+                description="primary",
+                higher_is_better=True,
+                is_primary=True,
+                significant_change=significant_change,
+            )
+        }
     )
 
 
@@ -95,9 +109,7 @@ class TestThompsonAuctioneer:
 
 class TestEVThompsonAuctioneer:
     def test_draw_order_bids_first_then_gate_then_baseline(self):
-        auctioneer = EVThompsonAuctioneer(
-            baseline_prior=(3.0, 3.0), prior_magnitude=0.1, ev_floor=0.0
-        )
+        auctioneer = EVThompsonAuctioneer(baseline_prior=(3.0, 3.0), ev_floor=0.0)
         candidates = [
             _candidate("c0", a=4.0, b=2.0, magnitude=0.5),
             _candidate("c1", a=2.0, b=4.0, magnitude=None),
@@ -105,10 +117,16 @@ class TestEVThompsonAuctioneer:
         winners, slate = auctioneer.run(candidates, np.random.default_rng(42))
 
         replay = np.random.default_rng(42)
+        warm_pool = [
+            c.magnitude
+            for c in candidates
+            if c.magnitude is not None and c.magnitude > 0
+        ]
+        cold_mag = float(np.median(warm_pool)) if warm_pool else 1.0
         expected_bids = []
         for candidate in candidates:
             theta_bid = float(replay.beta(candidate.posterior_a, candidate.posterior_b))
-            mag = candidate.magnitude if candidate.magnitude is not None else 0.1
+            mag = candidate.magnitude if candidate.magnitude is not None else cold_mag
             expected_bids.append((mag, theta_bid * mag))
         for candidate, (mag, bid_value), bid in zip(candidates, expected_bids, slate):
             theta = float(replay.beta(candidate.posterior_a, candidate.posterior_b))
@@ -129,12 +147,72 @@ class TestEVThompsonAuctioneer:
             )
             assert winners == []
 
-    def test_cold_card_bids_prior_magnitude(self):
-        auctioneer = EVThompsonAuctioneer(prior_magnitude=0.25)
+    def test_all_cold_round_uses_significant_change(self):
+        # All-cold round with a metrics context: the cold bid takes the primary
+        # metric's task-scaled significant_change, not a scale-blind constant.
+        auctioneer = EVThompsonAuctioneer(metrics_context=_metrics(0.02))
         _, slate = auctioneer.run(
             [_candidate("cold", magnitude=None)], np.random.default_rng(1)
         )
-        assert slate[0].magnitude == 0.25
+        assert slate[0].magnitude == 0.02
+
+    def test_all_cold_no_scale_uses_unscaled_placeholder(self):
+        # Degenerate round: all cold AND the task declares no significant_change
+        # (no metrics context). The cold bid rides the inert unit placeholder.
+        auctioneer = EVThompsonAuctioneer()
+        _, slate = auctioneer.run(
+            [_candidate("cold", magnitude=None)], np.random.default_rng(1)
+        )
+        assert slate[0].magnitude == 1.0
+
+    def test_unset_significant_change_uses_unscaled_placeholder(self):
+        # significant_change is optional; when the primary metric leaves it unset
+        # the cold bid falls back to the inert unit placeholder, not a fixed prior.
+        auctioneer = EVThompsonAuctioneer(metrics_context=_metrics(None))
+        _, slate = auctioneer.run(
+            [_candidate("cold", magnitude=None)], np.random.default_rng(1)
+        )
+        assert slate[0].magnitude == 1.0
+
+    def test_warm_pool_median_overrides_significant_change(self):
+        # In-round realized helpful gains are more informative than the declared
+        # threshold: the warm-pool median wins even when a metrics context is set.
+        auctioneer = EVThompsonAuctioneer(metrics_context=_metrics(0.02))
+        candidates = [
+            _candidate("warm_hi", magnitude=0.6),
+            _candidate("warm_lo", magnitude=0.2),
+            _candidate("cold", magnitude=None),
+        ]
+        _, slate = auctioneer.run(candidates, np.random.default_rng(1))
+        cold_bid = next(b for b in slate if b.card_id == "cold")
+        assert cold_bid.magnitude == 0.4
+
+    def test_cold_card_borrows_warm_pool_median(self):
+        # Mixed round: cold card bids the median of the warm cards' magnitudes,
+        # tracking the task's own realized gain scale rather than a fixed constant.
+        auctioneer = EVThompsonAuctioneer()
+        candidates = [
+            _candidate("warm_hi", magnitude=0.6),
+            _candidate("warm_lo", magnitude=0.2),
+            _candidate("cold", magnitude=None),
+        ]
+        _, slate = auctioneer.run(candidates, np.random.default_rng(1))
+        cold_bid = next(b for b in slate if b.card_id == "cold")
+        assert cold_bid.magnitude == 0.4
+
+    def test_cold_pool_ignores_nonpositive_warm_magnitudes(self):
+        # Only positive (helpful) warm magnitudes set the cold scale; a harmful
+        # or neutral card must not drag the exploration scale toward zero.
+        auctioneer = EVThompsonAuctioneer()
+        candidates = [
+            _candidate("helpful", magnitude=0.4),
+            _candidate("harmful", magnitude=-0.2),
+            _candidate("neutral", magnitude=0.0),
+            _candidate("cold", magnitude=None),
+        ]
+        _, slate = auctioneer.run(candidates, np.random.default_rng(1))
+        cold_bid = next(b for b in slate if b.card_id == "cold")
+        assert cold_bid.magnitude == 0.4
 
     def test_ev_floor_rejects_small_bids(self):
         auctioneer = EVThompsonAuctioneer(ev_floor=10.0)
@@ -146,13 +224,15 @@ class TestEVThompsonAuctioneer:
         assert slate[0].selected is False
 
     def test_emits_ev_auction_event(self, captured_events):
-        EVThompsonAuctioneer(prior_magnitude=0.3, ev_floor=0.05).run(
-            [_candidate("c0", magnitude=0.4)], np.random.default_rng(3)
+        # All-cold round with a metrics context: the emitted cold_magnitude is
+        # the borrowed significant_change scale, alongside the ev_floor.
+        EVThompsonAuctioneer(metrics_context=_metrics(0.3), ev_floor=0.05).run(
+            [_candidate("cold", magnitude=None)], np.random.default_rng(3)
         )
         (event,) = captured_events
         assert isinstance(event, MemoryAuctionRun)
         assert event.auction == "thompson_ev"
-        assert event.prior_magnitude == 0.3
+        assert event.cold_magnitude == 0.3
         assert event.ev_floor == 0.05
 
 

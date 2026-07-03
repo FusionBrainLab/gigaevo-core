@@ -43,6 +43,14 @@ class EmbedConfig(BaseModel):
         description="Scope backing nearest(); desc_expl won the embedder sweep. "
         "task_description is deliberately not part of it.",
     )
+    query_prefix: str = Field(
+        default="Represent this sentence for searching relevant passages: ",
+        description="Instruction prepended to every retrieval QUERY before "
+        "embedding (never to the indexed card documents) — the asymmetric "
+        "query prompt arctic-embed-m-v1.5 was trained with; the embedder sweep "
+        "left it as free headroom. Set '' for a symmetric embedder that takes "
+        "no query instruction.",
+    )
 
     @model_validator(mode="after")
     def _validate_scopes(self) -> EmbedConfig:

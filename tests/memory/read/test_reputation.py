@@ -1,4 +1,4 @@
-"""Reputation math: noise band, downside posterior, event blocks, BD partition."""
+"""Reputation math: downside posterior, event blocks, BD partition."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from gigaevo.memory.read.reputation import (
     BetaBinomialReputation,
     beta_binomial_posterior,
     block_from_events,
-    robust_noise_band,
 )
 
 
@@ -22,22 +21,6 @@ def _bs(num_bins: int = 10, max_val: float = 1.0) -> BehaviorSpace:
     return BehaviorSpace(
         bins={"x": LinearBinning(min_val=0.0, max_val=max_val, num_bins=num_bins)}
     )
-
-
-class TestRobustNoiseBand:
-    def test_empty_is_zero(self):
-        assert robust_noise_band([]) == 0.0
-
-    def test_flat_set_collapses_to_zero(self):
-        assert robust_noise_band([0.5, 0.5, 0.5]) == 0.0
-
-    def test_mad_to_sigma_scaling(self):
-        assert robust_noise_band([1.0, 2.0, 3.0]) == pytest.approx(1.4826)
-
-    def test_outlier_robust(self):
-        assert robust_noise_band([1.0, 2.0, 3.0, 1000.0]) == pytest.approx(
-            1.4826, rel=0.5
-        )
 
 
 class TestBetaBinomialPosterior:
@@ -91,16 +74,15 @@ class TestBlockFromEvents:
         assert block is not None
         assert block.IntroGain_best_median == pytest.approx(0.2)
 
-    def test_harm_uses_mad_noise_band(self, make_event):
+    def test_harm_counts_gains_below_zero(self, make_event):
         events = [make_event(g) for g in (0.10, 0.11, 0.09, -0.05)]
         block = block_from_events(events)
         assert block is not None
         assert block.k_harm == 1
 
-    def test_wins_do_not_inflate_the_loss_band(self, make_event):
-        # The upside is clipped to zero before the MAD, so a card's own wins can
-        # never widen the dead-band that judges its losses: the -0.5 loss among
-        # {1,2,3} wins is counted as harm (monotone harm math).
+    def test_wins_do_not_inflate_the_loss_count(self, make_event):
+        # A card's own wins can never mask its losses: harm is a strict sign
+        # test, so the -0.5 loss among {1,2,3} wins is still counted (monotone).
         events = [make_event(g) for g in (1.0, 2.0, 3.0, -0.5)]
         block = block_from_events(events)
         assert block is not None
@@ -117,9 +99,34 @@ class TestBlockFromEvents:
         ]
         assert counts == [2, 2, 2]
 
+    def test_wins_never_reduce_harm_count(self, make_event):
+        # A win must never buy immunity for a loss. A median-centred MAD band
+        # shifts when a win adds a clipped zero, dropping a loss from the harm
+        # count (non-monotone); counting every gain below zero keeps all four
+        # losses as harm however many wins arrive.
+        losses = (-1.0, -2.0, -3.0, -10.0)
+        base = block_from_events([make_event(g) for g in (0.5, *losses)])
+        plus_win = block_from_events([make_event(g) for g in (0.5, 0.5, *losses)])
+        assert base is not None and plus_win is not None
+        assert base.k_harm == plus_win.k_harm == 4
+
+    def test_uniformly_harmful_card_counts_every_loss(self, make_event):
+        # Every injection lost. A band derived from the card's own losses reads
+        # roughly half of them as within-noise and the card as net-helpful; a
+        # zero threshold counts all four as harm.
+        block = block_from_events([make_event(g) for g in (-1.0, -2.0, -3.0, -10.0)])
+        assert block is not None
+        assert block.k_harm == 4
+        assert block.p_help_mean < 0.5
+
+    def test_harm_count_is_the_number_of_losses(self, make_event):
+        block = block_from_events([make_event(g) for g in (2.0, -0.1, 0.0, -5.0, 3.0)])
+        assert block is not None
+        assert block.k_harm == 2
+
     def test_noop_card_is_not_efficacy_confident(self, make_event):
-        # All-zero gains: MAD 0 -> zero harm events -> a confident downside
-        # posterior, but a zero central gain is a no-op, not a confident win.
+        # All-zero gains: none is below zero -> zero harm events -> a confident
+        # downside posterior, but a zero central gain is a no-op, not a win.
         block = block_from_events([make_event(0.0) for _ in range(4)])
         assert block is not None
         assert block.IntroGain_best_median == 0.0

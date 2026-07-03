@@ -15,6 +15,12 @@ store:
   config:
     _target_: gigaevo.memory.storage.config.StoreConfig
     path: ${checkpoint_dir}
+    # Recall width feeding the auction — see config/memory/full.yaml for the
+    # top_k -> shortlist -> auction -> injection-budget funnel.
+    research:
+      _target_: gigaevo.memory.storage.config.ResearchConfig
+      default_top_k: 10
+      max_cards: 10
   llm: ${ref:memory.llm}
   prompts_dir: ${prompts.dir}
 
@@ -28,6 +34,7 @@ reader:
   budgeter: ${ref:memory.budget}
   renderer:
     _target_: gigaevo.memory.read.render.EfficacyCardRenderer
+  # Injection budget after the auction ranks the recall shortlist above.
   max_cards: 1
 
 provider:

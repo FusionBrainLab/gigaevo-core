@@ -81,8 +81,8 @@ class DecisionMetrics(BaseModel):
     )
     k_harm: int | None = Field(
         default=None,
-        description="Introduction events whose baseline-adjusted gain fell below "
-        "the negative noise-band threshold.",
+        description="Introduction events whose baseline-adjusted gain was "
+        "negative (harm, a strict sign test).",
     )
     p_help_mean: float | None = Field(
         default=None, description="Posterior mean P(gain >= threshold), a / (a + b)."

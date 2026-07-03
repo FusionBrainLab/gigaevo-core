@@ -15,12 +15,10 @@ fallback:
   harm_threshold: 0.5
   confident_quantile: 0.20
   confident_threshold: 0.5
-  noise_band_k: 1.0
   cold_prior: [1.0, 1.0]
 harm_min_events: 3
 harm_quantile: 0.80
 harm_threshold: 0.5
 confident_quantile: 0.20
 confident_threshold: 0.5
-noise_band_k: 1.0
 cold_prior: [1.0, 1.0]

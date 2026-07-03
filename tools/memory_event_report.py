@@ -265,7 +265,9 @@ def summarize_memory_events(
         if (duration := _safe_float(row.get("duration_ms"))) is not None
     ]
     bank_counts = [
-        n for row in store_write_events if (n := _safe_int(row.get("bank_count")))
+        n
+        for row in store_write_events
+        if (n := _safe_int(row.get("bank_count"))) is not None
     ]
     evicted_ids = _flatten_ids(eviction_events, "evicted_ids")
     consolidation_outcomes = Counter(

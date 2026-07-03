@@ -239,7 +239,7 @@ class MemoryAuctionRun(MemoryEvent):
     winner_count: int = 0
     winner_ids: tuple[str, ...] = ()
     baseline_prior: tuple[float, float] = (0.0, 0.0)
-    prior_magnitude: float | None = None
+    cold_magnitude: float | None = None
     ev_floor: float | None = None
     bids: tuple[dict[str, Any], ...] = ()
 

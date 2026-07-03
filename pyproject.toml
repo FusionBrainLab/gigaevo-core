@@ -114,17 +114,14 @@ local-llm = [
     "vllm",
 ]
 
-# GAM memory platform API client — opt-in when running with `use_api=True`
-# on the memory backend. Default backend is the local in-process variant
-# (does not require this extra).
-# gigaevo-memory wheels require Python >=3.12; gated so CI on 3.11 can install
-# [memory-platform] without resolution failure. The single test that imports
-# `gigaevo_memory` uses pytest.importorskip; production use_api=True paths
-# import gigaevo.memory_platform lazily so a 3.11 runtime never sees it
-# unless the user opts in.
-memory-platform = [
-    "gigaevo-memory; python_version >= '3.12'",
-]
+# GAM memory platform API client — PARKED by the memory rebuild. Its only
+# consumer (`gigaevo.memory_platform`, the `use_api=True` backend) was removed;
+# re-enable alongside the remote store port (storage/remote.py). Kept commented
+# so the wheel gating rationale survives: gigaevo-memory wheels require
+# Python >=3.12, gated so CI on 3.11 could install it without resolution failure.
+# memory-platform = [
+#     "gigaevo-memory; python_version >= '3.12'",
+# ]
 
 dev = [
     "pre-commit",
@@ -148,7 +145,7 @@ test = [
 
 # Convenience meta-extra — everything user-facing.
 all = [
-    "gigaevo[chains,optimization,plotting,tracking,local-llm,memory-platform]",
+    "gigaevo[chains,optimization,plotting,tracking,local-llm]",
 ]
 
 [project.scripts]
@@ -219,7 +216,7 @@ module = [
     "dotenv.*",
     "jinja2.*",
     "fakeredis.*",
-    "gigaevo_memory.*",
+    # "gigaevo_memory.*",  # parked with the [memory-platform] extra
     # [chains] extra
     "chromadb.*",
     "sentence_transformers.*",

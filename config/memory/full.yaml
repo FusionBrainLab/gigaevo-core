@@ -8,7 +8,7 @@
 #
 # Swap a component group with e.g. `memory/llm=qwen_instruct` or
 # `memory/auction=thompson`; tune a leaf field with
-# `memory.auction.prior_magnitude=0.05`. Default stack = the EV
+# `memory.auction.ev_floor=0.01`. Default stack = the EV
 # contextual-bandit treatment: EV-bid auction + bid-ranked budgeter over the
 # Beta-Binomial injection posterior. Single-island runs can upgrade to
 # `memory/reputation=bd_proximity` for cell-local credit; the legacy
@@ -31,6 +31,15 @@ store:
   config:
     _target_: gigaevo.memory.storage.config.StoreConfig
     path: ${checkpoint_dir}
+    # Recall width: the research agent pulls default_top_k nearest cards per
+    # scoped query, aggregates them into a candidate pool across iterations,
+    # and the reflector shortlists up to max_cards of them. That shortlist is
+    # the auction's input population — keep it wider than the injection budget
+    # so the auction actually has candidates to rank.
+    research:
+      _target_: gigaevo.memory.storage.config.ResearchConfig
+      default_top_k: 10
+      max_cards: 10
   llm: ${ref:memory.llm}
   prompts_dir: ${prompts.dir}
 
@@ -44,8 +53,9 @@ reader:
   budgeter: ${ref:memory.budget}
   renderer:
     _target_: gigaevo.memory.read.render.EfficacyCardRenderer
-  # Injection budget: cards the mutator sees per child. Recall width (research
-  # shortlist size) lives in memory.store.config.research.max_cards.
+  # Injection budget: cards the mutator sees per child, after the auction ranks
+  # the recall shortlist above. Recall width lives in
+  # memory.store.config.research.max_cards.
   max_cards: 1
 
 provider:

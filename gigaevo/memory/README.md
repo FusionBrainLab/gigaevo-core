@@ -75,7 +75,7 @@ groups, and launch recipes.
 | File | Writer | Contents |
 |---|---|---|
 | `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, atomic rewrite per save |
-| `chroma/` | `VectorIndex` | Vector collections, one per embed scope; rebuilt from the bank on demand |
+| `chroma/` | `VectorIndex` | Vector collections, one per embed scope; rebuilt from the bank on demand. Holds `embed_fingerprint.json` — reopening under a changed `embedding_model` raises rather than rank against stale vectors |
 | `write_ledger.jsonl` | `WriteLedger` | Append-only admission/eviction verdicts |
 | `memory_events.jsonl` | `events.py` sink | Every memory event, one JSON row each |
 

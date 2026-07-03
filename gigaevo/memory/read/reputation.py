@@ -1,10 +1,11 @@
 """Per-card efficacy statistics derived from injection outcomes.
 
 Owner of the gain → downside-posterior math: ``block_from_events`` turns a
-card's gain events into the reputation block (median magnitude, MAD harm band)
-that the auction and renderer read. ``BetaBinomialReputation`` binds that math
-to injectable thresholds; ``BDProximityReputation`` partitions it by the query
-parent's MAP-Elites cell.
+card's gain events into the reputation block (median magnitude plus a downside
+posterior that counts every below-zero gain as harm) that the auction and
+renderer read. ``BetaBinomialReputation`` binds that math to injectable
+thresholds; ``BDProximityReputation`` partitions it by the query parent's
+MAP-Elites cell.
 """
 
 from __future__ import annotations
@@ -19,22 +20,9 @@ from scipy.stats import beta
 from gigaevo.evolution.strategies.models import BehaviorSpace
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
 
-_MAD_TO_SIGMA = 1.4826
-
 
 def _median(values: Sequence[float]) -> float:
     return float(statistics.median(values)) if values else 0.0
-
-
-def robust_noise_band(values: Sequence[float]) -> float:
-    """Robust noise scale of the values (MAD -> sigma), centred on their median.
-    Collapses to 0 for a degenerate/flat set so genuine discrete steps still
-    register. The single source of the harm-predicate noise band for both the
-    global counterfactual path and the BD-cell partition."""
-    if not values:
-        return 0.0
-    med = _median(values)
-    return _MAD_TO_SIGMA * _median([abs(x - med) for x in values])
 
 
 def beta_binomial_posterior(
@@ -74,20 +62,22 @@ def beta_binomial_posterior(
 def block_from_events(
     events: Sequence[ContextualGain],
     *,
-    noise_band_k: float = 1.0,
     confident_quantile: float = 0.20,
     confident_threshold: float = 0.5,
 ) -> CardStatsBlock | None:
     """Global, unadjusted card block from its gain events: median magnitude plus
-    the downside posterior, harm being a gain below the robust noise band
-    ``-noise_band_k * MAD`` of the finite valid gains with the upside clipped to
-    zero — a card's own wins cannot widen the dead-band that judges its losses,
-    so the harm accounting is monotone. Invalid events are forced harm with no
-    magnitude. A block is efficacy-confident only when the downside posterior is
-    confident AND the median gain is a genuine positive (a zero/negative median
-    is a no-op, never a confident win). Returns ``None`` for a card with no
-    events (no evidence, no block). The single owner of the events -> card block
-    math, shared by the global reputation and the BD in-cell partition.
+    the downside posterior, harm being any gain below zero (a strict sign test).
+    A win is never harm and never shifts another event's verdict, so the harm
+    count is monotone in the events and a uniformly-losing card counts every
+    loss; eval noise is absorbed by the counting posterior (``harm_min_events``
+    plus the optimistic harm quantile), not a per-card dead band — a band drawn
+    from one card's own gains cannot tell noise-level losses from genuine ones.
+    Invalid events are forced harm with no magnitude. A block is efficacy-
+    confident only when the downside posterior is confident AND the median gain
+    is a genuine positive (a zero/negative median is a no-op, never a confident
+    win). Returns ``None`` for a card with no events (no evidence, no block).
+    The single owner of the events -> card block math, shared by the global
+    reputation and the BD in-cell partition.
     """
     if not events:
         return None
@@ -95,10 +85,8 @@ def block_from_events(
     invalid_events = len(events) - len(valid)
     valid_gains = [float(e.gain) for e in valid]
     finite_gains = [g for g in valid_gains if math.isfinite(g)]
-    epsilon = noise_band_k * robust_noise_band([min(g, 0.0) for g in finite_gains])
     block = beta_binomial_posterior(
         valid_gains,
-        threshold=-epsilon,
         invalid_events=invalid_events,
         confident_quantile=confident_quantile,
         confident_threshold=confident_threshold,
@@ -142,10 +130,6 @@ class BetaBinomialReputation(BaseModel):
         default=0.5,
         description="Confident iff the pessimistic P(help) read clears this.",
     )
-    noise_band_k: float = Field(
-        default=1.0,
-        description="Robust noise-scale multiplier; gains within the band are not harm.",
-    )
     cold_prior: tuple[float, float] = Field(
         default=(1.0, 1.0),
         description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
@@ -170,7 +154,6 @@ class BetaBinomialReputation(BaseModel):
         read-seam hook contextual reputations condition on; ignored here."""
         return block_from_events(
             card.gain_events,
-            noise_band_k=self.noise_band_k,
             confident_quantile=self.confident_quantile,
             confident_threshold=self.confident_threshold,
         )
@@ -293,11 +276,10 @@ class BDProximityReputation(BetaBinomialReputation):
             return self.fallback.card_stats(card, context)
         # Same global block math as the base reputation, but over the in-cell
         # subset only: the cell partition already controls for context, so the
-        # MAD harm band and median magnitude are measured BD-locally rather than
+        # harm count and median magnitude are measured BD-locally rather than
         # against a parent-fitness counterfactual. Cold cells delegated above.
         return block_from_events(
             in_cell,
-            noise_band_k=self.noise_band_k,
             confident_quantile=self.confident_quantile,
             confident_threshold=self.confident_threshold,
         )

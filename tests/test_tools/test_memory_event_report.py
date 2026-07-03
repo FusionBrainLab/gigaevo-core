@@ -88,7 +88,7 @@ def _write_fixture(run_dir):
                     "winner_count": 2,
                     "winner_ids": ["mem-a", "program-x"],
                     "baseline_prior": [3.0, 3.0],
-                    "prior_magnitude": 0.1,
+                    "cold_magnitude": 0.1,
                     "ev_floor": 0.0,
                     "bids": [_bid("mem-a", True), _bid("program-x", True)],
                 },
@@ -301,6 +301,26 @@ def test_build_report_summarizes_memory_events_and_artifacts(tmp_path) -> None:
     assert summary["bank"]["intro_events_median"] == 4
     assert summary["gain_restamp"]["last_credited_card_count"] == 2
     assert summary["gain_restamp"]["last_event_count"] == 8
+
+
+def test_last_bank_count_reports_emptied_bank(tmp_path) -> None:
+    # A trailing store write that empties the bank (bank_count == 0) must be
+    # reported as 0, not silently dropped back to an earlier nonzero count.
+    _append_jsonl(
+        tmp_path / "memory" / "memory_events.jsonl",
+        [
+            _event(
+                "MEMORY_STORE_WRITE", {"op": "save", "outcome": "ok", "bank_count": 2}
+            ),
+            _event(
+                "MEMORY_STORE_WRITE", {"op": "delete", "outcome": "ok", "bank_count": 0}
+            ),
+        ],
+    )
+
+    summary = build_report(tmp_path, top_n=5)
+
+    assert summary["store"]["last_bank_count"] == 0
 
 
 def test_format_report_contains_debug_sections(tmp_path) -> None:

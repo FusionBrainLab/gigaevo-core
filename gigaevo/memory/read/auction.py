@@ -7,12 +7,21 @@ ceiling that caps the winner set to the mutator-facing ``max_cards``.
 
 from __future__ import annotations
 
+import math
+import statistics
 from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.memory.events import MemoryAuctionRun, MemoryBudgetCap, emit_memory_event
+from gigaevo.programs.metrics.context import MetricsContext
+
+# Last-resort cold magnitude for a degenerate round: all cards cold AND the task
+# declares no significant_change. Its value is inert — a common positive factor
+# cancels from the bid ranking and clears the default zero floor — so cold cards
+# stay explorable without a tunable scale-blind knob.
+_UNSCALED_COLD_MAGNITUDE = 1.0
 
 
 class AuctionCandidate(BaseModel):
@@ -58,8 +67,8 @@ class AuctionBid(BaseModel):
     selected: bool = Field(description="True iff the card draw beat the baseline draw.")
     magnitude: float | None = Field(
         default=None,
-        description="Magnitude used for the EV bid (card's own, or the cold prior); "
-        "None for the safety auction.",
+        description="Magnitude used for the EV bid (card's own, or the borrowed cold "
+        "magnitude); None for the safety auction.",
     )
     bid: float | None = Field(
         default=None,
@@ -152,20 +161,26 @@ class EVThompsonAuctioneer(BaseModel):
     winner iff a fresh ``theta ~ Beta(posterior_a, posterior_b)`` beats a fresh
     ``base ~ Beta(*baseline_prior)`` — but each candidate additionally bids
     ``theta_bid x magnitude`` so the downstream :class:`TopBidBudgeter` ranks
-    winners by expected gain, not raw help probability. Cold cards
-    (``magnitude is None``) bid against ``prior_magnitude`` so exploration does
-    not starve them at zero.
+    winners by expected gain, not raw help probability. A cold card
+    (``magnitude is None``) has no gain scale of its own, so it borrows one, in
+    order of preference: (1) the median of the positive magnitudes of the warm
+    cards in the same round — the task's own realized helpful-gain scale;
+    (2) failing that, the primary metric's ``significant_change`` from
+    ``metrics_context`` — a declared task-scaled threshold in the same units. So
+    the cold bid tracks the task's gain scale rather than a fixed constant. Only
+    a degenerate round — all cold, with no ``significant_change`` declared —
+    falls back to an inert unit magnitude (see ``_UNSCALED_COLD_MAGNITUDE``).
 
     A winner must pass the safety gate AND clear the EV reserve ``ev_floor`` —
     its bid must be strictly positive (by default). Magnitude is signed, so a
     proven-harmful card (negative ``IntroGain_best_median``) can clear the
-    safety gate yet bids negative; the floor abstains on it. Cold cards bid
-    against the positive ``prior_magnitude`` so the floor never strands them. If
-    every retrieved card is expected to hurt, the auction injects nothing.
+    safety gate yet bids negative; the floor abstains on it. Cold cards bid at
+    that positive borrowed magnitude, so the floor never strands them. If every
+    retrieved card is expected to hurt, the auction injects nothing.
 
-    Draw order is pinned for replay parity with the offline reference
-    (``rerank_arm.py``): one bid draw per candidate first, then per candidate
-    the gate draw followed by the baseline draw.
+    Draw order is pinned so a run is seed-exact reproducible: one bid draw per
+    candidate first, then per candidate the gate draw followed by the baseline
+    draw.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -174,10 +189,12 @@ class EVThompsonAuctioneer(BaseModel):
         default=(3.0, 3.0),
         description="(alpha, beta) of the no-card baseline arm each candidate must beat.",
     )
-    prior_magnitude: float = Field(
-        default=0.1,
-        description="Optimistic expected-gain prior bid for cold cards (no stamped "
-        "magnitude); keeps exploration from starving fresh cards at zero.",
+    metrics_context: MetricsContext | None = Field(
+        default=None,
+        description="Task metrics (shared ${ref:problem_context::metrics_context}). Its "
+        "primary metric's significant_change — a task-scaled gain threshold in the same "
+        "units as magnitude — is the cold fallback when a round has no warm magnitude to "
+        "borrow.",
     )
     ev_floor: float = Field(
         default=0.0,
@@ -186,16 +203,34 @@ class EVThompsonAuctioneer(BaseModel):
         "expect to hurt).",
     )
 
+    def _cold_fallback(self) -> float:
+        """Cold magnitude for an all-cold round: the primary metric's
+        significant_change (task-scaled, same units as magnitude) if declared,
+        else the inert unit placeholder."""
+        if self.metrics_context is not None:
+            sig = self.metrics_context.get_primary_spec().significant_change
+            if sig is not None and math.isfinite(sig) and sig > 0.0:
+                return float(sig)
+        return _UNSCALED_COLD_MAGNITUDE
+
     def run(
         self, candidates: list[AuctionCandidate], rng: Any
     ) -> tuple[list[str], list[AuctionBid]]:
+        warm = [
+            c.magnitude
+            for c in candidates
+            if c.magnitude is not None
+            and math.isfinite(c.magnitude)
+            and c.magnitude > 0.0
+        ]
+        cold_magnitude = statistics.median(warm) if warm else self._cold_fallback()
         bid_draws: list[tuple[float, float]] = []
         for candidate in candidates:
             theta_bid = float(rng.beta(candidate.posterior_a, candidate.posterior_b))
             mag = (
                 candidate.magnitude
                 if candidate.magnitude is not None
-                else self.prior_magnitude
+                else cold_magnitude
             )
             bid_draws.append((mag, theta_bid * mag))
         base_a, base_b = self.baseline_prior
@@ -229,7 +264,7 @@ class EVThompsonAuctioneer(BaseModel):
                     winner_count=len(winners),
                     winner_ids=tuple(winners),
                     baseline_prior=(float(base_a), float(base_b)),
-                    prior_magnitude=float(self.prior_magnitude),
+                    cold_magnitude=float(cold_magnitude),
                     ev_floor=float(self.ev_floor),
                     bids=_bid_dicts(slate),
                 )
