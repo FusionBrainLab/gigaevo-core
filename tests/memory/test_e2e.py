@@ -72,7 +72,11 @@ def make_program(code: str, fitness: float, parents: list[str]) -> Program:
         code=code,
         metrics={VALIDITY_KEY: 1.0, "fitness": fitness},
         metadata=(
-            {MUTATION_OUTPUT_METADATA_KEY: {"changes": ["swapped solver"]}}
+            {
+                MUTATION_OUTPUT_METADATA_KEY: {
+                    "changes": [{"description": "swapped solver", "explanation": ""}]
+                }
+            }
             if parents
             else {}
         ),

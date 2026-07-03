@@ -1,4 +1,4 @@
-"""Mutation-output normalisation and eligible-record extraction."""
+"""Mutation-output validation and eligible-record extraction."""
 
 from __future__ import annotations
 
@@ -9,53 +9,33 @@ from gigaevo.memory.write.extraction import (
     Improvement,
     MutationOutput,
     ProgramRecordExtractor,
-    normalize_improvement_item,
-    normalize_improvements,
     program_to_record,
     record_note,
 )
 
 
-def test_normalize_item_from_string():
-    imp = normalize_improvement_item("  tightened the bound  ")
-    assert imp == Improvement(description="tightened the bound")
-
-
-def test_normalize_item_blank_string_falls_back():
-    assert normalize_improvement_item("  ").description == "Unspecified change"
-
-
-def test_normalize_item_dict_with_description_keys():
-    imp = normalize_improvement_item(
-        {"summary": "swapped solver", "rationale": "converges faster", "extra": 3}
+def test_mutation_output_validates_typed_changes():
+    out = MutationOutput.model_validate(
+        {
+            "changes": [
+                {"description": "swapped solver", "explanation": "converges faster"},
+                {"description": "clamped step"},
+            ]
+        }
     )
-    assert imp.description == "swapped solver"
-    assert imp.explanation == "converges faster"
-
-
-def test_normalize_item_dict_only_extras_promotes_first():
-    imp = normalize_improvement_item({"alpha": "one", "beta": "two"})
-    assert imp.description == "alpha: one"
-    assert imp.explanation == "beta: two"
-
-
-def test_normalize_item_non_dict_stringifies():
-    assert normalize_improvement_item(42).description == "42"
-    assert normalize_improvement_item(None).description == "Unspecified change"
-
-
-def test_normalize_improvements_shapes():
-    assert normalize_improvements(None) == []
-    assert [i.description for i in normalize_improvements(["a", "b"])] == ["a", "b"]
-    assert [i.description for i in normalize_improvements("solo")] == ["solo"]
+    assert out.changes == [
+        Improvement(description="swapped solver", explanation="converges faster"),
+        Improvement(description="clamped step"),
+    ]
 
 
 def test_mutation_output_coerces_none_fields():
     out = MutationOutput.model_validate(
-        {"archetype": None, "base_parent": None, "unknown": "ignored"}
+        {"archetype": None, "base_parent": None, "changes": None, "unknown": "ignored"}
     )
     assert out.archetype == ""
     assert out.base_parent == 1
+    assert out.changes == []
 
 
 def test_program_to_record_picks_named_base_parent(make_program):
@@ -83,7 +63,14 @@ def test_program_to_record_out_of_range_base_falls_back_to_first(make_program):
 def test_record_note_joins_descriptions_with_fallback(make_program):
     prog = make_program(
         parents=["p-first"],
-        metadata={MUTATION_OUTPUT_METADATA_KEY: {"changes": ["one", "two"]}},
+        metadata={
+            MUTATION_OUTPUT_METADATA_KEY: {
+                "changes": [
+                    {"description": "one", "explanation": ""},
+                    {"description": "two", "explanation": ""},
+                ]
+            }
+        },
     )
     record = program_to_record(prog, "task", "summary")
     assert record_note(record) == "one; two"

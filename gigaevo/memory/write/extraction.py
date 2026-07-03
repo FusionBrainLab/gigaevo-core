@@ -1,10 +1,11 @@
 """Run programs → eligible mutation records for the librarian write path.
 
-Normalises the mutator's free-form ``mutation_output`` changes into typed
-``Improvement``s, converts eligible programs (parented, strictly-valid fitness,
-unseen) into ``ProgramRecord``s, and owns the cross-sweep dedup bookkeeping so
-the live hook and the post-run hook never re-ingest the same program. Pure
-with respect to the store and the LLM — it only reads program metadata.
+Validates the mutator's typed ``mutation_output`` changes (each already a
+structured ``{description, explanation}`` item) into ``Improvement``s, converts
+eligible programs (parented, strictly-valid fitness, unseen) into
+``ProgramRecord``s, and owns the cross-sweep dedup bookkeeping so the live hook
+and the post-run hook never re-ingest the same program. Pure with respect to the
+store and the LLM — it only reads program metadata.
 """
 
 from __future__ import annotations
@@ -17,43 +18,6 @@ from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 
-_DESCRIPTION_KEYS = (
-    "description",
-    "summary",
-    "title",
-    "change",
-    "what_changed",
-    "pattern",
-    "improvement",
-    "name",
-)
-_EXPLANATION_KEYS = (
-    "explanation",
-    "rationale",
-    "reason",
-    "why",
-    "motivation",
-    "expected_effect",
-    "impact",
-    "details",
-    "justification",
-)
-
-
-def _stringify(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, dict):
-        parts = [f"{k}: {_stringify(v)}" for k, v in value.items() if _stringify(v)]
-        return "; ".join(parts)
-    if isinstance(value, (list, tuple, set)):
-        return "; ".join(p for p in (_stringify(i) for i in value) if p)
-    return str(value).strip()
-
 
 class Improvement(BaseModel):
     """A single normalised mutation change: what changed, and the stated why."""
@@ -64,53 +28,6 @@ class Improvement(BaseModel):
     explanation: str = Field(
         default="", description="The stated motivation for the change."
     )
-
-
-def normalize_improvement_item(idea: Any) -> Improvement:
-    """Coerce one mutation change payload (str, dict, or anything) into an Improvement."""
-    if isinstance(idea, str):
-        stripped = idea.strip()
-        return Improvement(description=stripped or "Unspecified change")
-    if not isinstance(idea, dict):
-        return Improvement(description=_stringify(idea) or "Unspecified change")
-
-    description = next(
-        (
-            _stringify(idea[k])
-            for k in _DESCRIPTION_KEYS
-            if k in idea and _stringify(idea[k])
-        ),
-        "",
-    )
-    explanation = next(
-        (
-            _stringify(idea[k])
-            for k in _EXPLANATION_KEYS
-            if k in idea and _stringify(idea[k])
-        ),
-        "",
-    )
-    extras = [
-        f"{k}: {_stringify(v)}"
-        for k, v in idea.items()
-        if k not in _DESCRIPTION_KEYS and k not in _EXPLANATION_KEYS and _stringify(v)
-    ]
-    if not description and extras:
-        description, extras = extras[0], extras[1:]
-    if not explanation and extras:
-        explanation = "; ".join(extras)
-    if not description:
-        description = explanation or "Unspecified change"
-    return Improvement(description=description, explanation=explanation)
-
-
-def normalize_improvements(ideas: Any) -> list[Improvement]:
-    """Normalise any mutation changes payload to a list of Improvement models."""
-    if ideas is None:
-        return []
-    if isinstance(ideas, list):
-        return [normalize_improvement_item(i) for i in ideas]
-    return [normalize_improvement_item(ideas)]
 
 
 class ProgramRecord(BaseModel):
@@ -130,7 +47,7 @@ class ProgramRecord(BaseModel):
     parents: list[str] = Field(default_factory=list, description="Parent program ids.")
     improvements: list[Improvement] = Field(
         default_factory=list,
-        description="Normalised mutation changes that produced this program.",
+        description="Typed mutation changes that produced this program.",
     )
     strategy: str = Field(
         default="", description="Mutation archetype reported in the mutation output."
@@ -157,9 +74,9 @@ class MutationOutput(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    changes: Any = Field(
-        default=None,
-        description="Raw changes payload as emitted by the mutator; normalised via normalize_improvements().",
+    changes: list[Improvement] = Field(
+        default_factory=list,
+        description="Typed changes emitted by the mutator; each already a {description, explanation} item.",
     )
     archetype: str = Field(
         default="", description="Mutation archetype label; empty when absent."
@@ -168,6 +85,11 @@ class MutationOutput(BaseModel):
         default=1,
         description="1-based index of the parent the mutator anchored the child to.",
     )
+
+    @field_validator("changes", mode="before")
+    @classmethod
+    def coerce_none_changes(cls, value: Any) -> Any:
+        return value or []
 
     @field_validator("archetype", mode="before")
     @classmethod
@@ -213,7 +135,7 @@ def program_to_record(
         fitness=program.metrics[fitness_key],
         generation=program.lineage.generation,
         parents=parents,
-        improvements=normalize_improvements(mutation_output.changes),
+        improvements=list(mutation_output.changes),
         strategy=mutation_output.archetype,
         task_description=task_description,
         task_description_summary=task_description_summary,
@@ -224,7 +146,7 @@ def program_to_record(
 
 
 def record_note(record: ProgramRecord) -> str:
-    """One-line mutation note from a record's normalised improvements."""
+    """One-line mutation note from a record's typed improvements."""
     note = "; ".join(
         imp.description.strip()
         for imp in record.improvements

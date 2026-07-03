@@ -82,7 +82,11 @@ async def test_run_increment_ingests_and_authors_exemplars(
     child = make_program(
         fitness=0.7,
         parents=[parent.id],
-        metadata={MUTATION_OUTPUT_METADATA_KEY: {"changes": ["swapped solver"]}},
+        metadata={
+            MUTATION_OUTPUT_METADATA_KEY: {
+                "changes": [{"description": "swapped solver", "explanation": ""}]
+            }
+        },
     )
     writer = make_writer(store, metrics_context, tmp_path)
     librarian = writer._stack.librarian
