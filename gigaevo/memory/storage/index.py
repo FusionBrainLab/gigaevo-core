@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import json
+import os
 from pathlib import Path
 import threading
 from typing import Any, cast
@@ -102,16 +103,30 @@ class VectorIndex:
         if path.exists():
             try:
                 existing = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                existing = None
-            if existing is not None and existing != fingerprint:
+            except (OSError, json.JSONDecodeError) as exc:
+                # A present-but-unreadable fingerprint is more suspicious than an
+                # absent one (a truncated write, a foreign file) — fail closed
+                # rather than silently re-stamp and rank against unknown vectors.
+                raise StorageError(
+                    f"Unreadable embed fingerprint at {path}: {exc}. Cannot verify "
+                    f"the persisted vectors match the run's embedder — use a fresh "
+                    f"checkpoint_dir."
+                ) from exc
+            if existing != fingerprint:
                 raise StorageError(
                     f"Embedding config changed for memory index {persist_dir}: "
                     f"persisted vectors were built with {existing}, but the run "
                     f"requests {fingerprint}. The old vectors are incompatible "
                     f"with the new embedder — use a fresh checkpoint_dir."
                 )
-        path.write_text(json.dumps(fingerprint, sort_keys=True), encoding="utf-8")
+        # Atomic stamp: a crashed write leaves the prior fingerprint intact
+        # instead of a truncated file the guard would now reject.
+        tmp = persist_dir / f"{_FINGERPRINT_FILE}.{os.getpid()}.tmp"
+        try:
+            tmp.write_text(json.dumps(fingerprint, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @property
     def scopes(self) -> tuple[str, ...]:

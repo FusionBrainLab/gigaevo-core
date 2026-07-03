@@ -7,7 +7,11 @@ import pytest
 from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import CardKind
 from gigaevo.memory.storage.config import EmbedConfig
-from gigaevo.memory.storage.index import VectorIndex, render_scope_document
+from gigaevo.memory.storage.index import (
+    _FINGERPRINT_FILE,
+    VectorIndex,
+    render_scope_document,
+)
 
 SCOPES = {
     "description": ("description",),
@@ -203,3 +207,13 @@ def test_changed_query_prefix_does_not_invalidate(tmp_path):
     persist = tmp_path / "chroma"
     VectorIndex(persist, _embed("model-a", query_prefix="A: "))
     VectorIndex(persist, _embed("model-a", query_prefix="B: "))
+
+
+def test_corrupt_fingerprint_fails_closed(tmp_path):
+    # A present-but-unreadable fingerprint (truncated write, foreign file) must
+    # fail closed — we cannot prove the stored vectors match the embedder.
+    persist = tmp_path / "chroma"
+    VectorIndex(persist, _embed("model-a"))
+    (persist / _FINGERPRINT_FILE).write_text("{not json", encoding="utf-8")
+    with pytest.raises(StorageError, match="[Uu]nreadable embed fingerprint"):
+        VectorIndex(persist, _embed("model-a"))
