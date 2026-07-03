@@ -1,0 +1,38 @@
+# @package _global_
+# Pipeline: standard (intra-memory) pipeline for JSON chain genomes — ValidateCodeStage and
+# CallProgramFunction are swapped for ParseJsonProgram, and initial programs load as *.json.
+# Launch: python run.py problem.name=chains/summarizer pipeline=summarizer_json ...
+
+# Problem-local prompts (chain-flavored mutation prompt); files absent here fall
+# back to package defaults per-file (e.g. structured_diff/*).
+prompts:
+  dir: ${problem.dir}/prompts
+
+evolution_context:
+  _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
+  problem_ctx: ${problem_context}
+  llm_wrapper: ${ref:llm}
+  storage: ${program_storage}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
+  memory_provider: ${ref:memory::provider}
+
+pipeline_builder:
+  _target_: problems.chains.summarizer.pipeline.JsonChainPipelineBuilder
+  ctx: ${evolution_context}
+  stage_timeout: ${stage_timeout}
+  dag_timeout: ${dag_timeout}
+  max_parallel: ${dag_concurrency}
+  max_insights: ${max_insights}
+  max_code_length: ${max_code_length}
+  intra_max_children: 24
+  mutation_mode: ${mutation_mode}
+  enable_optuna_stage: ${enable_optuna_stage}
+  optimization_time_budget: ${optimization_time_budget}
+
+dag_blueprint:
+  _target_: gigaevo.config.helpers.build_dag_from_builder
+  builder: ${pipeline_builder}
+
+program_loader:
+  pattern: "*.json"

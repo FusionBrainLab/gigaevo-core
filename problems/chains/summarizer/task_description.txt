@@ -1,0 +1,4 @@
+- Genome: a CARL reasoning-chain wire JSON — steps with title/aim/stage_action/reasoning_questions, explicit dependencies between steps, 1..8 steps, last step is the output step.
+- The chain is executed by a small LLM over 8 Russian text-summarization samples; the final step's answer is the produced summary.
+- Goal: chains whose final outputs match the reference summaries as closely as possible.
+- Prefer cheaper chains (fewer steps, fewer completion tokens) at equal quality.

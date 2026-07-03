@@ -1,5 +1,6 @@
 import ast
 from datetime import UTC, datetime
+import json
 import os
 import re
 import time
@@ -497,12 +498,18 @@ class MutationAgent(LangGraphAgent):
             else:
                 final_code = self._extract_code_block(code_from_llm)
 
-            # Guard: reject code that is a JSON template echoed back instead of Python
+            # Guard: reject the structured-output template echoed back as code;
+            # other JSON documents are legitimate genomes (e.g. reasoning chains)
             if "def " not in final_code and final_code.lstrip().startswith("{"):
-                raise ValueError(
-                    "LLM returned JSON template as code instead of Python. "
-                    f"Code starts with: {final_code[:80]!r}"
-                )
+                try:
+                    echoed = json.loads(final_code)
+                except ValueError:
+                    echoed = None
+                if isinstance(echoed, dict) and {"code", "archetype"} <= echoed.keys():
+                    raise ValueError(
+                        "LLM echoed the structured-output template as code. "
+                        f"Code starts with: {final_code[:80]!r}"
+                    )
 
             state["final_code"] = final_code
 

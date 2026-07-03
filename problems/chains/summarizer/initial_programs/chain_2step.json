@@ -1,0 +1,48 @@
+{
+  "format_version": 1,
+  "carl_version": "0.3.0",
+  "version": "1.0",
+  "max_workers": 1,
+  "enable_progress": false,
+  "task_description": "Summarize each dataset row into one sentence in the same language as the input. Platform feeds each CSV/JSONL row as outer_context (fields input and task; score against expected).",
+  "search_config": {
+    "strategy": "substring",
+    "substring_config": null,
+    "vector_config": null,
+    "embedding_model": null
+  },
+  "metadata": {
+    "display_name": "Summarizer — 2 steps (draft → polish)",
+    "tags": ["preset:summarizer", "handoff", "platform-ready", "steps:2"],
+    "context_files": []
+  },
+  "steps": [
+    {
+      "number": 1,
+      "title": "Draft summary",
+      "step_type": "llm",
+      "dependencies": [],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "Capture the main idea of the source text as a single rough sentence",
+      "stage_action": "Read the source text from the Data section (fields input or task). Write one sentence that states the central fact. Use the same language as the input. Ignore minor details.",
+      "reasoning_questions": "What is the single most important message? How to say it in one sentence?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    },
+    {
+      "number": 2,
+      "title": "Polish final sentence",
+      "step_type": "llm",
+      "dependencies": [1],
+      "triggered_by": [],
+      "checkpoint": false,
+      "is_output_step": true,
+      "aim": "Deliver one grammatically correct final summary sentence",
+      "stage_action": "Using the draft from the previous step and the original Data section, output exactly one polished sentence. Same language as the input. No markdown, no quotes, no labels, no preamble.",
+      "reasoning_questions": "Is the draft faithful to the source? Can wording be shorter or clearer without losing meaning?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    }
+  ]
+}

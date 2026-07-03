@@ -369,6 +369,20 @@ User Prompt (from gigaevo/prompts/mutation/user.txt):
 
 **Critical dependency**: If `MutationContextStage` is missing from your pipeline, mutation prompts will lack context and produce poor results.
 
+### Structured diff mutation (non-Python genomes)
+
+`StructuredDiffMutationOperator` (`gigaevo/evolution/mutation/structured_diff.py`) is an
+alternative to `LLMMutationOperator` for genomes where free-form code generation is the
+dominant failure mode. Instead of asking the LLM for the whole child genome, it constrains
+the response to a per-call JSON schema of *representable changes* and applies the returned
+diff mechanically. The genome-specific vocabulary lives behind the `AllowedChanges` contract
+(`gigaevo/evolution/mutation/allowed_changes.py`): a subclass owns one genome family and
+provides `build_schema` / `render_parents` / `apply` / `describe`. `gigaevo/chains/` holds
+these vocabularies; currently `AllowedDagChanges` (CARL reasoning-chain positional-slot
+diffs). Enable with `+mutation=structured_diff_chains`. JSON-document genomes evaluate via
+the `ParseJsonProgram` stage (`gigaevo/programs/stages/json_genome.py`), wired by
+`pipeline=summarizer_json`.
+
 ## Configuration System (Hydra)
 
 The config system uses Hydra with custom resolvers:
@@ -500,6 +514,10 @@ Metrics history follows the same pattern: the run's writer (Hydra `writer` node)
 | `gigaevo/database/redis/keys.py` | Redis key templates |
 | `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (legacy stage wiring; `IntraMemoryPipelineBuilder` is the v2 default) |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
+| `gigaevo/evolution/mutation/structured_diff.py` | `StructuredDiffMutationOperator` (schema-constrained diff mutation) |
+| `gigaevo/evolution/mutation/allowed_changes.py` | `AllowedChanges` contract (genome-family diff vocabularies) |
+| `gigaevo/chains/dag_changes.py` | `AllowedDagChanges` (CARL chain positional-slot diffs) |
+| `gigaevo/programs/stages/json_genome.py` | `ParseJsonProgram` (JSON-document genomes) |
 
 ## Next Steps
 

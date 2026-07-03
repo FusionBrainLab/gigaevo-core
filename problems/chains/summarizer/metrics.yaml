@@ -1,0 +1,39 @@
+specs:
+  fitness:
+    description: "Mean ROUGE-L F1 of the chain's final output vs the reference summary"
+    decimals: 3
+    is_primary: true
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 0.005
+    sentinel_value: -1000.0
+  is_valid:
+    description: "Whether the genome parsed into a CARL chain and executed (1 valid, 0 invalid)"
+    decimals: 0
+    is_primary: false
+    higher_is_better: true
+    lower_bound: 0.0
+    upper_bound: 1.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0
+  n_steps:
+    description: "Number of steps in the chain"
+    decimals: 0
+    is_primary: false
+    higher_is_better: false
+    lower_bound: 0.0
+    upper_bound: 8.0
+    include_in_prompts: true
+    significant_change: 1.0
+    sentinel_value: 0.0
+  completion_tokens:
+    description: "Total completion tokens spent executing the chain on the eval set"
+    decimals: 0
+    is_primary: false
+    higher_is_better: false
+    include_in_prompts: true
+    significant_change: 500.0
+    sentinel_value: 0.0

@@ -1,0 +1,14 @@
+# @package _global_
+# Structured DAG-diff mutation for CARL chain genomes (arm B of the carl_dag_diff A/B).
+# Launch: python run.py ... mutation=structured_diff_chains
+
+mutation_operator:
+  _target_: gigaevo.evolution.mutation.structured_diff.StructuredDiffMutationOperator
+  llm_wrapper: ${ref:llm}
+  allowed_changes:
+    _target_: gigaevo.chains.dag_changes.AllowedDagChanges
+    min_steps: 1
+    max_steps: 8
+  problem_context: ${problem_context}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}

@@ -15,14 +15,15 @@ class InitialProgramLoader(Protocol):
 
 
 class DirectoryProgramLoader:
-    def __init__(self, problem_dir: str | Path):
+    def __init__(self, problem_dir: str | Path, pattern: str = "*.py"):
         self.problem_dir = Path(problem_dir)
+        self.pattern = pattern
 
     async def load(self, storage: ProgramStorage) -> list[Program]:
         initial_dir = self.problem_dir / "initial_programs"
         if not initial_dir.exists():
             return []
-        python_files = list(initial_dir.glob("*.py"))
+        python_files = list(initial_dir.glob(self.pattern))
         programs: list[Program] = []
         for program_file in tqdm(python_files, desc="Loading initial programs"):
             try:
