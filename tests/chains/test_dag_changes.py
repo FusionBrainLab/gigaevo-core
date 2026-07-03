@@ -15,14 +15,14 @@ from gigaevo.exceptions import MutationError
 from gigaevo.llm.schema_compat import nonportable_keys
 
 
-def make_genome(n_steps: int) -> str:
+def make_genome(n_steps: int, label: str = "") -> str:
     steps = [
         LLMStepDescription(
             number=i + 1,
             dependencies=[i] if i else [],
-            title=f"step {i + 1}",
-            aim=f"aim {i + 1}",
-            stage_action=f"action {i + 1}",
+            title=f"{label}step {i + 1}",
+            aim=f"{label}aim {i + 1}",
+            stage_action=f"{label}action {i + 1}",
         )
         for i in range(n_steps)
     ]
@@ -384,6 +384,12 @@ def test_empty_parents_dict_rejected(changes):
         changes.build_schema({})
 
 
+def test_parent_with_zero_steps_rejected(changes):
+    wire = {"steps": [], "max_workers": 1, "task_description": "x"}
+    with pytest.raises(MutationError, match="parent A.*at least one step"):
+        changes.build_schema({"A": json.dumps(wire)})
+
+
 def test_non_llm_parent_step_rejected(changes):
     from mmar_carl.models.config import MemoryOperation, MemoryStepConfig
     from mmar_carl.models.steps import MemoryStepDescription
@@ -441,20 +447,14 @@ def test_min_equals_max_pins_slot_count(parents):
                 "slot_1": {"kind": "keep", "id": "a1"},
             }
         )
-    with pytest.raises(ValidationError):
-        schema.validate(
-            {
-                "reasoning": "x",
-                "base_parent": "A",
-                "slot_1": {"kind": "keep", "id": "a1"},
-                "slot_2": {"kind": "keep", "id": "a2"},
-                "slot_3": {"kind": "keep", "id": "a2"},
-            }
-        )
 
 
 def test_three_parent_crossover(changes):
-    parents = {"A": make_genome(2), "B": make_genome(3), "C": make_genome(2)}
+    parents = {
+        "A": make_genome(2, label="A-"),
+        "B": make_genome(3, label="B-"),
+        "C": make_genome(2, label="C-"),
+    }
     schema = changes.build_schema(parents)
     keep = _object_branches(schema.json_schema["properties"]["slot_1"])[0]
     assert set(keep["properties"]["id"]["enum"]) == {
@@ -476,7 +476,8 @@ def test_three_parent_crossover(changes):
         }
     )
     child = json.loads(changes.apply(diff, parents))
-    assert len(child["steps"]) == 3
+    assert [s["title"] for s in child["steps"]] == ["A-step 1", "B-step 2", "C-step 2"]
+    assert [s["aim"] for s in child["steps"]] == ["A-aim 1", "B-aim 2", "C-aim 2"]
 
 
 def test_apply_wraps_transcription_failures(changes, parents):

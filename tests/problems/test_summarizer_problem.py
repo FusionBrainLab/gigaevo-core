@@ -77,6 +77,27 @@ def test_validate_scores_chain_outputs_without_network(monkeypatch):
         assert len(sample["output"]) <= 200
 
 
+def test_validate_aggregates_tokens_and_truncates_outputs(monkeypatch):
+    from problems.chains.client import CallLog
+    import problems.chains.summarizer.validate as validate_mod
+
+    async def fake_run(spec, client, dataset, context_builder, max_concurrent=8):
+        client._call_logs.append(
+            CallLog(
+                prompt_tokens=100, completion_tokens=42, cost=0.0, cost_utilization=0.0
+            )
+        )
+        return [SimpleNamespace(final_output="x" * 250) for _ in dataset]
+
+    monkeypatch.setattr(validate_mod, "arun_chain_on_dataset", fake_run)
+    doc = json.loads(
+        (PROBLEM_DIR / "initial_programs" / "chain_2step.json").read_text()
+    )
+    metrics, artifact = validate_mod.validate(doc)
+    assert metrics["completion_tokens"] == 42
+    assert all(len(sample["output"]) == 200 for sample in artifact["per_sample"])
+
+
 def test_validate_client_copies_share_call_log():
     from problems.chains.client import CallLog
     from problems.chains.summarizer.validate import _LogAggregatingClient

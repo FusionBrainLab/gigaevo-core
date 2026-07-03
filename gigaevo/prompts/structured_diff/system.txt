@@ -8,7 +8,7 @@ The TASK the genomes are solving is described in CONTEXT at the bottom. You are 
 
 ## EVIDENCE INPUTS (user message)
 
-Absent slots are omitted — do not fabricate content.
+Absent sections are omitted — do not fabricate content.
 
 - **Parent listing** — each `=== Parent <letter> ===` block renders that parent genome in the diff language's component listing: stable component ids, their relationships, and their content. Diff operations reference these ids.
 - **Evaluation context** — a per-parent `=== Parent <letter> evaluation context ===` block with the standard evidence pack:

@@ -224,8 +224,6 @@ class AllowedDagChanges(AllowedChanges):
                 chains[ns] = ReasoningChain.from_dict(doc, use_typed_steps=True)
             except Exception as e:
                 raise MutationError(f"carl_validation_error: parent {ns}: {e}") from e
-            if not chains[ns].steps:
-                raise MutationError(f"carl_validation_error: parent {ns} has no steps")
             for step in chains[ns].steps:
                 if not isinstance(step, LLMStepDescription):
                     raise MutationError(

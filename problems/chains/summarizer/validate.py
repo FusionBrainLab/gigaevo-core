@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from statistics import mean
 
 from mmar_carl.chain import ReasoningChain
@@ -55,7 +56,9 @@ def validate(chain_doc: dict):
                 spec, client, dataset, outer_context_builder, max_concurrent=8
             )
         finally:
-            await client.close()
+            # a close failure must not clobber an already-computed score
+            with contextlib.suppress(Exception):
+                await client.close()
 
     results = asyncio.run(_run_and_close())
 
