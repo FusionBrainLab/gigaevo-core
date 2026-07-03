@@ -20,7 +20,11 @@ if TYPE_CHECKING:
 
 class StructuredDiffMutationOperator(MutationOperator):
     """`AllowedChanges` builds the per-call schema, renders parents, and applies diffs;
-    this operator stays genome-agnostic."""
+    this operator stays genome-agnostic.
+
+    The diff schema carries no archetype field: any archetype the prompt asks the
+    LLM to name lives in the diff's prose, so MutationSpec.mutation_archetype
+    stays None by design."""
 
     def __init__(
         self,
@@ -58,6 +62,11 @@ class StructuredDiffMutationOperator(MutationOperator):
         }
         try:
             schema = self.allowed_changes.build_schema(parents_map)
+        except MutationError:
+            raise
+        except Exception as e:
+            raise MutationError(f"diff_schema_error: {e}") from e
+        try:
             result = await self.agent.arun(
                 parents=selected_parents, parents_map=parents_map, diff_schema=schema
             )

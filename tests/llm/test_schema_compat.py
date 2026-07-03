@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
+import pytest
 
 from gigaevo.llm.schema_compat import (
     const_to_enum,
@@ -50,6 +51,20 @@ def test_inline_refs_resolves_defs_referencing_defs():
         "type": "array",
         "items": {"type": "integer"},
     }
+
+
+def test_inline_refs_raises_on_recursive_ref():
+    schema = {
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {"child": {"$ref": "#/$defs/Node"}},
+            }
+        },
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+    }
+    with pytest.raises(ValueError, match="recursive"):
+        inline_refs(schema)
 
 
 def test_const_to_enum_rewrites_at_any_depth():

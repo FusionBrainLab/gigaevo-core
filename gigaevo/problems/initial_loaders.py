@@ -23,9 +23,9 @@ class DirectoryProgramLoader:
         initial_dir = self.problem_dir / "initial_programs"
         if not initial_dir.exists():
             return []
-        python_files = list(initial_dir.glob(self.pattern))
+        program_files = list(initial_dir.glob(self.pattern))
         programs: list[Program] = []
-        for program_file in tqdm(python_files, desc="Loading initial programs"):
+        for program_file in tqdm(program_files, desc="Loading initial programs"):
             try:
                 program_code = program_file.read_text()
                 program = Program(code=program_code, iteration=len(programs))

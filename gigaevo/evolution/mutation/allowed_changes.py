@@ -1,9 +1,9 @@
 """Genome-agnostic diff contract for StructuredDiffMutationOperator.
 
-A subclass owns one genome family (e.g. CARL chain DAGs in gigaevo/chains/)
-and defines which changes are representable; the operator never inspects
-genome internals. Parents are keyed by prompt namespace ("A", "B", ...) to
-genome code.
+A subclass owns one genome family and defines which changes are representable;
+the operator never inspects genome internals. Parents are keyed by prompt
+namespace ("A", "B", ...) to genome code. Reference implementation:
+gigaevo/chains/dag_changes.py.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class AllowedChanges(ABC):
 
     @abstractmethod
     def render_parents(self, parents: dict[str, str]) -> str:
-        """Render parent genomes for the mutation prompt, with stable step ids."""
+        """Render parent genomes for the mutation prompt, with stable component ids."""
 
     @abstractmethod
     def apply(self, diff: Any, parents: dict[str, str]) -> str:

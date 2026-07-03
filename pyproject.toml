@@ -78,7 +78,7 @@ chains = [
     "langdetect",
     "immutabledict",
     # mmar-carl wheels require Python >=3.12; gated so CI on 3.11 can install [chains].
-    # Tests that import mmar_carl use pytest.importorskip to skip when unavailable.
+    # Test modules importing mmar_carl are collection-gated via conftest when unavailable.
     "mmar-carl==0.2.0; python_version >= '3.12'",
 ]
 

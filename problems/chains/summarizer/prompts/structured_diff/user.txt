@@ -1,4 +1,4 @@
-Produce the next-generation genome for the parent(s) below. Use the evidence packed into each parent block (parent listing, then evaluation context: Program Metrics → Program Insights → Evolutionary Statistics → Intra Memory).
+Produce the next-generation chain for the parent(s) below. Use the evidence packed into each parent block (chain listing, then evaluation context: Program Metrics → Program Insights → Evolutionary Statistics → Intra Memory).
 
 {parent_blocks}
 

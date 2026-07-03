@@ -118,7 +118,7 @@ def _slot_models(k: int, all_ids: tuple[str, ...]) -> tuple[type, type]:
         __config__=ConfigDict(extra="forbid"),
         kind=(Literal["keep"], ...),
         id=(Literal[all_ids], ...),
-        edits=(StepEdits, StepEdits()),
+        edits=(StepEdits, Field(default_factory=StepEdits)),
         **dep_field,
     )
     new = create_model(
@@ -157,8 +157,11 @@ class AllowedDagChanges(AllowedChanges):
             lines = [f"=== Parent {ns} ==="]
             if extras[ns]:
                 lines.append(f"chain task_description: {extras[ns]}")
-            for sid, step in zip(_base_ids(ns, chain), chain.steps):
-                deps = [f"{ns.lower()}{d}" for d in step.dependencies]
+            ids = _base_ids(ns, chain)
+            # dependencies carry CARL step numbers, which need not match positions
+            num_to_sid = {step.number: sid for sid, step in zip(ids, chain.steps)}
+            for sid, step in zip(ids, chain.steps):
+                deps = [num_to_sid.get(d, str(d)) for d in step.dependencies]
                 lines.append(f"{sid} | deps={deps or '[]'} | title: {step.title}")
                 for field in (
                     "aim",
@@ -213,12 +216,23 @@ class AllowedDagChanges(AllowedChanges):
     ) -> tuple[dict[str, ReasoningChain], dict[str, str]]:
         chains: dict[str, ReasoningChain] = {}
         extras: dict[str, str] = {}
+        if not parents:
+            raise MutationError("carl_validation_error: no parents provided")
         for ns, code in parents.items():
             try:
                 doc = json.loads(code)
                 chains[ns] = ReasoningChain.from_dict(doc, use_typed_steps=True)
             except Exception as e:
                 raise MutationError(f"carl_validation_error: parent {ns}: {e}") from e
+            if not chains[ns].steps:
+                raise MutationError(f"carl_validation_error: parent {ns} has no steps")
+            for step in chains[ns].steps:
+                if not isinstance(step, LLMStepDescription):
+                    raise MutationError(
+                        f"carl_validation_error: parent {ns} step {step.number} has "
+                        f"unsupported type {type(step).__name__}; the diff grammar "
+                        "covers LLM steps only"
+                    )
             extras[ns] = doc.get("task_description", "")
         return chains, extras
 
@@ -264,18 +278,16 @@ class AllowedDagChanges(AllowedChanges):
             refs = slot.dependencies if k > 1 else []
             deps = sorted({int(ref.removeprefix("slot_")) for ref in refs})
             if slot.kind == "keep":
-                data = {f: getattr(by_id[slot.id], f) for f in CONTENT_FIELDS}
+                data = by_id[slot.id].model_dump(exclude={"number", "dependencies"})
                 data |= slot.edits.model_dump(exclude_none=True)
             else:
-                data = {f: getattr(slot, f, "") for f in CONTENT_FIELDS}
+                data = dict.fromkeys(CONTENT_FIELDS, "")
+                data |= slot.model_dump(include=set(CONTENT_FIELDS))
             steps.append(LLMStepDescription(number=k, dependencies=deps, **data))
-        child = ReasoningChain(
-            steps=steps,
-            max_workers=base.max_workers,
-            enable_progress=base.enable_progress,
-            metadata=dict(base.metadata),
-        )
-        wire = child.to_dict()
+        # base.to_dict() scaffold preserves chain-level fields the diff never
+        # touches (search_config, replan_policy, timeout, ...); only steps change
+        wire = base.to_dict()
+        wire["steps"] = ReasoningChain(steps=steps).to_dict()["steps"]
         # platform extras that carl's round-trip drops: derived, never LLM-emitted
         wire["task_description"] = extras[diff.base_parent]
         wire["steps"][-1]["is_output_step"] = True

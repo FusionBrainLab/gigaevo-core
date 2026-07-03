@@ -3,8 +3,8 @@
 # CallProgramFunction are swapped for ParseJsonProgram, and initial programs load as *.json.
 # Launch: python run.py problem.name=chains/summarizer pipeline=summarizer_json ...
 
-# Problem-local prompts (chain-flavored mutation prompt); files absent here fall
-# back to package defaults per-file (e.g. structured_diff/*).
+# Problem-local prompts (chain-flavored mutation + structured_diff prompts);
+# files absent here fall back to package defaults per-file.
 prompts:
   dir: ${problem.dir}/prompts
 

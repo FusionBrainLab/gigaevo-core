@@ -379,7 +379,7 @@ diff mechanically. The genome-specific vocabulary lives behind the `AllowedChang
 (`gigaevo/evolution/mutation/allowed_changes.py`): a subclass owns one genome family and
 provides `build_schema` / `render_parents` / `apply` / `describe`. `gigaevo/chains/` holds
 these vocabularies; currently `AllowedDagChanges` (CARL reasoning-chain positional-slot
-diffs). Enable with `+mutation=structured_diff_chains`. JSON-document genomes evaluate via
+diffs). Enable with `mutation=structured_diff_chains`. JSON-document genomes evaluate via
 the `ParseJsonProgram` stage (`gigaevo/programs/stages/json_genome.py`), wired by
 `pipeline=summarizer_json`.
 

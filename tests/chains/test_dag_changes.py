@@ -356,3 +356,132 @@ def test_fuzz_schema_valid_diffs_always_apply(changes, parents):
         diff = schema.validate(payload)
         child_code = changes.apply(diff, parents)
         ReasoningChain.from_dict(json.loads(child_code), use_typed_steps=True)
+
+
+def test_transcribe_preserves_chain_and_step_fields(changes):
+    doc = json.loads(make_genome(2))
+    doc["search_config"] = {"strategy": "vector"}
+    doc["steps"][0]["checkpoint"] = True
+    parents = {"A": json.dumps(doc)}
+    schema = changes.build_schema(parents)
+    diff = schema.validate(
+        {
+            "reasoning": "identity",
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+        }
+    )
+    child = json.loads(changes.apply(diff, parents))
+    assert child["search_config"]["strategy"] == "vector"
+    assert child["steps"][0]["checkpoint"] is True
+    assert child["task_description"] == "summarize the text"
+    assert child["steps"][-1]["is_output_step"] is True
+
+
+def test_empty_parents_dict_rejected(changes):
+    with pytest.raises(MutationError, match="no parents"):
+        changes.build_schema({})
+
+
+def test_non_llm_parent_step_rejected(changes):
+    from mmar_carl.models.config import MemoryOperation, MemoryStepConfig
+    from mmar_carl.models.steps import MemoryStepDescription
+
+    steps = [
+        LLMStepDescription(number=1, dependencies=[], title="t", aim="a"),
+        MemoryStepDescription(
+            number=2,
+            dependencies=[1],
+            title="m",
+            aim="store",
+            config=MemoryStepConfig(operation=list(MemoryOperation)[0], memory_key="k"),
+        ),
+    ]
+    wire = ReasoningChain(
+        steps=steps, max_workers=1, enable_progress=False, metadata={}
+    ).to_dict()
+    wire["task_description"] = "x"
+    wire["steps"][-1]["is_output_step"] = True
+    with pytest.raises(MutationError, match="unsupported type"):
+        changes.build_schema({"A": json.dumps(wire)})
+
+
+def test_render_parents_maps_nonsequential_dep_numbers(changes):
+    steps = [
+        LLMStepDescription(number=10, dependencies=[], title="first", aim="draft"),
+        LLMStepDescription(number=20, dependencies=[10], title="second", aim="polish"),
+    ]
+    wire = ReasoningChain(
+        steps=steps, max_workers=1, enable_progress=False, metadata={}
+    ).to_dict()
+    wire["task_description"] = "x"
+    wire["steps"][-1]["is_output_step"] = True
+    rendered = changes.render_parents({"A": json.dumps(wire)})
+    assert "a2 | deps=['a1']" in rendered
+
+
+def test_min_equals_max_pins_slot_count(parents):
+    changes = AllowedDagChanges(min_steps=2, max_steps=2)
+    schema = changes.build_schema(parents)
+    diff = schema.validate(
+        {
+            "reasoning": "x",
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+        }
+    )
+    assert len(json.loads(changes.apply(diff, parents))["steps"]) == 2
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                "reasoning": "x",
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+            }
+        )
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                "reasoning": "x",
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_2": {"kind": "keep", "id": "a2"},
+                "slot_3": {"kind": "keep", "id": "a2"},
+            }
+        )
+
+
+def test_three_parent_crossover(changes):
+    parents = {"A": make_genome(2), "B": make_genome(3), "C": make_genome(2)}
+    schema = changes.build_schema(parents)
+    keep = _object_branches(schema.json_schema["properties"]["slot_1"])[0]
+    assert set(keep["properties"]["id"]["enum"]) == {
+        "a1",
+        "a2",
+        "b1",
+        "b2",
+        "b3",
+        "c1",
+        "c2",
+    }
+    diff = schema.validate(
+        {
+            "reasoning": "graft from all three",
+            "base_parent": "B",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_2": {"kind": "keep", "id": "b2", "dependencies": ["slot_1"]},
+            "slot_3": {"kind": "keep", "id": "c2", "dependencies": ["slot_2"]},
+        }
+    )
+    child = json.loads(changes.apply(diff, parents))
+    assert len(child["steps"]) == 3
+
+
+def test_apply_wraps_transcription_failures(changes, parents):
+    schema = changes.build_schema(parents)
+    diff = schema.validate(ARCHETYPES["delete"])
+    diff.slot_1.id = "z9"
+    with pytest.raises(MutationError, match="diff_apply_assertion"):
+        changes.apply(diff, parents)

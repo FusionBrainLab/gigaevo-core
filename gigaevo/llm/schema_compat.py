@@ -21,19 +21,27 @@ UNSUPPORTED_KEYS = frozenset(
 
 
 def inline_refs(schema: dict) -> dict:
-    """Resolve internal ``#/$defs/...`` references and drop the ``$defs`` block."""
+    """Resolve internal ``#/$defs/...`` references and drop the ``$defs`` block.
+
+    Raises ValueError on recursive definitions: they cannot be inlined.
+    """
     defs = schema.get("$defs", {})
 
-    def resolve(node: Any) -> Any:
+    def resolve(node: Any, stack: frozenset[str] = frozenset()) -> Any:
         if isinstance(node, dict):
             ref = node.get("$ref")
             if isinstance(ref, str) and ref.startswith("#/$defs/"):
-                target = resolve(defs[ref.rsplit("/", 1)[-1]])
-                siblings = {k: resolve(v) for k, v in node.items() if k != "$ref"}
+                name = ref.rsplit("/", 1)[-1]
+                if name in stack:
+                    raise ValueError(f"recursive $ref '{name}' cannot be inlined")
+                target = resolve(defs[name], stack | {name})
+                siblings = {
+                    k: resolve(v, stack) for k, v in node.items() if k != "$ref"
+                }
                 return {**target, **siblings}
-            return {k: resolve(v) for k, v in node.items() if k != "$defs"}
+            return {k: resolve(v, stack) for k, v in node.items() if k != "$defs"}
         if isinstance(node, list):
-            return [resolve(v) for v in node]
+            return [resolve(v, stack) for v in node]
         return node
 
     return resolve(schema)

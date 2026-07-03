@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from mmar_carl.chain import ReasoningChain
+import pytest
 
 from gigaevo.chains.dag_changes import AllowedDagChanges
 from problems.chains.summarizer.shared_config import (
@@ -52,6 +54,27 @@ def test_validate_rejects_broken_genome_without_network():
     metrics, artifact = validate({"steps": "garbage"})
     assert metrics == INVALID_METRICS
     assert artifact["error"].startswith("carl_validation_error")
+
+
+def test_validate_scores_chain_outputs_without_network(monkeypatch):
+    import problems.chains.summarizer.validate as validate_mod
+
+    async def fake_run(spec, client, dataset, context_builder, max_concurrent=8):
+        return [SimpleNamespace(final_output=row["expected"]) for row in dataset]
+
+    monkeypatch.setattr(validate_mod, "arun_chain_on_dataset", fake_run)
+    doc = json.loads(
+        (PROBLEM_DIR / "initial_programs" / "chain_2step.json").read_text()
+    )
+    metrics, artifact = validate_mod.validate(doc)
+    assert metrics["fitness"] == pytest.approx(1.0)
+    assert metrics["is_valid"] == 1
+    assert metrics["n_steps"] == 2
+    assert metrics["completion_tokens"] == 0
+    assert len(artifact["per_sample"]) == 8
+    for sample in artifact["per_sample"]:
+        assert sample["score"] == pytest.approx(1.0)
+        assert len(sample["output"]) <= 200
 
 
 def test_validate_client_copies_share_call_log():

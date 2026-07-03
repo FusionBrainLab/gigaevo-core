@@ -20,7 +20,10 @@ LLM_CONFIG = {
         "max_tokens": 8192,
         "extra_body": {"top_k": 20},
     },
-    "client_kwargs": {"api_key": "sk-gigaevo", "base_url": _CHAIN_URL},
+    "client_kwargs": {
+        "api_key": os.environ.get("OPENAI_API_KEY", "sk-gigaevo"),
+        "base_url": _CHAIN_URL,
+    },
 }
 
 

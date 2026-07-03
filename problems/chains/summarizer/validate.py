@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from statistics import mean
 
 from mmar_carl.chain import ReasoningChain
 
-from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_runner import arun_chain_on_dataset
 from problems.chains.client import LLMClient
 from problems.chains.summarizer.rouge import rouge_l_f1
 from problems.chains.summarizer.shared_config import (
@@ -47,9 +48,16 @@ def validate(chain_doc: dict):
         system_prompt=chain_doc.get("task_description", ""),
         steps=list(chain.steps),
     )
-    results = run_chain_on_dataset(
-        spec, client, dataset, outer_context_builder, max_concurrent=8
-    )
+
+    async def _run_and_close():
+        try:
+            return await arun_chain_on_dataset(
+                spec, client, dataset, outer_context_builder, max_concurrent=8
+            )
+        finally:
+            await client.close()
+
+    results = asyncio.run(_run_and_close())
 
     scores = [
         rouge_l_f1(result.final_output or "", sample["expected"])

@@ -24,6 +24,7 @@ defaults:
   - /prompt_fetcher: coevolved
   - /evolution: default
   - /algorithm: single_island
+  - /mutation: llm_rewrite
   - /pipeline: auto
   - /runner: default
   - /scheduling: cached_first

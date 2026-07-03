@@ -1,4 +1,4 @@
-"""LangGraph agent that emits a schema-constrained DAG diff instead of raw genome text."""
+"""LangGraph agent that emits a schema-constrained structured diff instead of raw genome text."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from gigaevo.evolution.mutation.allowed_changes import AllowedChanges, DiffSchema
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
@@ -132,9 +133,12 @@ class DiffMutationAgent(LangGraphAgent):
         except Exception as e:
             raise MutationError(f"diff_schema_error: {e}") from e
         state["child_code"] = self._allowed.apply(diff, state["parents_map"])
-        state["diff_payload"] = (
-            payload if isinstance(payload, dict) else diff.model_dump()
-        )
+        if isinstance(payload, dict):
+            state["diff_payload"] = payload
+        elif isinstance(diff, BaseModel):
+            state["diff_payload"] = diff.model_dump()
+        else:
+            state["diff_payload"] = {"payload": payload}
         return state
 
     async def arun(
