@@ -70,6 +70,43 @@ class InsightCitation(BaseModel):
     )
 
 
+def compute_citation_integrity(
+    cited_pairs: list[tuple[str, int]],
+    card_ids_used: list[str],
+    messages: list[BaseMessage],
+) -> dict[str, int]:
+    """Count cited insight and card references that were offered in the prompt.
+
+    Each parent block carries its own '## Program Insights' list numbered from
+    1, so an insight citation is a (parent-label, insight-number) pair:
+    grounded when the insight's rendered list marker ('\\n<N>. **[' — the
+    numbering emitted by InsightsMutationContext.format) appears inside that
+    parent's block. Card ids match exactly anywhere.
+
+    Parent-label-agnostic: matches both '=== Parent N ===' (standard, numeric)
+    and '=== Parent A [evaluation context] ===' (structured diff, letter). When
+    a letter labels both a listing block and an evaluation-context block, the
+    later (evaluation-context) block wins — that is where insights render.
+
+    Purely observational (the counts land in child metadata for run statistics,
+    nothing is gated on them — the hard credit gate is the base_selected ∩ used
+    intersection at the write path).
+    """
+    rendered = "\n".join(str(m.content) for m in messages)
+    parts = re.split(r"=== Parent (\w+)(?: evaluation context)? ===", rendered)
+    blocks = {label: block for label, block in zip(parts[1::2], parts[2::2])}
+    cited = [(label, n) for label, n in cited_pairs if label and n > 0]
+    cards = [c.strip() for c in card_ids_used if c.strip()]
+    return {
+        "cited": len(cited),
+        "grounded": sum(
+            1 for label, n in cited if f"\n{n}. **[" in blocks.get(label, "")
+        ),
+        "cards_cited": len(cards),
+        "cards_grounded": sum(1 for c in cards if c in rendered),
+    }
+
+
 class MutationStructuredOutput(BaseModel):
     """Structured output from the mutation LLM.
 
@@ -573,28 +610,16 @@ class MutationAgent(LangGraphAgent):
     ) -> dict[str, int]:
         """Count cited insight and card references that were offered in the prompt.
 
-        Each parent block ('=== Parent N ===') carries its own '## Program
-        Insights' list numbered from 1, so an insight citation is a (parent,
-        insight) pair: grounded when the insight's rendered list marker
-        ('\\n<N>. **[' — the numbering emitted by InsightsMutationContext.format)
-        appears inside that parent's block. Card ids match exactly anywhere.
-        Purely observational (the counts land in child metadata for run
-        statistics, nothing is gated on them — the hard credit gate is the
-        base_selected ∩ used intersection at the write path).
+        Standard operator: parents are labelled '=== Parent N ===' by 1-based
+        number, so citations carry an int parent. Delegates to the shared,
+        parent-label-agnostic grounder.
         """
-        rendered = "\n".join(str(m.content) for m in messages)
-        parts = re.split(r"=== Parent (\d+) ===", rendered)
-        blocks = {int(n): block for n, block in zip(parts[1::2], parts[2::2])}
-        cited = [c for c in insight_ids_used if c.parent > 0 and c.insight > 0]
-        cards = [c.strip() for c in card_ids_used if c.strip()]
-        return {
-            "cited": len(cited),
-            "grounded": sum(
-                1 for c in cited if f"\n{c.insight}. **[" in blocks.get(c.parent, "")
-            ),
-            "cards_cited": len(cards),
-            "cards_grounded": sum(1 for c in cards if c in rendered),
-        }
+        pairs = [
+            (str(c.parent), c.insight)
+            for c in insight_ids_used
+            if c.parent > 0 and c.insight > 0
+        ]
+        return compute_citation_integrity(pairs, card_ids_used, messages)
 
     @staticmethod
     def _fix_json_escaped_code(code: str) -> str:

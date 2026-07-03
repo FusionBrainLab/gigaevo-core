@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from gigaevo.evolution.engine.mutation import base_parent_index
 from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
 
 # ---------------------------------------------------------------------------
@@ -171,7 +172,11 @@ class MutationOutput(BaseModel):
     )
     base_parent: int = Field(
         default=1,
-        description="1-based index of the parent the mutator anchored the child to.",
+        description=(
+            "1-based index of the parent the mutator anchored the child to. The "
+            "structured-diff operator emits a namespace letter ('A'); it is "
+            "normalised to the 1-based index here."
+        ),
     )
 
     @field_validator("archetype", mode="before")
@@ -182,7 +187,7 @@ class MutationOutput(BaseModel):
     @field_validator("base_parent", mode="before")
     @classmethod
     def coerce_none_base_parent(cls, value: Any) -> Any:
-        return value or 1
+        return base_parent_index(value) if value else 1
 
 
 # ---------------------------------------------------------------------------

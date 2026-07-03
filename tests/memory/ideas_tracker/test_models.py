@@ -131,6 +131,21 @@ class TestProgramToRecord:
         assert record.base_parent_id == "p2"
         assert record.parent_code == "CODE_TWO"
 
+    def test_base_parent_letter_from_diff_operator_is_coerced(self) -> None:
+        # StructuredDiffMutationOperator labels parents by letter; "B" -> index 2
+        prog = self._make_program(
+            parents=["p1", "p2"],
+            mutation_output={"base_parent": "B", "archetype": "Guided Innovation"},
+        )
+        record = program_to_record(
+            prog,
+            "task",
+            "summary",
+            parent_codes={"p1": "CODE_ONE", "p2": "CODE_TWO"},
+        )
+        assert record.base_parent_id == "p2"
+        assert record.parent_code == "CODE_TWO"
+
     def test_base_parent_defaults_to_first_when_absent(self) -> None:
         prog = self._make_program(
             parents=["p1", "p2"],

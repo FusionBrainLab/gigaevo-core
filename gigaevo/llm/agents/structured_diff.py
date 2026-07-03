@@ -8,12 +8,14 @@ from typing import Any, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from loguru import logger
 from pydantic import BaseModel
 
 from gigaevo.evolution.mutation.allowed_changes import AllowedChanges, DiffSchema
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.agents.base import LangGraphAgent
+from gigaevo.llm.agents.mutation import compute_citation_integrity
 from gigaevo.llm.models import (
     MultiModelRouter,
     get_last_token_usage,
@@ -139,7 +141,36 @@ class DiffMutationAgent(LangGraphAgent):
             state["diff_payload"] = diff.model_dump()
         else:
             state["diff_payload"] = {"payload": payload}
+        state.setdefault("metadata", {})["citation_integrity"] = (
+            self._citation_integrity(state["diff_payload"], state.get("messages", []))
+        )
         return state
+
+    @staticmethod
+    def _citation_integrity(
+        diff_payload: dict[str, Any], messages: list[BaseMessage]
+    ) -> dict[str, int]:
+        """Ground the diff's letter-parent insight/card citations against the prompt.
+
+        Reads the shared evidence fields off the diff payload; a genome family
+        that omits them (no DiffStructuredOutputBase) simply grounds nothing.
+        """
+        pairs = [
+            (str(entry.get("parent", "")), int(entry.get("insight", 0)))
+            for entry in diff_payload.get("insight_ids_used", [])
+            if isinstance(entry, dict)
+        ]
+        cards = [c for c in diff_payload.get("card_ids_used", []) if isinstance(c, str)]
+        integrity = compute_citation_integrity(pairs, cards, messages)
+        logger.info(
+            "[DiffMutationAgent] Citation integrity: insights {}/{} grounded, "
+            "cards {}/{} grounded",
+            integrity["grounded"],
+            integrity["cited"],
+            integrity["cards_grounded"],
+            integrity["cards_cited"],
+        )
+        return integrity
 
     async def arun(
         self,

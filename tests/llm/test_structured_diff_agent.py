@@ -51,7 +51,17 @@ def _metrics_context() -> MetricsContext:
 
 
 DIFF_PAYLOAD = {
-    "reasoning": "add a verification step",
+    "archetype": "Guided Innovation",
+    "justification": "insight 1 flags a terse final step; a verify pass re-grounds it",
+    "insights_used": ["insight: structure — final step"],
+    "insight_ids_used": [{"parent": "A", "insight": 1}],
+    "card_ids_used": [],
+    "changes": [
+        {
+            "description": "Added a verify step after the draft",
+            "explanation": "the drafter drops source entities; a cross-check restores them",
+        }
+    ],
     "base_parent": "A",
     "slot_1": {"kind": "keep", "id": "a1"},
     "slot_2": {
@@ -117,7 +127,10 @@ async def test_router_parse_failure_raises():
 
 
 async def test_schema_invalid_payload_raises_diff_schema_error():
-    agent, _, changes = _make_agent({"reasoning": "x", "base_parent": "A"})
+    # missing the now-required archetype/justification evidence fields
+    agent, _, changes = _make_agent(
+        {"base_parent": "A", "slot_1": {"kind": "keep", "id": "a1"}}
+    )
     parents_map = {"A": make_genome(2)}
     parents = [Program(code=parents_map["A"], iteration=0)]
     schema = changes.build_schema(parents_map)
@@ -142,6 +155,32 @@ async def test_parent_evaluation_context_included_when_present():
     assert "=== Parent A evaluation context ===" in user.content
     assert "ctx A" in user.content
     assert "=== Parent B evaluation context ===" not in user.content
+
+
+async def test_citation_integrity_grounds_letter_parent_insight():
+    agent, _, changes = _make_agent(DIFF_PAYLOAD)
+    parents_map = {"A": make_genome(2), "B": make_genome(3)}
+    # DIFF_PAYLOAD cites {"parent": "A", "insight": 1}; render insight 1 into A's
+    # evaluation-context block using the marker InsightsMutationContext.format emits
+    parents = [
+        Program(
+            code=parents_map["A"],
+            iteration=0,
+            metadata={
+                MUTATION_CONTEXT_METADATA_KEY: (
+                    "## Program Insights\n1. **[structure]** final step is terse"
+                )
+            },
+        ),
+        Program(code=parents_map["B"], iteration=0),
+    ]
+    schema = changes.build_schema(parents_map)
+    result = await agent.arun(
+        parents=parents, parents_map=parents_map, diff_schema=schema
+    )
+    integrity = result["metadata"]["citation_integrity"]
+    assert integrity["cited"] == 1
+    assert integrity["grounded"] == 1
 
 
 class NeutralChanges(AllowedChanges):

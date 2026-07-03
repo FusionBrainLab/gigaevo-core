@@ -3,9 +3,17 @@
 Genomes are CARL wire JSON (ReasoningChain.to_dict plus the platform extras
 task_description / is_output_step). A diff IS the full child chain as fixed
 object properties slot_1..slot_max, each keeping a rendered parent step by id
-or introducing a new one; unused trailing slots are null::
+or introducing a new one; unused trailing slots are null. The diff also
+carries the evidence fields of DiffStructuredOutputBase (archetype,
+justification, insights_used, insight_ids_used, card_ids_used, changes) —
+the same tracking surface the standard mutation operator emits::
 
-    {"reasoning": "add a verification step",
+    {"archetype": "Guided Innovation",
+     "justification": "insight: structure — final step; verification re-grounds ...",
+     "insights_used": ["insight: structure — final step"],
+     "insight_ids_used": [{"parent": "A", "insight": 1}],
+     "card_ids_used": [],
+     "changes": [{"description": "...", "explanation": "..."}],
      "base_parent": "A",
      "slot_1": {"kind": "keep", "id": "a1"},
      "slot_2": {"kind": "new", "title": "Verify facts",
@@ -41,7 +49,11 @@ from pydantic import (
     model_validator,
 )
 
-from gigaevo.evolution.mutation.allowed_changes import AllowedChanges, DiffSchema
+from gigaevo.evolution.mutation.allowed_changes import (
+    AllowedChanges,
+    DiffSchema,
+    DiffStructuredOutputBase,
+)
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.schema_compat import portable_json_schema
 
@@ -73,13 +85,12 @@ StepEdits = create_model(
 )
 
 
-class ChainDagDiffBase(BaseModel):
-    """Static shape of the per-call diff model; _diff_model narrows the enums."""
+class ChainDagDiffBase(DiffStructuredOutputBase):
+    """Static shape of the per-call diff model; _diff_model narrows the enums.
 
-    model_config = ConfigDict(extra="forbid")
-
-    reasoning: str
-    base_parent: str
+    Evidence fields (archetype, justification, citations, changes) come from
+    DiffStructuredOutputBase; only the slot fields are chain-specific.
+    """
 
 
 def _base_ids(ns: str, chain: ReasoningChain) -> list[str]:

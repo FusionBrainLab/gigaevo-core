@@ -22,9 +22,10 @@ class StructuredDiffMutationOperator(MutationOperator):
     """`AllowedChanges` builds the per-call schema, renders parents, and applies diffs;
     this operator stays genome-agnostic.
 
-    The diff schema carries no archetype field: any archetype the prompt asks the
-    LLM to name lives in the diff's prose, so MutationSpec.mutation_archetype
-    stays None by design."""
+    The diff carries the same evidence fields as the standard mutation operator
+    (archetype, justification, insight/card citations, changes) alongside the
+    genome-specific diff body, so MutationSpec.mutation_archetype and the
+    citation-integrity metadata are populated identically."""
 
     def __init__(
         self,
@@ -78,6 +79,9 @@ class StructuredDiffMutationOperator(MutationOperator):
         model_used = result["metadata"].get("model_used")
         if model_used:
             metadata[MutationSpec.META_MODEL] = model_used
+        citation_integrity = result["metadata"].get("citation_integrity")
+        if citation_integrity is not None:
+            metadata["citation_integrity"] = citation_integrity
         return MutationSpec(
             code=result["code"],
             parents=selected_parents,

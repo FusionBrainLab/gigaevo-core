@@ -48,9 +48,14 @@ def n_filled(payload: dict) -> int:
     return sum(1 for k, v in payload.items() if k.startswith("slot_") and v is not None)
 
 
+# Evidence fields the diff now shares with the standard mutation operator; archetype
+# and justification are required, so every schema-valid payload carries them.
+EVIDENCE = {"archetype": "Guided Innovation", "justification": "act on insight 1"}
+
+
 ARCHETYPES = {
     "edit": {
-        "reasoning": "sharpen the final step",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {
@@ -61,7 +66,7 @@ ARCHETYPES = {
         },
     },
     "insert": {
-        "reasoning": "add a verification step",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {
@@ -73,26 +78,26 @@ ARCHETYPES = {
         "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_2"]},
     },
     "delete": {
-        "reasoning": "single-shot summarizer",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a2"},
     },
     "duplicate": {
-        "reasoning": "two drafts then merge",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {"kind": "keep", "id": "a1", "dependencies": []},
         "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1", "slot_2"]},
     },
     "rewire": {
-        "reasoning": "parallel off the raw input",
+        **EVIDENCE,
         "base_parent": "B",
         "slot_1": {"kind": "keep", "id": "b1"},
         "slot_2": {"kind": "keep", "id": "b2", "dependencies": []},
         "slot_3": {"kind": "keep", "id": "b3", "dependencies": ["slot_1", "slot_2"]},
     },
     "full_rewrite": {
-        "reasoning": "all-new skeleton",
+        **EVIDENCE,
         "base_parent": "B",
         "slot_1": {
             "kind": "new",
@@ -107,13 +112,13 @@ ARCHETYPES = {
         },
     },
     "crossover": {
-        "reasoning": "graft B's opener onto A's lineage",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "b1"},
         "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
     },
     "explicit trailing nulls": {
-        "reasoning": "trailing slots may be null",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
@@ -124,46 +129,46 @@ ARCHETYPES = {
 
 REJECTS = {
     "dependency on own slot": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_2"]},
     },
     "forward dependency": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_5"]},
     },
     "dependencies on slot 1": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1", "dependencies": []},
     },
     "dangling keep id": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a9"},
     },
-    "empty chain": {"reasoning": "x", "base_parent": "A"},
+    "empty chain": {**EVIDENCE, "base_parent": "A"},
     "gap fill": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_3": {"kind": "keep", "id": "a2"},
     },
     "empty aim on new step": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "new", "title": "t", "aim": ""},
     },
     "edit aim to empty": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1", "edits": {"aim": ""}},
     },
     "9th slot": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         **{
@@ -171,7 +176,7 @@ REJECTS = {
         },
     },
     "dependency list over position cap": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {
@@ -181,7 +186,7 @@ REJECTS = {
         },
     },
     "degenerate dependency repetition": {
-        "reasoning": "x",
+        **EVIDENCE,
         "base_parent": "A",
         "slot_1": {"kind": "keep", "id": "a1"},
         "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"] * 71},
@@ -251,7 +256,7 @@ def test_dependencies_are_renumbered_and_deduped(changes, parents):
     schema = changes.build_schema(parents)
     diff = schema.validate(
         {
-            "reasoning": "x",
+            **EVIDENCE,
             "base_parent": "A",
             "slot_1": {"kind": "keep", "id": "a1"},
             "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
@@ -283,7 +288,7 @@ def test_min_steps_requires_leading_slots(parents):
     with pytest.raises(ValidationError):
         schema.validate(
             {
-                "reasoning": "x",
+                **EVIDENCE,
                 "base_parent": "A",
                 "slot_1": {"kind": "keep", "id": "a1"},
                 "slot_2": None,
@@ -323,7 +328,7 @@ def test_fuzz_schema_valid_diffs_always_apply(changes, parents):
     words = "draft polish verify extract merge rank filter compress".split()
     for i in range(300):
         n_slots = rng.randint(1, 8)
-        payload = {"reasoning": f"fuzz {i}", "base_parent": rng.choice(["A", "B"])}
+        payload = {**EVIDENCE, "base_parent": rng.choice(["A", "B"])}
         for k in range(1, n_slots + 1):
             deps = (
                 {}
@@ -366,7 +371,7 @@ def test_transcribe_preserves_chain_and_step_fields(changes):
     schema = changes.build_schema(parents)
     diff = schema.validate(
         {
-            "reasoning": "identity",
+            **EVIDENCE,
             "base_parent": "A",
             "slot_1": {"kind": "keep", "id": "a1"},
             "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
@@ -432,7 +437,7 @@ def test_min_equals_max_pins_slot_count(parents):
     schema = changes.build_schema(parents)
     diff = schema.validate(
         {
-            "reasoning": "x",
+            **EVIDENCE,
             "base_parent": "A",
             "slot_1": {"kind": "keep", "id": "a1"},
             "slot_2": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
@@ -442,7 +447,7 @@ def test_min_equals_max_pins_slot_count(parents):
     with pytest.raises(ValidationError):
         schema.validate(
             {
-                "reasoning": "x",
+                **EVIDENCE,
                 "base_parent": "A",
                 "slot_1": {"kind": "keep", "id": "a1"},
             }
@@ -468,7 +473,7 @@ def test_three_parent_crossover(changes):
     }
     diff = schema.validate(
         {
-            "reasoning": "graft from all three",
+            **EVIDENCE,
             "base_parent": "B",
             "slot_1": {"kind": "keep", "id": "a1"},
             "slot_2": {"kind": "keep", "id": "b2", "dependencies": ["slot_1"]},

@@ -52,6 +52,14 @@ async def test_mutate_single_returns_spec_with_diff_metadata():
     assert spec.parents == parents
     assert len(json.loads(spec.code)["steps"]) == 3
     assert spec.metadata[MutationSpec.META_OUTPUT] == DIFF_PAYLOAD
+    # evidence-field parity: archetype flows to MutationSpec, citation integrity stamped
+    assert spec.mutation_archetype == "Guided Innovation"
+    assert set(spec.metadata["citation_integrity"]) == {
+        "cited",
+        "grounded",
+        "cards_cited",
+        "cards_grounded",
+    }
 
 
 async def test_no_parents_returns_none():
@@ -60,7 +68,7 @@ async def test_no_parents_returns_none():
 
 
 async def test_schema_invalid_payload_surfaces_mutation_error():
-    operator = _operator({"reasoning": "x", "base_parent": "A", "steps": []})
+    operator = _operator({"base_parent": "A", "slot_1": {"kind": "keep", "id": "a1"}})
     parents = [Program(code=make_genome(2), iteration=0)]
     with pytest.raises(MutationError, match="diff_schema_error"):
         await operator.mutate_single(parents)
