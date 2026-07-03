@@ -8,17 +8,21 @@
 #
 # Swap a component group with e.g. `memory/llm=qwen_instruct` or
 # `memory/auction=thompson`; tune a leaf field with
-# `memory.auction.ev_floor=0.01`. Default stack = the EV
-# contextual-bandit treatment: EV-bid auction + bid-ranked budgeter over the
-# Beta-Binomial injection posterior. Single-island runs can upgrade to
-# `memory/reputation=bd_proximity` for cell-local credit; the legacy
+# `memory.reader.max_cards=2`. Default stack = the EV contextual-bandit
+# treatment: EV-bid auction + bid-ranked budgeter over the cell-local
+# BD-proximity injection posterior (per-cell credit, global Beta-Binomial
+# fallback for cold cells), with lineage exclusion so a child never re-sees a
+# card already applied up its own ancestry. BD-proximity requires a
+# single-island algorithm exposing a top-level `behavior_space` (the framework
+# default); multi-island runs must fall back to
+# `memory/reputation=beta_binomial memory/excluder=none`. The legacy
 # probability-only stack is `memory/auction=thompson memory/budget=top_theta`.
 defaults:
   - llm: gemini
-  - reputation: beta_binomial
+  - reputation: bd_proximity
   - auction: thompson_ev
   - budget: top_bid
-  - excluder: none
+  - excluder: lineage
   - evictor: harm
   - _self_
 
