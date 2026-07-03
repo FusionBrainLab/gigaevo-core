@@ -58,6 +58,7 @@ def make_writer(store, metrics_context, tmp_path, **overrides) -> MemoryWriter:
     params = {
         "llm": object(),
         "evictor": NullEvictor(),
+        "store": store,
         "checkpoint_dir": tmp_path,
         "metrics_context": metrics_context,
         "task_description": "task",
@@ -66,7 +67,6 @@ def make_writer(store, metrics_context, tmp_path, **overrides) -> MemoryWriter:
     params.update(overrides)
     writer = MemoryWriter(**params)
     stack = writer._stack
-    stack._store = store
     stack._gate = CardAdmissionGate(store=store, evictor=NullEvictor())
     stack._neighbors = store
     stack._librarian = FakeLibrarian(store)
@@ -161,10 +161,13 @@ async def test_gain_events_restamp_from_posterior_pool(
     assert events[0].context.parent_id == parent.id
 
 
-async def test_on_run_complete_empty_storage_skips_build(metrics_context, tmp_path):
+async def test_on_run_complete_empty_storage_skips_build(
+    store, metrics_context, tmp_path
+):
     writer = MemoryWriter(
         llm=object(),
         evictor=NullEvictor(),
+        store=store,
         checkpoint_dir=tmp_path,
         metrics_context=metrics_context,
     )
@@ -185,18 +188,19 @@ async def test_on_run_complete_runs_final_sweep(
     assert [c["child_id"] for c in librarian.ingest_calls] == [child.id]
 
 
-def test_unknown_fitness_key_fails_fast(metrics_context, tmp_path):
+def test_unknown_fitness_key_fails_fast(store, metrics_context, tmp_path):
     with pytest.raises(KeyError):
         MemoryWriter(
             llm=object(),
             evictor=NullEvictor(),
+            store=store,
             checkpoint_dir=tmp_path,
             metrics_context=metrics_context,
             fitness_key="not-a-metric",
         )
 
 
-def test_direction_derives_from_metrics_context(tmp_path):
+def test_direction_derives_from_metrics_context(store, tmp_path):
     minimize = MetricsContext(
         specs={
             "loss": MetricSpec(
@@ -207,8 +211,28 @@ def test_direction_derives_from_metrics_context(tmp_path):
     writer = MemoryWriter(
         llm=object(),
         evictor=NullEvictor(),
+        store=store,
         checkpoint_dir=tmp_path,
         metrics_context=minimize,
         fitness_key="loss",
     )
     assert writer._higher_is_better is False
+
+
+def test_fitness_key_defaults_to_primary_metric(store, tmp_path):
+    # An omitted fitness_key must resolve to the task's primary metric, not a
+    # literal "fitness" — else gain attribution silently zeroes on any task whose
+    # primary key differs.
+    ctx = MetricsContext(
+        specs={
+            "r2": MetricSpec(description="r2", higher_is_better=True, is_primary=True)
+        }
+    )
+    writer = MemoryWriter(
+        llm=object(),
+        evictor=NullEvictor(),
+        store=store,
+        checkpoint_dir=tmp_path,
+        metrics_context=ctx,
+    )
+    assert writer._fitness_key == "r2"

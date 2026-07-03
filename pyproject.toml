@@ -166,7 +166,7 @@ include = ["gigaevo*"]
 [tool.ruff]
 line-length = 88  # same as in black
 target-version = "py311"
-exclude = [".claude/worktrees", "experiments/*/top_programs_*", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/"]
+exclude = [".claude/worktrees", "experiments/*/top_programs_*"]
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
@@ -180,12 +180,6 @@ ignore = ["E501"]  # Ignore line-too-long (handled by ruff-format)
 "tools/**/*.py" = ["E402"]
 "__init__.py" = ["F401"]
 "problems/**/*.py" = ["E402", "E722", "E741", "F841"]
-"gigaevo/memory/examples/a_mem_memory_creation.py" = ["E402"]
-"gigaevo/memory/shared_memory/amem_gam_retriever.py" = ["E402"]
-"gigaevo/memory/shared_memory/memory.py" = ["E402"]
-"gigaevo/memory/examples/memory_usage_example.py" = ["E402"]
-"gigaevo/memory_platform/shared_memory/memory.py" = ["E402"]
-"gigaevo/memory_platform/shared_memory/remote_gam_retriever.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["gigaevo"]
@@ -199,18 +193,7 @@ warn_redundant_casts = true
 strict_optional = true
 no_implicit_optional = true
 warn_no_return = true
-exclude = ["build/", "dist/", "gigaevo/memory/_vendor/A_mem/", "gigaevo/memory/_vendor/GAM_root/", "gigaevo/memory/examples/"]
-
-# Vendored third-party trees: `exclude` stops mypy from discovering them as
-# roots, but first-party modules import them, and mypy follows those imports.
-# Skip-following keeps the vendored copies out of the gate without editing them.
-[[tool.mypy.overrides]]
-module = [
-    "gigaevo.memory._vendor.A_mem.*",
-    "gigaevo.memory._vendor.GAM_root.*",
-]
-follow_imports = "skip"
-ignore_errors = true
+exclude = ["build/", "dist/"]
 
 [[tool.mypy.overrides]]
 module = [

@@ -238,9 +238,8 @@ class ProgramRecordExtractor:
 
     Skips: root programs (no parents), programs without a strictly-valid
     fitness (missing/non-positive ``is_valid``; missing, non-finite, or
-    sentinel fitness), and already-seen ids. Tracks seen ids and the running
-    record log so a timed-out or cancelled ingest can be rolled back via
-    :meth:`forget`.
+    sentinel fitness), and already-seen ids. Tracks seen ids so a timed-out or
+    cancelled ingest can be rolled back via :meth:`forget`.
     """
 
     def __init__(
@@ -253,16 +252,11 @@ class ProgramRecordExtractor:
         self._task_description = task_description
         self._fitness_key = fitness_key
         self._metrics_context = metrics_context
-        self._all_records: list[ProgramRecord] = []
         self._seen_ids: set[str] = set()
 
     @property
     def seen_ids(self) -> set[str]:
         return self._seen_ids
-
-    @property
-    def all_records(self) -> list[ProgramRecord]:
-        return self._all_records
 
     def extract(
         self,
@@ -304,7 +298,6 @@ class ProgramRecordExtractor:
             )
             for p in eligible
         ]
-        self._all_records.extend(records)
         self._seen_ids.update(p.id for p in eligible)
         return records
 
@@ -313,4 +306,3 @@ class ProgramRecordExtractor:
         if not ids:
             return
         self._seen_ids -= ids
-        self._all_records = [r for r in self._all_records if r.id not in ids]

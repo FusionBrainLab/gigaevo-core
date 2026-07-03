@@ -61,8 +61,6 @@ class ReputationModel(Protocol):
         self, card: Card, context: DecisionContext | None = None
     ) -> float | None: ...
 
-    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool: ...
-
 
 @runtime_checkable
 class Auctioneer(Protocol):
@@ -279,28 +277,35 @@ class MemoryReader:
                 empty_reason = "budget_empty"
             else:
                 empty_reason = "render_empty"
-        emit_memory_event(
-            base.model_copy(
-                update={
-                    "research_iterations": result.iterations,
-                    "candidate_ids": tuple(candidates),
-                    "auction_winner_ids": tuple(auction_winner_ids),
-                    "budgeted_ids": tuple(budgeted_ids),
-                    "render_dropped_ids": render_dropped_ids,
-                    "selected_ids": card_ids,
-                    "slate": tuple(bid.model_dump(mode="json") for bid in slate),
-                    "empty_reason": empty_reason,
-                    "timing_ms": {
-                        "research": research_ms,
-                        "reputation": reputation_ms,
-                        "auction": auction_ms,
-                        "budget": budget_ms,
-                        "render": render_ms,
-                        "total": _elapsed_ms(started_total),
-                    },
-                }
+        # Terminal telemetry is isolated: the selection is already computed, so a
+        # failure emitting/serializing it must not discard a valid selection.
+        try:
+            emit_memory_event(
+                base.model_copy(
+                    update={
+                        "research_iterations": result.iterations,
+                        "candidate_ids": tuple(candidates),
+                        "auction_winner_ids": tuple(auction_winner_ids),
+                        "budgeted_ids": tuple(budgeted_ids),
+                        "render_dropped_ids": render_dropped_ids,
+                        "selected_ids": card_ids,
+                        "slate": tuple(bid.model_dump(mode="json") for bid in slate),
+                        "empty_reason": empty_reason,
+                        "timing_ms": {
+                            "research": research_ms,
+                            "reputation": reputation_ms,
+                            "auction": auction_ms,
+                            "budget": budget_ms,
+                            "render": render_ms,
+                            "total": _elapsed_ms(started_total),
+                        },
+                    }
+                )
             )
-        )
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[Memory][Reader] selection telemetry emit failed; keeping selection"
+            )
         logger.debug(
             "[Memory][Reader] Selected {}/{} card(s) after auction+budget (ids={})",
             len(card_ids),

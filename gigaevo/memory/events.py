@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 import json
 import math
 from pathlib import Path
+from threading import Lock
 from typing import Any, ClassVar
 from uuid import uuid4
 
@@ -35,6 +36,12 @@ from gigaevo.monitoring.emit import emit
 from gigaevo.monitoring.events import BaseEvent
 
 MEMORY_EVENTS_FILENAME = "memory_events.jsonl"
+
+# Serializes JSONL sink appends: the writer emits from worker threads
+# (stats/eviction off the event loop) while the reader emits from the loop, and
+# a row can exceed the atomic-append size (PIPE_BUF), so concurrent appends
+# could otherwise interleave into a torn line.
+_sink_lock = Lock()
 
 _decision_id: ContextVar[str] = ContextVar("memory_event_decision_id", default="")
 _program_id: ContextVar[str] = ContextVar("memory_event_program_id", default="")
@@ -147,10 +154,11 @@ def emit_memory_event(
         target = resolve_memory_event_path()
     if target is not None:
         row = {"event": type(stamped).event, **stamped.model_dump(mode="json")}
+        line = json.dumps(_finite(row), ensure_ascii=False) + "\n"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(_finite(row), ensure_ascii=False) + "\n")
+            with _sink_lock, target.open("a", encoding="utf-8") as f:
+                f.write(line)
         except Exception as exc:
             logger.warning(
                 "[Memory][Event] failed to record {}: {}", type(stamped).event, exc

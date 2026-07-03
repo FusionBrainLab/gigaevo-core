@@ -22,9 +22,10 @@ defaults:
   - evictor: harm
   - _self_
 
-# One read-side store per run, owning bank + vector index + research agent
-# under the run's checkpoint dir. The writer builds its own store over the
-# same dir; the bank's mtime watermark keeps the two views coherent.
+# One store per run, owning bank + vector index + research agent under the
+# run's checkpoint dir. The reader and the writer share this single instance by
+# reference (below) — a write is visible to the next read with no cross-view
+# sync.
 store:
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
   config:
@@ -56,6 +57,7 @@ writer:
   _target_: gigaevo.memory.write.writer.MemoryWriter
   llm: ${ref:memory.llm}
   evictor: ${ref:memory.evictor}
+  store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
   task_description: ${ref:problem_context::task_description}

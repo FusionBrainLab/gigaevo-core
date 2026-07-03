@@ -145,15 +145,6 @@ class TestLocalStore:
         assert store.is_ready
         assert store.state is StoreState.READY
 
-    def test_external_writer_visible_after_refresh(self, make_store_config, make_card):
-        config = make_store_config()
-        writer = LocalMemoryStore(config)
-        reader = LocalMemoryStore(config)
-        card = make_card()
-        writer.save(card)
-        assert card in reader.snapshot()
-        assert reader.get(card.id) == card
-
     def test_bank_survives_restart(self, make_store_config, make_card):
         config = make_store_config()
         card = make_card()

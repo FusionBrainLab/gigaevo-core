@@ -80,10 +80,14 @@ def block_from_events(
 ) -> CardStatsBlock | None:
     """Global, unadjusted card block from its gain events: median magnitude plus
     the downside posterior, harm being a gain below the robust noise band
-    ``-noise_band_k * MAD`` of the finite valid gains. Invalid events are forced
-    harm with no magnitude. Returns ``None`` for a card with no events (no
-    evidence, no block). The single owner of the events -> card block math,
-    shared by the global reputation and the BD in-cell partition.
+    ``-noise_band_k * MAD`` of the finite valid gains with the upside clipped to
+    zero — a card's own wins cannot widen the dead-band that judges its losses,
+    so the harm accounting is monotone. Invalid events are forced harm with no
+    magnitude. A block is efficacy-confident only when the downside posterior is
+    confident AND the median gain is a genuine positive (a zero/negative median
+    is a no-op, never a confident win). Returns ``None`` for a card with no
+    events (no evidence, no block). The single owner of the events -> card block
+    math, shared by the global reputation and the BD in-cell partition.
     """
     if not events:
         return None
@@ -91,7 +95,7 @@ def block_from_events(
     invalid_events = len(events) - len(valid)
     valid_gains = [float(e.gain) for e in valid]
     finite_gains = [g for g in valid_gains if math.isfinite(g)]
-    epsilon = noise_band_k * robust_noise_band(finite_gains)
+    epsilon = noise_band_k * robust_noise_band([min(g, 0.0) for g in finite_gains])
     block = beta_binomial_posterior(
         valid_gains,
         threshold=-epsilon,
@@ -100,7 +104,12 @@ def block_from_events(
         confident_threshold=confident_threshold,
     )
     magnitude = _median(finite_gains) if finite_gains else 0.0
-    return block.model_copy(update={"IntroGain_best_median": magnitude})
+    return block.model_copy(
+        update={
+            "IntroGain_best_median": magnitude,
+            "efficacy_confident": block.efficacy_confident and magnitude > 0,
+        }
+    )
 
 
 class BetaBinomialReputation(BaseModel):
@@ -225,9 +234,9 @@ class BDProximityReputation(BetaBinomialReputation):
     parent cell with no in-cell event delegates byte-for-byte to ``fallback``.
 
     The cell is recomputed every read from the immutable ``parent_metrics``
-    under the held ``behavior_space``'s current bounds — the bandit reads the
-    one tessellation, never stores a cell id (``DynamicBehaviorSpace`` moves
-    cells on every reindex).
+    under a per-read snapshot of the ``behavior_space``'s bounds — the bandit
+    reads one frozen tessellation, never stores a cell id (``DynamicBehaviorSpace``
+    moves cells on every reindex).
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -240,15 +249,18 @@ class BDProximityReputation(BetaBinomialReputation):
         description="Cold-cell delegate: the global event-derived reputation.",
     )
 
-    def _cell(self, metrics: dict[str, float]) -> tuple[int, ...] | None:
+    @staticmethod
+    def _cell_in(
+        space: BehaviorSpace, metrics: dict[str, float]
+    ) -> tuple[int, ...] | None:
         # A missing or non-finite behavior coord has no well-defined cell —
         # LinearBinning silently clamps NaN to bin 0, so guard here and abstain
         # to fallback rather than credit events to a spurious low-end cell.
-        for key in self.behavior_space.behavior_keys:
+        for key in space.behavior_keys:
             value = metrics.get(key)
             if value is None or not math.isfinite(value):
                 return None
-        return self.behavior_space.get_cell(metrics)
+        return space.get_cell(metrics)
 
     def _in_cell(
         self, card: Card, context: DecisionContext | None
@@ -258,13 +270,18 @@ class BDProximityReputation(BetaBinomialReputation):
         events = card.gain_events
         if not events:
             return None
-        parent_cell = self._cell(context.parent_metrics)
+        # DynamicBehaviorSpace.check_and_expand mutates the live bounds on every
+        # reindex; freeze one tessellation for this read so the parent cell and
+        # every event cell are bucketed against the same bounds (a mid-read
+        # reindex can't split co-located events off the parent cell).
+        space = self.behavior_space.model_copy(deep=True)
+        parent_cell = self._cell_in(space, context.parent_metrics)
         if parent_cell is None:
             return None
         in_cell = [
             event
             for event in events
-            if self._cell(event.context.parent_metrics) == parent_cell
+            if self._cell_in(space, event.context.parent_metrics) == parent_cell
         ]
         return in_cell or None
 

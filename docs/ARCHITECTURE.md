@@ -487,7 +487,7 @@ cards.py → events.py → storage/ → { read/ │ write/ } → provider.py / l
 ```
 
 - **`cards.py`** — the one `Card` model (`kind ∈ {insight, program}`), `GainEvent`, `DecisionContext`. Frozen Pydantic, `extra="forbid"`, zero aliases.
-- **`storage/`** — retrieval is an implementation detail of storage. `MemoryStore` answers `nearest(text, k, kind)` and `research(request)`; callers never see Chroma or the LangGraph research agent. `LocalMemoryStore` = card bank (atomic JSON persist under `checkpoint_dir`, mtime watermark for external-writer visibility) ∘ vector index ∘ research agent.
+- **`storage/`** — retrieval is an implementation detail of storage. `MemoryStore` answers `nearest(text, k, kind)` and `research(request)`; callers never see Chroma or the LangGraph research agent. `LocalMemoryStore` = card bank (atomic JSON persist under `checkpoint_dir`, cold-loaded from disk at construction) ∘ vector index ∘ research agent. Within a run the reader and writer share one store instance (`${ref:memory.store}`), so mid-run writes are visible to the reader with no reload.
 - **`read/`** — `MemoryReader` facade: research shortlist → Beta-Binomial reputation → Thompson auction against a no-card baseline → budget → prompt render. Every stage fails to an empty selection, so a memory outage never sinks a mutation.
 - **`write/`** — `MemoryWriter` facade: extract valid parent→child records → librarian LLM reconciles each diff into NEW/DUPLICATE/MERGE cards → author program exemplars → restamp gain events → harm eviction → throttled background near-duplicate consolidation. `write/` never imports `read/`; eviction consumes a `CardScorer` Protocol that `read/reputation` implements (dependency inversion).
 

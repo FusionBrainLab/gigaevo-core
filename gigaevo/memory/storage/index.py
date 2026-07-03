@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+import threading
 from typing import Any, cast
 
 import chromadb
@@ -46,6 +47,10 @@ def render_scope_document(card: Card, fields: Sequence[str]) -> str:
 class VectorIndex:
     def __init__(self, persist_dir: str | Path, embed: EmbedConfig) -> None:
         self._embed = embed
+        # The reader queries on the event loop while a live restamp upserts on a
+        # to_thread worker — serialize all Chroma access so concurrent
+        # query/upsert/remove on the one client cannot race.
+        self._lock = threading.Lock()
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(persist_dir))
         # sentence-transformers follows HF_HOME and friends; redirect them to a
@@ -71,48 +76,51 @@ class VectorIndex:
         Diff-sync: stale documents are deleted, and only missing or changed
         documents are re-embedded — a rebuild over an unchanged bank is cheap.
         """
-        for scope, collection in self._collections.items():
-            desired = self._desired_documents(scope, cards)
-            existing = collection.get(include=["documents"])
-            existing_docs = dict(
-                zip(existing["ids"], existing["documents"] or [], strict=True)
-            )
-            stale = sorted(set(existing_docs) - desired.keys())
-            if stale:
-                collection.delete(ids=stale)
-            changed = sorted(
-                cid
-                for cid, (document, _) in desired.items()
-                if existing_docs.get(cid) != document
-            )
-            if changed:
-                collection.upsert(
-                    ids=changed,
-                    documents=[desired[i][0] for i in changed],
-                    metadatas=[desired[i][1] for i in changed],
+        with self._lock:
+            for scope, collection in self._collections.items():
+                desired = self._desired_documents(scope, cards)
+                existing = collection.get(include=["documents"])
+                existing_docs = dict(
+                    zip(existing["ids"], existing["documents"] or [], strict=True)
                 )
+                stale = sorted(set(existing_docs) - desired.keys())
+                if stale:
+                    collection.delete(ids=stale)
+                changed = sorted(
+                    cid
+                    for cid, (document, _) in desired.items()
+                    if existing_docs.get(cid) != document
+                )
+                if changed:
+                    collection.upsert(
+                        ids=changed,
+                        documents=[desired[i][0] for i in changed],
+                        metadatas=[desired[i][1] for i in changed],
+                    )
 
     def upsert(self, cards: Sequence[Card]) -> None:
         """Index these cards in every scope (re-embedding them); a card whose
         scope document is empty is dropped from that scope."""
         if not cards:
             return
-        card_ids = [card.id for card in cards]
-        for scope, collection in self._collections.items():
-            desired = self._desired_documents(scope, cards)
-            emptied = [cid for cid in card_ids if cid not in desired]
-            self._delete_present(collection, emptied)
-            if desired:
-                ids = sorted(desired)
-                collection.upsert(
-                    ids=ids,
-                    documents=[desired[i][0] for i in ids],
-                    metadatas=[desired[i][1] for i in ids],
-                )
+        with self._lock:
+            card_ids = [card.id for card in cards]
+            for scope, collection in self._collections.items():
+                desired = self._desired_documents(scope, cards)
+                emptied = [cid for cid in card_ids if cid not in desired]
+                self._delete_present(collection, emptied)
+                if desired:
+                    ids = sorted(desired)
+                    collection.upsert(
+                        ids=ids,
+                        documents=[desired[i][0] for i in ids],
+                        metadatas=[desired[i][1] for i in ids],
+                    )
 
     def remove(self, card_ids: Sequence[str]) -> None:
-        for collection in self._collections.values():
-            self._delete_present(collection, list(card_ids))
+        with self._lock:
+            for collection in self._collections.values():
+                self._delete_present(collection, list(card_ids))
 
     def _desired_documents(
         self, scope: str, cards: Sequence[Card]
@@ -151,14 +159,15 @@ class VectorIndex:
                 f"unknown embed scope {scope!r}; configured: {sorted(self._collections)}"
             )
         collection = self._collections[scope]
-        if k <= 0 or not text.strip() or collection.count() == 0:
-            return []
-        result = collection.query(
-            query_texts=[text],
-            n_results=k,
-            where=self._where(kind, exclude_ids),
-            include=["distances"],
-        )
+        with self._lock:
+            if k <= 0 or not text.strip() or collection.count() == 0:
+                return []
+            result = collection.query(
+                query_texts=[text],
+                n_results=k,
+                where=self._where(kind, exclude_ids),
+                include=["distances"],
+            )
         ids = result["ids"][0]
         result_distances = result["distances"]
         distances = result_distances[0] if result_distances else []

@@ -31,6 +31,15 @@ LAYER_ALLOWED = {
 }
 
 CHROMA_ALLOWED = {"storage/index.py"}
+# The embedding stack (Chroma + the sentence-transformers model it loads, plus
+# the transformer/runtime libs underneath) is confined to the one index module.
+EMBEDDING_PREFIXES = (
+    "chromadb",
+    "sentence_transformers",
+    "transformers",
+    "fastembed",
+    "onnxruntime",
+)
 LLM_ALLOWED = {
     "storage/research.py",
     "write/librarian.py",
@@ -41,15 +50,15 @@ LLM_PREFIXES = ("gigaevo.llm", "langgraph", "langchain", "langchain_core")
 
 
 def _memory_modules() -> list[Path]:
-    return sorted(
-        p
-        for p in MEMORY_ROOT.rglob("*.py")
-        if "__pycache__" not in p.parts and p.name != "__init__.py"
-    )
+    return sorted(p for p in MEMORY_ROOT.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def _module_layer(rel: Path) -> str:
-    return rel.parts[0] if len(rel.parts) > 1 else rel.stem
+    if len(rel.parts) > 1:
+        return rel.parts[0]
+    # The package-root __init__ re-exports the integration surface — treat it as
+    # the top (provider) layer so it may import from any layer below.
+    return "provider" if rel.stem == "__init__" else rel.stem
 
 
 def _imported_modules(path: Path) -> list[str]:
@@ -92,17 +101,20 @@ def test_layer_imports_respect_order() -> None:
     assert not violations, "layering violations:\n" + "\n".join(violations)
 
 
-def test_chroma_confined_to_index() -> None:
+def test_embedding_stack_confined_to_index() -> None:
     violations: list[str] = []
     for path in _memory_modules():
         rel = path.relative_to(MEMORY_ROOT).as_posix()
         if rel in CHROMA_ALLOWED:
             continue
         for module in _imported_modules(path):
-            if module == "chromadb" or module.startswith("chromadb."):
+            if any(
+                module == prefix or module.startswith(prefix + ".")
+                for prefix in EMBEDDING_PREFIXES
+            ):
                 violations.append(f"{rel}: imports {module}")
-    assert not violations, "chroma leaked outside storage/index.py:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "embedding stack leaked outside storage/index.py:\n" + "\n".join(violations)
     )
 
 

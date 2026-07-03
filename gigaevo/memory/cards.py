@@ -66,6 +66,8 @@ class DecisionMetrics(BaseModel):
     contract, including the mixed-case ``IntroGain_*`` keys.
     """
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     posterior_a: float | None = Field(
         default=None,
         description="Beta alpha of the downside posterior over per-introduction gains.",
@@ -101,7 +103,7 @@ class CardStatsBlock(DecisionMetrics):
     """A card's efficacy-statistics block, computed by reputation from the
     card's gain events."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     @model_serializer(mode="wrap")
     def serialize_without_unset_defaults(
@@ -186,6 +188,8 @@ class Card(BaseModel):
             raise ValueError(
                 "program_id/code/fitness are exemplar fields — set kind=program"
             )
+        if self.id and self.id in self.absorbed_ids:
+            raise ValueError("a card cannot absorb its own id")
         return self
 
 

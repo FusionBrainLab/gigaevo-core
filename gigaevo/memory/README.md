@@ -32,7 +32,7 @@ persisted data raises instead of being coerced.
 | `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` + `DecisionContext` (gain events), `CardStatsBlock`, `card_brief()` |
 | `events.py` | Typed `MemoryEvent`s (canonical monitoring events + per-run `memory_events.jsonl` sink), `memory_event_context` correlation (decision/program/parent ids) |
 | `storage/base.py` | `MemoryStore` ABC: `save/get/delete/snapshot/apply_merges`, `nearest()`, `research()`, `rebuild/close/is_ready` |
-| `storage/bank.py` | `CardBank`: in-proc dict + atomic `cards.json` persist; mtime watermark for external-writer visibility |
+| `storage/bank.py` | `CardBank`: thread-safe in-proc dict + atomic `cards.json` persist; cold-loaded from disk once at construction |
 | `storage/index.py` | `VectorIndex` (Chroma, one collection per embed scope) |
 | `storage/research.py` | LangGraph research agent: plan → retrieve → reflect, ≤`max_iters`, fail-to-empty; prompts under `gigaevo/prompts/retrieval_{planner,reflection}/` |
 | `storage/config.py` | `StoreConfig` / `EmbedConfig` / `ResearchConfig` — embedding is config, not code (`embed_scopes` maps scope → card text fields) |

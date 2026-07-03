@@ -12,10 +12,21 @@ defaults:
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
 
+# The store the writer fills (bank + vector index under the run's checkpoint
+# dir). Owned here so a later `memory=reader` run can cold-load the bank.
+store:
+  _target_: gigaevo.memory.storage.local.LocalMemoryStore
+  config:
+    _target_: gigaevo.memory.storage.config.StoreConfig
+    path: ${checkpoint_dir}
+  llm: ${ref:memory.llm}
+  prompts_dir: ${prompts.dir}
+
 writer:
   _target_: gigaevo.memory.write.writer.MemoryWriter
   llm: ${ref:memory.llm}
   evictor: ${ref:memory.evictor}
+  store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
   task_description: ${ref:problem_context::task_description}

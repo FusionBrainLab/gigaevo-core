@@ -2,9 +2,10 @@
 
 The hook is a thin orchestration shell over four collaborators, mirroring the
 reader's modular pipeline: a :class:`ProgramRecordExtractor` (eligible records +
-dedup bookkeeping), a :class:`LibrarianWriteStack` (lazy store/gate/librarian +
-task summary), a :class:`CardStatsUpdater` (gain attribution + restamp + harm
-sweep), and a :class:`ConsolidationScheduler` (throttled background dedup).
+dedup bookkeeping), a :class:`LibrarianWriteStack` (the shared store + a lazy
+gate/librarian + task summary), a :class:`CardStatsUpdater` (gain attribution +
+restamp + harm sweep), and a :class:`ConsolidationScheduler` (throttled
+background dedup).
 There is no enable flag — when the writer is off the config wires
 ``NullPostRunHook`` instead.
 """
@@ -28,8 +29,6 @@ from gigaevo.llm.agents.factories import (
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.storage.base import MemoryStore
-from gigaevo.memory.storage.config import StoreConfig
-from gigaevo.memory.storage.local import LocalMemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate, WriteLedger
 from gigaevo.memory.write.consolidation import ConsolidationScheduler
 from gigaevo.memory.write.eviction import Evictor
@@ -45,13 +44,15 @@ if TYPE_CHECKING:
 
 
 class LibrarianWriteStack:
-    """Builds and holds the shared write-path components, lazily.
+    """Builds and holds the write-path components over the shared store.
 
-    A thin holder that builds the store, admission gate, neighbor source,
-    librarian, and consolidation agent once, off the event loop, on first use.
-    It also condenses the task description into the one-line summary stamped on
-    every card — folded into :meth:`ensure` so there is no summary-before-stack
-    ordering rule for the orchestrator to honour.
+    A thin holder over the one ``MemoryStore`` the whole run shares (injected —
+    the reader reads the same instance, so a write is visible to the next read
+    with no cross-view reconciliation). It builds the admission gate, neighbor
+    source, librarian, and consolidation agent once, off the event loop, on
+    first use. It also condenses the task description into the one-line summary
+    stamped on every card — folded into :meth:`ensure` so there is no
+    summary-before-stack ordering rule for the orchestrator to honour.
     """
 
     def __init__(
@@ -59,6 +60,7 @@ class LibrarianWriteStack:
         *,
         llm: MultiModelRouter,
         evictor: Evictor,
+        store: MemoryStore,
         checkpoint_dir: str | Path,
         task_description: str = "",
         dedup_policy: DedupPolicy | None = None,
@@ -66,11 +68,11 @@ class LibrarianWriteStack:
     ) -> None:
         self._llm = llm
         self._evictor = evictor
+        self._store = store
         self._checkpoint_dir = Path(checkpoint_dir)
         self._task_description = task_description
         self._dedup_policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._prompts_dir = prompts_dir
-        self._store: MemoryStore | None = None
         self._gate: CardAdmissionGate | None = None
         self._librarian: Librarian | None = None
         self._neighbors: NeighborSource | None = None
@@ -168,11 +170,7 @@ class LibrarianWriteStack:
 
     def _build(self, summary: str) -> None:
         policy = self._dedup_policy
-        store = LocalMemoryStore(
-            StoreConfig(path=self._checkpoint_dir),
-            llm=self._llm,
-            prompts_dir=self._prompts_dir,
-        )
+        store = self._store
         gate = CardAdmissionGate(
             store=store,
             evictor=self._evictor,
@@ -220,12 +218,16 @@ class MemoryWriter(IncrementalPostRunHook):
         evictor: Harm evictor consulted by the admission gate — the config wires
             ``HarmEvictor`` over the read side's reputation (``memory=full``) or
             ``NullEvictor``.
-        checkpoint_dir: Pins per-run memory cards (bank, index, write ledger)
-            under the Hydra output dir.
+        store: The one ``MemoryStore`` the run shares (``${ref:memory.store}``);
+            the reader reads the same instance, so a write is visible to the
+            next read with no cross-view sync.
+        checkpoint_dir: Pins the write ledger under the Hydra output dir (the
+            bank + index live under the shared store's own ``checkpoint_dir``).
         metrics_context: Validity/sentinel semantics for record eligibility and
             gain attribution; also the single source of the fitness direction.
         task_description: Human-readable description of the current task.
-        fitness_key: Metric key to use as fitness.
+        fitness_key: Metric key to use as fitness; empty (the default) resolves
+            to the task's primary metric key from ``metrics_context``.
         best_programs_percent: Share of top-fitness programs authored into
             program cards.
         ingest_call_timeout_s: Per-call wall-clock bound on each librarian LLM
@@ -246,16 +248,21 @@ class MemoryWriter(IncrementalPostRunHook):
         *,
         llm: MultiModelRouter,
         evictor: Evictor,
+        store: MemoryStore,
         checkpoint_dir: str | Path,
         metrics_context: MetricsContext,
         task_description: str = "",
-        fitness_key: str = "fitness",
+        fitness_key: str = "",
         best_programs_percent: float = 5.0,
         ingest_call_timeout_s: float = 300.0,
         consolidation_every_n: int = 0,
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
     ) -> None:
+        # Default to the task's primary metric, not a literal "fitness": on a
+        # task whose primary key differs, a hardcoded key would resolve to no
+        # metric and silently zero every gain event (reputation never warms).
+        fitness_key = fitness_key or metrics_context.get_primary_key()
         self._best_programs_percent = best_programs_percent
         self._ingest_call_timeout_s = ingest_call_timeout_s
         self._fitness_key = fitness_key
@@ -270,6 +277,7 @@ class MemoryWriter(IncrementalPostRunHook):
         self._stack = LibrarianWriteStack(
             llm=llm,
             evictor=evictor,
+            store=store,
             checkpoint_dir=checkpoint_dir,
             task_description=task_description,
             dedup_policy=policy,
@@ -427,18 +435,29 @@ class MemoryWriter(IncrementalPostRunHook):
                     exc,
                 )
                 continue
-            librarian.admit_program(
-                Card(
-                    kind=CardKind.PROGRAM,
-                    id=f"program-{prog.id}",
-                    program_id=prog.id,
-                    task_description=self._task_description,
-                    task_description_summary=summary,
-                    description=authored.description,
-                    explanation_summary=authored.explanation_summary,
-                    fitness=fitness,
-                    code=prog.code,
-                    keywords=tuple(authored.keywords),
-                ),
-                higher_is_better=self._higher_is_better,
-            )
+            try:
+                librarian.admit_program(
+                    Card(
+                        kind=CardKind.PROGRAM,
+                        id=f"program-{prog.id}",
+                        program_id=prog.id,
+                        task_description=self._task_description,
+                        task_description_summary=summary,
+                        description=authored.description,
+                        explanation_summary=authored.explanation_summary,
+                        fitness=fitness,
+                        code=prog.code,
+                        keywords=tuple(authored.keywords),
+                    ),
+                    higher_is_better=self._higher_is_better,
+                )
+            except Exception as exc:
+                # Card construction (validation) or the gate's store write can
+                # fail for one exemplar (e.g. a persist hiccup); degrade it like
+                # the authoring path so the remaining exemplars, the stats
+                # restamp, and the harm sweep still run.
+                logger.warning(
+                    "[Memory][Writer] admitting exemplar {} failed ({}); skipping",
+                    prog.id,
+                    exc,
+                )

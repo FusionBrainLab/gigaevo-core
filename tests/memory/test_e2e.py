@@ -133,6 +133,7 @@ async def test_writer_bank_feeds_fresh_reader_run(tmp_path):
     writer = MemoryWriter(
         llm=writer_router(),
         evictor=NullEvictor(),
+        store=LocalMemoryStore(StoreConfig(path=tmp_path)),
         checkpoint_dir=tmp_path,
         metrics_context=metrics_context,
         task_description=TASK,

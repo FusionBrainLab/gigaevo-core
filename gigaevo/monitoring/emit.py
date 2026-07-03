@@ -21,12 +21,27 @@ to fire the generic `EVENT_RATE_ZERO` alert when a registered event with
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any
 
 from loguru import logger
 
 from gigaevo.monitoring.events import BaseEvent
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats (inf/nan) with null so the emitted line is
+    strict JSON — ``json.dumps`` otherwise writes ``Infinity``/``NaN``, which
+    the audit parsers reject."""
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
 
 # Process-scoped counter configuration. Populated by
 # ``configure_event_counters`` at run startup; cleared by
@@ -133,6 +148,6 @@ def emit(event: BaseEvent) -> None:
     payload = event.model_dump(mode="json")
     payload = {"event": name, **payload}
     logger.bind(canonical_event=True, event_name=name).info(
-        f"[{name}] {json.dumps(payload, ensure_ascii=False)}"
+        f"[{name}] {json.dumps(_json_safe(payload), ensure_ascii=False)}"
     )
     _incr_counter(name)

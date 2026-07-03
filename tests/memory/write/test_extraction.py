@@ -119,7 +119,6 @@ def test_forget_rolls_back_seen_and_records(extractor, make_program):
     extractor.extract([prog], task_description_summary="s")
     extractor.forget({prog.id})
     assert extractor.seen_ids == set()
-    assert extractor.all_records == []
     retried = extractor.extract([prog], task_description_summary="s")
     assert [r.id for r in retried] == [prog.id]
 

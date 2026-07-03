@@ -143,9 +143,22 @@ def assess_run(run: str, cards: Mapping[str, Mapping[str, Any]]) -> RunHealth:
     )
 
 
+def _resolve_bank(run_root: Path) -> Path | None:
+    """``cards.json`` under a run, tolerating being pointed at either the run dir
+    (``<run>/memory/cards.json``) or the memory dir itself (``<dir>/cards.json``)
+    — mirrors ``memory_event_report._resolve_checkpoint_dir``."""
+    direct = run_root / "cards.json"
+    if direct.exists():
+        return direct
+    nested = run_root / "memory" / "cards.json"
+    if nested.exists():
+        return nested
+    return None
+
+
 def load_card_bank(run_root: Path) -> dict[str, dict[str, Any]]:
-    bank = run_root / "memory" / "cards.json"
-    if not bank.exists():
+    bank = _resolve_bank(run_root)
+    if bank is None:
         return {}
     try:
         payload = json.loads(bank.read_text(encoding="utf-8"))

@@ -1,9 +1,9 @@
 """LocalMemoryStore — CardBank ∘ VectorIndex ∘ ResearchAgent.
 
 The bank is the source of truth and is persisted on every write; the vector
-index follows it (incremental upserts per write, diff-sync rebuild to heal or
-absorb external writers). Retrieval failures degrade to empty results; bank
-corruption raises.
+index follows it (incremental upserts per write; :meth:`rebuild` re-reads the
+bank and rebuilds the index to heal it). Retrieval failures degrade to empty
+results; bank corruption raises.
 """
 
 from __future__ import annotations
@@ -75,7 +75,6 @@ class LocalMemoryStore(MemoryStore):
         return self._state
 
     def save(self, card: Card) -> str:
-        self._refresh_if_stale()
         if not card.id:
             card = card.model_copy(update={"id": new_card_id()})
         self._bank.put(card)
@@ -95,7 +94,6 @@ class LocalMemoryStore(MemoryStore):
         return self._bank.get(card_id)
 
     def delete(self, card_id: str) -> bool:
-        self._refresh_if_stale()
         removed = self._bank.remove(card_id)
         if removed:
             self._bank.persist()
@@ -111,11 +109,9 @@ class LocalMemoryStore(MemoryStore):
         return removed
 
     def snapshot(self) -> tuple[Card, ...]:
-        self._refresh_if_stale()
         return self._bank.snapshot()
 
     def apply_merges(self, merged: Sequence[Card]) -> list[str]:
-        self._refresh_if_stale()
         saved: list[Card] = []
         for card in merged:
             if not card.id:
@@ -138,7 +134,6 @@ class LocalMemoryStore(MemoryStore):
     def nearest(
         self, text: str, k: int, kind: CardKind | None = None
     ) -> list[ScoredCard]:
-        self._refresh_if_stale()
         try:
             hits = self._index.query(
                 self._config.embed.nearest_scope, text, k, kind=kind
@@ -156,7 +151,6 @@ class LocalMemoryStore(MemoryStore):
 
     async def research(self, request: ResearchRequest) -> ResearchResult:
         started = perf_counter()
-        self._refresh_if_stale()
         if self._agent is None:
             return self._finish_research(started, request, ResearchResult())
         try:
@@ -171,7 +165,7 @@ class LocalMemoryStore(MemoryStore):
     def rebuild(self) -> None:
         self._transition(StoreState.BUILDING)
         try:
-            self._bank.refresh_if_stale()
+            self._bank.reload()
             self._sync_index("rebuild")
         except Exception:
             self._transition(StoreState.ERROR)
@@ -208,17 +202,6 @@ class LocalMemoryStore(MemoryStore):
             )
         )
         return result
-
-    def _refresh_if_stale(self) -> None:
-        if not self._bank.refresh_if_stale():
-            return
-        try:
-            self._sync_index("refresh")
-        except Exception:
-            logger.opt(exception=True).warning(
-                "[Memory][Store] index refresh failed; serving the refreshed "
-                "bank on a stale index until the next rebuild"
-            )
 
     def _sync_index(self, op: str) -> None:
         started = perf_counter()

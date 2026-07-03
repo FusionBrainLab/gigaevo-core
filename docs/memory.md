@@ -234,6 +234,6 @@ python run.py problem.name=my_task pipeline=standard memory=reader \
 python run.py problem.name=my_task pipeline=standard memory=none ...
 ```
 
-A fresh store over an existing checkpoint dir picks the bank up from disk, and
-the bank's mtime watermark keeps readers coherent with external writers —
-this handoff is covered end-to-end by `tests/memory/test_e2e.py`.
+A fresh store over an existing checkpoint dir cold-loads the bank from disk at
+construction — this cross-run handoff is covered end-to-end by
+`tests/memory/test_e2e.py`.

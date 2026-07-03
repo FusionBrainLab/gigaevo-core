@@ -20,10 +20,11 @@ class CardBank:
     """Authoritative card map, persisted as a single JSON file.
 
     :meth:`persist` writes atomically (tmp file + ``os.replace``) so a crash
-    never leaves a torn bank. A stat watermark — (mtime_ns, size), since
-    mtime alone is too coarse on NFS — makes external writers visible:
-    :meth:`refresh_if_stale` reloads only when the file on disk differs from
-    the last version this process wrote or read.
+    never leaves a torn bank. The owning process is the sole writer: the bank
+    is loaded from disk once at construction — a cold start, or a bank a prior
+    run left behind (this is how a ``memory=reader`` run consumes a bank a
+    ``memory=writer`` run built) — and is the in-memory source of truth
+    thereafter. :meth:`reload` re-reads it from disk on demand (index rebuild).
 
     A missing file is a legitimate cold start; a file that exists but does
     not parse into cards raises :class:`MemoryStorageError` — silently
@@ -34,7 +35,6 @@ class CardBank:
         self._path = Path(path)
         self._lock = RLock()
         self._cards: dict[str, Card] = {}
-        self._watermark: tuple[int, int] = (0, 0)
         if self._path.exists():
             self._reload()
 
@@ -86,24 +86,17 @@ class CardBank:
                 os.replace(tmp, self._path)
             finally:
                 tmp.unlink(missing_ok=True)
-            self._watermark = self._stat_signature()
 
-    def refresh_if_stale(self) -> bool:
+    def reload(self) -> None:
+        """Re-read the bank from disk, discarding the in-memory map. A missing
+        file leaves the current map untouched (nothing persisted yet)."""
         with self._lock:
             if not self._path.exists():
-                return False
-            if self._stat_signature() == self._watermark:
-                return False
+                return
             self._reload()
-            return True
-
-    def _stat_signature(self) -> tuple[int, int]:
-        stat = self._path.stat()
-        return (stat.st_mtime_ns, stat.st_size)
 
     def _reload(self) -> None:
         with self._lock:
-            signature = self._stat_signature()
             try:
                 payload = json.loads(self._path.read_text(encoding="utf-8"))
                 cards = {
@@ -115,4 +108,3 @@ class CardBank:
                     f"corrupt card bank at {self._path}: {exc}"
                 ) from exc
             self._cards = cards
-            self._watermark = signature

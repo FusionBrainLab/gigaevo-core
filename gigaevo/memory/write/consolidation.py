@@ -134,12 +134,13 @@ async def consolidate(
                 )
                 # Queue the partner for deletion ONLY after a committed fold. The
                 # gate returns a truthy id iff it folded the partner's evidence
-                # onto the survivor; it returns "" without folding on a
-                # harmful-union eviction or a backend miss, and ``apply_merges``
-                # swallows per-target persist failures rather than raising — so
-                # the only way merge raises is the harm-path ``delete`` (before
-                # any fold). Queuing before the merge would orphan the partner on
-                # that raise.
+                # onto the survivor and persisted it; it returns "" without
+                # folding on a harmful-union eviction or a target miss, and it
+                # raises if the underlying store persist fails (the harm-path
+                # ``delete`` and ``apply_merges`` both persist unwrapped). Queuing
+                # before the fold would orphan the partner on either the empty
+                # return or that raise; queuing after means the finally only ever
+                # deletes committed folds.
                 if not fid:
                     consumed.add(card.id)
                     break
@@ -149,8 +150,23 @@ async def consolidate(
                 merges += 1
                 break
     finally:
+        # Delete each folded partner independently. store.delete drops the card
+        # from the in-memory bank before its fallible disk persist, so guarding
+        # per-id means one partner's persist failure cannot abort the loop and
+        # leave the remaining partners live-yet-folded — a permanent gain
+        # double-count (their evidence sits on the survivor while they still
+        # score their own). A failed on-disk flush is logged and heals on the
+        # next successful sweep persist.
         for cid in absorbed:
-            store.delete(cid)
+            try:
+                store.delete(cid)
+            except Exception as exc:
+                logger.warning(
+                    "[Memory][Consolidation] failed to delete folded partner {} "
+                    "({}); removal flushes on the next sweep persist",
+                    cid,
+                    exc,
+                )
     return merges
 
 

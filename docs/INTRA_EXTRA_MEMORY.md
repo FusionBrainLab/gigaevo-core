@@ -125,7 +125,7 @@ post_step_hook:
 It wraps `MemoryWriter.run_increment(...)` on the **same writer instance** the engine holds as its end-of-run `post_run_hook` (`${ref:...}` declares it once), so mid-run and end-of-run writes are serialized by the writer's `_run_lock`. After each refresh:
 
 - New cards land in the bank (`cards.json`) and vector index.
-- The reader's research pass sees them on the next `MemoryContextStage` invocation — the store refreshes from the bank's mtime watermark.
+- The reader's research pass sees them on the next `MemoryContextStage` invocation — the reader and writer share one store instance (`${ref:memory.store}`), so a mid-run write lands in the same in-memory bank the reader queries, with no reload.
 - The framework's `InputHashCache` sees the cards block change and invalidates downstream stages (including `IntraMemoryStage` for any parent whose lineage card hadn't already been invalidated by a new child).
 
 `refresh_every: 10` ≈ one refresh per 10 newly-evaluated mutants, which on heilbron's smoke (~45 programs) gave 4 mid-run refreshes plus the end-of-run pass.

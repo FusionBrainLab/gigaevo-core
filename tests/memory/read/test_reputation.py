@@ -97,11 +97,41 @@ class TestBlockFromEvents:
         assert block is not None
         assert block.k_harm == 1
 
-    def test_within_band_dip_is_not_harm(self, make_event):
+    def test_wins_do_not_inflate_the_loss_band(self, make_event):
+        # The upside is clipped to zero before the MAD, so a card's own wins can
+        # never widen the dead-band that judges its losses: the -0.5 loss among
+        # {1,2,3} wins is counted as harm (monotone harm math).
         events = [make_event(g) for g in (1.0, 2.0, 3.0, -0.5)]
         block = block_from_events(events)
         assert block is not None
-        assert block.k_harm == 0
+        assert block.k_harm == 1
+
+    def test_escalating_wins_never_hide_a_loss(self, make_event):
+        # Same two losses, growing wins: the harm verdict on the losses is
+        # invariant to how large the wins get (no win-inflation loophole).
+        losses = (-0.3, -0.25)
+        counts = [
+            block_from_events([make_event(g) for g in losses]).k_harm,
+            block_from_events([make_event(g) for g in (*losses, 0.05)]).k_harm,
+            block_from_events([make_event(g) for g in (*losses, 10.0, 20.0)]).k_harm,
+        ]
+        assert counts == [2, 2, 2]
+
+    def test_noop_card_is_not_efficacy_confident(self, make_event):
+        # All-zero gains: MAD 0 -> zero harm events -> a confident downside
+        # posterior, but a zero central gain is a no-op, not a confident win.
+        block = block_from_events([make_event(0.0) for _ in range(4)])
+        assert block is not None
+        assert block.IntroGain_best_median == 0.0
+        assert block.efficacy_confident is False
+
+    def test_positive_median_keeps_confidence(self, make_event):
+        block = block_from_events(
+            [make_event(0.1) for _ in range(9)] + [make_event(-0.2)]
+        )
+        assert block is not None
+        assert block.IntroGain_best_median > 0
+        assert block.efficacy_confident is True
 
     def test_invalid_events_forced_harm_without_magnitude(self, make_event):
         block = block_from_events([make_event(0.5), make_event(0.0, invalid=True)])
@@ -227,3 +257,46 @@ class TestBDProximityReputation:
         assert block is not None
         assert block.intro_events == 1
         assert block.k_harm == 0
+
+    def test_in_cell_snapshots_bounds_against_a_live_reindex(
+        self, make_card, make_event, monkeypatch
+    ):
+        from gigaevo.evolution.strategies.models import (
+            DynamicBehaviorSpace,
+            LinearBinning,
+        )
+        from gigaevo.memory.cards import DecisionContext
+
+        bs = DynamicBehaviorSpace(
+            bins={"x": LinearBinning(min_val=0.0, max_val=1.0, num_bins=10)}
+        )
+        rep = BDProximityReputation(behavior_space=bs)
+        card = make_card(
+            gain_events=(
+                make_event(0.5, metrics={"x": 0.15}),
+                make_event(-0.9, metrics={"x": 0.85}),
+            )
+        )
+        ctx = DecisionContext(parent_metrics={"x": 0.15})
+
+        real_get_cell = DynamicBehaviorSpace.get_cell
+        calls = {"n": 0}
+
+        def reindex_after_parent(self, metrics):
+            cell = real_get_cell(self, metrics)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # A concurrent DynamicBehaviorSpace reindex moves the live bounds
+                # after the parent cell is read; x=0.15 would fall in a new cell.
+                bs.bins["x"].max_val = 0.3
+            return cell
+
+        monkeypatch.setattr(DynamicBehaviorSpace, "get_cell", reindex_after_parent)
+
+        block = rep.card_stats(card, ctx)
+        assert block is not None
+        # The read pins one tessellation: parent (x=0.15) and its co-located event
+        # share a cell despite the mid-read bound change, so exactly the near
+        # event is in-cell (a live re-bin would delegate all events to fallback).
+        assert block.intro_events == 1
+        assert block.IntroGain_best_median == pytest.approx(0.5)
