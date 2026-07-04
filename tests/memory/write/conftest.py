@@ -101,12 +101,18 @@ def make_card():
 @pytest.fixture
 def make_event():
     def _make_event(
-        gain: float, *, invalid: bool = False, metrics: dict[str, float] | None = None
+        gain: float,
+        *,
+        invalid: bool = False,
+        founding: bool = False,
+        metrics: dict[str, float] | None = None,
+        parent_id: str = "",
     ) -> ContextualGain:
         return ContextualGain(
-            context=DecisionContext(parent_metrics=metrics or {}),
+            context=DecisionContext(parent_metrics=metrics or {}, parent_id=parent_id),
             gain=gain,
             invalid=invalid,
+            founding=founding,
         )
 
     return _make_event

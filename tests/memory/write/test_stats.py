@@ -20,6 +20,7 @@ from gigaevo.memory.write.stats import (
     InjectionOutcome,
     card_gain_events_from_programs,
     compute_contextual_gains,
+    founding_gain_event,
 )
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 
@@ -118,6 +119,135 @@ def test_sentinel_base_fitness_yields_no_events(make_program, metrics_context):
         metrics_context=metrics_context,
     )
     assert events == {}
+
+
+def test_founding_gain_event_signed_positive_delta(make_program, metrics_context):
+    prog = make_program(
+        fitness=0.7, metadata=base_meta(selected=["card-a"], used=["card-a"])
+    )
+    event = founding_gain_event(
+        prog,
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+    )
+    assert event is not None
+    assert event.gain == pytest.approx(0.2)
+    assert event.founding is True
+    assert event.invalid is False
+    assert event.context.parent_id == "parent-1"
+    assert event.context.timestamp == prog.created_at
+
+
+def test_founding_gain_event_carries_true_negative_delta(make_program, metrics_context):
+    prog = make_program(
+        fitness=0.3,
+        metadata=base_meta(selected=["card-a"], used=["card-a"], base_fitness=0.5),
+    )
+    event = founding_gain_event(
+        prog,
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+    )
+    assert event is not None
+    assert event.gain == pytest.approx(-0.2)
+    assert event.founding is True
+
+
+def test_founding_gain_event_none_without_base_baseline(make_program, metrics_context):
+    prog = make_program(fitness=0.7, parents=["p"], metadata={})
+    assert (
+        founding_gain_event(
+            prog,
+            fitness_key="fitness",
+            higher_is_better=True,
+            metrics_context=metrics_context,
+        )
+        is None
+    )
+
+
+def test_founding_gain_event_none_when_base_sentinel(make_program, metrics_context):
+    prog = make_program(
+        fitness=0.7,
+        metadata=base_meta(selected=["card-a"], used=["card-a"], base_fitness=-1e5),
+    )
+    assert (
+        founding_gain_event(
+            prog,
+            fitness_key="fitness",
+            higher_is_better=True,
+            metrics_context=metrics_context,
+        )
+        is None
+    )
+
+
+def test_founding_gain_event_respects_minimize_direction(make_program, metrics_context):
+    prog = make_program(
+        fitness=0.7, metadata=base_meta(selected=["card-a"], used=["card-a"])
+    )
+    event = founding_gain_event(
+        prog,
+        fitness_key="fitness",
+        higher_is_better=False,
+        metrics_context=metrics_context,
+    )
+    assert event is not None
+    assert event.gain == pytest.approx(-0.2)
+
+
+def test_stamper_preserves_founding_event_when_uncredited(make_card, make_event):
+    founding = make_event(0.2, founding=True, parent_id="parent-1")
+    card = make_card(gain_events=(founding,))
+    stamped = CardStatsStamper().stamp_gain_events(card, {})
+    assert stamped.gain_events == (founding,)
+    assert stamped.gain_events[0].founding is True
+
+
+def test_stamper_layers_recomputed_use_events_over_founding(make_card, make_event):
+    founding = make_event(0.2, founding=True, parent_id="parent-1")
+    use_event = make_event(0.3)
+    card = make_card(gain_events=(founding,))
+    stamped = CardStatsStamper().stamp_gain_events(card, {card.id: [use_event]})
+    assert stamped.gain_events == (founding, use_event)
+
+
+def test_stamper_still_clears_stale_founding_absent_use_events(make_card, make_event):
+    # A founding event is preserved; a stale NON-founding use event unioned onto
+    # the card (e.g. by a prior merge) is cleared and recomputed from the pool.
+    founding = make_event(0.2, founding=True, parent_id="parent-1")
+    stale_use = make_event(0.9)
+    card = make_card(gain_events=(founding, stale_use))
+    stamped = CardStatsStamper().stamp_gain_events(card, {})
+    assert stamped.gain_events == (founding,)
+
+
+def test_stamper_preserves_both_founding_events_across_merge(make_card, make_event):
+    # A survivor that absorbed a near-duplicate carries BOTH its own founding
+    # event and the partner's (merge unions gain_events). The from-scratch
+    # restamp preserves both, layers this sweep's recomputed use events, and
+    # re-aliases the absorbed id's use events — with no founding double-count,
+    # since the recomputed pool never contains founding events.
+    own_founding = make_event(0.2, founding=True, parent_id="parent-own")
+    absorbed_founding = make_event(0.15, founding=True, parent_id="parent-absorbed")
+    stale_use = make_event(0.9)
+    survivor = make_card(
+        gain_events=(own_founding, stale_use, absorbed_founding),
+        absorbed_ids=("dead-1",),
+    )
+    own_use = make_event(0.3)
+    aliased_use = make_event(0.4)
+    events = {survivor.id: [own_use], "dead-1": [aliased_use]}
+    stamped = CardStatsStamper().stamp_gain_events(survivor, events)
+    assert stamped.gain_events == (
+        own_founding,
+        absorbed_founding,
+        own_use,
+        aliased_use,
+    )
+    assert sum(1 for e in stamped.gain_events if e.founding) == 2
 
 
 def test_stamper_folds_absorbed_events_deduping_by_identity(make_card, make_event):

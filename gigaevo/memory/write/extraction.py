@@ -15,6 +15,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
+from gigaevo.memory.cards import ContextualGain
+from gigaevo.memory.write.stats import founding_gain_event
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 
@@ -67,6 +69,12 @@ class ProgramRecord(BaseModel):
         default="",
         description="Source code of the base parent, when available.",
     )
+    founding_gain: ContextualGain | None = Field(
+        default=None,
+        description="The founding gain event seeded onto a card authored from this "
+        "record — the child's true signed delta against its base parent. None when "
+        "the child predates the memory path or has no honest base baseline.",
+    )
 
 
 class MutationOutput(BaseModel):
@@ -108,6 +116,7 @@ def program_to_record(
     task_description_summary: str,
     fitness_key: str = "fitness",
     parent_codes: dict[str, str] | None = None,
+    founding_gain: ContextualGain | None = None,
 ) -> ProgramRecord:
     """Convert a Program to a ProgramRecord for the librarian write path.
 
@@ -142,6 +151,7 @@ def program_to_record(
         code=program.code,
         base_parent_id=base_parent_id,
         parent_code=parent_code,
+        founding_gain=founding_gain,
     )
 
 
@@ -174,6 +184,7 @@ class ProgramRecordExtractor:
         self._task_description = task_description
         self._fitness_key = fitness_key
         self._metrics_context = metrics_context
+        self._higher_is_better = metrics_context.is_higher_better(fitness_key)
         self._seen_ids: set[str] = set()
 
     @property
@@ -217,6 +228,12 @@ class ProgramRecordExtractor:
                 task_description_summary,
                 self._fitness_key,
                 parent_codes=parent_codes,
+                founding_gain=founding_gain_event(
+                    p,
+                    fitness_key=self._fitness_key,
+                    higher_is_better=self._higher_is_better,
+                    metrics_context=self._metrics_context,
+                ),
             )
             for p in eligible
         ]

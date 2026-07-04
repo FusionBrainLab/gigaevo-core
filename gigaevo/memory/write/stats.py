@@ -60,6 +60,41 @@ def base_id(prog: Program) -> str:
     return pid if isinstance(pid, str) else ""
 
 
+def founding_gain_event(
+    program: Program,
+    *,
+    fitness_key: str,
+    higher_is_better: bool,
+    metrics_context: MetricsContext,
+) -> ContextualGain | None:
+    """The ``founding`` gain event for a freshly-authored card: the true signed
+    delta of the child it was distilled from against that child's base parent.
+
+    Baseline and context are resolved identically to use-attribution
+    (``base_metrics`` / ``base_id`` / ``strict_fitness``) so a founding event and
+    the later use events of the same card are the same kind of evidence — the
+    only distinguisher is ``founding=True``, which carries it across the
+    from-scratch restamp that recomputes all use events from the pool. Returns
+    None when the child predates the memory path (no frozen base snapshot) or
+    either fitness is missing/sentinel — there is then no honest founding delta.
+    """
+    bm = base_metrics(program)
+    base_fit = metrics_context.strict_fitness(bm, fitness_key)
+    child_fit = metrics_context.strict_fitness(program.metrics, fitness_key)
+    if base_fit is None or child_fit is None:
+        return None
+    delta = child_fit - base_fit if higher_is_better else base_fit - child_fit
+    return ContextualGain(
+        context=DecisionContext(
+            parent_metrics=dict(bm),
+            parent_id=base_id(program),
+            timestamp=program.created_at,
+        ),
+        gain=delta,
+        founding=True,
+    )
+
+
 class InjectionOutcome(BaseModel):
     """One program's injection-relevant facts, extracted at the writer seam."""
 
@@ -215,8 +250,18 @@ class CardStatsStamper(BaseModel):
         identity keeps distinct value-equal trials and drops only the shared one.
         This relies on receiving one sweep's freshly built pool, which is the sole
         caller's contract (CardStatsUpdater.update).
+
+        Founding events (the delta a card was distilled from) are the one class of
+        event the pool cannot recompute — the founding child predates the card, so
+        use-attribution never re-credits it. They live only on the card, are
+        carried onto a merge survivor by ``merge_cards`` unioning gain events, and
+        are preserved here across the recompute. They never double-count: the pool
+        only ever holds use events, so the absorbed-id fold below cannot re-add one.
         """
-        folded: list[ContextualGain] = list(gain_events.get(card.id.strip()) or [])
+        founding = [event for event in card.gain_events if event.founding]
+        folded: list[ContextualGain] = founding + list(
+            gain_events.get(card.id.strip()) or []
+        )
         if card.kind is CardKind.INSIGHT and card.absorbed_ids:
             seen = {id(event) for event in folded}
             for aid in card.absorbed_ids:

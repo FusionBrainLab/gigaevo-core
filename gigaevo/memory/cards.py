@@ -55,6 +55,13 @@ class ContextualGain(BaseModel):
         description="True for an evaluated-and-judged-invalid child — a forced "
         "harm event whose gain magnitude is meaningless.",
     )
+    founding: bool = Field(
+        default=False,
+        description="True for the event seeded at authoring from the parent-child "
+        "pair the card was distilled from. The founding child predates the card, "
+        "so use-attribution can never re-credit it; it is preserved across the "
+        "from-scratch restamp rather than recomputed each sweep.",
+    )
 
 
 class DecisionMetrics(BaseModel):

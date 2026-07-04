@@ -30,7 +30,7 @@ from loguru import logger
 from gigaevo.llm.agents.admission_novelty import NoveltyAdmissionAgent
 from gigaevo.llm.agents.program_author import ProgramAuthorAgent, ProgramAuthorResponse
 from gigaevo.llm.agents.reconcile import ReconcileAgent
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card, CardKind, ContextualGain
 from gigaevo.memory.storage.base import MemoryStore, ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate
 
@@ -74,7 +74,12 @@ class Librarian:
         child_id: str,
         child_code: str,
         note: str,
+        founding_gain: ContextualGain | None = None,
     ) -> list[str]:
+        # founding_gain seeds the child's verified parent->child delta so a fresh
+        # card bids on its own evidence; it rides a NEW admit and a MERGE union,
+        # and is dropped on a DUPLICATE (the target keeps its own founding event).
+        events = (founding_gain,) if founding_gain is not None else ()
         try:
             # Idea dedup is insight-only: an idea is never a near-duplicate of
             # a program exemplar, and the reconcile agent must not be offered
@@ -108,6 +113,7 @@ class Librarian:
                     programs=(child_id,),
                     task_description=self._task_description,
                     task_description_summary=self._task_description_summary,
+                    gain_events=events,
                 )
             )
             return [fid] if fid else []
@@ -122,6 +128,7 @@ class Librarian:
                 programs=(child_id,),
                 task_description=self._task_description,
                 task_description_summary=self._task_description_summary,
+                gain_events=events,
             )
             if item.decision == "NEW":
                 fid = await self._admit_new(card)

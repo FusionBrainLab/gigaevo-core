@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_ID_METADATA_KEY,
+    MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
+    MUTATION_OUTPUT_METADATA_KEY,
+)
 from gigaevo.memory.write.extraction import (
     Improvement,
     MutationOutput,
@@ -12,6 +17,23 @@ from gigaevo.memory.write.extraction import (
     program_to_record,
     record_note,
 )
+from gigaevo.programs.metrics.context import (
+    VALIDITY_KEY,
+    MetricsContext,
+    MetricSpec,
+)
+
+
+def base_meta(*, base_fitness: float = 0.5) -> dict:
+    return {
+        MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY: ["card-a"],
+        MUTATION_MEMORY_BASE_METRICS_METADATA_KEY: {
+            VALIDITY_KEY: 1.0,
+            "fitness": base_fitness,
+        },
+        MUTATION_MEMORY_BASE_ID_METADATA_KEY: "parent-1",
+        MUTATION_OUTPUT_METADATA_KEY: {"card_ids_used": ["card-a"]},
+    }
 
 
 def test_mutation_output_validates_typed_changes():
@@ -117,3 +139,40 @@ def test_parent_code_resolves_from_posterior_pool(extractor, make_program):
         [child], task_description_summary="s", posterior_programs=[parent, child]
     )
     assert records[0].parent_code == parent.code
+
+
+def test_program_to_record_founding_gain_defaults_none(make_program):
+    record = program_to_record(make_program(parents=["p"]), "task", "summary")
+    assert record.founding_gain is None
+
+
+def test_extract_attaches_signed_founding_gain(extractor, make_program):
+    child = make_program(fitness=0.7, parents=["parent-1"], metadata=base_meta())
+    (record,) = extractor.extract([child], task_description_summary="s")
+    assert record.founding_gain is not None
+    assert record.founding_gain.gain == pytest.approx(0.2)
+    assert record.founding_gain.founding is True
+    assert record.founding_gain.context.parent_id == "parent-1"
+
+
+def test_extract_no_founding_gain_without_base_snapshot(extractor, make_program):
+    child = make_program(fitness=0.7, parents=["p"], metadata={})
+    (record,) = extractor.extract([child], task_description_summary="s")
+    assert record.founding_gain is None
+
+
+def test_extract_minimize_direction_flips_founding_sign(metrics_context, make_program):
+    minimize = MetricsContext(
+        specs={
+            "fitness": MetricSpec(
+                description="loss", higher_is_better=False, is_primary=True
+            )
+        }
+    )
+    extractor = ProgramRecordExtractor(
+        task_description="task", fitness_key="fitness", metrics_context=minimize
+    )
+    child = make_program(fitness=0.7, parents=["parent-1"], metadata=base_meta())
+    (record,) = extractor.extract([child], task_description_summary="s")
+    assert record.founding_gain is not None
+    assert record.founding_gain.gain == pytest.approx(-0.2)

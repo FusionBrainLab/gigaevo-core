@@ -7,11 +7,19 @@ import pytest
 from gigaevo.llm.agents.admission_novelty import NoveltyVerdict
 from gigaevo.llm.agents.program_author import ProgramAuthorResponse
 from gigaevo.llm.agents.reconcile import LibrarianCard, ReconcileItem, ReconcileResponse
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 from gigaevo.memory.storage.base import ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory.write.librarian import Librarian, _strictly_better
+
+
+def founding_event(gain: float = 0.2, parent_id: str = "parent-1") -> ContextualGain:
+    return ContextualGain(
+        context=DecisionContext(parent_id=parent_id),
+        gain=gain,
+        founding=True,
+    )
 
 
 class FakeReconcileAgent:
@@ -260,6 +268,65 @@ async def test_merge_empty_target_falls_back_to_admit(store, make_librarian):
     ids = await ingest(librarian)
     assert len(ids) == 1
     assert store.get(ids[0]).description == "an idea"
+
+
+async def test_new_card_born_with_founding_event(store, make_librarian):
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent)
+    founding = founding_event()
+    ids = await librarian.ingest_idea(
+        base_parent_code="x = 0",
+        child_id="child-1",
+        child_code="x = 1",
+        note="note",
+        founding_gain=founding,
+    )
+    assert len(ids) == 1
+    assert store.get(ids[0]).gain_events == (founding,)
+
+
+async def test_new_card_without_founding_gain_has_empty_events(store, make_librarian):
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent)
+    ids = await ingest(librarian)
+    assert store.get(ids[0]).gain_events == ()
+
+
+async def test_merge_unions_founding_onto_target(store, make_card, make_librarian):
+    target = make_card()
+    store.save(target)
+    agent = FakeReconcileAgent(
+        ReconcileResponse(
+            items=[item("MERGE", description="union prose", target_id=target.id)]
+        )
+    )
+    librarian = make_librarian(agent)
+    founding = founding_event()
+    ids = await librarian.ingest_idea(
+        base_parent_code="x = 0",
+        child_id="child-1",
+        child_code="x = 1",
+        note="note",
+        founding_gain=founding,
+    )
+    assert ids == [target.id]
+    assert store.get(target.id).gain_events == (founding,)
+
+
+async def test_verbatim_fallback_carries_founding_event(store, make_librarian):
+    agent = FakeReconcileAgent()
+    agent.raise_on_call = True
+    librarian = make_librarian(agent)
+    founding = founding_event()
+    ids = await librarian.ingest_idea(
+        base_parent_code="x = 0",
+        child_id="child-1",
+        child_code="x = 1",
+        note="raw note",
+        founding_gain=founding,
+    )
+    assert len(ids) == 1
+    assert store.get(ids[0]).gain_events == (founding,)
 
 
 async def test_max_cards_truncates_items(store, make_librarian):

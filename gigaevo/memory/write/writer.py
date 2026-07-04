@@ -378,6 +378,7 @@ class MemoryWriter(IncrementalPostRunHook):
                         child_id=rec.id,
                         child_code=rec.code,
                         note=record_note(rec),
+                        founding_gain=rec.founding_gain,
                     ),
                     timeout=self._ingest_call_timeout_s,
                 )
