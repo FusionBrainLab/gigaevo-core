@@ -262,7 +262,53 @@ def test_unknown_tool_unrepresentable(changes, hover_parent):
         )
 
 
-def test_gap_in_slots_rejected(changes, hover_parent):
+def test_gap_in_slots_repaired(changes, hover_parent):
+    # A gap (slot_2 empty, slot_3 filled) is deterministically compacted left,
+    # not rejected: the same steps slide into contiguous slots and transcribe
+    # as a 2-step chain.
+    schema = changes.build_schema(hover_parent)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+        }
+    )
+    assert diff.slot_1 is not None and diff.slot_2 is not None
+    assert diff.slot_3 is None
+    assert diff.slot_2.id == "a2"
+    assert diff.slot_2.dependencies == ["slot_1"]
+    child = json.loads(changes.apply(diff, parents=hover_parent))
+    assert [s["number"] for s in child["steps"]] == [1, 2]
+    assert child["steps"][1]["dependencies"] == [1]
+
+
+def test_gap_repair_remaps_tool_query_source(changes, hover_parent):
+    # slot_4 (a tool reading slot_1) compacts to slot_2; its query_source is
+    # remapped so the absolute $history wiring still points at the same step.
+    schema = changes.build_schema(hover_parent)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_4": {
+                "kind": "new_tool",
+                "tool_name": "retrieve",
+                "query_source": "slot_1",
+            },
+        }
+    )
+    assert diff.slot_2 is not None and diff.slot_3 is None
+    child = json.loads(changes.apply(diff, parents=hover_parent))
+    assert child["steps"][1]["step_config"]["input_mapping"]["query"] == "$history[0]"
+    assert child["steps"][1]["dependencies"] == [1]
+
+
+def test_gap_with_dangling_ref_still_rejected(changes, hover_parent):
+    # slot_3 depends on slot_2, but slot_2 is the hole -> not cleanly repairable,
+    # so the original contiguity error stands.
     schema = changes.build_schema(hover_parent)
     with pytest.raises(ValidationError):
         schema.validate(
@@ -270,7 +316,7 @@ def test_gap_in_slots_rejected(changes, hover_parent):
                 **EVIDENCE,
                 "base_parent": "A",
                 "slot_1": {"kind": "keep", "id": "a1"},
-                "slot_3": {"kind": "keep", "id": "a2"},
+                "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_2"]},
             }
         )
 

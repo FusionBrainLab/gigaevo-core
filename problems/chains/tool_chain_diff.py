@@ -14,11 +14,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     TypeAdapter,
+    ValidationError,
     create_model,
     model_validator,
 )
@@ -106,7 +108,77 @@ class AllowedToolChainChanges(AllowedChanges):
         schema = portable_json_schema(
             {**adapter.json_schema(), "title": "tool_chain_diff"}
         )
-        return DiffSchema(json_schema=schema, validate=adapter.validate_python)
+
+        def validate(payload: Any) -> Any:
+            try:
+                return adapter.validate_python(payload)
+            except ValidationError:
+                repaired = self._compact_payload(payload)
+                if repaired is None:
+                    raise
+                validated = adapter.validate_python(repaired)
+                logger.warning(
+                    "tool_chain_diff: repaired non-contiguous slot payload "
+                    "(filled slots {} compacted)",
+                    sorted(
+                        int(k.removeprefix("slot_"))
+                        for k, v in payload.items()
+                        if k.startswith("slot_") and v is not None
+                    ),
+                )
+                return validated
+
+        return DiffSchema(json_schema=schema, validate=validate)
+
+    @staticmethod
+    def _compact_payload(payload: Any) -> dict | None:
+        """Slide filled slots left to close a gap the model left, remapping every
+        slot reference, so a well-formed-but-non-contiguous diff becomes valid.
+        Order is preserved and edges are backward, so the result transcribes
+        identically to a contiguous emission. Returns None (keep the original
+        error) when there is no gap or a surviving slot references the hole."""
+        if not isinstance(payload, dict):
+            return None
+        names = sorted(
+            (k for k in payload if k.startswith("slot_")),
+            key=lambda s: int(s.removeprefix("slot_")),
+        )
+        filled = [
+            (int(k.removeprefix("slot_")), payload[k])
+            for k in names
+            if payload[k] is not None
+        ]
+        old = [i for i, _ in filled]
+        if old == list(range(1, len(old) + 1)):
+            return None
+        remap = {o: n for n, (o, _) in enumerate(filled, start=1)}
+        rebuilt: dict[str, Any] = {}
+        try:
+            for n, (_, body) in enumerate(filled, start=1):
+                if not isinstance(body, dict):
+                    return None
+                body = dict(body)
+                deps = body.get("dependencies")
+                if isinstance(deps, list):
+                    new_deps = []
+                    for r in deps:
+                        j = int(str(r).removeprefix("slot_"))
+                        if j not in remap:
+                            return None
+                        new_deps.append(f"slot_{remap[j]}")
+                    body["dependencies"] = new_deps
+                qsrc = body.get("query_source")
+                if isinstance(qsrc, str) and qsrc.startswith("slot_"):
+                    j = int(qsrc.removeprefix("slot_"))
+                    if j not in remap:
+                        return None
+                    body["query_source"] = f"slot_{remap[j]}"
+                rebuilt[f"slot_{n}"] = body
+        except (ValueError, TypeError):
+            return None
+        out = {k: v for k, v in payload.items() if not k.startswith("slot_")}
+        out.update(rebuilt)
+        return out
 
     def render_parents(self, parents: dict[str, str]) -> str:
         specs = self._parse(parents)
