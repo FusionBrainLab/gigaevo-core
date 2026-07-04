@@ -69,6 +69,17 @@ class WriteResult(BaseModel):
     def rejected_harm(self) -> bool:
         return self.outcome is WriteOutcome.REJECTED_HARM
 
+    @property
+    def benign_noop(self) -> bool:
+        """The gate did nothing and judged nothing: safe to re-author as fresh.
+
+        The only verdict a caller may launder back into the bank as new. Every
+        other non-landed outcome is a harm-driven deletion (``REJECTED_HARM``
+        today; ``EVICTED`` if a sweep verdict is ever routed through a re-author
+        path) and must be dropped, not resurrected.
+        """
+        return self.outcome is WriteOutcome.DISCARDED
+
 
 _DISCARDED = WriteResult(outcome=WriteOutcome.DISCARDED)
 

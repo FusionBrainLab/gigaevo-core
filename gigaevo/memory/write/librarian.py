@@ -151,21 +151,22 @@ class Librarian:
     async def _land_dedup(self, result: WriteResult | None, card: Card) -> str:
         """Resolve a DUPLICATE/MERGE gate verdict to a banked id.
 
-        A landed verdict yields its id. A harmful-rejected verdict is dropped —
-        never laundered back in as a fresh card (the gate already judged it and
-        deleted the merge target). Any benign no-op — an empty target id (``None``
-        here) or a target the gate found absent/ineligible — re-authors the idea
-        as NEW through the novelty gate rather than silently dropping it.
+        A landed verdict yields its id. Re-authoring as NEW is whitelisted to the
+        two genuinely benign cases — an empty target id (``None`` here) or a
+        gate no-op (``DISCARDED``: target absent/ineligible, or the store merge
+        failed). Every other non-landed verdict is a harm-driven deletion (the
+        gate judged the union confidently harmful and deleted the merge target)
+        and is dropped — never laundered back in as a fresh card.
         """
-        if result is not None and result.rejected_harm:
-            logger.info(
-                "[Memory][Librarian] dedup target folded to a confidently harmful "
-                "union; dropping the card rather than re-authoring it as new."
-            )
-            return ""
         if result is not None and result.landed:
             return result.card_id
-        return await self._admit_new(card)
+        if result is None or result.benign_noop:
+            return await self._admit_new(card)
+        logger.info(
+            "[Memory][Librarian] dedup target folded to a confidently harmful "
+            "union; dropping the card rather than re-authoring it as new."
+        )
+        return ""
 
     async def _admit_new(self, card: Card) -> str:
         """Admit a fresh idea card, gating it through the novelty judge first.

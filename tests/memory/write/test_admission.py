@@ -10,6 +10,7 @@ from gigaevo.memory.write.admission import (
     WriteLedger,
     WriteLedgerRecord,
     WriteOutcome,
+    WriteResult,
 )
 from gigaevo.memory.write.eviction import NullEvictor
 
@@ -190,6 +191,20 @@ def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.EVICTED
     assert row.incoming_id == bad.id
+
+
+def test_write_result_benign_noop_is_discarded_only():
+    # Only DISCARDED is safe to re-author as fresh. Every other non-landed
+    # verdict is a harm-driven deletion the librarian must drop — EVICTED must
+    # never read as a benign no-op or a swept-harmful card resurrects as NEW.
+    landed = {WriteOutcome.ADDED, WriteOutcome.UPDATED, WriteOutcome.MERGED}
+    for outcome in WriteOutcome:
+        card_id = "x" if outcome in landed else ""
+        result = WriteResult(outcome=outcome, card_id=card_id)
+        assert result.benign_noop is (outcome is WriteOutcome.DISCARDED)
+        assert result.rejected_harm is (outcome is WriteOutcome.REJECTED_HARM)
+        assert result.landed is (outcome in landed)
+    assert not WriteResult(outcome=WriteOutcome.EVICTED).benign_noop
 
 
 def test_ledger_record_never_raises_on_unwritable_path(tmp_path):
