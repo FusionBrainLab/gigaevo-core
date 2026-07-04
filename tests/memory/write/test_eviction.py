@@ -6,6 +6,7 @@ import pytest
 
 from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
 from gigaevo.memory.events import MemoryEvictionSweep
+from gigaevo.memory.read.reputation import BetaBinomialReputation
 from gigaevo.memory.write.eviction import HarmEvictor, NullEvictor
 
 
@@ -68,3 +69,33 @@ def test_null_evictor_never_evicts(make_card):
     card = make_card()
     assert evictor.should_evict(card) is False
     assert evictor.sweep([card]) == []
+
+
+def test_founding_events_never_trigger_eviction(make_card, make_event):
+    """Founding evidence seeds the auction bid, not the harm verdict: a card is
+    never evicted on the origin deltas it was distilled from, before use-
+    attribution ever credits it. Three losing founding events would trip the harm
+    gate if counted; stripped, the card carries no usage evidence and survives.
+    """
+    evictor = HarmEvictor(BetaBinomialReputation())
+    founding_only = make_card(
+        gain_events=tuple(make_event(-0.5, founding=True) for _ in range(3))
+    )
+    use_only = make_card(gain_events=tuple(make_event(-0.5) for _ in range(3)))
+    assert evictor.should_evict(founding_only) is False
+    assert evictor.should_evict(use_only) is True
+
+
+def test_founding_events_do_not_lower_the_harm_bar(make_card, make_event):
+    """Founding events must not count toward ``harm_min_events``: a card with two
+    losing use events and one losing founding event is judged on the two use
+    events (below the bar), not evicted as if it had three."""
+    evictor = HarmEvictor(BetaBinomialReputation())
+    mixed = make_card(
+        gain_events=(
+            make_event(-0.5),
+            make_event(-0.5),
+            make_event(-0.5, founding=True),
+        )
+    )
+    assert evictor.should_evict(mixed) is False

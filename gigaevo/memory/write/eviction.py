@@ -32,6 +32,21 @@ class Evictor(Protocol):
     def sweep(self, cards: Sequence[Card]) -> list[str]: ...
 
 
+def _harm_evidence(card: Card) -> Card:
+    """The card with founding events dropped, for the harm verdict only.
+
+    A founding event seeds the auction bid (a regression-born card bids low),
+    but harm-eviction is usage-based: a card must never be evicted on the origin
+    delta it was distilled from, before use-attribution has credited it. The bid
+    still reads the full ``gain_events`` — only the eviction judgment strips them.
+    """
+    if not any(event.founding for event in card.gain_events):
+        return card
+    return card.model_copy(
+        update={"gain_events": tuple(e for e in card.gain_events if not e.founding)}
+    )
+
+
 class HarmEvictor:
     """Evicts cards whose injection posterior is confidently harmful."""
 
@@ -39,7 +54,8 @@ class HarmEvictor:
         self._scorer = scorer
 
     def should_evict(self, card: Card) -> bool:
-        return self._scorer.is_confidently_harmful(self._scorer.card_stats(card))
+        evidence = _harm_evidence(card)
+        return self._scorer.is_confidently_harmful(self._scorer.card_stats(evidence))
 
     def sweep(self, cards: Sequence[Card]) -> list[str]:
         evicted = [card.id for card in cards if self.should_evict(card)]
