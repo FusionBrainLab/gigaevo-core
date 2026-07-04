@@ -160,9 +160,10 @@ class MutationStructuredOutput(BaseModel):
     )
     code: str = Field(
         description=(
-            "The complete mutated Python source code. "
-            "Must be valid Python starting with imports or def statements. "
-            "NEVER put JSON, format examples, or templates here. "
+            "The complete mutated program, emitted verbatim in the SAME source "
+            "format as the parent program(s) — whatever format the task uses "
+            "(Python source, a JSON document, ...). Never a fragment, diff, "
+            "format example, or template. "
             "Use actual newlines between lines, not literal backslash-n."
         )
     )
