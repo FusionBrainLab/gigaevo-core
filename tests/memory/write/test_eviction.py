@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
 from gigaevo.memory.events import MemoryEvictionSweep
-from gigaevo.memory.read.reputation import BetaBinomialReputation
+from gigaevo.memory.read.reputation import (
+    BDProximityReputation,
+    BetaBinomialReputation,
+)
 from gigaevo.memory.write.eviction import HarmEvictor, NullEvictor
 
 
@@ -99,3 +103,21 @@ def test_founding_events_do_not_lower_the_harm_bar(make_card, make_event):
         )
     )
     assert evictor.should_evict(mixed) is False
+
+
+def test_founding_strip_holds_under_bd_proximity_scorer(make_card, make_event):
+    """``memory=full`` wires ``BDProximityReputation`` as the harm scorer, not the
+    plain BetaBinomial. The strip must hold through its context-less
+    ``card_stats`` (no query cell → fallback over the already-stripped events),
+    so the same founding-only-survives / use-only-evicts invariant holds under
+    the scorer eviction actually runs against in production."""
+    space = BehaviorSpace(
+        bins={"b": LinearBinning(min_val=0.0, max_val=1.0, num_bins=4)}
+    )
+    evictor = HarmEvictor(BDProximityReputation(behavior_space=space))
+    founding_only = make_card(
+        gain_events=tuple(make_event(-0.5, founding=True) for _ in range(3))
+    )
+    use_only = make_card(gain_events=tuple(make_event(-0.5) for _ in range(3)))
+    assert evictor.should_evict(founding_only) is False
+    assert evictor.should_evict(use_only) is True
