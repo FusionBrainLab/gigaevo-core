@@ -26,7 +26,16 @@ from gigaevo.memory.write.merge import merge_cards
 
 
 class WriteOutcome(StrEnum):
-    """Verdict of one card-bank ingest, one member per ledger row outcome."""
+    """Verdict of one card-bank ingest.
+
+    ADDED / UPDATED / MERGED / REJECTED_HARM / EVICTED are each recorded as a
+    write-ledger row. DISCARDED is the no-op verdict: the gate did nothing
+    (merge/bump target absent or ineligible, or the store merge failed) and
+    recorded no row — the submitted card was neither admitted nor rejected, so a
+    caller may re-author it as fresh. It is deliberately distinct from
+    REJECTED_HARM, which the gate judged and dropped and which must never be
+    re-admitted.
+    """
 
     ADDED = "added"
     UPDATED = "updated"
@@ -34,6 +43,34 @@ class WriteOutcome(StrEnum):
     DISCARDED = "discarded"
     REJECTED_HARM = "rejected_harm"
     EVICTED = "evicted"
+
+
+class WriteResult(BaseModel):
+    """What one gate ingest did, and the bank id the card landed under.
+
+    Replaces the former bare-``str`` return whose ``""`` conflated two verdicts a
+    caller must tell apart: a benign no-op (``DISCARDED`` — retry as fresh) and a
+    harmful rejection (``REJECTED_HARM`` — drop, never re-admit).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: WriteOutcome = Field(description="Gate verdict for this ingest.")
+    card_id: str = Field(
+        default="",
+        description="Bank id the card landed under; '' when nothing landed.",
+    )
+
+    @property
+    def landed(self) -> bool:
+        return bool(self.card_id)
+
+    @property
+    def rejected_harm(self) -> bool:
+        return self.outcome is WriteOutcome.REJECTED_HARM
+
+
+_DISCARDED = WriteResult(outcome=WriteOutcome.DISCARDED)
 
 
 class WriteLedgerRecord(BaseModel):
@@ -129,7 +166,7 @@ class CardAdmissionGate:
         self._evictor = evictor
         self._ledger = ledger
 
-    def admit(self, card: Card) -> str:
+    def admit(self, card: Card) -> WriteResult:
         incoming_id = card.id.strip()
         known = bool(incoming_id) and self._store.get(incoming_id) is not None
 
@@ -148,10 +185,10 @@ class CardAdmissionGate:
         reason = "known id replaced" if known else "librarian-authored card"
         return self._ledger_record(card, final_id, outcome, reason)
 
-    def merge(self, target_id: str, card: Card) -> str:
+    def merge(self, target_id: str, card: Card) -> WriteResult:
         target = self._store.get(target_id)
         if target is None or target.kind is not CardKind.INSIGHT:
-            return ""
+            return _DISCARDED
         # merge_cards preserves the target id on the survivor, so capture the
         # submitted card's id before the fold — the ledger row must report what
         # happened to the SUBMITTED card, not the merge target.
@@ -168,7 +205,7 @@ class CardAdmissionGate:
             )
         updated = self._store.apply_merges([merged])
         if not updated:
-            return ""
+            return _DISCARDED
         return self._ledger_record(
             merged,
             updated[0],
@@ -178,10 +215,10 @@ class CardAdmissionGate:
             merge_targets=(target_id,),
         )
 
-    def bump_provenance(self, target_id: str, child_id: str) -> str:
+    def bump_provenance(self, target_id: str, child_id: str) -> WriteResult:
         target = self._store.get(target_id)
         if target is None or target.kind is not CardKind.INSIGHT:
-            return ""
+            return _DISCARDED
         if child_id and child_id not in target.programs:
             self._store.save(
                 target.model_copy(update={"programs": (*target.programs, child_id)})
@@ -212,7 +249,7 @@ class CardAdmissionGate:
         *,
         incoming_id: str | None = None,
         merge_targets: Sequence[str] | None = None,
-    ) -> str:
+    ) -> WriteResult:
         if self._ledger is not None:
             self._ledger.record(
                 incoming_id=card.id if incoming_id is None else incoming_id,
@@ -222,4 +259,4 @@ class CardAdmissionGate:
                 merge_targets=merge_targets,
                 category=card.category,
             )
-        return final_id
+        return WriteResult(outcome=outcome, card_id=final_id)

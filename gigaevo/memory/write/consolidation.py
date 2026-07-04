@@ -117,7 +117,7 @@ async def consolidate(
                     reviewed.add(pair)
                     continue
                 union = decision.card
-                fid = gate.merge(
+                result = gate.merge(
                     card.id,
                     Card(
                         # The survivor is ``card`` (target_id); the partner is
@@ -147,15 +147,14 @@ async def consolidate(
                     ),
                 )
                 # Queue the partner for deletion ONLY after a committed fold. The
-                # gate returns a truthy id iff it folded the partner's evidence
-                # onto the survivor and persisted it; it returns "" without
-                # folding on a harmful-union eviction or a target miss, and it
-                # raises if the underlying store persist fails (the harm-path
-                # ``delete`` and ``apply_merges`` both persist unwrapped). Queuing
-                # before the fold would orphan the partner on either the empty
-                # return or that raise; queuing after means the finally only ever
-                # deletes committed folds.
-                if not fid:
+                # result ``landed`` iff the gate folded the partner's evidence onto
+                # the survivor and persisted it; it does not land on a harmful-union
+                # eviction or a target miss, and it raises if the underlying store
+                # persist fails (the harm-path ``delete`` and ``apply_merges`` both
+                # persist unwrapped). Queuing before the fold would orphan the
+                # partner on either the non-landing result or that raise; queuing
+                # after means the finally only ever deletes committed folds.
+                if not result.landed:
                     consumed.add(card.id)
                     break
                 absorbed.append(partner.id)

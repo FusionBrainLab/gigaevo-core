@@ -22,6 +22,19 @@ def founding_event(gain: float = 0.2, parent_id: str = "parent-1") -> Contextual
     )
 
 
+class MarkEvictor:
+    """Evicts exactly the ids in ``harmful`` (harm-gate stand-in)."""
+
+    def __init__(self, harmful: set[str]) -> None:
+        self._harmful = harmful
+
+    def should_evict(self, card: Card) -> bool:
+        return card.id in self._harmful
+
+    def sweep(self, cards) -> list[str]:
+        return [card.id for card in cards if self.should_evict(card)]
+
+
 class FakeReconcileAgent:
     def __init__(self, response: ReconcileResponse | None = None) -> None:
         self.response = response or ReconcileResponse(items=[])
@@ -268,6 +281,28 @@ async def test_merge_empty_target_falls_back_to_admit(store, make_librarian):
     ids = await ingest(librarian)
     assert len(ids) == 1
     assert store.get(ids[0]).description == "an idea"
+
+
+async def test_merge_ruled_harmful_is_not_reauthored_as_new(
+    store, make_card, make_librarian
+):
+    # A MERGE whose union the harm gate rejects must be DROPPED — never laundered
+    # back in as a fresh NEW card. This is the verdict a benign missing-target
+    # merge (which DOES fall back to NEW) must be distinguished from: the harm
+    # gate already judged and deleted the target, so re-authoring resurrects it.
+    target = make_card()
+    store.save(target)
+    gate = CardAdmissionGate(store=store, evictor=MarkEvictor({target.id}))
+    agent = FakeReconcileAgent(
+        ReconcileResponse(
+            items=[item("MERGE", description="union prose", target_id=target.id)]
+        )
+    )
+    librarian = make_librarian(agent, gate=gate)
+    ids = await ingest(librarian)
+    assert ids == []
+    assert store.get(target.id) is None
+    assert store.snapshot() == ()
 
 
 async def test_new_card_born_with_founding_event(store, make_librarian):

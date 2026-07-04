@@ -44,21 +44,24 @@ def make_gate(store, tmp_path, evictor=None):
 
 def test_admit_empty_id_mints_and_records_added(store, make_card, tmp_path):
     gate, ledger = make_gate(store, tmp_path)
-    final_id = gate.admit(make_card(id=""))
-    assert final_id.startswith("minted-")
-    assert store.get(final_id) is not None
+    result = gate.admit(make_card(id=""))
+    assert result.outcome is WriteOutcome.ADDED
+    assert result.landed
+    assert result.card_id.startswith("minted-")
+    assert store.get(result.card_id) is not None
     rows = read_rows(ledger.path)
     assert len(rows) == 1
     assert rows[0].outcome is WriteOutcome.ADDED
-    assert rows[0].final_id == final_id
+    assert rows[0].final_id == result.card_id
 
 
 def test_admit_known_id_records_updated(store, make_card, tmp_path):
     gate, ledger = make_gate(store, tmp_path)
     card = make_card()
     store.save(card)
-    final_id = gate.admit(card.model_copy(update={"description": "revised"}))
-    assert final_id == card.id
+    result = gate.admit(card.model_copy(update={"description": "revised"}))
+    assert result.outcome is WriteOutcome.UPDATED
+    assert result.card_id == card.id
     assert store.get(card.id).description == "revised"
     assert read_rows(ledger.path)[-1].outcome is WriteOutcome.UPDATED
 
@@ -67,7 +70,10 @@ def test_admit_harmful_known_card_deletes_and_rejects(store, make_card, tmp_path
     card = make_card()
     store.save(card)
     gate, ledger = make_gate(store, tmp_path, MarkingEvictor({card.id}))
-    assert gate.admit(card) == ""
+    result = gate.admit(card)
+    assert result.rejected_harm
+    assert result.card_id == ""
+    assert not result.landed
     assert store.get(card.id) is None
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.REJECTED_HARM
@@ -77,23 +83,28 @@ def test_admit_harmful_known_card_deletes_and_rejects(store, make_card, tmp_path
 def test_admit_harmful_unknown_card_does_not_delete(store, make_card, tmp_path):
     card = make_card()
     gate, _ = make_gate(store, tmp_path, MarkingEvictor({card.id}))
-    assert gate.admit(card) == ""
+    assert gate.admit(card).rejected_harm
     assert store.deleted_ids == []
 
 
-def test_merge_missing_target_is_noop(store, make_card, tmp_path):
+def test_merge_missing_target_is_benign_noop(store, make_card, tmp_path):
     gate, ledger = make_gate(store, tmp_path)
-    assert gate.merge("absent", make_card()) == ""
+    result = gate.merge("absent", make_card())
+    assert result.outcome is WriteOutcome.DISCARDED
+    assert not result.landed
+    assert not result.rejected_harm
     assert read_rows(ledger.path) == []
 
 
-def test_merge_program_target_is_noop(store, make_card, tmp_path):
+def test_merge_program_target_is_benign_noop(store, make_card, tmp_path):
     target = make_card(
         kind=CardKind.PROGRAM, program_id="p1", code="x = 1", fitness=0.5
     )
     store.save(target)
     gate, _ = make_gate(store, tmp_path)
-    assert gate.merge(target.id, make_card()) == ""
+    result = gate.merge(target.id, make_card())
+    assert result.outcome is WriteOutcome.DISCARDED
+    assert not result.rejected_harm
 
 
 def test_merge_success_records_submitted_card_id(store, make_card, tmp_path):
@@ -101,7 +112,9 @@ def test_merge_success_records_submitted_card_id(store, make_card, tmp_path):
     store.save(target)
     incoming = make_card()
     gate, ledger = make_gate(store, tmp_path)
-    assert gate.merge(target.id, incoming) == target.id
+    result = gate.merge(target.id, incoming)
+    assert result.outcome is WriteOutcome.MERGED
+    assert result.card_id == target.id
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.MERGED
     assert row.incoming_id == incoming.id
@@ -115,19 +128,24 @@ def test_merge_harmful_union_deletes_target(store, make_card, tmp_path):
     store.save(target)
     incoming = make_card()
     gate, ledger = make_gate(store, tmp_path, MarkingEvictor({target.id}))
-    assert gate.merge(target.id, incoming) == ""
+    result = gate.merge(target.id, incoming)
+    assert result.rejected_harm
+    assert result.card_id == ""
     assert store.get(target.id) is None
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.REJECTED_HARM
     assert row.incoming_id == incoming.id
 
 
-def test_merge_store_failure_records_nothing(store, make_card, tmp_path):
+def test_merge_store_failure_is_benign_noop(store, make_card, tmp_path):
     target = make_card()
     store.save(target)
     store.fail_merges = True
     gate, ledger = make_gate(store, tmp_path)
-    assert gate.merge(target.id, make_card()) == ""
+    result = gate.merge(target.id, make_card())
+    assert result.outcome is WriteOutcome.DISCARDED
+    assert not result.landed
+    assert not result.rejected_harm
     assert read_rows(ledger.path) == []
 
 
@@ -136,11 +154,11 @@ def test_bump_provenance_appends_child_once(store, make_card, tmp_path):
     store.save(target)
     gate, ledger = make_gate(store, tmp_path)
 
-    assert gate.bump_provenance(target.id, "child-1") == target.id
+    assert gate.bump_provenance(target.id, "child-1").card_id == target.id
     assert store.get(target.id).programs == ("child-1",)
 
     saves_before = len(store.saved_ids)
-    assert gate.bump_provenance(target.id, "child-1") == target.id
+    assert gate.bump_provenance(target.id, "child-1").card_id == target.id
     assert len(store.saved_ids) == saves_before
     assert store.get(target.id).programs == ("child-1",)
 
@@ -148,14 +166,16 @@ def test_bump_provenance_appends_child_once(store, make_card, tmp_path):
     assert [r.outcome for r in rows] == [WriteOutcome.UPDATED, WriteOutcome.UPDATED]
 
 
-def test_bump_provenance_missing_or_program_target_is_noop(store, make_card, tmp_path):
+def test_bump_provenance_missing_or_program_target_is_benign_noop(
+    store, make_card, tmp_path
+):
     program = make_card(
         kind=CardKind.PROGRAM, program_id="p1", code="x = 1", fitness=0.5
     )
     store.save(program)
     gate, _ = make_gate(store, tmp_path)
-    assert gate.bump_provenance("absent", "child-1") == ""
-    assert gate.bump_provenance(program.id, "child-1") == ""
+    assert gate.bump_provenance("absent", "child-1").outcome is WriteOutcome.DISCARDED
+    assert gate.bump_provenance(program.id, "child-1").outcome is WriteOutcome.DISCARDED
 
 
 def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):

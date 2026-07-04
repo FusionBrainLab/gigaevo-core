@@ -32,7 +32,7 @@ from gigaevo.llm.agents.program_author import ProgramAuthorAgent, ProgramAuthorR
 from gigaevo.llm.agents.reconcile import ReconcileAgent
 from gigaevo.memory.cards import Card, CardKind, ContextualGain
 from gigaevo.memory.storage.base import MemoryStore, ScoredCard
-from gigaevo.memory.write.admission import CardAdmissionGate
+from gigaevo.memory.write.admission import CardAdmissionGate, WriteResult
 
 
 class NeighborSource(Protocol):
@@ -106,7 +106,7 @@ class Librarian:
                 "verbatim (NOT a drop).",
                 exc,
             )
-            fid = self._gate.admit(
+            result = self._gate.admit(
                 Card(
                     id="",
                     description=note,
@@ -116,7 +116,7 @@ class Librarian:
                     gain_events=events,
                 )
             )
-            return [fid] if fid else []
+            return [result.card_id] if result.landed else []
 
         out: list[str] = []
         for item in resp.items[: self._max_cards]:
@@ -133,21 +133,39 @@ class Librarian:
             if item.decision == "NEW":
                 fid = await self._admit_new(card)
             elif item.decision == "DUPLICATE":
-                fid = (
+                fid = await self._land_dedup(
                     self._gate.bump_provenance(item.target_id, child_id)
                     if item.target_id
-                    else ""
+                    else None,
+                    card,
                 )
             else:  # MERGE
-                fid = self._gate.merge(item.target_id, card) if item.target_id else ""
-            # A DUPLICATE/MERGE whose target is empty or already gone from the
-            # bank makes the gate a no-op (returns ""): author the idea as NEW
-            # rather than silently dropping it — through the same novelty gate.
-            if not fid and item.decision != "NEW":
-                fid = await self._admit_new(card)
+                fid = await self._land_dedup(
+                    self._gate.merge(item.target_id, card) if item.target_id else None,
+                    card,
+                )
             if fid:
                 out.append(fid)
         return out
+
+    async def _land_dedup(self, result: WriteResult | None, card: Card) -> str:
+        """Resolve a DUPLICATE/MERGE gate verdict to a banked id.
+
+        A landed verdict yields its id. A harmful-rejected verdict is dropped —
+        never laundered back in as a fresh card (the gate already judged it and
+        deleted the merge target). Any benign no-op — an empty target id (``None``
+        here) or a target the gate found absent/ineligible — re-authors the idea
+        as NEW through the novelty gate rather than silently dropping it.
+        """
+        if result is not None and result.rejected_harm:
+            logger.info(
+                "[Memory][Librarian] dedup target folded to a confidently harmful "
+                "union; dropping the card rather than re-authoring it as new."
+            )
+            return ""
+        if result is not None and result.landed:
+            return result.card_id
+        return await self._admit_new(card)
 
     async def _admit_new(self, card: Card) -> str:
         """Admit a fresh idea card, gating it through the novelty judge first.
@@ -177,7 +195,7 @@ class Librarian:
                         verdict.reason,
                     )
                     return ""
-        return self._gate.admit(card)
+        return self._gate.admit(card).card_id
 
     async def author_program(
         self, *, program_id: str, code: str, fitness: float | None
@@ -213,7 +231,7 @@ class Librarian:
             if not _strictly_better(card.fitness, twin.fitness, higher_is_better):
                 return ""
             self._store.delete(twin.id)
-        return self._gate.admit(card)
+        return self._gate.admit(card).card_id
 
     def _code_twin(self, card: Card) -> Card | None:
         key = _code_key(card.code)
