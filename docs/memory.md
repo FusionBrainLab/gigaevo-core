@@ -231,6 +231,18 @@ injection posterior; the auction samples that posterior against a no-card
 baseline arm, so a card holds its slot only while it keeps beating "inject
 nothing". Confidently-harmful posteriors get the card evicted.
 
+A freshly-authored **insight** card is born with a *founding* gain event: the
+true signed fitness delta of the parent→child mutation it was distilled from
+(negated for minimize objectives, so positive always means improvement). This
+seeds the card's bid on its own evidence from the first sweep instead of
+starting cold — and a card distilled from a regression bids *low*. The founding
+event is preserved across the periodic restamp that recomputes every
+use-attribution event from the program pool (it can never be re-derived: the
+founding child predates the card), and it rides card merges onto the survivor.
+It shapes the **auction bid only** — harm-eviction is usage-based, so a card is
+never evicted on the origin delta it was distilled from before use-attribution
+has judged it. Program exemplars keep the zero-evidence-at-birth path.
+
 ## Tracking: did memory actually flow?
 
 Child-program metadata stamped by the mutation path

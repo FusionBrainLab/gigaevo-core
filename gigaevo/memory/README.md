@@ -29,7 +29,7 @@ persisted data raises instead of being coerced.
 
 | Module | What it owns |
 |---|---|
-| `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` + `DecisionContext` (gain events), `CardStatsBlock`, `card_brief()` |
+| `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` (`founding` flag marks the birth event) + `DecisionContext` (gain events), `CardStatsBlock`, `card_brief()` |
 | `events.py` | Typed `MemoryEvent`s (canonical monitoring events + per-run `memory_events.jsonl` sink), `memory_event_context` correlation (decision/program/parent ids) |
 | `storage/base.py` | `MemoryStore` ABC: `save/get/delete/snapshot/apply_merges`, `nearest()`, `research()`, `rebuild/close/is_ready` |
 | `storage/bank.py` | `CardBank`: thread-safe in-proc dict + atomic `cards.json` persist; cold-loaded from disk once at construction |
@@ -50,10 +50,10 @@ persisted data raises instead of being coerced.
 | `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards, author exemplar prose; optional novelty-admission gate on NEW idea cards |
 | `llm/agents/admission_novelty.py` | `NoveltyAdmissionAgent`: keep/reject an idea card on novelty vs the mutator's prior (`writer.novelty_admission_gate`, on in `memory=full`) |
 | `write/admission.py` | `CardAdmissionGate` (sole harm gate) + `WriteLedger` (`write_ledger.jsonl`) |
-| `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp |
+| `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp; seeds each new insight card's `founding` gain event (signed parent→child delta) and preserves it across restamps |
 | `write/merge.py` | `DedupPolicy` + card merge semantics |
 | `write/consolidation.py` | Throttled background near-duplicate consolidation pass |
-| `write/eviction.py` | `CardScorer` Protocol, `HarmEvictor`, `NullEvictor` |
+| `write/eviction.py` | `CardScorer` Protocol, `HarmEvictor` (harm verdict strips `founding` events — eviction is usage-based), `NullEvictor` |
 | `write/extraction.py` | `ProgramRecordExtractor` — eligible records via strict `MetricsContext` validity |
 | `provider.py` | `MemoryProvider` ABC + `NullMemoryProvider` / `ReaderMemoryProvider` / `StaticLeverMemoryProvider` |
 | `live_memory_hook.py` | `LiveMemoryRefreshHook` — periodic in-run writer sweeps (`post_step_hook`) |
