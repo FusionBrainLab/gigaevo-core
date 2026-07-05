@@ -10,9 +10,10 @@ from pathlib import Path
 # Start the proxy with: bash tools/litellm.sh --background
 
 _CHAIN_URL = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
+_CHAIN_MODEL = os.environ.get("HOVER_CHAIN_MODEL", "Qwen/Qwen3-8B")
 
 LLM_CONFIG = {
-    "model": "Qwen/Qwen3-8B",
+    "model": _CHAIN_MODEL,
     "max_cost": 10.0,
     "model_pricing": {
         "prompt": 0.05,

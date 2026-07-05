@@ -1,0 +1,30 @@
+# @package _global_
+
+# Single mutation LLM: meta-llama/llama-3.1-8b-instruct via OpenRouter.
+# A cheap, older, non-reasoning 8B chosen to (a) surface free-form JSON
+# failures on the baseline arm and (b) still let the diff arm's json_schema
+# be provider-enforced (probed 2026-07-03: 3/3 valid structured diffs on the
+# union-root + maxItems schema; ~25% free-form rewrite failures).
+#
+# No reasoning channel (non-reasoning model) → billed output reflects the
+# actual diff payload, not a reasoning burn. No service_tier (Google-only).
+#
+# Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
+#
+# Usage:
+#   python run.py ... llm=llama31_8b
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: meta-llama/llama-3.1-8b-instruct
+      api_key: ${oc.env:OPENROUTER_API_KEY}
+      max_tokens: ${max_tokens}
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+      temperature: ${temperature}
+  probabilities: [1.0]
+  max_concurrent: ${llm_max_concurrent}
+  writer: ${ref:writer}

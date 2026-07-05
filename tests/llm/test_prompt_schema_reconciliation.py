@@ -93,6 +93,43 @@ class TestMutationPromptRetainsNonSchemaRules:
         assert "Cite, never invent" in load_prompt("mutation", "system")
 
 
+class TestStructuredDiffPromptMirrorsMutationPrompt:
+    """The diff operator's prompt is the mutation prompt with only the output form
+    (diff language for Python source) and the parent noun (genome for program)
+    swapped. The shared cross-field rules and section structure must match so the
+    two operators cite evidence and hypothesise change identically."""
+
+    _SHARED_HEADERS = (
+        "## ROLE",
+        "## EVIDENCE INPUTS (user message)",
+        "## ARCHETYPE — apply gates FIRST, then pick exactly ONE",
+        "## EXECUTION PRINCIPLES",
+        "## OUTPUT RULES",
+    )
+
+    def test_shared_section_headers_are_present_in_both(self) -> None:
+        diff = load_prompt("structured_diff", "system")
+        mutation = load_prompt("mutation", "system")
+        for header in self._SHARED_HEADERS:
+            assert header in mutation
+            assert header in diff
+
+    def test_shares_falsifiability_and_citation_rules(self) -> None:
+        diff = load_prompt("structured_diff", "system")
+        assert "Tautology test" in diff
+        assert "Cite, never invent" in diff
+        assert "card_ids_used" in diff
+        assert "no extra keys" not in diff.lower()
+
+    def test_output_form_is_diff_language_not_python(self) -> None:
+        diff = load_prompt("structured_diff", "system")
+        mutation = load_prompt("mutation", "system")
+        # the one deliberate divergence: artifact is a diff, not Python source
+        assert "DIFF LANGUAGE" in diff
+        assert "Python source" not in diff
+        assert "Python source" in mutation
+
+
 class TestSharedInsightSchemaCarriesFieldMeaning:
     """The structured-suggestion prompt no longer re-describes each field, so the
     shared schema must carry the meaning it used to spell out in prose."""

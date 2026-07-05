@@ -1,5 +1,6 @@
 import ast
 from datetime import UTC, datetime
+import json
 import os
 import re
 import time
@@ -69,6 +70,43 @@ class InsightCitation(BaseModel):
     )
 
 
+def compute_citation_integrity(
+    cited_pairs: list[tuple[str, int]],
+    card_ids_used: list[str],
+    messages: list[BaseMessage],
+) -> dict[str, int]:
+    """Count cited insight and card references that were offered in the prompt.
+
+    Each parent block carries its own '## Program Insights' list numbered from
+    1, so an insight citation is a (parent-label, insight-number) pair:
+    grounded when the insight's rendered list marker ('\\n<N>. **[' — the
+    numbering emitted by InsightsMutationContext.format) appears inside that
+    parent's block. Card ids match exactly anywhere.
+
+    Parent-label-agnostic: matches both '=== Parent N ===' (standard, numeric)
+    and '=== Parent A [evaluation context] ===' (structured diff, letter). When
+    a letter labels both a listing block and an evaluation-context block, the
+    later (evaluation-context) block wins — that is where insights render.
+
+    Purely observational (the counts land in child metadata for run statistics,
+    nothing is gated on them — the hard credit gate is the base_selected ∩ used
+    intersection at the write path).
+    """
+    rendered = "\n".join(str(m.content) for m in messages)
+    parts = re.split(r"=== Parent (\w+)(?: evaluation context)? ===", rendered)
+    blocks = {label: block for label, block in zip(parts[1::2], parts[2::2])}
+    cited = [(label, n) for label, n in cited_pairs if label and n > 0]
+    cards = [c.strip() for c in card_ids_used if c.strip()]
+    return {
+        "cited": len(cited),
+        "grounded": sum(
+            1 for label, n in cited if f"\n{n}. **[" in blocks.get(label, "")
+        ),
+        "cards_cited": len(cards),
+        "cards_grounded": sum(1 for c in cards if c in rendered),
+    }
+
+
 class MutationStructuredOutput(BaseModel):
     """Structured output from the mutation LLM.
 
@@ -122,9 +160,10 @@ class MutationStructuredOutput(BaseModel):
     )
     code: str = Field(
         description=(
-            "The complete mutated Python source code. "
-            "Must be valid Python starting with imports or def statements. "
-            "NEVER put JSON, format examples, or templates here. "
+            "The complete mutated program, emitted verbatim in the SAME source "
+            "format as the parent program(s) — whatever format the task uses "
+            "(Python source, a JSON document, ...). Never a fragment, diff, "
+            "format example, or template. "
             "Use actual newlines between lines, not literal backslash-n."
         )
     )
@@ -341,6 +380,7 @@ class MutationAgent(LangGraphAgent):
                         latency_ms=(time.monotonic() - t0) * 1000.0,
                         tokens_in=usage.context if usage else 0,
                         tokens_out=usage.generated if usage else 0,
+                        tokens_reasoning=usage.reasoning if usage else 0,
                         error_type=error_type,
                     )
                 )
@@ -497,12 +537,18 @@ class MutationAgent(LangGraphAgent):
             else:
                 final_code = self._extract_code_block(code_from_llm)
 
-            # Guard: reject code that is a JSON template echoed back instead of Python
+            # Guard: reject the structured-output template echoed back as code;
+            # other JSON documents are legitimate genomes (e.g. reasoning chains)
             if "def " not in final_code and final_code.lstrip().startswith("{"):
-                raise ValueError(
-                    "LLM returned JSON template as code instead of Python. "
-                    f"Code starts with: {final_code[:80]!r}"
-                )
+                try:
+                    echoed = json.loads(final_code)
+                except ValueError:
+                    echoed = None
+                if isinstance(echoed, dict) and {"code", "archetype"} <= echoed.keys():
+                    raise ValueError(
+                        "LLM echoed the structured-output template as code. "
+                        f"Code starts with: {final_code[:80]!r}"
+                    )
 
             state["final_code"] = final_code
 
@@ -566,28 +612,16 @@ class MutationAgent(LangGraphAgent):
     ) -> dict[str, int]:
         """Count cited insight and card references that were offered in the prompt.
 
-        Each parent block ('=== Parent N ===') carries its own '## Program
-        Insights' list numbered from 1, so an insight citation is a (parent,
-        insight) pair: grounded when the insight's rendered list marker
-        ('\\n<N>. **[' — the numbering emitted by InsightsMutationContext.format)
-        appears inside that parent's block. Card ids match exactly anywhere.
-        Purely observational (the counts land in child metadata for run
-        statistics, nothing is gated on them — the hard credit gate is the
-        base_selected ∩ used intersection at the write path).
+        Standard operator: parents are labelled '=== Parent N ===' by 1-based
+        number, so citations carry an int parent. Delegates to the shared,
+        parent-label-agnostic grounder.
         """
-        rendered = "\n".join(str(m.content) for m in messages)
-        parts = re.split(r"=== Parent (\d+) ===", rendered)
-        blocks = {int(n): block for n, block in zip(parts[1::2], parts[2::2])}
-        cited = [c for c in insight_ids_used if c.parent > 0 and c.insight > 0]
-        cards = [c.strip() for c in card_ids_used if c.strip()]
-        return {
-            "cited": len(cited),
-            "grounded": sum(
-                1 for c in cited if f"\n{c.insight}. **[" in blocks.get(c.parent, "")
-            ),
-            "cards_cited": len(cards),
-            "cards_grounded": sum(1 for c in cards if c in rendered),
-        }
+        pairs = [
+            (str(c.parent), c.insight)
+            for c in insight_ids_used
+            if c.parent > 0 and c.insight > 0
+        ]
+        return compute_citation_integrity(pairs, card_ids_used, messages)
 
     @staticmethod
     def _fix_json_escaped_code(code: str) -> str:

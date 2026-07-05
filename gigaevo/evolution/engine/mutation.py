@@ -38,6 +38,23 @@ def lineage_applied_closure(
     return sorted(closure)
 
 
+def base_parent_index(value) -> int:
+    """1-based base-parent index from mutator output: wire-JSON emits an int,
+    structured diffs a namespace letter ('A' = parent 1); anything else falls
+    back to parent 1."""
+    if isinstance(value, str) and len(value) == 1 and value.isalpha():
+        return ord(value.upper()) - ord("A") + 1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "base_parent={!r} is neither an index nor a namespace letter; "
+            "attributing credit to parent 1.",
+            value,
+        )
+        return 1
+
+
 def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
     """Snapshot the base parent's selected ids and metrics for use-attribution.
 
@@ -137,7 +154,7 @@ async def generate_one_mutation(
         mutation_output = mutation_spec.metadata.get(MutationSpec.META_OUTPUT)
         base_parent = 1
         if isinstance(mutation_output, dict):
-            base_parent = int(mutation_output.get("base_parent", 1) or 1)
+            base_parent = base_parent_index(mutation_output.get("base_parent", 1) or 1)
         for key, value in freeze_base_parent_snapshot(parents, base_parent).items():
             program.set_metadata(key, value)
 

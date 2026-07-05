@@ -128,6 +128,7 @@ class LLMCall(BaseEvent):
     latency_ms: float
     tokens_in: int = 0
     tokens_out: int = 0
+    tokens_reasoning: int = 0
     error_type: str | None = None
 
 

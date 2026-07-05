@@ -719,6 +719,10 @@ def run_chain_on_dataset(
     )
 
 
+# public async entry-point so callers can close their client in the same loop
+arun_chain_on_dataset = _run_chain_on_dataset_async
+
+
 def run_chain_on_dataset_stepwise(
     chain: ChainSpec,
     client,

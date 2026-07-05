@@ -1,0 +1,21 @@
+# @package _global_
+# Structured DAG-diff mutation for CARL chain genomes that include retrieval
+# tool steps (RawChainSpec = {system_prompt, steps:[llm | tool]}). Each slot is
+# keep / new_llm / new_tool; tool query wiring is reorder-safe. Arm B of the
+# CARL-format A/B — pair with pipeline=program_is_json so only the mutation
+# format differs from the free-rewrite baseline.
+# Launch: python run.py problem.name=chains/hover/full7 pipeline=program_is_json mutation=carl_with_retrieval_tools
+# max_steps / available_tools default to the retrieval chain problems' bounds
+# (problems/chains/hover/full7/config.FULL_CHAIN_CONFIG); override per problem.
+
+mutation_operator:
+  _target_: gigaevo.evolution.mutation.structured_diff.StructuredDiffMutationOperator
+  llm_wrapper: ${ref:llm}
+  allowed_changes:
+    _target_: problems.chains.tool_chain_diff.AllowedToolChainChanges
+    min_steps: 1
+    max_steps: 7
+    available_tools: [retrieve, retrieve_deep]
+  problem_context: ${problem_context}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}

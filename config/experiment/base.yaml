@@ -11,6 +11,7 @@ defaults:
   - /prompt_fetcher: fixed
   - /evolution: default
   - /algorithm: single_island_no_distant_parents
+  - /mutation: llm_rewrite
   - /pipeline: auto
   - /runner: default
   - /scheduling: cached_first

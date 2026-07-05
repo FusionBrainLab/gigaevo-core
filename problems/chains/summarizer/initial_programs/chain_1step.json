@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "carl_version": "0.3.0",
+  "version": "1.0",
+  "max_workers": 1,
+  "enable_progress": false,
+  "task_description": "Summarize each dataset row into one sentence in the same language as the input. Platform feeds each CSV/JSONL row as outer_context (fields input and task; score against expected).",
+  "search_config": {
+    "strategy": "substring",
+    "substring_config": null,
+    "vector_config": null,
+    "embedding_model": null
+  },
+  "metadata": {
+    "display_name": "Summarizer — 1 step (platform seed)",
+    "tags": [
+      "preset:summarizer",
+      "handoff",
+      "platform-ready",
+      "steps:1"
+    ],
+    "context_files": []
+  },
+  "steps": [
+    {
+      "number": 1,
+      "title": "Summarize paragraph",
+      "step_type": "llm",
+      "dependencies": [],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "Produce exactly one concise sentence that captures the main idea of the source text",
+      "stage_action": "Read the source text from the Data section (fields input or task). Reply with a single sentence summary in the same language as the input. No markdown, no quotes, no preamble, no JSON.",
+      "reasoning_questions": "What is the core fact? How to express it in one short sentence?",
+      "example_reasoning": "",
+      "step_context_queries": [],
+      "is_output_step": true
+    }
+  ]
+}

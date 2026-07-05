@@ -292,6 +292,20 @@ class TestParseResponse:
         assert result["parsed_output"]["code"] == ""
         assert "error" in result["parsed_output"]
 
+    def test_json_genome_passes_guard(self):
+        """A JSON document genome (e.g. reasoning chain) is legitimate code."""
+        agent = _make_agent(mutation_mode="rewrite")
+        genome = (
+            '{\n  "format_version": 1,\n  "steps": [{"number": 1, "title": "t"}]\n}'
+        )
+        output = _make_structured_output(code=genome)
+        state = _make_state(mutation_mode="rewrite", structured_output=output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["code"] == genome
+        assert "error" not in result["parsed_output"]
+
     def test_diff_multi_parents_raises(self):
         """Diff mode with >1 parent raises ValueError (stored in error)."""
         agent = _make_agent(mutation_mode="diff")
@@ -868,7 +882,7 @@ class TestJsonTemplateGuard:
         result = agent.parse_response(state)
 
         assert result["parsed_output"]["code"] == ""
-        assert "JSON template" in result["parsed_output"]["error"]
+        assert "structured-output template" in result["parsed_output"]["error"]
 
     def test_valid_python_starting_with_brace_is_not_rejected(self):
         """A dict literal assigned to a variable is valid Python and must not be rejected."""

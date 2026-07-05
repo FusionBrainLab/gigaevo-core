@@ -1,0 +1,61 @@
+{
+  "format_version": 1,
+  "carl_version": "0.3.0",
+  "version": "1.0",
+  "max_workers": 1,
+  "enable_progress": false,
+  "task_description": "Summarize each dataset row into one sentence in the same language as the input. Platform feeds each CSV/JSONL row as outer_context (fields input and task; score against expected).",
+  "search_config": {
+    "strategy": "substring",
+    "substring_config": null,
+    "vector_config": null,
+    "embedding_model": null
+  },
+  "metadata": {
+    "display_name": "Summarizer — 3 steps (extract → draft → polish)",
+    "tags": ["preset:summarizer", "handoff", "platform-ready", "steps:3"],
+    "context_files": []
+  },
+  "steps": [
+    {
+      "number": 1,
+      "title": "Extract key facts",
+      "step_type": "llm",
+      "dependencies": [],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "List the essential facts from the source text without interpretation",
+      "stage_action": "Read the source text from the Data section (fields input or task). Output 2–4 short bullet lines, each one fact. Same language as the input. No full sentences yet.",
+      "reasoning_questions": "Which facts are necessary for the gist? Which details can be omitted?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    },
+    {
+      "number": 2,
+      "title": "Draft one sentence",
+      "step_type": "llm",
+      "dependencies": [1],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "Compress the key facts into one rough summary sentence",
+      "stage_action": "Using the bullet facts from the previous step, write one sentence that captures the main idea. Same language as the source. Plain text only.",
+      "reasoning_questions": "How to merge the facts into one coherent line? What is the core claim?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    },
+    {
+      "number": 3,
+      "title": "Polish final sentence",
+      "step_type": "llm",
+      "dependencies": [2],
+      "triggered_by": [],
+      "checkpoint": false,
+      "is_output_step": true,
+      "aim": "Produce the final one-sentence summary ready for scoring",
+      "stage_action": "Polish the draft into exactly one grammatically correct sentence. Preserve meaning; remove redundancy. Same language as the input. No markdown, no quotes, no preamble.",
+      "reasoning_questions": "Is grammar natural? Is the sentence as short as possible while staying accurate?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    }
+  ]
+}

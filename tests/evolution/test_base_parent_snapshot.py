@@ -1,4 +1,7 @@
-from gigaevo.evolution.engine.mutation import freeze_base_parent_snapshot
+from gigaevo.evolution.engine.mutation import (
+    base_parent_index,
+    freeze_base_parent_snapshot,
+)
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
@@ -42,3 +45,18 @@ def test_snapshot_drops_falsy_card_ids():
 
 def test_snapshot_empty_when_no_parents():
     assert freeze_base_parent_snapshot([], base_parent=1) == {}
+
+
+def test_base_parent_index_accepts_wire_json_integers():
+    assert base_parent_index(1) == 1
+    assert base_parent_index("2") == 2
+
+
+def test_base_parent_index_accepts_diff_namespace_letters():
+    assert base_parent_index("A") == 1
+    assert base_parent_index("B") == 2
+
+
+def test_base_parent_index_defaults_to_first_parent_on_garbage():
+    assert base_parent_index(None) == 1
+    assert base_parent_index("parent A") == 1

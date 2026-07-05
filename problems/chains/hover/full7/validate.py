@@ -8,9 +8,8 @@ gold article matches, regardless of their position in the chain.
 
 from statistics import mean
 
-from problems.chains.chain_runner import run_chain_on_dataset
+from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
-from problems.chains.client import LLMClient
 from problems.chains.hover.full7.config import FULL_CHAIN_CONFIG
 from problems.chains.hover.shared_config import (
     get_llm_config,
@@ -23,6 +22,7 @@ from problems.chains.hover.utils.utils import (
     extract_titles_from_passages,
     normalize_text,
 )
+from problems.chains.usage import ZERO_USAGE, LogAggregatingLLMClient, usage_totals
 
 
 def evaluate_soft_coverage_adaptive(dataset, results, chain):
@@ -71,7 +71,13 @@ def validate(chain_spec: dict) -> dict:
     steps = chain_spec.get("steps", [])
     max_steps = FULL_CHAIN_CONFIG["max_steps"]
     if len(steps) > max_steps:
-        return {"fitness": 0.0, "is_valid": 0, "n_steps": len(steps), "n_tool_steps": 0}
+        return {
+            "fitness": 0.0,
+            "is_valid": 0,
+            "n_steps": len(steps),
+            "n_tool_steps": 0,
+            **ZERO_USAGE,
+        }
 
     # 1. Structural validation (full_chain mode)
     chain = validate_chain_spec(
@@ -89,10 +95,11 @@ def validate(chain_spec: dict) -> dict:
     endpoint = llm_config["client_kwargs"]["base_url"]
     success = True
     try:
-        client = LLMClient(**llm_config)
+        client = LogAggregatingLLMClient(**llm_config)
 
-        # 4. Build tool registry: two retrieve tools with different k
-        tool_registry = {
+        # make_retrieve_fn is a batch fn (list[dict] -> list[str]) — dispatched
+        # via batch_tool_registry, not the per-sample tool_registry.
+        batch_tool_registry = {
             "retrieve": make_retrieve_fn(
                 context["bm25s_index_dir"], k=7, corpus_path=context["corpus_path"]
             ),
@@ -101,9 +108,13 @@ def validate(chain_spec: dict) -> dict:
             ),
         }
 
-        # 5. Run chain on dataset
-        results = run_chain_on_dataset(
-            chain, client, dataset, outer_context_builder, tool_registry
+        # 5. Run chain on dataset (step-batched for optimal vLLM batching)
+        results = run_chain_on_dataset_stepwise(
+            chain,
+            client,
+            dataset,
+            outer_context_builder,
+            batch_tool_registry=batch_tool_registry,
         )
 
         # 6. Adaptive soft coverage scoring
@@ -119,6 +130,7 @@ def validate(chain_spec: dict) -> dict:
             "is_valid": 1,
             "n_steps": n_steps,
             "n_tool_steps": n_tool_steps,
+            **usage_totals(client),
         }
     except Exception:
         success = False

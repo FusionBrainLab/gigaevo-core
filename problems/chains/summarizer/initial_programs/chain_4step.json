@@ -1,0 +1,74 @@
+{
+  "format_version": 1,
+  "carl_version": "0.3.0",
+  "version": "1.0",
+  "max_workers": 1,
+  "enable_progress": false,
+  "task_description": "Summarize each dataset row into one sentence in the same language as the input. Platform feeds each CSV/JSONL row as outer_context (fields input and task; score against expected).",
+  "search_config": {
+    "strategy": "substring",
+    "substring_config": null,
+    "vector_config": null,
+    "embedding_model": null
+  },
+  "metadata": {
+    "display_name": "Summarizer — 4 steps (preset)",
+    "tags": ["preset:summarizer", "handoff", "platform-ready", "steps:4"],
+    "context_files": []
+  },
+  "steps": [
+    {
+      "number": 1,
+      "title": "Read and segment",
+      "step_type": "llm",
+      "dependencies": [],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "Understand the source text and split it into distinct factual claims",
+      "stage_action": "Read the source text from the Data section (fields input or task). List each distinct claim on its own short line. Same language as the input. Do not summarize yet.",
+      "reasoning_questions": "How many separate ideas are in the paragraph? What does each sentence assert?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    },
+    {
+      "number": 2,
+      "title": "Select main idea",
+      "step_type": "llm",
+      "dependencies": [1],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "Choose the single central message and drop secondary details",
+      "stage_action": "From the segmented claims in the previous step, pick the one main idea the summary must convey. State it in one short phrase. Ignore side facts unless they are essential to the main point.",
+      "reasoning_questions": "Which claim would a reader remember? What can be safely omitted?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    },
+    {
+      "number": 3,
+      "title": "Draft summary sentence",
+      "step_type": "llm",
+      "dependencies": [2],
+      "triggered_by": [],
+      "checkpoint": false,
+      "aim": "Write a first-pass one-sentence summary of the main idea",
+      "stage_action": "Turn the selected main idea into one sentence. Use the same language as the source. Plain text; wording may be rough.",
+      "reasoning_questions": "Does the draft cover the gist? Is it already one sentence?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    },
+    {
+      "number": 4,
+      "title": "Finalize summary",
+      "step_type": "llm",
+      "dependencies": [3],
+      "triggered_by": [],
+      "checkpoint": false,
+      "is_output_step": true,
+      "aim": "Deliver exactly one polished summary sentence for evaluation",
+      "stage_action": "Polish the draft into one grammatically correct sentence. Same language as the input. No markdown, no quotes, no labels, no JSON, no preamble — only the final sentence.",
+      "reasoning_questions": "Is the final line faithful, concise, and natural? Would ROUGE match a human one-liner?",
+      "example_reasoning": "",
+      "step_context_queries": []
+    }
+  ]
+}

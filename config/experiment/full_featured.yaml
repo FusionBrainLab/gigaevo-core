@@ -12,6 +12,7 @@ defaults:
   - /evolution: default
   - /metrics: code_complexity  # Required by multi_island
   - /algorithm: multi_island
+  - /mutation: llm_rewrite
   - /pipeline: auto
   - /runner: default
   - /loader: directory
