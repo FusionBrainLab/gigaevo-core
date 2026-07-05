@@ -246,7 +246,12 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 
 | Tool | Purpose |
 |---|---|
-| `litellm.sh` | Start/stop/status LiteLLM proxy for chain server load balancing |
+| `litellm.sh` | Start/stop/status the LiteLLM proxy load-balancing all backend pools (chain/mutation/instruct/GLM) from `experiments/infrastructure.yaml`; simple-shuffle routing, per-deployment rpm/concurrency caps, Prometheus `/metrics` |
+| `litellm_monitor.py` | Scrape vLLM `/metrics` on every backend + LiteLLM health; append JSONL history, render 24h diagnostic plot (`--send` posts to Telegram, `--plot-only` skips collection) |
+| `litellm_monitor_cron.sh` | Cron/one-shot wrapper for `litellm_monitor.py` with stable cwd + env |
+| `litellm_monitor_loop.sh` | 4-hour daemon loop around `litellm_monitor.py` (`--stop` / `--status`) |
+| `litellm_sampler_loop.sh` | 1-minute collector daemon (`--collect-only` snapshots into the shared JSONL history; no rendering) |
+| `litellm_token_logger.py` | Opt-in LiteLLM callback logging per-request prompt/completion tokens, routed backend, latency to rotating JSONL (not wired by default — see its docstring) |
 
 ### Benchmarking Tools
 
