@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from loguru import logger
 from mmar_carl.chain import ReasoningChain
 from mmar_carl.models.steps import LLMStepDescription
 from pydantic import (
@@ -45,6 +46,7 @@ from pydantic import (
     ConfigDict,
     Field,
     TypeAdapter,
+    ValidationError,
     create_model,
     model_validator,
 )
@@ -159,7 +161,82 @@ class AllowedDagChanges(AllowedChanges):
         schema = portable_json_schema(
             {**adapter.json_schema(), "title": "chain_dag_diff"}
         )
-        return DiffSchema(json_schema=schema, validate=adapter.validate_python)
+
+        def validate(payload: Any) -> Any:
+            try:
+                return adapter.validate_python(payload)
+            except ValidationError as original:
+                repaired = self._compact_payload(payload)
+                if repaired is None:
+                    raise
+                try:
+                    validated = adapter.validate_python(repaired)
+                except ValidationError:
+                    # surface the model's actual payload error, not the
+                    # repair attempt's
+                    raise original
+                logger.warning(
+                    "chain_dag_diff: repaired non-contiguous slot payload "
+                    "(filled slots {} compacted)",
+                    sorted(
+                        int(k.removeprefix("slot_"))
+                        for k, v in payload.items()
+                        if k.startswith("slot_") and v is not None
+                    ),
+                )
+                return validated
+
+        return DiffSchema(json_schema=schema, validate=validate)
+
+    @staticmethod
+    def _compact_payload(payload: Any) -> dict | None:
+        """Slide filled slots left to close a gap the model left, remapping every
+        slot dependency, so a well-formed-but-non-contiguous diff becomes valid.
+        Order is preserved and edges are backward, so the result transcribes
+        identically to a contiguous emission. Returns None (keep the original
+        error) when there is no gap, a surviving slot references the hole, or
+        any slot key / dependency ref is non-canonical (aliases like
+        "slot_01", zero/negative indices, non-string refs) — aliases would
+        silently collide under compaction."""
+        if not isinstance(payload, dict):
+            return None
+        rebuilt: dict[str, Any] = {}
+        try:
+            indices: dict[str, int] = {}
+            for k in payload:
+                if not (isinstance(k, str) and k.startswith("slot_")):
+                    continue
+                i = int(k.removeprefix("slot_"))
+                if i < 1 or k != f"slot_{i}":
+                    return None
+                indices[k] = i
+            names = sorted(indices, key=indices.__getitem__)
+            filled = [(indices[k], payload[k]) for k in names if payload[k] is not None]
+            old = [i for i, _ in filled]
+            if old == list(range(1, len(old) + 1)):
+                return None
+            remap = {o: n for n, (o, _) in enumerate(filled, start=1)}
+            for n, (_, body) in enumerate(filled, start=1):
+                if not isinstance(body, dict):
+                    return None
+                body = dict(body)
+                deps = body.get("dependencies")
+                if isinstance(deps, list):
+                    new_deps = []
+                    for r in deps:
+                        if not isinstance(r, str):
+                            return None
+                        j = int(r.removeprefix("slot_"))
+                        if r != f"slot_{j}" or j not in remap:
+                            return None
+                        new_deps.append(f"slot_{remap[j]}")
+                    body["dependencies"] = new_deps
+                rebuilt[f"slot_{n}"] = body
+        except (ValueError, TypeError):
+            return None
+        out = {k: v for k, v in payload.items() if not k.startswith("slot_")}
+        out.update(rebuilt)
+        return out
 
     def render_parents(self, parents: dict[str, str]) -> str:
         chains, extras = self._parse(parents)

@@ -112,11 +112,16 @@ class AllowedToolChainChanges(AllowedChanges):
         def validate(payload: Any) -> Any:
             try:
                 return adapter.validate_python(payload)
-            except ValidationError:
+            except ValidationError as original:
                 repaired = self._compact_payload(payload)
                 if repaired is None:
                     raise
-                validated = adapter.validate_python(repaired)
+                try:
+                    validated = adapter.validate_python(repaired)
+                except ValidationError:
+                    # surface the model's actual payload error, not the
+                    # repair attempt's
+                    raise original
                 logger.warning(
                     "tool_chain_diff: repaired non-contiguous slot payload "
                     "(filled slots {} compacted)",
@@ -136,24 +141,28 @@ class AllowedToolChainChanges(AllowedChanges):
         slot reference, so a well-formed-but-non-contiguous diff becomes valid.
         Order is preserved and edges are backward, so the result transcribes
         identically to a contiguous emission. Returns None (keep the original
-        error) when there is no gap or a surviving slot references the hole."""
+        error) when there is no gap, a surviving slot references the hole, or
+        any slot key / slot ref is non-canonical (aliases like "slot_01",
+        zero/negative indices, non-string refs) — aliases would silently
+        collide under compaction."""
         if not isinstance(payload, dict):
             return None
-        names = sorted(
-            (k for k in payload if k.startswith("slot_")),
-            key=lambda s: int(s.removeprefix("slot_")),
-        )
-        filled = [
-            (int(k.removeprefix("slot_")), payload[k])
-            for k in names
-            if payload[k] is not None
-        ]
-        old = [i for i, _ in filled]
-        if old == list(range(1, len(old) + 1)):
-            return None
-        remap = {o: n for n, (o, _) in enumerate(filled, start=1)}
         rebuilt: dict[str, Any] = {}
         try:
+            indices: dict[str, int] = {}
+            for k in payload:
+                if not (isinstance(k, str) and k.startswith("slot_")):
+                    continue
+                i = int(k.removeprefix("slot_"))
+                if i < 1 or k != f"slot_{i}":
+                    return None
+                indices[k] = i
+            names = sorted(indices, key=indices.__getitem__)
+            filled = [(indices[k], payload[k]) for k in names if payload[k] is not None]
+            old = [i for i, _ in filled]
+            if old == list(range(1, len(old) + 1)):
+                return None
+            remap = {o: n for n, (o, _) in enumerate(filled, start=1)}
             for n, (_, body) in enumerate(filled, start=1):
                 if not isinstance(body, dict):
                     return None
@@ -162,15 +171,17 @@ class AllowedToolChainChanges(AllowedChanges):
                 if isinstance(deps, list):
                     new_deps = []
                     for r in deps:
-                        j = int(str(r).removeprefix("slot_"))
-                        if j not in remap:
+                        if not isinstance(r, str):
+                            return None
+                        j = int(r.removeprefix("slot_"))
+                        if r != f"slot_{j}" or j not in remap:
                             return None
                         new_deps.append(f"slot_{remap[j]}")
                     body["dependencies"] = new_deps
                 qsrc = body.get("query_source")
                 if isinstance(qsrc, str) and qsrc.startswith("slot_"):
                     j = int(qsrc.removeprefix("slot_"))
-                    if j not in remap:
+                    if qsrc != f"slot_{j}" or j not in remap:
                         return None
                     body["query_source"] = f"slot_{remap[j]}"
                 rebuilt[f"slot_{n}"] = body

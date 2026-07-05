@@ -306,6 +306,45 @@ def test_gap_repair_remaps_tool_query_source(changes, hover_parent):
     assert child["steps"][1]["dependencies"] == [1]
 
 
+def test_multi_gap_repair_compacts_all_holes(changes, hover_parent):
+    # Two holes (slot_2, slot_4 empty) close in one pass: slot_3 -> slot_2,
+    # slot_5 -> slot_3, with every dependency renumbered to the new positions.
+    schema = changes.build_schema(hover_parent)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+            "slot_5": {"kind": "keep", "id": "a3", "dependencies": ["slot_3"]},
+        }
+    )
+    assert diff.slot_2 is not None and diff.slot_3 is not None
+    assert diff.slot_4 is None and diff.slot_5 is None
+    assert diff.slot_2.id == "a2" and diff.slot_2.dependencies == ["slot_1"]
+    assert diff.slot_3.id == "a3" and diff.slot_3.dependencies == ["slot_2"]
+    child = json.loads(changes.apply(diff, parents=hover_parent))
+    assert [s["number"] for s in child["steps"]] == [1, 2, 3]
+    assert child["steps"][2]["dependencies"] == [2]
+
+
+def test_leading_gap_slot1_empty_repaired(changes, hover_parent):
+    # The hole can be slot_1 itself: a lone slot_2 slides down to slot_1 and
+    # the diff transcribes as a single-step chain.
+    schema = changes.build_schema(hover_parent)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_2": {"kind": "keep", "id": "a1"},
+        }
+    )
+    assert diff.slot_1 is not None and diff.slot_1.id == "a1"
+    assert diff.slot_2 is None
+    child = json.loads(changes.apply(diff, parents=hover_parent))
+    assert [s["number"] for s in child["steps"]] == [1]
+
+
 def test_gap_with_dangling_ref_still_rejected(changes, hover_parent):
     # slot_3 depends on slot_2, but slot_2 is the hole -> not cleanly repairable,
     # so the original contiguity error stands.
@@ -317,6 +356,41 @@ def test_gap_with_dangling_ref_still_rejected(changes, hover_parent):
                 "base_parent": "A",
                 "slot_1": {"kind": "keep", "id": "a1"},
                 "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_2"]},
+            }
+        )
+
+
+def test_alias_slot_key_aborts_repair(changes, hover_parent):
+    # "slot_01" parses to index 1 and would silently collide with slot_1 under
+    # compaction; non-canonical keys abort the repair.
+    schema = changes.build_schema(hover_parent)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_01": {"kind": "keep", "id": "a2"},
+                "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+            }
+        )
+
+
+def test_alias_query_source_aborts_repair(changes, hover_parent):
+    # A non-canonical "slot_01" query_source must not be laundered into a valid
+    # ref by the repair's remapping.
+    schema = changes.build_schema(hover_parent)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_4": {
+                    "kind": "new_tool",
+                    "tool_name": "retrieve",
+                    "query_source": "slot_01",
+                },
             }
         )
 

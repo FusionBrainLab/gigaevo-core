@@ -151,12 +151,6 @@ REJECTS = {
         "slot_1": {"kind": "keep", "id": "a9"},
     },
     "empty chain": {**EVIDENCE, "base_parent": "A"},
-    "gap fill": {
-        **EVIDENCE,
-        "base_parent": "A",
-        "slot_1": {"kind": "keep", "id": "a1"},
-        "slot_3": {"kind": "keep", "id": "a2"},
-    },
     "empty aim on new step": {
         **EVIDENCE,
         "base_parent": "A",
@@ -209,6 +203,164 @@ def test_illegal_diffs_are_rejected(changes, parents, label):
     schema = changes.build_schema(parents)
     with pytest.raises(ValidationError):
         schema.validate(REJECTS[label])
+
+
+def test_gap_in_slots_repaired(changes, parents):
+    # A gap (slot_2 empty, slot_3 filled) is deterministically compacted left,
+    # not rejected: the same steps slide into contiguous slots and every slot
+    # reference is remapped, so the child transcribes as a 2-step chain.
+    schema = changes.build_schema(parents)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+        }
+    )
+    assert diff.slot_1 is not None and diff.slot_2 is not None
+    assert diff.slot_3 is None
+    assert diff.slot_2.id == "a2"
+    assert diff.slot_2.dependencies == ["slot_1"]
+    child = json.loads(changes.apply(diff, parents))
+    assert [s["number"] for s in child["steps"]] == [1, 2]
+    assert child["steps"][1]["dependencies"] == [1]
+
+
+def test_gap_repair_remaps_later_dependency(changes, parents):
+    # slot_4 depends on slot_3, which itself sits after the slot_2 hole; both
+    # compact left (to slot_2, slot_3) and the dependency is renumbered to match.
+    schema = changes.build_schema(parents)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_1": {"kind": "keep", "id": "a1"},
+            "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+            "slot_4": {"kind": "keep", "id": "a1", "dependencies": ["slot_3"]},
+        }
+    )
+    assert diff.slot_3 is not None and diff.slot_4 is None
+    assert diff.slot_3.dependencies == ["slot_2"]
+    child = json.loads(changes.apply(diff, parents))
+    assert [s["number"] for s in child["steps"]] == [1, 2, 3]
+    assert child["steps"][2]["dependencies"] == [2]
+
+
+def test_gap_with_dangling_ref_still_rejected(changes, parents):
+    # slot_3 depends on slot_2, but slot_2 is the hole -> not cleanly repairable,
+    # so the original contiguity error stands.
+    schema = changes.build_schema(parents)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_2"]},
+            }
+        )
+
+
+def test_multi_gap_repair_compacts_all_holes(changes, parents):
+    # Two holes (slot_2, slot_4 empty) close in one pass: slot_3 -> slot_2,
+    # slot_5 -> slot_3, with every dependency renumbered to the new positions.
+    schema = changes.build_schema(parents)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "B",
+            "slot_1": {"kind": "keep", "id": "b1"},
+            "slot_3": {"kind": "keep", "id": "b2", "dependencies": ["slot_1"]},
+            "slot_5": {"kind": "keep", "id": "b3", "dependencies": ["slot_3"]},
+        }
+    )
+    assert diff.slot_2 is not None and diff.slot_3 is not None
+    assert diff.slot_4 is None and diff.slot_5 is None
+    assert diff.slot_2.id == "b2" and diff.slot_2.dependencies == ["slot_1"]
+    assert diff.slot_3.id == "b3" and diff.slot_3.dependencies == ["slot_2"]
+    child = json.loads(changes.apply(diff, parents))
+    assert [s["number"] for s in child["steps"]] == [1, 2, 3]
+    assert child["steps"][2]["dependencies"] == [2]
+
+
+def test_leading_gap_slot1_empty_repaired(changes, parents):
+    # The hole can be slot_1 itself: a lone slot_2 slides down to slot_1 and
+    # the diff transcribes as a single-step chain.
+    schema = changes.build_schema(parents)
+    diff = schema.validate(
+        {
+            **EVIDENCE,
+            "base_parent": "A",
+            "slot_2": {"kind": "keep", "id": "a1"},
+        }
+    )
+    assert diff.slot_1 is not None and diff.slot_1.id == "a1"
+    assert diff.slot_2 is None
+    child = json.loads(changes.apply(diff, parents))
+    assert [s["number"] for s in child["steps"]] == [1]
+
+
+def test_malformed_slot_key_surfaces_original_error(changes, parents):
+    # A non-numeric slot key poisons the repair (int() fails); the repair backs
+    # off and the original ValidationError surfaces instead of a raw ValueError.
+    schema = changes.build_schema(parents)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+                "slot_final": {"kind": "keep", "id": "a2"},
+            }
+        )
+
+
+def test_alias_slot_key_aborts_repair(changes, parents):
+    # "slot_01" parses to index 1 and would silently collide with slot_1 under
+    # compaction (redirecting slot_3's dependency); non-canonical keys abort.
+    schema = changes.build_schema(parents)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_01": {"kind": "keep", "id": "a2"},
+                "slot_3": {"kind": "keep", "id": "a2", "dependencies": ["slot_1"]},
+            }
+        )
+
+
+def test_slot_zero_key_aborts_repair(changes, parents):
+    # slot_0 is outside the 1-based grammar; the repair must not legitimize it
+    # by sliding it into slot_1.
+    schema = changes.build_schema(parents)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_0": {"kind": "keep", "id": "a1"},
+                "slot_2": {"kind": "keep", "id": "a2"},
+            }
+        )
+
+
+def test_non_string_dependency_ref_aborts_repair(changes, parents):
+    # An int dependency ref is outside the grammar; the repair must not launder
+    # it into a valid "slot_N" string.
+    schema = changes.build_schema(parents)
+    with pytest.raises(ValidationError):
+        schema.validate(
+            {
+                **EVIDENCE,
+                "base_parent": "A",
+                "slot_1": {"kind": "keep", "id": "a1"},
+                "slot_3": {"kind": "keep", "id": "a2", "dependencies": [1]},
+            }
+        )
 
 
 def _object_branches(prop: dict) -> list[dict]:
