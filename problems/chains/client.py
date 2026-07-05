@@ -155,7 +155,8 @@ class LLMClient:
         The copy shares the underlying AsyncOpenAI client (stateless)
         but has independent call logs for parallel processing.
         """
-        client = LLMClient.__new__(LLMClient)
+        cls = type(self)
+        client = cls.__new__(cls)
         client.model = self.model
         client.max_cost = self.max_cost
         client.model_pricing = self.model_pricing

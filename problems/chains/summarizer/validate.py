@@ -9,7 +9,6 @@ from statistics import mean
 from mmar_carl.chain import ReasoningChain
 
 from problems.chains.chain_runner import arun_chain_on_dataset
-from problems.chains.client import LLMClient
 from problems.chains.summarizer.rouge import rouge_l_f1
 from problems.chains.summarizer.shared_config import (
     get_llm_config,
@@ -17,6 +16,7 @@ from problems.chains.summarizer.shared_config import (
     outer_context_builder,
 )
 from problems.chains.types import ChainSpec
+from problems.chains.usage import LogAggregatingLLMClient
 
 INVALID_METRICS = {
     "fitness": 0.0,
@@ -24,15 +24,6 @@ INVALID_METRICS = {
     "n_steps": 0,
     "completion_tokens": 0,
 }
-
-
-class _LogAggregatingClient(LLMClient):
-    """The chain runner logs each call into a throwaway ``copy()``; share one log list so usage survives."""
-
-    def copy(self) -> LLMClient:
-        clone = super().copy()
-        clone._call_logs = self._call_logs
-        return clone
 
 
 def validate(chain_doc: dict):
@@ -44,7 +35,7 @@ def validate(chain_doc: dict):
         return (dict(INVALID_METRICS), {"error": f"carl_validation_error: {e}"})
 
     dataset = load_dataset()
-    client = _LogAggregatingClient(**get_llm_config())
+    client = LogAggregatingLLMClient(**get_llm_config())
     spec = ChainSpec(
         system_prompt=chain_doc.get("task_description", ""),
         steps=list(chain.steps),

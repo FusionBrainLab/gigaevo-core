@@ -100,9 +100,9 @@ def test_validate_aggregates_tokens_and_truncates_outputs(monkeypatch):
 
 def test_validate_client_copies_share_call_log():
     from problems.chains.client import CallLog
-    from problems.chains.summarizer.validate import _LogAggregatingClient
+    from problems.chains.usage import LogAggregatingLLMClient
 
-    client = _LogAggregatingClient(model="m")
+    client = LogAggregatingLLMClient(model="m")
     clone = client.copy()
     clone._call_logs.append(
         CallLog(prompt_tokens=3, completion_tokens=7, cost=0.0, cost_utilization=0.0)

@@ -1,0 +1,7 @@
+Produce the next-generation chain for the parent(s) below. Use the evidence packed into each parent block (Program Metrics → Program Insights → Evolutionary Statistics → Intra Memory).
+
+{parent_blocks}
+
+---
+
+Pick ONE archetype, cite the specific insights / stats triggers that motivated each change in `insights_used` and `justification`, and emit a single coherent mutation following the OUTPUT RULES in the system prompt — the child as one complete JSON document in `code`.
