@@ -1,0 +1,17 @@
+# @package _global_
+# Frozen-topology structured diff for CARL chain genomes: the chain's step
+# count, step types, tool configs, and dependency wiring are pinned to the
+# parents' shared structure; only LLM step prompt text (title / aim /
+# stage_action / reasoning_questions) is mutable. Topology edits are
+# unrepresentable in the schema. Parents with mismatched topologies are
+# rejected, so seed the run with a single fixed-structure genome.
+# Launch: python run.py problem.name=chains/hover/full7 pipeline=program_is_json mutation=carl_frozen_topology
+
+mutation_operator:
+  _target_: gigaevo.evolution.mutation.structured_diff.StructuredDiffMutationOperator
+  llm_wrapper: ${ref:llm}
+  allowed_changes:
+    _target_: problems.chains.frozen_chain_diff.FrozenTopologyChainChanges
+  problem_context: ${problem_context}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
