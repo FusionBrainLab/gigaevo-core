@@ -20,6 +20,7 @@ from gigaevo.programs.dag.automata import DataFlowEdge, ExecutionOrderDependency
 from gigaevo.programs.stages.ancestry_selector import AncestrySelector
 from gigaevo.programs.stages.archive_gate import ArchivePotentialGateStage
 from gigaevo.programs.stages.base import Stage
+from gigaevo.programs.stages.chain_structural import ChainStructuralMetricsStage
 from gigaevo.programs.stages.collector import (
     AncestorProgramIds,
     DescendantProgramIds,
@@ -484,6 +485,31 @@ class ArchivePotentialFilterFeature(PipelineFeature):
         builder.add_exec_dep(
             "ArchivePotentialGateStage",
             ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+        )
+
+
+class ChainStructuralMetricsFeature(PipelineFeature):
+    """Extract chain topology metrics for structural MAP-Elites archives.
+
+    Adds ``dag_depth``, ``max_dependency_fan_in``, ``n_deep_retrieval``, and
+    ``n_retrievals`` to ``program.metrics`` after the candidate has parsed and
+    validated. Enable this when an algorithm's behavior space uses chain
+    structure keys, for example ``algorithm=topology_3d_ret``.
+    """
+
+    name = "chain_structural_metrics"
+    description = "Compute chain topology metrics for behavior-space archives."
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        stage_timeout = builder._stage_timeout
+
+        builder.add_stage(
+            "ChainStructuralMetricsStage",
+            lambda: ChainStructuralMetricsStage(timeout=stage_timeout),
+        )
+        builder.add_exec_dep(
+            "ChainStructuralMetricsStage",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
         )
 
 

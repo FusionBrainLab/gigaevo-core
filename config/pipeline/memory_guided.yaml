@@ -48,6 +48,7 @@ pipeline_builder:
   reverse_repack: false
   no_card_control_probability: 0.10
   memory_block_last: false
+  enable_chain_structural_metrics: ${enable_chain_structural_metrics}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

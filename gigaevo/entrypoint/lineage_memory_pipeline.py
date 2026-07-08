@@ -68,6 +68,7 @@ from gigaevo.entrypoint.constants import (
     MAX_CODE_LENGTH,
 )
 from gigaevo.entrypoint.default_pipelines import (
+    ChainStructuralMetricsFeature,
     DefaultPipelineBuilder,
     PipelineBuilder,
     PipelineFeature,
@@ -377,6 +378,7 @@ class GuidedMutationPipelineBuilder(DefaultPipelineBuilder):
         optimization_time_budget: float | None = None,
         memory_block_last: bool = False,
         program_format_feature: PipelineFeature | None = None,
+        enable_chain_structural_metrics: bool = False,
     ):
         super().__init__(
             ctx,
@@ -389,6 +391,9 @@ class GuidedMutationPipelineBuilder(DefaultPipelineBuilder):
             include_legacy_feedback=False,
             program_format_feature=program_format_feature,
         )
+        if enable_chain_structural_metrics:
+            self.apply_feature(ChainStructuralMetricsFeature())
+
         self._enable_optuna_stage = enable_optuna_stage
         self._optimization_time_budget_arg = optimization_time_budget
         self._dag_timeout_arg = dag_timeout
@@ -466,6 +471,7 @@ class MemoryGuidedMutationPipelineBuilder(GuidedMutationPipelineBuilder):
         no_card_control_probability: float = 0.0,
         memory_block_last: bool = False,
         program_format_feature: PipelineFeature | None = None,
+        enable_chain_structural_metrics: bool = False,
     ):
         super().__init__(
             ctx,
@@ -481,6 +487,7 @@ class MemoryGuidedMutationPipelineBuilder(GuidedMutationPipelineBuilder):
             optimization_time_budget=optimization_time_budget,
             memory_block_last=memory_block_last,
             program_format_feature=program_format_feature,
+            enable_chain_structural_metrics=enable_chain_structural_metrics,
         )
 
         self.apply_feature(

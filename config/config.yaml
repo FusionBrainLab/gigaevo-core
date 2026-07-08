@@ -24,3 +24,7 @@ checkpoint_dir: ${hydra:runtime.output_dir}/memory
 # structured) is dumped as a complete JSON record (prompt, response, token
 # usage) into <run_dir>/llm_io/<router>.jsonl. Set false to disable.
 llm_io_dump: true
+
+# Optional chain topology metric stage. Enable when an archive behavior space
+# requires chain structural keys, for example algorithm=topology_3d_ret.
+enable_chain_structural_metrics: false

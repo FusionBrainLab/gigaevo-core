@@ -82,6 +82,45 @@ mutation: StructuredDiffMutationOperator + AllowedToolChainChanges
 `config/loader/directory.yaml`; the instantiated loader field to check in the
 resolved config is `program_loader.pattern`.
 
+## HoVer Tool-Diff With Memory
+
+Use `pipeline=memory_guided` when cards should be read before mutation and
+written after evaluation. For topology MAP-Elites archives, also enable the
+chain structural metrics stage; `algorithm=topology_3d_ret` expects
+`dag_depth`, `max_dependency_fan_in`, and `n_retrievals` before archive
+admission.
+
+```bash
+python run.py \
+    problem.name=chains/hover/full7 \
+    pipeline=memory_guided \
+    program_format=json_document \
+    memory=full \
+    memory/write=live \
+    memory/llm=qwen_instruct \
+    checkpoint_dir="$PWD/SHARE_HOVER_DIFF_MEMORY" \
+    mutation=carl_with_retrieval_tools \
+    algorithm=topology_3d_ret \
+    enable_chain_structural_metrics=true \
+    llm=single \
+    llm_base_url="$LITELLM_BASE_URL" \
+    model_name="$CARL_MUTATION_MODEL" \
+    memory.llm.models.0.base_url="$LITELLM_BASE_URL" \
+    num_parents=1 \
+    max_mutants=10 \
+    max_tokens=60000 \
+    stage_timeout=7200 \
+    dag_timeout=14400 \
+    --cfg job
+```
+
+For the two-copy HoVer memory launch with endpoint smoke checks and independent
+memory banks, use:
+
+```bash
+OPENAI_API_KEY=sk-gigaevo ./experiments/hover/diff_memory/launch.sh
+```
+
 ## Summarizer DAG-Diff Run
 
 The older LLM-step summarizer experiment uses the same no-memory JSON setup but

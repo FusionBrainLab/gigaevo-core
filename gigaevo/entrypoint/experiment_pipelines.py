@@ -7,10 +7,11 @@ needed for a particular experiment.  Referenced via Hydra pipeline YAML configs
 
 from __future__ import annotations
 
-from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
+from gigaevo.entrypoint.default_pipelines import (
+    ChainStructuralMetricsFeature,
+    DefaultPipelineBuilder,
+)
 from gigaevo.entrypoint.evolution_context import EvolutionContext
-from gigaevo.programs.dag.automata import ExecutionOrderDependency
-from gigaevo.programs.stages.chain_structural import ChainStructuralMetricsStage
 
 
 class StructuralMetricsPipelineBuilder(DefaultPipelineBuilder):
@@ -37,18 +38,4 @@ class StructuralMetricsPipelineBuilder(DefaultPipelineBuilder):
         if stage_timeout is not None:
             kwargs["stage_timeout"] = stage_timeout
         super().__init__(ctx, **kwargs)
-        self._add_structural_metrics_stage()
-
-    def _add_structural_metrics_stage(self) -> None:
-        stage_timeout = self._stage_timeout
-
-        self.add_stage(
-            "ChainStructuralMetricsStage",
-            lambda: ChainStructuralMetricsStage(timeout=stage_timeout),
-        )
-
-        # Run after ValidateCodeStage succeeds (needs valid code to parse).
-        self.add_exec_dep(
-            "ChainStructuralMetricsStage",
-            ExecutionOrderDependency.on_success("ValidateCodeStage"),
-        )
+        self.apply_feature(ChainStructuralMetricsFeature())
