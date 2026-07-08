@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 from typing import Any, cast
 
 import cloudpickle
@@ -65,6 +66,19 @@ from gigaevo.programs.stages.lineage_memory import (
     collect_ancestral_trail,
 )
 from gigaevo.programs.stages.stage_registry import StageRegistry
+
+_MEMORY_CARD_HEADER_RE = re.compile(r"^\[card\s+\d+\]\s+id=(\S+)", re.MULTILINE)
+
+
+def offered_memory_card_ids(memory_cards: str | None) -> frozenset[str]:
+    """Card ids explicitly rendered by MemoryContextStage for this suggestion call."""
+    if not memory_cards:
+        return frozenset()
+    return frozenset(
+        match.group(1).strip()
+        for match in _MEMORY_CARD_HEADER_RE.finditer(memory_cards)
+        if match.group(1).strip()
+    )
 
 
 class MutationSuggestionInputs(StageIO):
@@ -264,4 +278,7 @@ class MutationSuggestionStage(LangGraphStage):
                 program.id[:8],
             )
             insights = ProgramInsights(insights=[])
+        insights = insights.grounded_memory_card_refs(
+            offered_memory_card_ids(kwargs.get("memory_cards"))
+        )
         return InsightsOutput(insights=insights)

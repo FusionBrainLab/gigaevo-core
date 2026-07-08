@@ -1,0 +1,51 @@
+# @package memory.reputation
+# TOP-1 default for `memory=full`: bootstrap-EV over BD-local reputation.
+#
+# Use when the algorithm exposes one shared top-level `behavior_space`
+# (single-island MAP-Elites / tabular BD runs). This is the strongest current
+# default: BD-proximity gives contextual credit, bootstrap-EV prices raw gain
+# deltas so left-tail losses are visible, and bank-cycle staleness fades old EV
+# evidence toward neutral zero. Pairs with `memory/auction=thompson_bootstrap`
+# and `BootstrapFusedRankingShortlister`.
+_target_: gigaevo.memory.read.reputation.BootstrapReputation
+store: ${ref:memory.store}
+# Staleness half-life for bootstrap EV evidence, measured in bank cycles:
+# one cycle ~= current bank size newer gain events. 1.0 means a card's old
+# deltas get half the resample weight after one bank-wide turn of newer evidence.
+half_life_cycles: 1.0
+# Low EV quantile stamped into `IntroGain_bootstrap_ev_lo20`; the warm-card
+# bench uses this pessimistic expected-gain read. Lower = more conservative.
+ev_lo_quantile: 0.20
+# Number of deterministic bootstrap resamples used for card stats. Higher is
+# smoother but costs CPU per read; auction bidding still uses one live draw.
+n_bootstrap: 512
+# Effective non-stale use-event count required before the bootstrap layer can
+# mark a card efficacy-confident.
+confident_min_events: 3
+inner:
+  _target_: gigaevo.memory.read.reputation.BDProximityReputation
+  # The run's MAP-Elites behavior space. Required for contextual reputation;
+  # use `memory/read_policy=portable` when there is no single shared behavior space.
+  behavior_space: ${ref:behavior_space}
+  fallback:
+    _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
+    # Harm gate: never judge harmful until at least this many intro events.
+    harm_min_events: 3
+    # Optimistic posterior quantile of P(not harmful) used by the harm gate.
+    harm_quantile: 0.80
+    # Harmful iff that optimistic P(not harmful) remains below this threshold.
+    harm_threshold: 0.5
+    # Pessimistic posterior quantile used for display/confidence.
+    confident_quantile: 0.20
+    # Confidence threshold on P(help). EV confidence also requires positive
+    # pessimistic bootstrap EV.
+    confident_threshold: 0.5
+    # Cold no-evidence prior. Must match auction baseline_prior.
+    cold_prior: [3.0, 3.0]
+  # Same thresholds for the BD-local in-cell posterior.
+  harm_min_events: 3
+  harm_quantile: 0.80
+  harm_threshold: 0.5
+  confident_quantile: 0.20
+  confident_threshold: 0.5
+  cold_prior: [3.0, 3.0]

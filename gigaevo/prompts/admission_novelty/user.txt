@@ -1,0 +1,9 @@
+Judge the card below on novelty against a strong optimizer LLM's prior for the task in CONTEXT.
+
+## CARD DESCRIPTION
+{description}
+
+## CARD EXPLANATION (why the lever works)
+{explanation_summary}
+
+Would a strong model already reach for this lever unprompted on this task? Return a single JSON object matching the structured-output schema: `keep = false` if it is inside the model's prior (generic optimizer repertoire), `keep = true` only if it carries a task-specific mechanism beyond the prior. No prose, no preamble, no fences.

@@ -1,0 +1,32 @@
+# @package memory
+# Experimental double-ageing contextual bootstrap policy.
+#
+# Bootstrap-EV already fades raw deltas toward neutral zero. This preset also
+# decays the inner Beta posterior/counts, so use it only when stale known cards
+# are demonstrably overconfident and clogging retrieval.
+defaults:
+  - /memory/reputation: bootstrap_bd_decay
+  - /memory/auction: thompson_bootstrap
+  - /memory/budget: top_bid
+  - /memory/excluder: lineage
+  - _self_
+
+reader:
+  shortlister:
+    _target_: gigaevo.memory.read.fused.BootstrapFusedRankingShortlister
+    inner:
+      _target_: gigaevo.memory.read.shortlist.ResearchShortlister
+      store: ${ref:memory.store}
+      # Planner bank digest size; the bench below prunes known stale/negative
+      # warm cards before this digest reaches the planner.
+      digest_max_cards: 50
+    reputation: ${ref:memory.reputation}
+    store: ${ref:memory.store}
+    # Keep LLM research order by default. The point of this preset is posterior
+    # decay, not ranker-weight changes.
+    w_sem: 1.0
+    w_rep: 0.0
+    w_nov: 0.0
+    # Warm-card bootstrap-EV bench floor. In this preset, EV staleness and Beta
+    # posterior decay both apply, so increasing this can become very aggressive.
+    rep_floor_quantile: 0.4

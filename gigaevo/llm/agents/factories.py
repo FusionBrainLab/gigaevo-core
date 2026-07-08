@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
 
+from gigaevo.llm.agents.admission_novelty import NoveltyAdmissionAgent
 from gigaevo.llm.agents.consolidate_cards import ConsolidateAgent
 from gigaevo.llm.agents.insights import InsightsAgent
 from gigaevo.llm.agents.lineage import LineageAgent
@@ -28,6 +29,7 @@ from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.prompts import (
+    AdmissionNoveltyPrompts,
     ConsolidatePrompts,
     InsightsPrompts,
     LineagePrompts,
@@ -290,6 +292,36 @@ def create_reconcile_agent(
     user_template = ReconcilePrompts.user(prompts_dir=prompts_dir)
     system_prompt = system_template.format(task_description=task_description)
     return ReconcileAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+    )
+
+
+def create_novelty_admission_agent(
+    llm: ChatOpenAI | MultiModelRouter,
+    task_description: str,
+    prompts_dir: str | Path | None = None,
+) -> NoveltyAdmissionAgent:
+    """Create the librarian's novelty-admission judge (idea-card write gate).
+
+    Bakes the task into the system prompt's CONTEXT once at construction (the
+    task is fixed for a run), mirroring the reconcile factory. No metrics: the
+    judge reasons over one authored card against the model's prior for the task.
+
+    Args:
+        llm: LangChain chat model or multi-model router.
+        task_description: Description of the optimization task.
+        prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
+            If None, package defaults are used.
+
+    Returns:
+        Ready-to-use ``NoveltyAdmissionAgent``.
+    """
+    system_template = AdmissionNoveltyPrompts.system(prompts_dir=prompts_dir)
+    user_template = AdmissionNoveltyPrompts.user(prompts_dir=prompts_dir)
+    system_prompt = system_template.format(task_description=task_description)
+    return NoveltyAdmissionAgent(
         llm=llm,
         system_prompt=system_prompt,
         user_prompt_template=user_template,

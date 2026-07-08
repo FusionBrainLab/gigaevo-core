@@ -15,22 +15,13 @@ ways a prompt edit breaks the system:
 
 from __future__ import annotations
 
-from gigaevo.memory.shared_memory.card_search import format_block_efficacy
-from gigaevo.memory.shared_memory.models import (
-    CardStatsBlock,
-    MemoryCard,
-    ProgramCard,
-)
+from gigaevo.memory.cards import Card, CardKind, CardStatsBlock
+from gigaevo.memory.read.render import format_block_efficacy
 from gigaevo.prompts import MutationSuggestionsPrompts, load_prompt
 
 
-def _mcard() -> MemoryCard:
-    return MemoryCard(
-        id="m1",
-        description="d",
-        keywords=[],
-        gain_events=None,
-    )
+def _mcard() -> Card:
+    return Card(id="m1", description="d")
 
 
 def _confident_positive_line() -> str:
@@ -38,6 +29,19 @@ def _confident_positive_line() -> str:
         _mcard(),
         CardStatsBlock(
             intro_events=3, IntroGain_best_median=0.012, efficacy_confident=True
+        ),
+    )
+
+
+def _confident_expected_line() -> str:
+    return format_block_efficacy(
+        _mcard(),
+        CardStatsBlock(
+            intro_events=3,
+            IntroGain_best_median=0.020,
+            IntroGain_bootstrap_ev_mean=0.012,
+            IntroGain_bootstrap_ev_lo20=0.006,
+            efficacy_confident=True,
         ),
     )
 
@@ -53,13 +57,12 @@ def _caution_line() -> str:
 
 def _exemplar_line() -> str:
     return format_block_efficacy(
-        ProgramCard(
+        Card(
             id="program-x",
+            kind=CardKind.PROGRAM,
             program_id="x",
             description="d",
-            keywords=[],
             fitness=0.85,
-            gain_events=None,
         ),
         None,
     )
@@ -75,9 +78,20 @@ class TestEfficacyDescriptionMatchesRenderer:
             assert token in line, f"renderer no longer emits {token!r}"
             assert token in prompt, f"prompt omits renderer token {token!r}"
 
+    def test_prompt_describes_bootstrap_expected_improvement_tokens(self) -> None:
+        prompt = MutationSuggestionsPrompts.system()
+        line = _confident_expected_line()
+        for token in ("expected improvement", "(confident)"):
+            assert token in line, f"renderer no longer emits {token!r}"
+            assert token in prompt, f"prompt omits renderer token {token!r}"
+
     def test_prompt_describes_caution_token(self) -> None:
         assert "(caution: non-positive median)" in _caution_line()
         assert "(caution: non-positive median)" in MutationSuggestionsPrompts.system()
+        assert (
+            "(caution: non-positive expected improvement)"
+            in MutationSuggestionsPrompts.system()
+        )
 
     def test_prompt_describes_exemplar_token(self) -> None:
         assert "exemplar fitness" in _exemplar_line()

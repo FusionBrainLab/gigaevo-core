@@ -34,8 +34,8 @@ from gigaevo.entrypoint.lineage_memory_pipeline import (
     IntraMemoryPipelineBuilder,
 )
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.memory.core import MemorySelection
 from gigaevo.memory.provider import MemoryProvider
+from gigaevo.memory.read.reader import MemorySelection
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
@@ -377,7 +377,7 @@ class _CardProvider(MemoryProvider):
         metrics_description: str,
         parent_context: str | None = None,
     ) -> MemorySelection:
-        return MemorySelection(cards=[], card_ids=[])
+        return MemorySelection()
 
 
 @pytest.fixture

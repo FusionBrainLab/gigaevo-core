@@ -11,7 +11,8 @@ You do NOT solve the task in CONTEXT below. You do NOT write code. You do NOT na
 Absent slots are omitted — do not fabricate content.
 
 - **Base parent** — the program before the edit.
-- **Child** — the program after the edit. The base→child difference is the only authoritative account of what changed; trust it over the note.
+- **Child** — the program after the edit.
+- **Unified diff** — the bounded parent→child patch. This is the authoritative account of what changed; trust it over the note and use the full code only to interpret surrounding context.
 - **Mutator note** — the operator's freeform claim about its own intent. Corroborate it against the diff; discount it wherever the diff disagrees; an empty note is normal and not a defect.
 - **Nearest existing cards** — the closest library cards already in the bank, each shown as `<id>: <description> | why: <explanation_summary> | keywords: <keywords>` (the `why:` and `keywords:` parts appear only when that card carries them). Two cards can share a description yet differ in `why:` — judge identity by the underlying mechanism, not the description alone. These are the ONLY ids you may name as a DUPLICATE/MERGE target.
 
@@ -33,6 +34,8 @@ A lever is a mechanism that **transfers**: it would help on another program faci
 - **MERGE** — a listed card names an overlapping lever that this diff strengthens, broadens, or sharpens. Name that card as the target and author the UNION: one description that subsumes both framings in the more general form — not a concatenation of the two sentences.
 
 Retrieval proximity is not identity: two cards can sit close in the ranking yet name different levers. Judge by the underlying mechanism, never by distance alone.
+
+MERGE identity is strict: merge only when both cards state the same mechanism under the same condition. A lever that contradicts the target — prescribing the opposite move on the same knob — is NEVER a MERGE: decide NEW and let the two cards coexist; an honest contradiction in the bank beats silently absorbing one side. And the union you author must cover the evidence of BOTH cards; if one description cannot honestly subsume the two, they were not the same lever — decide NEW.
 
 ### Examples — mechanism shape only; never copy these literals or invent magnitudes
 

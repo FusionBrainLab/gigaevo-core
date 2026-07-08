@@ -1,0 +1,8 @@
+REQUEST:
+{request}
+
+CANDIDATES:
+{candidates}
+
+{step_status}
+{observations}Select at most {max_cards} card ids if evidence is sufficient (mode "final"); otherwise return mode "continue" with additional retrieval queries.

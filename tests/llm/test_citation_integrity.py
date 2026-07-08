@@ -101,10 +101,16 @@ def test_non_positive_numbers_ignored():
     assert res["grounded"] == 1
 
 
-def test_card_ids_used_counted_against_prompt():
-    res = _integrity([], ["program-abc", "ghost-1"], "consider card program-abc here")
-    assert res["cards_cited"] == 2
-    assert res["cards_grounded"] == 1
+def test_card_ids_used_grounded_only_against_explicit_card_renderers():
+    prompt = (
+        "free text mentioning program-abc is not enough\n"
+        "[card 1] id=mem-a\n"
+        "description\n"
+        "1. **[x][rigid][medium]** — mechanism: x | card: program-abc"
+    )
+    res = _integrity([], ["program-abc", "mem-a", "ghost-1"], prompt)
+    assert res["cards_cited"] == 3
+    assert res["cards_grounded"] == 2
 
 
 def test_empty_citations():

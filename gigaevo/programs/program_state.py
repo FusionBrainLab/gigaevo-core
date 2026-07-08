@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from gigaevo.utils import state_machine
+
 
 class ProgramState(StrEnum):
     QUEUED = "queued"
@@ -43,18 +45,11 @@ VALID_TRANSITIONS: dict[ProgramState, set[ProgramState]] = {
 
 
 def is_valid_transition(current: ProgramState, new: ProgramState) -> bool:
-    if current == new:
-        return True
-    return new in VALID_TRANSITIONS.get(current, set())
+    return state_machine.is_valid_transition(current, new, VALID_TRANSITIONS)
 
 
 def validate_transition(current: ProgramState, new: ProgramState) -> None:
-    if not is_valid_transition(current, new):
-        valid_next = VALID_TRANSITIONS.get(current, set())
-        raise ValueError(
-            f"Invalid state transition: {current.value} -> {new.value}. "
-            f"Valid transitions from {current.value}: {[s.value for s in valid_next]}"
-        )
+    state_machine.validate_transition(current, new, VALID_TRANSITIONS)
 
 
 def is_incomplete(state: ProgramState) -> bool:

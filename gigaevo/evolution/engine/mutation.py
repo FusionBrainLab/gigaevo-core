@@ -11,6 +11,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_USED_METADATA_KEY,
     MUTATION_PARENT_STAGE_OUTPUTS_METADATA_KEY,
@@ -21,14 +22,14 @@ from gigaevo.programs.program import Program
 
 
 def lineage_applied_closure(
-    *, injected_ids: list[str], parents: list[Program]
+    *, applied_ids: list[str], parents: list[Program]
 ) -> list[str]:
     """Transitive closure of every card applied to this child or any ancestor.
 
-    Built from frozen inputs only: the child's just-computed ``injected_ids``
+    Built from frozen inputs only: the child's just-computed ``applied_ids``
     unioned with each parent's own (birth-frozen) lineage-applied closure.
     """
-    closure: set[str] = {cid for cid in injected_ids if cid}
+    closure: set[str] = {cid for cid in applied_ids if cid}
     for parent in parents:
         for cid in (
             parent.get_metadata(MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY) or []
@@ -53,6 +54,27 @@ def base_parent_index(value) -> int:
             value,
         )
         return 1
+
+
+def applied_memory_ids(injected_ids: list[str], mutation_output: object) -> list[str]:
+    """Cards the mutator actually applied, limited to the prompt-time slate.
+
+    ``injected_ids`` remains the full exposure slate for write-time attribution.
+    Lineage exclusion is stricter: descendants should not re-see cards the branch
+    truly used, but merely showing a card should not ban it forever. Current
+    structured mutation output carries ``card_ids_used``; legacy/non-structured
+    mutations fall back to the injected slate because they have no use signal.
+    """
+    injected = {cid.strip() for cid in injected_ids if cid.strip()}
+    if not injected:
+        return []
+    if not isinstance(mutation_output, dict):
+        return sorted(injected)
+    raw_used = mutation_output.get("card_ids_used")
+    if not isinstance(raw_used, list):
+        return []
+    used = {str(cid).strip() for cid in raw_used if str(cid).strip()}
+    return sorted(injected & used)
 
 
 def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
@@ -85,6 +107,9 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
         ],
         MUTATION_MEMORY_BASE_METRICS_METADATA_KEY: dict(base.metrics or {}),
         MUTATION_MEMORY_BASE_ID_METADATA_KEY: base.id,
+        MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY: bool(
+            base.get_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY)
+        ),
     }
 
 
@@ -144,17 +169,17 @@ async def generate_one_mutation(
                 if card_id
             }
         )
-        program.set_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY, injected_ids)
-        program.set_metadata(MUTATION_MEMORY_USED_METADATA_KEY, bool(injected_ids))
-        program.set_metadata(
-            MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
-            lineage_applied_closure(injected_ids=injected_ids, parents=parents),
-        )
-
         mutation_output = mutation_spec.metadata.get(MutationSpec.META_OUTPUT)
         base_parent = 1
         if isinstance(mutation_output, dict):
             base_parent = base_parent_index(mutation_output.get("base_parent", 1) or 1)
+        applied_ids = applied_memory_ids(injected_ids, mutation_output)
+        program.set_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY, injected_ids)
+        program.set_metadata(MUTATION_MEMORY_USED_METADATA_KEY, bool(injected_ids))
+        program.set_metadata(
+            MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
+            lineage_applied_closure(applied_ids=applied_ids, parents=parents),
+        )
         for key, value in freeze_base_parent_snapshot(parents, base_parent).items():
             program.set_metadata(key, value)
 

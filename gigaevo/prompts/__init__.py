@@ -25,7 +25,7 @@ def load_prompt(
     the package default directory.
 
     Args:
-        agent_name: Agent type directory (insights, lineage, mutation, mutation_suggestions, memory_selector)
+        agent_name: Agent type directory (insights, lineage, mutation, mutation_suggestions)
         prompt_type: Prompt file type (system, user)
         prompts_dir: Optional directory for prompts (e.g. config.prompts.dir).
             Same layout as package: subdirs per agent with system.txt / user.txt.
@@ -115,15 +115,6 @@ class MutationSuggestionsPrompts:
         return load_prompt("mutation_suggestions", "user", prompts_dir=prompts_dir)
 
 
-class MemorySelectorPrompts:
-    """Memory selector agent prompt templates."""
-
-    @staticmethod
-    def system(prompts_dir: str | Path | None = None) -> str:
-        """System prompt for memory selector."""
-        return load_prompt("memory_selector", "system", prompts_dir=prompts_dir)
-
-
 class ReconcilePrompts:
     """Librarian reconcile agent prompt templates."""
 
@@ -150,6 +141,20 @@ class ConsolidatePrompts:
     def user(prompts_dir: str | Path | None = None) -> str:
         """User prompt template for the consolidate hop."""
         return load_prompt("consolidate", "user", prompts_dir=prompts_dir)
+
+
+class AdmissionNoveltyPrompts:
+    """Librarian novelty-admission judge prompt templates."""
+
+    @staticmethod
+    def system(prompts_dir: str | Path | None = None) -> str:
+        """System prompt for the novelty-admission (keep/reject) hop."""
+        return load_prompt("admission_novelty", "system", prompts_dir=prompts_dir)
+
+    @staticmethod
+    def user(prompts_dir: str | Path | None = None) -> str:
+        """User prompt template for the novelty-admission hop."""
+        return load_prompt("admission_novelty", "user", prompts_dir=prompts_dir)
 
 
 class ProgramAuthorPrompts:

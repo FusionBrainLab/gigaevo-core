@@ -1,0 +1,37 @@
+# @package memory.reputation
+# BD-proximity reputation with bank-cycle staleness decay: same cell-local
+# value channel as `bd_proximity`, but each card's evidence is discounted by
+# w = 2^(-s/H) where s = bank gain events newer than the card's latest event
+# and H = bank size x half_life_cycles. Benched cards drift back toward neutral
+# evidence (magnitude expires below one effective event, the harm gate's
+# min-events requirement expires with it) instead of staying frozen forever.
+# Opt-in: no preset selects this group by default (`memory/reputation=
+# bd_proximity_decay` to enable); rank-based and self-normalizing, no absolute
+# constants.
+_target_: gigaevo.memory.read.decay.DecayingReputation
+store: ${ref:memory.store}
+# Posterior/count staleness half-life in bank cycles. One cycle ~= current bank
+# size newer gain events. 1.0 halves old evidence after one bank-wide turn.
+half_life_cycles: 1.0
+inner:
+  _target_: gigaevo.memory.read.reputation.BDProximityReputation
+  # Required shared behavior space; use bootstrap_global/portable policies for
+  # multi-island or no-BD algorithms.
+  behavior_space: ${ref:behavior_space}
+  # Fallback used when the query parent's BD cell has no in-cell events.
+  fallback:
+    _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
+    # Harm/confidence thresholds and cold prior for cold cells.
+    harm_min_events: 3
+    harm_quantile: 0.80
+    harm_threshold: 0.5
+    confident_quantile: 0.20
+    confident_threshold: 0.5
+    cold_prior: [3.0, 3.0]
+  # Harm/confidence thresholds for in-cell BD evidence.
+  harm_min_events: 3
+  harm_quantile: 0.80
+  harm_threshold: 0.5
+  confident_quantile: 0.20
+  confident_threshold: 0.5
+  cold_prior: [3.0, 3.0]

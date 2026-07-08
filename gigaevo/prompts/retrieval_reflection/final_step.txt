@@ -1,0 +1,1 @@
+FINAL STEP — retrieval budget exhausted. mode MUST be "final": select the best-fitting CANDIDATES, or an empty hand only if nothing fits. "continue" forfeits every candidate.

@@ -1,31 +1,107 @@
-# memory=full — read + write both on (the old `memory=local ideas_tracker=default`).
-# ONE assembled MemorySystem node: Hydra builds the component leaves below and
-# passes them to MemorySystem, which threads the shared reputation/backend/llm
-# in Python (no ${ref:memory.*} sibling web). Component leaves are grouped by
-# role: `common/` (shared by reader + writer), `reader/` (the read provider),
-# and `writer/` (the librarian write path). Swap a component with e.g.
-# `memory/common/llm=qwen_instruct` or `memory/reader/auction=thompson`; tune a
-# leaf field with `memory.auction.baseline_prior=[5,2]` (the leaf still lands at
-# `memory.<kwarg>`, so dotted overrides are unchanged). Default stack = the EV
-# contextual-bandit treatment: absolute-progress value channel + EV-bid auction +
-# bid-ranked budgeter (works on every algorithm). Single-island runs can upgrade
-# to `memory/common/reputation=bd_proximity` for cell-local credit; revert to the
-# legacy probability-only stack with `memory/common/reputation=beta_binomial
-# memory/reader/auction=thompson memory/reader/budget=top_theta`.
+# memory=full — read + write both on.
+#
+# A flat ${ref:} graph: every component is declared once and shared by
+# reference (instantiate-once with write-back, exactly how algorithm configs
+# share behavior_space/program_storage). No assembler, no partials — Hydra
+# builds exactly what this file declares. Consumers read two nodes: pipelines
+# take ${ref:memory.provider}, engines take ${ref:memory.writer}.
+#
+# Public read-stack choices live in `memory/read_policy`: `recommended`
+# (default contextual bootstrap), `portable` (global bootstrap for multi-island
+# or no-BD algorithms), and explicit legacy/decay ablations. Override with
+# `memory/read_policy=portable`; tune leaf fields with `memory.reader.max_cards=2`.
 defaults:
-  - common/llm: gemini
-  - common/reputation: absolute_progress
-  - common/backend: local
-  - reader/retriever: gam
-  - reader/selector: llm
-  - reader/auction: thompson_ev
-  - reader/budget: top_bid
-  - reader/excluder: none
-  - reader/provider: selector
-  - writer/tracker: librarian
-  - writer/evictor: harm
+  - llm: gemini
+  - read_policy: recommended
+  - evictor: recommended
   - _self_
 
-_target_: gigaevo.memory.system.MemorySystem
-reader_enabled: true
-writer_enabled: true
+# One store per run, owning bank + vector index + research agent under the
+# run's checkpoint dir. The reader and the writer share this single instance by
+# reference (below) — a write is visible to the next read with no cross-view
+# sync.
+store:
+  _target_: gigaevo.memory.storage.local.LocalMemoryStore
+  config:
+    _target_: gigaevo.memory.storage.config.StoreConfig
+    path: ${checkpoint_dir}
+    # Recall width: the research agent pulls default_top_k nearest cards per
+    # scoped query, aggregates them into a candidate pool across iterations,
+    # and the reflector shortlists up to max_cards of them. That shortlist is
+    # the auction's input population — keep it wider than the injection budget
+    # so the auction actually has candidates to rank.
+    research:
+      _target_: gigaevo.memory.storage.config.ResearchConfig
+      default_top_k: 10
+      max_cards: 10
+  llm: ${ref:memory.llm}
+  prompts_dir: ${prompts.dir}
+
+reader:
+  _target_: gigaevo.memory.read.reader.MemoryReader
+  # `memory/read_policy` owns shortlister/reputation/auction/budget/excluder as
+  # one coherent bandit stack. The reader consumes those shared component refs.
+  reputation: ${ref:memory.reputation}
+  auctioneer: ${ref:memory.auction}
+  budgeter: ${ref:memory.budget}
+  renderer:
+    _target_: gigaevo.memory.read.render.EfficacyCardRenderer
+  # Injection budget: cards the mutator sees per child, after the auction ranks
+  # the recall shortlist above. Recall width lives in
+  # memory.store.config.research.max_cards.
+  max_cards: 1
+
+provider:
+  _target_: gigaevo.memory.provider.ReaderMemoryProvider
+  reader: ${ref:memory.reader}
+  excluder: ${ref:memory.excluder}
+
+writer:
+  _target_: gigaevo.memory.write.writer.MemoryWriter
+  llm: ${ref:memory.llm}
+  evictor: ${ref:memory.evictor}
+  store: ${ref:memory.store}
+  checkpoint_dir: ${checkpoint_dir}
+  metrics_context: ${ref:problem_context::metrics_context}
+  baseline_estimator: ${ref:memory.reputation}
+  task_description: ${ref:problem_context::task_description}
+  best_programs_percent: 5.0
+  # Per-call wall-clock bound on each librarian LLM call (reconcile/author). A
+  # stalled call past this is skipped (record retried next sweep) so one hung
+  # memory-LLM request cannot freeze the whole write increment.
+  ingest_call_timeout_s: 300.0
+  # After this many cards are written across sweeps, schedule one background
+  # near-duplicate consolidation pass over the whole bank (folds drifted
+  # same-lever cards the greedy online path let in separately). Declined pair
+  # rulings are remembered across passes, so a pass only pays the consolidate
+  # LLM for pairs it has not already ruled on. 0 disables.
+  consolidation_every_n: 32
+  # Dedup knobs of the librarian write path: neighbor-context widths for the
+  # reconcile agent and the consolidation arbiter (pure top-k, no distance cut).
+  # Program exemplars dedup by exact code identity in the librarian, so there is
+  # no exemplar distance threshold.
+  dedup_policy:
+    _target_: gigaevo.memory.write.merge.DedupPolicy
+    online_top_k: 5
+    max_cards_per_diff: 3
+    consolidation_k: 5
+  # Program exemplar controls: exact normalized-source identity via code hash,
+  # bounded authoring per refresh, and a hard total archive cap. No prose/word
+  # similarity is used for exemplar dedup.
+  program_exemplars:
+    _target_: gigaevo.memory.write.merge.ProgramExemplarPolicy
+    enabled: true
+    top_k_per_refresh: 4
+    max_cards: 12
+    min_fitness_gap: 0.0
+    store_code: false
+  # Novelty-admission gate: an LLM judge rejects freshly-authored idea cards that
+  # a strong model would already reach for unprompted. One extra memory-LLM hop
+  # per authored insight card; fails open on judge error. Insight cards only —
+  # program exemplars carry concrete code+fitness and dedup by exact code
+  # identity, so prose-novelty is the wrong axis for them. OFF by default: in a
+  # 2026-07 heilbron comparison the gated arm climbed markedly slower, but that
+  # comparison also changed the embedder and store architecture — the A/B
+  # isolating the gate's own effect is still running.
+  novelty_admission_gate: false
+  prompts_dir: ${prompts.dir}

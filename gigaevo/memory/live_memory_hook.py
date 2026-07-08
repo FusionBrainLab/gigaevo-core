@@ -1,6 +1,6 @@
-"""Live mid-run refresh hook for the IdeaTracker / external-memory pipeline.
+"""Live mid-run refresh hook for the MemoryWriter / external-memory pipeline.
 
-Wraps an :class:`IdeaTracker` instance as a ``post_step_hook`` so the global
+Wraps a :class:`MemoryWriter` instance as a ``post_step_hook`` so the global
 memory bank is rebuilt mid-run instead of only once after ``on_run_complete``.
 
 Cadence is counted in *ingestor sweeps that landed at least one program* —
@@ -34,11 +34,11 @@ if TYPE_CHECKING:
 
 
 class LiveMemoryRefreshHook:
-    """Cadence-gated wrapper around :meth:`IdeaTracker.run_increment`.
+    """Cadence-gated wrapper around :meth:`MemoryWriter.run_increment`.
 
     Args:
-        tracker: The :class:`IncrementalPostRunHook` (in practice an
-            :class:`IdeaTracker`) whose state should be refreshed live.
+        tracker: The :class:`IncrementalPostRunHook` (in practice a
+            :class:`MemoryWriter`) whose state should be refreshed live.
         storage: ProgramStorage to pull the current program set from.
         refresh_every: Number of post-step invocations between refreshes.
             ``1`` refreshes on every ingestor sweep that lands a program.

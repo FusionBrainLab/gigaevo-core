@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+import math
+from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, Field, model_validator
 
 __all__ = ["MetricSpec", "MetricsContext"]
+
+
+class HasMetrics(Protocol):
+    """Anything scoreable by :meth:`MetricsContext.top_valid_programs`."""
+
+    id: str
+    metrics: dict[str, float]
+
+
+ScoredT = TypeVar("ScoredT", bound=HasMetrics)
 
 # Constants
 MAX_VALUE_DEFAULT: float = 1e5
@@ -181,6 +192,68 @@ class MetricsContext(BaseModel):
         """Delegate to MetricSpec.is_sentinel; False if metric is unknown."""
         spec = self.specs.get(metric_name)
         return spec is not None and spec.is_sentinel(value)
+
+    def strict_fitness(self, metrics: Mapping[str, float], key: str) -> float | None:
+        """Fitness under ``key`` for stat tracking, or ``None`` for invalid.
+
+        Strict semantics: a missing VALIDITY_KEY is invalid — the contract is
+        that every evaluated program carries the flag (contrast
+        :meth:`is_valid`, which defaults a missing flag to valid — correct for
+        metric aggregation, not for stat tracking). Non-finite and sentinel
+        fitness values are rejected even when the program claims validity:
+        a sentinel floor treated as real would manufacture catastrophic harm
+        (invalid child) or phantom improvement (invalid parent baseline).
+        """
+        is_valid = metrics.get(VALIDITY_KEY)
+        if is_valid is None or is_valid <= 0:
+            return None
+        fit = metrics.get(key)
+        if fit is None or not math.isfinite(fit):
+            return None
+        if self.is_sentinel(key, fit):
+            return None
+        return float(fit)
+
+    def is_evaluated_invalid(self, metrics: Mapping[str, float], key: str) -> bool:
+        """True iff evaluated and judged invalid — a real negative outcome a
+        downside posterior must count as harm, unlike a program that simply
+        never produced a fitness (missing VALIDITY_KEY: not evaluated, no
+        signal)."""
+        is_valid = metrics.get(VALIDITY_KEY)
+        if is_valid is None:
+            return False
+        if is_valid <= 0:
+            return True
+        fit = metrics.get(key)
+        if fit is None or not math.isfinite(fit):
+            return False
+        return self.is_sentinel(key, fit)
+
+    def top_valid_programs(
+        self,
+        programs: Sequence[ScoredT],
+        *,
+        key: str,
+        percent: float,
+    ) -> list[tuple[ScoredT, float]]:
+        """The top slice of strictly-valid programs under ``key``, as
+        (program, fitness) pairs, honoring the metric's direction."""
+        if percent <= 0:
+            return []
+        scored = [
+            (prog, fit)
+            for prog in programs
+            for fit in (self.strict_fitness(prog.metrics, key),)
+            if fit is not None
+        ]
+        if not scored:
+            return []
+        scored.sort(
+            key=lambda pair: (pair[1], pair[0].id),
+            reverse=self.is_higher_better(key),
+        )
+        count = max(1, math.ceil(len(scored) * percent / 100.0))
+        return scored[:count]
 
     def get_bounds(self, key: str) -> tuple[float, float] | None:
         """Get the bounds for a metric if defined.

@@ -202,8 +202,8 @@ Most read/write/plot functionality previously lived as standalone scripts here; 
 | Tool | Purpose | Key flags |
 |---|---|---|
 | `lineage.py` | Trace evolutionary ancestry chain back to seed | `python -m tools.lineage --run`, `--top-n 1`, `--depth N` |
-| `memory_card_health.py` | Read-only structural/attribute integrity snapshot across one or more run dirs. Loads each `<run>/memory/api_index.json` and flags `missing_description`, `self_absorbed`, `absorbed_id_still_live`, `cross_absorbed`, and `duplicate_description`; delegates read/write telemetry to `memory_event_report.py` (suppress with `--no-events`). Use to audit a live memory run for dedup/consolidation invariant violations. | `python tools/memory_card_health.py <run_roots...>`, `--json OUT`, `--no-events` |
-| `memory_event_report.py` | Summarize memory telemetry from `memory_events.jsonl`, `write_ledger.jsonl`, and exported cards. Use this first when debugging empty memory selections, auction rejects, repeated winners, budget drops, write outcomes/sweeps, GAM planner/search/reflection events, backend rebuild/search/refresh events, and posterior bridge activity. | `python tools/memory_event_report.py <run-dir-or-memory-dir>`, `--events PATH`, `--write-ledger PATH`, `--cards PATH`, `--json`, `--top-n N` |
+| `memory_card_health.py` | Read-only structural/attribute integrity snapshot across one or more run dirs. Loads each `<run>/memory/cards.json` and flags `missing_description`, `self_absorbed`, `absorbed_id_still_live`, `cross_absorbed`, and `duplicate_description` (the absorbed-id alias invariants of the dedup/merge path); delegates read/write telemetry to `memory_event_report.py` (suppress with `--no-events`). Use to audit a live memory run for dedup/consolidation invariant violations. | `python tools/memory_card_health.py <run_roots...>`, `--json OUT`, `--no-events` |
+| `memory_event_report.py` | Summarize canonical memory telemetry from `memory_events.jsonl`, `write_ledger.jsonl`, and `cards.json`. Use this first when debugging empty memory selections, auction rejects, repeated winners, budget drops, and write outcomes (admissions, evictions, consolidation passes). | `python tools/memory_event_report.py <run-dir-or-memory-dir>`, `--events PATH`, `--write-ledger PATH`, `--cards PATH`, `--json`, `--top-n N` |
 | `profiler.py` | Throughput profiler — Redis ops, serialization, DAG construction, stage execution (the log → HTML dashboard is the separate `gigaevo profiler` subcommand) | `python -m tools.profiler --redis-url redis://localhost:6379/15` |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
 | `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |
@@ -257,7 +257,7 @@ Depend on `experiment.yaml`, protocol docs, or PRs. Used by Claude Code skills.
 
 | Tool | Purpose |
 |---|---|
-| `canonical_benchmark/run_benchmark.py` | **Regression benchmark — run on every major breaking change.** 5 problems × 2 seeds, spawning `python run.py problem.name=<P> redis.db=<N> hydra.run.dir=<DIR> llm_base_url=<URL> model_name=<NAME>`. The LLM endpoint must be supplied via required `--llm-base-url` / `--model-name` CLI args — no default is shipped because the framework default in `config/constants/endpoints.yaml` (OpenRouter Gemini-3-Flash) is too slow for a 10-run sweep and the right replacement is environment-specific. Reads framework defaults: `pipeline=standard num_parents=2 max_mutants=250` (intra-memory pipeline, no cross-population channel, no IdeaTracker). Extracts best fitness via `gigaevo top`, appends to `BENCHMARK_HISTORY.md`. Uplift sweeps: opt in via `--override memory=full` and/or `--override pipeline=intra_extra_memory`. See `tools/canonical_benchmark/README.md`. |
+| `canonical_benchmark/run_benchmark.py` | **Regression benchmark — run on every major breaking change.** 5 problems × 2 seeds, spawning `python run.py problem.name=<P> redis.db=<N> hydra.run.dir=<DIR> llm_base_url=<URL> model_name=<NAME>`. The LLM endpoint must be supplied via required `--llm-base-url` / `--model-name` CLI args — no default is shipped because the framework default in `config/constants/endpoints.yaml` (OpenRouter Gemini-3-Flash) is too slow for a 10-run sweep and the right replacement is environment-specific. Reads framework defaults: `pipeline=standard num_parents=2 max_mutants=250` (intra-memory pipeline, no cross-population channel, no MemoryWriter). Extracts best fitness via `gigaevo top`, appends to `BENCHMARK_HISTORY.md`. Uplift sweeps: opt in via `--override memory=full` and/or `--override pipeline=intra_extra_memory`. See `tools/canonical_benchmark/README.md`. |
 | `profiler.py` | Redis ops, DAG construction, stage execution profiling |
 
 ### Scaffolding Tools
@@ -495,7 +495,7 @@ python tools/lineage.py --run chains/hotpotqa/static@4:O --top-n 1 --depth 5
 
 Read-only audit of whether injected memory cards are actually *read* by the mutator and
 whether using them helps. For each disk-storage child it joins the frozen
-`memory_injected_idea_ids` (extra/GAM channel) with the mutator-declared `card_ids_used`
+`memory_injected_idea_ids` (the reader-injected card slate) with the mutator-declared `card_ids_used`
 (a card counts as *used* when it is in `base_selected ∩ card_ids_used` — the same credit
 rule as `gain_events`). Mirrors the arm layout of `analyze_bandit_health.py`.
 

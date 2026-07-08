@@ -11,7 +11,7 @@ import pytest
 from gigaevo.llm.agents.consolidate_cards import ConsolidateDecision
 from gigaevo.llm.agents.factories import create_consolidate_agent
 from gigaevo.llm.agents.reconcile import LibrarianCard
-from gigaevo.memory.shared_memory.models import MemoryCard
+from gigaevo.memory.cards import Card
 
 
 class _FakeStructuredLLM:
@@ -48,8 +48,8 @@ async def test_consolidate_returns_merge_decision_with_union_card() -> None:
         )
     )
     out = await agent.arun(
-        card_a=MemoryCard(id="mem-A", description="lever A"),
-        card_b=MemoryCard(id="mem-B", description="lever B"),
+        card_a=Card(id="mem-A", description="lever A"),
+        card_b=Card(id="mem-B", description="lever B"),
     )
     assert out.merge is True
     assert out.card.description == "union lever"
@@ -62,8 +62,8 @@ async def test_consolidate_can_abstain_when_cards_are_distinct() -> None:
     # loosened candidate eps cannot force-merge distinct cards.
     agent = _agent(_FakeLLM(ConsolidateDecision(merge=False, card=None)))
     out = await agent.arun(
-        card_a=MemoryCard(id="mem-A", description="lever A"),
-        card_b=MemoryCard(id="mem-B", description="lever B"),
+        card_a=Card(id="mem-A", description="lever A"),
+        card_b=Card(id="mem-B", description="lever B"),
     )
     assert out.merge is False
     assert out.card is None
@@ -75,13 +75,13 @@ async def test_consolidate_passes_card_why_and_keywords_into_prompt() -> None:
         ConsolidateDecision(merge=True, card=LibrarianCard(description="union"))
     )
     agent = _agent(fake)
-    card_a = MemoryCard(
+    card_a = Card(
         id="mem-A",
         description="lever A",
         explanation_summary="WHY_A_MARKER",
         keywords=["KW_A_MARKER"],
     )
-    card_b = MemoryCard(
+    card_b = Card(
         id="mem-B",
         description="lever B",
         explanation_summary="WHY_B_MARKER",

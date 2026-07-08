@@ -7,12 +7,12 @@ docs/audits/bandit_health_data.md; the hand-authored narrative lives in
 docs/audits/bandit_health_report.md.
 
 Usage:
-    python tools/analyze_bandit_health.py [RUN_ROOT] [--arms BD1,BD2,AP1,AP2]
+    python tools/analyze_bandit_health.py RUN_ROOT [--arms BD1,BD2,AP1,AP2]
                                           [--out docs/audits] [--no-figs]
 
-RUN_ROOT defaults to outputs/bd_proximity_ab_2026-06-24. Each arm directory must
-contain memory/memory_events.jsonl, memory/write_ledger.jsonl,
-memory/amem_exports/amem_memories.jsonl and metrics/program_metrics:*.jsonl.
+Each arm directory under RUN_ROOT must contain memory/memory_events.jsonl,
+memory/write_ledger.jsonl, memory/cards.json and
+metrics/program_metrics:*.jsonl.
 
 The runs may be live: the last line of any jsonl can be a partial write, so every
 record is parsed defensively and bad lines are skipped.
@@ -21,7 +21,7 @@ record is parsed defensively and bad lines are skipped.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 import json
@@ -29,9 +29,8 @@ import math
 from pathlib import Path
 from typing import Any
 
-from gigaevo.memory.context import ContextualGain
-from gigaevo.memory.efficacy import block_from_events
-from gigaevo.memory.shared_memory.models import CardStatsBlock
+from gigaevo.memory.cards import CardStatsBlock, ContextualGain
+from gigaevo.memory.read.reputation import block_from_events
 
 PRIOR_MAGNITUDE = 0.1  # EVThompsonAuctioneer cold-card bid magnitude
 BASELINE_MEAN = 0.5  # Beta(3,3) abstain-arm mean
@@ -52,20 +51,31 @@ def _iter_jsonl(path: Path):
                 continue  # partial trailing write on a live run
 
 
+def _load_bank(path: Path) -> dict[str, dict]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    cards = payload.get("cards") if isinstance(payload, Mapping) else None
+    if not isinstance(cards, Mapping):
+        return {}
+    return {cid: rec for cid, rec in cards.items() if isinstance(rec, Mapping)}
+
+
 @dataclass
 class Arm:
     name: str
     root: Path
-    selections: list = field(default_factory=list)  # read.selection payloads, in order
-    posteriors: list = field(
-        default_factory=list
-    )  # injection_posterior.compute payloads
-    admissions: list = field(default_factory=list)
-    gam_searches: list = field(default_factory=list)
-    inserts: int = 0
-    merges: int = 0
+    selections: list = field(default_factory=list)  # MEMORY_READ_SELECTION rows
+    restamps: list = field(default_factory=list)  # MEMORY_GAIN_RESTAMP rows
+    researches: list = field(default_factory=list)  # MEMORY_RESEARCH rows
+    research_steps: list = field(default_factory=list)  # MEMORY_RESEARCH_STEP rows
+    saves: int = 0  # MEMORY_STORE_WRITE op=save
+    merges: int = 0  # MEMORY_STORE_WRITE op=merge
     ledger: list = field(default_factory=list)
-    amem: dict = field(default_factory=dict)  # card_id -> record
+    bank: dict = field(default_factory=dict)  # card_id -> card record
     frontier: list = field(default_factory=list)  # cumulative-max-able (s, v)
 
     @property
@@ -76,26 +86,23 @@ class Arm:
 def load_arm(name: str, root: Path) -> Arm:
     arm = Arm(name=name, root=root / name)
     for e in _iter_jsonl(arm.mem / "memory_events.jsonl"):
-        et = e.get("event_type")
-        p = e.get("payload") or {}
-        if et == "read.selection":
-            p["_parent"] = (e.get("parent_ids") or [None])[0]
-            arm.selections.append(p)
-        elif et == "injection_posterior.compute":
-            arm.posteriors.append(p)
-        elif et == "admission.select":
-            arm.admissions.append(p)
-        elif et == "gam.search":
-            arm.gam_searches.append(p)
-        elif et == "store.insert":
-            arm.inserts += 1
-        elif et == "store.merge":
-            arm.merges += 1
+        ev = e.get("event")
+        if ev == "MEMORY_READ_SELECTION":
+            e["_parent"] = (e.get("parent_ids") or [None])[0]
+            arm.selections.append(e)
+        elif ev == "MEMORY_GAIN_RESTAMP":
+            arm.restamps.append(e)
+        elif ev == "MEMORY_RESEARCH":
+            arm.researches.append(e)
+        elif ev == "MEMORY_RESEARCH_STEP":
+            arm.research_steps.append(e)
+        elif ev == "MEMORY_STORE_WRITE":
+            if e.get("op") == "save":
+                arm.saves += 1
+            elif e.get("op") == "merge":
+                arm.merges += 1
     arm.ledger = list(_iter_jsonl(arm.mem / "write_ledger.jsonl"))
-    for r in _iter_jsonl(arm.mem / "amem_exports" / "amem_memories.jsonl"):
-        cid = r.get("id")
-        if cid is not None:
-            arm.amem[cid] = r
+    arm.bank = _load_bank(arm.mem / "cards.json")
     fr = list(
         _iter_jsonl(
             arm.root / "metrics" / "program_metrics:valid_frontier_fitness.jsonl"
@@ -110,7 +117,11 @@ def load_arm(name: str, root: Path) -> Arm:
 # --------------------------------------------------------------------------- #
 
 
-def is_program(cid: str) -> bool:
+def is_program(cid: str, bank: Mapping[str, Mapping] | None = None) -> bool:
+    if bank is not None:
+        rec = bank.get(cid)
+        if rec is not None:
+            return rec.get("kind") == "program"
     return isinstance(cid, str) and cid.startswith("program-")
 
 
@@ -143,10 +154,9 @@ def latest_posterior(arm: Arm):
 
 
 def _card_block(rec: Mapping[str, Any] | None) -> CardStatsBlock | None:
-    """Live reputation block from a card's persisted ``gain_events`` — the same
-    ``block_from_events`` math the auction reads, recomputed here because the
-    offline-stamped ``evolution_statistics["ALL"]`` field these reads relied on
-    was removed. ``None`` for a missing card or one with no events."""
+    """Live reputation block recomputed from a card's persisted ``gain_events``
+    with the same ``block_from_events`` math the auction reads. ``None`` for a
+    missing card or one with no events."""
     if not rec:
         return None
     raw = rec.get("gain_events")
@@ -202,7 +212,7 @@ def rq1(arm: Arm) -> dict:
                 cold_mag += 1
             if is_prior_post(r["posterior_a"], r["posterior_b"]):
                 prior_post += 1
-            if is_program(r["card_id"]):
+            if is_program(r["card_id"], arm.bank):
                 program += 1
         # counterfactual displacement: a cold winner while an evidence-bearing
         # (learned-magnitude, positive-bid) card sat on the same slate
@@ -257,7 +267,7 @@ def rq2(arm: Arm) -> dict:
         for cid, n in counts.items():
             a, b = post.get(cid, (1.0, 1.0))
             # prefer the live block recomputed from the card's gain_events
-            block = _card_block(arm.amem.get(cid))
+            block = _card_block(arm.bank.get(cid))
             if block is not None and block.posterior_a is not None:
                 a, b = block.posterior_a, block.posterior_b
             mean = a / (a + b)
@@ -265,7 +275,7 @@ def rq2(arm: Arm) -> dict:
                 bad_arms.append((cid, n, round(mean, 3)))
     cvals = list(counts.values())
     max_share = (max(cvals) / total) if total else 0.0
-    bank = len(arm.amem)
+    bank = len(arm.bank)
     pathological = max_share >= 0.15 and bool(bad_arms)
     return {
         "n_injections": total,
@@ -299,10 +309,16 @@ def rq3(arm: Arm) -> dict:
         if not is_prior_post(a, b):
             off_prior += 1
     off_prior_frac = off_prior / len(ever) if ever else 0.0
-    confident_series = [p.get("confident_count", 0) for p in arm.posteriors]
-    card_count_series = [p.get("card_count", 0) for p in arm.posteriors]
-    last_conf = confident_series[-1] if confident_series else 0
-    last_cards = card_count_series[-1] if card_count_series else 0
+    credited_series = [r.get("credited_card_count", 0) for r in arm.restamps]
+    # confidence snapshot from the bank: blocks recomputed per card
+    with_block = confident = 0
+    for rec in arm.bank.values():
+        block = _card_block(rec)
+        if block is None:
+            continue
+        with_block += 1
+        if block.efficacy_confident:
+            confident += 1
     # reconciliation: the global block recomputed from each card's gain_events
     # vs the (a,b) stamped on its latest slate row. Informational only (does not
     # feed the verdict). Expect a HIGH match under a global reputation, but a LOW
@@ -310,7 +326,7 @@ def rq3(arm: Arm) -> dict:
     # stamps a cell-subset posterior on the slate while _card_block recomputes
     # over all gain_events, so the two diverge by construction on BD arms.
     dir_ok = dir_total = 0
-    for cid, rec in arm.amem.items():
+    for cid, rec in arm.bank.items():
         block = _card_block(rec)
         slate = post.get(cid)
         if block is None or block.posterior_a is None or slate is None:
@@ -322,13 +338,14 @@ def rq3(arm: Arm) -> dict:
         ):
             dir_ok += 1
     # pathological if credit is too sparse to overrule the prior
-    confident_share = (last_conf / last_cards) if last_cards else 0.0
+    confident_share = (confident / with_block) if with_block else 0.0
     pathological = confident_share <= 0.34 or off_prior_frac < 0.5
     return {
         "ever_injected": len(ever),
         "off_prior_frac": off_prior_frac,
-        "confident_series": confident_series,
-        "card_count_series": card_count_series,
+        "credited_series": credited_series,
+        "cards_with_block": with_block,
+        "confident_cards": confident,
         "last_confident_share": confident_share,
         "direction_consistent": f"{dir_ok}/{dir_total}",
         "verdict": "PATHOLOGICAL"
@@ -390,24 +407,39 @@ def rq4(arm: Arm) -> dict:
 
 def rq5(arm: Arm) -> dict:
     outcomes = Counter(r.get("outcome") for r in arm.ledger)
-    prog_in = sum(1 for r in arm.ledger if is_program(r.get("incoming_id", "")))
+    prog_in = sum(
+        1 for r in arm.ledger if is_program(r.get("incoming_id", ""), arm.bank)
+    )
     added_ids = {r.get("final_id") for r in arm.ledger if r.get("outcome") == "added"}
-    adm_rates = [
-        (p.get("admitted_count", 0) / p["input_count"]) if p.get("input_count") else 0.0
-        for p in arm.admissions
-    ]
-    gam_novelty = [
-        (g.get("unique_hit_count", 0) / g["raw_hit_count"])
-        if g.get("raw_hit_count")
-        else 0.0
-        for g in arm.gam_searches
-    ]
+    # retire_twin rows (UPDATED with incoming != final) record a twin DELETION
+    # from the deleted card's side; the successor's own ADDED row is the
+    # admission, so they count as neither admitted nor recycled inflow.
+    retired = sum(
+        1
+        for r in arm.ledger
+        if r.get("outcome") == "updated" and r.get("incoming_id") != r.get("final_id")
+    )
+    admitted = sum(outcomes.get(k, 0) for k in ("added", "updated", "merged")) - retired
+    refused = sum(
+        outcomes.get(k, 0) for k in ("discarded", "rejected_harm", "rejected_novelty")
+    )
+    admission_rate = admitted / (admitted + refused) if (admitted + refused) else 0.0
+    # research novelty: unique vs total hits over each decision's step trail
+    steps_by_decision = defaultdict(list)
+    for st in arm.research_steps:
+        steps_by_decision[st.get("decision_id")].append(st)
+    research_novelty = []
+    for steps in steps_by_decision.values():
+        hits = [h for st in steps for h in (st.get("hit_ids") or [])]
+        if hits:
+            research_novelty.append(len(set(hits)) / len(hits))
     ever_budgeted = set()
     for s in arm.selections:
         ever_budgeted.update(s.get("budgeted_ids") or [])
     added = outcomes.get("added", 0)
-    recycled = sum(
-        outcomes.get(k, 0) for k in ("merged", "discarded", "updated", "evicted")
+    recycled = (
+        sum(outcomes.get(k, 0) for k in ("merged", "discarded", "updated", "evicted"))
+        - retired
     )
     # pathological if inflow is dominated by recycling rather than genuinely new arms
     pathological = added > 0 and recycled > added
@@ -416,13 +448,13 @@ def rq5(arm: Arm) -> dict:
         "distinct_added": len(added_ids),
         "program_inflow": prog_in,
         "added_vs_recycled": (added, recycled),
-        "admission_rates": [round(x, 3) for x in adm_rates],
-        "gam_novelty_mean": round(sum(gam_novelty) / len(gam_novelty), 3)
-        if gam_novelty
+        "admission_rate": round(admission_rate, 3),
+        "research_novelty_mean": round(sum(research_novelty) / len(research_novelty), 3)
+        if research_novelty
         else None,
         "coverage": {
             "ever_budgeted": len(ever_budgeted),
-            "bank_size": len(arm.amem),
+            "bank_size": len(arm.bank),
             "total_added": len(added_ids),
         },
         "verdict": "WATCH"
@@ -444,7 +476,7 @@ def rq6(arm: Arm) -> dict:
     gate_flip = floor_flip = 0
     integrity_ok = True
     for s in arm.selections:
-        cc = s.get("candidate_count", 0) or s.get("auction_input_count", 0)
+        cc = len(s.get("candidate_ids") or [])
         injected = bool(s.get("budgeted_ids"))
         if cc > 0:
             n_with_candidates += 1
@@ -545,18 +577,18 @@ def make_figures(arms, results, figdir: Path):
     fig.savefig(figdir / "rq2_concentration.png", dpi=110)
     plt.close(fig)
 
-    # RQ3: confident_count per sweep
+    # RQ3: credited cards per gain-restamp sweep
     fig, ax = plt.subplots(figsize=(7, 4))
     for n in names:
-        cs = results[n]["RQ3 posterior credibility"]["confident_series"]
+        cs = results[n]["RQ3 posterior credibility"]["credited_series"]
         if cs:
             ax.plot(range(1, len(cs) + 1), cs, marker="s", label=n)
-    ax.set_xlabel("posterior sweep")
-    ax.set_ylabel("confident_count")
-    ax.set_title("RQ3: cards reaching confident efficacy")
+    ax.set_xlabel("gain-restamp sweep")
+    ax.set_ylabel("credited_card_count")
+    ax.set_title("RQ3: cards credited with gain events per sweep")
     ax.legend()
     fig.tight_layout()
-    fig.savefig(figdir / "rq3_confident.png", dpi=110)
+    fig.savefig(figdir / "rq3_credited.png", dpi=110)
     plt.close(fig)
 
     # RQ1 magnitude histogram (all arms pooled)
@@ -602,9 +634,9 @@ def build_report(arms, results) -> str:
     )
     L.append("## Caveats (read first)\n")
     L.append(
-        "- **Variance floor:** 2 seeds per arm (BD1/BD2 = bd_proximity, AP1/AP2 = absolute_progress). "
-        "All BD-vs-AP contrasts are **directional / hypothesis-generating only**; compare each "
-        "A/B gap against the within-arm seed spread before reading anything into it.\n"
+        "- **Variance floor:** with few seeds per arm, all cross-arm contrasts are "
+        "**directional / hypothesis-generating only**; compare each A/B gap against the "
+        "within-arm seed spread before reading anything into it.\n"
         "- **Load-bearing evidence is within-run structural** (RQ1 cold fraction, RQ2 concentration, "
         "RQ3 stuck-at-prior, RQ6 abstain/floor): large-N over decisions inside a single run, "
         "independent of the seed floor.\n"
@@ -645,8 +677,7 @@ def build_report(arms, results) -> str:
             "win_magnitudes",
             "cold_flags",
             "counts",
-            "confident_series",
-            "card_count_series",
+            "credited_series",
         }
         keys = [k for k in keys if k not in drop]
         L.append("| metric | " + " | ".join(names) + " |")
@@ -678,7 +709,7 @@ def build_report(arms, results) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("run_root", nargs="?", default="outputs/bd_proximity_ab_2026-06-24")
+    ap.add_argument("run_root")
     ap.add_argument("--arms", default="BD1,BD2,AP1,AP2")
     ap.add_argument("--out", default="docs/audits")
     ap.add_argument("--no-figs", action="store_true")

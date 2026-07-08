@@ -33,6 +33,10 @@ if TYPE_CHECKING:
     from gigaevo.prompts.fetcher import PromptFetcher
 
 
+_MEMORY_CARD_HEADER_RE = re.compile(r"^\[card\s+\d+\]\s+id=(\S+)", re.MULTILINE)
+_PROGRAM_INSIGHT_CARD_RE = re.compile(r"\bcard:\s*([^\s|,]+)")
+
+
 class MutationChange(BaseModel):
     """Tracker-friendly description of one introduced change."""
 
@@ -97,13 +101,23 @@ def compute_citation_integrity(
     blocks = {label: block for label, block in zip(parts[1::2], parts[2::2])}
     cited = [(label, n) for label, n in cited_pairs if label and n > 0]
     cards = [c.strip() for c in card_ids_used if c.strip()]
+    offered_cards = {
+        match.group(1).strip()
+        for match in _MEMORY_CARD_HEADER_RE.finditer(rendered)
+        if match.group(1).strip()
+    }
+    offered_cards.update(
+        match.group(1).strip()
+        for match in _PROGRAM_INSIGHT_CARD_RE.finditer(rendered)
+        if match.group(1).strip()
+    )
     return {
         "cited": len(cited),
         "grounded": sum(
             1 for label, n in cited if f"\n{n}. **[" in blocks.get(label, "")
         ),
         "cards_cited": len(cards),
-        "cards_grounded": sum(1 for c in cards if c in rendered),
+        "cards_grounded": sum(1 for c in cards if c in offered_cards),
     }
 
 
@@ -554,6 +568,11 @@ class MutationAgent(LangGraphAgent):
 
             # Convert structured output to dict for storage
             structured_dict = structured_output.model_dump()
+            grounded_card_ids = self._grounded_card_ids(
+                structured_output.card_ids_used,
+                state.get("messages", []),
+            )
+            structured_dict["card_ids_used"] = grounded_card_ids
 
             citation_integrity = self._citation_integrity(
                 structured_output.insight_ids_used,
@@ -579,7 +598,7 @@ class MutationAgent(LangGraphAgent):
                     c.model_dump() for c in structured_output.insight_ids_used
                 ],
                 "base_parent": structured_output.base_parent,
-                "card_ids_used": structured_output.card_ids_used,
+                "card_ids_used": grounded_card_ids,
                 "changes": structured_output.changes,
                 "citation_integrity": citation_integrity,
                 "model_used": model_used,
@@ -622,6 +641,37 @@ class MutationAgent(LangGraphAgent):
             if c.parent > 0 and c.insight > 0
         ]
         return compute_citation_integrity(pairs, card_ids_used, messages)
+
+    @staticmethod
+    def _offered_card_ids(rendered: str) -> set[str]:
+        """Card ids explicitly exposed to the mutator by memory renderers."""
+        ids = {
+            match.group(1).strip()
+            for match in _MEMORY_CARD_HEADER_RE.finditer(rendered)
+            if match.group(1).strip()
+        }
+        ids.update(
+            match.group(1).strip()
+            for match in _PROGRAM_INSIGHT_CARD_RE.finditer(rendered)
+            if match.group(1).strip()
+        )
+        return ids
+
+    @staticmethod
+    def _grounded_card_ids(
+        card_ids_used: list[str], messages: list[BaseMessage]
+    ) -> list[str]:
+        """Ordered, de-duplicated card ids that were actually offered."""
+        rendered = "\n".join(str(m.content) for m in messages)
+        offered = MutationAgent._offered_card_ids(rendered)
+        grounded: list[str] = []
+        seen: set[str] = set()
+        for raw in card_ids_used:
+            card_id = raw.strip()
+            if card_id and card_id in offered and card_id not in seen:
+                grounded.append(card_id)
+                seen.add(card_id)
+        return grounded
 
     @staticmethod
     def _fix_json_escaped_code(code: str) -> str:

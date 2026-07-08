@@ -116,8 +116,8 @@ def test_load_card_bank_missing_file_is_empty(tmp_path):
 def test_load_card_bank_reads_memory_cards(tmp_path):
     mem = tmp_path / "memory"
     mem.mkdir()
-    payload = {"memory_cards": {"mem-1": _mem("mem-1")}}
-    (mem / "api_index.json").write_text(json.dumps(payload))
+    payload = {"cards": {"mem-1": _mem("mem-1")}}
+    (mem / "cards.json").write_text(json.dumps(payload))
     bank = load_card_bank(tmp_path)
     assert set(bank) == {"mem-1"}
     assert bank["mem-1"]["description"].startswith("Bin gain-to-bid")

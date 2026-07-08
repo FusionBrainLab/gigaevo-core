@@ -10,6 +10,11 @@ Distil the mutation below into transferable library cards, and reconcile each le
 {child_code}
 ```
 
+## UNIFIED DIFF (ground truth)
+```diff
+{unified_diff}
+```
+
 ## MUTATOR NOTE (hint — corroborate against the diff, discount where they disagree)
 {note}
 

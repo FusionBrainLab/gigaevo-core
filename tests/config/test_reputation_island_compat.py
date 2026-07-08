@@ -12,14 +12,17 @@ cannot slip past an exact class-name match.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from omegaconf import OmegaConf
 import pytest
 
 from gigaevo.config.validation import validate_reputation_island_compat
 
 _REF = "${ref:behavior_space}"
-_BD = "gigaevo.memory.core.bd_proximity.BDProximityReputation"
-_BB = "gigaevo.memory.core.reputation.BetaBinomialReputation"
+_BD = "gigaevo.memory.read.reputation.BDProximityReputation"
+_BB = "gigaevo.memory.read.reputation.BetaBinomialReputation"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _cfg(*, n_islands: int, reputation: dict | None) -> object:
@@ -28,6 +31,16 @@ def _cfg(*, n_islands: int, reputation: dict | None) -> object:
     if reputation is not None:
         memory["reputation"] = reputation
     return OmegaConf.create({"islands": islands, "memory": memory})
+
+
+def _reputation_from_policy(policy: str):
+    read_policy = OmegaConf.load(
+        _REPO_ROOT / "config" / "memory" / "read_policy" / f"{policy}.yaml"
+    )
+    reputation_name = read_policy.defaults[0]["/memory/reputation"]
+    return OmegaConf.load(
+        _REPO_ROOT / "config" / "memory" / "reputation" / f"{reputation_name}.yaml"
+    )
 
 
 def test_multi_island_with_bd_reputation_raises() -> None:
@@ -61,3 +74,16 @@ def test_missing_islands_key_is_allowed() -> None:
             {"memory": {"reputation": {"_target_": _BD, "behavior_space": _REF}}}
         )
     )
+
+
+def test_multi_island_with_recommended_read_policy_raises() -> None:
+    cfg = _cfg(n_islands=2, reputation=None)
+    cfg.memory.reputation = _reputation_from_policy("recommended")
+    with pytest.raises(NotImplementedError, match="behavior_space"):
+        validate_reputation_island_compat(cfg)
+
+
+def test_multi_island_with_portable_read_policy_is_allowed() -> None:
+    cfg = _cfg(n_islands=2, reputation=None)
+    cfg.memory.reputation = _reputation_from_policy("portable")
+    validate_reputation_island_compat(cfg)

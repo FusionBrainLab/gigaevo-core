@@ -47,9 +47,9 @@ def validate_reputation_island_compat(cfg: DictConfig) -> None:
     raw = OmegaConf.to_container(reputation, resolve=False)
     if _references_shared_behavior_space(raw):
         raise NotImplementedError(
-            "memory/common/reputation=bd_proximity reads one ${ref:behavior_space}, but "
+            "BD-proximity memory reputation reads one ${ref:behavior_space}, but "
             f"this algorithm configures {len(islands)} islands with per-island "
             "behavior spaces and no top-level behavior_space for the ref to bind "
-            "to. Use a single-island algorithm, or a non-BD reputation for "
-            "multi-island runs."
+            "to. Use a single-island algorithm, or switch to "
+            "memory/read_policy=portable for multi-island runs."
         )

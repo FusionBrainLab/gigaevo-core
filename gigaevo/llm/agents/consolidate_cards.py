@@ -22,8 +22,7 @@ from pydantic import BaseModel, Field
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.agents.reconcile import LibrarianCard
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.memory.shared_memory.card_conversion import AnyCard
-from gigaevo.memory.shared_memory.card_search import format_card_brief
+from gigaevo.memory.cards import Card, card_brief
 
 
 class ConsolidateDecision(BaseModel):
@@ -48,8 +47,8 @@ class ConsolidateDecision(BaseModel):
 
 
 class ConsolidateState(TypedDict, total=False):
-    card_a: AnyCard
-    card_b: AnyCard
+    card_a: Card
+    card_b: Card
     messages: list[BaseMessage]
     llm_response: Any
     result: ConsolidateDecision
@@ -72,8 +71,8 @@ class ConsolidateAgent(LangGraphAgent):
     def build_prompt(self, state: ConsolidateState) -> ConsolidateState:
         a, b = state["card_a"], state["card_b"]
         user = self.user_prompt_template.format(
-            card_a=format_card_brief(a),
-            card_b=format_card_brief(b),
+            card_a=card_brief(a),
+            card_b=card_brief(b),
         )
         state["messages"] = [
             SystemMessage(content=self.system_prompt),
@@ -90,7 +89,7 @@ class ConsolidateAgent(LangGraphAgent):
         )
         return state
 
-    async def arun(self, *, card_a: AnyCard, card_b: AnyCard) -> ConsolidateDecision:
+    async def arun(self, *, card_a: Card, card_b: Card) -> ConsolidateDecision:
         state: ConsolidateState = {
             "card_a": card_a,
             "card_b": card_b,

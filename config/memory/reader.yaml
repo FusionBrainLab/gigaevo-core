@@ -1,9 +1,47 @@
 # memory=reader — read only (inject cards from a pre-seeded bank, no writer).
-# Inherits full's components; flips the writer off. Used to read a bank a prior
-# `memory=writer` run filled.
+# Same read graph as `memory=full` with the write side unmounted: no evictor,
+# no librarian, and the post-run hook is a no-op. Point `checkpoint_dir` at a
+# bank a prior `memory=writer` (or `memory=full`) run filled.
+#
+# Same bootstrap-EV auction as `memory=full`, but with the portable global
+# bootstrap reputation (no `behavior_space` requirement, so this preset works
+# under any algorithm). Use `memory/reputation=bootstrap_bd` only for
+# single-island algorithms exposing a top-level `behavior_space`.
 defaults:
-  - full
+  - llm: gemini
+  - read_policy: portable
   - _self_
 
-reader_enabled: true
-writer_enabled: false
+store:
+  _target_: gigaevo.memory.storage.local.LocalMemoryStore
+  config:
+    _target_: gigaevo.memory.storage.config.StoreConfig
+    path: ${checkpoint_dir}
+    # Recall width feeding the auction — see config/memory/full.yaml for the
+    # top_k -> shortlist -> auction -> injection-budget funnel.
+    research:
+      _target_: gigaevo.memory.storage.config.ResearchConfig
+      default_top_k: 10
+      max_cards: 10
+  llm: ${ref:memory.llm}
+  prompts_dir: ${prompts.dir}
+
+reader:
+  _target_: gigaevo.memory.read.reader.MemoryReader
+  # `memory/read_policy` owns shortlister/reputation/auction/budget/excluder as
+  # one coherent stack. The read-only default is portable global bootstrap.
+  reputation: ${ref:memory.reputation}
+  auctioneer: ${ref:memory.auction}
+  budgeter: ${ref:memory.budget}
+  renderer:
+    _target_: gigaevo.memory.read.render.EfficacyCardRenderer
+  # Injection budget after the auction ranks the recall shortlist above.
+  max_cards: 1
+
+provider:
+  _target_: gigaevo.memory.provider.ReaderMemoryProvider
+  reader: ${ref:memory.reader}
+  excluder: ${ref:memory.excluder}
+
+writer:
+  _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

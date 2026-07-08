@@ -36,7 +36,7 @@ class FakeStructuredRouter:
 
 class FakeMemoryRouter:
     """
-    Mimics the MultiModelRouter methods the ideas_tracker call path uses:
+    Mimics the MultiModelRouter methods the memory writer call path uses:
     invoke/ainvoke returning an AIMessage, and with_structured_output
     returning a runnable whose (a)invoke yields ``respond(schema, messages)``.
 

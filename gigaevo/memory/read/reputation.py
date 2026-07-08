@@ -1,0 +1,748 @@
+"""Per-card efficacy statistics derived from injection outcomes.
+
+Owner of the gain → downside-posterior math: ``block_from_events`` turns a
+card's gain events into the reputation block (median magnitude plus a downside
+posterior that counts every below-zero gain as harm) that the auction and
+renderer read. ``BetaBinomialReputation`` binds that math to injectable
+thresholds; ``BDProximityReputation`` partitions it by the query parent's
+MAP-Elites cell.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+import math
+import statistics
+from typing import Any
+
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
+from scipy.stats import beta
+
+from gigaevo.evolution.strategies.models import BehaviorSpace
+from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
+from gigaevo.memory.read.bootstrap import bootstrap_ev_samples, stable_rng
+from gigaevo.memory.read.interfaces import NoCardBaseline, ReputationModel
+from gigaevo.memory.read.staleness import bank_cycle_weight
+from gigaevo.memory.storage.base import MemoryStore
+
+
+def _median(values: Sequence[float]) -> float:
+    return float(statistics.median(values)) if values else 0.0
+
+
+def _outcome_selected_ids(outcome: Any) -> set[str]:
+    return {
+        cid.strip()
+        for cid in (getattr(outcome, "base_selected_ids", ()) or ())
+        if cid.strip()
+    }
+
+
+def _outcome_no_card_control(outcome: Any) -> bool:
+    return bool(getattr(outcome, "no_card_control", False))
+
+
+def _no_card_cohort(outcomes: Sequence[Any]) -> list[Any]:
+    no_card = [outcome for outcome in outcomes if not _outcome_selected_ids(outcome)]
+    controls = [outcome for outcome in no_card if _outcome_no_card_control(outcome)]
+    return controls if controls else no_card
+
+
+def _outcome_delta(outcome: Any, higher_is_better: bool) -> float | None:
+    fitness = getattr(outcome, "fitness", None)
+    base_fitness = getattr(outcome, "base_fitness", None)
+    if fitness is None or base_fitness is None:
+        return None
+    return (
+        float(fitness) - float(base_fitness)
+        if higher_is_better
+        else float(base_fitness) - float(fitness)
+    )
+
+
+class _GlobalNoCardBaseline:
+    def __init__(self, baseline: float, *, has_evidence: bool) -> None:
+        self._baseline = baseline
+        self.has_evidence = has_evidence
+
+    def baseline_for(self, outcome: Any) -> float:
+        del outcome
+        return self._baseline
+
+
+class _CellNoCardBaseline:
+    def __init__(
+        self,
+        *,
+        behavior_space: BehaviorSpace,
+        global_median: float,
+        by_cell: dict[tuple[int, ...], float],
+        has_evidence: bool,
+    ) -> None:
+        self._behavior_space = behavior_space
+        self._global_median = global_median
+        self._by_cell = by_cell
+        self.has_evidence = has_evidence
+
+    def baseline_for(self, outcome: Any) -> float:
+        metrics = getattr(outcome, "base_metrics", {}) or {}
+        cell = BDProximityReputation._cell_in(self._behavior_space, metrics)
+        if cell is not None and cell in self._by_cell:
+            return self._by_cell[cell]
+        return self._global_median
+
+
+def _global_no_card_baseline(
+    outcomes: Sequence[Any], *, higher_is_better: bool
+) -> _GlobalNoCardBaseline:
+    deltas = _no_card_deltas(outcomes, higher_is_better)
+    return _GlobalNoCardBaseline(_median(deltas), has_evidence=bool(deltas))
+
+
+def _no_card_deltas(outcomes: Sequence[Any], higher_is_better: bool) -> list[float]:
+    deltas: list[float] = []
+    for outcome in _no_card_cohort(outcomes):
+        if getattr(outcome, "base_fitness", None) is not None and getattr(
+            outcome, "invalid", False
+        ):
+            deltas.append(0.0)
+            continue
+        delta = _outcome_delta(outcome, higher_is_better)
+        if delta is not None and math.isfinite(delta):
+            deltas.append(delta)
+    return deltas
+
+
+def _event_weight(event: ContextualGain) -> float:
+    attr = event.attribution
+    if attr is not None and attr.credit_weight is not None:
+        weight = float(attr.credit_weight)
+    elif event.founding:
+        weight = 0.0
+    else:
+        weight = 1.0
+    return weight if math.isfinite(weight) and weight > 0.0 else 0.0
+
+
+def _use_gains(events: Sequence[ContextualGain]) -> tuple[float, ...]:
+    """Valid non-founding use deltas that define the display magnitude."""
+    return tuple(
+        float(e.gain)
+        for e in events
+        if not e.invalid
+        and not e.founding
+        and not e.unused
+        and e.gain is not None
+        and math.isfinite(float(e.gain))
+    )
+
+
+def _use_gain_weights(events: Sequence[ContextualGain]) -> tuple[float, ...]:
+    """Causal weights aligned with :func:`_use_gains`."""
+    return tuple(
+        _event_weight(e)
+        for e in events
+        if not e.invalid
+        and not e.founding
+        and not e.unused
+        and e.gain is not None
+        and math.isfinite(float(e.gain))
+    )
+
+
+def _ev_rewards(events: Sequence[ContextualGain]) -> tuple[float, ...]:
+    """EV support for the bootstrap auction.
+
+    Founding evidence is origin/audit evidence and is deliberately excluded.
+    Real direct use contributes its finite gain. Invalid or unused prompt
+    exposure contributes a zero atom, which makes the card no longer cold
+    without inventing a gain magnitude.
+    """
+    rewards: list[float] = []
+    for event in events:
+        if event.founding:
+            continue
+        weight = _event_weight(event)
+        if weight <= 0.0:
+            continue
+        if event.invalid or event.unused:
+            rewards.append(0.0)
+        elif event.gain is not None and math.isfinite(float(event.gain)):
+            rewards.append(float(event.gain))
+    return tuple(rewards)
+
+
+def _ev_events(events: Sequence[ContextualGain]) -> tuple[ContextualGain, ...]:
+    """The concrete event rows aligned with :func:`_ev_rewards`."""
+    out: list[ContextualGain] = []
+    for event in events:
+        if event.founding:
+            continue
+        weight = _event_weight(event)
+        if weight <= 0.0:
+            continue
+        if event.invalid or event.unused:
+            out.append(event)
+        elif event.gain is not None and math.isfinite(float(event.gain)):
+            out.append(event)
+    return tuple(out)
+
+
+def _ev_reward_weights(events: Sequence[ContextualGain]) -> tuple[float, ...]:
+    weights: list[float] = []
+    for event in events:
+        if event.founding:
+            continue
+        weight = _event_weight(event)
+        if weight <= 0.0:
+            continue
+        if event.invalid or event.unused:
+            weights.append(weight)
+        elif event.gain is not None and math.isfinite(float(event.gain)):
+            weights.append(weight)
+    return tuple(weights)
+
+
+def beta_binomial_posterior(
+    gains: Sequence[float],
+    *,
+    threshold: float = 0.0,
+    weights: Sequence[float] | None = None,
+    invalid_events: float = 0.0,
+    unused_events: float = 0.0,
+    confident_quantile: float = 0.20,
+    confident_threshold: float = 0.5,
+) -> CardStatsBlock:
+    """Downside Beta-Binomial posterior on P(not harmful) from per-event gains.
+
+    ``a = 1 + (n - k_harm)``, ``b = 1 + k_harm`` with ``k_harm`` the count of
+    events whose gain is below ``threshold`` (default 0); ``efficacy_confident``
+    iff the ``confident_quantile`` of Beta(a, b) exceeds ``confident_threshold``.
+    The ``p_help_lo20`` field name is part of the serialized-card stats contract
+    regardless of the configured quantile. ``invalid_events`` are evaluated-and-
+    judged-invalid children; ``unused_events`` are prompt exposures the mutator
+    ignored. Both are forced failure observations with no gain magnitude.
+    """
+    raw_weights = tuple(weights) if weights is not None else ()
+    if raw_weights and len(raw_weights) != len(gains):
+        raise ValueError(
+            f"weights length {len(raw_weights)} != gains length {len(gains)}"
+        )
+    finite: list[tuple[float, float]] = []
+    for idx, gain in enumerate(gains):
+        if gain is None or not math.isfinite(float(gain)):
+            continue
+        weight = float(raw_weights[idx]) if raw_weights else 1.0
+        if math.isfinite(weight) and weight > 0.0:
+            finite.append((float(gain), weight))
+    forced_failures = invalid_events + unused_events
+    n = sum(weight for _, weight in finite) + forced_failures
+    k_harm = sum(weight for g, weight in finite if g < threshold) + forced_failures
+    a = 1.0 + (n - k_harm)
+    b = 1.0 + k_harm
+    lo = float(beta.ppf(confident_quantile, a, b)) if n else float("nan")
+    return CardStatsBlock(
+        posterior_a=a,
+        posterior_b=b,
+        intro_events=n,
+        k_harm=k_harm,
+        p_help_mean=a / (a + b),
+        p_help_lo20=lo,
+        efficacy_confident=bool(n and lo > confident_threshold),
+    )
+
+
+def block_from_events(
+    events: Sequence[ContextualGain],
+    *,
+    confident_quantile: float = 0.20,
+    confident_threshold: float = 0.5,
+) -> CardStatsBlock | None:
+    """Global, unadjusted card block from its gain events: median magnitude plus
+    the downside posterior, harm being any gain below zero (a strict sign test).
+    A win is never harm and never shifts another event's verdict, so the harm
+    count is monotone in the events and a uniformly-losing card counts every
+    loss; eval noise is absorbed by the counting posterior (``harm_min_events``
+    plus the optimistic harm quantile), not a per-card dead band — a band drawn
+    from one card's own gains cannot tell noise-level losses from genuine ones.
+    Invalid events are forced harm with no magnitude. A block is efficacy-
+    confident only when the downside posterior is confident AND the median gain
+    is a genuine positive (a zero/negative median is a no-op, never a confident
+    win). Returns ``None`` for a card with no events (no evidence, no block).
+
+    Magnitude is the median of the card's *use* events (real injection
+    outcomes). The one-time founding delta is origin evidence measured before
+    the card existed, so it does not enter posterior, confidence, or EV. A
+    founding-only card is therefore still statistically cold; catastrophic
+    founding failures are handled by the write-side birth-failure evictor.
+    """
+    proof_events = [event for event in events if not event.founding]
+    if not proof_events:
+        return None
+    valid = [e for e in proof_events if not e.invalid and not e.unused]
+    invalid_events = sum(_event_weight(e) for e in proof_events if e.invalid)
+    unused_events = sum(
+        _event_weight(e) for e in proof_events if e.unused and not e.invalid
+    )
+    valid_gains = [float(e.gain) for e in valid]
+    valid_weights = [_event_weight(e) for e in valid]
+    block = beta_binomial_posterior(
+        valid_gains,
+        weights=valid_weights,
+        invalid_events=invalid_events,
+        unused_events=unused_events,
+        confident_quantile=confident_quantile,
+        confident_threshold=confident_threshold,
+    )
+    use_gains = _use_gains(events)
+    magnitude: float | None
+    if use_gains:
+        magnitude = _median(use_gains)
+    elif invalid_events or unused_events:
+        magnitude = 0.0
+    else:
+        magnitude = None
+    return block.model_copy(
+        update={
+            "IntroGain_best_median": magnitude,
+            "efficacy_confident": block.efficacy_confident
+            and magnitude is not None
+            and magnitude > 0,
+        }
+    )
+
+
+class BetaBinomialReputation(BaseModel):
+    """Downside Beta-Binomial reputation over per-card injection gains.
+
+    Configurable façade over :func:`block_from_events` — one implementation,
+    bound here to injectable thresholds. Also the single home of the
+    ``is_confidently_harmful`` predicate.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    harm_min_events: int = Field(
+        default=3,
+        description="Minimum intro events before a card can be judged harmful.",
+    )
+    harm_quantile: float = Field(
+        default=0.80,
+        description="Optimistic posterior quantile used by the harm predicate.",
+    )
+    harm_threshold: float = Field(
+        default=0.5,
+        description="Harmful iff the optimistic P(not harmful) read stays below this.",
+    )
+    confident_quantile: float = Field(
+        default=0.20,
+        description="Pessimistic posterior quantile used for the confidence flag.",
+    )
+    confident_threshold: float = Field(
+        default=0.5,
+        description="Confident iff the pessimistic P(help) read clears this.",
+    )
+    cold_prior: tuple[float, float] = Field(
+        default=(3.0, 3.0),
+        description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
+    )
+
+    def posterior(
+        self, gains: Sequence[float], *, threshold: float = 0.0
+    ) -> CardStatsBlock:
+        return beta_binomial_posterior(
+            gains,
+            threshold=threshold,
+            confident_quantile=self.confident_quantile,
+            confident_threshold=self.confident_threshold,
+        )
+
+    def card_stats(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        """The single statistics block every per-card efficacy view resolves
+        through: the global, unadjusted block computed from the card's gain
+        events (``None`` when the card has none). ``context`` is the additive
+        read-seam hook contextual reputations condition on; ignored here."""
+        return block_from_events(
+            card.gain_events,
+            confident_quantile=self.confident_quantile,
+            confident_threshold=self.confident_threshold,
+        )
+
+    def posterior_of(self, block: CardStatsBlock | None) -> tuple[float, float]:
+        """(alpha, beta) of a resolved block's downside posterior; ``cold_prior``
+        when absent. Pure projection over an already-resolved ``card_stats``
+        block, so one resolve per candidate serves the auction and the render
+        alike."""
+        if block is None or block.posterior_a is None or block.posterior_b is None:
+            return self.cold_prior
+        a = float(block.posterior_a)
+        b = float(block.posterior_b)
+        # Beta(a, b) requires finite a > 0, b > 0; a corrupt stamped block
+        # would otherwise raise inside the auction's rng.beta draw.
+        if not (math.isfinite(a) and math.isfinite(b) and a > 0 and b > 0):
+            return self.cold_prior
+        return (a, b)
+
+    def magnitude_of(self, block: CardStatsBlock | None) -> float | None:
+        """A resolved block's expected gain (``IntroGain_best_median``) — the EV
+        auction's magnitude. ``None`` when the block is absent or carries no use
+        evidence (no events, or founding-only birth evidence — either sign), so
+        the auction falls back to its borrowed gain scale."""
+        if block is None or block.IntroGain_best_median is None:
+            return None
+        return float(block.IntroGain_best_median)
+
+    def card_posterior(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, float]:
+        """``posterior_of`` composed with ``card_stats`` — one-card convenience
+        for callers outside the reader's batched resolve."""
+        return self.posterior_of(self.card_stats(card, context))
+
+    def card_magnitude(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> float | None:
+        """``magnitude_of`` composed with ``card_stats`` — one-card convenience
+        for callers outside the reader's batched resolve."""
+        return self.magnitude_of(self.card_stats(card, context))
+
+    def event_deltas(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        """Bootstrap EV support values.
+
+        Empty means genuinely cold or founding-only. Unused/invalid exposures
+        contribute zero support so they do not receive another cold-start bid.
+        """
+        return _ev_rewards(card.gain_events)
+
+    def event_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        """Causal weights aligned with :meth:`event_deltas`."""
+        return _ev_reward_weights(card.gain_events)
+
+    def evidence_events(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[ContextualGain, ...]:
+        """Concrete event rows behind :meth:`event_deltas`."""
+        return _ev_events(card.gain_events)
+
+    def staleness_weight(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> float:
+        """Bank-cycle evidence discount ``w = 2**(-s/H)`` used as the bootstrap
+        resample weight. The un-decayed base never ages evidence (``1.0``); the
+        staleness stack overrides this and the decay reputation reuses the same
+        mechanism."""
+        return 1.0
+
+    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool:
+        """True iff the resolved stats block excludes the card as harmful: at
+        least ``harm_min_events`` intro events and even the optimistic
+        ``harm_quantile`` read of P(not harmful) stays below ``harm_threshold``.
+        A missing block or one without posterior parameters is never harmful."""
+        if block is None or block.posterior_a is None or block.posterior_b is None:
+            return False
+        a = float(block.posterior_a)
+        b = float(block.posterior_b)
+        # Beta(a, b) requires finite a > 0, b > 0; beta.ppf on a degenerate
+        # (0/negative) posterior returns nan, and ``nan < threshold`` is False —
+        # which would silently read a corrupt block as "never harmful".
+        if block.intro_events < self.harm_min_events or not (
+            math.isfinite(a) and math.isfinite(b) and a > 0 and b > 0
+        ):
+            return False
+        return float(beta.ppf(self.harm_quantile, a, b)) < self.harm_threshold
+
+    def fit_no_card_baseline(
+        self, outcomes: Sequence[Any], *, higher_is_better: bool
+    ) -> Any:
+        return _global_no_card_baseline(outcomes, higher_is_better=higher_is_better)
+
+
+class BDProximityReputation(BetaBinomialReputation):
+    """Read-time BD-cell partitioned reputation (the contextual bandit's value
+    channel).
+
+    Re-buckets each card's stored ``gain_events`` into the query parent's
+    *current* MAP-Elites cell via the run's own ``behavior_space.get_cell`` and
+    bids over the in-cell subset only — a card that helped near cell A and hurt
+    near cell B bids high in A and abstains in B from the same stored list. A
+    parent cell with no in-cell event delegates byte-for-byte to ``fallback``.
+
+    The cell is recomputed every read from the immutable ``parent_metrics``
+    under a per-read snapshot of the ``behavior_space``'s bounds — the bandit
+    reads one frozen tessellation, never stores a cell id (``DynamicBehaviorSpace``
+    moves cells on every reindex).
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    behavior_space: BehaviorSpace = Field(
+        description="The run's tessellation; bucketing reads its CURRENT bounds.",
+    )
+    fallback: BetaBinomialReputation = Field(
+        default_factory=BetaBinomialReputation,
+        description="Cold-cell delegate: the global event-derived reputation.",
+    )
+
+    @staticmethod
+    def _cell_in(
+        space: BehaviorSpace, metrics: dict[str, float]
+    ) -> tuple[int, ...] | None:
+        # A missing or non-finite behavior coord has no well-defined cell —
+        # LinearBinning silently clamps NaN to bin 0, so guard here and abstain
+        # to fallback rather than credit events to a spurious low-end cell.
+        for key in space.behavior_keys:
+            value = metrics.get(key)
+            if value is None or not math.isfinite(value):
+                return None
+        return space.get_cell(metrics)
+
+    def _in_cell(
+        self, card: Card, context: DecisionContext | None
+    ) -> list[ContextualGain] | None:
+        if context is None:
+            return None
+        events = card.gain_events
+        if not events:
+            return None
+        # DynamicBehaviorSpace.check_and_expand mutates the live bounds on every
+        # reindex; freeze one tessellation for this read so the parent cell and
+        # every event cell are bucketed against the same bounds (a mid-read
+        # reindex can't split co-located events off the parent cell).
+        space = self.behavior_space.model_copy(deep=True)
+        parent_cell = self._cell_in(space, context.parent_metrics)
+        if parent_cell is None:
+            return None
+        in_cell = [
+            event
+            for event in events
+            if self._cell_in(space, event.context.parent_metrics) == parent_cell
+        ]
+        # Founding-only cells do not block fallback to global real-use evidence.
+        # Zero-valued unused/invalid exposure still returns a non-empty tuple and
+        # remains local evidence.
+        if not in_cell or not _ev_rewards(in_cell):
+            return None
+        return in_cell
+
+    def card_stats(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        in_cell = self._in_cell(card, context)
+        if in_cell is None:
+            return self.fallback.card_stats(card, context)
+        # Same global block math as the base reputation, but over the in-cell
+        # subset only: the cell partition already controls for context, so the
+        # harm count and median magnitude are measured BD-locally rather than
+        # against a parent-fitness counterfactual. Cold cells delegated above.
+        return block_from_events(
+            in_cell,
+            confident_quantile=self.confident_quantile,
+            confident_threshold=self.confident_threshold,
+        )
+
+    def event_deltas(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        """The card's in-cell EV support values — the bootstrap resample support
+        partitioned by the query parent's MAP-Elites cell, exactly the subset
+        ``card_stats`` prices here. Falls back to the global deltas when the
+        parent cell holds no in-cell event (the cold-cell delegation above)."""
+        in_cell = self._in_cell(card, context)
+        if in_cell is None:
+            return self.fallback.event_deltas(card, context)
+        return _ev_rewards(in_cell)
+
+    def event_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        in_cell = self._in_cell(card, context)
+        if in_cell is None:
+            return self.fallback.event_weights(card, context)
+        return _ev_reward_weights(in_cell)
+
+    def evidence_events(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[ContextualGain, ...]:
+        in_cell = self._in_cell(card, context)
+        if in_cell is None:
+            return self.fallback.evidence_events(card, context)
+        return _ev_events(in_cell)
+
+    def fit_no_card_baseline(
+        self, outcomes: Sequence[Any], *, higher_is_better: bool
+    ) -> Any:
+        """Median no-card progress by this reputation's BD cell, with global fallback."""
+        space = self.behavior_space.model_copy(deep=True)
+        global_deltas: list[float] = []
+        deltas_by_cell: dict[tuple[int, ...], list[float]] = {}
+        for outcome in _no_card_cohort(outcomes):
+            delta: float | None
+            if getattr(outcome, "base_fitness", None) is not None and getattr(
+                outcome, "invalid", False
+            ):
+                delta = 0.0
+            else:
+                delta = _outcome_delta(outcome, higher_is_better)
+            if delta is None or not math.isfinite(delta):
+                continue
+            global_deltas.append(delta)
+            metrics = getattr(outcome, "base_metrics", {}) or {}
+            if (cell := self._cell_in(space, metrics)) is not None:
+                deltas_by_cell.setdefault(cell, []).append(delta)
+        return _CellNoCardBaseline(
+            behavior_space=space,
+            global_median=_median(global_deltas),
+            by_cell={cell: _median(deltas) for cell, deltas in deltas_by_cell.items()},
+            has_evidence=bool(global_deltas),
+        )
+
+
+class BootstrapReputation:
+    """Bootstrap-EV reputation: re-prices the gain summary a card's block carries
+    on the mean and low quantile of its weighted-bootstrap expected-gain
+    distribution, so every reader that already trusts the block — the shortlist
+    bench, the renderer endorsement, the auction's cold-magnitude borrow — sees
+    the same tail-aware EV the bootstrap auction bids on, without re-deriving it.
+
+    Decorates any :class:`ReputationModel` (global, BD-local, or decayed). The
+    inner reputation still owns the downside Beta posterior (the harm gate reads
+    it unchanged via ``is_confidently_harmful``) and the raw event deltas; this
+    layer adds explicit bootstrap-EV fields: ``IntroGain_bootstrap_ev_mean`` is
+    the central EV the auction bids, and ``IntroGain_bootstrap_ev_lo20`` is the
+    pessimistic EV the bootstrap bench reads. The inner ``p_help_*`` probability
+    fields remain probabilities; EV is never written into them. The observed
+    median stays in ``IntroGain_best_median`` so rendering does not call an EV a
+    median.
+
+    Staleness reuses the one bank-cycle mechanism ``bank_cycle_weight`` (shared
+    with :class:`~gigaevo.memory.read.decay.DecayingReputation`): the discount
+    ``w = 2**(-s/H)`` enters as the per-event resample weight, so a stale known
+    card's own deltas fade toward neutral zero rather than borrowing unrelated
+    winners' positive scale. A card with no non-founding evidence keeps its
+    inner block untouched; the write-side birth-failure evictor is responsible
+    for deleting catastrophic founding losses before they reach this read path.
+    """
+
+    def __init__(
+        self,
+        inner: ReputationModel,
+        store: MemoryStore,
+        *,
+        half_life_cycles: float = 1.0,
+        ev_lo_quantile: float = 0.20,
+        n_bootstrap: int = 512,
+        confident_min_events: int = 3,
+    ) -> None:
+        if half_life_cycles <= 0:
+            raise ValueError(
+                f"half_life_cycles must be positive, got {half_life_cycles}"
+            )
+        if not 0.0 <= ev_lo_quantile < 1.0:
+            raise ValueError(f"ev_lo_quantile must be in [0, 1), got {ev_lo_quantile}")
+        if n_bootstrap <= 0:
+            raise ValueError(f"n_bootstrap must be positive, got {n_bootstrap}")
+        if confident_min_events < 1:
+            raise ValueError(
+                f"confident_min_events must be positive, got {confident_min_events}"
+            )
+        self._inner = inner
+        self._store = store
+        self._half_life_cycles = half_life_cycles
+        self._ev_lo_quantile = ev_lo_quantile
+        self._n_bootstrap = n_bootstrap
+        self._confident_min_events = confident_min_events
+
+    def card_stats(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        block = self._inner.card_stats(card, context)
+        if block is None:
+            return None
+        deltas = self._inner.event_deltas(card, context)
+        if not deltas:
+            # No non-founding EV support to bootstrap. Leave the inner block as
+            # is; true cold exploration is owned by the auction, while severe
+            # founding losses are deleted on the write side.
+            return block
+        weights = self._inner.event_weights(card, context)
+        weight = self.staleness_weight(card, context)
+        # Deterministic per-card seed: the block's pessimistic EV must be
+        # reproducible read-to-read and must never consume the live auction
+        # round's RNG stream.
+        rng = stable_rng(card.id, len(deltas), self._n_bootstrap)
+        samples = bootstrap_ev_samples(
+            deltas,
+            0.0,
+            weight,
+            self._n_bootstrap,
+            rng,
+            delta_weights=weights,
+        )
+        ev_mean = float(samples.mean())
+        ev_lo = float(np.quantile(samples, self._ev_lo_quantile))
+        effective_events = weight * sum(weights or (1.0 for _ in deltas))
+        return block.model_copy(
+            update={
+                "IntroGain_bootstrap_ev_mean": ev_mean,
+                "IntroGain_bootstrap_ev_lo20": ev_lo,
+                "efficacy_confident": bool(
+                    effective_events >= self._confident_min_events
+                    and block.efficacy_confident
+                    and ev_lo > 0.0
+                ),
+            }
+        )
+
+    def posterior_of(self, block: CardStatsBlock | None) -> tuple[float, float]:
+        return self._inner.posterior_of(block)
+
+    def magnitude_of(self, block: CardStatsBlock | None) -> float | None:
+        if block is not None and block.IntroGain_bootstrap_ev_mean is not None:
+            return float(block.IntroGain_bootstrap_ev_mean)
+        return self._inner.magnitude_of(block)
+
+    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool:
+        return self._inner.is_confidently_harmful(block)
+
+    def event_deltas(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        return self._inner.event_deltas(card, context)
+
+    def event_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        return self._inner.event_weights(card, context)
+
+    def evidence_events(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[ContextualGain, ...]:
+        evidence = getattr(self._inner, "evidence_events", None)
+        if callable(evidence):
+            return evidence(card, context)
+        return ()
+
+    def staleness_weight(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> float:
+        return bank_cycle_weight(
+            card,
+            self._store.snapshot(),
+            self._half_life_cycles,
+            reference_events=self.evidence_events(card, context),
+        )
+
+    def fit_no_card_baseline(
+        self, outcomes: Sequence[Any], *, higher_is_better: bool
+    ) -> NoCardBaseline:
+        fit = getattr(self._inner, "fit_no_card_baseline", None)
+        if callable(fit):
+            return fit(outcomes, higher_is_better=higher_is_better)
+        return _global_no_card_baseline(outcomes, higher_is_better=higher_is_better)
