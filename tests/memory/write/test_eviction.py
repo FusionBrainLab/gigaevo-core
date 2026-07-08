@@ -16,6 +16,7 @@ from gigaevo.memory.write.eviction import (
     CompositeEvictor,
     HarmEvictor,
     NullEvictor,
+    PolicyNonViableEvictor,
 )
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
@@ -79,6 +80,44 @@ def test_null_evictor_never_evicts(make_card):
     card = make_card()
     assert evictor.should_evict(card) is False
     assert evictor.sweep([card]) == []
+
+
+def test_policy_nonviable_evicts_single_negative_use_zombie(make_card, make_event):
+    evictor = PolicyNonViableEvictor(BetaBinomialReputation(), neutral_gain=0.0)
+    card = make_card(gain_events=(make_event(-0.1),))
+
+    assert evictor.should_evict(card) is True
+    assert "policy non-viable" in evictor.eviction_reason(card)
+
+
+def test_policy_nonviable_evicts_unused_only_zombie(make_card, make_event):
+    evictor = PolicyNonViableEvictor(BetaBinomialReputation(), neutral_gain=0.0)
+    card = make_card(gain_events=(make_event(0.0, unused=True),))
+
+    assert evictor.should_evict(card) is True
+
+
+def test_policy_nonviable_keeps_baseline_positive_card(make_card, make_event):
+    evictor = PolicyNonViableEvictor(BetaBinomialReputation(), neutral_gain=0.0)
+    # Stored gain is already child-parent minus no-card baseline. A raw child
+    # regression that beats an even-worse no-card baseline is positive here.
+    card = make_card(gain_events=(make_event(0.1),))
+
+    assert evictor.should_evict(card) is False
+
+
+def test_policy_nonviable_keeps_mixed_sign_card(make_card, make_event):
+    evictor = PolicyNonViableEvictor(BetaBinomialReputation(), neutral_gain=0.0)
+    card = make_card(gain_events=(make_event(-0.3), make_event(0.1)))
+
+    assert evictor.should_evict(card) is False
+
+
+def test_policy_nonviable_ignores_founding_only_cards(make_card, make_event):
+    evictor = PolicyNonViableEvictor(BetaBinomialReputation(), neutral_gain=0.0)
+    card = make_card(gain_events=(make_event(-0.3, founding=True),))
+
+    assert evictor.should_evict(card) is False
 
 
 def _metrics(significant_change: float | None) -> MetricsContext:

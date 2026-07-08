@@ -1,10 +1,11 @@
-"""Harm eviction over the card bank.
+"""Configured eviction policies over the card bank.
 
-The write path must not import the read system, but the harm verdict IS the
-read side's injection posterior. ``CardScorer`` inverts that dependency: this
-module declares the scoring surface it needs, ``read/reputation.py``'s
-reputation models satisfy it structurally, and the integration config wires
-one shared instance into both sides.
+The write path must not import the read system, but eviction verdicts read the
+same reputation/value view as prompt selection. ``CardScorer`` /
+``CardValueScorer`` invert that dependency: this module declares the scoring
+surface it needs, ``read/reputation.py``'s reputation models satisfy it
+structurally, and the integration config wires one shared instance into both
+sides.
 """
 
 from __future__ import annotations
@@ -26,6 +27,14 @@ class CardScorer(Protocol):
     ) -> CardStatsBlock | None: ...
 
     def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool: ...
+
+
+class CardValueScorer(CardScorer, Protocol):
+    def magnitude_of(self, block: CardStatsBlock | None) -> float | None: ...
+
+    def event_deltas(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]: ...
 
 
 class Evictor(Protocol):
@@ -70,6 +79,57 @@ class HarmEvictor:
             )
             logger.info(
                 "[Memory][Evictor] Sweep evicting {}/{} card(s) as confidently harmful: {}",
+                len(evicted),
+                len(cards),
+                evicted,
+            )
+        return evicted
+
+
+class PolicyNonViableEvictor:
+    """Evicts cards the active value policy has made non-viable.
+
+    This is not a statistical harm verdict. It is bank hygiene for cards with
+    real non-founding evidence that the configured reputation/EV stack prices at
+    or below the neutral no-card baseline, while no direct baseline-adjusted use
+    has ever beaten that neutral point. Mixed-sign cards are deliberately left to
+    the normal harm/confidence path.
+    """
+
+    def __init__(self, scorer: CardValueScorer, *, neutral_gain: float) -> None:
+        if not math.isfinite(neutral_gain):
+            raise ValueError(f"neutral_gain must be finite, got {neutral_gain}")
+        self._scorer = scorer
+        self._neutral_gain = float(neutral_gain)
+
+    def should_evict(self, card: Card) -> bool:
+        evidence = _harm_evidence(card)
+        deltas = self._scorer.event_deltas(evidence)
+        if not deltas:
+            return False
+        if any(delta > self._neutral_gain for delta in deltas):
+            return False
+        block = self._scorer.card_stats(evidence)
+        ev = self._scorer.magnitude_of(block)
+        return (
+            ev is not None
+            and math.isfinite(float(ev))
+            and float(ev) <= self._neutral_gain
+        )
+
+    def eviction_reason(self, card: Card) -> str:
+        del card
+        return "policy non-viable: non-positive EV with no positive direct evidence"
+
+    def sweep(self, cards: Sequence[Card]) -> list[str]:
+        evicted = [card.id for card in cards if self.should_evict(card)]
+        if evicted:
+            emit_memory_event(
+                MemoryEvictionSweep(bank_count=len(cards), evicted_ids=tuple(evicted))
+            )
+            logger.info(
+                "[Memory][PolicyNonViableEvictor] Sweep evicting {}/{} card(s) "
+                "with non-positive EV and no positive direct evidence: {}",
                 len(evicted),
                 len(cards),
                 evicted,
@@ -228,7 +288,7 @@ class CompositeEvictor:
 
 
 class NullEvictor:
-    """No-op evictor: never evicts. Runs the write path with the harm sweep
+    """No-op evictor: never evicts. Runs the write path with eviction sweeps
     disabled, the bank-maintenance twin of ``memory=none`` on the read side."""
 
     def should_evict(self, card: Card) -> bool:

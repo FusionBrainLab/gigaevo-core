@@ -81,6 +81,12 @@ def test_full_defaults_to_recommended_contextual_bootstrap_with_lineage():
         memory.evictor.evictors[1]._target_
         == "gigaevo.memory.write.eviction.HarmEvictor"
     )
+    assert (
+        memory.evictor.evictors[2]._target_
+        == "gigaevo.memory.write.eviction.PolicyNonViableEvictor"
+    )
+    assert memory.neutral_gain == pytest.approx(0.0)
+    assert memory.evictor.evictors[2].neutral_gain == pytest.approx(0.0)
 
 
 def test_ev_floor_quantile_is_bootstrap_policy_local():
@@ -110,6 +116,18 @@ def test_reader_defaults_to_portable_bootstrap_with_lineage():
     )
     assert not _contains_behavior_space_ref(raw_reputation)
     assert memory.excluder._target_ == "gigaevo.memory.read.exclusion.LineageExcluder"
+
+
+def test_writer_default_evictor_uses_memory_neutral_gain():
+    cfg = _compose("memory=writer")
+    memory = cfg.memory
+
+    assert memory.neutral_gain == pytest.approx(0.0)
+    assert (
+        memory.evictor.evictors[2]._target_
+        == "gigaevo.memory.write.eviction.PolicyNonViableEvictor"
+    )
+    assert memory.evictor.evictors[2].neutral_gain == pytest.approx(memory.neutral_gain)
 
 
 def test_portable_policy_contains_no_behavior_space_ref():

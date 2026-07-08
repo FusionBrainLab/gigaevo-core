@@ -1,9 +1,9 @@
 """AST-enforced layering of ``gigaevo.memory``.
 
 Layer order: ``cards < events < storage < {read | write} < provider``.
-``read/`` and ``write/`` never import each other (eviction's ``CardScorer``
-Protocol lives in ``write/``; ``read/reputation`` implements it; config wires
-them). Chroma is confined to ``storage/index.py``; LLM handles (routers,
+``read/`` and ``write/`` never import each other (eviction's ``CardScorer`` /
+``CardValueScorer`` Protocols live in ``write/``; ``read/reputation`` implements
+them; config wires them). Chroma is confined to ``storage/index.py``; LLM handles (routers,
 agents, langgraph/langchain) are confined to the research agent and the
 write-side authoring modules.
 """

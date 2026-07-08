@@ -4,7 +4,7 @@ The hook is a thin orchestration shell over four collaborators, mirroring the
 reader's modular pipeline: a :class:`ProgramRecordExtractor` (eligible records +
 dedup bookkeeping), a :class:`LibrarianWriteStack` (the shared store + a lazy
 gate/librarian + task summary), a :class:`CardStatsUpdater` (gain attribution +
-restamp + harm sweep), and a :class:`ConsolidationScheduler` (throttled
+restamp + configured eviction), and a :class:`ConsolidationScheduler` (throttled
 background dedup).
 There is no enable flag — when the writer is off the config wires
 ``NullPostRunHook`` instead.
@@ -253,16 +253,16 @@ class MemoryWriter(IncrementalPostRunHook):
     """PostRunHook that authors memory cards from a completed evolutionary run
     via the librarian write path: each eligible mutation diff is reconciled into
     clean idea cards, each top-fitness exemplar gets a program card, and one
-    harm-eviction sweep runs per increment.
+    configured eviction sweep runs per increment.
 
     Instantiated by Hydra; the config declares the evictor and llm once and
     shares them by reference.
 
     Args:
         llm: Memory LLM router for the librarian agents.
-        evictor: Harm evictor consulted by the admission gate — the config wires
-            ``HarmEvictor`` over the read side's reputation (``memory=full``) or
-            ``NullEvictor``.
+        evictor: Eviction policy consulted by the admission gate — the default
+            config wires a composite over the read side's reputation;
+            ``memory/evictor=none`` uses ``NullEvictor``.
         store: The one ``MemoryStore`` the run shares (``${ref:memory.store}``);
             the reader reads the same instance, so a write is visible to the
             next read with no cross-view sync.
@@ -458,7 +458,7 @@ class MemoryWriter(IncrementalPostRunHook):
         pool = programs if posterior_programs is None else posterior_programs
         await self._author_exemplars(pool, summary)
 
-        # re-stamping (per-card store writes) and harm eviction are blocking
+        # re-stamping (per-card store writes) and eviction are blocking
         # I/O; keep them off the event loop so in-flight mutations don't stall
         await _shielded_to_thread(
             self._stats.update,
@@ -526,8 +526,8 @@ class MemoryWriter(IncrementalPostRunHook):
             except Exception as exc:
                 # A non-timeout authoring failure (API/schema error) must
                 # degrade per-exemplar like the idea path, not abort the
-                # increment before the stats restamp and harm sweep. Cancellation
-                # (BaseException) still propagates.
+                # increment before the stats restamp and eviction sweep.
+                # Cancellation (BaseException) still propagates.
                 logger.warning(
                     "[Memory][Writer] authoring exemplar {} failed ({}); skipping",
                     prog.id,
@@ -556,7 +556,7 @@ class MemoryWriter(IncrementalPostRunHook):
                 # Card construction (validation) or the gate's store write can
                 # fail for one exemplar (e.g. a persist hiccup); degrade it like
                 # the authoring path so the remaining exemplars, the stats
-                # restamp, and the harm sweep still run.
+                # restamp, and the eviction sweep still run.
                 logger.warning(
                     "[Memory][Writer] admitting exemplar {} failed ({}); skipping",
                     prog.id,

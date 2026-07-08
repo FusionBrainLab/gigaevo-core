@@ -6,8 +6,8 @@ no-card baseline; selected but unused cards receive an explicit ``unused``
 exposure event. The card stores only event rows; ``read/reputation.py`` computes
 every per-card statistic from them at read time. After each write sweep
 ``CardStatsUpdater`` recomputes the events from the full program pool, restamps
-every changed card, and runs one harm-eviction pass — gain events are a pure
-function of the pool, so each sweep is authoritative. Validity/sentinel semantics
+every changed card, and runs one configured eviction pass — gain events are a
+pure function of the pool, so each sweep is authoritative. Validity/sentinel semantics
 come from
 ``MetricsContext.strict_fitness`` / ``is_evaluated_invalid``.
 """
@@ -527,7 +527,7 @@ class CardStatsUpdater:
         self, pool: list[Program], *, store: MemoryStore, gate: CardAdmissionGate
     ) -> None:
         """Attribute outcomes across the pool, emit the restamp event, restamp the
-        selected cards, and run one harm-eviction sweep. Events for a card id
+        selected cards, and run one configured eviction sweep. Events for a card id
         nothing in the bank can receive — neither a banked id nor an absorbed
         alias, e.g. a card evicted after the child froze its selection — is
         dropped before the restamp event, so the telemetry never reports events
@@ -577,7 +577,7 @@ class CardStatsUpdater:
         preserve_events_outside_child_ids: set[str] | None = None,
     ) -> None:
         """Attach this sweep's outcome events onto selected cards, then run one
-        harm-eviction pass. Selected cards get this sweep's events; cards no
+        configured eviction pass. Selected cards get this sweep's events; cards no
         longer selected have stale events cleared. Only cards whose
         events changed are rewritten."""
         stamper = CardStatsStamper()

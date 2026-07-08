@@ -109,8 +109,9 @@ exemplars  author program cards for top-fitness programs (best_programs_percent)
            a harm-evicted exemplar is tombstoned and never re-authored this run
 restamp    base-relative fitness gain events across the full lineage pool;
            credit that no longer resolves to a banked card is dropped
-evict      harm sweep — confidently-harmful cards leave the bank, and their
-           ids are tombstoned against re-admission for the rest of the run
+evict      configured eviction sweep — catastrophic-birth, confidently-harmful,
+           and policy-non-viable cards leave the bank; deleted ids are
+           tombstoned against re-admission for the rest of the run
 consolidate inline same-batch folding of each increment's freshly added cards,
            plus a throttled background pass over the whole bank
 ```
@@ -143,7 +144,7 @@ instantiate-once mechanism algorithm configs use for `behavior_space`):
 defaults:
   - llm: gemini              # memory LLM router (research + librarian agents)
   - read_policy: recommended # owns reputation + auction + budget + excluder + shortlister
-  - evictor: recommended     # birth-failure + later-use harm eviction
+  - evictor: recommended     # birth-failure + harm + policy-non-viable eviction
 
 store:      # LocalMemoryStore = card bank + vector index + research agent
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
@@ -192,7 +193,7 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only |
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
-| `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion with later-use harm eviction; `harm` keeps only the later-use harm sweep |
+| `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion, later-use harm eviction, and policy-non-viable active-bank cleanup; `harm` keeps only the later-use harm sweep |
 
 `memory/llm` is independent of the main mutation `llm`. The default
 `memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
@@ -310,8 +311,10 @@ survivor. It rides **NEW admits only**: a DUPLICATE or MERGE ruling at ingest
 drops the incoming founding event, because the delta was measured for that
 child against its parent — foreign evidence for a pre-existing lever.
 Harm-eviction remains later-use-only; catastrophic origin failures are handled
-by the separate birth-failure policy. Program exemplars keep the
-zero-evidence-at-birth path.
+by the separate birth-failure policy. The recommended evictor also removes
+policy-non-viable cards whose active value estimate is at or below
+`memory.neutral_gain` and whose direct baseline-adjusted evidence never beat
+that neutral point. Program exemplars keep the zero-evidence-at-birth path.
 
 ## Tracking: did memory actually flow?
 

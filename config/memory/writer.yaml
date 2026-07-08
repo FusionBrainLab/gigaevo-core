@@ -15,6 +15,11 @@ capabilities:
   read: false
   write: true
 
+# Neutral point for baseline-adjusted card gain. Use-attributed gains are
+# child-parent deltas after subtracting the no-card baseline, so this value is
+# the no-card counterfactual origin, not a task-specific metric threshold.
+neutral_gain: 0.0
+
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
 

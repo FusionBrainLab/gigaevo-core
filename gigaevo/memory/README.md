@@ -60,7 +60,7 @@ persisted data raises instead of being coerced.
 | `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp (credit that no longer resolves to a banked card is dropped); seeds each new insight card's `founding` gain event (signed parent→child delta) and preserves it across restamps |
 | `write/merge.py` | `DedupPolicy` + card merge semantics |
 | `write/consolidation.py` | Near-duplicate consolidation: inline same-batch pass over each increment's freshly-ADDED cards (`consolidate_written`) + throttled background pass over the whole bank |
-| `write/eviction.py` | `CardScorer` Protocol, `BirthFailureEvictor` (catastrophic origin failure), `HarmEvictor` (later-use harm), `CompositeEvictor`, `NullEvictor` |
+| `write/eviction.py` | `CardScorer` / `CardValueScorer` Protocols, `BirthFailureEvictor` (catastrophic origin failure), `HarmEvictor` (later-use harm), `PolicyNonViableEvictor` (active-policy non-viable cards), `CompositeEvictor`, `NullEvictor` |
 | `write/extraction.py` | `ProgramRecordExtractor` — eligible records via strict `MetricsContext` validity |
 | `provider.py` | `MemoryProvider` ABC + `NullMemoryProvider` / `ReaderMemoryProvider` / `StaticLeverMemoryProvider` |
 | `live_memory_hook.py` | `LiveMemoryRefreshHook` — periodic in-run writer sweeps (`post_step_hook`) |

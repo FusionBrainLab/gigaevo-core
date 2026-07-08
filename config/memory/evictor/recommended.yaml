@@ -1,7 +1,9 @@
 # @package memory.evictor
 # Recommended write-side deletion policy:
 # 1. reject catastrophic founding failures before they can behave like cold cards;
-# 2. evict cards whose later use evidence is confidently harmful.
+# 2. evict cards whose later use evidence is confidently harmful;
+# 3. retire cards the active read policy has made non-viable before the harm
+#    posterior can collect more samples.
 #
 # Birth failure uses the primary metric's `significant_change` as its scale.
 # With the default multiplier 2.0, a card born from a child that regressed by at
@@ -19,3 +21,7 @@ evictors:
     rescue_ev_threshold: 0.0
   - _target_: gigaevo.memory.write.eviction.HarmEvictor
     scorer: ${ref:memory.reputation}
+  - _target_: gigaevo.memory.write.eviction.PolicyNonViableEvictor
+    scorer: ${ref:memory.reputation}
+    # Derived from the active memory preset's baseline-adjusted reward origin.
+    neutral_gain: ${memory.neutral_gain}

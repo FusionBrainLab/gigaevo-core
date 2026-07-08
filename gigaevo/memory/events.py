@@ -276,9 +276,9 @@ class MemoryGainRestamp(MemoryEvent):
 class MemoryEvictionSweep(MemoryEvent):
     event: ClassVar[str] = "MEMORY_EVICTION_SWEEP"
     description: ClassVar[str] = (
-        "A harm sweep evicted confidently-harmful cards from the bank."
+        "A configured eviction sweep deleted cards from the bank."
     )
-    health_question: ClassVar[str] = "Is harm eviction firing, and how often?"
+    health_question: ClassVar[str] = "Is memory eviction firing, and how often?"
 
     bank_count: int = 0
     evicted_ids: tuple[str, ...] = ()
