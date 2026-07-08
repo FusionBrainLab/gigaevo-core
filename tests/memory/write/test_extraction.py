@@ -62,6 +62,11 @@ def test_mutation_output_coerces_none_fields():
     assert out.changes == []
 
 
+def test_mutation_output_accepts_diff_parent_letters():
+    out = MutationOutput.model_validate({"base_parent": "B"})
+    assert out.base_parent == 2
+
+
 def test_extraction_models_are_frozen():
     # Records flow through async writer paths shared across sweeps; silent
     # in-place mutation would corrupt gain attribution downstream.
@@ -80,6 +85,18 @@ def test_program_to_record_picks_named_base_parent(make_program):
     prog = make_program(
         parents=["p-first", "p-second"],
         metadata={MUTATION_OUTPUT_METADATA_KEY: {"base_parent": 2}},
+    )
+    record = program_to_record(
+        prog, "task", "summary", parent_codes={"p-second": "y = 2"}
+    )
+    assert record.base_parent_id == "p-second"
+    assert record.parent_code == "y = 2"
+
+
+def test_program_to_record_picks_letter_base_parent(make_program):
+    prog = make_program(
+        parents=["p-first", "p-second"],
+        metadata={MUTATION_OUTPUT_METADATA_KEY: {"base_parent": "B"}},
     )
     record = program_to_record(
         prog, "task", "summary", parent_codes={"p-second": "y = 2"}

@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from gigaevo.evolution.engine.mutation import base_parent_index
 from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.memory.cards import ContextualGain
 from gigaevo.memory.write.stats import founding_gain_event
@@ -107,7 +108,7 @@ class MutationOutput(BaseModel):
     @field_validator("base_parent", mode="before")
     @classmethod
     def coerce_none_base_parent(cls, value: Any) -> Any:
-        return value or 1
+        return base_parent_index(value or 1)
 
 
 def program_to_record(
