@@ -55,8 +55,8 @@ python run.py problem.name=toy_example \
     max_concurrent_dags=20 \
     max_in_flight=12
 
-# Use a different Redis database
-python run.py problem.name=toy_example redis.db=5
+# Use Redis-backed storage on a specific DB
+python run.py problem.name=toy_example storage=redis redis.db=5
 
 # Disable the LLM I/O audit trail (on by default)
 python run.py problem.name=toy_example llm_io_dump=false
@@ -129,7 +129,7 @@ python run.py problem.name=chains/hover/full7 program_format=json_document
 
 # Co-evolved mutation prompts
 python run.py problem.name=toy_example \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6
+    storage=redis prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6
 ```
 
 ### Available Config Groups
@@ -146,14 +146,14 @@ python run.py problem.name=toy_example \
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
 | `loader` | `directory`, `top_programs` (knobs: `loader.source_db` — Redis DB to read seeds from, default 0; `loader.top_n` — number of top programs to seed, default 50) |
 | `logging` | `tensorboard`, `wandb` |
-| `storage` | `redis` (default), `disk` |
+| `storage` | `disk` (default), `redis` |
 
 ### Disk Storage Backend
 
-Programs and archives can be persisted to JSON files instead of Redis:
+Programs and archives are persisted to JSON files by default:
 
 ```bash
-python run.py problem.name=toy_example storage=disk
+python run.py problem.name=toy_example
 ```
 
 Data lands under `<hydra run dir>/storage/<problem name>/` by default
@@ -164,6 +164,12 @@ no cross-process pub/sub. Metrics history also goes to disk (JSONL files
 under `<hydra run dir>/metrics/`), and live monitors
 (`live_frontier_compare`) read it through the same backend — `storage=disk`
 runs are fully Redis-free.
+
+Use Redis explicitly when you want Redis-backed program/archive storage:
+
+```bash
+python run.py problem.name=toy_example storage=redis redis.db=5
+```
 
 Inspect a disk run with the CLI by passing the storage path as the run
 spec (read-only, safe while the run is live):

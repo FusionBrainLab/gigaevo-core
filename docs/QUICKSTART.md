@@ -5,7 +5,6 @@ This guide gets you from zero to running evolution in **5 minutes**.
 ## Prerequisites
 
 - Python 3.11+
-- Redis server running
 - OpenRouter API key (or other LLM provider)
 
 ## Step 1: Install (30 seconds)
@@ -34,14 +33,7 @@ pip install -e ".[all,dev,test]"         # developer
 
 See the [README install table](../README.md#1-install) for the full mapping.
 
-## Step 2: Start Redis (10 seconds)
-
-```bash
-# In a separate terminal
-redis-server
-```
-
-## Step 3: Run Your First Evolution (5 seconds to start)
+## Step 2: Run Your First Evolution (5 seconds to start)
 
 ```bash
 # Default provider: OpenRouter (set OPENAI_API_KEY=sk-or-v1-...)
@@ -89,44 +81,45 @@ You should see:
 5. **Repeat**: The steady-state engine continuously mutates and ingests until
    the configured stopper (here `max_mutants=5`) fires
 
-## Step 4: Inspect Results (while evolution runs)
+## Step 3: Inspect Results
 
-Open a new terminal:
+Disk storage is the default. After the run starts, get the latest run directory
+and inspect its local storage:
 
 ```bash
-# Show current run status (fitness, iteration count, invalidity, etc.)
-# Preferred: use --experiment mode (auto-discovers runs from experiment.yaml)
-gigaevo status -e <task>/<name>
-# Or specify a single run directly:
-gigaevo status -r heilbron@0:run-1
+LATEST_RUN=$(ls -td outputs/*/* | head -1)
 
 # Show top N programs
-gigaevo top -r heilbron@0:run-1 -n 5
+gigaevo top -r "$LATEST_RUN/storage" -n 5
 
 # Export results to CSV
-gigaevo export csv -r heilbron@0:run-1
+gigaevo export csv -r "$LATEST_RUN/storage"
 ```
 
-## Step 5: View Evolution Logs
+Redis-backed live status is still available if you launch with
+`storage=redis redis.db=<db>`.
+
+## Step 4: View Evolution Logs
 
 ```bash
 # Logs are in outputs/YYYY-MM-DD/HH-MM-SS/
 tail -f outputs/*/*/evolution_*.log
 ```
 
-## Step 6: Analyze Results
+## Step 5: Analyze Results
 
 After evolution completes:
 
 ```bash
 # Export to CSV
-gigaevo export csv -r heilbron@0:run-1
+LATEST_RUN=$(ls -td outputs/*/* | head -1)
+gigaevo export csv -r "$LATEST_RUN/storage"
 
-# Compare fitness curves across runs (pass multiple --run flags; -o is required)
-gigaevo plot comparison -r heilbron@0:run-1 -r heilbron@1:run-2 -o plots/
+# Compare fitness curves across disk runs (pass multiple --run flags; -o is required)
+gigaevo plot comparison -r outputs/run-a/storage -r outputs/run-b/storage -o plots/
 
 # View top programs
-gigaevo top -r heilbron@0:run-1 -n 10
+gigaevo top -r "$LATEST_RUN/storage" -n 10
 ```
 
 ## Understanding the Output
@@ -135,7 +128,7 @@ gigaevo top -r heilbron@0:run-1 -n 10
 
 ```
 [INFO] Step 1/5: Initializing components... ✓
-[INFO] Step 2/5: Checking Redis database... ✓
+[INFO] Step 2/5: Checking storage backend... ✓
 [INFO] Step 3/5: Loading initial programs... (5 programs) ✓
 [INFO] Step 4/5: Starting evolution... ✓
 [INFO] Step 5/5: Running until completion...
@@ -155,12 +148,14 @@ gigaevo top -r heilbron@0:run-1 -n 10
 
 ### Issue: "Redis database is not empty"
 
+This only applies to Redis-backed runs launched with `storage=redis`.
+
 **Solution:**
 ```bash
 # Flush the database (kills exec_runner workers first):
 gigaevo flush --db 0 --confirm
 # Or use a different database:
-python run.py problem.name=heilbron redis.db=1
+python run.py problem.name=heilbron storage=redis redis.db=1
 ```
 
 ### Issue: "No programs reaching DONE state"
@@ -170,11 +165,8 @@ python run.py problem.name=heilbron redis.db=1
 
 **Solution:**
 ```bash
-# Check invalidity rate
-gigaevo status -r <prefix>@<db>:<label>
-
 # View top programs and their fitness
-gigaevo top -r <prefix>@<db>:<label> -n 10
+gigaevo top -r outputs/<date>/<time>/storage -n 10
 ```
 
 ### Issue: Evolution seems slow
@@ -255,19 +247,18 @@ python run.py experiment=<experiment> problem.name=<problem>
 # Preview config (no execution)
 python run.py problem.name=<problem> --cfg job
 
-# Check run status (--experiment mode preferred for managed experiments)
+# Check run status for managed/Redis-backed experiments
 gigaevo status -e <task>/<name>
-# Or for a single run:
 gigaevo status -r <prefix>@<db>:<label>
 
 # View top programs
-gigaevo top -r <prefix>@<db>:<label> -n 10
+gigaevo top -r outputs/<date>/<time>/storage -n 10
 
 # Export results to CSV
-gigaevo export csv -r <prefix>@<db>:<label>
+gigaevo export csv -r outputs/<date>/<time>/storage
 
 # Compare fitness curves across runs (-o output dir required)
-gigaevo plot comparison -r <prefix>@<db>:A -r <prefix>@<db>:B -o plots/
+gigaevo plot comparison -r outputs/run-a/storage -r outputs/run-b/storage -o plots/
 
 # Flush Redis (kills exec_runners first — never use redis-cli FLUSHDB directly)
 gigaevo flush --db 0 --confirm
@@ -279,7 +270,7 @@ tail -f outputs/*/*/evolution_*.log
 ## Getting Help
 
 1. **Check logs**: Most issues are explained in the logs
-2. **Check run status**: `gigaevo status -r <prefix>@<db>:<label>`
+2. **Inspect programs**: `gigaevo top -r outputs/<date>/<time>/storage -n 10`
 3. **Read architecture doc**: `docs/ARCHITECTURE.md` explains the system
 4. **Check examples**: Look at existing problems in `problems/`
 
