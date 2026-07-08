@@ -176,6 +176,68 @@ def test_remove_is_idempotent(index, make_card):
     index.remove([card.id])
 
 
+def _mmr_cards(index, make_card):
+    exact = make_card(description="alpha beta gamma")
+    near_dup = make_card(description="alpha beta delta")
+    diverse = make_card(description="zeta eta theta")
+    index.upsert([exact, near_dup, diverse])
+    return exact, near_dup, diverse
+
+
+def test_mmr_lambda_one_is_pure_relevance(index, make_card):
+    exact, near_dup, diverse = _mmr_cards(index, make_card)
+    ordered = index.mmr_order(
+        "description",
+        "alpha beta gamma",
+        [diverse.id, near_dup.id, exact.id],
+        lambda_=1.0,
+    )
+    assert ordered == [exact.id, near_dup.id, diverse.id]
+
+
+def test_mmr_low_lambda_promotes_diversity(index, make_card):
+    exact, near_dup, diverse = _mmr_cards(index, make_card)
+    ordered = index.mmr_order(
+        "description",
+        "alpha beta gamma",
+        [exact.id, near_dup.id, diverse.id],
+        lambda_=0.3,
+    )
+    assert ordered == [exact.id, diverse.id, near_dup.id]
+
+
+def test_mmr_relevance_override_replaces_query_similarity(index, make_card):
+    exact, near_dup, diverse = _mmr_cards(index, make_card)
+    ordered = index.mmr_order(
+        "description",
+        "alpha beta gamma",
+        [exact.id, near_dup.id, diverse.id],
+        lambda_=1.0,
+        relevance={diverse.id: 1.0, near_dup.id: 0.5, exact.id: 0.0},
+    )
+    assert ordered == [diverse.id, near_dup.id, exact.id]
+
+
+def test_mmr_missing_ids_keep_input_order_at_tail(index, make_card):
+    exact, near_dup, diverse = _mmr_cards(index, make_card)
+    ordered = index.mmr_order(
+        "description",
+        "alpha beta gamma",
+        ["ghost-2", diverse.id, "ghost-1", exact.id],
+        lambda_=1.0,
+    )
+    assert ordered == [exact.id, diverse.id, "ghost-2", "ghost-1"]
+
+
+def test_mmr_empty_ids_is_empty(index):
+    assert index.mmr_order("description", "alpha", [], lambda_=0.5) == []
+
+
+def test_mmr_unknown_scope_raises(index):
+    with pytest.raises(KeyError, match="unknown embed scope"):
+        index.mmr_order("nope", "alpha", ["x"], lambda_=0.5)
+
+
 def _embed(model: str, *, query_prefix: str = "") -> EmbedConfig:
     return EmbedConfig(
         embedding_model=model,

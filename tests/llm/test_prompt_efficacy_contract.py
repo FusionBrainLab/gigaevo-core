@@ -33,6 +33,19 @@ def _confident_positive_line() -> str:
     )
 
 
+def _confident_expected_line() -> str:
+    return format_block_efficacy(
+        _mcard(),
+        CardStatsBlock(
+            intro_events=3,
+            IntroGain_best_median=0.020,
+            IntroGain_bootstrap_ev_mean=0.012,
+            IntroGain_bootstrap_ev_lo20=0.006,
+            efficacy_confident=True,
+        ),
+    )
+
+
 def _caution_line() -> str:
     return format_block_efficacy(
         _mcard(),
@@ -65,9 +78,20 @@ class TestEfficacyDescriptionMatchesRenderer:
             assert token in line, f"renderer no longer emits {token!r}"
             assert token in prompt, f"prompt omits renderer token {token!r}"
 
+    def test_prompt_describes_bootstrap_expected_improvement_tokens(self) -> None:
+        prompt = MutationSuggestionsPrompts.system()
+        line = _confident_expected_line()
+        for token in ("expected improvement", "(confident)"):
+            assert token in line, f"renderer no longer emits {token!r}"
+            assert token in prompt, f"prompt omits renderer token {token!r}"
+
     def test_prompt_describes_caution_token(self) -> None:
         assert "(caution: non-positive median)" in _caution_line()
         assert "(caution: non-positive median)" in MutationSuggestionsPrompts.system()
+        assert (
+            "(caution: non-positive expected improvement)"
+            in MutationSuggestionsPrompts.system()
+        )
 
     def test_prompt_describes_exemplar_token(self) -> None:
         assert "exemplar fitness" in _exemplar_line()

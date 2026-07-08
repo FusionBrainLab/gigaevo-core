@@ -11,6 +11,7 @@ from gigaevo.memory.events import MemoryReadSelection
 from gigaevo.memory.read.auction import (
     AuctionBid,
     AuctionCandidate,
+    EVThompsonAuctioneer,
     ThompsonAuctioneer,
     TopThetaBudgeter,
 )
@@ -166,6 +167,50 @@ class TestSelect:
         assert (candidate.posterior_a, candidate.posterior_b) == (3.0, 1.0)
         assert candidate.magnitude == pytest.approx(0.3)
 
+    async def test_card_stats_resolved_once_per_candidate(self, make_card, make_event):
+        # One block_from_events pass per candidate per select: the auction's
+        # posterior/magnitude and the winner's render all read the same
+        # resolved block (BD proximity deep-copies the behavior space per
+        # card_stats call, so re-resolving is real per-read cost, and a
+        # render-time re-resolve could even disagree with what was bid on).
+        calls: list[str] = []
+
+        class _Counting(BetaBinomialReputation):
+            def card_stats(self, card, context=None):
+                calls.append(card.id)
+                return super().card_stats(card, context)
+
+        cards = tuple(make_card(gain_events=(make_event(0.2),)) for _ in range(3))
+        reader = MemoryReader(
+            shortlister=_Shortlister(ResearchResult(cards=cards)),
+            reputation=_Counting(),
+            auctioneer=_WinAllAuctioneer(),
+            budgeter=TopThetaBudgeter(),
+            renderer=EfficacyCardRenderer(),
+            max_cards=3,
+            rng=np.random.default_rng(0),
+        )
+        await _select(reader)
+        assert sorted(calls) == sorted(c.id for c in cards)
+
+    async def test_founding_only_card_borrows_warm_scale_end_to_end(
+        self, make_card, make_event
+    ):
+        # A founding-only card resolves to magnitude None through the
+        # reputation, and the EV auction prices it on the warm pool's positive
+        # gain scale — birth evidence never prices the bid directly, in either
+        # direction.
+        warm = make_card(gain_events=(make_event(0.4), make_event(0.4)))
+        newborn = make_card(gain_events=(make_event(0.9, founding=True),))
+        reader = _reader(
+            shortlister=_Shortlister(ResearchResult(cards=(warm, newborn))),
+            auctioneer=EVThompsonAuctioneer(),
+            max_cards=2,
+        )
+        selection = await _select(reader)
+        newborn_bid = next(b for b in selection.slate if b.card_id == newborn.id)
+        assert newborn_bid.magnitude == pytest.approx(0.4)
+
     async def test_exclude_ids_thread_to_shortlister(self, make_card):
         shortlister = _Shortlister()
         reader = _reader(shortlister=shortlister)
@@ -173,6 +218,38 @@ class TestSelect:
         (call,) = shortlister.calls
         assert call["exclude_ids"] == frozenset({"m-used"})
         assert call["mutation_mode"] == "rewrite"
+
+    async def test_exclude_ids_filtered_after_shortlisting(
+        self, make_card, captured_events
+    ):
+        excluded = make_card(description="excluded")
+        allowed = make_card(description="allowed")
+        shortlister = _Shortlister(ResearchResult(cards=(excluded, allowed)))
+        reader = _reader(shortlister=shortlister, max_cards=2)
+
+        selection = await _select(reader, exclude_ids=frozenset({excluded.id}))
+
+        assert selection.card_ids == (allowed.id,)
+        assert selection.cards == ("allowed",)
+        (event,) = _selection_events(captured_events)
+        assert event.candidate_ids == (allowed.id,)
+
+    async def test_exclude_ids_filter_absorbed_alias_after_shortlisting(
+        self, make_card
+    ):
+        survivor = make_card(
+            id="mem-new",
+            absorbed_ids=("mem-old",),
+            description="survivor",
+        )
+        allowed = make_card(description="allowed")
+        shortlister = _Shortlister(ResearchResult(cards=(survivor, allowed)))
+        reader = _reader(shortlister=shortlister, max_cards=2)
+
+        selection = await _select(reader, exclude_ids=frozenset({"mem-old"}))
+
+        assert selection.card_ids == (allowed.id,)
+        assert selection.cards == ("allowed",)
 
     async def test_nonpositive_budget_short_circuits(self, captured_events):
         shortlister = _Shortlister()

@@ -56,8 +56,17 @@ the `MemoryReader` stack:
 
 ```
 research   LangGraph agent over the store: plan → retrieve → reflect
-reputation Beta-Binomial posterior over each card's recorded gain events
-auction    Thompson sampling of card bids against a no-card baseline arm
+           (the planner sees a digest of the newest `digest_max_cards`
+           banked cards — default 50, one description line each; the
+           shortlister pre-benches warm cards the bootstrap reputation
+           prices as guaranteed losers, so they stop occupying slots)
+reputation bootstrap-EV re-pricing (mean + low quantile of a staleness-
+           weighted bootstrap over each card's raw oriented gain deltas)
+           over the cell-local BD-proximity posterior
+auction    Thompson gate vs a no-card baseline arm; known cards bid the
+           mean of one weighted bootstrap resample of their deltas plus a
+           neutral pseudo-event; genuinely cold cards use the cold scale;
+           gated by bid > 0 and a round-quantile reserve
 budget     cap winners to reader.max_cards
 render     mutator-facing prompt block incl. efficacy endorsement
 ```
@@ -70,15 +79,24 @@ stamped with the selected card ids (see [Tracking](#tracking-did-memory-actually
 
 ```
 extract    eligible parent→child records (strict metric validity)
-reconcile  librarian LLM turns each diff into NEW / DUPLICATE / MERGE cards
-admit      novelty gate (optional) — reject NEW idea cards inside the mutator's prior
-exemplars  author program cards for top-fitness programs (best_programs_percent)
-restamp    base-relative fitness gain events across the full lineage pool
-evict      harm sweep — confidently-harmful cards leave the bank
-consolidate throttled background near-duplicate folding
+reconcile  librarian LLM turns each diff into NEW / DUPLICATE / MERGE cards;
+           a byte-identical description never mints a second id (exact
+           text-twin dedup resolves to a provenance bump on the banked twin)
+admit      novelty gate (optional, off by default) — reject NEW idea cards
+           inside the mutator's prior
+exemplars  author program cards for top-fitness programs (best_programs_percent);
+           a harm-evicted exemplar is tombstoned and never re-authored this run
+restamp    base-relative fitness gain events across the full lineage pool;
+           credit that no longer resolves to a banked card is dropped
+evict      harm sweep — confidently-harmful cards leave the bank, and their
+           ids are tombstoned against re-admission for the rest of the run
+consolidate inline same-batch folding of each increment's freshly added cards,
+           plus a throttled background pass over the whole bank
 ```
 
-When `writer.novelty_admission_gate` is on (the default in `memory=full`), a
+When `writer.novelty_admission_gate` is on (**off by default** — the A/B
+isolating its effect is still running; enable with
+`memory.writer.novelty_admission_gate=true`), a
 `NoveltyAdmissionAgent` scores each freshly-authored idea card on one axis —
 *would a strong optimizer LLM already reach for this lever unprompted on this
 task?* — and drops the card if so, before it enters the bank. It is a subtraction
@@ -103,11 +121,8 @@ instantiate-once mechanism algorithm configs use for `behavior_space`):
 ```yaml
 defaults:
   - llm: gemini              # memory LLM router (research + librarian agents)
-  - reputation: beta_binomial
-  - auction: thompson_ev
-  - budget: top_bid
-  - excluder: none
-  - evictor: harm            # scored by ${ref:memory.reputation}
+  - read_policy: recommended # owns reputation + auction + budget + excluder + shortlister
+  - evictor: recommended     # birth-failure + later-use harm eviction
 
 store:      # LocalMemoryStore = card bank + vector index + research agent
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
@@ -119,7 +134,9 @@ store:      # LocalMemoryStore = card bank + vector index + research agent
 
 reader:
   _target_: gigaevo.memory.read.reader.MemoryReader
-  shortlister: { _target_: gigaevo.memory.read.shortlist.ResearchShortlister, store: ${ref:memory.store} }
+  # read_policy supplies `shortlister`; the recommended policy uses
+  # BootstrapFusedRankingShortlister with digest_max_cards=50 and
+  # rep_floor_quantile=0.4.
   reputation: ${ref:memory.reputation}
   auctioneer: ${ref:memory.auction}
   budgeter: ${ref:memory.budget}
@@ -138,20 +155,23 @@ writer:     # ← engines consume this as post_run_hook
   ...
 ```
 
-Swap a component group (`memory/auction=thompson`,
-`memory/reputation=bd_proximity`, `memory/llm=qwen_instruct`) or tune a leaf
-(`memory.auction.ev_floor=0.01`, `memory.reader.max_cards=2`).
+Choose a whole read stack first (`memory/read_policy=portable`) and tune a leaf
+only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
+`memory.reader.max_cards=2`). Raw `memory/reputation`, `memory/auction`, and
+`memory/budget` leaves are still available for ablations, but the public API is
+`memory/read_policy`.
 
 ### Component groups
 
 | Group | Options | Notes |
 |---|---|---|
 | `memory/llm` | `gemini` (default), `qwen_instruct` | one router shared by the research + librarian agents |
-| `memory/reputation` | `beta_binomial` (default), `bd_proximity` | `bd_proximity` weights gain events by behavior-descriptor proximity to the current parent |
-| `memory/auction` | `thompson_ev` (default), `thompson` | `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only |
-| `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with `thompson_ev` and `top_theta` with `thompson` |
-| `memory/excluder` | `none` (default), `lineage` | `lineage` excludes cards already applied on the parent's lineage before research |
-| `memory/evictor` | `harm` (default), `none` | harm evictor is scored by the shared reputation instance |
+| `memory/read_policy` | `recommended` (default), `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `recommended` = contextual bootstrap-EV over BD-proximity + bootstrap auction + top-bid budget + warm-card bench + lineage excluder. `portable` = same but global reputation, no `behavior_space` dependency; use for multi-island/no-BD algorithms. Decay variants are explicit experiments, not defaults. Legacy variants preserve old median-EV / probability-only baselines |
+| `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bootstrap_ev` (alias), `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; staleness enters as per-event weight `w = 2^(-s/H)`. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
+| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only |
+| `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
+| `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
+| `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion with later-use harm eviction; `harm` keeps only the later-use harm sweep |
 
 ### The read funnel — three distinct widths
 
@@ -226,22 +246,45 @@ One `Card` model (`gigaevo/memory/cards.py`), `kind ∈ {insight, program}`:
 
 When a card is injected and the child evaluates, the writer stamps a gain
 event on the card: the base-relative fitness delta plus the decision context
-(parent metrics). Reputation reduces those events to a Beta-Binomial
-injection posterior; the auction samples that posterior against a no-card
-baseline arm, so a card holds its slot only while it keeps beating "inject
-nothing". Confidently-harmful posteriors get the card evicted.
+(parent metrics). Reputation re-prices those events by weighted bootstrap over
+the raw oriented deltas (mean + low quantile; staleness fades old evidence via
+the bank-cycle resample weight toward neutral zero), and the auction bids the
+mean of one such resample against a no-card Thompson baseline arm. Genuinely
+cold cards use the round's borrowed gain scale for their first probe, so a
+known card holds its slot only while its own gain distribution keeps beating
+"inject nothing" (a fat left tail bids negative and abstains on the sign gate).
+The downside Beta-Binomial
+posterior is still what the harm gate reads; confidently-harmful posteriors
+get the card evicted. Harm counting
+is a **strict sign test** — any event with gain below zero counts as harm.
+This is a deliberate departure from the old MAD noise band: per our analysis
+a per-card band could not be designed soundly for these gain distributions,
+so tiny negative deltas do count against a card and the noise guard is the
+counting posterior itself — `harm_min_events: 3` before a card can be judged
+harmful at all, plus the optimistic `harm_quantile` read of P(not harmful).
+Measured on run data, that guard holds the sequential false-harm rate to
+~0.77% at the observed median of ~2 uses per card; revisit the calibration if
+cards start accumulating more than ~5 uses.
 
 A freshly-authored **insight** card is born with a *founding* gain event: the
 true signed fitness delta of the parent→child mutation it was distilled from
-(negated for minimize objectives, so positive always means improvement). This
-seeds the card's bid on its own evidence from the first sweep instead of
-starting cold — and a card distilled from a regression bids *low*. The founding
-event is preserved across the periodic restamp that recomputes every
-use-attribution event from the program pool (it can never be re-derived: the
-founding child predates the card), and it rides card merges onto the survivor.
-It shapes the **auction bid only** — harm-eviction is usage-based, so a card is
-never evicted on the origin delta it was distilled from before use-attribution
-has judged it. Program exemplars keep the zero-evidence-at-birth path.
+(negated for minimize objectives, so positive always means improvement). The
+founding event is origin/admission evidence only: it does not enter the
+use-attributed downside posterior, confidence flag, renderer endorsement, or EV
+bid. Catastrophic founding losses are deleted by the recommended write-side
+birth-failure evictor before they can behave like ordinary cold cards. Mild
+founding-only cards remain statistically cold until a later child actually uses
+them.
+
+The founding event is preserved across the periodic restamp that recomputes
+every use-attribution event from the program pool (it can never be re-derived:
+the founding child predates the card), and it rides card merges onto the
+survivor. It rides **NEW admits only**: a DUPLICATE or MERGE ruling at ingest
+drops the incoming founding event, because the delta was measured for that
+child against its parent — foreign evidence for a pre-existing lever.
+Harm-eviction remains later-use-only; catastrophic origin failures are handled
+by the separate birth-failure policy. Program exemplars keep the
+zero-evidence-at-birth path.
 
 ## Tracking: did memory actually flow?
 
@@ -264,7 +307,7 @@ Per run, under `checkpoint_dir`:
 | File | Contents |
 |---|---|
 | `memory_events.jsonl` | canonical event stream: read decisions, research steps, auction slates, budget caps, store writes/syncs, gain restamps, eviction sweeps, consolidation passes |
-| `write_ledger.jsonl` | append-only admission/eviction verdicts |
+| `write_ledger.jsonl` | append-only admission/eviction verdicts (outcomes: `added`, `updated`, `merged`, `rejected_harm`, `rejected_novelty`, `evicted`; a benign no-op ingest — `DISCARDED` — writes no row) |
 | `cards.json` | the bank itself |
 
 First stop when debugging empty selections, repeated winners, or evictions:

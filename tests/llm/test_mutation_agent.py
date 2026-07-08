@@ -443,6 +443,31 @@ class TestCitationIntegrity:
             {"parent": 1, "insight": 2}
         ]
 
+    def test_card_ids_forwarded_only_when_grounded_in_prompt(self):
+        agent = _make_agent()
+        output = _make_structured_output(
+            card_ids_used=["mem-a", "ghost-card", "mem-a", "program-card"]
+        )
+        prompt = (
+            "=== Parent 1 ===\n"
+            "## Program Insights\n\n"
+            "1. **[x][rigid][medium]** — mechanism: x | card: program-card\n\n"
+            "[card 1] id=mem-a\n"
+            "description\n"
+            "free text ghost-card should not ground credit"
+        )
+        state = self._state_with_prompt(prompt, output)
+
+        result = agent.parse_response(state)
+
+        assert result["parsed_output"]["card_ids_used"] == ["mem-a", "program-card"]
+        assert result["parsed_output"]["structured_output"]["card_ids_used"] == [
+            "mem-a",
+            "program-card",
+        ]
+        assert result["parsed_output"]["citation_integrity"]["cards_cited"] == 4
+        assert result["parsed_output"]["citation_integrity"]["cards_grounded"] == 3
+
 
 # ---------------------------------------------------------------------------
 # TestAcallLlm

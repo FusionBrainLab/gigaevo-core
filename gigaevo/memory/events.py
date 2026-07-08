@@ -233,7 +233,7 @@ class MemoryAuctionRun(MemoryEvent):
     )
     health_question: ClassVar[str] = "Are auction winners emerging at a healthy rate?"
 
-    # {"thompson", "thompson_ev"}
+    # {"thompson", "thompson_ev", "thompson_bootstrap"}
     auction: str
     candidate_count: int = 0
     winner_count: int = 0

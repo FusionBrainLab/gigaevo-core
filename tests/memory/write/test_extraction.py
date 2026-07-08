@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import ValidationError
 import pytest
 
 from gigaevo.evolution.mutation.constants import (
@@ -13,6 +14,7 @@ from gigaevo.evolution.mutation.constants import (
 from gigaevo.memory.write.extraction import (
     Improvement,
     MutationOutput,
+    ProgramRecord,
     ProgramRecordExtractor,
     program_to_record,
     record_note,
@@ -58,6 +60,20 @@ def test_mutation_output_coerces_none_fields():
     assert out.archetype == ""
     assert out.base_parent == 1
     assert out.changes == []
+
+
+def test_extraction_models_are_frozen():
+    # Records flow through async writer paths shared across sweeps; silent
+    # in-place mutation would corrupt gain attribution downstream.
+    models = [
+        Improvement(description="swapped solver"),
+        MutationOutput(),
+        ProgramRecord(id="p1", fitness=0.5, generation=1),
+    ]
+    for model in models:
+        field = next(iter(type(model).model_fields))
+        with pytest.raises(ValidationError):
+            setattr(model, field, "mutated")
 
 
 def test_program_to_record_picks_named_base_parent(make_program):

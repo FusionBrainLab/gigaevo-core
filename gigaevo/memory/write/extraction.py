@@ -24,7 +24,7 @@ from gigaevo.programs.program import Program
 class Improvement(BaseModel):
     """A single normalised mutation change: what changed, and the stated why."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     description: str = Field(description="What changed, in one sentence.")
     explanation: str = Field(
@@ -39,7 +39,7 @@ class ProgramRecord(BaseModel):
     needs (no stage results, no raw execution data).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(description="Program id.")
     fitness: float = Field(
@@ -80,7 +80,7 @@ class ProgramRecord(BaseModel):
 class MutationOutput(BaseModel):
     """Validated `mutation_output` metadata blob attached to a mutated Program."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     changes: list[Improvement] = Field(
         default_factory=list,

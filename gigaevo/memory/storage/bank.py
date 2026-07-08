@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
+import fcntl
 import json
 import os
 from pathlib import Path
 from threading import RLock
+from typing import BinaryIO
 from uuid import uuid4
 
 from gigaevo.exceptions import MemoryStorageError
@@ -16,15 +20,40 @@ def new_card_id() -> str:
     return f"mem-{uuid4().hex[:12]}"
 
 
+class CardBankFileLock(AbstractContextManager["CardBankFileLock"]):
+    """Advisory inter-process lock guarding one persisted card-bank file."""
+
+    def __init__(self, path: str | Path, *, exclusive: bool = True) -> None:
+        self._path = Path(path)
+        self._exclusive = exclusive
+        self._fh: BinaryIO | None = None
+
+    def __enter__(self) -> CardBankFileLock:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fh = self._path.open("a+b")
+        self._fh = fh
+        mode = fcntl.LOCK_EX if self._exclusive else fcntl.LOCK_SH
+        fcntl.flock(fh.fileno(), mode)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._fh is None:
+            return
+        try:
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fh.close()
+            self._fh = None
+
+
 class CardBank:
     """Authoritative card map, persisted as a single JSON file.
 
     :meth:`persist` writes atomically (tmp file + ``os.replace``) so a crash
-    never leaves a torn bank. The owning process is the sole writer: the bank
-    is loaded from disk once at construction — a cold start, or a bank a prior
-    run left behind (this is how a ``memory=reader`` run consumes a bank a
-    ``memory=writer`` run built) — and is the in-memory source of truth
-    thereafter. :meth:`reload` re-reads it from disk on demand (index rebuild).
+    never leaves a torn bank. The store serializes mutations with
+    :class:`CardBankFileLock` and reloads before each write, so multiple runs
+    can share a bank directory without whole-snapshot last-writer loss.
+    :meth:`reload` re-reads it from disk on demand (index rebuild/refresh).
 
     A missing file is a legitimate cold start; a file that exists but does
     not parse into cards raises :class:`MemoryStorageError` — silently
@@ -35,12 +64,17 @@ class CardBank:
         self._path = Path(path)
         self._lock = RLock()
         self._cards: dict[str, Card] = {}
+        self._disk_token: tuple[int, int] | None = None
         if self._path.exists():
             self._reload()
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def lock_path(self) -> Path:
+        return self._path.with_name(f"{self._path.name}.lock")
 
     def __len__(self) -> int:
         with self._lock:
@@ -68,6 +102,16 @@ class CardBank:
         with self._lock:
             return tuple(sorted(self._cards.values(), key=lambda c: c.id))
 
+    def restore_snapshot(self, cards: Sequence[Card]) -> None:
+        """Replace the in-memory map without persisting.
+
+        Used by the owning store to roll back a failed durable write. The store is
+        still the transaction boundary; CardBank keeps this primitive deliberately
+        narrow so callers cannot accidentally persist stale state.
+        """
+        with self._lock:
+            self._cards = {card.id: card for card in cards}
+
     def persist(self) -> None:
         with self._lock:
             payload = {
@@ -84,6 +128,7 @@ class CardBank:
                     encoding="utf-8",
                 )
                 os.replace(tmp, self._path)
+                self._disk_token = self._stat_token()
             finally:
                 tmp.unlink(missing_ok=True)
 
@@ -94,6 +139,15 @@ class CardBank:
             if not self._path.exists():
                 return
             self._reload()
+
+    def reload_if_changed(self) -> bool:
+        """Reload and return True iff the durable bank advanced on disk."""
+        with self._lock:
+            token = self._stat_token()
+            if token is None or token == self._disk_token:
+                return False
+            self._reload()
+            return True
 
     def _reload(self) -> None:
         with self._lock:
@@ -108,3 +162,11 @@ class CardBank:
                     f"corrupt card bank at {self._path}: {exc}"
                 ) from exc
             self._cards = cards
+            self._disk_token = self._stat_token()
+
+    def _stat_token(self) -> tuple[int, int] | None:
+        try:
+            stat = self._path.stat()
+        except FileNotFoundError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)

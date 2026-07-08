@@ -28,13 +28,14 @@ from gigaevo.memory.write.merge import merge_cards
 class WriteOutcome(StrEnum):
     """Verdict of one card-bank ingest.
 
-    ADDED / UPDATED / MERGED / REJECTED_HARM / EVICTED are each recorded as a
-    write-ledger row. DISCARDED is the no-op verdict: the gate did nothing
-    (merge/bump target absent or ineligible, or the store merge failed) and
-    recorded no row — the submitted card was neither admitted nor rejected, so a
-    caller may re-author it as fresh. It is deliberately distinct from
-    REJECTED_HARM, which the gate judged and dropped and which must never be
-    re-admitted.
+    ADDED / UPDATED / MERGED / REJECTED_HARM / REJECTED_NOVELTY / EVICTED are
+    each recorded as a write-ledger row. DISCARDED is the no-op verdict: the
+    gate did nothing (merge/bump target absent or ineligible, or the store
+    merge failed) and recorded no row — the submitted card was neither admitted
+    nor rejected, so a caller may re-author it as fresh. It is deliberately
+    distinct from the judged rejections: REJECTED_HARM must never be
+    re-admitted, and REJECTED_NOVELTY (the novelty judge ruled the lever
+    prior-known) must not be re-authored either or the judge just re-rejects it.
     """
 
     ADDED = "added"
@@ -42,6 +43,7 @@ class WriteOutcome(StrEnum):
     MERGED = "merged"
     DISCARDED = "discarded"
     REJECTED_HARM = "rejected_harm"
+    REJECTED_NOVELTY = "rejected_novelty"
     EVICTED = "evicted"
 
 
@@ -164,10 +166,15 @@ class WriteLedger:
 class CardAdmissionGate:
     """Harm gate + ledger over the card store.
 
-    Four methods make up the whole write-path admission surface:
+    Six methods make up the whole write-path admission surface:
     ``admit`` (new/known-id card), ``merge`` (synthesized union onto an existing
     card), ``bump_provenance`` (DUPLICATE-ruling provenance append, no LLM),
-    and ``sweep`` (periodic harm eviction).
+    ``reject_novelty`` (ledger a novelty-judge kill), ``retire_exemplar`` (delete
+    a non-harm superseded/pruned exemplar), and ``sweep`` (periodic harm
+    eviction). Every harm deletion also tombstones the id for the rest of the
+    run: the deletion destroys the very gain events the evictor's verdict
+    rested on, so a re-authored twin arrives evidence-free and would otherwise
+    churn evict → re-author → re-admit every sweep.
     """
 
     def __init__(
@@ -176,19 +183,39 @@ class CardAdmissionGate:
         self._store = store
         self._evictor = evictor
         self._ledger = ledger
+        self._tombstoned: set[str] = set()
+
+    def is_tombstoned(self, card_id: str) -> bool:
+        """True iff this id was harm-deleted earlier in the run. Lets callers
+        skip work the gate would reject anyway — the writer checks before
+        paying the exemplar-author LLM call. In-memory only: a restart clears
+        the set (accepted — the churn this kills is intra-run)."""
+        return card_id in self._tombstoned
 
     def admit(self, card: Card) -> WriteResult:
         incoming_id = card.id.strip()
-        known = bool(incoming_id) and self._store.get(incoming_id) is not None
-
-        if self._evictor.should_evict(card):
-            if known:
-                self._store.delete(incoming_id)
+        if incoming_id in self._tombstoned:
             return self._ledger_record(
                 card,
                 "",
                 WriteOutcome.REJECTED_HARM,
-                "injection posterior confidently harmful",
+                "tombstoned: harm-evicted earlier this run",
+            )
+        known = bool(incoming_id) and self._store.get(incoming_id) is not None
+
+        if self._evictor.should_evict(card):
+            reason = _eviction_reason(
+                self._evictor, card, "injection posterior confidently harmful"
+            )
+            if known:
+                self._store.delete(incoming_id)
+            if incoming_id:
+                self._tombstoned.add(incoming_id)
+            return self._ledger_record(
+                card,
+                "",
+                WriteOutcome.REJECTED_HARM,
+                reason,
             )
 
         final_id = self._store.save(card)
@@ -206,13 +233,29 @@ class CardAdmissionGate:
         submitted_id = card.id
         merged = merge_cards(target, card, replace_description=True)
         if self._evictor.should_evict(merged):
+            reason = _eviction_reason(
+                self._evictor, merged, "merged card confidently harmful"
+            )
             self._store.delete(target_id)
+            self._tombstoned.add(target_id)
+            if (
+                submitted_id
+                and submitted_id != target_id
+                and self._store.get(submitted_id) is not None
+            ):
+                self._store.delete(submitted_id)
+                self._tombstoned.add(submitted_id)
+            # Two cards die here, so two rows: the banked target's deletion
+            # (EVICTED, same convention as sweep) and the submitted partner's
+            # rejection — one row would leave the target's fate unrecorded.
+            self._ledger_record(target, "", WriteOutcome.EVICTED, reason)
             return self._ledger_record(
                 merged,
                 "",
                 WriteOutcome.REJECTED_HARM,
-                "merged card confidently harmful",
+                reason,
                 incoming_id=submitted_id,
+                merge_targets=(target_id,),
             )
         updated = self._store.apply_merges([merged])
         if not updated:
@@ -224,6 +267,34 @@ class CardAdmissionGate:
             "librarian merge",
             incoming_id=submitted_id,
             merge_targets=(target_id,),
+        )
+
+    def reject_novelty(self, card: Card, reason: str) -> WriteResult:
+        """Record a novelty-judge rejection. The librarian holds the judge; the
+        gate only ledgers the verdict — when the judge is on it kills a large
+        share of idea authorship, and an unledgered kill of that size makes the
+        ledger unable to answer "where did my cards go"."""
+        return self._ledger_record(card, "", WriteOutcome.REJECTED_NOVELTY, reason)
+
+    def retire_exemplar(
+        self, card: Card, *, successor_id: str = "", reason: str
+    ) -> WriteResult:
+        """Delete a program exemplar for a non-harm reason and ledger it.
+
+        Supersession/pruning is not a harm verdict — no tombstone — but the
+        deletion must still be answerable from write_ledger.jsonl.
+        """
+        if card.kind is not CardKind.PROGRAM:
+            return _DISCARDED
+        self._store.delete(card.id)
+        return self._ledger_record(card, successor_id, WriteOutcome.UPDATED, reason)
+
+    def retire_twin(self, twin: Card, *, successor_id: str) -> None:
+        """Delete an exemplar superseded by a strictly-better twin."""
+        self.retire_exemplar(
+            twin,
+            successor_id=successor_id,
+            reason="exemplar superseded by strictly-better twin",
         )
 
     def bump_provenance(self, target_id: str, child_id: str) -> WriteResult:
@@ -244,11 +315,11 @@ class CardAdmissionGate:
         evicted = list(self._evictor.sweep(bank))
         for cid in evicted:
             self._store.delete(cid)
+            self._tombstoned.add(cid)
             card = by_id.get(cid)
             if card is not None:
-                self._ledger_record(
-                    card, "", WriteOutcome.EVICTED, "confidently harmful"
-                )
+                reason = _eviction_reason(self._evictor, card, "confidently harmful")
+                self._ledger_record(card, "", WriteOutcome.EVICTED, reason)
         return evicted
 
     def _ledger_record(
@@ -271,3 +342,12 @@ class CardAdmissionGate:
                 category=card.category,
             )
         return WriteResult(outcome=outcome, card_id=final_id)
+
+
+def _eviction_reason(evictor: Evictor, card: Card, default: str) -> str:
+    reason = getattr(evictor, "eviction_reason", None)
+    if callable(reason):
+        text = str(reason(card)).strip()
+        if text:
+            return text
+    return default

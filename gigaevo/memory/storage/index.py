@@ -7,7 +7,7 @@ document per card — the labeled concatenation of that scope's card fields.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import json
 import os
 from pathlib import Path
@@ -16,6 +16,7 @@ from typing import Any, cast
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from gigaevo.exceptions import StorageError
@@ -77,12 +78,12 @@ class VectorIndex:
         # sentence-transformers follows HF_HOME and friends; redirect them to a
         # writable dir before the model download begins.
         ensure_writable_hf_cache()
-        embedding_fn = SentenceTransformerEmbeddingFunction(
+        self._embedding_fn = SentenceTransformerEmbeddingFunction(
             model_name=embed.embedding_model
         )
         self._collections = {
             scope: self._client.get_or_create_collection(
-                name=f"cards_{scope}", embedding_function=cast(Any, embedding_fn)
+                name=f"cards_{scope}", embedding_function=cast(Any, self._embedding_fn)
             )
             for scope in embed.embed_scopes
         }
@@ -240,6 +241,76 @@ class VectorIndex:
             IndexHit(card_id=cid, distance=float(dist))
             for cid, dist in zip(ids, distances, strict=True)
         ]
+
+    def mmr_order(
+        self,
+        scope: str,
+        text: str,
+        card_ids: Sequence[str],
+        *,
+        lambda_: float = 1.0,
+        relevance: Mapping[str, float] | None = None,
+    ) -> list[str]:
+        """Greedy maximal-marginal-relevance ordering of ``card_ids``.
+
+        Each step picks ``argmax lambda_ * rel - (1 - lambda_) * max_sim`` over
+        the not-yet-picked cards, where ``rel`` is cosine similarity to ``text``
+        (or the caller-supplied ``relevance`` score) and ``max_sim`` is the
+        cosine similarity to the closest already-picked card. ``lambda_=1.0``
+        is pure relevance order; lower values penalize near-duplicates. Ids
+        without a stored embedding keep their input order at the tail; ties
+        resolve to input order.
+        """
+        if scope not in self._collections:
+            raise KeyError(
+                f"unknown embed scope {scope!r}; configured: {sorted(self._collections)}"
+            )
+        if not 0.0 <= lambda_ <= 1.0:
+            raise ValueError(f"lambda_ must be in [0.0, 1.0], got {lambda_}")
+        unique_ids = list(dict.fromkeys(card_ids))
+        if not unique_ids:
+            return []
+        collection = self._collections[scope]
+        with self._lock:
+            stored = collection.get(ids=unique_ids, include=["embeddings"])
+            query_embedding = (
+                None
+                if relevance is not None
+                else self._embedding_fn([f"{self._embed.query_prefix}{text}"])[0]
+            )
+        embeddings = stored["embeddings"]
+        vectors = {
+            cid: np.asarray(vector, dtype=float)
+            for cid, vector in zip(
+                stored["ids"],
+                embeddings if embeddings is not None else [],
+                strict=True,
+            )
+        }
+        known = [cid for cid in unique_ids if cid in vectors]
+        missing = [cid for cid in unique_ids if cid not in vectors]
+        if len(known) <= 1:
+            return known + missing
+        matrix = np.stack([vectors[cid] for cid in known])
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix = matrix / np.where(norms == 0.0, 1.0, norms)
+        if relevance is not None:
+            rel = np.asarray([float(relevance.get(cid, 0.0)) for cid in known])
+        else:
+            query = np.asarray(query_embedding, dtype=float)
+            query = query / (float(np.linalg.norm(query)) or 1.0)
+            rel = matrix @ query
+        pairwise = matrix @ matrix.T
+        picked: list[int] = []
+        remaining = list(range(len(known)))
+        while remaining:
+            if picked:
+                max_sim = pairwise[np.ix_(remaining, picked)].max(axis=1)
+            else:
+                max_sim = np.zeros(len(remaining))
+            scores = lambda_ * rel[remaining] - (1.0 - lambda_) * max_sim
+            picked.append(remaining.pop(int(np.argmax(scores))))
+        return [known[i] for i in picked] + missing
 
     @staticmethod
     def _where(

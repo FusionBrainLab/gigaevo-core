@@ -8,6 +8,7 @@ node fails to empty so retrieval can never crash the caller.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 from time import perf_counter
 from typing import Any, Literal, TypedDict
@@ -22,12 +23,14 @@ from gigaevo.memory.events import MemoryResearchStep, emit_memory_event
 from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest, ResearchResult
 from gigaevo.memory.storage.config import EmbedConfig, ResearchConfig
+from gigaevo.memory.storage.exclusion import expand_exclude_ids, is_card_excluded
 from gigaevo.memory.storage.index import VectorIndex
 from gigaevo.prompts import load_prompt
 
-_FIELD_CLIP_CHARS = 1200
-_PAYLOAD_CLIP_CHARS = 12000
-_KEYWORD_LIMIT = 12
+_BRIEF_DESCRIPTION_CHARS = 300
+_BRIEF_EVIDENCE_CHARS = 160
+_BRIEF_TASK_CHARS = 100
+_BRIEF_KEYWORD_LIMIT = 6
 _MAX_FOLLOWUP_QUERIES = 5
 
 
@@ -118,6 +121,8 @@ class _ReflectionState(TypedDict, total=False):
     request: str
     candidates: str
     max_cards: int
+    step_status: str
+    observations: str
     messages: list[BaseMessage]
     llm_response: Any
     result: ShortlistDecision
@@ -142,6 +147,8 @@ class RetrievalReflectionAgent(LangGraphAgent):
                     request=state["request"],
                     candidates=state["candidates"],
                     max_cards=state["max_cards"],
+                    step_status=state["step_status"],
+                    observations=state["observations"],
                 )
             ),
         ]
@@ -155,40 +162,76 @@ class RetrievalReflectionAgent(LangGraphAgent):
         return state
 
     async def arun(
-        self, *, request: str, candidates: str, max_cards: int
+        self,
+        *,
+        request: str,
+        candidates: str,
+        max_cards: int,
+        step_status: str,
+        observations: str,
     ) -> ShortlistDecision:
         state: _ReflectionState = {
             "request": request,
             "candidates": candidates,
             "max_cards": max_cards,
+            "step_status": step_status,
+            "observations": observations,
         }
         final = await self.graph.ainvoke(state)
         return final["result"]
 
 
-def _clip(text: str, max_chars: int = _FIELD_CLIP_CHARS) -> str:
+def _clip(text: str, max_chars: int) -> str:
     text = text.strip()
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 16] + "...[truncated]"
 
 
-def _candidate_payload(card: Card) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+def _brief_text(text: str, max_chars: int) -> str:
+    return _clip(" ".join(text.split()), max_chars)
+
+
+def candidate_brief(card: Card) -> dict[str, Any]:
+    brief: dict[str, Any] = {
         "card_id": card.id,
         "kind": card.kind.value,
-        "description": _clip(card.description),
-        "evidence_summary": _clip(card.explanation_summary),
+        "description": _brief_text(card.description, _BRIEF_DESCRIPTION_CHARS),
+        "evidence_summary": _brief_text(
+            card.explanation_summary, _BRIEF_EVIDENCE_CHARS
+        ),
     }
     if card.category:
-        payload["category"] = card.category
+        brief["category"] = card.category
     if card.task_description_summary:
-        payload["task_description_summary"] = _clip(card.task_description_summary)
+        brief["task_description_summary"] = _brief_text(
+            card.task_description_summary, _BRIEF_TASK_CHARS
+        )
     if card.keywords:
-        payload["keywords"] = list(card.keywords[:_KEYWORD_LIMIT])
+        brief["keywords"] = list(card.keywords[:_BRIEF_KEYWORD_LIMIT])
     if card.kind is CardKind.PROGRAM and card.fitness is not None:
-        payload["fitness"] = card.fitness
-    return payload
+        brief["fitness"] = card.fitness
+    return brief
+
+
+def render_candidate_briefs(cards: Sequence[Card], budget: int) -> str:
+    rendered, _ = render_candidate_briefs_with_visible_ids(cards, budget)
+    return rendered
+
+
+def render_candidate_briefs_with_visible_ids(
+    cards: Sequence[Card], budget: int
+) -> tuple[str, frozenset[str]]:
+    briefs = [candidate_brief(card) for card in cards]
+    omitted_ids: list[str] = []
+    while True:
+        payload: list[dict[str, Any]] = list(briefs)
+        if omitted_ids:
+            payload.append({"omitted": len(omitted_ids)})
+        rendered = json.dumps(payload, ensure_ascii=True, indent=2)
+        if len(rendered) <= budget or len(briefs) <= 1:
+            return rendered, frozenset(brief["card_id"] for brief in briefs)
+        omitted_ids.insert(0, briefs.pop()["card_id"])
 
 
 def _with_focus(request: str, queries: list[str]) -> str:
@@ -204,9 +247,10 @@ class ResearchAgent:
     """The loop composing planner, index, and reflector.
 
     Aggregates candidates across iterations (a card retrieved once stays a
-    candidate), so the reflector always judges the full evidence pool. If no
-    iteration finalizes, the answer is empty — a shortlist is only ever an
-    explicit reflector decision.
+    candidate), so the reflector always judges the full evidence pool. If the
+    reflector violates the final-step contract and asks to continue after the
+    budget is exhausted, the loop falls back to the nearest visible candidates
+    instead of discarding a non-empty pool.
     """
 
     def __init__(
@@ -229,18 +273,39 @@ class ResearchAgent:
         )
         self._planner = RetrievalPlannerAgent(llm, prompts_dir)
         self._reflector = RetrievalReflectionAgent(llm, prompts_dir)
+        self._step_status_template = load_prompt(
+            "retrieval_reflection", "step_status", prompts_dir
+        )
+        self._final_step_snippet = load_prompt(
+            "retrieval_reflection", "final_step", prompts_dir
+        )
+        self._already_held_template = load_prompt(
+            "retrieval_reflection", "already_held", prompts_dir
+        )
+        self._no_new_cards_line = load_prompt(
+            "retrieval_reflection", "no_new_cards", prompts_dir
+        )
 
     async def research(self, request: ResearchRequest) -> ResearchResult:
-        candidates: dict[str, Card] = {}
+        candidates: dict[str, tuple[Card, float]] = {}
+        exclude_ids = expand_exclude_ids(self._bank.snapshot(), request.exclude_ids)
         planner_request = request.query
+        held_ids: list[str] = []
         for step in range(1, self._config.max_iters + 1):
             started = perf_counter()
             plan = await self._plan(planner_request, request.planning_context)
             queries = [
                 q for q in plan.queries if q.scope in self._scopes and q.query.strip()
             ]
-            new_ids = self._retrieve(queries, request.exclude_ids, candidates)
-            decision = await self._reflect(request.query, candidates)
+            new_ids = self._retrieve(queries, exclude_ids, candidates)
+            decision = await self._reflect(
+                request.query,
+                candidates,
+                step,
+                self._observations(step, held_ids, new_ids),
+            )
+            if decision.mode != "final" and step == self._config.max_iters:
+                decision = self._final_step_fallback(candidates, decision)
             emit_memory_event(
                 MemoryResearchStep(
                     step=step,
@@ -253,19 +318,72 @@ class ResearchAgent:
             )
             if decision.mode == "final":
                 selected = [
-                    candidates[cid]
+                    candidates[cid][0]
                     for cid in dict.fromkeys(decision.selected_ids)
                     if cid in candidates
+                    and not is_card_excluded(candidates[cid][0], exclude_ids)
                 ]
                 return ResearchResult(
                     cards=tuple(selected[: self._config.max_cards]),
                     summary=decision.reasoning,
                     iterations=step,
                 )
+            held_ids = [
+                cid
+                for cid in candidates
+                if any(cid in query for query in decision.additional_queries)
+            ]
             planner_request = _with_focus(
                 request.query, decision.additional_queries[:_MAX_FOLLOWUP_QUERIES]
             )
         return ResearchResult(iterations=self._config.max_iters)
+
+    def _final_step_fallback(
+        self,
+        candidates: dict[str, tuple[Card, float]],
+        decision: ShortlistDecision,
+    ) -> ShortlistDecision:
+        ordered = [
+            card for card, _ in sorted(candidates.values(), key=lambda entry: entry[1])
+        ]
+        _, visible_ids = render_candidate_briefs_with_visible_ids(
+            ordered, self._config.reflect_payload_chars
+        )
+        selected_ids = [
+            card.id
+            for card in ordered
+            if card.id in visible_ids and not is_card_excluded(card, frozenset())
+        ][: self._config.max_cards]
+        if selected_ids:
+            logger.warning(
+                "[Memory][Research] reflector returned continue on final step; "
+                "falling back to {} visible candidate(s)",
+                len(selected_ids),
+            )
+        return ShortlistDecision(
+            mode="final",
+            reasoning=decision.reasoning
+            or "Final-step fallback selected the nearest visible candidates.",
+            selected_ids=selected_ids,
+        )
+
+    def _step_status(self, step: int) -> str:
+        status = self._step_status_template.format(
+            step=step, max_steps=self._config.max_iters
+        )
+        if step == self._config.max_iters:
+            return f"{status}\n{self._final_step_snippet}"
+        return status
+
+    def _observations(self, step: int, held_ids: list[str], new_ids: list[str]) -> str:
+        if step == 1:
+            return ""
+        lines: list[str] = []
+        if held_ids:
+            lines.append(self._already_held_template.format(ids=", ".join(held_ids)))
+        if not new_ids:
+            lines.append(self._no_new_cards_line)
+        return "".join(f"{line}\n" for line in lines)
 
     async def _plan(self, request: str, context: str) -> SearchPlan:
         try:
@@ -284,7 +402,7 @@ class ResearchAgent:
         self,
         queries: list[ScopedQuery],
         exclude_ids: frozenset[str],
-        candidates: dict[str, Card],
+        candidates: dict[str, tuple[Card, float]],
     ) -> list[str]:
         new_ids: list[str] = []
         for scoped in queries:
@@ -301,31 +419,52 @@ class ResearchAgent:
                 )
                 continue
             for hit in hits:
-                if hit.card_id in candidates or hit.card_id in exclude_ids:
+                held = candidates.get(hit.card_id)
+                if held is not None:
+                    candidates[hit.card_id] = (held[0], min(held[1], hit.distance))
                     continue
                 card = self._bank.get(hit.card_id)
-                if card is None:
+                if card is None or is_card_excluded(card, exclude_ids):
                     continue
-                candidates[card.id] = card
+                candidates[card.id] = (card, hit.distance)
                 new_ids.append(card.id)
         return new_ids
 
     async def _reflect(
-        self, request: str, candidates: dict[str, Card]
+        self,
+        request: str,
+        candidates: dict[str, tuple[Card, float]],
+        step: int,
+        observations: str,
     ) -> ShortlistDecision:
-        payload = json.dumps(
-            [_candidate_payload(c) for c in candidates.values()],
-            ensure_ascii=True,
-            indent=2,
+        ordered = [
+            card for card, _ in sorted(candidates.values(), key=lambda entry: entry[1])
+        ]
+        payload, visible_ids = render_candidate_briefs_with_visible_ids(
+            ordered, self._config.reflect_payload_chars
         )
         try:
-            return await self._reflector.arun(
+            decision = await self._reflector.arun(
                 request=request,
-                candidates=_clip(payload, _PAYLOAD_CLIP_CHARS),
+                candidates=payload,
                 max_cards=self._config.max_cards,
+                step_status=self._step_status(step),
+                observations=observations,
             )
+            if decision.mode == "final":
+                selected_ids = [
+                    cid for cid in decision.selected_ids if cid in visible_ids
+                ]
+                if selected_ids != decision.selected_ids:
+                    return decision.model_copy(update={"selected_ids": selected_ids})
+            return decision
         except Exception:
             logger.opt(exception=True).warning(
                 "[Memory][Research] reflection failed; continuing without a decision"
             )
+            if step == self._config.max_iters:
+                return ShortlistDecision(
+                    mode="final",
+                    reasoning="Reflection failed on the final retrieval step.",
+                )
             return ShortlistDecision(mode="continue")

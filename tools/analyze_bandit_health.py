@@ -411,8 +411,18 @@ def rq5(arm: Arm) -> dict:
         1 for r in arm.ledger if is_program(r.get("incoming_id", ""), arm.bank)
     )
     added_ids = {r.get("final_id") for r in arm.ledger if r.get("outcome") == "added"}
-    admitted = sum(outcomes.get(k, 0) for k in ("added", "updated", "merged"))
-    refused = sum(outcomes.get(k, 0) for k in ("discarded", "rejected_harm"))
+    # retire_twin rows (UPDATED with incoming != final) record a twin DELETION
+    # from the deleted card's side; the successor's own ADDED row is the
+    # admission, so they count as neither admitted nor recycled inflow.
+    retired = sum(
+        1
+        for r in arm.ledger
+        if r.get("outcome") == "updated" and r.get("incoming_id") != r.get("final_id")
+    )
+    admitted = sum(outcomes.get(k, 0) for k in ("added", "updated", "merged")) - retired
+    refused = sum(
+        outcomes.get(k, 0) for k in ("discarded", "rejected_harm", "rejected_novelty")
+    )
     admission_rate = admitted / (admitted + refused) if (admitted + refused) else 0.0
     # research novelty: unique vs total hits over each decision's step trail
     steps_by_decision = defaultdict(list)
@@ -427,8 +437,9 @@ def rq5(arm: Arm) -> dict:
     for s in arm.selections:
         ever_budgeted.update(s.get("budgeted_ids") or [])
     added = outcomes.get("added", 0)
-    recycled = sum(
-        outcomes.get(k, 0) for k in ("merged", "discarded", "updated", "evicted")
+    recycled = (
+        sum(outcomes.get(k, 0) for k in ("merged", "discarded", "updated", "evicted"))
+        - retired
     )
     # pathological if inflow is dominated by recycling rather than genuinely new arms
     pathological = added > 0 and recycled > added

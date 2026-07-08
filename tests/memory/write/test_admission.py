@@ -138,6 +138,86 @@ def test_merge_harmful_union_deletes_target(store, make_card, tmp_path):
     assert row.incoming_id == incoming.id
 
 
+def test_merge_harmful_union_deletes_banked_incoming(store, make_card, tmp_path):
+    target = make_card()
+    incoming = make_card()
+    store.save(target)
+    store.save(incoming)
+    gate, ledger = make_gate(store, tmp_path, MarkingEvictor({target.id}))
+
+    result = gate.merge(target.id, incoming)
+
+    assert result.rejected_harm
+    assert store.get(target.id) is None
+    assert store.get(incoming.id) is None
+    assert gate.is_tombstoned(target.id)
+    assert gate.is_tombstoned(incoming.id)
+    rows = read_rows(ledger.path)
+    assert [row.outcome for row in rows] == [
+        WriteOutcome.EVICTED,
+        WriteOutcome.REJECTED_HARM,
+    ]
+    assert rows[-1].incoming_id == incoming.id
+
+
+def test_merge_harmful_union_ledgers_target_eviction(store, make_card, tmp_path):
+    # The harm verdict destroys TWO cards: the banked target (deleted) and the
+    # submitted partner (rejected). Each needs its own ledger row or the
+    # target's disappearance is unexplained and the rejected row points at the
+    # wrong card's fate.
+    target = make_card()
+    store.save(target)
+    incoming = make_card()
+    gate, ledger = make_gate(store, tmp_path, MarkingEvictor({target.id}))
+    result = gate.merge(target.id, incoming)
+    assert result.rejected_harm
+    rows = read_rows(ledger.path)
+    assert [r.outcome for r in rows] == [
+        WriteOutcome.EVICTED,
+        WriteOutcome.REJECTED_HARM,
+    ]
+    evicted, rejected = rows
+    assert evicted.incoming_id == target.id
+    assert evicted.final_id == ""
+    assert rejected.incoming_id == incoming.id
+    assert rejected.merge_targets == (target.id,)
+
+
+def test_merge_onto_tombstoned_target_is_benign_noop(store, make_card, tmp_path):
+    # Gate-level pin: a tombstoned id is deleted from the store, so a MERGE
+    # onto it degrades to the missing-target no-op and writes no row. No live
+    # path reaches this — reconcile only offers targets from the store's
+    # neighbor context, which never contains a tombstoned (deleted) id.
+    card = make_card()
+    store.save(card)
+    harmful = {card.id}
+    gate, ledger = make_gate(store, tmp_path, MarkingEvictor(harmful))
+    gate.sweep()
+    harmful.clear()
+    rows_before = len(read_rows(ledger.path))
+    result = gate.merge(card.id, make_card())
+    assert result.outcome is WriteOutcome.DISCARDED
+    assert len(read_rows(ledger.path)) == rows_before
+
+
+def test_tombstoned_program_id_does_not_block_bare_insight_id(
+    store, make_card, tmp_path
+):
+    # Exemplar cache ids live in the "program-<id>" namespace; harm-evicting
+    # one must not tombstone the bare insight id it embeds.
+    exemplar = make_card(
+        id="program-p1", kind=CardKind.PROGRAM, program_id="p1", code="x = 1"
+    )
+    store.save(exemplar)
+    harmful = {exemplar.id}
+    gate, _ = make_gate(store, tmp_path, MarkingEvictor(harmful))
+    assert gate.sweep() == [exemplar.id]
+    harmful.clear()
+    result = gate.admit(make_card(id="p1"))
+    assert result.outcome is WriteOutcome.ADDED
+    assert store.get("p1") is not None
+
+
 def test_merge_store_failure_is_benign_noop(store, make_card, tmp_path):
     target = make_card()
     store.save(target)
@@ -191,6 +271,67 @@ def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.EVICTED
     assert row.incoming_id == bad.id
+
+
+def test_sweep_tombstones_id_against_readmission(store, make_card, tmp_path):
+    card = make_card()
+    store.save(card)
+    harmful = {card.id}
+    gate, ledger = make_gate(store, tmp_path, MarkingEvictor(harmful))
+    assert gate.sweep() == [card.id]
+    assert gate.is_tombstoned(card.id)
+
+    # A re-authored twin carries no harm evidence, so the evictor alone would
+    # wave it straight back in — the tombstone must be what blocks it.
+    harmful.clear()
+    result = gate.admit(card.model_copy(update={"description": "re-authored twin"}))
+    assert result.rejected_harm
+    assert store.get(card.id) is None
+    rows = read_rows(ledger.path)
+    assert [r.outcome for r in rows] == [
+        WriteOutcome.EVICTED,
+        WriteOutcome.REJECTED_HARM,
+    ]
+
+    fresh = gate.admit(make_card(id=""))
+    assert fresh.outcome is WriteOutcome.ADDED
+
+
+def test_admit_harm_rejection_tombstones_id(store, make_card, tmp_path):
+    card = make_card()
+    store.save(card)
+    harmful = {card.id}
+    gate, _ = make_gate(store, tmp_path, MarkingEvictor(harmful))
+    assert gate.admit(card).rejected_harm
+    harmful.clear()
+    assert gate.admit(card).rejected_harm
+    assert store.get(card.id) is None
+
+
+def test_merge_harmful_union_tombstones_target(store, make_card, tmp_path):
+    target = make_card()
+    store.save(target)
+    harmful = {target.id}
+    gate, _ = make_gate(store, tmp_path, MarkingEvictor(harmful))
+    assert gate.merge(target.id, make_card()).rejected_harm
+    harmful.clear()
+    assert gate.admit(target).rejected_harm
+    assert store.get(target.id) is None
+    assert not gate.is_tombstoned("unrelated-id")
+
+
+def test_reject_novelty_records_row_and_does_not_bank(store, make_card, tmp_path):
+    gate, ledger = make_gate(store, tmp_path)
+    result = gate.reject_novelty(make_card(id=""), "prior-known staple")
+    assert result.outcome is WriteOutcome.REJECTED_NOVELTY
+    assert not result.landed
+    assert not result.rejected_harm
+    assert not result.benign_noop
+    assert store.snapshot() == ()
+    row = read_rows(ledger.path)[-1]
+    assert row.outcome is WriteOutcome.REJECTED_NOVELTY
+    assert row.reason == "prior-known staple"
+    assert row.final_id == ""
 
 
 def test_write_result_benign_noop_is_discarded_only():

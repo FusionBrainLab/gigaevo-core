@@ -169,7 +169,7 @@ async def test_writer_bank_feeds_fresh_reader_run(tmp_path):
         budgeter=TopBidBudgeter(),
         renderer=EfficacyCardRenderer(),
         max_cards=1,
-        rng=np.random.default_rng(0),
+        rng=np.random.default_rng(1),
     )
     provider = ReaderMemoryProvider(reader=reader)
 

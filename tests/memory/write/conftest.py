@@ -105,6 +105,7 @@ def make_event():
         *,
         invalid: bool = False,
         founding: bool = False,
+        unused: bool = False,
         metrics: dict[str, float] | None = None,
         parent_id: str = "",
     ) -> ContextualGain:
@@ -113,6 +114,7 @@ def make_event():
             gain=gain,
             invalid=invalid,
             founding=founding,
+            unused=unused,
         )
 
     return _make_event

@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from gigaevo.memory.cards import CardKind
 from gigaevo.memory.events import memory_event_context
 from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest
@@ -22,6 +23,9 @@ from gigaevo.memory.storage.research import (
     ScopedQuery,
     SearchPlan,
     ShortlistDecision,
+    candidate_brief,
+    render_candidate_briefs,
+    render_candidate_briefs_with_visible_ids,
 )
 from tests.fakes.llm_router import FakeMemoryRouter
 
@@ -145,6 +149,31 @@ async def test_never_final_exhausts_iterations_empty(make_agent, make_card):
     assert len(calls_for(router, ShortlistDecision)) == 2
 
 
+async def test_final_step_continue_falls_back_to_visible_candidates(
+    make_agent, make_card
+):
+    card = make_card(description="zebra lattice")
+    router = scripted_router(
+        plans=[
+            plan(("description", "zebra lattice")),
+            plan(("description", "zebra lattice")),
+        ],
+        decisions=[
+            ShortlistDecision(mode="continue", additional_queries=["more lattice"]),
+            ShortlistDecision(mode="continue", reasoning="still searching"),
+        ],
+    )
+    agent = make_agent(
+        [card], router, research=ResearchConfig(default_top_k=1, max_iters=2)
+    )
+
+    result = await agent.research(ResearchRequest(query="anything"))
+
+    assert [c.id for c in result.cards] == [card.id]
+    assert result.summary == "still searching"
+    assert result.iterations == 2
+
+
 async def test_planner_failure_degrades_to_empty_plan(make_agent, make_card):
     router = scripted_router(
         plans=[RuntimeError("planner exploded")],
@@ -254,6 +283,203 @@ async def test_exclude_ids_never_become_candidates(make_agent, make_card):
     )
 
     assert [card.id for card in result.cards] == [allowed.id]
+
+
+async def test_absorbed_alias_exclude_suppresses_survivor(make_agent, make_card):
+    survivor = make_card(
+        id="mem-new",
+        absorbed_ids=("mem-old",),
+        description="shared topic alpha",
+    )
+    allowed = make_card(description="shared topic beta")
+    router = scripted_router(
+        plans=[plan(("description", "shared topic"))],
+        decisions=[
+            ShortlistDecision(mode="final", selected_ids=[survivor.id, allowed.id])
+        ],
+    )
+    agent = make_agent(
+        [survivor, allowed], router, research=ResearchConfig(default_top_k=2)
+    )
+
+    result = await agent.research(
+        ResearchRequest(query="anything", exclude_ids=frozenset({"mem-old"}))
+    )
+
+    assert [card.id for card in result.cards] == [allowed.id]
+
+
+def test_candidate_brief_clips_fields_single_spaced(make_card):
+    card = make_card(
+        description="line one\n  line two " + "x " * 300,
+        explanation_summary="e " * 300,
+        task_description_summary="t " * 300,
+        keywords=tuple(f"kw{i}" for i in range(10)),
+    )
+
+    brief = candidate_brief(card)
+
+    assert "\n" not in brief["description"]
+    assert len(brief["description"]) <= 300
+    assert len(brief["evidence_summary"]) <= 160
+    assert len(brief["task_description_summary"]) <= 100
+    assert brief["keywords"] == [f"kw{i}" for i in range(6)]
+    assert "fitness" not in brief
+
+
+def test_candidate_brief_keeps_program_fitness(make_card):
+    card = make_card(kind=CardKind.PROGRAM, program_id="prog-1", fitness=0.42)
+
+    assert candidate_brief(card)["fitness"] == 0.42
+
+
+def test_render_briefs_under_budget_keeps_all_cards(make_card):
+    cards = [make_card() for _ in range(3)]
+
+    payload = json.loads(render_candidate_briefs(cards, 24000))
+
+    assert [brief["card_id"] for brief in payload] == [card.id for card in cards]
+    assert all("omitted" not in brief for brief in payload)
+
+
+def test_render_briefs_over_budget_drops_whole_tail_with_marker(make_card):
+    cards = [make_card(description=f"variant {i} " + "pad " * 120) for i in range(6)]
+    budget = int(len(render_candidate_briefs(cards, 10**6)) * 0.6)
+
+    rendered = render_candidate_briefs(cards, budget)
+
+    assert len(rendered) <= budget
+    payload = json.loads(rendered)
+    kept, marker = payload[:-1], payload[-1]
+    assert kept
+    assert [brief["card_id"] for brief in kept] == [c.id for c in cards[: len(kept)]]
+    assert marker == {"omitted": len(cards) - len(kept)}
+
+
+def test_render_briefs_keeps_head_brief_under_tiny_budget(make_card):
+    cards = [make_card(), make_card()]
+
+    payload = json.loads(render_candidate_briefs(cards, 10))
+
+    assert payload[0]["card_id"] == cards[0].id
+    assert payload[-1] == {"omitted": 1}
+
+
+def test_render_briefs_reports_only_visible_ids(make_card):
+    cards = [make_card(), make_card()]
+
+    _, visible_ids = render_candidate_briefs_with_visible_ids(cards, 10)
+
+    assert visible_ids == {cards[0].id}
+
+
+async def test_reflect_filters_ids_not_visible_in_payload(make_agent, make_card):
+    shown = make_card(description="visible candidate")
+    omitted = make_card(description="omitted candidate")
+    router = scripted_router(
+        decisions=[
+            ShortlistDecision(
+                mode="final", selected_ids=[omitted.id, shown.id], reasoning="fits"
+            )
+        ]
+    )
+    agent = make_agent(
+        [shown, omitted],
+        router,
+        research=ResearchConfig(default_top_k=2, reflect_payload_chars=10),
+    )
+
+    decision = await agent._reflect(
+        "anything",
+        {shown.id: (shown, 0.0), omitted.id: (omitted, 1.0)},
+        step=1,
+        observations="",
+    )
+
+    assert decision.selected_ids == [shown.id]
+
+
+async def test_reflect_briefs_ordered_by_best_hit_distance(make_agent, make_card):
+    far = make_card(description="quantum annealing")
+    near = make_card(description="zebra lattice")
+    router = scripted_router(
+        plans=[
+            plan(
+                (
+                    "description",
+                    "quantum annealing amid many wholly unrelated filler words "
+                    "about cooking sailing gardening painting chess poetry "
+                    "weather geology astronomy pottery dancing",
+                )
+            ),
+            plan(("description", "zebra lattice")),
+        ],
+        decisions=[
+            ShortlistDecision(mode="continue"),
+            ShortlistDecision(mode="final", selected_ids=[]),
+        ],
+    )
+    agent = make_agent(
+        [far, near], router, research=ResearchConfig(default_top_k=1, max_iters=2)
+    )
+
+    await agent.research(ResearchRequest(query="anything"))
+
+    second_reflect = calls_for(router, ShortlistDecision)[1][1].content
+    assert second_reflect.index(near.id) < second_reflect.index(far.id)
+    assert "NO NEW CARDS" not in second_reflect
+    assert "ALREADY HELD" not in second_reflect
+
+
+async def test_final_step_notice_forces_final_mode_instruction(make_agent, make_card):
+    router = scripted_router(
+        decisions=[
+            ShortlistDecision(mode="continue"),
+            ShortlistDecision(mode="continue"),
+        ],
+    )
+    agent = make_agent(
+        [make_card()], router, research=ResearchConfig(default_top_k=1, max_iters=2)
+    )
+
+    await agent.research(ResearchRequest(query="anything"))
+
+    first, second = (m[1].content for m in calls_for(router, ShortlistDecision))
+    assert "Retrieval step 1 of 2." in first
+    assert "FINAL STEP" not in first
+    assert "Retrieval step 2 of 2." in second
+    assert "FINAL STEP" in second
+    assert 'mode MUST be "final"' in second
+
+
+async def test_held_id_requery_and_no_new_cards_reported_next_step(
+    make_agent, make_card
+):
+    card = make_card(description="zebra lattice")
+    router = scripted_router(
+        plans=[
+            plan(("description", "zebra lattice")),
+            plan(("description", "zebra lattice")),
+        ],
+        decisions=[
+            ShortlistDecision(
+                mode="continue", additional_queries=[f"more about {card.id}"]
+            ),
+            ShortlistDecision(mode="final", selected_ids=[card.id]),
+        ],
+    )
+    agent = make_agent(
+        [card], router, research=ResearchConfig(default_top_k=1, max_iters=2)
+    )
+
+    result = await agent.research(ResearchRequest(query="anything"))
+
+    first, second = (m[1].content for m in calls_for(router, ShortlistDecision))
+    assert "ALREADY HELD" not in first
+    assert "NO NEW CARDS" not in first
+    assert f"ALREADY HELD: [{card.id}]" in second
+    assert "NO NEW CARDS matched the follow-up queries." in second
+    assert [c.id for c in result.cards] == [card.id]
 
 
 async def test_research_step_events_recorded(make_agent, make_card, tmp_path):

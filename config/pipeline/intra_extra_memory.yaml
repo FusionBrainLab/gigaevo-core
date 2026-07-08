@@ -49,6 +49,17 @@ pipeline_builder:
   # (Arm B): the selector falls back to the one-pass-stale metadata block
   # (pre-reorder behaviour). Override per arm: pipeline_builder.fresh_context_reorder=false
   fresh_context_reorder: true
+  # Lost-in-the-middle placement levers, both default-off (current order):
+  # reverse_repack renders extra cards worst-first (best card last, nearest the
+  # instruction); memory_block_last moves the memory block to the end of the
+  # composite mutation context.
+  reverse_repack: false
+  # Randomly withhold selected memory cards from this fraction of otherwise
+  # card-eligible mutations. These children become fair no-card controls for
+  # baseline-adjusted card reputation instead of estimating no-card progress only
+  # from policy abstentions.
+  no_card_control_probability: 0.10
+  memory_block_last: false
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

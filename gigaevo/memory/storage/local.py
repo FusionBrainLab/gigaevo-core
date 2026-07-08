@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
+import threading
 from time import perf_counter
 from typing import Any
 
@@ -22,7 +23,7 @@ from gigaevo.memory.events import (
     MemoryStoreWrite,
     emit_memory_event,
 )
-from gigaevo.memory.storage.bank import CardBank, new_card_id
+from gigaevo.memory.storage.bank import CardBank, CardBankFileLock, new_card_id
 from gigaevo.memory.storage.base import (
     MemoryStore,
     ResearchRequest,
@@ -44,6 +45,7 @@ class LocalMemoryStore(MemoryStore):
     ) -> None:
         self._config = config
         self._state = StoreState.INITIALIZING
+        self._lock = threading.RLock()
         try:
             self._bank = CardBank(config.bank_file)
             self._index = VectorIndex(config.index_dir, config.embed)
@@ -75,58 +77,92 @@ class LocalMemoryStore(MemoryStore):
         return self._state
 
     def save(self, card: Card) -> str:
-        if not card.id:
-            card = card.model_copy(update={"id": new_card_id()})
-        self._bank.put(card)
-        self._bank.persist()
-        self._index_write(self._index.upsert, [card])
+        with self._lock:
+            with self._bank_file_lock(exclusive=True):
+                self._refresh_from_disk_locked()
+                before = self._bank.snapshot()
+                if not card.id:
+                    card = card.model_copy(update={"id": new_card_id()})
+                try:
+                    self._bank.put(card)
+                    self._bank.persist()
+                except Exception:
+                    self._bank.restore_snapshot(before)
+                    raise
+            self._index_write(self._index.upsert, [card])
+            bank_count = len(self._bank)
         emit_memory_event(
             MemoryStoreWrite(
                 op="save",
                 outcome="ok",
                 card_ids=(card.id,),
-                bank_count=len(self._bank),
+                bank_count=bank_count,
             )
         )
         return card.id
 
     def get(self, card_id: str) -> Card | None:
-        return self._bank.get(card_id)
+        with self._lock:
+            with self._bank_file_lock(exclusive=False):
+                self._refresh_from_disk_locked()
+            return self._bank.get(card_id)
 
     def delete(self, card_id: str) -> bool:
-        removed = self._bank.remove(card_id)
-        if removed:
-            self._bank.persist()
-            self._index_write(self._index.remove, [card_id])
+        with self._lock:
+            with self._bank_file_lock(exclusive=True):
+                self._refresh_from_disk_locked()
+                before = self._bank.snapshot()
+                removed = self._bank.remove(card_id)
+                if removed:
+                    try:
+                        self._bank.persist()
+                    except Exception:
+                        self._bank.restore_snapshot(before)
+                        raise
+                    self._index_write(self._index.remove, [card_id])
+            bank_count = len(self._bank)
         emit_memory_event(
             MemoryStoreWrite(
                 op="delete",
                 outcome="ok" if removed else "not_found",
                 card_ids=(card_id,),
-                bank_count=len(self._bank),
+                bank_count=bank_count,
             )
         )
         return removed
 
     def snapshot(self) -> tuple[Card, ...]:
-        return self._bank.snapshot()
+        with self._lock:
+            with self._bank_file_lock(exclusive=False):
+                self._refresh_from_disk_locked()
+            return self._bank.snapshot()
 
     def apply_merges(self, merged: Sequence[Card]) -> list[str]:
-        saved: list[Card] = []
-        for card in merged:
-            if not card.id:
-                card = card.model_copy(update={"id": new_card_id()})
-            self._bank.put(card)
-            saved.append(card)
-        if saved:
-            self._bank.persist()
-            self._index_write(self._index.upsert, saved)
+        with self._lock:
+            with self._bank_file_lock(exclusive=True):
+                self._refresh_from_disk_locked()
+                before = self._bank.snapshot()
+                saved: list[Card] = []
+                try:
+                    for card in merged:
+                        if not card.id:
+                            card = card.model_copy(update={"id": new_card_id()})
+                        self._bank.put(card)
+                        saved.append(card)
+                    if saved:
+                        self._bank.persist()
+                except Exception:
+                    self._bank.restore_snapshot(before)
+                    raise
+            if saved:
+                self._index_write(self._index.upsert, saved)
+            bank_count = len(self._bank)
         emit_memory_event(
             MemoryStoreWrite(
                 op="merge",
                 outcome="ok" if saved else "noop",
                 card_ids=tuple(card.id for card in saved),
-                bank_count=len(self._bank),
+                bank_count=bank_count,
             )
         )
         return [card.id for card in saved]
@@ -135,24 +171,30 @@ class LocalMemoryStore(MemoryStore):
         self, text: str, k: int, kind: CardKind | None = None
     ) -> list[ScoredCard]:
         try:
-            hits = self._index.query(
-                self._config.embed.nearest_scope, text, k, kind=kind
-            )
+            with self._lock:
+                with self._bank_file_lock(exclusive=False):
+                    self._refresh_from_disk_locked()
+                hits = self._index.query(
+                    self._config.embed.nearest_scope, text, k, kind=kind
+                )
+                return [
+                    ScoredCard(card=card, distance=hit.distance)
+                    for hit in hits
+                    if (card := self._bank.get(hit.card_id)) is not None
+                ]
         except Exception:
             logger.opt(exception=True).warning(
                 "[Memory][Store] nearest() failed; returning no neighbors"
             )
             return []
-        return [
-            ScoredCard(card=card, distance=hit.distance)
-            for hit in hits
-            if (card := self._bank.get(hit.card_id)) is not None
-        ]
 
     async def research(self, request: ResearchRequest) -> ResearchResult:
         started = perf_counter()
         if self._agent is None:
             return self._finish_research(started, request, ResearchResult())
+        with self._lock:
+            with self._bank_file_lock(exclusive=False):
+                self._refresh_from_disk_locked()
         try:
             result = await self._agent.research(request)
         except Exception as exc:
@@ -163,14 +205,16 @@ class LocalMemoryStore(MemoryStore):
         return self._finish_research(started, request, result)
 
     def rebuild(self) -> None:
-        self._transition(StoreState.BUILDING)
-        try:
-            self._bank.reload()
-            self._sync_index("rebuild")
-        except Exception:
-            self._transition(StoreState.ERROR)
-            raise
-        self._transition(StoreState.READY)
+        with self._lock:
+            self._transition(StoreState.BUILDING)
+            try:
+                with self._bank_file_lock(exclusive=False):
+                    self._bank.reload()
+                    self._sync_index("rebuild")
+            except Exception:
+                self._transition(StoreState.ERROR)
+                raise
+            self._transition(StoreState.READY)
 
     def close(self) -> None:
         logger.debug(
@@ -237,6 +281,14 @@ class LocalMemoryStore(MemoryStore):
             logger.opt(exception=True).warning(
                 "[Memory][Store] index write failed; index heals on next rebuild"
             )
+
+    def _refresh_from_disk_locked(self) -> None:
+        """Refresh this process' bank/index view if another process persisted."""
+        if self._bank.reload_if_changed():
+            self._sync_index("refresh")
+
+    def _bank_file_lock(self, *, exclusive: bool) -> CardBankFileLock:
+        return CardBankFileLock(self._bank.lock_path, exclusive=exclusive)
 
     def _transition(self, new: StoreState) -> None:
         validate_transition(self._state, new)

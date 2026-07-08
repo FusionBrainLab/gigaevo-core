@@ -30,8 +30,10 @@ class DedupPolicy(BaseModel):
     scheduler. Idea-card dedup is LLM-arbitrated end to end: recall is top-k by
     rank, with no embedding distance threshold anywhere (same-lever cards average
     only ~0.78 cosine similarity on this geometry, so any useful cosine gate
-    would either be inert or force-merge distinct levers). Exemplar cards dedup
-    by exact code identity in the librarian — also threshold-free.
+    would either be inert or force-merge distinct levers). Program-exemplar
+    controls live in ``ProgramExemplarPolicy`` because their constraints are
+    different: bounded top-k authoring, a hard archive cap, and code-hash
+    identity.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -50,6 +52,46 @@ class DedupPolicy(BaseModel):
         description="Neighbours fetched per card during a consolidation pass; "
         "every one is offered to the consolidate agent as a merge candidate "
         "(pure top-k, no distance cut).",
+    )
+
+
+class ProgramExemplarPolicy(BaseModel):
+    """Bounded write policy for program exemplar cards.
+
+    Program cards are not durable ideas; they are a small reference shelf of
+    high-fitness concrete exemplars. The policy therefore caps both per-refresh
+    authoring and total bank residency, and stores only a source hash by default
+    so cards do not consume the bank with large program bodies.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether the writer authors and maintains program exemplars.",
+    )
+    top_k_per_refresh: int | None = Field(
+        default=4,
+        ge=0,
+        description="Maximum number of top programs authored per write refresh; "
+        "None keeps all programs selected by best_programs_percent.",
+    )
+    max_cards: int = Field(
+        default=12,
+        ge=0,
+        description="Hard cap on program exemplar cards kept in the bank.",
+    )
+    min_fitness_gap: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Absolute improvement required to replace an existing "
+        "same-code exemplar. Default is strict improvement with no task-scale "
+        "epsilon.",
+    )
+    store_code: bool = Field(
+        default=False,
+        description="When false, new program cards keep only code_sha256, not "
+        "the full source body.",
     )
 
 

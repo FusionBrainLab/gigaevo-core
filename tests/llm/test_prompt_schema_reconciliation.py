@@ -163,3 +163,10 @@ class TestSuggestionsPromptDefersFieldSetToSchema:
         assert "defines every field and its meaning" in load_prompt(
             "mutation_suggestions", "system"
         )
+
+    def test_output_shape_matches_structured_schema_wrapper(self) -> None:
+        prompt = load_prompt("mutation_suggestions", "system")
+        assert "single JSON array" not in prompt
+        assert "single JSON object" not in prompt
+        assert "bound structured-output schema" in prompt
+        assert "Use the `insights` collection" in prompt

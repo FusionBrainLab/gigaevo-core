@@ -38,6 +38,17 @@ def test_nearest_scope_must_be_configured():
         EmbedConfig(embed_scopes={"s": ("description",)}, nearest_scope="other")
 
 
+def test_mmr_lambda_defaults_to_pure_relevance():
+    assert ResearchConfig().mmr_lambda == 1.0
+
+
+def test_mmr_lambda_must_be_in_unit_interval():
+    with pytest.raises(ValueError, match="mmr_lambda"):
+        ResearchConfig(mmr_lambda=1.5)
+    with pytest.raises(ValueError, match="mmr_lambda"):
+        ResearchConfig(mmr_lambda=-0.1)
+
+
 def test_top_k_by_scope_overrides_default():
     research = ResearchConfig(top_k_by_scope={"a": 7}, default_top_k=2)
     assert research.top_k("a") == 7

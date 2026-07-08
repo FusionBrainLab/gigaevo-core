@@ -51,6 +51,28 @@ class TestFormatBlockEfficacy:
         assert line.endswith("(caution: non-positive median)")
         assert "-0.0500" in line
 
+    def test_bootstrap_ev_renders_expected_improvement_not_median(self, make_card):
+        line = format_block_efficacy(
+            make_card(),
+            _block(
+                IntroGain_best_median=0.10,
+                IntroGain_bootstrap_ev_mean=0.025,
+                IntroGain_bootstrap_ev_lo20=0.01,
+            ),
+        )
+        assert line == (
+            "efficacy: introduced in 4 children; "
+            "expected improvement +0.0250 (confident)"
+        )
+
+    def test_bootstrap_ev_caution_uses_expected_improvement_label(self, make_card):
+        line = format_block_efficacy(
+            make_card(),
+            _block(IntroGain_best_median=0.10, IntroGain_bootstrap_ev_mean=-0.025),
+        )
+        assert line.endswith("(caution: non-positive expected improvement)")
+        assert "median improvement" not in line
+
 
 class TestEfficacyCardRenderer:
     def test_none_card_renders_empty(self):

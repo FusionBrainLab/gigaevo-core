@@ -151,6 +151,28 @@ class TestLocalStore:
         LocalMemoryStore(config).save(card)
         assert LocalMemoryStore(config).get(card.id) == card
 
+    def test_shared_bank_instances_do_not_clobber_each_other(
+        self, make_store_config, make_card
+    ):
+        config = make_store_config()
+        store_a = LocalMemoryStore(config)
+        store_b = LocalMemoryStore(config)
+        card_a = make_card(id="mem-shared-a", description="alpha shared bank")
+        card_b = make_card(id="mem-shared-b", description="beta shared bank")
+
+        store_a.save(card_a)
+        store_b.save(card_b)
+
+        reopened = LocalMemoryStore(config)
+        assert {card.id for card in reopened.snapshot()} == {
+            "mem-shared-a",
+            "mem-shared-b",
+        }
+        assert store_a.get(card_b.id) == card_b
+        assert [hit.card.id for hit in store_a.nearest("beta shared bank", k=2)][
+            0
+        ] == card_b.id
+
     def test_corrupt_bank_raises(self, make_store_config):
         config = make_store_config()
         config.path.mkdir(parents=True, exist_ok=True)
@@ -175,6 +197,56 @@ class TestLocalStore:
             store.rebuild()
         assert store.state is StoreState.ERROR
         assert not store.is_ready
+
+    def test_save_rolls_back_ram_on_persist_failure(
+        self, make_store_config, make_card, monkeypatch
+    ):
+        store = LocalMemoryStore(make_store_config())
+        card = make_card()
+
+        def fail_persist():
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(store._bank, "persist", fail_persist)
+        with pytest.raises(RuntimeError, match="disk full"):
+            store.save(card)
+
+        assert store.get(card.id) is None
+        assert store.snapshot() == ()
+
+    def test_delete_rolls_back_ram_on_persist_failure(
+        self, make_store_config, make_card, monkeypatch
+    ):
+        store = LocalMemoryStore(make_store_config())
+        card = make_card()
+        store.save(card)
+
+        def fail_persist():
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(store._bank, "persist", fail_persist)
+        with pytest.raises(RuntimeError, match="disk full"):
+            store.delete(card.id)
+
+        assert store.get(card.id) == card
+
+    def test_apply_merges_rolls_back_ram_on_persist_failure(
+        self, make_store_config, make_card, monkeypatch
+    ):
+        store = LocalMemoryStore(make_store_config())
+        original = make_card(id="mem-original")
+        store.save(original)
+        incoming = make_card(id="mem-incoming")
+
+        def fail_persist():
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(store._bank, "persist", fail_persist)
+        with pytest.raises(RuntimeError, match="disk full"):
+            store.apply_merges([incoming])
+
+        assert store.get(original.id) == original
+        assert store.get(incoming.id) is None
 
     def test_nearest_ranks_matching_card_first(self, make_store_config, make_card):
         store = LocalMemoryStore(make_store_config())

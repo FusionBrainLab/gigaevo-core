@@ -28,12 +28,19 @@ def make_card():
 @pytest.fixture
 def make_event():
     def _make_event(
-        gain: float, *, invalid: bool = False, metrics: dict[str, float] | None = None
+        gain: float,
+        *,
+        invalid: bool = False,
+        founding: bool = False,
+        unused: bool = False,
+        metrics: dict[str, float] | None = None,
     ) -> ContextualGain:
         return ContextualGain(
             context=DecisionContext(parent_metrics=metrics or {}),
             gain=gain,
             invalid=invalid,
+            founding=founding,
+            unused=unused,
         )
 
     return _make_event

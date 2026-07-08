@@ -8,6 +8,7 @@ from typing import Literal
 
 MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
+MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY = "memory_no_card_control"
 
 #: Frozen onto a child at birth: sorted union of the parents' prompt-time
 #: selected card ids. Posterior attribution reads this stamp — the parents'
@@ -36,10 +37,10 @@ MUTATION_OUTPUT_METADATA_KEY = "mutation_output"
 #: candidates were rejected (the "no-card" outcome).
 MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY = "memory_candidate_slate"
 
-#: Frozen onto a child at birth from the base parent (the one the mutator named in
-#: base_parent): its prompt-time selected card ids. Use-attribution credits only the
-#: cards in this set that the mutator also declared in card_ids_used. Frozen because
-#: the parent's own selected-ids are overwritten on NO_CACHE requeue.
+#: Legacy/base-parent selected ids frozen at birth. Current attribution prefers
+#: MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY (the full prompt slate across all
+#: parents) so crossover donor cards can be credited; this key still supplies a
+#: base-parent fallback for older children.
 MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY = "memory_base_selected_idea_ids"
 
 #: Frozen onto a child at birth: the base parent's metric dict — the decision context

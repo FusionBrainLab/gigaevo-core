@@ -18,6 +18,7 @@ from gigaevo.programs.stages.common import StringContainer
 from gigaevo.programs.stages.mutation_suggestions import (
     MutationSuggestionInputs,
     MutationSuggestionStage,
+    offered_memory_card_ids,
 )
 
 # ---------------------------------------------------------------------------
@@ -214,3 +215,18 @@ class TestAgentSeesFullStats:
         )
         prep = await stage.preprocess(MagicMock(), params)
         assert prep["evolutionary_statistics"] is stats
+
+
+class TestOfferedMemoryCardIds:
+    def test_parses_only_memory_card_headers(self):
+        rendered = (
+            "free text card-ghost\n\n"
+            "[card 1] id=card-abc\n"
+            "description\n\n"
+            "[card 2] id=program-123\n"
+            "description"
+        )
+
+        assert offered_memory_card_ids(rendered) == frozenset(
+            {"card-abc", "program-123"}
+        )

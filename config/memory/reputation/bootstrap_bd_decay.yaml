@@ -1,0 +1,44 @@
+# @package memory.reputation
+# Conservative-ageing contextual preset: bootstrap-EV over decayed BD reputation.
+#
+# Use when stale card evidence is visibly clogging the bank and you want both
+# value channels to age: the inner Beta posterior/event counts decay toward the
+# prior, and the outer bootstrap-EV resample already fades raw deltas toward
+# neutral zero. This is stricter than the default and can re-open exploration
+# faster, at the cost of forgetting old reliable cards sooner.
+_target_: gigaevo.memory.read.reputation.BootstrapReputation
+store: ${ref:memory.store}
+# Outer bootstrap-EV staleness half-life in bank cycles.
+half_life_cycles: 1.0
+# Pessimistic EV quantile used by the bootstrap warm-card bench.
+ev_lo_quantile: 0.20
+# Deterministic resamples for per-card stats.
+n_bootstrap: 512
+# Effective non-stale use-event count required before confidence can be true.
+confident_min_events: 3
+inner:
+  _target_: gigaevo.memory.read.decay.DecayingReputation
+  store: ${ref:memory.store}
+  # Inner posterior/count decay half-life. This stacks with the outer bootstrap
+  # EV staleness; use deliberately.
+  half_life_cycles: 1.0
+  inner:
+    _target_: gigaevo.memory.read.reputation.BDProximityReputation
+    # Required shared behavior space for contextual credit.
+    behavior_space: ${ref:behavior_space}
+    fallback:
+      _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
+      # Harm/confidence thresholds and aligned cold prior for cold BD cells.
+      harm_min_events: 3
+      harm_quantile: 0.80
+      harm_threshold: 0.5
+      confident_quantile: 0.20
+      confident_threshold: 0.5
+      cold_prior: [3.0, 3.0]
+    # Harm/confidence thresholds for in-cell BD evidence.
+    harm_min_events: 3
+    harm_quantile: 0.80
+    harm_threshold: 0.5
+    confident_quantile: 0.20
+    confident_threshold: 0.5
+    cold_prior: [3.0, 3.0]

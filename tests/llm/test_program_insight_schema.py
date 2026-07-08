@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import ValidationError
 import pytest
 
-from gigaevo.llm.agents.insights import ProgramInsight
+from gigaevo.llm.agents.insights import ProgramInsight, ProgramInsights
 
 
 def _insight(**overrides) -> ProgramInsight:
@@ -64,3 +64,43 @@ class TestMechanismSource:
     def test_card_attribution_round_trip(self) -> None:
         ins = _insight(mechanism_source="memory_cards", card_id="card-abc-123")
         assert ins.card_id == "card-abc-123"
+
+
+class TestMemoryCardGrounding:
+    def test_keeps_exact_offered_card_refs(self) -> None:
+        ins = _insight(
+            evidence_source="program",
+            mechanism_source="memory_cards",
+            card_id="card-abc",
+            evidence_refs=["card-abc"],
+        )
+
+        grounded = ins.grounded_memory_card_refs({"card-abc"})
+
+        assert grounded.card_id == "card-abc"
+        assert grounded.evidence_refs == ["card-abc"]
+
+    def test_clears_unoffered_card_refs(self) -> None:
+        ins = _insight(
+            evidence_source="program",
+            mechanism_source="memory_cards",
+            card_id="ghost-card",
+            evidence_refs=["ghost-card", "card-abc"],
+        )
+
+        grounded = ins.grounded_memory_card_refs({"card-abc"})
+
+        assert grounded.card_id == ""
+        assert grounded.evidence_refs == ["card-abc"]
+
+    def test_collection_grounds_each_insight(self) -> None:
+        insights = ProgramInsights(
+            insights=[
+                _insight(mechanism_source="memory_cards", card_id="card-abc"),
+                _insight(mechanism_source="memory_cards", card_id="ghost-card"),
+            ]
+        )
+
+        grounded = insights.grounded_memory_card_refs({"card-abc"})
+
+        assert [ins.card_id for ins in grounded.insights] == ["card-abc", ""]

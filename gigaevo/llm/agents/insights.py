@@ -4,6 +4,9 @@ This agent analyzes programs to generate actionable insights for evolution.
 ALL LLM-related logic lives here - stages are just thin wrappers.
 """
 
+from __future__ import annotations
+
+from collections.abc import Iterable
 from typing import Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -79,9 +82,9 @@ class ProgramInsight(BaseModel):
     card_id: str = Field(
         default="",
         description=(
-            "When mechanism_source is memory_cards: the id of the card the "
-            "mechanism was transposed from (shown as `[card N] id=<id>`). "
-            "Empty otherwise."
+            "When mechanism_source is memory_cards: an exact card id copied "
+            "from the offered Memory Cards block header (`[card N] id=<id>`). "
+            "Runtime grounding ignores ids that were not offered. Empty otherwise."
         ),
     )
     substitute: str = Field(
@@ -127,6 +130,41 @@ class ProgramInsight(BaseModel):
         description="Severity / priority of the insight: high | medium | low."
     )
 
+    def grounded_memory_card_refs(
+        self, allowed_card_ids: Iterable[str]
+    ) -> ProgramInsight:
+        """Return this insight with memory-card identity fields runtime-grounded.
+
+        The structured schema can require a ``card_id`` field, but it cannot
+        know the dynamic slate of ids rendered in a particular prompt. This is
+        the schema-level runtime check: keep exact offered ids, clear invented
+        card ids, and keep only offered card ids in ``evidence_refs`` for
+        memory-sourced suggestions. No text similarity or content heuristics.
+        """
+        allowed = frozenset(cid.strip() for cid in allowed_card_ids if cid.strip())
+        card_id = self.card_id.strip()
+        updates: dict[str, object] = {}
+        if card_id != self.card_id:
+            updates["card_id"] = card_id
+        if card_id and card_id not in allowed:
+            updates["card_id"] = ""
+
+        memory_sourced = (
+            self.evidence_source == "memory_cards"
+            or self.mechanism_source == "memory_cards"
+            or bool(card_id)
+        )
+        if memory_sourced:
+            grounded_refs = [
+                ref.strip()
+                for ref in self.evidence_refs
+                if ref.strip() and ref.strip() in allowed
+            ]
+            if grounded_refs != self.evidence_refs:
+                updates["evidence_refs"] = grounded_refs
+
+        return self.model_copy(update=updates) if updates else self
+
 
 class ProgramInsights(BaseModel):
     """Collection of program insights."""
@@ -134,6 +172,20 @@ class ProgramInsights(BaseModel):
     insights: list[ProgramInsight] = Field(
         description="List of actionable insights",
     )
+
+    def grounded_memory_card_refs(
+        self, allowed_card_ids: Iterable[str]
+    ) -> ProgramInsights:
+        """Ground every insight's structured memory-card references."""
+        allowed = frozenset(cid.strip() for cid in allowed_card_ids if cid.strip())
+        return self.model_copy(
+            update={
+                "insights": [
+                    insight.grounded_memory_card_refs(allowed)
+                    for insight in self.insights
+                ]
+            }
+        )
 
 
 class InsightsState(TypedDict):

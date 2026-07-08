@@ -14,6 +14,7 @@ via :func:`gigaevo.llm.agents.factories.create_reconcile_agent`.
 
 from __future__ import annotations
 
+import difflib
 from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -23,6 +24,8 @@ from pydantic import BaseModel, Field
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.cards import Card, card_brief
+
+_MAX_DIFF_CHARS = 16_000
 
 
 class LibrarianCard(BaseModel):
@@ -66,6 +69,7 @@ class ReconcileResponse(BaseModel):
 class ReconcileState(TypedDict, total=False):
     base_parent_code: str
     child_code: str
+    unified_diff: str
     note: str
     neighbors: list[Card]
     messages: list[BaseMessage]
@@ -94,6 +98,8 @@ class ReconcileAgent(LangGraphAgent):
         user = self.user_prompt_template.format(
             base_parent_code=state["base_parent_code"],
             child_code=state["child_code"],
+            unified_diff=state.get("unified_diff")
+            or unified_diff(state["base_parent_code"], state["child_code"]),
             note=state["note"],
             neighbors=neighbors or "(none)",
         )
@@ -121,8 +127,29 @@ class ReconcileAgent(LangGraphAgent):
         state: ReconcileState = {
             "base_parent_code": base_parent_code,
             "child_code": child_code,
+            "unified_diff": unified_diff(base_parent_code, child_code),
             "note": note,
             "neighbors": neighbors,
         }
         final = await self.graph.ainvoke(state)
         return final["result"]
+
+
+def unified_diff(base_parent_code: str, child_code: str) -> str:
+    """Bounded unified diff used as the reconcile agent's ground truth."""
+    lines = list(
+        difflib.unified_diff(
+            base_parent_code.splitlines(),
+            child_code.splitlines(),
+            fromfile="base_parent.py",
+            tofile="child.py",
+            lineterm="",
+            n=3,
+        )
+    )
+    if not lines:
+        return "(No code differences detected)"
+    diff = "\n".join(lines)
+    if len(diff) <= _MAX_DIFF_CHARS:
+        return diff
+    return diff[: _MAX_DIFF_CHARS - 40] + "\n...[diff truncated]"

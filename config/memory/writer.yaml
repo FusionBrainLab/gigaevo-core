@@ -1,12 +1,13 @@
 # memory=writer — write only (seed a card bank for a later `memory=reader`
 # run; the deliberate "build a bank" move). The read side is unmounted: no
 # store/reader nodes, the provider injects nothing. Reputation is still
-# mounted — it is the harm evictor's scorer, pure math over stamped gain
-# events. NOTE: this spends memory-LLM tokens — see gigaevo/memory/README.md.
+# mounted — it is the recommended evictor's scorer, pure math over stamped gain
+# events plus birth-failure admission. NOTE: this spends memory-LLM tokens — see
+# gigaevo/memory/README.md.
 defaults:
   - llm: gemini
   - reputation: beta_binomial
-  - evictor: harm
+  - evictor: recommended
   - _self_
 
 provider:
@@ -29,6 +30,7 @@ writer:
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
+  baseline_estimator: ${ref:memory.reputation}
   task_description: ${ref:problem_context::task_description}
   best_programs_percent: 5.0
   ingest_call_timeout_s: 300.0
@@ -38,4 +40,14 @@ writer:
     online_top_k: 5
     max_cards_per_diff: 3
     consolidation_k: 5
+  # Program exemplar controls: exact normalized-source identity via code hash,
+  # bounded authoring per refresh, and a hard total archive cap. No prose/word
+  # similarity is used for exemplar dedup.
+  program_exemplars:
+    _target_: gigaevo.memory.write.merge.ProgramExemplarPolicy
+    enabled: true
+    top_k_per_refresh: 4
+    max_cards: 12
+    min_fitness_gap: 0.0
+    store_code: false
   prompts_dir: ${prompts.dir}

@@ -94,6 +94,25 @@ async def test_reconcile_passes_neighbor_ids_into_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconcile_prompt_includes_unified_diff() -> None:
+    fake = _FakeLLM(ReconcileResponse(items=[]))
+    agent = _agent(fake)
+    await agent.arun(
+        base_parent_code="def f():\n    return 1\n",
+        child_code="def f():\n    return 2\n",
+        note="changed return",
+        neighbors=[],
+    )
+
+    rendered = str(fake._structured.calls[0])
+    assert "## UNIFIED DIFF" in rendered
+    assert "--- base_parent.py" in rendered
+    assert "+++ child.py" in rendered
+    assert "-    return 1" in rendered
+    assert "+    return 2" in rendered
+
+
+@pytest.mark.asyncio
 async def test_reconcile_passes_neighbor_why_and_keywords_into_prompt() -> None:
     fake = _FakeLLM(ReconcileResponse(items=[]))
     agent = _agent(fake)

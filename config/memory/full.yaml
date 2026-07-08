@@ -6,24 +6,14 @@
 # builds exactly what this file declares. Consumers read two nodes: pipelines
 # take ${ref:memory.provider}, engines take ${ref:memory.writer}.
 #
-# Swap a component group with e.g. `memory/llm=qwen_instruct` or
-# `memory/auction=thompson`; tune a leaf field with
-# `memory.reader.max_cards=2`. Default stack = the EV contextual-bandit
-# treatment: EV-bid auction + bid-ranked budgeter over the cell-local
-# BD-proximity injection posterior (per-cell credit, global Beta-Binomial
-# fallback for cold cells), with lineage exclusion so a child never re-sees a
-# card already applied up its own ancestry. BD-proximity requires a
-# single-island algorithm exposing a top-level `behavior_space` (the framework
-# default); multi-island runs must fall back to
-# `memory/reputation=beta_binomial memory/excluder=none`. The legacy
-# probability-only stack is `memory/auction=thompson memory/budget=top_theta`.
+# Public read-stack choices live in `memory/read_policy`: `recommended`
+# (default contextual bootstrap), `portable` (global bootstrap for multi-island
+# or no-BD algorithms), and explicit legacy/decay ablations. Override with
+# `memory/read_policy=portable`; tune leaf fields with `memory.reader.max_cards=2`.
 defaults:
   - llm: gemini
-  - reputation: bd_proximity
-  - auction: thompson_ev
-  - budget: top_bid
-  - excluder: lineage
-  - evictor: harm
+  - read_policy: recommended
+  - evictor: recommended
   - _self_
 
 # One store per run, owning bank + vector index + research agent under the
@@ -49,9 +39,8 @@ store:
 
 reader:
   _target_: gigaevo.memory.read.reader.MemoryReader
-  shortlister:
-    _target_: gigaevo.memory.read.shortlist.ResearchShortlister
-    store: ${ref:memory.store}
+  # `memory/read_policy` owns shortlister/reputation/auction/budget/excluder as
+  # one coherent bandit stack. The reader consumes those shared component refs.
   reputation: ${ref:memory.reputation}
   auctioneer: ${ref:memory.auction}
   budgeter: ${ref:memory.budget}
@@ -74,6 +63,7 @@ writer:
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
+  baseline_estimator: ${ref:memory.reputation}
   task_description: ${ref:problem_context::task_description}
   best_programs_percent: 5.0
   # Per-call wall-clock bound on each librarian LLM call (reconcile/author). A
@@ -95,11 +85,23 @@ writer:
     online_top_k: 5
     max_cards_per_diff: 3
     consolidation_k: 5
+  # Program exemplar controls: exact normalized-source identity via code hash,
+  # bounded authoring per refresh, and a hard total archive cap. No prose/word
+  # similarity is used for exemplar dedup.
+  program_exemplars:
+    _target_: gigaevo.memory.write.merge.ProgramExemplarPolicy
+    enabled: true
+    top_k_per_refresh: 4
+    max_cards: 12
+    min_fitness_gap: 0.0
+    store_code: false
   # Novelty-admission gate: an LLM judge rejects freshly-authored idea cards that
-  # a strong model would already reach for unprompted (the bank's binding
-  # constraint is an excess of prior-known cards, not plumbing). One extra
-  # memory-LLM hop per authored insight card; fails open on judge error. Insight
-  # cards only — program exemplars carry concrete code+fitness and dedup by exact
-  # code identity, so prose-novelty is the wrong axis for them.
-  novelty_admission_gate: true
+  # a strong model would already reach for unprompted. One extra memory-LLM hop
+  # per authored insight card; fails open on judge error. Insight cards only —
+  # program exemplars carry concrete code+fitness and dedup by exact code
+  # identity, so prose-novelty is the wrong axis for them. OFF by default: in a
+  # 2026-07 heilbron comparison the gated arm climbed markedly slower, but that
+  # comparison also changed the embedder and store architecture — the A/B
+  # isolating the gate's own effect is still running.
+  novelty_admission_gate: false
   prompts_dir: ${prompts.dir}

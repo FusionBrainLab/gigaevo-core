@@ -2,9 +2,15 @@
 # Global downside Beta-Binomial reputation over per-card injection gains — the
 # default value channel for the auction and the harm evictor's scorer.
 _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
+# Minimum intro events before a card can be harm-evicted.
 harm_min_events: 3
+# Optimistic posterior quantile of P(not harmful) used by the harm gate.
 harm_quantile: 0.80
+# Harmful iff that optimistic P(not harmful) remains below this threshold.
 harm_threshold: 0.5
+# Pessimistic posterior quantile used for confidence/display.
 confident_quantile: 0.20
+# Confidence threshold on P(help) for the Beta posterior.
 confident_threshold: 0.5
-cold_prior: [1.0, 1.0]
+# Cold no-evidence prior. Keep aligned with auction baseline_prior.
+cold_prior: [3.0, 3.0]

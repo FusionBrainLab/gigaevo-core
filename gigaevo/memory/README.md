@@ -29,7 +29,7 @@ persisted data raises instead of being coerced.
 
 | Module | What it owns |
 |---|---|
-| `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` (`founding` flag marks the birth event) + `DecisionContext` (gain events), `CardStatsBlock`, `card_brief()` |
+| `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` + `EvidenceAttribution` (origin/use/exposure provenance), `DecisionContext`, `CardStatsBlock`, `card_brief()` |
 | `events.py` | Typed `MemoryEvent`s (canonical monitoring events + per-run `memory_events.jsonl` sink), `memory_event_context` correlation (decision/program/parent ids) |
 | `storage/base.py` | `MemoryStore` ABC: `save/get/delete/snapshot/apply_merges`, `nearest()`, `research()`, `rebuild/close/is_ready` |
 | `storage/bank.py` | `CardBank`: thread-safe in-proc dict + atomic `cards.json` persist; cold-loaded from disk once at construction |
@@ -41,19 +41,24 @@ persisted data raises instead of being coerced.
 | `storage/state.py` | `StoreState` transition table (shared `validate_transition` pattern) |
 | `storage/hf_cache.py` | HuggingFace cache/timeout shims applied before the embedder downloads |
 | `read/reader.py` | `MemoryReader` facade: shortlist → reputation → auction → budget → render; every stage a Protocol; fails to empty selection |
-| `read/shortlist.py` | `ResearchShortlister`: mutation-grounded query → `store.research()` |
-| `read/reputation.py` | `BetaBinomialReputation` (+ `BDProximityReputation` cell-local variant); posterior/efficacy math over gain events (`block_from_events`) |
-| `read/auction.py` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` + `TopThetaBudgeter` / `TopBidBudgeter` |
+| `read/interfaces.py` | Shared Protocols for read components (`ReputationModel`, `Shortlister`, `Auctioneer`, `Budgeter`, renderer, no-card baseline) |
+| `read/shortlist.py` | `ResearchShortlister`: mutation-grounded query → `store.research()`; passes a digest of the newest `digest_max_cards` banked cards (default 50, one description line each) as the planner's context |
+| `read/fused.py` | `FusedRankingShortlister` (fused re-rank of the inner shortlist: `w_sem`/`w_rep`/`w_nov` + self-normalizing `rep_floor_quantile` gate) and `BootstrapFusedRankingShortlister` (default: warm-only bench over the bootstrap-repriced `ev_lo`/`ev_mean`; benched cards merge into `exclude_ids` before research, cold cards stay explorable) |
+| `read/reputation.py` | `BetaBinomialReputation` (+ `BDProximityReputation` cell-local variant); posterior/efficacy math over gain events (`block_from_events`); `BootstrapReputation` (default, wraps either): re-prices the gain summary on the mean + low quantile of a staleness-weighted bootstrap over raw oriented deltas, delegating the downside posterior to the inner |
+| `read/auction.py` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` / `BootstrapThompsonAuctioneer` (default: known cards bid one weighted bootstrap resample mean + neutral pseudo-event; true cold cards bid posterior × cold scale; sign gate + round-quantile EV reserve) + `TopThetaBudgeter` / `TopBidBudgeter` |
+| `read/bootstrap.py` | `bootstrap_ev_samples` (weighted resample of known-card EV support + neutral pseudo-event) + `stable_rng` (sha256-seeded, replayable) — shared by reputation and auction |
+| `read/staleness.py` | `bank_cycle_weight`: the ONE staleness mechanism, `w = 2^(-s/H)` (s = bank gain events newer than the card's latest, H = bank size × `half_life_cycles`) |
+| `read/decay.py` | `DecayingReputation` (`memory/reputation=bootstrap_*_decay` or `bd_proximity_decay`): explicit posterior/count decay experiment; default bootstrap policies decay EV evidence but not Beta counts |
 | `read/exclusion.py` | `NullExcluder`, `LineageExcluder` (filter-first lineage gate) |
 | `read/render.py` | `EfficacyCardRenderer` — card → mutator-facing block incl. efficacy endorsement |
 | `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): extract → reconcile → author exemplars → restamp gains → harm-evict, one lock |
-| `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards, author exemplar prose; optional novelty-admission gate on NEW idea cards |
-| `llm/agents/admission_novelty.py` | `NoveltyAdmissionAgent`: keep/reject an idea card on novelty vs the mutator's prior (`writer.novelty_admission_gate`, on in `memory=full`) |
-| `write/admission.py` | `CardAdmissionGate` (sole harm gate) + `WriteLedger` (`write_ledger.jsonl`) |
-| `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp; seeds each new insight card's `founding` gain event (signed parent→child delta) and preserves it across restamps |
+| `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards (byte-identical descriptions dedup to a provenance bump, never a second id), author exemplar prose; optional novelty-admission gate on NEW idea cards |
+| `gigaevo/llm/agents/admission_novelty.py` (outside this package) | `NoveltyAdmissionAgent`: keep/reject an idea card on novelty vs the mutator's prior (`writer.novelty_admission_gate`, off by default pending its A/B) |
+| `write/admission.py` | `CardAdmissionGate` (sole harm gate; harm deletions tombstone the id against re-admission for the run) + `WriteLedger` (`write_ledger.jsonl`) |
+| `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp (credit that no longer resolves to a banked card is dropped); seeds each new insight card's `founding` gain event (signed parent→child delta) and preserves it across restamps |
 | `write/merge.py` | `DedupPolicy` + card merge semantics |
-| `write/consolidation.py` | Throttled background near-duplicate consolidation pass |
-| `write/eviction.py` | `CardScorer` Protocol, `HarmEvictor` (harm verdict strips `founding` events — eviction is usage-based), `NullEvictor` |
+| `write/consolidation.py` | Near-duplicate consolidation: inline same-batch pass over each increment's freshly-ADDED cards (`consolidate_written`) + throttled background pass over the whole bank |
+| `write/eviction.py` | `CardScorer` Protocol, `BirthFailureEvictor` (catastrophic origin failure), `HarmEvictor` (later-use harm), `CompositeEvictor`, `NullEvictor` |
 | `write/extraction.py` | `ProgramRecordExtractor` — eligible records via strict `MetricsContext` validity |
 | `provider.py` | `MemoryProvider` ABC + `NullMemoryProvider` / `ReaderMemoryProvider` / `StaticLeverMemoryProvider` |
 | `live_memory_hook.py` | `LiveMemoryRefreshHook` — periodic in-run writer sweeps (`post_step_hook`) |
@@ -77,7 +82,7 @@ groups, and launch recipes.
 |---|---|---|
 | `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, atomic rewrite per save |
 | `chroma/` | `VectorIndex` | Vector collections, one per embed scope; rebuilt from the bank on demand. Holds `embed_fingerprint.json` — reopening under a changed `embedding_model` raises rather than rank against stale vectors |
-| `write_ledger.jsonl` | `WriteLedger` | Append-only admission/eviction verdicts |
+| `write_ledger.jsonl` | `WriteLedger` | Append-only admission/eviction verdicts; outcomes: `added` / `updated` / `merged` / `rejected_harm` / `rejected_novelty` / `evicted` (a benign no-op ingest — `DISCARDED` — writes no row) |
 | `memory_events.jsonl` | `events.py` sink | Every memory event, one JSON row each |
 
 The bank is the source of truth; index writes are best-effort and heal on

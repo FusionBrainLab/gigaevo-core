@@ -88,6 +88,7 @@ from gigaevo.programs.stages.memory_context import (
     MemoryContextStage,
     MemoryExposureCounter,
 )
+from gigaevo.programs.stages.mutation_context import MutationContextStage
 from gigaevo.programs.stages.mutation_suggestions import MutationSuggestionStage
 
 DEFAULT_INTRA_MAX_CHILDREN = 24
@@ -122,6 +123,7 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
         mutation_mode: str | None = None,
         enable_optuna_stage: bool = False,
         optimization_time_budget: float | None = None,
+        memory_block_last: bool = False,
     ):
         super().__init__(
             ctx,
@@ -162,6 +164,18 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
                 timeout=stage_timeout,
             ),
         )
+
+        # memory_block_last moves the memory block to the composite context's
+        # end, adjacent to the trailing mutation instruction.
+        if memory_block_last:
+            self.replace_stage(
+                "MutationContextStage",
+                lambda: MutationContextStage(
+                    metrics_context=metrics_context,
+                    timeout=stage_timeout,
+                    memory_last=True,
+                ),
+            )
 
         self.add_stage(
             "IntraMemoryStage",
@@ -359,6 +373,9 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         enable_optuna_stage: bool = False,
         optimization_time_budget: float | None = None,
         fresh_context_reorder: bool = True,
+        reverse_repack: bool = False,
+        no_card_control_probability: float = 0.0,
+        memory_block_last: bool = False,
     ):
         super().__init__(
             ctx,
@@ -372,6 +389,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
             mutation_mode=mutation_mode,
             enable_optuna_stage=enable_optuna_stage,
             optimization_time_budget=optimization_time_budget,
+            memory_block_last=memory_block_last,
         )
 
         memory_provider = self.ctx.memory_provider
@@ -403,6 +421,8 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
                 timeout=stage_timeout,
                 exposure=exposure,
                 fresh_context_reorder=fresh_context_reorder,
+                reverse_repack=reverse_repack,
+                no_card_control_probability=no_card_control_probability,
             ),
         )
 

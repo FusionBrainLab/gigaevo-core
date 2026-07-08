@@ -66,10 +66,17 @@ class MutationContextStage(Stage):
     OutputModel = StringContainer
     cache_handler = NO_CACHE
 
-    def __init__(self, *, metrics_context: MetricsContext, **kwargs: Any):
+    def __init__(
+        self,
+        *,
+        metrics_context: MetricsContext,
+        memory_last: bool = False,
+        **kwargs: Any,
+    ):
         super().__init__(**kwargs)
         self.metrics_context = metrics_context
         self.metadata_key = MUTATION_CONTEXT_METADATA_KEY
+        self._memory_last = memory_last
 
     async def compute(self, program: Program) -> StageIO:
         contexts: list[MutationContext] = []
@@ -112,11 +119,21 @@ class MutationContextStage(Stage):
                 )
             )
 
-        if params.memory is not None and params.memory.data.strip():
-            contexts.append(MemoryMutationContext(memory_block=params.memory.data))
+        memory_context = (
+            MemoryMutationContext(memory_block=params.memory.data)
+            if params.memory is not None and params.memory.data.strip()
+            else None
+        )
+        # memory_last places the memory block at the composite's end, adjacent
+        # to the trailing mutation instruction (lost-in-the-middle mitigation).
+        if memory_context is not None and not self._memory_last:
+            contexts.append(memory_context)
 
         if params.formatted is not None:
             contexts.append(PreformattedMutationContext(content=params.formatted.data))
+
+        if memory_context is not None and self._memory_last:
+            contexts.append(memory_context)
 
         if not contexts:
             logger.info(

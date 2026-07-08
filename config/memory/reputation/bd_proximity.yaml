@@ -1,5 +1,6 @@
 # @package memory.reputation
-# BD-cell partitioned reputation: buckets each card's gain events into the
+# BD-cell partitioned reputation (selectable; the `memory=full` default policy is
+# `recommended`, which wraps this class): buckets each card's gain events into the
 # query parent's current MAP-Elites cell and bids over the in-cell subset only;
 # a cold cell delegates to the global `fallback`. Requires a single-island
 # algorithm that exposes a top-level `behavior_space` (single_island*,
@@ -7,18 +8,24 @@
 # behavior spaces and is NOT compatible (validate_reputation_island_compat
 # fails fast).
 _target_: gigaevo.memory.read.reputation.BDProximityReputation
+# Required shared behavior space. This preset is not compatible with multi-island
+# algorithms that only expose per-island behavior spaces.
 behavior_space: ${ref:behavior_space}
+# Fallback used when the query parent's BD cell has no in-cell events for a card.
 fallback:
   _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
+  # Harm/confidence thresholds and cold prior for cold cells.
   harm_min_events: 3
   harm_quantile: 0.80
   harm_threshold: 0.5
   confident_quantile: 0.20
   confident_threshold: 0.5
-  cold_prior: [1.0, 1.0]
+  cold_prior: [3.0, 3.0]
+# Harm/confidence thresholds for in-cell BD evidence.
 harm_min_events: 3
 harm_quantile: 0.80
 harm_threshold: 0.5
 confident_quantile: 0.20
 confident_threshold: 0.5
-cold_prior: [1.0, 1.0]
+# Cold no-evidence prior. Keep aligned with auction baseline_prior.
+cold_prior: [3.0, 3.0]

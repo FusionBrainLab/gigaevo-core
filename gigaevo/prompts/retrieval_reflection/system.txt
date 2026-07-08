@@ -20,6 +20,15 @@ Decision rules:
 - Use fitness as supporting evidence or a tie-breaker, never as a reason to select a task-mismatched card. Treat missing fitness as neutral, not negative.
 - Prefer candidates whose task_description_summary matches the REQUEST over candidates with only generic semantic overlap.
 - Prefer a small diverse slate of distinct mechanisms over multiple variants of the same mechanism.
+- Mechanism fit gates every selection: a candidate must name the same parameter, symbol, component, code region, or algorithm family as a plausible next mutation of the REQUEST's parents. Apply domain-appropriate synonym tolerance: identifiers that name the same knob ("lr" / "learning_rate"), the same structural role ("retrieval_k" / "top_k"), the same operation ("perturb" / "jitter"), or the same algorithm family match. Do NOT match across roles merely because tokens collide (tree-"depth" is not recursion-"depth").
+- Judge redundancy from the parent code shown in REQUEST and the candidate evidence shown in CANDIDATES. Do not assume hidden evidence.
+  - DUPLICATE: the candidate names a mechanism the parent already implements, with no supplied increment. Reject it.
+  - INCREMENT: the candidate names the same mechanism family and supplies a concrete delta over the parent (a different schedule, an extra term, a changed operator, a new parameter regime). Select it when task-fit, and state the delta in reasoning.
+  - NEW: the candidate names a mechanism absent from the parent code. Select it when task-fit and mechanism-fit.
+- The parent code is the strongest anti-redundancy signal: if the parent already implements the candidate's full mechanism, reject the candidate even when the card is high-fitness or textually relevant.
+- Program exemplars are summarized cards, not raw code dumps. Fitness is evidence of empirical strength, not evidence of novelty. Do not infer a code-level delta from a strategy-family label; if the shown description/evidence does not name a concrete delta over the parent, reject the exemplar.
+- The REQUEST's PARENTS blocks carry each parent's lineage context (what this branch already tried and how it fared). Use it as a tie-breaker between INCREMENT candidates: prefer deltas the lineage does not record as already tried.
+- If CANDIDATES is non-empty, prefer mode "final"; use "continue" only when you can name a specific missing kind of evidence and the current step retrieved new cards.
 
 Idea quality bar — select only crisp ideas:
 - A crisp idea names one concrete mechanism: a specific knob, component, or transformation, the direction of change, and why it should help on this REQUEST.
@@ -27,6 +36,6 @@ Idea quality bar — select only crisp ideas:
 - Prefer an idea with an exact target and delta over a broader idea with more textual overlap.
 - When two candidates describe the same mechanism, keep the sharper one and drop the duplicate.
 
-If mode = "final": select fewer than the limit when fewer candidates are genuinely relevant; never pad with weak candidates. Reference cards only by card_id — do not rewrite, summarize, or generate card content. Leave additional_queries empty.
+If mode = "final": select fewer than the limit when fewer candidates are genuinely relevant; never pad with weak candidates. When at least one candidate is task-fit at grade INCREMENT or NEW, select the sharpest 1-3. An empty hand is a last resort, reserved for slates with no task-fit candidate at all: only then return mode "final" with an empty selection (zero selected ids) rather than padding with low-relevance cards. Reference cards only by card_id; do not rewrite, summarize, or generate card content. Leave additional_queries empty.
 If mode = "continue": return 1-5 concrete additional_queries and leave selected_ids empty.
 Always fill reasoning with one or two sentences grounded in CANDIDATES — it is stored as the retrieval summary for this decision.

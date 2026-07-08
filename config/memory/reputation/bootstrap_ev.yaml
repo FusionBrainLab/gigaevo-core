@@ -1,0 +1,33 @@
+# @package memory.reputation
+# Backward-compatible alias of `bootstrap_bd`. Prefer
+# `memory/reputation=bootstrap_bd` or the public `memory/read_policy=recommended`
+# name in new configs.
+_target_: gigaevo.memory.read.reputation.BootstrapReputation
+store: ${ref:memory.store}
+# Bootstrap-EV staleness half-life in bank cycles.
+half_life_cycles: 1.0
+# Pessimistic EV quantile used by the bootstrap warm-card bench.
+ev_lo_quantile: 0.20
+# Deterministic resamples for per-card stats.
+n_bootstrap: 512
+# Effective non-stale use-event count required before confidence can be true.
+confident_min_events: 3
+inner:
+  _target_: gigaevo.memory.read.reputation.BDProximityReputation
+  # Required shared behavior space.
+  behavior_space: ${ref:behavior_space}
+  fallback:
+    _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
+    # Harm/confidence thresholds and aligned cold prior for cold BD cells.
+    harm_min_events: 3
+    harm_quantile: 0.80
+    harm_threshold: 0.5
+    confident_quantile: 0.20
+    confident_threshold: 0.5
+    cold_prior: [3.0, 3.0]
+  harm_min_events: 3
+  harm_quantile: 0.80
+  harm_threshold: 0.5
+  confident_quantile: 0.20
+  confident_threshold: 0.5
+  cold_prior: [3.0, 3.0]

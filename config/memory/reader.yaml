@@ -2,12 +2,14 @@
 # Same read graph as `memory=full` with the write side unmounted: no evictor,
 # no librarian, and the post-run hook is a no-op. Point `checkpoint_dir` at a
 # bank a prior `memory=writer` (or `memory=full`) run filled.
+#
+# Same bootstrap-EV auction as `memory=full`, but with the portable global
+# bootstrap reputation (no `behavior_space` requirement, so this preset works
+# under any algorithm). Use `memory/reputation=bootstrap_bd` only for
+# single-island algorithms exposing a top-level `behavior_space`.
 defaults:
   - llm: gemini
-  - reputation: beta_binomial
-  - auction: thompson_ev
-  - budget: top_bid
-  - excluder: none
+  - read_policy: portable
   - _self_
 
 store:
@@ -26,9 +28,8 @@ store:
 
 reader:
   _target_: gigaevo.memory.read.reader.MemoryReader
-  shortlister:
-    _target_: gigaevo.memory.read.shortlist.ResearchShortlister
-    store: ${ref:memory.store}
+  # `memory/read_policy` owns shortlister/reputation/auction/budget/excluder as
+  # one coherent stack. The read-only default is portable global bootstrap.
   reputation: ${ref:memory.reputation}
   auctioneer: ${ref:memory.auction}
   budgeter: ${ref:memory.budget}

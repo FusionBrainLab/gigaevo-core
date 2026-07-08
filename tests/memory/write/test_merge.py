@@ -5,7 +5,11 @@ from __future__ import annotations
 from pydantic import ValidationError
 import pytest
 
-from gigaevo.memory.write.merge import DedupPolicy, merge_cards
+from gigaevo.memory.write.merge import (
+    DedupPolicy,
+    ProgramExemplarPolicy,
+    merge_cards,
+)
 
 
 def test_replace_description_takes_incoming_prose_and_keywords(make_card):
@@ -96,3 +100,21 @@ def test_dedup_policy_defaults_and_frozen():
     assert policy.consolidation_k == 5
     with pytest.raises(ValidationError):
         policy.consolidation_k = 7
+
+
+def test_program_exemplar_policy_defaults_and_frozen():
+    policy = ProgramExemplarPolicy()
+    assert policy.enabled is True
+    assert policy.top_k_per_refresh == 4
+    assert policy.max_cards == 12
+    assert policy.min_fitness_gap == 0.0
+    assert policy.store_code is False
+    with pytest.raises(ValidationError):
+        policy.max_cards = 7
+
+
+def test_program_exemplar_policy_rejects_negative_caps():
+    with pytest.raises(ValidationError):
+        ProgramExemplarPolicy(top_k_per_refresh=-1)
+    with pytest.raises(ValidationError):
+        ProgramExemplarPolicy(max_cards=-1)

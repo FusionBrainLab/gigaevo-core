@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import asyncio
 from time import perf_counter
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from loguru import logger
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
+from gigaevo.memory.cards import DecisionContext
 from gigaevo.memory.events import (
     MemoryReadSelection,
     emit_memory_event,
@@ -23,69 +23,17 @@ from gigaevo.memory.events import (
     new_decision_id,
 )
 from gigaevo.memory.read.auction import AuctionBid, AuctionCandidate
-from gigaevo.memory.storage.base import ResearchResult
+from gigaevo.memory.read.exclusion import is_card_excluded
+from gigaevo.memory.read.interfaces import (
+    Auctioneer,
+    Budgeter,
+    CardRenderer,
+    ReputationModel,
+    Shortlister,
+)
 
 _MILLISECONDS_PER_SECOND = 1000.0
 _TIMING_DECIMALS = 3
-
-
-@runtime_checkable
-class Shortlister(Protocol):
-    """Turns the mutation context into researched candidate cards."""
-
-    async def shortlist(
-        self,
-        *,
-        parents: list[Any],
-        mutation_mode: str,
-        task_description: str,
-        metrics_description: str,
-        exclude_ids: frozenset[str] = frozenset(),
-        parent_contexts: list[str] | None = None,
-    ) -> ResearchResult: ...
-
-
-@runtime_checkable
-class ReputationModel(Protocol):
-    """Owns all per-card efficacy statistics derived from injection outcomes."""
-
-    def card_stats(
-        self, card: Card, context: DecisionContext | None = None
-    ) -> CardStatsBlock | None: ...
-
-    def card_posterior(
-        self, card: Card, context: DecisionContext | None = None
-    ) -> tuple[float, float]: ...
-
-    def card_magnitude(
-        self, card: Card, context: DecisionContext | None = None
-    ) -> float | None: ...
-
-
-@runtime_checkable
-class Auctioneer(Protocol):
-    """Decides which candidate cards are injected into a mutation prompt."""
-
-    def run(
-        self, candidates: list[AuctionCandidate], rng: Any
-    ) -> tuple[list[str], list[AuctionBid]]: ...
-
-
-@runtime_checkable
-class Budgeter(Protocol):
-    """Caps the auction's emergent winner set to the mutator-facing budget."""
-
-    def cap(
-        self, card_ids: list[str], slate: list[AuctionBid], max_cards: int
-    ) -> list[str]: ...
-
-
-@runtime_checkable
-class CardRenderer(Protocol):
-    """Renders one card into its mutator-facing text block from its resolved
-    ``card_stats`` block (the same authority the auction bid on)."""
-
-    def render(self, card: Card | None, block: CardStatsBlock | None = None) -> str: ...
 
 
 class MemorySelection(BaseModel):
@@ -217,7 +165,11 @@ class MemoryReader:
                 parent_contexts=parent_contexts,
             )
         research_ms = _elapsed_ms(started_research)
-        candidates = {card.id: card for card in result.cards}
+        candidates = {
+            card.id: card
+            for card in result.cards
+            if not is_card_excluded(card, exclude_ids)
+        }
 
         started_reputation = perf_counter()
         # Query cell = parents[0]: no base parent is chosen until the mutator
@@ -232,18 +184,29 @@ class MemoryReader:
             if parents
             else None
         )
-        auction_input = [
-            AuctionCandidate(
-                card_id=card.id,
-                posterior_a=posterior_a,
-                posterior_b=posterior_b,
-                magnitude=self._reputation.card_magnitude(card, decision_context),
-            )
+        blocks = {
+            card.id: self._reputation.card_stats(card, decision_context)
             for card in candidates.values()
-            for posterior_a, posterior_b in (
-                self._reputation.card_posterior(card, decision_context),
+        }
+        auction_input = []
+        for card_id, block in blocks.items():
+            posterior_a, posterior_b = self._reputation.posterior_of(block)
+            card = candidates[card_id]
+            auction_input.append(
+                AuctionCandidate(
+                    card_id=card_id,
+                    posterior_a=posterior_a,
+                    posterior_b=posterior_b,
+                    magnitude=self._reputation.magnitude_of(block),
+                    deltas=self._reputation.event_deltas(card, decision_context),
+                    delta_weights=self._reputation.event_weights(
+                        card, decision_context
+                    ),
+                    staleness_weight=self._reputation.staleness_weight(
+                        card, decision_context
+                    ),
+                )
             )
-        ]
         reputation_ms = _elapsed_ms(started_reputation)
 
         started_auction = perf_counter()
@@ -256,12 +219,7 @@ class MemoryReader:
         rendered = [
             (cid, text)
             for cid in budgeted_ids
-            if (
-                text := self._renderer.render(
-                    candidates[cid],
-                    self._reputation.card_stats(candidates[cid], decision_context),
-                )
-            )
+            if (text := self._renderer.render(candidates[cid], blocks.get(cid)))
         ]
         render_ms = _elapsed_ms(started_render)
         card_ids = tuple(cid for cid, _ in rendered)

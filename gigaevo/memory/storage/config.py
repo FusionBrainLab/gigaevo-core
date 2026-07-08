@@ -86,6 +86,21 @@ class ResearchConfig(BaseModel):
     default_top_k: int = Field(default=3, gt=0)
     max_iters: int = Field(default=3, gt=0)
     max_cards: int = Field(default=3, gt=0)
+    reflect_payload_chars: int = Field(
+        default=36000,
+        gt=0,
+        description="Char budget for the reflector's rendered candidate briefs; "
+        "over-budget briefs are dropped whole (tail-first) behind an "
+        "omitted-ids marker, never clipped mid-JSON.",
+    )
+    mmr_lambda: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="MMR relevance-diversity trade-off for candidate ordering "
+        "(VectorIndex.mmr_order); 1.0 = pure relevance (off). Not yet consumed "
+        "by the research loop.",
+    )
 
     def top_k(self, scope: str) -> int:
         return self.top_k_by_scope.get(scope, self.default_top_k)

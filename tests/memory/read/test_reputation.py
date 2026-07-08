@@ -8,10 +8,16 @@ import pytest
 from scipy.stats import beta
 
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
-from gigaevo.memory.cards import CardStatsBlock
+from gigaevo.memory.cards import (
+    CardStatsBlock,
+    CausalStrength,
+    EvidenceAttribution,
+    EvidenceSource,
+)
 from gigaevo.memory.read.reputation import (
     BDProximityReputation,
     BetaBinomialReputation,
+    BootstrapReputation,
     beta_binomial_posterior,
     block_from_events,
 )
@@ -48,6 +54,12 @@ class TestBetaBinomialPosterior:
 
     def test_invalid_events_are_forced_harm(self):
         block = beta_binomial_posterior([0.5], invalid_events=2)
+        assert block.intro_events == 3
+        assert block.k_harm == 2
+        assert (block.posterior_a, block.posterior_b) == (2.0, 3.0)
+
+    def test_unused_events_are_failure_trials(self):
+        block = beta_binomial_posterior([0.5], unused_events=2)
         assert block.intro_events == 3
         assert block.k_harm == 2
         assert (block.posterior_a, block.posterior_b) == (2.0, 3.0)
@@ -147,11 +159,61 @@ class TestBlockFromEvents:
         assert block.k_harm == 1
         assert block.IntroGain_best_median == pytest.approx(0.5)
 
+    def test_unused_events_count_as_failures_without_magnitude(self, make_event):
+        block = block_from_events([make_event(0.5), make_event(0.0, unused=True)])
+        assert block is not None
+        assert block.intro_events == 2
+        assert block.k_harm == 1
+        assert block.IntroGain_best_median == pytest.approx(0.5)
+
+    def test_all_unused_has_zero_magnitude_and_no_confidence(self, make_event):
+        block = block_from_events([make_event(0.0, unused=True) for _ in range(3)])
+        assert block is not None
+        assert block.intro_events == 3
+        assert block.k_harm == 3
+        assert block.IntroGain_best_median == 0.0
+        assert block.efficacy_confident is False
+
     def test_all_invalid_has_zero_magnitude(self, make_event):
         block = block_from_events([make_event(0.0, invalid=True)])
         assert block is not None
         assert block.IntroGain_best_median == 0.0
         assert block.k_harm == 1
+
+    def test_losing_founding_only_card_has_no_efficacy_block(self, make_event):
+        # Founding evidence is origin/admission evidence only. It must not enter
+        # the use-attributed posterior, confidence, or EV view.
+        assert block_from_events([make_event(-0.4, founding=True)]) is None
+
+    def test_winning_founding_only_card_also_has_no_efficacy_block(self, make_event):
+        assert block_from_events([make_event(0.3, founding=True)]) is None
+
+    def test_use_events_own_the_magnitude_over_founding(self, make_event):
+        # Once real injection outcomes exist they are the gain scale; the
+        # one-time birth delta no longer skews the median either way.
+        block = block_from_events(
+            [make_event(5.0, founding=True), make_event(0.1), make_event(0.2)]
+        )
+        assert block is not None
+        assert block.IntroGain_best_median == pytest.approx(0.15)
+        assert block.intro_events == 2
+
+    def test_bundled_use_events_have_fractional_posterior_weight(self, make_event):
+        bundled = make_event(0.2).model_copy(
+            update={
+                "attribution": EvidenceAttribution(
+                    source=EvidenceSource.DIRECT,
+                    causal_strength=CausalStrength.DIRECT_BUNDLED,
+                    used_card_count=2,
+                    credit_weight=0.5,
+                )
+            }
+        )
+        block = block_from_events([bundled])
+        assert block is not None
+        assert block.intro_events == pytest.approx(0.5)
+        assert block.posterior_a == pytest.approx(1.5)
+        assert block.posterior_b == pytest.approx(1.0)
 
 
 class TestBetaBinomialReputation:
@@ -159,7 +221,7 @@ class TestBetaBinomialReputation:
         rep = BetaBinomialReputation()
         card = make_card()
         assert rep.card_stats(card) is None
-        assert rep.card_posterior(card) == (1.0, 1.0)
+        assert rep.card_posterior(card) == (3.0, 3.0)
         assert rep.card_magnitude(card) is None
 
     def test_card_with_events_resolves_through_block(self, make_card, make_event):
@@ -193,6 +255,40 @@ class TestBetaBinomialReputation:
         good = CardStatsBlock(posterior_a=9.0, posterior_b=2.0, intro_events=9)
         assert rep.is_confidently_harmful(good) is False
         assert rep.is_confidently_harmful(None) is False
+
+    def test_losing_founding_only_card_is_cold_for_the_auction(
+        self, make_card, make_event
+    ):
+        rep = BetaBinomialReputation()
+        card = make_card(gain_events=(make_event(-0.4, founding=True),))
+        assert rep.card_magnitude(card) is None
+        assert rep.card_posterior(card) == rep.cold_prior
+        assert rep.event_deltas(card) == ()
+
+    def test_unused_and_invalid_exposures_are_zero_ev_support(
+        self, make_card, make_event
+    ):
+        rep = BetaBinomialReputation()
+        card = make_card(
+            gain_events=(make_event(0.0, unused=True), make_event(0.0, invalid=True))
+        )
+        assert rep.event_deltas(card) == (0.0, 0.0)
+        assert rep.card_magnitude(card) == 0.0
+
+    def test_projections_are_pure_over_a_resolved_block(self, make_card, make_event):
+        # posterior_of/magnitude_of read an already-resolved block so the
+        # reader can resolve card_stats ONCE per candidate and reuse it for
+        # the auction and the render; the card-level accessors are the same
+        # math composed with card_stats.
+        rep = BetaBinomialReputation()
+        card = make_card(
+            gain_events=(make_event(0.2), make_event(0.4), make_event(-5.0))
+        )
+        block = rep.card_stats(card)
+        assert rep.posterior_of(block) == rep.card_posterior(card)
+        assert rep.magnitude_of(block) == rep.card_magnitude(card)
+        assert rep.posterior_of(None) == (3.0, 3.0)
+        assert rep.magnitude_of(None) is None
 
 
 class TestBDProximityReputation:
@@ -231,6 +327,44 @@ class TestBDProximityReputation:
         card = make_card(gain_events=(make_event(0.5, metrics={"x": 0.15}),))
         elsewhere = DecisionContext(parent_metrics={"x": 0.55})
         assert rep.card_stats(card, elsewhere) == rep.fallback.card_stats(card, None)
+
+    def test_founding_only_cell_delegates_to_global_use_evidence(
+        self, make_card, make_event
+    ):
+        from gigaevo.memory.cards import DecisionContext
+
+        rep = BDProximityReputation(behavior_space=_bs())
+        card = make_card(
+            gain_events=(
+                make_event(-0.5, founding=True, metrics={"x": 0.15}),
+                make_event(-0.9, metrics={"x": 0.95}),
+            )
+        )
+        founding_cell = DecisionContext(parent_metrics={"x": 0.15})
+
+        assert rep.card_stats(card, founding_cell) == rep.fallback.card_stats(
+            card, None
+        )
+        assert rep.event_deltas(card, founding_cell) == rep.fallback.event_deltas(
+            card, None
+        )
+
+    def test_unused_in_cell_zero_support_does_not_delegate(self, make_card, make_event):
+        from gigaevo.memory.cards import DecisionContext
+
+        rep = BDProximityReputation(behavior_space=_bs())
+        card = make_card(
+            gain_events=(
+                make_event(0.0, unused=True, metrics={"x": 0.15}),
+                make_event(0.9, metrics={"x": 0.95}),
+            )
+        )
+        near = DecisionContext(parent_metrics={"x": 0.15})
+
+        block = rep.card_stats(card, near)
+        assert block is not None
+        assert block.IntroGain_best_median == 0.0
+        assert rep.event_deltas(card, near) == (0.0,)
 
     @pytest.mark.parametrize("bad", [nan, inf])
     def test_non_finite_parent_coord_delegates(self, make_card, make_event, bad):
@@ -307,3 +441,79 @@ class TestBDProximityReputation:
         # event is in-cell (a live re-bin would delegate all events to fallback).
         assert block.intro_events == 1
         assert block.IntroGain_best_median == pytest.approx(0.5)
+
+
+class _Store:
+    def __init__(self, cards=()) -> None:
+        self._cards = tuple(cards)
+
+    def snapshot(self):
+        return self._cards
+
+
+class TestBootstrapReputation:
+    def test_one_positive_use_event_is_priced_but_not_confident(
+        self, make_card, make_event
+    ):
+        card = make_card(gain_events=(make_event(0.2),))
+        rep = BootstrapReputation(
+            BetaBinomialReputation(),
+            _Store((card,)),
+            n_bootstrap=128,
+            confident_min_events=3,
+        )
+        block = rep.card_stats(card)
+        assert block is not None
+        assert block.IntroGain_best_median == pytest.approx(0.2)
+        assert block.IntroGain_bootstrap_ev_mean is not None
+        assert block.IntroGain_bootstrap_ev_mean > 0.0
+        assert block.IntroGain_bootstrap_ev_lo20 is not None
+        assert block.IntroGain_bootstrap_ev_lo20 >= 0.0
+        assert block.p_help_lo20 is not None
+        assert 0.0 <= block.p_help_lo20 <= 1.0
+        assert block.p_help_lo20 != pytest.approx(block.IntroGain_bootstrap_ev_lo20)
+        assert block.efficacy_confident is False
+
+    def test_bootstrap_ev_does_not_overwrite_observed_median(
+        self, make_card, make_event
+    ):
+        card = make_card(
+            gain_events=(make_event(1.0), make_event(1.0), make_event(-10.0))
+        )
+        rep = BootstrapReputation(
+            BetaBinomialReputation(),
+            _Store((card,)),
+            n_bootstrap=4096,
+            confident_min_events=3,
+        )
+        block = rep.card_stats(card)
+        assert block is not None
+        assert block.IntroGain_best_median == pytest.approx(1.0)
+        assert block.IntroGain_bootstrap_ev_mean is not None
+        assert block.IntroGain_bootstrap_ev_mean < 0.0
+        assert block.IntroGain_bootstrap_ev_lo20 is not None
+        assert block.IntroGain_bootstrap_ev_lo20 < 0.0
+        assert rep.magnitude_of(block) == pytest.approx(
+            block.IntroGain_bootstrap_ev_mean
+        )
+        assert block.efficacy_confident is False
+
+    def test_known_loser_does_not_borrow_positive_bank_scale(
+        self, make_card, make_event
+    ):
+        loser = make_card(id="loser", gain_events=(make_event(-1.0),))
+        winner = make_card(id="winner", gain_events=(make_event(10.0),))
+        rep = BootstrapReputation(
+            BetaBinomialReputation(),
+            _Store((loser, winner)),
+            n_bootstrap=4096,
+            confident_min_events=1,
+        )
+
+        block = rep.card_stats(loser)
+
+        assert block is not None
+        assert block.IntroGain_bootstrap_ev_mean is not None
+        assert block.IntroGain_bootstrap_ev_mean <= 0.0
+        assert block.IntroGain_bootstrap_ev_lo20 is not None
+        assert block.IntroGain_bootstrap_ev_lo20 <= 0.0

@@ -80,11 +80,13 @@ async def consolidate(
     if reviewed is None:
         reviewed = set()
     merges = 0
+    processed = 0
     # Absorbed partners are deleted in a finally so a mid-pass agent failure
     # cannot leave an already-merged partner in the bank (its evidence is now
     # on the survivor — an undeleted partner would be double-counted).
     try:
         for card in cards:
+            processed += 1
             # Only idea cards drift into duplicates; program exemplar cards are
             # identity-keyed and re-authored each sweep, so never merge them.
             if card.kind is not CardKind.INSIGHT or card.id in consumed:
@@ -162,6 +164,18 @@ async def consolidate(
                 consumed.add(partner.id)
                 merges += 1
                 break
+    except asyncio.CancelledError:
+        # A shared-budget timeout (wait_for) or shutdown cancel lands here as a
+        # cancel of the in-flight arbiter call; say how far the pass got so the
+        # overrun is attributable, then let the caller see the cancellation.
+        logger.warning(
+            "[Memory][Consolidation] pass cancelled at card {}/{}; {} committed "
+            "merge(s) kept (folded partners still deleted)",
+            processed,
+            len(cards),
+            merges,
+        )
+        raise
     finally:
         # Delete each folded partner independently. store.delete drops the card
         # from the in-memory bank before its fallible disk persist, so guarding

@@ -2,4 +2,5 @@
 # Probability-only Thompson auction: each card's posterior draw races the
 # no-card baseline draw; pairs with `memory/budget=top_theta`.
 _target_: gigaevo.memory.read.auction.ThompsonAuctioneer
+# No-card baseline arm prior. Must match reputation cold_prior.
 baseline_prior: [3.0, 3.0]

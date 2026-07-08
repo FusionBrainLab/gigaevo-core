@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from loguru import logger
+import pytest
+
 from gigaevo.llm.agents.reconcile import LibrarianCard
 from gigaevo.memory.cards import CardKind
 from gigaevo.memory.events import MemoryConsolidationPass
@@ -12,6 +15,17 @@ from gigaevo.memory.storage.base import ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.consolidation import ConsolidationScheduler, consolidate
 from gigaevo.memory.write.eviction import NullEvictor
+
+
+class MarkingEvictor:
+    def __init__(self, harmful: set[str]) -> None:
+        self._harmful = harmful
+
+    def should_evict(self, card) -> bool:
+        return card.id in self._harmful
+
+    def sweep(self, cards) -> list[str]:
+        return [card.id for card in cards if self.should_evict(card)]
 
 
 class FakeConsolidateAgent:
@@ -94,6 +108,23 @@ async def test_abstain_reviews_symmetric_pair_once(store, make_card):
     assert store.get(b.id) is not None
 
 
+async def test_harmful_consolidation_removes_both_banked_cards(store, make_card):
+    a = make_card()
+    b = make_card()
+    store.save(a)
+    store.save(b)
+    pair_neighbors(store, a, b)
+    gate = CardAdmissionGate(store=store, evictor=MarkingEvictor({a.id}))
+
+    merged = await run_consolidate(store, FakeConsolidateAgent(), gate=gate)
+
+    assert merged == 0
+    assert store.get(a.id) is None
+    assert store.get(b.id) is None
+    assert gate.is_tombstoned(a.id)
+    assert gate.is_tombstoned(b.id)
+
+
 async def test_program_cards_never_offered(store, make_card):
     exemplar = make_card(
         kind=CardKind.PROGRAM, program_id="p1", code="x = 1", fitness=0.5
@@ -148,6 +179,76 @@ async def test_distant_hits_still_reach_arbiter(store, make_card):
     assert len(agent.calls) == 1
     assert store.get(a.id) is not None
     assert store.get(b.id) is not None
+
+
+async def test_cancel_mid_pass_logs_progress_and_keeps_committed_folds(
+    store, make_card
+):
+    a = make_card(description="pair-one alpha")
+    b = make_card(description="pair-one beta")
+    c = make_card(description="pair-two gamma")
+    d = make_card(description="pair-two delta")
+    for card in (a, b, c, d):
+        store.save(card)
+
+    def nearest(text, k, kind=None):
+        table = {
+            a.description: [ScoredCard(card=b, distance=0.1)],
+            b.description: [ScoredCard(card=a, distance=0.1)],
+            c.description: [ScoredCard(card=d, distance=0.1)],
+            d.description: [ScoredCard(card=c, distance=0.1)],
+        }
+        return table.get(text, [])
+
+    store.nearest = nearest
+
+    class CancelledMidPassAgent(FakeConsolidateAgent):
+        async def arun(self, *, card_a, card_b):
+            if self.calls:
+                raise asyncio.CancelledError
+            return await super().arun(card_a=card_a, card_b=card_b)
+
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await run_consolidate(store, CancelledMidPassAgent())
+    finally:
+        logger.remove(sink)
+
+    assert store.get(b.id) is None
+    assert store.get(a.id).description == "union prose"
+    assert store.get(c.id) is not None
+    assert store.get(d.id) is not None
+    assert any(
+        "cancelled at card 3/4" in m and "1 committed merge" in m for m in messages
+    )
+
+
+async def test_cancel_before_first_merge_logs_zero_committed(store, make_card):
+    a = make_card(description="pair alpha")
+    b = make_card(description="pair beta")
+    for card in (a, b):
+        store.save(card)
+    pair_neighbors(store, a, b)
+
+    class CancelImmediatelyAgent(FakeConsolidateAgent):
+        async def arun(self, *, card_a, card_b):
+            raise asyncio.CancelledError
+
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await run_consolidate(store, CancelImmediatelyAgent())
+    finally:
+        logger.remove(sink)
+
+    assert store.get(a.id) is not None
+    assert store.get(b.id) is not None
+    assert any(
+        "cancelled at card 1/2" in m and "0 committed merge" in m for m in messages
+    )
 
 
 def make_scheduler(store, agent, **overrides):

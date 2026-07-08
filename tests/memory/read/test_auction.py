@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.stats import beta as beta_dist
 
 from gigaevo.memory.events import MemoryAuctionRun, MemoryBudgetCap
 from gigaevo.memory.read.auction import (
     AuctionBid,
     AuctionCandidate,
+    BootstrapThompsonAuctioneer,
     EVThompsonAuctioneer,
     ThompsonAuctioneer,
     TopBidBudgeter,
@@ -223,6 +225,56 @@ class TestEVThompsonAuctioneer:
         assert winners == []
         assert slate[0].selected is False
 
+    def test_ev_floor_quantile_gates_on_baseline_ev_scale(self):
+        # Floor = Beta(baseline_prior).ppf(q) x the round's own cold-magnitude
+        # scale: a confident warm card clears it, a weak one bids under it.
+        auctioneer = EVThompsonAuctioneer(ev_floor_quantile=0.75)
+        winners, slate = auctioneer.run(
+            [
+                _candidate("strong", a=200.0, b=1.0, magnitude=0.5),
+                _candidate("weak", a=1.0, b=200.0, magnitude=0.5),
+            ],
+            np.random.default_rng(0),
+        )
+        assert winners == ["strong"]
+        assert next(b for b in slate if b.card_id == "weak").selected is False
+
+    def test_ev_floor_quantile_rejects_cold_bid_below_baseline_tail(self):
+        # An extreme quantile pushes the floor near the top of the cold scale
+        # (Beta(3,3).ppf(0.9999) ~ 0.978 x cold_magnitude); a mid-confidence
+        # cold bid (theta ~ 0.5) cannot clear it.
+        from scipy.stats import beta as beta_dist
+
+        q = 0.9999
+        assert beta_dist.ppf(q, 3.0, 3.0) > 0.9
+        auctioneer = EVThompsonAuctioneer(
+            metrics_context=_metrics(0.01), ev_floor_quantile=q
+        )
+        winners, slate = auctioneer.run(
+            [_candidate("cold", a=5.0, b=5.0, magnitude=None)],
+            np.random.default_rng(0),
+        )
+        assert winners == []
+        assert slate[0].selected is False
+
+    def test_effective_floor_is_max_of_absolute_and_quantile(self, captured_events):
+        # Beta(3,3).ppf(0.5) == 0.5 exactly, so q=0.5 with sig=0.3 sets the
+        # quantile leg at 0.15.
+        EVThompsonAuctioneer(
+            metrics_context=_metrics(0.3), ev_floor=0.05, ev_floor_quantile=0.5
+        ).run([_candidate("cold", magnitude=None)], np.random.default_rng(3))
+        EVThompsonAuctioneer(
+            metrics_context=_metrics(0.3), ev_floor=0.5, ev_floor_quantile=0.5
+        ).run([_candidate("cold", magnitude=None)], np.random.default_rng(3))
+        quantile_dominated, absolute_dominated = captured_events
+        assert quantile_dominated.ev_floor == pytest.approx(0.15)
+        assert absolute_dominated.ev_floor == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("q", [-0.1, 1.0, 1.5])
+    def test_invalid_ev_floor_quantile_raises(self, q):
+        with pytest.raises(ValueError):
+            EVThompsonAuctioneer(ev_floor_quantile=q)
+
     def test_emits_ev_auction_event(self, captured_events):
         # All-cold round with a metrics context: the emitted cold_magnitude is
         # the borrowed significant_change scale, alongside the ev_floor.
@@ -234,6 +286,159 @@ class TestEVThompsonAuctioneer:
         assert event.auction == "thompson_ev"
         assert event.cold_magnitude == 0.3
         assert event.ev_floor == 0.05
+
+
+class TestBootstrapThompsonAuctioneer:
+    def test_negative_only_candidate_does_not_borrow_positive_fallback(self):
+        auctioneer = BootstrapThompsonAuctioneer()
+        candidate = AuctionCandidate(
+            card_id="harmful",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            magnitude=None,
+            deltas=(-0.1,),
+        )
+
+        for seed in range(30):
+            winners, slate = auctioneer.run([candidate], np.random.default_rng(seed))
+            assert winners == []
+            assert slate[0].bid <= 0.0
+            assert slate[0].magnitude == 0.0
+
+    def test_known_negative_delta_does_not_borrow_warm_scale(self):
+        auctioneer = BootstrapThompsonAuctioneer(ev_floor_quantile=0.0)
+        loser = AuctionCandidate(
+            card_id="loser",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            magnitude=10.0,
+            deltas=(-1.0,),
+            staleness_weight=0.01,
+        )
+        warm = AuctionCandidate(
+            card_id="warm",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            magnitude=10.0,
+            deltas=(),
+        )
+
+        for seed in range(30):
+            winners, slate = auctioneer.run([loser, warm], np.random.default_rng(seed))
+            loser_bid = next(bid for bid in slate if bid.card_id == "loser")
+            assert "loser" not in winners
+            assert loser_bid.bid <= 0.0
+            assert loser_bid.magnitude == pytest.approx(10.0)
+
+    def test_cold_candidate_still_uses_sampled_positive_fallback(self):
+        auctioneer = BootstrapThompsonAuctioneer(metrics_context=_metrics(0.02))
+
+        _, slate = auctioneer.run(
+            [
+                AuctionCandidate(
+                    card_id="cold",
+                    posterior_a=50.0,
+                    posterior_b=1.0,
+                    magnitude=None,
+                    deltas=(),
+                )
+            ],
+            np.random.default_rng(0),
+        )
+
+        assert slate[0].magnitude == 0.02
+        assert 0.0 < slate[0].bid < 0.02
+        assert slate[0].support_kind == "cold_prior"
+
+    def test_empty_delta_non_cold_candidate_does_not_borrow_fallback(self):
+        auctioneer = BootstrapThompsonAuctioneer(metrics_context=_metrics(0.02))
+
+        winners, slate = auctioneer.run(
+            [
+                AuctionCandidate(
+                    card_id="unused-only",
+                    posterior_a=50.0,
+                    posterior_b=1.0,
+                    magnitude=0.0,
+                    deltas=(),
+                )
+            ],
+            np.random.default_rng(0),
+        )
+
+        assert winners == []
+        assert slate[0].magnitude == 0.0
+        assert slate[0].bid == 0.0
+        assert slate[0].support_kind == "zero_support"
+
+    def test_bootstrap_uses_one_baseline_space_gate_for_slate(self):
+        auctioneer = BootstrapThompsonAuctioneer(
+            metrics_context=_metrics(0.02), ev_floor_quantile=0.0
+        )
+        candidates = [
+            AuctionCandidate(
+                card_id=f"cold-{i}",
+                posterior_a=3.0,
+                posterior_b=3.0,
+                magnitude=None,
+                deltas=(),
+            )
+            for i in range(10)
+        ]
+
+        _, slate = auctioneer.run(candidates, np.random.default_rng(123))
+
+        assert len({bid.bid for bid in slate}) > 1
+        baselines = {bid.baseline_theta for bid in slate}
+        assert len(baselines) == 1
+        (baseline_theta,) = baselines
+        baseline_quantile = float(beta_dist.cdf(baseline_theta, 3.0, 3.0))
+        gate_quantile = baseline_quantile ** (1.0 / len(candidates))
+        for bid in slate:
+            assert bid.baseline_quantile == pytest.approx(baseline_quantile)
+            assert bid.gate_quantile == pytest.approx(gate_quantile)
+            assert bid.theta_quantile == pytest.approx(
+                beta_dist.cdf(bid.theta, bid.baseline_a, bid.baseline_b)
+            )
+            assert bid.selected is (bid.theta_quantile > gate_quantile)
+
+        fires = 0
+        trials = 200
+        for seed in range(trials):
+            winners, _ = auctioneer.run(candidates, np.random.default_rng(seed))
+            fires += bool(winners)
+        fire_rate = fires / trials
+        assert 0.30 <= fire_rate <= 0.70
+
+    def test_bootstrap_gate_preserves_card_posterior_strength(self):
+        auctioneer = BootstrapThompsonAuctioneer(
+            metrics_context=_metrics(0.02), ev_floor_quantile=0.0
+        )
+        candidates = [
+            AuctionCandidate(
+                card_id="strong",
+                posterior_a=200.0,
+                posterior_b=1.0,
+                magnitude=None,
+                deltas=(),
+            ),
+            AuctionCandidate(
+                card_id="bad",
+                posterior_a=1.0,
+                posterior_b=200.0,
+                magnitude=None,
+                deltas=(),
+            ),
+        ]
+
+        wins = {"strong": 0, "bad": 0}
+        for seed in range(100):
+            winners, _ = auctioneer.run(candidates, np.random.default_rng(seed))
+            for winner in winners:
+                wins[winner] += 1
+
+        assert wins["strong"] >= 95
+        assert wins["bad"] == 0
 
 
 class TestTopThetaBudgeter:
@@ -277,3 +482,14 @@ class TestTopBidBudgeter:
     def test_within_budget_preserves_auction_order(self):
         slate = [_bid("a", bid=0.1), _bid("b", bid=0.9)]
         assert TopBidBudgeter().cap(["a", "b"], slate, max_cards=5) == ["a", "b"]
+
+    def test_tied_bid_breaks_by_theta_then_card_id(self):
+        slate = [
+            _bid("b", theta=0.9, bid=0.1),
+            _bid("a", theta=0.9, bid=0.1),
+            _bid("c", theta=0.8, bid=0.1),
+        ]
+        assert TopBidBudgeter().cap(["c", "b", "a"], slate, max_cards=2) == [
+            "a",
+            "b",
+        ]

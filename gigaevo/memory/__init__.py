@@ -19,15 +19,21 @@ from __future__ import annotations
 from gigaevo.memory.cards import (
     Card,
     CardKind,
+    CausalStrength,
     ContextualGain,
     DecisionContext,
+    EvidenceAttribution,
+    EvidenceSource,
     card_brief,
 )
 
 __all__ = [
     "Card",
     "CardKind",
+    "CausalStrength",
     "ContextualGain",
     "DecisionContext",
+    "EvidenceAttribution",
+    "EvidenceSource",
     "card_brief",
 ]

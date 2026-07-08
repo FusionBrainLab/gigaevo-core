@@ -20,6 +20,21 @@ class CardKind(StrEnum):
     PROGRAM = "program"
 
 
+class EvidenceSource(StrEnum):
+    FOUNDING = "founding"
+    DIRECT = "direct"
+    UNUSED = "unused"
+    INVALID = "invalid"
+
+
+class CausalStrength(StrEnum):
+    ORIGIN = "origin"
+    DIRECT_ISOLATED = "direct_isolated"
+    DIRECT_BUNDLED = "direct_bundled"
+    EXPOSURE = "exposure"
+    INVALID = "invalid"
+
+
 class DecisionContext(BaseModel):
     """The state a card-injection decision was made in.
 
@@ -39,11 +54,64 @@ class DecisionContext(BaseModel):
     )
 
 
-class ContextualGain(BaseModel):
-    """One credited injection event: the gain a card earned in a context.
+class EvidenceAttribution(BaseModel):
+    """Causal provenance for one outcome event.
 
-    "Gain" is always the child-minus-parent best-fitness delta in
-    positive-is-improvement space (negated for minimize metrics).
+    ``ContextualGain`` keeps the numeric reward. This block says how much causal
+    credit the reward should carry. A bundled child that used three cards, for
+    example, still stores its split gain on each card but each card receives
+    ``credit_weight=1/3`` in posterior evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: EvidenceSource = Field(
+        default=EvidenceSource.DIRECT,
+        description="Origin of the evidence: birth, direct use, unused exposure, or invalid child.",
+    )
+    causal_strength: CausalStrength = Field(
+        default=CausalStrength.DIRECT_ISOLATED,
+        description="How cleanly this event identifies the card's causal effect.",
+    )
+    source_child_id: str = Field(
+        default="", description="Program id of the child that produced this event."
+    )
+    used_card_count: int = Field(
+        default=1,
+        ge=0,
+        description="Number of memory cards cited as used by the child.",
+    )
+    child_change_count: int = Field(
+        default=1,
+        ge=0,
+        description="Number of concrete child changes this event bundles, when known.",
+    )
+    authored_card_count: int = Field(
+        default=1,
+        ge=0,
+        description="Number of cards authored from the same source child, when known.",
+    )
+    authored_card_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="Index of this card among cards authored from the same source child.",
+    )
+    credit_weight: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Effective evidence weight for posterior/EV support; inferred when unset.",
+    )
+
+
+class ContextualGain(BaseModel):
+    """One selected-card outcome: the gain a card earned in a context.
+
+    For use-attributed events, ``gain`` is the child-minus-parent best-fitness
+    delta after subtracting the fitted no-card baseline for that decision
+    context. Founding events keep the raw origin delta. ``unused`` marks a card
+    that was selected into the prompt but not cited by the mutator; it is a
+    failed exposure, not a gain-magnitude observation.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -61,6 +129,16 @@ class ContextualGain(BaseModel):
         "pair the card was distilled from. The founding child predates the card, "
         "so use-attribution can never re-credit it; it is preserved across the "
         "from-scratch restamp rather than recomputed each sweep.",
+    )
+    unused: bool = Field(
+        default=False,
+        description="True when the card was selected for the prompt but the "
+        "mutator did not declare it used. Counts as exposure/failure evidence, "
+        "but is excluded from gain-magnitude and bootstrap EV pricing.",
+    )
+    attribution: EvidenceAttribution | None = Field(
+        default=None,
+        description="Optional causal attribution metadata for weighted reputation.",
     )
 
 
@@ -82,13 +160,13 @@ class DecisionMetrics(BaseModel):
     posterior_b: float | None = Field(
         default=None, description="Beta beta of the downside posterior."
     )
-    intro_events: int = Field(
+    intro_events: float = Field(
         default=0,
-        description="Introduction events (scorable children) backing this row.",
+        description="Effective introduction-event weight backing this row.",
     )
-    k_harm: int | None = Field(
+    k_harm: float | None = Field(
         default=None,
-        description="Introduction events whose baseline-adjusted gain was "
+        description="Effective introduction-event weight whose baseline-adjusted gain was "
         "negative (harm, a strict sign test).",
     )
     p_help_mean: float | None = Field(
@@ -103,6 +181,14 @@ class DecisionMetrics(BaseModel):
     )
     IntroGain_best_median: float | None = Field(
         default=None, description="Median raw child-minus-parent best-fitness gain."
+    )
+    IntroGain_bootstrap_ev_mean: float | None = Field(
+        default=None,
+        description="Mean expected-gain estimate from bootstrap resampling.",
+    )
+    IntroGain_bootstrap_ev_lo20: float | None = Field(
+        default=None,
+        description="Lower bootstrap expected-gain quantile used as a pessimistic EV.",
     )
 
 
@@ -131,9 +217,9 @@ class Card(BaseModel):
     """The one memory card.
 
     ``kind`` distinguishes distilled insights from program exemplars; the
-    exemplar-only fields (``program_id``, ``code``, ``fitness``) are kind-gated
-    so an insight card can never smuggle them in. Cards are frozen — the write
-    path evolves them via ``model_copy(update=...)``.
+    exemplar-only fields (``program_id``, ``code``, ``code_sha256``,
+    ``fitness``) are kind-gated so an insight card can never smuggle them in.
+    Cards are frozen — the write path evolves them via ``model_copy(update=...)``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -181,6 +267,10 @@ class Card(BaseModel):
     code: str = Field(
         default="", description="Exemplar program's source code (kind=program only)."
     )
+    code_sha256: str = Field(
+        default="",
+        description="SHA-256 of the normalized exemplar source (kind=program only).",
+    )
     fitness: float | None = Field(
         default=None,
         description="Exemplar fitness at capture time (kind=program only).",
@@ -191,9 +281,12 @@ class Card(BaseModel):
         if self.kind is CardKind.PROGRAM:
             if not self.program_id:
                 raise ValueError("kind=program requires a non-empty program_id")
-        elif self.program_id or self.code or self.fitness is not None:
+        elif (
+            self.program_id or self.code or self.code_sha256 or self.fitness is not None
+        ):
             raise ValueError(
-                "program_id/code/fitness are exemplar fields — set kind=program"
+                "program_id/code/code_sha256/fitness are exemplar fields — "
+                "set kind=program"
             )
         if self.id and self.id in self.absorbed_ids:
             raise ValueError("a card cannot absorb its own id")

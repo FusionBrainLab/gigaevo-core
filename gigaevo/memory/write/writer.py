@@ -30,18 +30,46 @@ from gigaevo.llm.agents.factories import (
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.storage.base import MemoryStore
-from gigaevo.memory.write.admission import CardAdmissionGate, WriteLedger
+from gigaevo.memory.write.admission import (
+    CardAdmissionGate,
+    WriteLedger,
+    WriteOutcome,
+    WriteResult,
+)
 from gigaevo.memory.write.consolidation import ConsolidationScheduler
 from gigaevo.memory.write.eviction import Evictor
 from gigaevo.memory.write.extraction import ProgramRecordExtractor, record_note
-from gigaevo.memory.write.librarian import Librarian, NeighborSource
-from gigaevo.memory.write.merge import DedupPolicy
-from gigaevo.memory.write.stats import CardStatsUpdater
+from gigaevo.memory.write.librarian import Librarian, NeighborSource, code_sha256
+from gigaevo.memory.write.merge import DedupPolicy, ProgramExemplarPolicy
+from gigaevo.memory.write.stats import CardStatsUpdater, NoCardBaselineEstimator
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
+
+
+async def _shielded_to_thread(func, *args, cancel_log: str, **kwargs):
+    """Run blocking work off-loop, but do not release caller locks mid-write.
+
+    Cancelling ``asyncio.to_thread`` cancels only the awaiter; the worker thread
+    keeps running. The memory writer holds an async run lock around store
+    mutations, so on cancellation we wait for the thread to finish before
+    propagating ``CancelledError`` and releasing that lock.
+    """
+    task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        logger.warning("{}; waiting for blocking memory work to finish", cancel_log)
+        try:
+            await task
+        except Exception as exc:
+            logger.warning(
+                "[Memory][Writer] blocking memory work failed after cancellation: {}",
+                exc,
+            )
+        raise
 
 
 class LibrarianWriteStack:
@@ -144,7 +172,11 @@ class LibrarianWriteStack:
             if self._librarian is not None:
                 return
             summary = await self.ensure_summary()
-            await asyncio.to_thread(self._build, summary)
+            await _shielded_to_thread(
+                self._build,
+                summary,
+                cancel_log="[Memory][Writer] stack build was cancelled",
+            )
 
     async def ensure_summary(self) -> str:
         """Condense the task description into a one-line summary, once per run.
@@ -252,6 +284,8 @@ class MemoryWriter(IncrementalPostRunHook):
         dedup_policy: Dedup knobs of the librarian write path (reconcile-agent
             context width, consolidation candidate width); defaults to
             ``DedupPolicy()``.
+        program_exemplars: Program exemplar caps/dedup policy; defaults to
+            ``ProgramExemplarPolicy()``.
         prompts_dir: Optional prompts directory for the librarian agents (e.g.
             ``config.prompts.dir``); None uses the package default prompts.
         novelty_admission_gate: When true, a novelty-admission LLM judge gates
@@ -269,12 +303,14 @@ class MemoryWriter(IncrementalPostRunHook):
         store: MemoryStore,
         checkpoint_dir: str | Path,
         metrics_context: MetricsContext,
+        baseline_estimator: NoCardBaselineEstimator | None = None,
         task_description: str = "",
         fitness_key: str = "",
         best_programs_percent: float = 5.0,
         ingest_call_timeout_s: float = 300.0,
         consolidation_every_n: int = 0,
         dedup_policy: DedupPolicy | None = None,
+        program_exemplars: ProgramExemplarPolicy | None = None,
         prompts_dir: str | Path | None = None,
         novelty_admission_gate: bool = False,
     ) -> None:
@@ -289,6 +325,11 @@ class MemoryWriter(IncrementalPostRunHook):
         self._higher_is_better = metrics_context.is_higher_better(fitness_key)
         self._task_description = task_description
         policy = dedup_policy if dedup_policy is not None else DedupPolicy()
+        self._program_exemplars = (
+            program_exemplars
+            if program_exemplars is not None
+            else ProgramExemplarPolicy()
+        )
 
         # the live hook and the post-run hook share one writer; overlapping
         # sweeps would interleave store writes and dedup bookkeeping
@@ -312,6 +353,7 @@ class MemoryWriter(IncrementalPostRunHook):
             fitness_key=fitness_key,
             higher_is_better=self._higher_is_better,
             metrics_context=metrics_context,
+            baseline_estimator=baseline_estimator,
         )
         self._consolidation = ConsolidationScheduler(
             stack=self._stack,
@@ -369,8 +411,14 @@ class MemoryWriter(IncrementalPostRunHook):
         )
 
         librarian = self._stack.require_librarian()
-        written_ids: list[str] = []
-        for rec in records:
+        results: list[WriteResult] = []
+        for i, rec in enumerate(records, 1):
+            # The sink mirrors the ingest's return value result-by-result:
+            # on timeout the cancelled coroutine's return is lost, but cards
+            # it already banked must still count below (inline consolidation
+            # subset + cadence), else accounting under-counts exactly on the
+            # slowest calls. Read only on timeout — success uses the return.
+            partial: list[WriteResult] = []
             try:
                 written = await asyncio.wait_for(
                     librarian.ingest_idea(
@@ -379,20 +427,26 @@ class MemoryWriter(IncrementalPostRunHook):
                         child_code=rec.code,
                         note=record_note(rec),
                         founding_gain=rec.founding_gain,
+                        sink=partial,
                     ),
                     timeout=self._ingest_call_timeout_s,
                 )
-                written_ids.extend(written)
+                results.extend(written)
             except TimeoutError:
                 # A stalled memory-LLM call must not starve the rest of the
                 # sweep (sibling ingests, exemplars, harm eviction). Drop this
                 # record so it is retried on a later increment, and continue.
                 logger.warning(
-                    "[Memory][Writer] ingest of {} timed out after {}s; "
-                    "skipping record for retry next sweep",
+                    "[Memory][Writer] ingest of {} ({}/{}) timed out after "
+                    "{}s with {} card(s) already banked; skipping record for "
+                    "retry next sweep",
                     rec.id,
+                    i,
+                    len(records),
                     self._ingest_call_timeout_s,
+                    sum(1 for r in partial if r.landed),
                 )
+                results.extend(partial)
                 self._extractor.forget({rec.id})
                 continue
             except BaseException:
@@ -406,20 +460,26 @@ class MemoryWriter(IncrementalPostRunHook):
 
         # re-stamping (per-card store writes) and harm eviction are blocking
         # I/O; keep them off the event loop so in-flight mutations don't stall
-        await asyncio.to_thread(
+        await _shielded_to_thread(
             self._stats.update,
             pool,
             store=self._stack.require_store(),
             gate=self._stack.require_gate(),
+            cancel_log="[Memory][Writer] stats restamp was cancelled",
         )
         # Intra-batch dedup: fold this increment's own same-lever idea cards now,
         # inline under the run lock, so a duplicate can't be injected into the
         # mutator before the periodic whole-bank pass' cadence trips. Bounded so
-        # its consolidate-agent calls can't stall the sweep.
+        # its consolidate-agent calls can't stall the sweep. Only freshly ADDED
+        # cards can be the unseen half of a same-batch duplicate pair — a
+        # MERGED/DUPLICATE target was already arbitrated this increment, and a
+        # rejected card never landed; partners still come from the whole bank.
+        landed = [r.card_id for r in results if r.landed]
+        added = {r.card_id for r in results if r.outcome is WriteOutcome.ADDED}
         await self._consolidation.consolidate_written(
-            set(written_ids), timeout=self._ingest_call_timeout_s
+            added, timeout=self._ingest_call_timeout_s
         )
-        self._consolidation.note_writes(len(written_ids))
+        self._consolidation.note_writes(len(landed))
 
     async def _author_exemplars(self, pool: list[Program], summary: str) -> None:
         """Author a clean program card for each top-fitness exemplar.
@@ -427,14 +487,25 @@ class MemoryWriter(IncrementalPostRunHook):
         ``author_program`` is cached on ``program-<id>`` so a re-selected
         exemplar never re-pays the LLM; the gate re-admits the card (its
         gain events are restamped immediately after from the full pool).
+        A harm-evicted exemplar is skipped outright — the eviction deleted the
+        cache, so re-authoring would re-pay the LLM only for the gate's
+        tombstone to reject the card.
         """
+        policy = self._program_exemplars
+        if not policy.enabled:
+            return
         selected = self._metrics_context.top_valid_programs(
             pool,
             key=self._fitness_key,
             percent=self._best_programs_percent,
         )
+        if policy.top_k_per_refresh is not None:
+            selected = selected[: policy.top_k_per_refresh]
         librarian = self._stack.require_librarian()
+        gate = self._stack.require_gate()
         for prog, fitness in selected:
+            if gate.is_tombstoned(f"program-{prog.id}"):
+                continue
             try:
                 authored = await asyncio.wait_for(
                     librarian.author_program(
@@ -474,10 +545,12 @@ class MemoryWriter(IncrementalPostRunHook):
                         description=authored.description,
                         explanation_summary=authored.explanation_summary,
                         fitness=fitness,
-                        code=prog.code,
+                        code=prog.code if policy.store_code else "",
+                        code_sha256=code_sha256(prog.code),
                         keywords=tuple(authored.keywords),
                     ),
                     higher_is_better=self._higher_is_better,
+                    min_fitness_gap=policy.min_fitness_gap,
                 )
             except Exception as exc:
                 # Card construction (validation) or the gate's store write can
@@ -489,3 +562,31 @@ class MemoryWriter(IncrementalPostRunHook):
                     prog.id,
                     exc,
                 )
+        self._prune_program_exemplars()
+
+    def _prune_program_exemplars(self) -> None:
+        policy = self._program_exemplars
+        if not policy.enabled:
+            return
+        store = self._stack.require_store()
+        exemplars = [c for c in store.snapshot() if c.kind is CardKind.PROGRAM]
+        excess = len(exemplars) - policy.max_cards
+        if excess <= 0:
+            return
+
+        def rank(card: Card) -> float:
+            if card.fitness is None:
+                return float("-inf") if self._higher_is_better else float("inf")
+            return card.fitness
+
+        ordered = sorted(
+            exemplars,
+            key=lambda c: (rank(c), c.id),
+            reverse=self._higher_is_better,
+        )
+        gate = self._stack.require_gate()
+        for card in ordered[policy.max_cards :]:
+            gate.retire_exemplar(
+                card,
+                reason=f"program exemplar pruned by max_cards={policy.max_cards}",
+            )
