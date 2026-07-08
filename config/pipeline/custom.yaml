@@ -3,6 +3,12 @@
 pipeline:
   id: custom
   reads_external_memory: false
+  archive_gate_mode: none
+
+# Declarative custom DAGs do not receive ArchivePotentialGateStage
+# automatically. Set this false here so `pipeline=custom` is runnable by
+# default; custom authors can wire the gate manually and switch the mode.
+archive_gate_enabled: false
 
 # Explicit Hydra config version of the DefaultPipeline
 # Analogous to DefaultPipelineBuilder but entirely declarative

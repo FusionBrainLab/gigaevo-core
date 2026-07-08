@@ -1,5 +1,6 @@
 defaults:
   - experiment: base       # Base experiment setup (override with experiment=full_featured)
+  - program_format: python_source  # Candidate representation: python_source | json_document
   - storage: redis         # Program/archive storage backend (override with storage=disk)
   - /migration_bus: disabled
   - memory: none           # Memory subsystem: none | reader | writer | full | static (flat ${ref:} component graph)

@@ -1,12 +1,11 @@
 """DefaultPipelineBuilder wires ArchivePotentialGateStage when enabled.
 
-- archive_gate_enabled=False (default): no gate node, InsightsStage deps unchanged.
+- archive_gate_enabled=False (default): no gate node, feedback deps unchanged.
 - archive_gate_enabled=True: gate node present with:
     * on_success(CallValidatorFunction)
     * always_after(EnsureMetricsStage)
   and InsightsStage gains on_success(ArchivePotentialGateStage) so any
-  ``run_insights == False`` skip cascades into Insights and (via existing
-  always_after) into MutationContextStage.
+  skipped gate result cascades into legacy insights.
 
 The gate uses ``ctx.archive_gate_provider`` (None ⇒ fail open inside the stage).
 """
@@ -14,15 +13,13 @@ The gate uses ``ctx.archive_gate_provider`` (None ⇒ fail open inside the stage
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from gigaevo.database.program_storage import ProgramStorage
-from gigaevo.entrypoint.default_pipelines import (
-    ContextPipelineBuilder,
-    DefaultPipelineBuilder,
-)
+from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
@@ -35,7 +32,9 @@ from gigaevo.programs.stages.archive_gate import (
 GATE_NAME = "ArchivePotentialGateStage"
 
 
-def _make_ctx(*, archive_gate_provider=None) -> EvolutionContext:
+def _make_ctx(
+    *, archive_gate_provider=None, is_contextual: bool = False
+) -> EvolutionContext:
     metrics_ctx = MetricsContext(
         specs={
             "fitness": MetricSpec(
@@ -51,7 +50,7 @@ def _make_ctx(*, archive_gate_provider=None) -> EvolutionContext:
     problem_ctx.problem_dir = Path("/fake/problem")
     problem_ctx.task_description = "x"
     problem_ctx.metrics_context = metrics_ctx
-    problem_ctx.is_contextual = False
+    problem_ctx.is_contextual = is_contextual
     return EvolutionContext(
         problem_ctx=problem_ctx,
         llm_wrapper=MagicMock(spec=MultiModelRouter),
@@ -100,21 +99,20 @@ def test_gate_enabled_uses_ctx_provider():
     provider_sentinel = MagicMock(spec=ArchiveGateProvider)
     ctx = _make_ctx(archive_gate_provider=provider_sentinel)
     bp = DefaultPipelineBuilder(ctx, archive_gate_enabled=True).build_blueprint()
-    stage = bp.nodes[GATE_NAME]()
+    stage = cast(ArchivePotentialGateStage, bp.nodes[GATE_NAME]())
     assert stage._provider is provider_sentinel
 
 
-def test_context_pipeline_builder_propagates_kwarg():
-    bp = ContextPipelineBuilder(
-        _make_ctx(), archive_gate_enabled=True
+def test_contextual_default_builder_propagates_kwarg():
+    bp = DefaultPipelineBuilder(
+        _make_ctx(is_contextual=True), archive_gate_enabled=True
     ).build_blueprint()
     assert GATE_NAME in bp.nodes
     assert (GATE_NAME, "success") in _deps_for(bp, "InsightsStage")
 
 
-def test_subclasses_default_to_disabled():
-    """Subclasses must not silently enable the gate."""
-    bp = ContextPipelineBuilder(_make_ctx()).build_blueprint()
+def test_contextual_default_builder_keeps_gate_disabled_by_default():
+    bp = DefaultPipelineBuilder(_make_ctx(is_contextual=True)).build_blueprint()
     assert GATE_NAME not in bp.nodes
 
 

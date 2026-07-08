@@ -1,0 +1,18 @@
+# @package _global_
+
+# Shared archive-gate wiring for builder-backed pipeline configs. The gate skips
+# expensive feedback/memory-context stages for programs that cannot enter any
+# archive cell; it fails open when archive eligibility cannot be determined.
+pipeline:
+  archive_gate_mode: builder
+
+archive_gate_provider:
+  _target_: gigaevo.config.helpers.build_archive_gate_provider
+  strategy: ${ref:evolution_strategy}
+  enabled: ${archive_gate_enabled}
+
+evolution_context:
+  archive_gate_provider: ${ref:archive_gate_provider}
+
+pipeline_builder:
+  archive_gate_enabled: ${archive_gate_enabled}

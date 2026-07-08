@@ -5,7 +5,7 @@
 # stage_action / reasoning_questions) is mutable. Topology edits are
 # unrepresentable in the schema. Parents with mismatched topologies are
 # rejected, so seed the run with a single fixed-structure genome.
-# Launch: python run.py problem.name=chains/hover/full7 pipeline=program_is_json mutation=carl_frozen_topology
+# Launch: python run.py problem.name=chains/hover/full7 program_format=json_document mutation=carl_frozen_topology
 
 mutation_operator:
   _target_: gigaevo.evolution.mutation.structured_diff.StructuredDiffMutationOperator

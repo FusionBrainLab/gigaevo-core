@@ -3,7 +3,6 @@
 memory:
   write:
     enabled: false
-    mode: off
+    mode: "off"
     post_run_hook:
       _target_: gigaevo.evolution.engine.hooks.NullPostRunHook
-

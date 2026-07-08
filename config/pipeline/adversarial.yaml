@@ -23,6 +23,9 @@
 pipeline:
   id: adversarial
   reads_external_memory: false
+  archive_gate_mode: none
+
+archive_gate_enabled: false
 
 opponent_redis_db: ???
 opponent_redis_prefix: ???

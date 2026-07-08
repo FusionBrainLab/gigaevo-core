@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import ClassVar
 
 import yaml
 
@@ -49,6 +50,22 @@ from gigaevo.runner.dag_blueprint import DAGBlueprint
 StageFactory = Callable[[], Stage]
 
 
+class PipelineFeature:
+    """Self-contained contributor to a mutable pipeline blueprint.
+
+    A feature owns one coherent slice of the DAG: the stages it adds, the
+    data-flow edges between those stages and the surrounding graph, and any
+    execution-order dependencies required for correctness. Builders compose
+    features instead of hand-editing one monolithic stage graph.
+    """
+
+    name: ClassVar[str]
+    description: ClassVar[str]
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        raise NotImplementedError
+
+
 class PipelineBuilder:
     """Mutable builder for pipeline nodes/edges/deps producing a DAGBlueprint."""
 
@@ -67,6 +84,11 @@ class PipelineBuilder:
         self._max_parallel: int = (
             max_parallel if max_parallel is not None else DEFAULT_DAG_CONCURRENCY
         )
+        self._stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT
+        self._max_insights: int = DEFAULT_MAX_INSIGHTS
+        self._max_code_length: int = MAX_CODE_LENGTH
+        self._archive_gate_enabled: bool = False
+        self._optimization_time_budget: float | None = None
 
     # Stage operations - add, replace, remove
     def add_stage(self, name: str, factory: StageFactory) -> PipelineBuilder:
@@ -122,6 +144,11 @@ class PipelineBuilder:
             self._deps[stage] = [d for d in self._deps[stage] if d != dep]
         return self
 
+    def apply_feature(self, feature: PipelineFeature) -> PipelineBuilder:
+        """Apply a named pipeline feature to this mutable builder."""
+        feature.apply(self)
+        return self
+
     # Set limits for the pipeline
     def set_limits(
         self, *, dag_timeout: float | None, max_parallel: int | None
@@ -144,7 +171,7 @@ class PipelineBuilder:
 
 
 class DefaultPipelineBuilder(PipelineBuilder):
-    """Recreates the current default pipeline (no context added)."""
+    """Default Python-source pipeline with automatic contextual wiring."""
 
     OPTUNA_SCORE_KEY: str | None = None
     OPTUNA_MAX_PARALLEL: int = 10
@@ -159,16 +186,47 @@ class DefaultPipelineBuilder(PipelineBuilder):
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
         archive_gate_enabled: bool = False,
+        include_legacy_feedback: bool = True,
+        program_format_feature: PipelineFeature | None = None,
     ):
         super().__init__(ctx, dag_timeout=dag_timeout, max_parallel=max_parallel)
         self._stage_timeout = stage_timeout
         self._max_insights = max_insights
         self._max_code_length = max_code_length
         self._archive_gate_enabled = archive_gate_enabled
+        self._program_format_feature = program_format_feature
         self._optimization_time_budget: float | None = None
-        self._contribute_default_nodes()
-        self._contribute_default_edges()
-        self._contribute_default_deps()
+        self.apply_feature(SourceProgramEvaluationFeature())
+        if program_format_feature is not None:
+            self.apply_feature(program_format_feature)
+        if ctx.problem_ctx.is_contextual:
+            self._add_context_stage_and_edges()
+        self.apply_feature(MetricAssemblyFeature())
+        self.apply_feature(MutationPromptContextFeature())
+        if archive_gate_enabled:
+            self.apply_feature(ArchivePotentialFilterFeature())
+        if include_legacy_feedback:
+            self.apply_feature(LegacyLineageInsightFeature())
+
+    def _add_context_stage_and_edges(self) -> None:
+        """Add the problem context stage once.
+
+        Normal builders call this automatically when
+        ``ctx.problem_ctx.is_contextual`` is true. A few specialist builders
+        still force it explicitly; keeping the helper idempotent prevents
+        duplicate edges/dependencies.
+        """
+        if "AddContext" in self._nodes:
+            return
+        self.apply_feature(ProblemContextBuildFeature())
+
+    def _require_python_source_optimizer(self, optimizer_name: str) -> None:
+        if self._program_format_feature is None:
+            return
+        raise ValueError(
+            f"{optimizer_name} optimization requires program_format=python_source; "
+            "non-Python program formats need a format-aware optimizer."
+        )
 
     def _optuna_stage_kwargs(self) -> dict:
         """Extra kwargs forwarded to :class:`OptunaOptimizationStage`.
@@ -184,6 +242,8 @@ class DefaultPipelineBuilder(PipelineBuilder):
         Detects context auto-magically via the presence of an ``AddContext``
         stage in ``self._nodes``.
         """
+        self._require_python_source_optimizer("Optuna")
+
         from gigaevo.programs.stages.optimization.optuna import (
             OptunaOptimizationStage,
             OptunaPayloadBridge,
@@ -247,7 +307,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             self.add_data_flow_edge("AddContext", "OptunaOptStage", "context")
             self.add_exec_dep(
                 "OptunaOptStage",
-                ExecutionOrderDependency.always_after("AddContext"),
+                ExecutionOrderDependency.on_success("AddContext"),
             )
 
         # Bypass: when Optuna succeeds, OptunaPayloadBridge → PayloadResolver
@@ -281,18 +341,45 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
     def _contribute_default_nodes(self) -> None:
-        # Context is available for future wiring
-        metrics_context = self.ctx.problem_ctx.metrics_context
-        problem_ctx = self.ctx.problem_ctx
-        llm_wrapper = self.ctx.llm_wrapper
-        storage = self.ctx.storage
-        task_description = self.ctx.problem_ctx.task_description
-        prompts_dir = self.ctx.prompts_dir
-        stage_timeout = self._stage_timeout
-        max_code_length = self._max_code_length
+        """Deprecated compatibility wrapper for older builder subclasses."""
+        self.apply_feature(SourceProgramEvaluationFeature())
+        if self.ctx.problem_ctx.is_contextual:
+            self._add_context_stage_and_edges()
+        self.apply_feature(MetricAssemblyFeature())
+        self.apply_feature(MutationPromptContextFeature())
+        if self._archive_gate_enabled:
+            self.apply_feature(ArchivePotentialFilterFeature())
+        self.apply_feature(LegacyLineageInsightFeature())
+
+    def _contribute_default_edges(self) -> None:
+        """Deprecated: feature objects now contribute their own edges."""
+
+    def _contribute_default_deps(self) -> None:
+        """Deprecated: feature objects now contribute their own dependencies."""
+
+
+class SourceProgramEvaluationFeature(PipelineFeature):
+    """Python source validation, execution, validator call, and artifact formatting.
+
+    This is the base evaluator for normal Python programs: check the candidate
+    source, call its ``entrypoint()``, pass that payload to problem
+    ``validate.py``, and split the validator result into metrics and artifact
+    channels.
+    """
+
+    name = "source_program_evaluation"
+    description = (
+        "Validate Python source, run entrypoint(), call validate.py, and expose "
+        "metrics plus formatted artifact text."
+    )
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        problem_ctx = builder.ctx.problem_ctx
+        stage_timeout = builder._stage_timeout
+        max_code_length = builder._max_code_length
 
         # ValidateCompiles
-        self.add_stage(
+        builder.add_stage(
             "ValidateCodeStage",
             lambda: ValidateCodeStage(
                 max_code_length=max_code_length,
@@ -302,7 +389,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
         # ExecuteCode: run program.code with optional data from DAG
-        self.add_stage(
+        builder.add_stage(
             "CallProgramFunction",
             lambda: CallProgramFunction(
                 function_name="entrypoint",
@@ -315,7 +402,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
 
         # RunValidation
         validator_path = problem_ctx.problem_dir / "validate.py"
-        self.add_stage(
+        builder.add_stage(
             "CallValidatorFunction",
             lambda: CallValidatorFunction(
                 path=validator_path,
@@ -327,35 +414,105 @@ class DefaultPipelineBuilder(PipelineBuilder):
         )
 
         # Extract metrics and artifact from validation result (artifact output unused for now)
-        self.add_stage(
+        builder.add_stage(
             "FetchMetrics",
             lambda: FetchMetrics(timeout=stage_timeout),
         )
-        self.add_stage(
+        builder.add_stage(
             "FetchArtifact",
             lambda: FetchArtifact(timeout=stage_timeout),
         )
-        self.add_stage(
+        builder.add_stage(
             "FormatterStage",
             lambda: FormatterStage(timeout=stage_timeout),
         )
 
-        # Archive-potential gate: skip InsightsStage when a program would be
-        # dominated in every island. Disabled by default; opt-in via Hydra.
-        if self._archive_gate_enabled:
-            gate_provider = self.ctx.archive_gate_provider
-            gate_timeout = stage_timeout
-            self.add_stage(
-                "ArchivePotentialGateStage",
-                lambda: ArchivePotentialGateStage(
-                    provider=gate_provider,
-                    timeout=gate_timeout,
-                ),
-            )
+        builder.add_data_flow_edge(
+            "CallProgramFunction", "CallValidatorFunction", "payload"
+        )
+        builder.add_data_flow_edge(
+            "CallValidatorFunction", "FetchMetrics", "validation_result"
+        )
+        builder.add_data_flow_edge(
+            "CallValidatorFunction", "FetchArtifact", "validation_result"
+        )
+        builder.add_data_flow_edge("FetchArtifact", "FormatterStage", "data")
+        builder.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.on_success("ValidateCodeStage"),
+        )
+        builder.add_exec_dep(
+            "FetchMetrics",
+            ExecutionOrderDependency.always_after("CallValidatorFunction"),
+        )
+        builder.add_exec_dep(
+            "FetchArtifact",
+            ExecutionOrderDependency.always_after("CallValidatorFunction"),
+        )
+        builder.add_exec_dep(
+            "FormatterStage",
+            ExecutionOrderDependency.always_after("FetchArtifact"),
+        )
 
-        # Insights stages
-        max_insights = self._max_insights
-        self.add_stage(
+
+class ArchivePotentialFilterFeature(PipelineFeature):
+    """Optional archive-admission gate for expensive downstream LLM stages.
+
+    The stage asks the configured archive gate provider whether the candidate
+    could enter any island archive. Downstream feature-specific LLM stages can
+    depend on this gate to avoid spending tokens on dominated programs.
+    """
+
+    name = "archive_potential_filter"
+    description = "Gate expensive LLM feedback stages on archive-admission potential."
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        stage_timeout = builder._stage_timeout
+        gate_provider = builder.ctx.archive_gate_provider
+
+        builder.add_stage(
+            "ArchivePotentialGateStage",
+            lambda: ArchivePotentialGateStage(
+                provider=gate_provider,
+                timeout=stage_timeout,
+            ),
+        )
+        builder.add_exec_dep(
+            "ArchivePotentialGateStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
+        )
+        builder.add_exec_dep(
+            "ArchivePotentialGateStage",
+            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+        )
+
+
+class LegacyLineageInsightFeature(PipelineFeature):
+    """Original insights-plus-lineage feedback path.
+
+    This keeps the historical ``InsightsStage`` / ``LineageStage`` machinery in
+    one isolated feature for pipelines that still request
+    :class:`DefaultPipelineBuilder`. New guided-memory pipelines use
+    ``IntraMemoryStage`` + ``MutationSuggestionStage`` instead and do not apply
+    this feature.
+    """
+
+    name = "legacy_lineage_insights"
+    description = (
+        "Generate legacy ProgramInsights and lineage transition summaries for "
+        "MutationContextStage."
+    )
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        metrics_context = builder.ctx.problem_ctx.metrics_context
+        storage = builder.ctx.storage
+        llm_wrapper = builder.ctx.llm_wrapper
+        task_description = builder.ctx.problem_ctx.task_description
+        prompts_dir = builder.ctx.prompts_dir
+        stage_timeout = builder._stage_timeout
+        max_insights = builder._max_insights
+
+        builder.add_stage(
             "InsightsStage",
             lambda: InsightsStage(
                 llm=llm_wrapper,
@@ -374,7 +531,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             strategy="best_fitness",
             max_selected=1,
         )
-        self.add_stage(
+        builder.add_stage(
             "DescendantProgramIds",
             lambda: DescendantProgramIds(
                 storage=storage,
@@ -382,7 +539,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 timeout=stage_timeout,
             ),
         )
-        self.add_stage(
+        builder.add_stage(
             "AncestorProgramIds",
             lambda: AncestorProgramIds(
                 storage=storage,
@@ -395,7 +552,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
-        self.add_stage(
+        builder.add_stage(
             "LineageStage",
             lambda: LineageStage(
                 llm=llm_wrapper,
@@ -408,7 +565,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
-        self.add_stage(
+        builder.add_stage(
             "LineagesToDescendants",
             lambda: LineagesToDescendants(
                 storage=storage,
@@ -417,7 +574,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
-        self.add_stage(
+        builder.add_stage(
             "LineagesFromAncestors",
             lambda: LineagesFromAncestors(
                 storage=storage,
@@ -426,29 +583,74 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
-        self.add_stage(
-            "MutationContextStage",
-            lambda: MutationContextStage(
-                metrics_context=metrics_context,
-                timeout=stage_timeout,
-            ),
+        builder.add_data_flow_edge("InsightsStage", "MutationContextStage", "insights")
+        builder.add_data_flow_edge(
+            "DescendantProgramIds", "LineagesToDescendants", "descendant_ids"
+        )
+        builder.add_data_flow_edge(
+            "AncestorProgramIds", "LineagesFromAncestors", "ancestor_ids"
+        )
+        builder.add_data_flow_edge(
+            "LineagesToDescendants", "MutationContextStage", "lineage_descendants"
+        )
+        builder.add_data_flow_edge(
+            "LineagesFromAncestors", "MutationContextStage", "lineage_ancestors"
         )
 
-        self.add_stage(
+        builder.add_exec_dep(
+            "InsightsStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
+        )
+        builder.add_exec_dep(
+            "InsightsStage",
+            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+        )
+        builder.add_exec_dep(
+            "LineageStage",
+            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+        )
+        builder.add_exec_dep(
+            "LineagesToDescendants",
+            ExecutionOrderDependency.always_after("LineageStage"),
+        )
+        builder.add_exec_dep(
+            "LineagesFromAncestors",
+            ExecutionOrderDependency.always_after("LineageStage"),
+        )
+        if builder._archive_gate_enabled:
+            builder.add_exec_dep(
+                "InsightsStage",
+                ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
+            )
+
+
+class MetricAssemblyFeature(PipelineFeature):
+    """Combine validation metrics with framework metrics and collect run stats."""
+
+    name = "metric_assembly"
+    description = (
+        "Merge validator metrics with code complexity, ensure sentinel values, "
+        "and collect evolutionary statistics."
+    )
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        metrics_context = builder.ctx.problem_ctx.metrics_context
+        storage = builder.ctx.storage
+        stage_timeout = builder._stage_timeout
+
+        builder.add_stage(
             "ComputeComplexityStage",
             lambda: ComputeComplexityStage(
                 timeout=stage_timeout,
             ),
         )
-
-        self.add_stage(
+        builder.add_stage(
             "MergeMetricsStage",
             lambda: MergeDictStage[str, float](
                 timeout=stage_timeout,
             ),
         )
-
-        self.add_stage(
+        builder.add_stage(
             "EnsureMetricsStage",
             lambda: EnsureMetricsStage(
                 metrics_factory=metrics_context.get_sentinels,
@@ -456,7 +658,7 @@ class DefaultPipelineBuilder(PipelineBuilder):
                 timeout=stage_timeout,
             ),
         )
-        self.add_stage(
+        builder.add_stage(
             "EvolutionaryStatisticsCollector",
             lambda: EvolutionaryStatisticsCollector(
                 storage=storage,
@@ -465,124 +667,72 @@ class DefaultPipelineBuilder(PipelineBuilder):
             ),
         )
 
-    def _contribute_default_edges(self) -> None:
-        self.add_data_flow_edge(
-            "CallProgramFunction", "CallValidatorFunction", "payload"
+        builder.add_data_flow_edge("FetchMetrics", "MergeMetricsStage", "first")
+        builder.add_data_flow_edge(
+            "ComputeComplexityStage", "MergeMetricsStage", "second"
         )
-        self.add_data_flow_edge(
-            "CallValidatorFunction", "FetchMetrics", "validation_result"
+        builder.add_data_flow_edge(
+            "MergeMetricsStage", "EnsureMetricsStage", "candidate"
         )
-        self.add_data_flow_edge(
-            "CallValidatorFunction", "FetchArtifact", "validation_result"
+        builder.add_exec_dep(
+            "EvolutionaryStatisticsCollector",
+            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
         )
-        self.add_data_flow_edge("FetchMetrics", "MergeMetricsStage", "first")
-        self.add_data_flow_edge("ComputeComplexityStage", "MergeMetricsStage", "second")
-        self.add_data_flow_edge("MergeMetricsStage", "EnsureMetricsStage", "candidate")
-        self.add_data_flow_edge("EnsureMetricsStage", "MutationContextStage", "metrics")
-        self.add_data_flow_edge("InsightsStage", "MutationContextStage", "insights")
-        self.add_data_flow_edge(
-            "DescendantProgramIds", "LineagesToDescendants", "descendant_ids"
+
+
+class MutationPromptContextFeature(PipelineFeature):
+    """Assemble all feedback channels into the mutator-facing context object."""
+
+    name = "mutation_prompt_context"
+    description = (
+        "Create MutationContextStage and wire metrics, formatted artifacts, and "
+        "evolutionary statistics into the mutation prompt context."
+    )
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        metrics_context = builder.ctx.problem_ctx.metrics_context
+        stage_timeout = builder._stage_timeout
+
+        builder.add_stage(
+            "MutationContextStage",
+            lambda: MutationContextStage(
+                metrics_context=metrics_context,
+                timeout=stage_timeout,
+            ),
         )
-        self.add_data_flow_edge(
-            "AncestorProgramIds", "LineagesFromAncestors", "ancestor_ids"
+        builder.add_data_flow_edge(
+            "EnsureMetricsStage", "MutationContextStage", "metrics"
         )
-        self.add_data_flow_edge(
-            "LineagesToDescendants", "MutationContextStage", "lineage_descendants"
-        )
-        self.add_data_flow_edge(
-            "LineagesFromAncestors", "MutationContextStage", "lineage_ancestors"
-        )
-        self.add_data_flow_edge(
+        builder.add_data_flow_edge(
             "EvolutionaryStatisticsCollector",
             "MutationContextStage",
             "evolutionary_statistics",
         )
-        self.add_data_flow_edge("FetchArtifact", "FormatterStage", "data")
-        self.add_data_flow_edge("FormatterStage", "MutationContextStage", "formatted")
-
-    def _contribute_default_deps(self) -> None:
-        self._deps = {
-            "CallProgramFunction": [
-                ExecutionOrderDependency.on_success("ValidateCodeStage")
-            ],
-            "FetchMetrics": [
-                ExecutionOrderDependency.always_after("CallValidatorFunction"),
-            ],
-            "FetchArtifact": [
-                ExecutionOrderDependency.always_after("CallValidatorFunction"),
-            ],
-            "FormatterStage": [
-                ExecutionOrderDependency.always_after("FetchArtifact"),
-            ],
-            # Skip insights for programs that never produced real metrics:
-            # if CallValidatorFunction did not COMPLETE (validator skipped due
-            # to upstream ValidateCodeStage / CallProgramFunction failure, or
-            # validator itself crashed/timed out), we'd otherwise burn LLM
-            # tokens generating insights against sentinel-zero metrics. The
-            # on_success gate cascades: any failure upstream of the validator
-            # propagates as SKIPPED through InsightsStage.
-            "InsightsStage": [
-                ExecutionOrderDependency.on_success("CallValidatorFunction"),
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ],
-            "LineageStage": [
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ],
-            "LineagesToDescendants": [
-                ExecutionOrderDependency.always_after("LineageStage"),
-            ],
-            "LineagesFromAncestors": [
-                ExecutionOrderDependency.always_after("LineageStage"),
-            ],
-            "EvolutionaryStatisticsCollector": [
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ],
-        }
-        if self._archive_gate_enabled:
-            self._deps["ArchivePotentialGateStage"] = [
-                ExecutionOrderDependency.on_success("CallValidatorFunction"),
-                ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-            ]
-            # Add gate as on_success dep of Insights so SKIPPED cascades. The
-            # existing dependencies above are intentionally preserved — a
-            # validator failure must still skip Insights even when the gate
-            # itself is disabled in a future config flip.
-            self._deps["InsightsStage"].append(
-                ExecutionOrderDependency.on_success("ArchivePotentialGateStage")
-            )
-
-
-class ContextPipelineBuilder(DefaultPipelineBuilder):
-    """Default pipeline with AddContext stage and wiring enabled."""
-
-    def __init__(
-        self,
-        ctx: EvolutionContext,
-        *,
-        dag_timeout: float = 3600.0,
-        stage_timeout: float = DEFAULT_SIMPLE_STAGE_TIMEOUT,
-        max_parallel: int | None = None,
-        max_insights: int = DEFAULT_MAX_INSIGHTS,
-        max_code_length: int = MAX_CODE_LENGTH,
-        archive_gate_enabled: bool = False,
-    ):
-        super().__init__(
-            ctx,
-            dag_timeout=dag_timeout,
-            stage_timeout=stage_timeout,
-            max_parallel=max_parallel,
-            max_insights=max_insights,
-            max_code_length=max_code_length,
-            archive_gate_enabled=archive_gate_enabled,
+        builder.add_data_flow_edge(
+            "FormatterStage", "MutationContextStage", "formatted"
         )
-        self._add_context_stage_and_edges()
 
-    def _add_context_stage_and_edges(self) -> None:
-        problem_ctx = self.ctx.problem_ctx
-        stage_timeout = self._stage_timeout
 
-        # AddContext stage: runs build_context from context.py to produce a dict
-        self.add_stage(
+class ProblemContextBuildFeature(PipelineFeature):
+    """Run ``context.py`` and feed its payload into program and validator calls.
+
+    Contextual problems provide a ``build_context`` function that returns
+    per-evaluation data. This feature wires that data into both the candidate
+    program execution and the problem validator so contextual pipelines do not
+    need bespoke boilerplate.
+    """
+
+    name = "problem_context_build"
+    description = (
+        "Call problem context.py:build_context and pass the result to execution "
+        "and validation stages."
+    )
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        problem_ctx = builder.ctx.problem_ctx
+        stage_timeout = builder._stage_timeout
+
+        builder.add_stage(
             "AddContext",
             lambda: CallFileFunction(
                 path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
@@ -590,13 +740,20 @@ class ContextPipelineBuilder(DefaultPipelineBuilder):
                 timeout=stage_timeout,
             ),
         )
+        builder.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
+        builder.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+        builder.add_exec_dep(
+            "CallProgramFunction",
+            ExecutionOrderDependency.on_success("AddContext"),
+        )
+        builder.add_exec_dep(
+            "CallValidatorFunction",
+            ExecutionOrderDependency.on_success("AddContext"),
+        )
 
-        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
-        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
 
-
-class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
-    """Context pipeline variant using execution speed as the primary fitness."""
+class AlgoTuneSpeedPipelineBuilder(DefaultPipelineBuilder):
+    """Contextual pipeline variant using execution speed as primary fitness."""
 
     def __init__(
         self,
@@ -608,7 +765,13 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
         max_insights: int = DEFAULT_MAX_INSIGHTS,
         max_code_length: int = MAX_CODE_LENGTH,
         archive_gate_enabled: bool = False,
+        program_format_feature: PipelineFeature | None = None,
     ):
+        if not ctx.problem_ctx.is_contextual:
+            raise ValueError(
+                "AlgoTuneSpeedPipelineBuilder requires a contextual problem; "
+                "RuntimeFitnessStage times entrypoint(context)."
+            )
         super().__init__(
             ctx,
             dag_timeout=dag_timeout,
@@ -617,6 +780,7 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
             max_insights=max_insights,
             max_code_length=max_code_length,
             archive_gate_enabled=archive_gate_enabled,
+            program_format_feature=program_format_feature,
         )
         self._add_runtime_fitness_stage()
 
@@ -657,6 +821,10 @@ class AlgoTuneSpeedPipelineBuilder(ContextPipelineBuilder):
         self.add_data_flow_edge("FetchMetrics", "RuntimeFitnessStage", "candidate")
         self.add_data_flow_edge("AddContext", "RuntimeFitnessStage", "context")
         self.add_data_flow_edge("RuntimeFitnessStage", "MergeMetricsStage", "first")
+        self.add_exec_dep(
+            "RuntimeFitnessStage",
+            ExecutionOrderDependency.on_success("AddContext"),
+        )
 
 
 class CMAOptPipelineBuilder(DefaultPipelineBuilder):
@@ -665,13 +833,12 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
     Inherits :class:`DefaultPipelineBuilder` and inserts a
     :class:`CMANumericalOptimizationStage` between ``ValidateCodeStage``
     and ``CallProgramFunction``.  If the problem provides a ``context.py``
-    the ``AddContext`` stage is wired automatically (same as
-    :class:`ContextPipelineBuilder`).
+    the ``AddContext`` stage is wired automatically by the base builder.
 
     Execution order::
 
         ValidateCodeStage ─(success)─► CMAOptStage ─(always)─► CallProgramFunction
-        AddContext* ───────(always)──►              ─(data)──►
+        AddContext* ───────(success)─►              ─(data)──►
         (* only when context.py exists)
 
     If CMA fails, the program still runs with the original code.
@@ -700,6 +867,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         max_code_length: int = MAX_CODE_LENGTH,
         optimization_time_budget: float | None = None,
         archive_gate_enabled: bool = False,
+        program_format_feature: PipelineFeature | None = None,
     ):
         super().__init__(
             ctx,
@@ -709,6 +877,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
             max_insights=max_insights,
             max_code_length=max_code_length,
             archive_gate_enabled=archive_gate_enabled,
+            program_format_feature=program_format_feature,
         )
         self._optimization_time_budget = (
             optimization_time_budget
@@ -721,19 +890,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         self._add_cma_optimization(has_context=has_context)
 
     def _add_context_stage_and_edges(self) -> None:
-        """Add the AddContext stage (same as ContextPipelineBuilder)."""
-        problem_ctx = self.ctx.problem_ctx
-        stage_timeout = self._stage_timeout
-        self.add_stage(
-            "AddContext",
-            lambda: CallFileFunction(
-                path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
-                function_name="build_context",
-                timeout=stage_timeout,
-            ),
-        )
-        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
-        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+        super()._add_context_stage_and_edges()
 
     def _cma_stage_kwargs(self) -> dict:
         """Return extra kwargs forwarded to :class:`CMANumericalOptimizationStage`.
@@ -747,6 +904,8 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
         from gigaevo.programs.stages.optimization.cma import (
             CMANumericalOptimizationStage,
         )
+
+        self._require_python_source_optimizer("CMA")
 
         problem_ctx = self.ctx.problem_ctx
         validator_path = problem_ctx.problem_dir / "validate.py"
@@ -804,7 +963,7 @@ class CMAOptPipelineBuilder(DefaultPipelineBuilder):
             self.add_data_flow_edge("AddContext", "CMAOptStage", "context")
             self.add_exec_dep(
                 "CMAOptStage",
-                ExecutionOrderDependency.always_after("AddContext"),
+                ExecutionOrderDependency.on_success("AddContext"),
             )
 
         # Program execution waits for CMA (but runs even if CMA fails)
@@ -820,12 +979,12 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
     Inherits :class:`DefaultPipelineBuilder` and inserts an
     :class:`OptunaOptimizationStage` between ``ValidateCodeStage``
     and ``CallProgramFunction``.  If the problem provides a ``context.py``
-    the ``AddContext`` stage is wired automatically.
+    the ``AddContext`` stage is wired automatically by the base builder.
 
     Execution order::
 
-        ValidateCodeStage ─(success)─► OptunaOptStage ─(always)─► CallProgramFunction
-        AddContext* ───────(always)──►                 ─(data)──►
+        ValidateCodeStage ─(success)─► OptunaOptStage ─(failure)─► CallProgramFunction
+        AddContext* ───────(success)─►                 ─(data)────►
         (* only when context.py exists)
 
     If Optuna fails, the program still runs with the original code.
@@ -844,6 +1003,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         max_code_length: int = MAX_CODE_LENGTH,
         optimization_time_budget: float | None = None,
         archive_gate_enabled: bool = False,
+        program_format_feature: PipelineFeature | None = None,
     ):
         super().__init__(
             ctx,
@@ -853,6 +1013,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
             max_insights=max_insights,
             max_code_length=max_code_length,
             archive_gate_enabled=archive_gate_enabled,
+            program_format_feature=program_format_feature,
         )
         self._optimization_time_budget = (
             optimization_time_budget
@@ -864,19 +1025,7 @@ class OptunaOptPipelineBuilder(DefaultPipelineBuilder):
         self._wire_optuna_stage()
 
     def _add_context_stage_and_edges(self) -> None:
-        """Add the AddContext stage (same as ContextPipelineBuilder)."""
-        problem_ctx = self.ctx.problem_ctx
-        stage_timeout = self._stage_timeout
-        self.add_stage(
-            "AddContext",
-            lambda: CallFileFunction(
-                path=problem_ctx.problem_dir / ProblemLayout.CONTEXT_FILE,
-                function_name="build_context",
-                timeout=stage_timeout,
-            ),
-        )
-        self.add_data_flow_edge("AddContext", "CallProgramFunction", "context")
-        self.add_data_flow_edge("AddContext", "CallValidatorFunction", "context")
+        super()._add_context_stage_and_edges()
 
 
 class CustomPipelineBuilder(PipelineBuilder):

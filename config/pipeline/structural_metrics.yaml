@@ -5,6 +5,9 @@
 pipeline:
   id: structural_metrics
   reads_external_memory: false
+  archive_gate_mode: none
+
+archive_gate_enabled: false
 
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext

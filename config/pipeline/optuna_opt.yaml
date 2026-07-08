@@ -1,5 +1,9 @@
 # @package _global_
 
+defaults:
+  - /pipeline_feature/archive_gate
+  - _self_
+
 pipeline:
   id: optuna_opt
   reads_external_memory: false
@@ -22,6 +26,7 @@ pipeline_builder:
   max_insights: ${max_insights}
   max_code_length: ${max_code_length}
   optimization_time_budget: ${optimization_time_budget}
+  program_format_feature: ${ref:program_format.evaluation_feature}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder

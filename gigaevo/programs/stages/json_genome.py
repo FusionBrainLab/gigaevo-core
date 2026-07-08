@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from gigaevo.programs.core_types import VoidInput
+from gigaevo.programs.core_types import StageIO
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
-from gigaevo.programs.stages.common import Box
+from gigaevo.programs.stages.common import AnyContainer, Box
 from gigaevo.programs.stages.stage_registry import StageRegistry
+
+
+class JsonProgramInput(StageIO):
+    context: AnyContainer | None = None
 
 
 @StageRegistry.register(description="Parse a JSON-document genome into a dict")
@@ -18,7 +22,7 @@ class ParseJsonProgram(Stage):
     CallProgramFunction (the parsed document is the validator payload) for
     genomes that are data, not Python."""
 
-    InputsModel = VoidInput
+    InputsModel = JsonProgramInput
     OutputModel = Box[Any]
 
     async def compute(self, program: Program) -> Box[Any]:

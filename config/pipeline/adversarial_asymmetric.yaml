@@ -55,6 +55,9 @@ defaults:
 pipeline:
   id: adversarial_asymmetric
   reads_external_memory: false
+  archive_gate_mode: none
+
+archive_gate_enabled: false
 
 # Override sync hook to use programs_processed as the cross-population
 # progress signal: ProgressBasedSyncHook reads the counter that is

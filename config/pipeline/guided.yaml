@@ -6,6 +6,10 @@
 # memory/write=end_of_run or memory/write=live because write hooks live in the
 # memory config, not here.
 
+defaults:
+  - /pipeline_feature/archive_gate
+  - _self_
+
 pipeline:
   id: guided
   reads_external_memory: false
@@ -31,8 +35,8 @@ pipeline_builder:
   mutation_mode: ${mutation_mode}
   enable_optuna_stage: ${enable_optuna_stage}
   optimization_time_budget: ${optimization_time_budget}
+  program_format_feature: ${ref:program_format.evaluation_feature}
 
 dag_blueprint:
   _target_: gigaevo.config.helpers.build_dag_from_builder
   builder: ${pipeline_builder}
-

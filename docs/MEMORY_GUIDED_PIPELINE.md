@@ -10,16 +10,27 @@ python run.py problem.name=heilbron pipeline=memory_guided memory=reader \
   checkpoint_dir=/data/banks/heilbron
 ```
 
-For read + write against one shared bank:
-
-```bash
-python run.py problem.name=heilbron pipeline=memory_guided memory=full
-```
-
-For live mid-run writes:
+For read + write against one shared bank during the same run:
 
 ```bash
 python run.py problem.name=heilbron pipeline=memory_guided memory=full memory/write=live
+```
+
+Use a separate memory LLM when card research/writing should run on a cheaper
+or instruct-tuned endpoint:
+
+```bash
+python run.py problem.name=heilbron \
+  pipeline=memory_guided memory=full memory/write=live \
+  memory/llm=qwen_instruct \
+  checkpoint_dir=/data/banks/heilbron
+```
+
+For a pre-built shared bank with an end-of-run refresh:
+
+```bash
+python run.py problem.name=heilbron pipeline=memory_guided memory=full \
+  checkpoint_dir=/data/banks/heilbron
 ```
 
 ## DAG Contract
@@ -70,3 +81,9 @@ Live writing:
 pipeline=memory_guided memory=full memory/write=live checkpoint_dir=/data/banks/task
 ```
 
+JSON-document genomes compose with the same memory pipeline:
+
+```bash
+pipeline=memory_guided program_format=json_document \
+  memory=full memory/write=live checkpoint_dir=/data/banks/chains
+```

@@ -14,6 +14,8 @@ from omegaconf import DictConfig, OmegaConf
 _SHARED_BEHAVIOR_SPACE_REF = "${ref:behavior_space}"
 _DEFAULT_CHECKPOINT_DIR = "${hydra:runtime.output_dir}/memory"
 _READER_PROVIDER_TARGET = "gigaevo.memory.provider.ReaderMemoryProvider"
+_ARCHIVE_GATE_PROVIDER_TARGET = "gigaevo.config.helpers.build_archive_gate_provider"
+_MISSING = object()
 
 
 def _references_shared_behavior_space(node: Any) -> bool:
@@ -117,12 +119,106 @@ def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
     checkpoint_dir = _raw_select(cfg, "checkpoint_dir", None)
     if (
         memory_reads
-        and not memory_writes
         and provider_target == _READER_PROVIDER_TARGET
         and checkpoint_dir == _DEFAULT_CHECKPOINT_DIR
+        and write_mode != "live"
     ):
         raise ValueError(
-            "memory=reader is read-only and should point at an existing bank. "
-            "Set checkpoint_dir=/path/to/shared/bank, or use memory=full when "
-            "the same run should create the bank."
+            "memory reads from the default per-run bank, but no live writer will "
+            "populate that bank during the run. Set checkpoint_dir=/path/to/an/"
+            "existing/bank, use memory/write=live for same-run read+write, or "
+            "use pipeline=guided memory=writer to build a bank for a later run."
+        )
+
+
+def validate_archive_gate_pipeline_compat(cfg: DictConfig) -> None:
+    """Reject archive-gate settings that are not wired into the selected pipeline."""
+
+    enabled = bool(OmegaConf.select(cfg, "archive_gate_enabled", default=False))
+    if not enabled:
+        return
+
+    pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
+    mode = str(_raw_select(cfg, "pipeline.archive_gate_mode", "none"))
+
+    if mode == "builder":
+        provider_target = _raw_select(cfg, "archive_gate_provider._target_", None)
+        if provider_target != _ARCHIVE_GATE_PROVIDER_TARGET:
+            raise ValueError(
+                f"pipeline={pipeline_id} declares archive_gate_mode=builder, but "
+                "archive_gate_provider is not wired. Include "
+                "/pipeline_feature/archive_gate in the pipeline config."
+            )
+        context_provider = _raw_select(
+            cfg, "evolution_context.archive_gate_provider", None
+        )
+        if context_provider != "${ref:archive_gate_provider}":
+            raise ValueError(
+                f"pipeline={pipeline_id} declares archive_gate_mode=builder, but "
+                "evolution_context.archive_gate_provider is not "
+                "${ref:archive_gate_provider}."
+            )
+        builder_flag = _raw_select(
+            cfg, "pipeline_builder.archive_gate_enabled", _MISSING
+        )
+        if builder_flag is _MISSING:
+            raise ValueError(
+                f"pipeline={pipeline_id} declares archive_gate_mode=builder, but "
+                "pipeline_builder.archive_gate_enabled is missing."
+            )
+        return
+
+    if mode == "declarative":
+        gate_node = _raw_select(
+            cfg, "dag_blueprint.nodes.ArchivePotentialGateStage", _MISSING
+        )
+        if gate_node is _MISSING:
+            raise ValueError(
+                f"pipeline={pipeline_id} declares archive_gate_mode=declarative, "
+                "but dag_blueprint.nodes.ArchivePotentialGateStage is missing."
+            )
+        return
+
+    if mode == "none":
+        raise ValueError(
+            f"archive_gate_enabled=true, but pipeline={pipeline_id} declares "
+            "archive_gate_mode=none. Use pipeline=guided/memory_guided/optuna_opt, "
+            "set archive_gate_enabled=false, or wire ArchivePotentialGateStage "
+            "explicitly in the custom pipeline."
+        )
+
+    raise ValueError(
+        f"pipeline={pipeline_id} has unsupported archive_gate_mode={mode!r}. "
+        "Expected builder, declarative, or none."
+    )
+
+
+def validate_program_format_pipeline_compat(cfg: DictConfig) -> None:
+    """Reject program-format choices that the selected pipeline cannot consume."""
+
+    program_format = str(_raw_select(cfg, "program_format.id", "python_source"))
+    if program_format == "python_source":
+        return
+
+    pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
+    if bool(OmegaConf.select(cfg, "enable_optuna_stage", default=False)):
+        raise ValueError(
+            f"program_format={program_format} cannot be used with "
+            "enable_optuna_stage=true; the current Optuna stage optimizes "
+            "Python source programs only."
+        )
+    if pipeline_id == "optuna_opt":
+        raise ValueError(
+            f"program_format={program_format} cannot be used with "
+            "pipeline=optuna_opt; the current Optuna pipeline optimizes Python "
+            "source programs only."
+        )
+
+    feature_ref = _raw_select(cfg, "pipeline_builder.program_format_feature", None)
+    if feature_ref is None:
+        raise ValueError(
+            f"program_format={program_format} is selected, but pipeline={pipeline_id} "
+            "does not consume program_format.evaluation_feature. Use "
+            "pipeline=guided or pipeline=memory_guided, or add explicit support "
+            "to the custom pipeline."
         )

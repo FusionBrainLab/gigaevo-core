@@ -159,14 +159,17 @@ Stages execute in parallel (respecting dependencies)
     ├─→ MergeMetricsStage → EnsureMetricsStage
     │   └─→ Combines + sanitises all metrics
     │
-    ├─→ ArchivePotentialGateStage (optional, opt-in via Hydra)
-    │   └─→ Skip InsightsStage when a program would be dominated in every island
+    ├─→ ArchivePotentialGateStage (enabled in builder-backed guided pipelines)
+    │   └─→ Skips expensive feedback/memory stages for archive-rejected programs
     │
-    ├─→ InsightsStage (cacheable, LLM)
-    │   └─→ LLM generates insights
+    ├─→ DescendantProgramIds → IntraMemoryStage
+    │   └─→ Builds a per-parent history summary
     │
-    ├─→ LineageStage + LineagesToDescendants / LineagesFromAncestors
-    │   └─→ Lineage-aware analysis (non-cacheable; rerun on JIT refresh)
+    ├─→ MemoryContextStage (only pipeline=memory_guided)
+    │   └─→ Selects external memory cards
+    │
+    ├─→ MutationSuggestionStage
+    │   └─→ Converts parent history + optional cards into structured hints
     │
     └─→ MutationContextStage (non-cacheable)
         └─→ Formats context for future mutation
@@ -195,8 +198,10 @@ CallValidatorFunction.InputsModel.payload: Box[np.ndarray]
 | ValidateCodeStage | ✅ Yes | Code syntax doesn't change |
 | CallProgramFunction | ✅ Yes | Deterministic execution |
 | ComputeComplexityStage | ✅ Yes | Static code analysis |
-| InsightsStage | ✅ Yes | Fixed LLM-based analysis |
-| LineageStage | ❌ No | Depends on evolving family tree |
+| IntraMemoryStage | ✅ Yes | Parent-child id list is the cache key |
+| MutationSuggestionStage | ✅ Yes | Fixed parent history/card context |
+| MemoryContextStage | ✅ Yes | Fixed reader inputs/card bank snapshot |
+| Legacy InsightsStage | ✅ Yes | Fixed LLM-based analysis in custom/legacy builders |
 | MutationContextStage | ❌ No | Aggregates non-cacheable data |
 
 ## Multi-Island Evolution
@@ -383,7 +388,7 @@ enable with `mutation=structured_diff_chains`) and `AllowedToolChainChanges`
 (`problems/chains/tool_chain_diff.py`, chains mixing LLM and tool/retrieval steps for the
 HoVer tasks; enable with `mutation=carl_with_retrieval_tools`). JSON-document genomes
 evaluate via the `ParseJsonProgram` stage (`gigaevo/programs/stages/json_genome.py`),
-wired by `pipeline=program_is_json`.
+wired by `program_format=json_document`.
 
 ## Configuration System (Hydra)
 
@@ -396,7 +401,8 @@ defaults:
   - /redis: default         # Load redis/default.yaml
   - /llm: single           # Load llm/single.yaml
   - /algorithm: single_island_no_distant_parents
-  - /pipeline: auto
+  - /pipeline: guided
+  - /program_format: python_source
 
 # Hydra instantiation
 dag_blueprint:

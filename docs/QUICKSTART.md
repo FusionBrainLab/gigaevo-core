@@ -14,8 +14,12 @@ This guide gets you from zero to running evolution in **5 minutes**.
 # Minimal core (engine + LLM mutation + numpy exemplar problems)
 pip install -e .
 
-# Create .env file
-echo "OPENAI_API_KEY=sk-or-v1-your-key-here" > .env
+# Create .env file for the main mutation LLM.
+# The default llm=single sends OPENAI_API_KEY to llm_base_url.
+echo "OPENAI_API_KEY=sk-or-v1-your-openrouter-or-proxy-key" > .env
+
+# Optional, needed by default memory/llm=gemini when memory writes are enabled.
+echo "OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key" >> .env
 ```
 
 GigaEvo ships extras for opt-in stacks. If you intend to run chain problems
@@ -42,6 +46,18 @@ redis-server
 ```bash
 # Default provider: OpenRouter (set OPENAI_API_KEY=sk-or-v1-...)
 python run.py problem.name=heilbron max_mutants=5
+```
+
+For a local LiteLLM/vLLM-compatible proxy:
+
+```bash
+export OPENAI_API_KEY=sk-local
+export NO_PROXY=127.0.0.1,localhost
+
+python run.py problem.name=heilbron max_mutants=5 \
+    llm=single \
+    llm_base_url=http://127.0.0.1:4000/v1 \
+    model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
 ```
 
 **Alternative: z.ai coding-plan subscription** (uses function_calling for

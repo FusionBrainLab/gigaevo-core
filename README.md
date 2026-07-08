@@ -77,16 +77,60 @@ docker run -d -p 6379:6379 redis:7-alpine
 
 ### 2. Configure LLM Access
 
-Create a `.env` file with your API key:
+GigaEvo uses two LLM routes:
+
+| Route | Used for | Config group |
+|---|---|---|
+| Main mutation LLM | Writes child programs | `llm=...` |
+| Memory LLM | Writes/reconciles memory cards when `memory=writer/full` | `memory/llm=...` |
+
+Create a `.env` file with the keys required by the configs you select:
 
 ```bash
-OPENAI_API_KEY=sk-or-v1-your-api-key-here
+# Main default `llm=single` reads this key and sends requests to llm_base_url.
+OPENAI_API_KEY=sk-or-v1-your-openrouter-or-proxy-key
+
+# Default `memory/llm=gemini` reads this key.
+OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
 
 # Optional: Langfuse tracing
 LANGFUSE_PUBLIC_KEY=<key>
 LANGFUSE_SECRET_KEY=<key>
 LANGFUSE_HOST=https://cloud.langfuse.com
 ```
+
+Provider/OpenRouter example for the main run:
+
+```bash
+python run.py problem.name=heilbron \
+    llm=single \
+    llm_base_url=https://openrouter.ai/api/v1 \
+    model_name=google/gemini-3-flash-preview
+```
+
+Local LiteLLM/vLLM-compatible proxy example:
+
+```bash
+export OPENAI_API_KEY=sk-local
+export NO_PROXY=127.0.0.1,localhost
+
+python run.py problem.name=heilbron \
+    llm=single \
+    llm_base_url=http://127.0.0.1:4000/v1 \
+    model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
+```
+
+Memory runs can use a different, usually cheaper, instruct model:
+
+```bash
+python run.py problem.name=heilbron \
+    pipeline=memory_guided memory=full memory/write=live \
+    memory/llm=qwen_instruct \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+```
+
+`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets the configured
+LiteLLM proxy. `memory/llm=gemini` reads `OPENROUTER_API_KEY`.
 
 ### 3. Start Redis
 
@@ -100,15 +144,49 @@ redis-server
 python run.py problem.name=heilbron
 ```
 
-Evolution starts immediately. Logs are saved to `outputs/`.
+Evolution starts immediately with the guided mutation pipeline. Logs are saved
+to `outputs/`.
+
+### Common Run Recipes
+
+```bash
+# Fast smoke test
+python run.py problem.name=heilbron max_mutants=5
+
+# Explicit no-external-memory baseline
+python run.py problem.name=heilbron pipeline=guided memory=none
+
+# Read and write memory during the same run
+python run.py problem.name=heilbron \
+    pipeline=memory_guided memory=full memory/write=live \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# Build a memory bank for later use
+python run.py problem.name=heilbron \
+    pipeline=guided memory=writer \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# Read a pre-built memory bank
+python run.py problem.name=heilbron \
+    pipeline=memory_guided memory=reader \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# JSON-document genomes, e.g. CARL chain problems
+python run.py problem.name=chains/hover/full7 program_format=json_document
+```
+
+Use `python run.py ... --cfg job` to inspect the exact resolved config before
+spending LLM budget.
 
 ## How It Works
 
 1. **Load initial programs** from `problems/<name>/initial_programs/`
 2. **Mutate programs** using LLMs (GPT, Claude, Gemini, Qwen, etc.)
 3. **Evaluate fitness** by running each program's `entrypoint()` + `validate()`
-4. **Select solutions** using MAP-Elites across a behavior space
-5. **Repeat** continuously (steady-state) until a `stopper` (e.g. `max_mutants`,
+4. **Build mutation feedback** from the parent history; memory-guided runs also
+   retrieve cross-run memory cards
+5. **Select solutions** using MAP-Elites across a behavior space
+6. **Repeat** continuously (steady-state) until a `stopper` (e.g. `max_mutants`,
    wall-clock, fitness-plateau) fires
 
 ```
@@ -217,7 +295,8 @@ files are in `config/`:
 | `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `prompt_coevolution.yaml` |
 | `algorithm/` | Evolution algorithms | `single_island_no_distant_parents.yaml` (default), `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
 | `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
-| `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
+| `pipeline/` | DAG execution pipelines | `guided.yaml` (default), `memory_guided.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
+| `program_format/` | Candidate representation | `python_source.yaml` (default), `json_document.yaml` |
 | `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
 | `stopper/` | Stopping criteria | `max_mutants.yaml` (default), `wall_clock.yaml`, `fitness_plateau.yaml` |
 | `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml`, `runner.yaml`, `endpoints.yaml`, `redis.yaml`, `logging.yaml` |

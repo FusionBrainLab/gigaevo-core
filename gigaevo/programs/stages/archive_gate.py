@@ -1,9 +1,8 @@
-"""Archive-potential gate for InsightsStage.
+"""Archive-admission gate for expensive feedback stages.
 
-Skips the (heavy) ``InsightsStage`` LLM call when the candidate program
-cannot displace the current elite in any island's archive. Reuses the same
-``archive_selector`` predicate the archive uses, so the gate cannot diverge
-from the real insertion decision.
+Skips downstream stages when the candidate program cannot displace the current
+elite in any island's archive. Reuses the same ``archive_selector`` predicate
+the archive uses, so the gate cannot diverge from the real insertion decision.
 
 See ``docs/superpowers/specs/2026-05-14-archive-potential-gate-design.md``.
 """
@@ -97,17 +96,16 @@ class ArchivePotentialGateOutput(StageIO):
     reason: str
 
 
-@StageRegistry.register(description="Gate insights on archive insertion potential")
+@StageRegistry.register(description="Gate feedback on archive insertion potential")
 class ArchivePotentialGateStage(Stage):
     """Skip downstream LLM stages when no island would accept this program.
 
     Returns ``ProgramStageResult.skipped(...)`` when every target rejects;
     the existing automata cascade then auto-skips any
-    ``on_success(ArchivePotentialGateStage)`` dependent (notably
-    ``InsightsStage``). ``always_after`` dependents (``LineageStage``,
-    ``MutationContextStage``) still run because their lineage records are
-    consumed by sibling/descendant programs even when the candidate itself
-    is rejected.
+    ``on_success(ArchivePotentialGateStage)`` dependent. Legacy pipelines use
+    this for ``InsightsStage``; guided memory pipelines also gate
+    ``IntraMemoryStage``, ``MutationSuggestionStage``, and
+    ``MemoryContextStage``.
 
     Fail-open in every ambiguous case: missing provider, empty targets,
     missing behavior keys, or any target-side exception → returns

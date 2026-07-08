@@ -3,3 +3,7 @@
 program_loader:
   _target_: gigaevo.problems.initial_loaders.DirectoryProgramLoader
   problem_dir: ${problem.dir}
+  pattern: ${loader.pattern}
+
+loader:
+  pattern: "*.py"

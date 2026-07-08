@@ -2,9 +2,9 @@
 # Structured DAG-diff mutation for CARL chain genomes that include retrieval
 # tool steps (RawChainSpec = {system_prompt, steps:[llm | tool]}). Each slot is
 # keep / new_llm / new_tool; tool query wiring is reorder-safe. Arm B of the
-# CARL-format A/B — pair with pipeline=program_is_json so only the mutation
+# CARL-format A/B — pair with program_format=json_document so only the mutation
 # format differs from the free-rewrite baseline.
-# Launch: python run.py problem.name=chains/hover/full7 pipeline=program_is_json mutation=carl_with_retrieval_tools
+# Launch: python run.py problem.name=chains/hover/full7 program_format=json_document mutation=carl_with_retrieval_tools
 # max_steps / available_tools default to the retrieval chain problems' bounds
 # (problems/chains/hover/full7/config.FULL_CHAIN_CONFIG); override per problem.
 

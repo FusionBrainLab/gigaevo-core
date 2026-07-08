@@ -62,6 +62,46 @@ python run.py problem.name=toy_example redis.db=5
 python run.py problem.name=toy_example llm_io_dump=false
 ```
 
+## LLM Setup
+
+The main mutation LLM and the memory subsystem LLM are configured separately.
+
+| Route | Config | Typical key |
+|---|---|---|
+| Main mutation | `llm=...`, `llm_base_url=...`, `model_name=...` | `OPENAI_API_KEY` for `llm=single` |
+| Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for `memory/llm=gemini`, `OPENAI_API_KEY` for `memory/llm=qwen_instruct` |
+
+Hosted/OpenRouter style:
+
+```bash
+export OPENAI_API_KEY=sk-or-v1-...
+python run.py problem.name=toy_example \
+    llm=single \
+    llm_base_url=https://openrouter.ai/api/v1 \
+    model_name=google/gemini-3-flash-preview
+```
+
+Local LiteLLM/vLLM-compatible proxy:
+
+```bash
+export OPENAI_API_KEY=sk-local
+export NO_PROXY=127.0.0.1,localhost
+
+python run.py problem.name=toy_example \
+    llm=single \
+    llm_base_url=http://127.0.0.1:4000/v1 \
+    model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
+```
+
+Memory with a separate instruct model:
+
+```bash
+python run.py problem.name=toy_example \
+    pipeline=memory_guided memory=full memory/write=live \
+    memory/llm=qwen_instruct \
+    checkpoint_dir=$PWD/SHARE_TOY_MEMORY
+```
+
 ### LLM I/O Audit Trail
 
 Every LLM router call (mutation, memory, suggester — both plain and structured
@@ -84,6 +124,9 @@ python run.py problem.name=toy_example algorithm=multi_island
 # Use custom pipeline
 python run.py problem.name=toy_example pipeline=custom
 
+# JSON-document genomes, such as CARL chain specs
+python run.py problem.name=chains/hover/full7 program_format=json_document
+
 # Co-evolved mutation prompts
 python run.py problem.name=toy_example \
     prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6
@@ -96,7 +139,8 @@ python run.py problem.name=toy_example \
 | `experiment` | `base`, `full_featured`, `prompt_coevolution` |
 | `algorithm` | `single_island_no_distant_parents` (default), `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
 | `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini35_flash` |
-| `pipeline` | `auto` (default), `guided`, `memory_guided` (see [MEMORY_GUIDED_PIPELINE.md](MEMORY_GUIDED_PIPELINE.md)), `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `prompt_evolution`, `optuna_opt` |
+| `pipeline` | `guided` (default), `memory_guided` (see [MEMORY_GUIDED_PIPELINE.md](MEMORY_GUIDED_PIPELINE.md)), `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `prompt_evolution`, `optuna_opt` |
+| `program_format` | `python_source` (default), `json_document` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |

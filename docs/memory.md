@@ -12,11 +12,12 @@ The pipeline that consumes memory cards:
 ## The 30-second version
 
 ```bash
-# Memory ON (read + write against one shared bank, write at end of run):
-python run.py problem.name=heilbron pipeline=memory_guided memory=full
-
-# Memory ON with live mid-run writes:
+# Memory ON within the same run (read + live writes against one bank):
 python run.py problem.name=heilbron pipeline=memory_guided memory=full memory/write=live
+
+# Read from a pre-built bank:
+python run.py problem.name=heilbron pipeline=memory_guided memory=reader \
+  checkpoint_dir=/data/banks/heilbron
 
 # True no-memory baseline:
 python run.py problem.name=heilbron pipeline=guided memory=none
@@ -32,7 +33,7 @@ python run.py problem.name=heilbron pipeline=guided memory=none
 | `memory=none` | `NullMemoryProvider` | `NullPostRunHook` | nothing |
 | `memory=reader` | `ReaderMemoryProvider` | `NullPostRunHook` | injects from a pre-built bank; no extraction |
 | `memory=writer` | `NullMemoryProvider` | `MemoryWriter` | authors a bank for a *later* run; injects nothing |
-| `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir` |
+| `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir`; use `memory/write=live` for same-run memory effects |
 | `memory=static` | `StaticLeverMemoryProvider` | `NullPostRunHook` | fixed curated lever blocks; no bank, no embedder, no memory LLM |
 
 > ⚠️ **`writer` and `full` bill the memory LLM** (`memory/llm=gemini` by
@@ -55,6 +56,12 @@ External-memory write is a memory property:
 - `memory/write=end_of_run` writes once when the run stops.
 - `memory/write=live` also installs `LiveMemoryRefreshHook` for mid-run writer
   sweeps and requires `memory={writer,full}`.
+
+With the default per-run `checkpoint_dir`, `pipeline=memory_guided memory=full`
+must use `memory/write=live`: otherwise the reader looks at an empty run-local
+bank until the finalizer writes after the run is already over. End-of-run write
+mode is for bank-building runs or for runs that read an explicit pre-built
+`checkpoint_dir`.
 
 ## How memory flows through a run
 
@@ -180,6 +187,12 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
 | `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion with later-use harm eviction; `harm` keeps only the later-use harm sweep |
+
+`memory/llm` is independent of the main mutation `llm`. The default
+`memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
+`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets the configured
+LiteLLM-compatible proxy; pair it with a larger thinking model on the main
+`llm=single` route when mutation and card work should use different models.
 
 ### The read funnel — three distinct widths
 

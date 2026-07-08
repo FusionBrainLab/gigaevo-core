@@ -25,12 +25,44 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from gigaevo.config.resolvers import register_resolvers
+from gigaevo.config.validation import (
+    validate_archive_gate_pipeline_compat,
+    validate_memory_pipeline_compat,
+    validate_program_format_pipeline_compat,
+    validate_reputation_island_compat,
+)
 from gigaevo.experiment import manifest as _manifest_mod
 from gigaevo.experiment.launch_generator import _build_run_cmd
 from gigaevo.experiment.manifest import experiment_dir, load_manifest
+
+
+def _validate_if_full_resolved_config(cfg: Any, *, run_label: str) -> None:
+    """Run launch compatibility guards on real ``--cfg job`` dumps.
+
+    Unit tests sometimes feed tiny YAML stubs through the dry-run parser to
+    exercise persistence/fingerprinting. Those are not launch configs, so they
+    intentionally do not carry the pipeline/memory/evolution topology needed by
+    the guards.
+    """
+
+    if not isinstance(cfg, DictConfig):
+        return
+    if OmegaConf.select(cfg, "pipeline", default=None) is None:
+        return
+    if OmegaConf.select(cfg, "memory", default=None) is None:
+        return
+    try:
+        validate_reputation_island_compat(cfg)
+        validate_memory_pipeline_compat(cfg)
+        validate_archive_gate_pipeline_compat(cfg)
+        validate_program_format_pipeline_compat(cfg)
+    except Exception as exc:
+        raise RuntimeError(
+            f"run {run_label}: resolved config failed compatibility validation: {exc}"
+        ) from exc
 
 
 def _hydra_stub_resolver(path: str) -> str:
@@ -147,7 +179,9 @@ def dry_run(
         stdout = _invoke_run_py_cfg_job(full_args, cwd=proj, timeout=timeout)
         out_path = exp_dir / f"cfg_run_{run_label}.yaml"
         out_path.write_text(stdout)
-        doc = OmegaConf.to_container(OmegaConf.load(out_path), resolve=True)
+        cfg = OmegaConf.load(out_path)
+        _validate_if_full_resolved_config(cfg, run_label=run_label)
+        doc = OmegaConf.to_container(cfg, resolve=True)
         if not isinstance(doc, dict):
             raise RuntimeError(
                 f"run {run_label}: --cfg job output did not parse as a mapping; "
