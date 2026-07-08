@@ -16,6 +16,10 @@
 #     opponent_redis_db=2 \
 #     opponent_redis_prefix=adversarial/optimizer_v2/pop_b
 
+pipeline:
+  id: adversarial_coevo
+  reads_external_memory: false
+
 opponent_redis_db: ???
 opponent_redis_prefix: ???
 
@@ -44,7 +48,7 @@ evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${program_storage}
+  storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${ref:memory.provider}

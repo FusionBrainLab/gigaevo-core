@@ -2,7 +2,7 @@
 
 Fitness: mean proximity to global optimum across opponent landscapes.
 Falls back to static benchmark landscapes when opponent archive is empty.
-Uses pipeline=standard with opponent config via env vars.
+Uses pipeline=guided with opponent config via env vars.
 """
 
 import math

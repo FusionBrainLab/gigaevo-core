@@ -52,6 +52,10 @@
 defaults:
   - adversarial_coevo
 
+pipeline:
+  id: adversarial_asymmetric
+  reads_external_memory: false
+
 # Override sync hook to use programs_processed as the cross-population
 # progress signal: ProgressBasedSyncHook reads the counter that is
 # published before the hook fires, avoiding the mutual-wait deadlock that

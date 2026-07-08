@@ -1,5 +1,9 @@
 # @package _global_
 
+pipeline:
+  id: custom
+  reads_external_memory: false
+
 # Explicit Hydra config version of the DefaultPipeline
 # Analogous to DefaultPipelineBuilder but entirely declarative
 

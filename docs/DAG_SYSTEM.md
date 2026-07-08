@@ -19,8 +19,8 @@
 The DAG pipeline is selected via the `pipeline` config group:
 
 ```bash
-# Standard pipeline (validate → execute → metrics → insights)
-python run.py pipeline=standard problem.name=heilbron
+# Guided mutation pipeline
+python run.py pipeline=guided problem.name=heilbron
 
 # With mutation context (adds lineage + statistics to mutation prompt)
 python run.py pipeline=with_context problem.name=heilbron

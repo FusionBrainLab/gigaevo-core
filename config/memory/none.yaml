@@ -1,7 +1,13 @@
-# memory=none — baseline, both sides off. No component leaves are mounted:
-# the provider injects nothing and the post-run hook is a no-op, so no memory
-# LLM is billed. Every arm defines the same two consumer-facing nodes —
-# pipelines read ${ref:memory.provider}, engines read ${ref:memory.writer}.
+# memory=none — baseline, both sides off. The provider injects nothing and the
+# engine write hook is a no-op, so no memory LLM is billed.
+defaults:
+  - write: none
+  - _self_
+
+capabilities:
+  read: false
+  write: false
+
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
 writer:

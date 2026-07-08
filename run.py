@@ -12,7 +12,10 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
-from gigaevo.config.validation import validate_reputation_island_compat
+from gigaevo.config.validation import (
+    validate_memory_pipeline_compat,
+    validate_reputation_island_compat,
+)
 from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
@@ -45,6 +48,7 @@ async def run_experiment(cfg: DictConfig) -> None:
     writer: LogWriter | None = None
     try:
         validate_reputation_island_compat(cfg)
+        validate_memory_pipeline_compat(cfg)
         config_with_instances = instantiate(cfg, recursive=True)
         storage = cast(ProgramStorage, config_with_instances.program_storage)
         program_loader: InitialProgramLoader = config_with_instances.program_loader

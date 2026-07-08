@@ -5,6 +5,10 @@
 # as *.json. Problem-agnostic — the problem's own validate() consumes the parsed
 # document. Launch: python run.py problem.name=<json-genome problem> pipeline=program_is_json ...
 
+pipeline:
+  id: program_is_json
+  reads_external_memory: false
+
 # Problem-local prompts (chain-flavored mutation + structured_diff prompts);
 # files absent here fall back to package defaults per-file.
 prompts:
@@ -14,10 +18,10 @@ evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${program_storage}
+  storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
-  memory_provider: ${ref:memory::provider}
+  memory_provider: ${ref:memory.provider}
 
 pipeline_builder:
   _target_: problems.chains.json_pipeline.JsonChainPipelineBuilder

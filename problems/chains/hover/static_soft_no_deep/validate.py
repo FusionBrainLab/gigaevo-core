@@ -28,7 +28,7 @@ def validate(chain_spec: dict) -> dict:
     Soft (fractional) fitness: gold_found / n_gold per sample.
     Values: 0.0, 0.333, 0.667, or 1.0 for 3-hop HoVer (0/3, 1/3, 2/3, 3/3).
 
-    Returns a plain dict (no failure artifact) — uses pipeline=standard.
+    Returns a plain dict (no failure artifact) — uses pipeline=guided.
     """
     # 1. Structural validation
     baseline = load_baseline()

@@ -14,7 +14,12 @@ defaults:
   - llm: gemini
   - read_policy: recommended
   - evictor: recommended
+  - write: end_of_run
   - _self_
+
+capabilities:
+  read: true
+  write: true
 
 # One store per run, owning bank + vector index + research agent under the
 # run's checkpoint dir. The reader and the writer share this single instance by

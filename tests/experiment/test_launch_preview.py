@@ -52,7 +52,7 @@ def manifest_for_preview(tmp_path: Path, monkeypatch):
           - label: A1
             db: 15
             prefix: test_prefix
-            pipeline: standard
+            pipeline: guided
             problem_name: toy_kadane
             condition: control
             mutation_url: https://example.com/v1

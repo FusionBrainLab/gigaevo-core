@@ -1,28 +1,27 @@
-"""Pipeline builders for the intra/extra live-memory experiment.
+"""Pipeline builders for guided mutation and memory-guided mutation.
 
 Two related builders share most of their DAG structure:
 
-* :class:`IntraMemoryPipelineBuilder` (intra-only, used by ``pipeline=standard``)
-  is the base. It runs a per-parent lineage card via ``IntraMemoryStage`` and
-  prescriptive ``MutationSuggestionStage``, with NO cross-population memory
-  channel:
+* :class:`GuidedMutationPipelineBuilder` (used by ``pipeline=guided``) is the
+  base. It runs a per-parent history summary via ``IntraMemoryStage`` and
+  prescriptive ``MutationSuggestionStage``, with NO cross-run memory-card
+  retrieval:
 
     - The card and the suggester live inside the DAG.
-    - The card's ``StringContainer`` output wires DIRECTLY into
+    - The history summary's ``StringContainer`` output wires DIRECTLY into
       ``MutationContextStage.memory``; there is no ``ConcatMemoryStage`` (no
       second channel to join) and no ``MemoryContextStage`` (the source of
-      cross-population cards is dropped entirely).
-    - No ``LiveMemoryRefreshHook`` is wired by the matching YAML — when an
-      end-of-run extractor is desired the user opts in with
-      ``memory=writer`` (post_run_hook only; no mid-run refresh).
+      cross-run memory cards is dropped entirely).
+    - No read/write memory hook is wired by the matching pipeline YAML. Memory
+      write cadence lives under ``memory/write``.
 
-* :class:`IntraExtraMemoryPipelineBuilder` (used by
-  ``pipeline=intra_extra_memory``) is a subclass that re-adds the extra
-  channel: re-introduces ``MemoryContextStage`` and feeds the selected
-  cross-population cards ONLY to ``MutationSuggestionStage`` — the suggester
-  is the single source of hints for the mutator; cards never reach the
-  mutation prompt verbatim. The matching YAML also wires
-  ``LiveMemoryRefreshHook`` so the extra cards are refreshed mid-run.
+* :class:`MemoryGuidedMutationPipelineBuilder` (used by
+  ``pipeline=memory_guided``) is a subclass that re-adds memory-card
+  retrieval: re-introduces ``MemoryContextStage`` and feeds the selected
+  cross-run cards ONLY to ``MutationSuggestionStage`` — the suggester is the
+  single source of hints for the mutator; cards never reach the mutation prompt
+  verbatim. Live memory writes are still configured by ``memory/write=live``,
+  not by this pipeline.
 
 DAG-native layout (shared):
 
@@ -59,12 +58,9 @@ Legacy stages stripped (superseded by intra + suggestion):
 * ``AncestorProgramIds``, ``LineageStage``, ``LineagesToDescendants``,
   ``LineagesFromAncestors``, ``InsightsStage``.
 
-The "extra" half of :class:`IntraExtraMemoryPipelineBuilder` is provided by
-:class:`LiveMemoryRefreshHook` (``gigaevo/memory/live_memory_hook.py``),
-which wraps :meth:`MemoryWriter.run_increment` and is wired into the engine's
-``post_step_hook`` slot via ``pipeline=intra_extra_memory``. The provider
-inside :class:`MemoryContextStage` surfaces the freshest cards through
-reload-on-read.
+The external-memory read half is purely a DAG feature:
+``MemoryContextStage`` calls the configured ``memory.provider``. The write half
+is an engine-hook feature configured separately by ``memory/write``.
 """
 
 from __future__ import annotations
@@ -94,17 +90,14 @@ from gigaevo.programs.stages.mutation_suggestions import MutationSuggestionStage
 DEFAULT_INTRA_MAX_CHILDREN = 24
 
 
-class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
-    """Default pipeline + DAG-native intra memory (no cross-population channel).
+class GuidedMutationPipelineBuilder(DefaultPipelineBuilder):
+    """Default pipeline + DAG-native guided mutation feedback.
 
     Inherits from :class:`DefaultPipelineBuilder` (not the contextual variant)
     so problems without a ``context.py`` file (e.g. heilbron) are supported.
 
-    Used by ``pipeline=standard``. The end-of-run external-memory extractor
-    (MemoryWriter) is independent of this builder — opt in by passing
-    ``memory=writer`` on the CLI; the cards it writes are available
-    for subsequent runs that use ``pipeline=intra_extra_memory``, but they
-    are NOT consumed by this builder's DAG.
+    Used by ``pipeline=guided``. External-memory writing is independent of this
+    builder; external-memory reading requires ``pipeline=memory_guided``.
     """
 
     _reads_memory_cards = False
@@ -210,8 +203,8 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
         # (prescriptive insights). DescendantProgramIds is INTENTIONALLY kept;
         # it now feeds IntraMemoryStage instead of LineagesToDescendants.
         # ``remove_stage`` drops the node, every edge touching it, and any
-        # deps referencing it. The IntraExtraMemoryPipelineBuilder subclass
-        # adds MemoryContextStage when the extra channel is needed.
+        # deps referencing it. The MemoryGuidedMutationPipelineBuilder subclass
+        # adds MemoryContextStage when external memory cards are needed.
         for legacy in (
             "AncestorProgramIds",
             "LineageStage",
@@ -323,37 +316,32 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
             logger.warning(
                 "[Memory][Arm] memory provider {} is configured but this "
                 "pipeline never reads cards — selected cards reach no stage; "
-                "use pipeline=intra_extra_memory to consume them",
+                "use pipeline=memory_guided to consume them",
                 type(ctx.memory_provider).__name__,
             )
 
 
-class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
-    """Intra base + extra (cross-population) memory channel.
+class MemoryGuidedMutationPipelineBuilder(GuidedMutationPipelineBuilder):
+    """Guided mutation base + external memory-card retrieval.
 
-    Used by ``pipeline=intra_extra_memory``. Re-adds the
+    Used by ``pipeline=memory_guided``. Re-adds the
     :class:`MemoryContextStage` that the intra-only base strips and wires its
     selected cards into ``MutationSuggestionStage.memory_cards`` ONLY — the
     suggester digests them into structured ``ProgramInsights``; the mutator
     never sees card text verbatim. ``MutationContextStage.memory`` keeps the
-    bare intra card via the base class's direct edge, identical to
-    ``pipeline=standard``. The matching YAML wires
-    :class:`LiveMemoryRefreshHook` into the engine's ``post_step_hook`` so the
-    extra cards are refreshed mid-run.
+    bare per-parent history summary via the base class's direct edge, identical
+    to ``pipeline=guided``. This class does not wire writer hooks; use
+    ``memory/write=live`` for live writes.
 
-    REQUIRED CLI co-override (the YAML cannot safely flip this from inside
-    the ``pipeline/`` config group):
+    Common pairings:
 
-        memory=full             — composes the flat ``${ref:}`` graph providing BOTH
-                                  the ReaderMemoryProvider this builder READS and the
-                                  MemoryWriter the LiveMemoryRefreshHook WRITES, sharing
-                                  one card bank; memory=none collapses both to Null targets.
-        OPENROUTER_API_KEY=...  — the memory LLM agents call OpenRouter directly
-                                  (default memory/llm=gemini; swap memory/llm=qwen_instruct).
+        memory=reader           — read a pre-built bank; no writer.
+        memory=full             — read + end-of-run writer by default.
+        memory=full memory/write=live
+                                — read + live writer refresh.
 
-    Verify ``.hydra/config.yaml`` does not show ``Null*`` targets, and that
-    ``/proc/<pid>/environ`` contains the OpenRouter key, before trusting
-    extra-memory results.
+    Verify ``.hydra/config.yaml`` does not show ``NullMemoryProvider`` before
+    trusting memory-guided results.
     """
 
     _reads_memory_cards = True
@@ -393,14 +381,13 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         )
 
         memory_provider = self.ctx.memory_provider
-        # WARNING, never raise: memory=none under this pipeline is the
-        # legitimate write-side-controlled baseline arm (cards written by the
-        # tracker, never injected) and is used by live paper runs.
+        # Config validation rejects NullMemoryProvider for this public pipeline.
+        # Keep the warning as a defensive breadcrumb for tests or direct Python
+        # construction that bypasses Hydra validation.
         if isinstance(memory_provider, NullMemoryProvider):
             logger.warning(
                 "[Memory][Arm] read path DISABLED (memory=none) under "
-                "pipeline=intra_extra_memory — cards are written but never "
-                "read; intentional only for write-cost-controlled baselines"
+                "pipeline=memory_guided — selected memory cards cannot flow"
             )
         task_description = self.ctx.problem_ctx.task_description
         metrics_context = self.ctx.problem_ctx.metrics_context

@@ -1,0 +1,10 @@
+# @package _global_
+
+memory:
+  write:
+    enabled: true
+    mode: end_of_run
+    # Engine finalizer: flush memory once when the run stops. This references
+    # the writer component mounted by memory={writer,full}.
+    post_run_hook: ${ref:memory.writer}
+

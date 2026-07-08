@@ -1,5 +1,9 @@
 # @package _global_
 
+pipeline:
+  id: auto
+  reads_external_memory: false
+
 # ArchivePotentialGateStage provider. Returns None when the strategy is
 # not a MAP-Elites strategy (e.g. single-island scratch) or when
 # archive_gate_enabled is false — in either case the gate stage fails

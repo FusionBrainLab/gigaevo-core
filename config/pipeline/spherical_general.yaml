@@ -5,11 +5,15 @@
 # repr() of the metrics dict.
 # Launch: python run.py problem.name=spherical_codes_improver_general pipeline=spherical_general ...
 
+pipeline:
+  id: spherical_general
+  reads_external_memory: false
+
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${program_storage}
+  storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${ref:memory.provider}

@@ -11,6 +11,10 @@
 #     problem.name=prompt_evolution pipeline=prompt_evolution redis.db=6 \
 #     main_redis_db=5 main_redis_prefix=chains/hotpotqa
 
+pipeline:
+  id: prompt_evolution
+  reads_external_memory: false
+
 main_redis_db: ???
 main_redis_prefix: ???
 
@@ -56,7 +60,7 @@ evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${program_storage}
+  storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${ref:memory.provider}

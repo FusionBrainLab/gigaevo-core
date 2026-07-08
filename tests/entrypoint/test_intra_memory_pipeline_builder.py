@@ -1,16 +1,16 @@
-"""Tests for ``IntraMemoryPipelineBuilder`` and ``IntraExtraMemoryPipelineBuilder``.
+"""Tests for guided and memory-guided mutation pipeline builders.
 
 Two related pipeline builders share most of their DAG structure:
 
-* ``IntraMemoryPipelineBuilder`` (intra-only, used by ``pipeline=standard``):
+* ``GuidedMutationPipelineBuilder`` (used by ``pipeline=guided``):
     * Per-parent lineage card via ``IntraMemoryStage``
     * Structured suggestions via ``MutationSuggestionStage``
     * NO cross-population memory cards (``MemoryContextStage`` is dropped)
     * NO ``ConcatMemoryStage`` — intra card wires straight to
       ``MutationContextStage.memory``
 
-* ``IntraExtraMemoryPipelineBuilder`` (intra + extra; used by
-  ``pipeline=intra_extra_memory``) is a subclass that re-adds
+* ``MemoryGuidedMutationPipelineBuilder`` (used by
+  ``pipeline=memory_guided``) is a subclass that re-adds
   ``MemoryContextStage`` and feeds the cross-population cards ONLY to
   ``MutationSuggestionStage`` (``memory_cards`` slot). The mutator's
   ``memory`` slot keeps the bare intra card, identical to the base.
@@ -30,8 +30,8 @@ import pytest
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.entrypoint.lineage_memory_pipeline import (
-    IntraExtraMemoryPipelineBuilder,
-    IntraMemoryPipelineBuilder,
+    GuidedMutationPipelineBuilder,
+    MemoryGuidedMutationPipelineBuilder,
 )
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.provider import MemoryProvider
@@ -103,13 +103,13 @@ def _edge_src_dest(bp: DAGBlueprint) -> set[tuple[str, str]]:
 
 
 # ===================================================================
-# IntraMemoryPipelineBuilder — intra-only (pipeline=standard)
+# GuidedMutationPipelineBuilder — no external-memory read
 # ===================================================================
 
 
-class TestIntraMemoryPipelineBuilder:
+class TestGuidedMutationPipelineBuilder:
     def _build(self, **kwargs) -> DAGBlueprint:
-        builder = IntraMemoryPipelineBuilder(_make_ctx(), **kwargs)
+        builder = GuidedMutationPipelineBuilder(_make_ctx(), **kwargs)
         return builder.build_blueprint()
 
     def test_intra_memory_stage_present(self):
@@ -213,25 +213,27 @@ class TestIntraMemoryPipelineBuilder:
 
 
 # ===================================================================
-# IntraExtraMemoryPipelineBuilder — intra + extra (subclass)
+# MemoryGuidedMutationPipelineBuilder — guided + external-memory read
 # ===================================================================
 
 
-class TestIntraExtraMemoryPipelineBuilder:
-    """Regression tests for ``pipeline=intra_extra_memory`` wiring.
+class TestMemoryGuidedMutationPipelineBuilder:
+    """Regression tests for ``pipeline=memory_guided`` wiring.
 
     These pin the wiring exercised by all extant cycle-N intra+extra runs so
-    that the new ``IntraMemoryPipelineBuilder`` split doesn't accidentally
+    that the guided mutation split doesn't accidentally
     drop edges from the extra-channel-enabled variant.
     """
 
     def _build(self, **kwargs) -> DAGBlueprint:
-        builder = IntraExtraMemoryPipelineBuilder(_make_ctx(), **kwargs)
+        builder = MemoryGuidedMutationPipelineBuilder(_make_ctx(), **kwargs)
         return builder.build_blueprint()
 
-    def test_subclasses_intra_memory_builder(self):
+    def test_subclasses_guided_mutation_builder(self):
         """The intra+extra builder is a subclass — both share most wiring."""
-        assert issubclass(IntraExtraMemoryPipelineBuilder, IntraMemoryPipelineBuilder)
+        assert issubclass(
+            MemoryGuidedMutationPipelineBuilder, GuidedMutationPipelineBuilder
+        )
 
     def test_intra_memory_stage_present(self):
         bp = self._build()
@@ -398,19 +400,19 @@ class TestArmMismatchWarnings:
     ):
         # arm 2′ (write-cost-controlled baseline) is legitimate and currently
         # used live — this must stay a WARNING, never a raise.
-        IntraExtraMemoryPipelineBuilder(_make_ctx())
+        MemoryGuidedMutationPipelineBuilder(_make_ctx())
         (warning,) = _arm_warnings(warnings_log)
         assert "read path DISABLED" in warning
 
     def test_intra_extra_with_real_provider_is_silent(self, warnings_log):
-        IntraExtraMemoryPipelineBuilder(_make_ctx(_CardProvider()))
+        MemoryGuidedMutationPipelineBuilder(_make_ctx(_CardProvider()))
         assert _arm_warnings(warnings_log) == []
 
     def test_standard_with_real_provider_warns_cards_never_read(self, warnings_log):
-        IntraMemoryPipelineBuilder(_make_ctx(_CardProvider()))
+        GuidedMutationPipelineBuilder(_make_ctx(_CardProvider()))
         (warning,) = _arm_warnings(warnings_log)
         assert "never reads" in warning
 
     def test_standard_with_null_provider_is_silent(self, warnings_log):
-        IntraMemoryPipelineBuilder(_make_ctx())
+        GuidedMutationPipelineBuilder(_make_ctx())
         assert _arm_warnings(warnings_log) == []

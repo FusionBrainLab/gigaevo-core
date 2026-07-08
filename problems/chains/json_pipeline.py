@@ -4,13 +4,13 @@ from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT, MAX_CODE_
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.entrypoint.lineage_memory_pipeline import (
     DEFAULT_INTRA_MAX_CHILDREN,
-    IntraMemoryPipelineBuilder,
+    GuidedMutationPipelineBuilder,
 )
 from gigaevo.programs.stages.json_genome import ParseJsonProgram
 
 
-class JsonChainPipelineBuilder(IntraMemoryPipelineBuilder):
-    """Standard (intra-memory) pipeline where ValidateCodeStage and
+class JsonChainPipelineBuilder(GuidedMutationPipelineBuilder):
+    """Guided mutation pipeline where ValidateCodeStage and
     CallProgramFunction both become ParseJsonProgram: parsing is the syntax
     gate, and the parsed document is the validator payload."""
 

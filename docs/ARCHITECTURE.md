@@ -134,7 +134,7 @@ Program (state: QUEUED)
     ↓
 DagRunner picks it up
     ↓
-DAG built from blueprint (IntraMemoryPipelineBuilder by default; DefaultPipelineBuilder under pipeline=legacy)
+DAG built from blueprint (GuidedMutationPipelineBuilder by default)
     ↓
 Stages execute in parallel (respecting dependencies)
     │
@@ -507,7 +507,7 @@ cards.py → events.py → storage/ → { read/ │ write/ } → provider.py / l
 - **`read/`** — `MemoryReader` facade: research shortlist → Beta-Binomial reputation → Thompson auction against a no-card baseline → budget → prompt render. Every stage fails to an empty selection, so a memory outage never sinks a mutation.
 - **`write/`** — `MemoryWriter` facade: extract valid parent→child records → librarian LLM reconciles each diff into NEW/DUPLICATE/MERGE cards → author program exemplars → restamp gain events → harm eviction → throttled background near-duplicate consolidation. `write/` never imports `read/`; eviction consumes a `CardScorer` Protocol that `read/reputation` implements (dependency inversion).
 
-Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (no Python assembler, no `_partial_`). Consumers read two nodes: pipelines take `${ref:memory.provider}`, engines take `${ref:memory.writer}` as their `post_run_hook`. The `memory={none,reader,writer,full,static}` arms differ only in which `_target_`s those two nodes carry (Null variants for disabled sides) — there is no enable flag. Full guide: [`docs/memory.md`](memory.md); package internals: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md); the live pipeline that consumes it: [`docs/INTRA_EXTRA_MEMORY.md`](INTRA_EXTRA_MEMORY.md).
+Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (no Python assembler, no `_partial_`). Pipelines that read memory take `${ref:memory.provider}`; engines take `${ref:memory.write.post_run_hook}` as their memory finalizer. The `memory={none,reader,writer,full,static}` arms choose read/write components, while `memory/write={none,end_of_run,live}` chooses write cadence. Full guide: [`docs/memory.md`](memory.md); package internals: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md); the memory-guided pipeline: [`docs/MEMORY_GUIDED_PIPELINE.md`](MEMORY_GUIDED_PIPELINE.md).
 
 ## Quick Reference: Key Files
 
@@ -529,7 +529,7 @@ Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (n
 | `gigaevo/database/redis_program_storage.py` | Redis interface |
 | `gigaevo/database/state_manager.py` | Program state transitions |
 | `gigaevo/database/redis/keys.py` | Redis key templates |
-| `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (legacy stage wiring; `IntraMemoryPipelineBuilder` is the v2 default) |
+| `gigaevo/entrypoint/lineage_memory_pipeline.py` | `GuidedMutationPipelineBuilder` and `MemoryGuidedMutationPipelineBuilder` |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
 | `gigaevo/evolution/mutation/structured_diff.py` | `StructuredDiffMutationOperator` (schema-constrained diff mutation) |
 | `gigaevo/evolution/mutation/allowed_changes.py` | `AllowedChanges` contract (genome-family diff vocabularies) |

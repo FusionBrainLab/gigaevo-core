@@ -96,7 +96,7 @@ python run.py problem.name=toy_example \
 | `experiment` | `base`, `full_featured`, `prompt_coevolution` |
 | `algorithm` | `single_island_no_distant_parents` (default), `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
 | `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini35_flash` |
-| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt` |
+| `pipeline` | `auto` (default), `guided`, `memory_guided` (see [MEMORY_GUIDED_PIPELINE.md](MEMORY_GUIDED_PIPELINE.md)), `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `prompt_evolution`, `optuna_opt` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
@@ -154,23 +154,18 @@ python run.py problem.name=my_task pipeline=my_pipeline \
     prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
 ```
 
-### Intra/Extra Memory (per-parent lineage card + live global ideas)
+### Memory-Guided Mutation
 ```bash
-# See docs/INTRA_EXTRA_MEMORY.md for the full mode guide
+# See docs/MEMORY_GUIDED_PIPELINE.md for the full mode guide
 python run.py problem.name=heilbron \
-    pipeline=intra_extra_memory memory=full \
+    pipeline=memory_guided memory=full memory/write=live \
     num_parents=4 max_mutants=500
 ```
 
-> **Required override:** launch with `memory=full` — the single preset that
-> turns *both* the reader (injects cards) and the writer (`MemoryWriter`
-> distills diffs into cards) on. Under `pipeline=intra_extra_memory` the
-> writer-off presets (`memory=none`, `memory=reader`) **fail fast at
-> startup**: the live-refresh hook needs a real writer. A true no-memory
-> baseline is `pipeline=standard memory=none`. The default memory LLM
-> (`memory/llm=gemini`) calls OpenRouter, so `OPENROUTER_API_KEY` must be
-> exported — without it the research and librarian calls 401 and zero cards
-> flow. See docs/memory.md for the full arm matrix and observability.
+> `pipeline=memory_guided` reads cards; `memory/write=live` enables live
+> writer sweeps. A true no-memory baseline is `pipeline=guided memory=none`.
+> The default memory LLM (`memory/llm=gemini`) calls OpenRouter, so
+> `OPENROUTER_API_KEY` must be exported.
 
 ### Tabular Suite (regression + classification, 10 datasets)
 
