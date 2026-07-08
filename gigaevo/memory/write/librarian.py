@@ -86,11 +86,12 @@ class Librarian:
         # writer's wait_for cancels a hung ingest, the return value dies with
         # the coroutine but cards already routed through the gate are banked —
         # the sink is how they still reach the writer's accounting.
-        # founding_gain seeds the child's verified parent->child delta so a fresh
-        # card bids on its own evidence; it rides a NEW admit only. A MERGE or
-        # DUPLICATE target keeps exactly its own evidence — the delta was measured
-        # for THIS child against ITS parent, foreign context for a pre-existing
-        # lever (and the founding flag would defeat merge event dedup).
+        # founding_gain seeds the child's verified parent->child delta for
+        # origin audit and birth-failure eviction. It is not later-use evidence:
+        # reputation/EV exclude founding events, so a founding-only card remains
+        # statistically cold. A MERGE or DUPLICATE target keeps exactly its own
+        # evidence — the delta was measured for THIS child against ITS parent,
+        # foreign context for a pre-existing lever.
         events = (founding_gain,) if founding_gain is not None else ()
 
         def record_result(result: WriteResult) -> WriteResult:

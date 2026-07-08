@@ -7,7 +7,10 @@ prompts, tracking each card's realized fitness gain (reputation).
 
 Package-internals map: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md).
 The pipeline that consumes memory cards:
-[`MEMORY_GUIDED_PIPELINE.md`](MEMORY_GUIDED_PIPELINE.md).
+[`MEMORY_GUIDED_PIPELINE.md`](MEMORY_GUIDED_PIPELINE.md). For a diagram-heavy
+end-to-end explanation of card birth, read selection, no-card baselines,
+posteriors, decay, and eviction, see
+[`MEMORY_LIFECYCLE_TUTORIAL.md`](MEMORY_LIFECYCLE_TUTORIAL.md).
 
 ## The 30-second version
 
@@ -79,16 +82,19 @@ reputation bootstrap-EV re-pricing (mean + low quantile of a staleness-
            weighted bootstrap over each card's raw oriented gain deltas)
            over the cell-local BD-proximity posterior
 auction    Thompson gate vs a no-card baseline arm; known cards bid the
-           mean of one weighted bootstrap resample of their deltas plus a
-           neutral pseudo-event; genuinely cold cards use the cold scale;
-           gated by bid > 0 and a round-quantile reserve
+           mean of one weighted bootstrap resample of direct deltas, zero
+           atoms for invalid/unused exposures, plus a neutral pseudo-event;
+           genuinely cold cards use the cold scale; gated by bid > 0 and a
+           round-quantile reserve
 budget     cap winners to reader.max_cards
 render     mutator-facing prompt block incl. efficacy endorsement
 ```
 
 Every stage fails to an empty selection — a memory outage never sinks a
-mutation. Winning blocks land in the mutation prompt and the child program is
-stamped with the selected card ids (see [Tracking](#tracking-did-memory-actually-flow)).
+mutation. Winning blocks land in `MutationSuggestionStage.memory_cards`; the
+final mutator sees the resulting structured suggestions, not raw external-card
+text. The child program is stamped with frozen card-attribution metadata (see
+[Tracking](#tracking-did-memory-actually-flow)).
 
 **Write (per increment / end of run).** `MemoryWriter` runs:
 
@@ -309,17 +315,26 @@ zero-evidence-at-birth path.
 
 ## Tracking: did memory actually flow?
 
-Child-program metadata stamped by the mutation path
+Parent-stage transient metadata written by `MemoryContextStage`:
+
+| Key | Meaning |
+|---|---|
+| `memory_candidate_slate` | the full auction slate (winners and losers) |
+| `memory_selected_idea_ids` | cards selected/rendered for the current parent-stage invocation; overwritten on requeue |
+
+Child-birth metadata frozen by the mutation path
 (`gigaevo/evolution/mutation/constants.py`):
 
 | Key | Meaning |
 |---|---|
-| `memory_selected_idea_ids` | cards the reader selected for this mutation |
-| `memory_injected_idea_ids` | cards actually rendered into the prompt |
-| `memory_used` | mutator self-report of which cards it applied |
-| `memory_candidate_slate` | the full auction slate (winners and losers) |
+| `memory_injected_idea_ids` | sorted union of cards actually rendered into the child prompt |
+| `memory_used` | bool: whether any external card was injected |
 | `memory_base_selected_idea_ids` / `memory_base_metrics` / `memory_base_id` | base-parent snapshot used for gain attribution |
-| `memory_lineage_applied_ids` | lineage-accumulated card ids (feeds the `lineage` excluder) |
+| `memory_no_card_control` | selected cards were intentionally withheld for a randomized no-card control |
+| `memory_lineage_applied_ids` | lineage-accumulated applied card ids (feeds the `lineage` excluder) |
+
+The mutator's self-report of which shown cards it actually applied lives in
+`mutation_output.card_ids_used`, not in `memory_used`.
 
 ## Observability
 
