@@ -189,8 +189,8 @@ This expands into the following system.
 | Dedup | `DedupPolicy(online_top_k=5, max_cards_per_diff=3, consolidation_k=5)` | Uses LLM reconcile and consolidation, not distance thresholds | Prose/card embeddings are not reliable enough for a fixed duplicate cutoff | Ledger has many `merged` and `updated` rows |
 | Program exemplars | `enabled=true`, `top_k_per_refresh=4`, `max_cards=12` | Adds bounded top-program cards | Some lessons are best represented by a concrete program exemplar | Banks contain `kind=program` cards with fitness/code hash |
 | Birth eviction | `BirthFailureEvictor(scale_multiplier=2.0)` | Deletes catastrophic founding-loss cards | Prevents severe origin failures from acting like neutral cold advice | Ledger records `rejected_harm` or `evicted` near admission/sweep |
-| Harm eviction | `HarmEvictor` | Deletes cards whose later-use posterior is confidently harmful | Repeated bad injected use should leave the bank | Higgs SOTA R1 had 48 `evicted` ledger rows |
-| Policy non-viable eviction | `PolicyNonViableEvictor(neutral_gain=${memory.neutral_gain})` | Deletes warm cards with non-positive active-policy EV and no positive direct baseline-adjusted gain | Prevents one-bad-sample cards from staying in the index forever after the reader stops sampling them | Ledger reason says `policy non-viable`, not confidently harmful |
+| Harm eviction | `HarmEvictor` | Deletes cards whose later-use posterior is confidently harmful | Conservative backstop for repeated failures, usually from batched evidence or less conservative policies | Ledger reason says `injection posterior confidently harmful` |
+| Policy non-viable eviction | `PolicyNonViableEvictor(neutral_gain=${memory.neutral_gain})` | Deletes warm cards with non-positive active-policy EV and no positive direct baseline-adjusted gain | Main zombie-card fix: one bad/non-use sample can make a card unattractive without waiting for 3 bad selections | Ledger reason says `policy non-viable`, not confidently harmful |
 
 The recommended settings are conservative in one important way: they do not
 delete every cold card. A card with no later-use evidence can remain in the bank,
@@ -221,10 +221,11 @@ The recommended stack treats it like this:
 5. If its pessimistic EV is low relative to the bank, the shortlister benches it.
 6. If it is still a candidate, the auction samples a bid and compares it to the
    no-card arm.
-7. If later use becomes confidently harmful, `HarmEvictor` deletes it.
-8. If the active policy prices it at or below the no-card neutral point and it
+7. If the active policy prices it at or below the no-card neutral point and it
    has no positive direct baseline-adjusted use, `PolicyNonViableEvictor`
    removes it as active-bank hygiene rather than as a harm verdict.
+8. If later use accumulates enough repeated failures before policy retirement,
+   `HarmEvictor` deletes it as confidently harmful.
 
 This is the intended lifecycle: a plausible idea is neither trusted forever nor
 deleted immediately. It keeps competing only to the extent its evidence supports
@@ -299,8 +300,11 @@ stateDiagram-v2
     WithheldControl --> NoCardBaseline: external cards withheld
 
     GainRestamped --> BankWarm: posterior / bootstrap EV recomputed
-    BankWarm --> EvictedHarm: later-use posterior confidently harmful
-    BankWarm --> EvictedPolicyNonViable: non-positive policy EV + no positive direct use
+    BankWarm --> PositiveDirectEvidence: any direct gain > neutral_gain?
+    PositiveDirectEvidence --> RecallCandidate: yes, keep competing
+    PositiveDirectEvidence --> EvictedPolicyNonViable: no + active policy EV <= neutral_gain
+    PositiveDirectEvidence --> FailureBackstop: repeated failures accumulate
+    FailureBackstop --> EvictedHarm: later-use posterior confidently harmful
     BankWarm --> StaleNeutral: old EV evidence ages toward neutral
     StaleNeutral --> RecallCandidate
 
@@ -401,11 +405,11 @@ flowchart TD
     B -->|yes, scale known| C[BirthFailureEvictor deletes it]
     B -->|no| D[Card remains in bank]
     B -->|scale unavailable| D
-    D --> E{Later direct evidence?}
+    D --> E{Later non-founding evidence?}
     E -->|none| F[Still statistically cold]
-    E -->|positive enough| G[Can be rescued / warm]
-    E -->|confidently harmful| H[HarmEvictor deletes it]
-    E -->|non-positive policy EV and no positive direct use| I[PolicyNonViableEvictor removes it]
+    E -->|direct gain > neutral_gain| G[Can be rescued / warm]
+    E -->|EV <= neutral_gain and no positive direct gain| I[PolicyNonViableEvictor removes it]
+    E -->|several failures before policy retirement| H[HarmEvictor deletes it]
 ```
 
 The founding event is the raw child-minus-base delta of the child that produced
@@ -415,6 +419,10 @@ as later-use evidence in the reputation posterior. This matters:
 - A founding-only positive card is still cold statistically.
 - A founding-only mildly negative card is still cold statistically.
 - A founding-only catastrophically negative card can be deleted immediately.
+- A later single negative or unused exposure usually does not need to become a
+  "confidently harmful" posterior. If the active policy EV is non-positive and
+  there is no positive direct baseline-adjusted use, `PolicyNonViableEvictor`
+  can remove it as bank hygiene.
 
 Concretely, founding events are excluded from:
 
@@ -792,6 +800,50 @@ evidence fades toward zero, not toward optimism.
 The gain histogram shows why the EV layer matters: losses and wins can have
 different magnitudes. A sign-only posterior is not enough for prompt selection.
 
+### Bootstrap versus eviction
+
+Bootstrap is not "the evictor." It is the read-side value model that prices a
+card before the mutator sees it. Eviction is the write-side deletion policy that
+runs after evidence has been restamped onto cards.
+
+The recommended system connects them deliberately:
+
+| Mechanism | Runs when | Uses | Main effect |
+|---|---|---|---|
+| Bootstrap EV block | read/scoring time | non-founding gains, unused/invalid zero atoms, neutral pseudo-event, staleness weight | estimates expected card value and left-tail risk |
+| Bootstrap fused bench | before retrieval/research | pessimistic bootstrap EV (`IntroGain_bootstrap_ev_lo20`) | keeps known weak warm cards out of the retrieval prompt |
+| Bootstrap auction | after research | one live bootstrap EV bid plus Beta posterior draw | decides whether a candidate beats the no-card arm |
+| Renderer | after budget | central/pessimistic bootstrap EV and posterior confidence | decides how strongly the card is described to the suggester |
+| `PolicyNonViableEvictor` | write sweep after restamp | the same active value scorer, usually bootstrap EV mean | deletes warm cards that the active read policy now prices as non-viable |
+| `HarmEvictor` | write sweep after restamp | downside Beta posterior only | deletes cards with repeated later-use failures |
+
+That split is important. A single negative or unused exposure can make
+bootstrap EV non-positive. The reader may then stop selecting the card, so it
+may never collect the three failures required for a confident-harm posterior.
+`PolicyNonViableEvictor` is the cleanup path for that common case: it asks
+"would our current read policy still pay to show this card, and has it ever had
+a positive direct baseline-adjusted use?" If the answer is no, the card can be
+deleted without pretending we have a high-confidence harm theorem.
+
+```mermaid
+flowchart LR
+    E[Restamped non-founding evidence] --> B[Bootstrap EV pricing]
+    B --> Bench[Shortlister bench]
+    B --> Auction[Auction bid]
+    B --> Policy[PolicyNonViableEvictor]
+    E --> Beta[Downside Beta posterior]
+    Beta --> Harm[HarmEvictor]
+    Policy -->|EV <= neutral and no positive direct gain| Delete1[Delete as non-viable]
+    Harm -->|repeated failures, posterior confidently harmful| Delete2[Delete as harmful]
+```
+
+So "bad card cleanup" has two lanes:
+
+1. **Policy non-viable:** common lane for one-bad-sample or ignored cards that
+   the bootstrap reader would no longer select.
+2. **Confident harm:** conservative backstop for cards that accumulate repeated
+   later-use failures before policy retirement removes them.
+
 ## EV Staleness And Posterior Decay
 
 The default bootstrap reputation uses bank-cycle staleness for EV evidence:
@@ -916,7 +968,26 @@ intro_events >= 3
 and Beta(a, b).ppf(0.80) < 0.5
 ```
 
-So a single bad use does not delete a card. Repeated bad evidence can.
+So a single bad use does not delete a card through this path. This is
+deliberately conservative and it is not the main cleanup mechanism for cards
+that become unattractive after one negative or unused exposure.
+
+With the recommended reader, confidently harmful deletion is expected to be
+rare. A bad card may stop winning reads after its first non-founding evidence,
+which means it may never collect three separate later-use failures. That is not
+a bug in `HarmEvictor`; it is why the recommended evictor also includes
+`PolicyNonViableEvictor`.
+
+`HarmEvictor` still matters as a backstop when repeated failures arrive before
+the active policy can bench the card. Examples:
+
+- several children used or ignored the same stale card before the next live
+  writer sweep restamped evidence;
+- one writer sweep sees multiple already-evaluated children that selected the
+  same card;
+- invalid children provide forced failures for cited cards;
+- a legacy or experimental read policy keeps sampling weak cards more
+  aggressively than the recommended bootstrap stack.
 
 ### PolicyNonViableEvictor
 
@@ -939,6 +1010,12 @@ positive card gain.
 Mixed-sign cards are not deleted by this policy. If a card has ever produced a
 positive direct baseline-adjusted gain, the system leaves it to normal
 reputation, auction, and harm eviction.
+
+This is the anti-zombie rule for the common case. After a card gets one bad
+direct use, one ignored exposure, or one invalid-use failure, the bootstrap EV
+can become non-positive and the reader may stop selecting it. Rather than
+waiting for two more bad selections that may never happen, the eviction sweep
+can retire it if it has no positive direct baseline-adjusted evidence.
 
 ## Evidence Maturity In Real Banks
 
@@ -969,9 +1046,10 @@ and never gets removed. The current system has several defenses against that:
 - Non-positive warm EV cards are benched before retrieval by the bootstrap fused
   shortlister.
 - The bootstrap auction has a positive-EV sign gate.
-- `HarmEvictor` deletes cards whose later-use posterior is confidently harmful.
 - `PolicyNonViableEvictor` deletes warm cards that the active read policy prices
   at non-positive EV and that have no positive direct baseline-adjusted use.
+- `HarmEvictor` deletes cards whose later-use posterior is confidently harmful
+  when repeated failures do accumulate.
 - `BirthFailureEvictor` deletes catastrophic founding failures before they are
   treated as neutral cold cards.
 - `LineageExcluder` prevents descendants from reusing cards the lineage actually
@@ -988,8 +1066,9 @@ after evidence, or removed by a future admission policy.
 So the precise guarantee is not "every unused card is evicted." The guarantee is
 we do not keep serving a card as strong advice without evidence: cold cards stay
 neutral, unused/invalid/negative cards get evidence, warm non-positive cards are
-benched or retired as policy-non-viable, and confidently harmful cards are
-deleted.
+benched or retired as policy-non-viable, and repeated-failure cards can still be
+deleted by the confident-harm backstop. The recommended system does not require
+a bad card to be selected three more times after it already looks bad.
 
 ## Concrete Card Stories
 
@@ -1030,7 +1109,7 @@ deleted.
 | Rendered and used | Mutator cited id | Direct baseline-adjusted gain, split across used cards | Warms posterior and EV |
 | Rendered, cited, child invalid | Child invalid and id appears in `card_ids_used` | Forced invalid harm event | Can push toward eviction |
 | Rendered, uncited, child invalid | Child invalid and id absent from `card_ids_used` | `unused=True`, gain 0 | Exposure failure, not direct invalid harm |
-| Negative but sparse | Few negative events | Posterior worse, but not harmful enough | Can be benched/auction-rejected before deletion |
+| Negative but sparse | Few negative or unused later events | Posterior/EV worse, but not enough for confident harm | Can be retired as policy-non-viable if EV is non-positive and no positive direct gain exists; otherwise benched or auction-rejected |
 | Policy non-viable | Active value policy EV is at/below `memory.neutral_gain` and no direct adjusted gain is positive | Ledger `evicted` with `policy non-viable` reason | Deleted from active bank without claiming confident harm |
 | Confidently harmful | Enough bad later-use evidence | Ledger `evicted` | Deleted from bank |
 | Stale | Newer bank evidence accumulates | Same events, lower bootstrap weight | EV drifts toward neutral; not deleted |
