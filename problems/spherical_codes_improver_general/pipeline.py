@@ -9,7 +9,7 @@ from gigaevo.entrypoint.constants import DEFAULT_SIMPLE_STAGE_TIMEOUT
 from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.entrypoint.lineage_memory_pipeline import (
-    IntraExtraMemoryPipelineBuilder,
+    MemoryGuidedMutationPipelineBuilder,
 )
 from problems.spherical_codes_improver.formatter import SphericalCodesArtifactFormatter
 
@@ -31,8 +31,8 @@ class SphericalCodesGeneralPipelineBuilder(DefaultPipelineBuilder):
         )
 
 
-class SphericalCodesGeneralMemoryPipelineBuilder(IntraExtraMemoryPipelineBuilder):
-    """intra_extra_memory pipeline with FormatterStage replaced by a compact artifact formatter."""
+class SphericalCodesGeneralMemoryPipelineBuilder(MemoryGuidedMutationPipelineBuilder):
+    """memory_guided pipeline with FormatterStage replaced by a compact artifact formatter."""
 
     def __init__(self, ctx: EvolutionContext, **kwargs):
         super().__init__(ctx, **kwargs)

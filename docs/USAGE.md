@@ -55,11 +55,51 @@ python run.py problem.name=toy_example \
     max_concurrent_dags=20 \
     max_in_flight=12
 
-# Use a different Redis database
-python run.py problem.name=toy_example redis.db=5
+# Use Redis-backed storage on a specific DB
+python run.py problem.name=toy_example storage=redis redis.db=5
 
 # Disable the LLM I/O audit trail (on by default)
 python run.py problem.name=toy_example llm_io_dump=false
+```
+
+## LLM Setup
+
+The main mutation LLM and the memory subsystem LLM are configured separately.
+
+| Route | Config | Typical key |
+|---|---|---|
+| Main mutation | `llm=...`, `llm_base_url=...`, `model_name=...` | `OPENAI_API_KEY` for `llm=single` |
+| Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for `memory/llm=gemini`, `OPENAI_API_KEY` for `memory/llm=qwen_instruct` |
+
+Hosted/OpenRouter style:
+
+```bash
+export OPENAI_API_KEY=sk-or-v1-...
+python run.py problem.name=toy_example \
+    llm=single \
+    llm_base_url=https://openrouter.ai/api/v1 \
+    model_name=google/gemini-3-flash-preview
+```
+
+Local LiteLLM/vLLM-compatible proxy:
+
+```bash
+export OPENAI_API_KEY=sk-local
+export NO_PROXY=127.0.0.1,localhost
+
+python run.py problem.name=toy_example \
+    llm=single \
+    llm_base_url=http://127.0.0.1:4000/v1 \
+    model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
+```
+
+Memory with a separate instruct model:
+
+```bash
+python run.py problem.name=toy_example \
+    pipeline=memory_guided memory=full memory/write=live \
+    memory/llm=qwen_instruct \
+    checkpoint_dir=$PWD/SHARE_TOY_MEMORY
 ```
 
 ### LLM I/O Audit Trail
@@ -84,9 +124,12 @@ python run.py problem.name=toy_example algorithm=multi_island
 # Use custom pipeline
 python run.py problem.name=toy_example pipeline=custom
 
+# JSON-document genomes, such as CARL chain specs
+python run.py problem.name=chains/hover/full7 program_format=json_document
+
 # Co-evolved mutation prompts
 python run.py problem.name=toy_example \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6
+    storage=redis prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6
 ```
 
 ### Available Config Groups
@@ -96,20 +139,21 @@ python run.py problem.name=toy_example \
 | `experiment` | `base`, `full_featured`, `prompt_coevolution` |
 | `algorithm` | `single_island_no_distant_parents` (default), `single_island`, `single_island_2d`, `multi_island`, `topology_3d` (+ `_ret` variant) |
 | `llm` | `single`, `heterogeneous`, `heterogeneous_bandit`, `balanced`, `openrouter_bandit`, `openrouter_ensemble`, `google`, `openai`, `gemini3_flash`, `gemini35_flash` |
-| `pipeline` | `auto` (default), `standard`, `with_context`, `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `intra_extra_memory` (see [INTRA_EXTRA_MEMORY.md](INTRA_EXTRA_MEMORY.md)), `prompt_evolution`, `optuna_opt` |
+| `pipeline` | `guided` (default), `memory_guided` (see [MEMORY_GUIDED_PIPELINE.md](MEMORY_GUIDED_PIPELINE.md)), `custom`, `structural_metrics`, `adversarial`, `adversarial_asymmetric`, `adversarial_coevo`, `prompt_evolution`, `optuna_opt` |
+| `program_format` | `python_source` (default), `json_document` |
 | `prompt_fetcher` | `fixed` (default), `coevolved` |
 | `stopper` | `max_mutants` (default), `wall_clock`, `fitness_plateau`, `max_mutants_or_fitness_plateau` |
 | `constants` | `base`, `evolution`, `llm`, `islands`, `pipeline`, `redis`, `logging`, `runner`, `endpoints` |
 | `loader` | `directory`, `top_programs` (knobs: `loader.source_db` — Redis DB to read seeds from, default 0; `loader.top_n` — number of top programs to seed, default 50) |
 | `logging` | `tensorboard`, `wandb` |
-| `storage` | `redis` (default), `disk` |
+| `storage` | `disk` (default), `redis` |
 
 ### Disk Storage Backend
 
-Programs and archives can be persisted to JSON files instead of Redis:
+Programs and archives are persisted to JSON files by default:
 
 ```bash
-python run.py problem.name=toy_example storage=disk
+python run.py problem.name=toy_example
 ```
 
 Data lands under `<hydra run dir>/storage/<problem name>/` by default
@@ -120,6 +164,12 @@ no cross-process pub/sub. Metrics history also goes to disk (JSONL files
 under `<hydra run dir>/metrics/`), and live monitors
 (`live_frontier_compare`) read it through the same backend — `storage=disk`
 runs are fully Redis-free.
+
+Use Redis explicitly when you want Redis-backed program/archive storage:
+
+```bash
+python run.py problem.name=toy_example storage=redis redis.db=5
+```
 
 Inspect a disk run with the CLI by passing the storage path as the run
 spec (read-only, safe while the run is live):
@@ -154,23 +204,18 @@ python run.py problem.name=my_task pipeline=my_pipeline \
     prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
 ```
 
-### Intra/Extra Memory (per-parent lineage card + live global ideas)
+### Memory-Guided Mutation
 ```bash
-# See docs/INTRA_EXTRA_MEMORY.md for the full mode guide
+# See docs/MEMORY_GUIDED_PIPELINE.md for the full mode guide
 python run.py problem.name=heilbron \
-    pipeline=intra_extra_memory memory=full \
+    pipeline=memory_guided memory=full memory/write=live \
     num_parents=4 max_mutants=500
 ```
 
-> **Required override:** launch with `memory=full` — the single preset that
-> turns *both* the reader (injects cards) and the writer (`MemoryWriter`
-> distills diffs into cards) on. Under `pipeline=intra_extra_memory` the
-> writer-off presets (`memory=none`, `memory=reader`) **fail fast at
-> startup**: the live-refresh hook needs a real writer. A true no-memory
-> baseline is `pipeline=standard memory=none`. The default memory LLM
-> (`memory/llm=gemini`) calls OpenRouter, so `OPENROUTER_API_KEY` must be
-> exported — without it the research and librarian calls 401 and zero cards
-> flow. See docs/memory.md for the full arm matrix and observability.
+> `pipeline=memory_guided` reads cards; `memory/write=live` enables live
+> writer sweeps. A true no-memory baseline is `pipeline=guided memory=none`.
+> The default memory LLM (`memory/llm=gemini`) calls OpenRouter, so
+> `OPENROUTER_API_KEY` must be exported.
 
 ### Tabular Suite (regression + classification, 10 datasets)
 

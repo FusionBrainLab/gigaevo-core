@@ -1,0 +1,8 @@
+# @package _global_
+
+memory:
+  write:
+    enabled: false
+    mode: "off"
+    post_run_hook:
+      _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

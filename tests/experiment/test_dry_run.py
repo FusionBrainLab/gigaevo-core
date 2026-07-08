@@ -41,7 +41,7 @@ def dummy_manifest(tmp_path: Path, monkeypatch):
           - label: A1
             db: 15
             prefix: test_prefix
-            pipeline: standard
+            pipeline: guided
             problem_name: toy_kadane
             condition: control
             mutation_url: https://example.com/v1
@@ -49,7 +49,7 @@ def dummy_manifest(tmp_path: Path, monkeypatch):
           - label: A2
             db: 14
             prefix: test_prefix_2
-            pipeline: standard
+            pipeline: guided
             problem_name: toy_kadane
             condition: treatment
             mutation_url: https://example.com/v1
@@ -92,7 +92,7 @@ def dummy_manifest(tmp_path: Path, monkeypatch):
     (cfg / "experiment").mkdir(parents=True)
     (cfg / "config.yaml").write_text("# root\n")
     (cfg / "constants" / "pipeline.yaml").write_text("dag_concurrency: 16\n")
-    (cfg / "pipeline" / "standard.yaml").write_text("# standard\n")
+    (cfg / "pipeline" / "guided.yaml").write_text("# guided\n")
     (cfg / "experiment" / "widget.yaml").write_text("num_parents: 1\n")
     (cfg / "experiment" / "base.yaml").write_text("# base\n")
 

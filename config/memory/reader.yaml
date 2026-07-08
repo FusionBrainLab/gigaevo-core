@@ -10,7 +10,12 @@
 defaults:
   - llm: gemini
   - read_policy: portable
+  - write: none
   - _self_
+
+capabilities:
+  read: true
+  write: false
 
 store:
   _target_: gigaevo.memory.storage.local.LocalMemoryStore

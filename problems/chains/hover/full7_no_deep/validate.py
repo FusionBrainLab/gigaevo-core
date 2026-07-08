@@ -66,7 +66,7 @@ def validate(chain_spec: dict) -> dict:
     Soft (fractional) fitness: gold_found / n_gold per sample.
     Adaptive scoring: scans all tool-step outputs for gold articles.
 
-    Returns a plain dict (no failure artifact) -- uses pipeline=standard.
+    Returns a plain dict (no failure artifact) -- uses pipeline=guided.
     """
     # 0. Early step-count check (reject before expensive chain eval)
     steps = chain_spec.get("steps", [])

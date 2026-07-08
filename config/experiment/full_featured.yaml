@@ -13,7 +13,7 @@ defaults:
   - /metrics: code_complexity  # Required by multi_island
   - /algorithm: multi_island
   - /mutation: llm_rewrite
-  - /pipeline: auto
+  - /pipeline: guided
   - /runner: default
   - /loader: directory
   - /logging: tensorboard

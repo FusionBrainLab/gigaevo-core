@@ -8,8 +8,8 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 from gigaevo.entrypoint.lineage_memory_pipeline import (
-    IntraExtraMemoryPipelineBuilder,
-    IntraMemoryPipelineBuilder,
+    GuidedMutationPipelineBuilder,
+    MemoryGuidedMutationPipelineBuilder,
 )
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
@@ -176,19 +176,19 @@ def test_flags_default_off():
         is False
     )
     assert (
-        inspect.signature(IntraMemoryPipelineBuilder.__init__)
+        inspect.signature(GuidedMutationPipelineBuilder.__init__)
         .parameters["memory_block_last"]
         .default
         is False
     )
-    extra = inspect.signature(IntraExtraMemoryPipelineBuilder.__init__).parameters
+    extra = inspect.signature(MemoryGuidedMutationPipelineBuilder.__init__).parameters
     assert extra["reverse_repack"].default is False
     assert extra["no_card_control_probability"].default == 0.0
     assert extra["memory_block_last"].default is False
 
 
 def test_intra_extra_yaml_ships_flags_off():
-    cfg = OmegaConf.load(_REPO_ROOT / "config" / "pipeline" / "intra_extra_memory.yaml")
+    cfg = OmegaConf.load(_REPO_ROOT / "config" / "pipeline" / "memory_guided.yaml")
     assert cfg.pipeline_builder.reverse_repack is False
     assert cfg.pipeline_builder.no_card_control_probability == 0.10
     assert cfg.pipeline_builder.memory_block_last is False

@@ -61,7 +61,7 @@ def manifest_with_pinned(tmp_path: Path, monkeypatch):
           - label: A1
             db: 15
             prefix: test_prefix
-            pipeline: standard
+            pipeline: guided
             problem_name: toy_kadane
             condition: control
             mutation_url: https://example.com/v1
@@ -69,7 +69,7 @@ def manifest_with_pinned(tmp_path: Path, monkeypatch):
           - label: A2
             db: 14
             prefix: test_prefix_2
-            pipeline: standard
+            pipeline: guided
             problem_name: toy_kadane
             condition: treatment
             mutation_url: https://example.com/v1
@@ -254,7 +254,7 @@ class TestResolvedConfigMatchesPinned:
               - label: A1
                 db: 15
                 prefix: test_prefix
-                pipeline: standard
+                pipeline: guided
                 problem_name: toy_kadane
                 condition: control
                 mutation_url: https://example.com/v1

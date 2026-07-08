@@ -1,33 +1,32 @@
-"""Pipeline builders for the intra/extra live-memory experiment.
+"""Pipeline builders for guided mutation and memory-guided mutation.
 
 Two related builders share most of their DAG structure:
 
-* :class:`IntraMemoryPipelineBuilder` (intra-only, used by ``pipeline=standard``)
-  is the base. It runs a per-parent lineage card via ``IntraMemoryStage`` and
-  prescriptive ``MutationSuggestionStage``, with NO cross-population memory
-  channel:
+* :class:`GuidedMutationPipelineBuilder` (used by ``pipeline=guided``) is the
+  base. It runs a per-parent history summary via ``IntraMemoryStage`` and
+  prescriptive ``MutationSuggestionStage``, with NO cross-run memory-card
+  retrieval:
 
     - The card and the suggester live inside the DAG.
-    - The card's ``StringContainer`` output wires DIRECTLY into
+    - The history summary's ``StringContainer`` output wires DIRECTLY into
       ``MutationContextStage.memory``; there is no ``ConcatMemoryStage`` (no
       second channel to join) and no ``MemoryContextStage`` (the source of
-      cross-population cards is dropped entirely).
-    - No ``LiveMemoryRefreshHook`` is wired by the matching YAML — when an
-      end-of-run extractor is desired the user opts in with
-      ``memory=writer`` (post_run_hook only; no mid-run refresh).
+      cross-run memory cards is dropped entirely).
+    - No read/write memory hook is wired by the matching pipeline YAML. Memory
+      write cadence lives under ``memory/write``.
 
-* :class:`IntraExtraMemoryPipelineBuilder` (used by
-  ``pipeline=intra_extra_memory``) is a subclass that re-adds the extra
-  channel: re-introduces ``MemoryContextStage`` and feeds the selected
-  cross-population cards ONLY to ``MutationSuggestionStage`` — the suggester
-  is the single source of hints for the mutator; cards never reach the
-  mutation prompt verbatim. The matching YAML also wires
-  ``LiveMemoryRefreshHook`` so the extra cards are refreshed mid-run.
+* :class:`MemoryGuidedMutationPipelineBuilder` (used by
+  ``pipeline=memory_guided``) is a subclass that re-adds memory-card
+  retrieval: re-introduces ``MemoryContextStage`` and feeds the selected
+  cross-run cards ONLY to ``MutationSuggestionStage`` — the suggester is the
+  single source of hints for the mutator; cards never reach the mutation prompt
+  verbatim. Live memory writes are still configured by ``memory/write=live``,
+  not by this pipeline.
 
 DAG-native layout (shared):
 
-* ``DescendantProgramIds`` (collector, kept from the default pipeline but
-  reconfigured with ``max_selected = intra_max_children``) collects the
+* ``DescendantProgramIds`` (collector, configured with
+  ``max_selected = intra_max_children``) collects the
   current program X's already-evaluated children and emits their ids as a
   ``StringList`` keyed by the upstream-hash framework cache. When the
   engine's ``ParentRefresher`` flips X DONE→QUEUED after a new child finishes
@@ -54,17 +53,9 @@ archive gate is enabled, also on archive acceptance) so paid LLM tokens
 are never spent on programs that won't enter the archive — neither card
 nor suggestions are ever consumed for rejected programs.
 
-Legacy stages stripped (superseded by intra + suggestion):
-
-* ``AncestorProgramIds``, ``LineageStage``, ``LineagesToDescendants``,
-  ``LineagesFromAncestors``, ``InsightsStage``.
-
-The "extra" half of :class:`IntraExtraMemoryPipelineBuilder` is provided by
-:class:`LiveMemoryRefreshHook` (``gigaevo/memory/live_memory_hook.py``),
-which wraps :meth:`MemoryWriter.run_increment` and is wired into the engine's
-``post_step_hook`` slot via ``pipeline=intra_extra_memory``. The provider
-inside :class:`MemoryContextStage` surfaces the freshest cards through
-reload-on-read.
+The external-memory read half is purely a DAG feature:
+``MemoryContextStage`` calls the configured ``memory.provider``. The write half
+is an engine-hook feature configured separately by ``memory/write``.
 """
 
 from __future__ import annotations
@@ -76,7 +67,11 @@ from gigaevo.entrypoint.constants import (
     DEFAULT_SIMPLE_STAGE_TIMEOUT,
     MAX_CODE_LENGTH,
 )
-from gigaevo.entrypoint.default_pipelines import DefaultPipelineBuilder
+from gigaevo.entrypoint.default_pipelines import (
+    DefaultPipelineBuilder,
+    PipelineBuilder,
+    PipelineFeature,
+)
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.memory.provider import NullMemoryProvider
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
@@ -94,17 +89,274 @@ from gigaevo.programs.stages.mutation_suggestions import MutationSuggestionStage
 DEFAULT_INTRA_MAX_CHILDREN = 24
 
 
-class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
-    """Default pipeline + DAG-native intra memory (no cross-population channel).
+class GuidedMutationFeedbackFeature(PipelineFeature):
+    """Per-parent history summary plus prescriptive mutation suggestions.
 
-    Inherits from :class:`DefaultPipelineBuilder` (not the contextual variant)
-    so problems without a ``context.py`` file (e.g. heilbron) are supported.
+    This feature owns the guided-feedback DAG slice used by both
+    ``pipeline=guided`` and ``pipeline=memory_guided``: collect recent children,
+    summarize them with ``IntraMemoryStage``, turn that descriptive card into
+    structured suggestions, and feed the mutator through the standard
+    ``MutationContextStage`` slots.
+    """
 
-    Used by ``pipeline=standard``. The end-of-run external-memory extractor
-    (MemoryWriter) is independent of this builder — opt in by passing
-    ``memory=writer`` on the CLI; the cards it writes are available
-    for subsequent runs that use ``pipeline=intra_extra_memory``, but they
-    are NOT consumed by this builder's DAG.
+    name = "guided_mutation_feedback"
+    description = (
+        "Build an intra-run parent-history card and convert it into structured "
+        "mutation suggestions."
+    )
+
+    def __init__(
+        self,
+        *,
+        max_insights: int,
+        intra_max_children: int,
+        mutation_mode: str | None,
+        memory_block_last: bool,
+    ):
+        self._max_insights = max_insights
+        self._intra_max_children = intra_max_children
+        self._mutation_mode = mutation_mode
+        self._memory_block_last = memory_block_last
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        metrics_context = builder.ctx.problem_ctx.metrics_context
+        storage = builder.ctx.storage
+        strong_llm = builder.ctx.llm_wrapper
+        stage_timeout = builder._stage_timeout
+        task_description = builder.ctx.problem_ctx.task_description
+
+        # Add a descendant selector tailored to intra-memory analysis: a
+        # chronological recency window, NOT best_fitness — ranking by fitness
+        # would drop exactly the failed and regressed children whose failure
+        # modes the card exists to report, and would lose chronology.
+        intra_descendant_selector = AncestrySelector(
+            metrics_context=metrics_context,
+            strategy="recent",
+            max_selected=self._intra_max_children,
+        )
+        builder.replace_stage(
+            "DescendantProgramIds",
+            lambda: DescendantProgramIds(
+                storage=storage,
+                selector=intra_descendant_selector,
+                timeout=stage_timeout,
+            ),
+        )
+
+        # memory_block_last moves the memory block to the composite context's
+        # end, adjacent to the trailing mutation instruction.
+        if self._memory_block_last:
+            builder.replace_stage(
+                "MutationContextStage",
+                lambda: MutationContextStage(
+                    metrics_context=metrics_context,
+                    timeout=stage_timeout,
+                    memory_last=True,
+                ),
+            )
+
+        builder.add_stage(
+            "IntraMemoryStage",
+            lambda: IntraMemoryStage(
+                llm=strong_llm,
+                storage=storage,
+                metrics_context=metrics_context,
+                max_children=self._intra_max_children,
+                task_description=task_description,
+                timeout=stage_timeout,
+            ),
+        )
+        builder.add_stage(
+            "MutationSuggestionStage",
+            lambda: MutationSuggestionStage(
+                llm=strong_llm,
+                storage=storage,
+                metrics_context=metrics_context,
+                task_description=task_description,
+                max_insights=self._max_insights,
+                timeout=stage_timeout,
+                mutation_mode=self._mutation_mode,
+            ),
+        )
+
+        # Rewire MutationContextStage with the intra-only descriptive/prescriptive split:
+        #   * IntraMemoryStage is DESCRIPTIVE and consumes only ``children_ids``.
+        #   * MutationSuggestionStage is PRESCRIPTIVE: it takes the intra card
+        #     (+ ancestral trail walked from storage internally) and emits
+        #     structured ``ProgramInsights`` into MutationContextStage's
+        #     ``insights`` slot — same shape the legacy ``InsightsStage``
+        #     produced, so the mutator's PROGRAM INSIGHTS section renders
+        #     unchanged.
+        #   * The intra card wires DIRECTLY into MutationContextStage.memory
+        #     (Box[str] -> StringContainer | None) — no ConcatMemoryStage
+        #     needed when there's no second channel to join.
+        builder.add_data_flow_edge(
+            "DescendantProgramIds", "IntraMemoryStage", "children_ids"
+        )
+        builder.add_data_flow_edge(
+            "IntraMemoryStage", "MutationSuggestionStage", "intra_card"
+        )
+        builder.add_data_flow_edge(
+            "EvolutionaryStatisticsCollector",
+            "MutationSuggestionStage",
+            "evolutionary_statistics",
+        )
+        builder.add_data_flow_edge(
+            "MutationSuggestionStage", "MutationContextStage", "insights"
+        )
+        builder.add_data_flow_edge("IntraMemoryStage", "MutationContextStage", "memory")
+
+        builder.add_exec_dep(
+            "IntraMemoryStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
+        )
+        builder.add_exec_dep(
+            "IntraMemoryStage",
+            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+        )
+        builder.add_exec_dep(
+            "IntraMemoryStage",
+            ExecutionOrderDependency.always_after("DescendantProgramIds"),
+        )
+        builder.add_exec_dep(
+            "MutationSuggestionStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
+        )
+        builder.add_exec_dep(
+            "MutationSuggestionStage",
+            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
+        )
+        builder.add_exec_dep(
+            "MutationSuggestionStage",
+            ExecutionOrderDependency.always_after("IntraMemoryStage"),
+        )
+        builder.add_exec_dep(
+            "MutationSuggestionStage",
+            ExecutionOrderDependency.always_after("EvolutionaryStatisticsCollector"),
+        )
+
+        if builder._archive_gate_enabled:
+            builder.add_exec_dep(
+                "IntraMemoryStage",
+                ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
+            )
+            builder.add_exec_dep(
+                "MutationSuggestionStage",
+                ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
+            )
+
+
+class ExternalMemoryCardReadFeature(PipelineFeature):
+    """Select external memory cards and feed them only to the suggester.
+
+    This feature is the read half of the memory system. It installs
+    ``MemoryContextStage`` and wires selected cards to
+    ``MutationSuggestionStage.memory_cards``. It deliberately does not touch
+    writer hooks; write cadence belongs to ``memory/write``.
+    """
+
+    name = "external_memory_card_read"
+    description = (
+        "Retrieve cross-run memory cards through memory.provider and expose "
+        "them to MutationSuggestionStage only."
+    )
+
+    def __init__(
+        self,
+        *,
+        fresh_context_reorder: bool,
+        reverse_repack: bool,
+        no_card_control_probability: float,
+    ):
+        self._fresh_context_reorder = fresh_context_reorder
+        self._reverse_repack = reverse_repack
+        self._no_card_control_probability = no_card_control_probability
+
+    def apply(self, builder: PipelineBuilder) -> None:
+        memory_provider = builder.ctx.memory_provider
+        if isinstance(memory_provider, NullMemoryProvider):
+            logger.warning(
+                "[Memory][Arm] read path DISABLED (memory=none) under "
+                "pipeline=memory_guided — selected memory cards cannot flow"
+            )
+
+        task_description = builder.ctx.problem_ctx.task_description
+        metrics_context = builder.ctx.problem_ctx.metrics_context
+        metrics_description = MetricsFormatter(
+            metrics_context
+        ).format_metrics_description()
+        stage_timeout = builder._stage_timeout
+
+        # One exposure counter is shared across all per-program stage instances.
+        exposure = MemoryExposureCounter()
+        builder.add_stage(
+            "MemoryContextStage",
+            lambda: MemoryContextStage(
+                memory_provider=memory_provider,
+                task_description=task_description,
+                metrics_description=metrics_description,
+                metrics_context=metrics_context,
+                timeout=stage_timeout,
+                exposure=exposure,
+                fresh_context_reorder=self._fresh_context_reorder,
+                reverse_repack=self._reverse_repack,
+                no_card_control_probability=self._no_card_control_probability,
+            ),
+        )
+
+        builder.add_data_flow_edge(
+            "MemoryContextStage", "MutationSuggestionStage", "memory_cards"
+        )
+        builder.add_exec_dep(
+            "MutationSuggestionStage",
+            ExecutionOrderDependency.always_after("MemoryContextStage"),
+        )
+        builder.add_exec_dep(
+            "MemoryContextStage",
+            ExecutionOrderDependency.on_success("CallValidatorFunction"),
+        )
+        if builder._archive_gate_enabled:
+            builder.add_exec_dep(
+                "MemoryContextStage",
+                ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
+            )
+
+        # GAM-fresh-context reorder (Arm C). Condition external-memory card
+        # selection on the SAME fresh this-pass signals the mutation agent sees
+        # — the lineage card + live evolutionary snapshot — instead of a
+        # one-pass-stale metadata block. Gated so Arm B
+        # (fresh_context_reorder=False) reverts to the pre-reorder DAG and the
+        # stage passes parent_context=None (metadata fallback).
+        if self._fresh_context_reorder:
+            builder.add_data_flow_edge(
+                "IntraMemoryStage", "MemoryContextStage", "intra_card"
+            )
+            builder.add_data_flow_edge(
+                "EvolutionaryStatisticsCollector",
+                "MemoryContextStage",
+                "evolutionary_statistics",
+            )
+            builder.add_exec_dep(
+                "MemoryContextStage",
+                ExecutionOrderDependency.always_after("IntraMemoryStage"),
+            )
+            builder.add_exec_dep(
+                "MemoryContextStage",
+                ExecutionOrderDependency.always_after(
+                    "EvolutionaryStatisticsCollector"
+                ),
+            )
+
+
+class GuidedMutationPipelineBuilder(DefaultPipelineBuilder):
+    """Default pipeline + DAG-native guided mutation feedback.
+
+    Inherits from :class:`DefaultPipelineBuilder`; contextual problems get
+    ``AddContext`` automatically from the base builder, while non-contextual
+    problems keep the lean source-evaluation path.
+
+    Used by ``pipeline=guided``. External-memory writing is independent of this
+    builder; external-memory reading requires ``pipeline=memory_guided``.
     """
 
     _reads_memory_cards = False
@@ -124,6 +376,7 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
         enable_optuna_stage: bool = False,
         optimization_time_budget: float | None = None,
         memory_block_last: bool = False,
+        program_format_feature: PipelineFeature | None = None,
     ):
         super().__init__(
             ctx,
@@ -133,179 +386,20 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
             max_insights=max_insights,
             max_code_length=max_code_length,
             archive_gate_enabled=archive_gate_enabled,
+            include_legacy_feedback=False,
+            program_format_feature=program_format_feature,
         )
         self._enable_optuna_stage = enable_optuna_stage
         self._optimization_time_budget_arg = optimization_time_budget
         self._dag_timeout_arg = dag_timeout
-
-        metrics_context = self.ctx.problem_ctx.metrics_context
-        storage = self.ctx.storage
-        strong_llm = self.ctx.llm_wrapper
-        intra_max_children_val = intra_max_children
-        task_description = self.ctx.problem_ctx.task_description
-        mutation_mode_val = mutation_mode
-
-        # Override the default DescendantProgramIds (which the default builder
-        # configures with max_selected=1 for LineageStage) with a wider one
-        # tailored to intra-memory analysis: a chronological recency window,
-        # NOT best_fitness — ranking by fitness would drop exactly the failed
-        # and regressed children whose failure modes the card exists to
-        # report, and would lose chronology.
-        intra_descendant_selector = AncestrySelector(
-            metrics_context=metrics_context,
-            strategy="recent",
-            max_selected=intra_max_children_val,
-        )
-        self.replace_stage(
-            "DescendantProgramIds",
-            lambda: DescendantProgramIds(
-                storage=storage,
-                selector=intra_descendant_selector,
-                timeout=stage_timeout,
-            ),
-        )
-
-        # memory_block_last moves the memory block to the composite context's
-        # end, adjacent to the trailing mutation instruction.
-        if memory_block_last:
-            self.replace_stage(
-                "MutationContextStage",
-                lambda: MutationContextStage(
-                    metrics_context=metrics_context,
-                    timeout=stage_timeout,
-                    memory_last=True,
-                ),
+        self.apply_feature(
+            GuidedMutationFeedbackFeature(
+                max_insights=max_insights,
+                intra_max_children=intra_max_children,
+                mutation_mode=mutation_mode,
+                memory_block_last=memory_block_last,
             )
-
-        self.add_stage(
-            "IntraMemoryStage",
-            lambda: IntraMemoryStage(
-                llm=strong_llm,
-                storage=storage,
-                metrics_context=metrics_context,
-                max_children=intra_max_children_val,
-                task_description=task_description,
-                timeout=stage_timeout,
-            ),
         )
-
-        # Captured for the MutationSuggestionStage factory below.
-        max_insights_val = max_insights
-
-        self.add_stage(
-            "MutationSuggestionStage",
-            lambda: MutationSuggestionStage(
-                llm=strong_llm,
-                storage=storage,
-                metrics_context=metrics_context,
-                task_description=task_description,
-                max_insights=max_insights_val,
-                timeout=stage_timeout,
-                mutation_mode=mutation_mode_val,
-            ),
-        )
-
-        # Strip legacy lineage stages — superseded by IntraMemoryStage
-        # (per-parent lineage card via strong LLM) + MutationSuggestionStage
-        # (prescriptive insights). DescendantProgramIds is INTENTIONALLY kept;
-        # it now feeds IntraMemoryStage instead of LineagesToDescendants.
-        # ``remove_stage`` drops the node, every edge touching it, and any
-        # deps referencing it. The IntraExtraMemoryPipelineBuilder subclass
-        # adds MemoryContextStage when the extra channel is needed.
-        for legacy in (
-            "AncestorProgramIds",
-            "LineageStage",
-            "LineagesToDescendants",
-            "LineagesFromAncestors",
-            "InsightsStage",
-        ):
-            self.remove_stage(legacy)
-
-        # Rewire MutationContextStage with the intra-only descriptive/prescriptive split:
-        #   * IntraMemoryStage is DESCRIPTIVE and consumes only ``children_ids``.
-        #   * MutationSuggestionStage is PRESCRIPTIVE: it takes the intra card
-        #     (+ ancestral trail walked from storage internally) and emits
-        #     structured ``ProgramInsights`` into MutationContextStage's
-        #     ``insights`` slot — same shape the legacy ``InsightsStage``
-        #     produced, so the mutator's PROGRAM INSIGHTS section renders
-        #     unchanged.
-        #   * The intra card wires DIRECTLY into MutationContextStage.memory
-        #     (Box[str] → StringContainer | None) — no ConcatMemoryStage
-        #     needed when there's no second channel to join.
-        self.add_data_flow_edge(
-            "DescendantProgramIds", "IntraMemoryStage", "children_ids"
-        )
-        self.add_data_flow_edge(
-            "IntraMemoryStage", "MutationSuggestionStage", "intra_card"
-        )
-        self.add_data_flow_edge(
-            "EvolutionaryStatisticsCollector",
-            "MutationSuggestionStage",
-            "evolutionary_statistics",
-        )
-        self.add_data_flow_edge(
-            "MutationSuggestionStage", "MutationContextStage", "insights"
-        )
-        self.add_data_flow_edge("IntraMemoryStage", "MutationContextStage", "memory")
-
-        # Execution-order deps so intra fires after metrics + its upstream
-        # collector, and MutationSuggestionStage fires after intra.
-        #
-        # Both strong-LLM stages (IntraMemoryStage AND MutationSuggestionStage)
-        # are gated on validator success to mirror the old InsightsStage
-        # skip-cascade — spending paid strong-LLM tokens on a program whose
-        # code didn't even validate is pure waste. When the archive gate is
-        # enabled, also gate on archive acceptance: a program that won't enter
-        # the archive will never be a mutation parent, so neither its lineage
-        # card nor its suggestions are ever read — skip both calls outright
-        # (mirrors the legacy InsightsStage archive-gate dep at
-        # default_pipelines.py L460-L463).
-        self.add_exec_dep(
-            "IntraMemoryStage",
-            ExecutionOrderDependency.on_success("CallValidatorFunction"),
-        )
-        self.add_exec_dep(
-            "IntraMemoryStage",
-            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-        )
-        self.add_exec_dep(
-            "IntraMemoryStage",
-            ExecutionOrderDependency.always_after("DescendantProgramIds"),
-        )
-        # MutationSuggestionStage gates: validator-success + always-after both
-        # data upstreams + EnsureMetricsStage (so the suggester sees finalised
-        # metrics on the parent it analyses).
-        self.add_exec_dep(
-            "MutationSuggestionStage",
-            ExecutionOrderDependency.on_success("CallValidatorFunction"),
-        )
-        self.add_exec_dep(
-            "MutationSuggestionStage",
-            ExecutionOrderDependency.always_after("EnsureMetricsStage"),
-        )
-        self.add_exec_dep(
-            "MutationSuggestionStage",
-            ExecutionOrderDependency.always_after("IntraMemoryStage"),
-        )
-        self.add_exec_dep(
-            "MutationSuggestionStage",
-            ExecutionOrderDependency.always_after("EvolutionaryStatisticsCollector"),
-        )
-
-        if self._archive_gate_enabled:
-            # ArchivePotentialGateStage is configured by DefaultPipelineBuilder
-            # with its own on_success(CallValidatorFunction). Both strong-LLM
-            # stages piggyback on it so they skip-cascade when the gate
-            # rejects — neither the descriptive card nor the prescriptive
-            # suggestions are ever consumed for a rejected program.
-            self.add_exec_dep(
-                "IntraMemoryStage",
-                ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
-            )
-            self.add_exec_dep(
-                "MutationSuggestionStage",
-                ExecutionOrderDependency.on_success("ArchivePotentialGateStage"),
-            )
 
         if self._enable_optuna_stage:
             self._optimization_time_budget = (
@@ -323,37 +417,32 @@ class IntraMemoryPipelineBuilder(DefaultPipelineBuilder):
             logger.warning(
                 "[Memory][Arm] memory provider {} is configured but this "
                 "pipeline never reads cards — selected cards reach no stage; "
-                "use pipeline=intra_extra_memory to consume them",
+                "use pipeline=memory_guided to consume them",
                 type(ctx.memory_provider).__name__,
             )
 
 
-class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
-    """Intra base + extra (cross-population) memory channel.
+class MemoryGuidedMutationPipelineBuilder(GuidedMutationPipelineBuilder):
+    """Guided mutation base + external memory-card retrieval.
 
-    Used by ``pipeline=intra_extra_memory``. Re-adds the
+    Used by ``pipeline=memory_guided``. Re-adds the
     :class:`MemoryContextStage` that the intra-only base strips and wires its
     selected cards into ``MutationSuggestionStage.memory_cards`` ONLY — the
     suggester digests them into structured ``ProgramInsights``; the mutator
     never sees card text verbatim. ``MutationContextStage.memory`` keeps the
-    bare intra card via the base class's direct edge, identical to
-    ``pipeline=standard``. The matching YAML wires
-    :class:`LiveMemoryRefreshHook` into the engine's ``post_step_hook`` so the
-    extra cards are refreshed mid-run.
+    bare per-parent history summary via the base class's direct edge, identical
+    to ``pipeline=guided``. This class does not wire writer hooks; use
+    ``memory/write=live`` for live writes.
 
-    REQUIRED CLI co-override (the YAML cannot safely flip this from inside
-    the ``pipeline/`` config group):
+    Common pairings:
 
-        memory=full             — composes the flat ``${ref:}`` graph providing BOTH
-                                  the ReaderMemoryProvider this builder READS and the
-                                  MemoryWriter the LiveMemoryRefreshHook WRITES, sharing
-                                  one card bank; memory=none collapses both to Null targets.
-        OPENROUTER_API_KEY=...  — the memory LLM agents call OpenRouter directly
-                                  (default memory/llm=gemini; swap memory/llm=qwen_instruct).
+        memory=reader           — read a pre-built bank; no writer.
+        memory=full             — read + end-of-run writer by default.
+        memory=full memory/write=live
+                                — read + live writer refresh.
 
-    Verify ``.hydra/config.yaml`` does not show ``Null*`` targets, and that
-    ``/proc/<pid>/environ`` contains the OpenRouter key, before trusting
-    extra-memory results.
+    Verify ``.hydra/config.yaml`` does not show ``NullMemoryProvider`` before
+    trusting memory-guided results.
     """
 
     _reads_memory_cards = True
@@ -376,6 +465,7 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
         reverse_repack: bool = False,
         no_card_control_probability: float = 0.0,
         memory_block_last: bool = False,
+        program_format_feature: PipelineFeature | None = None,
     ):
         super().__init__(
             ctx,
@@ -390,73 +480,13 @@ class IntraExtraMemoryPipelineBuilder(IntraMemoryPipelineBuilder):
             enable_optuna_stage=enable_optuna_stage,
             optimization_time_budget=optimization_time_budget,
             memory_block_last=memory_block_last,
+            program_format_feature=program_format_feature,
         )
 
-        memory_provider = self.ctx.memory_provider
-        # WARNING, never raise: memory=none under this pipeline is the
-        # legitimate write-side-controlled baseline arm (cards written by the
-        # tracker, never injected) and is used by live paper runs.
-        if isinstance(memory_provider, NullMemoryProvider):
-            logger.warning(
-                "[Memory][Arm] read path DISABLED (memory=none) under "
-                "pipeline=intra_extra_memory — cards are written but never "
-                "read; intentional only for write-cost-controlled baselines"
-            )
-        task_description = self.ctx.problem_ctx.task_description
-        metrics_context = self.ctx.problem_ctx.metrics_context
-        metrics_description = MetricsFormatter(
-            metrics_context
-        ).format_metrics_description()
-
-        # Re-add MemoryContextStage (the intra-only base strips it).
-        # One exposure counter is shared across all per-program stage instances.
-        exposure = MemoryExposureCounter()
-        self.add_stage(
-            "MemoryContextStage",
-            lambda: MemoryContextStage(
-                memory_provider=memory_provider,
-                task_description=task_description,
-                metrics_description=metrics_description,
-                metrics_context=metrics_context,
-                timeout=stage_timeout,
-                exposure=exposure,
+        self.apply_feature(
+            ExternalMemoryCardReadFeature(
                 fresh_context_reorder=fresh_context_reorder,
                 reverse_repack=reverse_repack,
                 no_card_control_probability=no_card_control_probability,
-            ),
+            )
         )
-
-        self.add_data_flow_edge(
-            "MemoryContextStage", "MutationSuggestionStage", "memory_cards"
-        )
-
-        self.add_exec_dep(
-            "MutationSuggestionStage",
-            ExecutionOrderDependency.always_after("MemoryContextStage"),
-        )
-
-        # GAM-fresh-context reorder (Arm C). Condition extra-memory card
-        # selection on the SAME fresh this-pass signals the mutation agent sees
-        # — the lineage card + live evolutionary snapshot — instead of a
-        # one-pass-stale metadata block. Gated so Arm B
-        # (fresh_context_reorder=False) reverts to the pre-reorder DAG and the
-        # stage passes parent_context=None (metadata fallback).
-        if fresh_context_reorder:
-            self.add_data_flow_edge(
-                "IntraMemoryStage", "MemoryContextStage", "intra_card"
-            )
-            self.add_data_flow_edge(
-                "EvolutionaryStatisticsCollector",
-                "MemoryContextStage",
-                "evolutionary_statistics",
-            )
-            self.add_exec_dep(
-                "MemoryContextStage",
-                ExecutionOrderDependency.always_after("IntraMemoryStage"),
-            )
-            self.add_exec_dep(
-                "MemoryContextStage",
-                ExecutionOrderDependency.always_after(
-                    "EvolutionaryStatisticsCollector"
-                ),
-            )

@@ -43,7 +43,7 @@ class EvolutionContext(BaseModel):
     archive_gate_provider: ArchiveGateProvider | None = Field(
         default=None,
         description=(
-            "Provider for archive-insertion gating before InsightsStage. "
+            "Provider for archive-insertion gating before expensive feedback stages. "
             "None disables gating (ArchivePotentialGateStage fails open). "
             "Built at config-instantiation time from evolution_strategy."
         ),

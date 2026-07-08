@@ -2,14 +2,14 @@
 
 ``post_step_hook_timeout_s`` bounds a single ``post_step_hook`` invocation.
 The 300 s default was sized for the CPU-bound production
-``CompositionInjectionHook`` archive walk; the live memory recipe instead
-wires the network-bound ``LiveMemoryRefreshHook`` (LLM enrichment), whose
-per-increment latency balloons under shared-endpoint load and gets cancelled
-at 300 s. This test pins the contract:
+``CompositionInjectionHook`` archive walk; ``memory/write=live`` instead wires
+the network-bound ``LiveMemoryRefreshHook`` (LLM enrichment), whose
+per-increment latency balloons under shared-endpoint load and gets cancelled at
+300 s. This test pins the contract:
 
 * the global default resolves to 300 s on a plain steady-state run,
 * a short-name Hydra CLI override propagates to ``engine_config``,
-* the memory recipe raises the budget to 900 s.
+* the live memory write recipe raises the budget to 900 s.
 
 Resolution only — no instantiation (that needs a real Redis).
 """
@@ -48,6 +48,6 @@ def test_cli_override_propagates():
     assert cfg.engine_config.post_step_hook_timeout_s == 1200.0
 
 
-def test_memory_recipe_raises_budget():
-    cfg = _compose("pipeline=intra_extra_memory")
+def test_live_memory_write_raises_budget():
+    cfg = _compose("pipeline=memory_guided", "memory=full", "memory/write=live")
     assert cfg.engine_config.post_step_hook_timeout_s == 900.0

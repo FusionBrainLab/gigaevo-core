@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,17 +16,18 @@ from gigaevo.entrypoint.constants import (
 from gigaevo.entrypoint.default_pipelines import (
     AlgoTuneSpeedPipelineBuilder,
     CMAOptPipelineBuilder,
-    ContextPipelineBuilder,
     CustomPipelineBuilder,
     DefaultPipelineBuilder,
     OptunaOptPipelineBuilder,
     PipelineBuilder,
 )
 from gigaevo.entrypoint.evolution_context import EvolutionContext
+from gigaevo.entrypoint.program_formats import JsonDocumentEvaluationFeature
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.dag.automata import ExecutionOrderDependency
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
+from gigaevo.programs.stages.json_genome import ParseJsonProgram
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,15 @@ def _dep_names(blueprint: DAGBlueprint, stage: str) -> set[str]:
     if blueprint.exec_order_deps is None:
         return set()
     return {d.stage_name for d in blueprint.exec_order_deps.get(stage, [])}
+
+
+def _dep_pairs(blueprint: DAGBlueprint, stage: str) -> set[tuple[str, str]]:
+    """Get ``(stage_name, condition)`` dependency pairs for a given stage."""
+    if blueprint.exec_order_deps is None:
+        return set()
+    return {
+        (d.stage_name, d.condition) for d in blueprint.exec_order_deps.get(stage, [])
+    }
 
 
 # ===================================================================
@@ -245,6 +256,18 @@ class TestDefaultPipelineBuilder:
         bp = builder.build_blueprint()
         assert "AddContext" not in bp.nodes
 
+    def test_contextual_problem_adds_context_stage_automatically(self):
+        ctx = _make_ctx(is_contextual=True)
+        builder = DefaultPipelineBuilder(ctx)
+        bp = builder.build_blueprint()
+        edges = _edge_pairs(bp)
+
+        assert "AddContext" in bp.nodes
+        assert ("AddContext", "CallProgramFunction") in edges
+        assert ("AddContext", "CallValidatorFunction") in edges
+        assert ("AddContext", "success") in _dep_pairs(bp, "CallProgramFunction")
+        assert ("AddContext", "success") in _dep_pairs(bp, "CallValidatorFunction")
+
     def test_critical_data_flow_edges(self):
         ctx = _make_ctx()
         builder = DefaultPipelineBuilder(ctx)
@@ -306,38 +329,29 @@ class TestDefaultPipelineBuilder:
         for name, factory in bp.nodes.items():
             assert callable(factory), f"{name} factory is not callable"
 
-
-# ===================================================================
-# ContextPipelineBuilder
-# ===================================================================
-
-
-class TestContextPipelineBuilder:
-    def test_adds_context_stage(self):
+    def test_json_document_feature_replaces_source_evaluation_stages(self):
         ctx = _make_ctx()
-        builder = ContextPipelineBuilder(ctx)
+        builder = DefaultPipelineBuilder(
+            ctx,
+            program_format_feature=JsonDocumentEvaluationFeature(),
+        )
+        bp = builder.build_blueprint()
+
+        assert isinstance(bp.nodes["ValidateCodeStage"](), ParseJsonProgram)
+        assert isinstance(bp.nodes["CallProgramFunction"](), ParseJsonProgram)
+        assert ("CallProgramFunction", "CallValidatorFunction") in _edge_pairs(bp)
+
+    def test_contextual_json_document_keeps_context_wiring(self):
+        ctx = _make_ctx(is_contextual=True)
+        builder = DefaultPipelineBuilder(
+            ctx,
+            program_format_feature=JsonDocumentEvaluationFeature(),
+        )
         bp = builder.build_blueprint()
 
         assert "AddContext" in bp.nodes
-
-    def test_context_wired_to_program_and_validator(self):
-        ctx = _make_ctx()
-        builder = ContextPipelineBuilder(ctx)
-        bp = builder.build_blueprint()
-        edges = _edge_pairs(bp)
-
-        assert ("AddContext", "CallProgramFunction") in edges
-        assert ("AddContext", "CallValidatorFunction") in edges
-
-    def test_inherits_all_default_stages(self):
-        ctx = _make_ctx()
-        default_bp = DefaultPipelineBuilder(ctx).build_blueprint()
-        context_bp = ContextPipelineBuilder(ctx).build_blueprint()
-
-        default_stages = set(default_bp.nodes.keys())
-        context_stages = set(context_bp.nodes.keys())
-        assert default_stages.issubset(context_stages)
-        assert context_stages - default_stages == {"AddContext"}
+        assert ("AddContext", "CallProgramFunction") in _edge_pairs(bp)
+        assert ("AddContext", "CallValidatorFunction") in _edge_pairs(bp)
 
 
 # ===================================================================
@@ -346,6 +360,13 @@ class TestContextPipelineBuilder:
 
 
 class TestCMAOptPipelineBuilder:
+    def test_rejects_json_document_program_format(self):
+        with pytest.raises(ValueError, match="program_format=python_source"):
+            CMAOptPipelineBuilder(
+                _make_ctx(),
+                program_format_feature=JsonDocumentEvaluationFeature(),
+            )
+
     def test_adds_cma_stage_without_context(self):
         ctx = _make_ctx(is_contextual=False)
         builder = CMAOptPipelineBuilder(ctx)
@@ -377,6 +398,7 @@ class TestCMAOptPipelineBuilder:
         edges = _edge_pairs(bp)
 
         assert "AddContext" in _dep_names(bp, "CMAOptStage")
+        assert ("AddContext", "success") in _dep_pairs(bp, "CMAOptStage")
         assert ("AddContext", "CMAOptStage") in edges
 
     def test_context_wired_to_program_and_validator(self):
@@ -421,6 +443,13 @@ class TestCMAOptPipelineBuilder:
 
 
 class TestOptunaOptPipelineBuilder:
+    def test_rejects_json_document_program_format(self):
+        with pytest.raises(ValueError, match="program_format=python_source"):
+            OptunaOptPipelineBuilder(
+                _make_ctx(),
+                program_format_feature=JsonDocumentEvaluationFeature(),
+            )
+
     def test_adds_optuna_stages_without_context(self):
         ctx = _make_ctx()
         builder = OptunaOptPipelineBuilder(ctx)
@@ -478,7 +507,7 @@ class TestOptunaOptPipelineBuilder:
         edges = _edge_pairs(bp)
 
         assert ("AddContext", "OptunaOptStage") in edges
-        assert "AddContext" in _dep_names(bp, "OptunaOptStage")
+        assert ("AddContext", "success") in _dep_pairs(bp, "OptunaOptStage")
 
     def test_custom_optimization_budget(self):
         ctx = _make_ctx()
@@ -635,7 +664,7 @@ class TestPipelineBuilderEdgeCases:
 # default_pipelines.py hardcoded DEFAULT_SIMPLE_STAGE_TIMEOUT, silently
 # ignoring the researcher-provided Hydra `stage_timeout` override.
 # These tests pin every critical bypass site and enforce that subclasses
-# (Context, AlgoTuneSpeed, CMAOpt, OptunaOpt) accept and thread
+# (AlgoTuneSpeed, CMAOpt, OptunaOpt) accept and thread
 # ``stage_timeout`` through to the stages they build.
 
 
@@ -659,14 +688,18 @@ class TestStageTimeoutThreading:
     it into every stage it constructs. Audit ref: /tmp/hydra_bypass_audit.md
     CRITICAL-1."""
 
-    def test_context_builder_accepts_stage_timeout_kwarg(self, real_problem_dir):
+    def test_default_contextual_builder_accepts_stage_timeout_kwarg(
+        self, real_problem_dir
+    ):
         ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
-        builder = ContextPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        builder = DefaultPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
         assert builder._stage_timeout == _OVERRIDE
 
-    def test_context_addcontext_stage_uses_stage_timeout(self, real_problem_dir):
+    def test_default_contextual_addcontext_stage_uses_stage_timeout(
+        self, real_problem_dir
+    ):
         ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
-        builder = ContextPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
+        builder = DefaultPipelineBuilder(ctx, stage_timeout=_OVERRIDE)
         bp = builder.build_blueprint()
         add_ctx = bp.nodes["AddContext"]()
         assert add_ctx.timeout == _OVERRIDE, (
@@ -803,9 +836,11 @@ class TestDagConcurrencyThreading:
         bp = builder.build_blueprint()
         assert bp.max_parallel_stages == _DAG_CONC_OVERRIDE
 
-    def test_context_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
+    def test_default_contextual_builder_accepts_max_parallel_kwarg(
+        self, real_problem_dir
+    ):
         ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
-        builder = ContextPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
+        builder = DefaultPipelineBuilder(ctx, max_parallel=_DAG_CONC_OVERRIDE)
         assert builder._max_parallel == _DAG_CONC_OVERRIDE
 
     def test_cma_builder_accepts_max_parallel_kwarg(self, real_problem_dir):
@@ -845,15 +880,17 @@ class TestMaxInsightsThreading:
         ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
         builder = DefaultPipelineBuilder(ctx, max_insights=_MAX_INSIGHTS_OVERRIDE)
         bp = builder.build_blueprint()
-        stage = bp.nodes["InsightsStage"]()
+        stage = cast(Any, bp.nodes["InsightsStage"]())
         assert stage._max_insights == _MAX_INSIGHTS_OVERRIDE, (
             "InsightsStage ignored max_insights override — check for "
             "DEFAULT_MAX_INSIGHTS literal regression"
         )
 
-    def test_context_builder_accepts_max_insights_kwarg(self, real_problem_dir):
+    def test_default_contextual_builder_accepts_max_insights_kwarg(
+        self, real_problem_dir
+    ):
         ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
-        builder = ContextPipelineBuilder(ctx, max_insights=_MAX_INSIGHTS_OVERRIDE)
+        builder = DefaultPipelineBuilder(ctx, max_insights=_MAX_INSIGHTS_OVERRIDE)
         assert builder._max_insights == _MAX_INSIGHTS_OVERRIDE
 
 
@@ -873,13 +910,15 @@ class TestMaxCodeLengthThreading:
         ctx = _make_ctx(is_contextual=False, problem_dir=real_problem_dir)
         builder = DefaultPipelineBuilder(ctx, max_code_length=_MAX_CODE_LENGTH_OVERRIDE)
         bp = builder.build_blueprint()
-        stage = bp.nodes["ValidateCodeStage"]()
+        stage = cast(Any, bp.nodes["ValidateCodeStage"]())
         assert stage.max_code_length == _MAX_CODE_LENGTH_OVERRIDE, (
             "ValidateCodeStage ignored max_code_length override — check for "
             "MAX_CODE_LENGTH literal regression"
         )
 
-    def test_context_builder_accepts_max_code_length_kwarg(self, real_problem_dir):
+    def test_default_contextual_builder_accepts_max_code_length_kwarg(
+        self, real_problem_dir
+    ):
         ctx = _make_ctx(is_contextual=True, problem_dir=real_problem_dir)
-        builder = ContextPipelineBuilder(ctx, max_code_length=_MAX_CODE_LENGTH_OVERRIDE)
+        builder = DefaultPipelineBuilder(ctx, max_code_length=_MAX_CODE_LENGTH_OVERRIDE)
         assert builder._max_code_length == _MAX_CODE_LENGTH_OVERRIDE

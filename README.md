@@ -37,7 +37,7 @@ and supports single runs, multi-island evolution, and prompt co-evolution.
 
 ### 1. Install
 
-**Requirements:** Python 3.11+, Redis
+**Requirements:** Python 3.11+
 
 GigaEvo ships with a minimal core and opt-in **extras** so installs stay fast
 on firewalled/slow networks. Pick the install level that matches your use:
@@ -62,25 +62,23 @@ on firewalled/slow networks. Pick the install level that matches your use:
 | GAM memory **platform** backend (`use_api=True`) — local backend needs nothing | `[memory-platform]` |
 | `tools/dag_builder` web API | `[dev]` (uvicorn) |
 
-Install Redis if not already available:
-
-```bash
-# Ubuntu/Debian
-sudo apt-get install redis-server
-
-# macOS
-brew install redis
-
-# Or run via Docker
-docker run -d -p 6379:6379 redis:7-alpine
-```
-
 ### 2. Configure LLM Access
 
-Create a `.env` file with your API key:
+GigaEvo uses two LLM routes:
+
+| Route | Used for | Config group |
+|---|---|---|
+| Main mutation LLM | Writes child programs | `llm=...` |
+| Memory LLM | Writes/reconciles memory cards when `memory=writer/full` | `memory/llm=...` |
+
+Create a `.env` file with the keys required by the configs you select:
 
 ```bash
-OPENAI_API_KEY=sk-or-v1-your-api-key-here
+# Main default `llm=single` reads this key and sends requests to llm_base_url.
+OPENAI_API_KEY=sk-or-v1-your-openrouter-or-proxy-key
+
+# Default `memory/llm=gemini` reads this key.
+OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
 
 # Optional: Langfuse tracing
 LANGFUSE_PUBLIC_KEY=<key>
@@ -88,7 +86,52 @@ LANGFUSE_SECRET_KEY=<key>
 LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
-### 3. Start Redis
+Provider/OpenRouter example for the main run:
+
+```bash
+python run.py problem.name=heilbron \
+    llm=single \
+    llm_base_url=https://openrouter.ai/api/v1 \
+    model_name=google/gemini-3-flash-preview
+```
+
+Local LiteLLM/vLLM-compatible proxy example:
+
+```bash
+export OPENAI_API_KEY=sk-local
+export NO_PROXY=127.0.0.1,localhost
+
+python run.py problem.name=heilbron \
+    llm=single \
+    llm_base_url=http://127.0.0.1:4000/v1 \
+    model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
+```
+
+Memory runs can use a different, usually cheaper, instruct model:
+
+```bash
+python run.py problem.name=heilbron \
+    pipeline=memory_guided memory=full memory/write=live \
+    memory/llm=qwen_instruct \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+```
+
+`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets the configured
+LiteLLM proxy. `memory/llm=gemini` reads `OPENROUTER_API_KEY`.
+
+### 3. Choose Storage
+
+Disk storage is the default. Programs, archives, and metrics are written under
+the Hydra run directory (`outputs/.../storage` and `outputs/.../metrics`), so a
+basic run needs no Redis server.
+
+Redis storage is still available when you want a shared Redis DB workflow:
+
+```bash
+python run.py problem.name=heilbron storage=redis redis.db=0
+```
+
+For Redis-backed runs, start Redis first:
 
 ```bash
 redis-server
@@ -100,15 +143,52 @@ redis-server
 python run.py problem.name=heilbron
 ```
 
-Evolution starts immediately. Logs are saved to `outputs/`.
+Evolution starts immediately with the guided mutation pipeline. Logs are saved
+to `outputs/`, with disk-backed programs under the same run directory.
+
+### Common Run Recipes
+
+```bash
+# Fast smoke test
+python run.py problem.name=heilbron max_mutants=5
+
+# Explicit no-external-memory baseline
+python run.py problem.name=heilbron pipeline=guided memory=none
+
+# Redis-backed storage, if you need the Redis workflow
+python run.py problem.name=heilbron storage=redis redis.db=5
+
+# Read and write memory during the same run
+python run.py problem.name=heilbron \
+    pipeline=memory_guided memory=full memory/write=live \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# Build a memory bank for later use
+python run.py problem.name=heilbron \
+    pipeline=guided memory=writer \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# Read a pre-built memory bank
+python run.py problem.name=heilbron \
+    pipeline=memory_guided memory=reader \
+    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# JSON-document genomes, e.g. CARL chain problems
+python run.py problem.name=chains/hover/full7 program_format=json_document
+```
+
+Use `python run.py ... --cfg job` to inspect the exact resolved config before
+spending LLM budget.
 
 ## How It Works
 
 1. **Load initial programs** from `problems/<name>/initial_programs/`
 2. **Mutate programs** using LLMs (GPT, Claude, Gemini, Qwen, etc.)
 3. **Evaluate fitness** by running each program's `entrypoint()` + `validate()`
-4. **Select solutions** using MAP-Elites across a behavior space
-5. **Repeat** continuously (steady-state) until a `stopper` (e.g. `max_mutants`,
+4. **Build mutation feedback** from the parent history; memory-guided runs also
+   retrieve cross-run memory cards
+5. **Select solutions** using MAP-Elites across a behavior space
+6. **Repeat** continuously (steady-state) until a `stopper` (e.g. `max_mutants`,
    wall-clock, fitness-plateau) fires
 
 ```
@@ -120,7 +200,7 @@ Evolution starts immediately. Logs are saved to `outputs/`.
                            │                   ▼
                     ┌──────┴──────┐     ┌─────────────┐
                     │   Storage   │◀────│  Evaluator   │
-                    │   (Redis)   │     │ (DAG Runner) │
+                    │ (Disk/Redis)│     │ (DAG Runner) │
                     └─────────────┘     └─────────────┘
 ```
 
@@ -130,8 +210,8 @@ Evolution starts immediately. Logs are saved to `outputs/`.
 
 ```bash
 # Migration bus: parallel runs share rejected programs via Redis stream
-python run.py migration_bus=bus problem.name=heilbron redis.db=0
-python run.py migration_bus=bus problem.name=heilbron redis.db=1
+python run.py migration_bus=bus problem.name=heilbron storage=redis redis.db=0
+python run.py migration_bus=bus problem.name=heilbron storage=redis redis.db=1
 
 # Multi-island evolution (fitness + simplicity islands)
 python run.py algorithm=multi_island metrics=code_complexity problem.name=heilbron
@@ -141,7 +221,7 @@ python run.py llm=heterogeneous problem.name=heilbron
 
 # Prompt co-evolution (evolve mutation prompts alongside programs)
 python run.py experiment=prompt_coevolution problem.name=heilbron \
-    redis.db=4 prompt_fetcher.prompt_redis_db=6
+    storage=redis redis.db=4 prompt_fetcher.prompt_redis_db=6
 ```
 
 ### Common Overrides
@@ -150,8 +230,8 @@ python run.py experiment=prompt_coevolution problem.name=heilbron \
 # Cap total mutants (steady-state stopper budget)
 python run.py problem.name=heilbron max_mutants=10
 
-# Use different Redis database
-python run.py problem.name=heilbron redis.db=5
+# Use Redis-backed storage on a specific DB
+python run.py problem.name=heilbron storage=redis redis.db=5
 
 # Change LLM model
 python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
@@ -180,8 +260,7 @@ python run.py \
     llm_base_url=https://api.z.ai/api/coding/paas/v4 \
     max_in_flight=1 \
     max_concurrent_dags=1 \
-    llm_max_concurrent=1 \
-    redis.db=5
+    llm_max_concurrent=1
 ```
 
 `llm_max_concurrent` defaults to `null` (no cap). Set it to a small
@@ -197,11 +276,11 @@ produce better mutations:
 ```bash
 # Main run — uses co-evolved prompts from DB 6
 python run.py problem.name=my_task pipeline=my_pipeline \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
+    storage=redis prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
 
 # Prompt run — evolves mutation prompts, reads outcomes from DB 4
 python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
-    redis.db=6 main_redis_db=4 main_redis_prefix=my_task
+    storage=redis redis.db=6 main_redis_db=4 main_redis_prefix=my_task
 ```
 
 See [Prompt Co-Evolution Guide](docs/COEVOLUTION.md) for the full architecture,
@@ -217,7 +296,8 @@ files are in `config/`:
 | `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `prompt_coevolution.yaml` |
 | `algorithm/` | Evolution algorithms | `single_island_no_distant_parents.yaml` (default), `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
 | `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
-| `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
+| `pipeline/` | DAG execution pipelines | `guided.yaml` (default), `memory_guided.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
+| `program_format/` | Candidate representation | `python_source.yaml` (default), `json_document.yaml` |
 | `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
 | `stopper/` | Stopping criteria | `max_mutants.yaml` (default), `wall_clock.yaml`, `fitness_plateau.yaml` |
 | `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml`, `runner.yaml`, `endpoints.yaml`, `redis.yaml`, `logging.yaml` |
@@ -298,7 +378,8 @@ See `problems/heilbron/` for a complete example.
 
 Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
 - **Logs**: `evolution_*.log`
-- **Programs**: Stored in Redis (export with `gigaevo export csv`)
+- **Programs**: `storage/<problem name>/programs/*.json` by default
+- **Metrics history**: `metrics/*.jsonl` by default
 - **Metrics**: TensorBoard / W&B (if configured)
 
 ## CLI Tools (`gigaevo`)
@@ -321,7 +402,10 @@ Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `
 | `tools/dag_builder/` | Visual DAG pipeline designer |
 | `tools/wizard/` | Interactive problem scaffolding |
 
-See [tools/README.md](tools/README.md) for full CLI reference and Redis key schema.
+For disk runs, pass the storage directory as the run spec, e.g.
+`gigaevo -r outputs/<date>/<time>/storage top -n 5`. See
+[tools/README.md](tools/README.md) for the full CLI reference and Redis key
+schema.
 
 ## Testing
 
@@ -342,13 +426,13 @@ ruff check . && ruff format --check .
 
 ## Troubleshooting
 
-**Redis database not empty:**
+**Redis database not empty** (only when using `storage=redis`):
 ```bash
 # Flush (kills exec_runner workers first):
 gigaevo flush --db 0 --confirm
 
 # Or use a different DB:
-python run.py redis.db=1
+python run.py storage=redis redis.db=1
 ```
 
 **LLM connection issues:**

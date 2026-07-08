@@ -134,7 +134,7 @@ Program (state: QUEUED)
     ↓
 DagRunner picks it up
     ↓
-DAG built from blueprint (IntraMemoryPipelineBuilder by default; DefaultPipelineBuilder under pipeline=legacy)
+DAG built from blueprint (GuidedMutationPipelineBuilder by default)
     ↓
 Stages execute in parallel (respecting dependencies)
     │
@@ -159,14 +159,17 @@ Stages execute in parallel (respecting dependencies)
     ├─→ MergeMetricsStage → EnsureMetricsStage
     │   └─→ Combines + sanitises all metrics
     │
-    ├─→ ArchivePotentialGateStage (optional, opt-in via Hydra)
-    │   └─→ Skip InsightsStage when a program would be dominated in every island
+    ├─→ ArchivePotentialGateStage (enabled in builder-backed guided pipelines)
+    │   └─→ Skips expensive feedback/memory stages for archive-rejected programs
     │
-    ├─→ InsightsStage (cacheable, LLM)
-    │   └─→ LLM generates insights
+    ├─→ DescendantProgramIds → IntraMemoryStage
+    │   └─→ Builds a per-parent history summary
     │
-    ├─→ LineageStage + LineagesToDescendants / LineagesFromAncestors
-    │   └─→ Lineage-aware analysis (non-cacheable; rerun on JIT refresh)
+    ├─→ MemoryContextStage (only pipeline=memory_guided)
+    │   └─→ Selects external memory cards
+    │
+    ├─→ MutationSuggestionStage
+    │   └─→ Converts parent history + optional cards into structured hints
     │
     └─→ MutationContextStage (non-cacheable)
         └─→ Formats context for future mutation
@@ -195,8 +198,10 @@ CallValidatorFunction.InputsModel.payload: Box[np.ndarray]
 | ValidateCodeStage | ✅ Yes | Code syntax doesn't change |
 | CallProgramFunction | ✅ Yes | Deterministic execution |
 | ComputeComplexityStage | ✅ Yes | Static code analysis |
-| InsightsStage | ✅ Yes | Fixed LLM-based analysis |
-| LineageStage | ❌ No | Depends on evolving family tree |
+| IntraMemoryStage | ✅ Yes | Parent-child id list is the cache key |
+| MutationSuggestionStage | ✅ Yes | Fixed parent history/card context |
+| MemoryContextStage | ✅ Yes | Fixed reader inputs/card bank snapshot |
+| Legacy InsightsStage | ✅ Yes | Fixed LLM-based analysis in custom/legacy builders |
 | MutationContextStage | ❌ No | Aggregates non-cacheable data |
 
 ## Multi-Island Evolution
@@ -383,7 +388,7 @@ enable with `mutation=structured_diff_chains`) and `AllowedToolChainChanges`
 (`problems/chains/tool_chain_diff.py`, chains mixing LLM and tool/retrieval steps for the
 HoVer tasks; enable with `mutation=carl_with_retrieval_tools`). JSON-document genomes
 evaluate via the `ParseJsonProgram` stage (`gigaevo/programs/stages/json_genome.py`),
-wired by `pipeline=program_is_json`.
+wired by `program_format=json_document`.
 
 ## Configuration System (Hydra)
 
@@ -396,7 +401,8 @@ defaults:
   - /redis: default         # Load redis/default.yaml
   - /llm: single           # Load llm/single.yaml
   - /algorithm: single_island_no_distant_parents
-  - /pipeline: auto
+  - /pipeline: guided
+  - /program_format: python_source
 
 # Hydra instantiation
 dag_blueprint:
@@ -507,7 +513,7 @@ cards.py → events.py → storage/ → { read/ │ write/ } → provider.py / l
 - **`read/`** — `MemoryReader` facade: research shortlist → Beta-Binomial reputation → Thompson auction against a no-card baseline → budget → prompt render. Every stage fails to an empty selection, so a memory outage never sinks a mutation.
 - **`write/`** — `MemoryWriter` facade: extract valid parent→child records → librarian LLM reconciles each diff into NEW/DUPLICATE/MERGE cards → author program exemplars → restamp gain events → harm eviction → throttled background near-duplicate consolidation. `write/` never imports `read/`; eviction consumes a `CardScorer` Protocol that `read/reputation` implements (dependency inversion).
 
-Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (no Python assembler, no `_partial_`). Consumers read two nodes: pipelines take `${ref:memory.provider}`, engines take `${ref:memory.writer}` as their `post_run_hook`. The `memory={none,reader,writer,full,static}` arms differ only in which `_target_`s those two nodes carry (Null variants for disabled sides) — there is no enable flag. Full guide: [`docs/memory.md`](memory.md); package internals: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md); the live pipeline that consumes it: [`docs/INTRA_EXTRA_MEMORY.md`](INTRA_EXTRA_MEMORY.md).
+Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (no Python assembler, no `_partial_`). Pipelines that read memory take `${ref:memory.provider}`; engines take `${ref:memory.write.post_run_hook}` as their memory finalizer. The `memory={none,reader,writer,full,static}` arms choose read/write components, while `memory/write={none,end_of_run,live}` chooses write cadence. Full guide: [`docs/memory.md`](memory.md); package internals: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md); the memory-guided pipeline: [`docs/MEMORY_GUIDED_PIPELINE.md`](MEMORY_GUIDED_PIPELINE.md).
 
 ## Quick Reference: Key Files
 
@@ -529,7 +535,7 @@ Assembly is pure YAML — a flat `${ref:}` graph in `config/memory/full.yaml` (n
 | `gigaevo/database/redis_program_storage.py` | Redis interface |
 | `gigaevo/database/state_manager.py` | Program state transitions |
 | `gigaevo/database/redis/keys.py` | Redis key templates |
-| `gigaevo/entrypoint/default_pipelines.py` | `DefaultPipelineBuilder` (legacy stage wiring; `IntraMemoryPipelineBuilder` is the v2 default) |
+| `gigaevo/entrypoint/lineage_memory_pipeline.py` | `GuidedMutationPipelineBuilder` and `MemoryGuidedMutationPipelineBuilder` |
 | `gigaevo/llm/agents/mutation.py` | LLM mutation agent |
 | `gigaevo/evolution/mutation/structured_diff.py` | `StructuredDiffMutationOperator` (schema-constrained diff mutation) |
 | `gigaevo/evolution/mutation/allowed_changes.py` | `AllowedChanges` contract (genome-family diff vocabularies) |

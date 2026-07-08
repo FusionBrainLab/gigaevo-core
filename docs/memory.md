@@ -6,47 +6,62 @@ researches that bank and injects the most promising cards into mutation
 prompts, tracking each card's realized fitness gain (reputation).
 
 Package-internals map: [`gigaevo/memory/README.md`](../gigaevo/memory/README.md).
-The pipeline that consumes memory live: [`INTRA_EXTRA_MEMORY.md`](INTRA_EXTRA_MEMORY.md).
+The pipeline that consumes memory cards:
+[`MEMORY_GUIDED_PIPELINE.md`](MEMORY_GUIDED_PIPELINE.md).
 
 ## The 30-second version
 
 ```bash
-# Memory ON (read + write against one shared bank):
-python run.py problem.name=heilbron pipeline=intra_extra_memory memory=full
+# Memory ON within the same run (read + live writes against one bank):
+python run.py problem.name=heilbron pipeline=memory_guided memory=full memory/write=live
+
+# Read from a pre-built bank:
+python run.py problem.name=heilbron pipeline=memory_guided memory=reader \
+  checkpoint_dir=/data/banks/heilbron
 
 # True no-memory baseline:
-python run.py problem.name=heilbron pipeline=standard memory=none
+python run.py problem.name=heilbron pipeline=guided memory=none
 ```
 
-`memory={none,reader,writer,full,static}` is one Hydra knob. Every arm defines
-the same two consumer-facing nodes — pipelines read `${ref:memory.provider}`,
-engines read `${ref:memory.writer}` as their `post_run_hook` — and the arms
-differ only in which `_target_`s those nodes carry (Null variants for disabled
-sides). There is no enable flag and no Python assembler; assembly is the YAML
-`${ref:}` graph itself.
+`memory={none,reader,writer,full,static}` chooses the read/write components.
+`memory/write={none,end_of_run,live}` chooses write cadence. Pipelines read
+`${ref:memory.provider}` only when `pipeline=memory_guided`; engines read
+`${ref:memory.write.post_run_hook}` as their finalizer.
 
 | Arm | provider (read side) | writer (write side) | What runs |
 |---|---|---|---|
 | `memory=none` | `NullMemoryProvider` | `NullPostRunHook` | nothing |
 | `memory=reader` | `ReaderMemoryProvider` | `NullPostRunHook` | injects from a pre-built bank; no extraction |
 | `memory=writer` | `NullMemoryProvider` | `MemoryWriter` | authors a bank for a *later* run; injects nothing |
-| `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir` |
+| `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir`; use `memory/write=live` for same-run memory effects |
 | `memory=static` | `StaticLeverMemoryProvider` | `NullPostRunHook` | fixed curated lever blocks; no bank, no embedder, no memory LLM |
 
 > ⚠️ **`writer` and `full` bill the memory LLM** (`memory/llm=gemini` by
-> default). A no-memory baseline is `pipeline=standard memory=none` — both
+> default). A no-memory baseline is `pipeline=guided memory=none` — both
 > sides off in one preset. Do not use `memory=writer` as a "no-memory" run: it
 > pays full write-side cost for cards nobody reads (it is the deliberate
 > "seed a bank" move).
 
 ### Pipeline compatibility
 
-`pipeline=intra_extra_memory` writes cards live through its `post_step_hook`
-(`LiveMemoryRefreshHook`), which raises `TypeError` at startup unless the arm
-mounts a real writer. Under that pipeline: use `memory=full` or
-`memory=writer`; for `memory=static` add `post_step_hook=null` (there is no
-bank to refresh); `memory=reader` and `memory=none` pair with
-`pipeline=standard` instead.
+External-memory read is a pipeline property:
+
+- `pipeline=guided` never reads external memory cards.
+- `pipeline=memory_guided` reads external memory cards and requires
+  `memory={reader,full,static}`.
+
+External-memory write is a memory property:
+
+- `memory/write=none` disables live and final writer hooks.
+- `memory/write=end_of_run` writes once when the run stops.
+- `memory/write=live` also installs `LiveMemoryRefreshHook` for mid-run writer
+  sweeps and requires `memory={writer,full}`.
+
+With the default per-run `checkpoint_dir`, `pipeline=memory_guided memory=full`
+must use `memory/write=live`: otherwise the reader looks at an empty run-local
+bank until the finalizer writes after the run is already over. End-of-run write
+mode is for bank-building runs or for runs that read an explicit pre-built
+`checkpoint_dir`.
 
 ## How memory flows through a run
 
@@ -107,10 +122,10 @@ admit) and never touches the reconcile-failed verbatim path. Insight cards only 
 program exemplars carry concrete code+fitness and already dedup by exact code
 identity, so prose-novelty is the wrong axis for them.
 
-Under `pipeline=intra_extra_memory` the `LiveMemoryRefreshHook` additionally
-triggers bounded writer sweeps every `refresh_every` post-step invocations, so
-cards written mid-run become readable mid-run. All other pipelines write once,
-at run completion.
+With `memory/write=live`, `LiveMemoryRefreshHook` additionally triggers bounded
+writer sweeps every `refresh_every` post-step invocations, so cards written
+mid-run become readable mid-run. Without it, writer-enabled runs write once at
+run completion.
 
 ## Configuration
 
@@ -173,6 +188,12 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
 | `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion with later-use harm eviction; `harm` keeps only the later-use harm sweep |
 
+`memory/llm` is independent of the main mutation `llm`. The default
+`memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
+`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets the configured
+LiteLLM-compatible proxy; pair it with a larger thinking model on the main
+`llm=single` route when mutation and card work should use different models.
+
 ### The read funnel — three distinct widths
 
 A card travels through three narrowing stages, each with its own knob:
@@ -226,8 +247,8 @@ dynamic system feeds, identically for every child — no bank, no embedder, no
 memory LLM:
 
 ```bash
-python run.py ... pipeline=intra_extra_memory memory=static \
-    memory.provider.levers_file=/abs/path/levers.md post_step_hook=null
+python run.py ... pipeline=memory_guided memory=static \
+    memory.provider.levers_file=/abs/path/levers.md
 ```
 
 A missing, empty, or wrong-block-count levers file fails the launch
@@ -323,13 +344,13 @@ All memory logs carry a `[Memory][<Component>]` prefix.
 
 ```bash
 # Phase A — seed a bank (writer only, nothing injected):
-python run.py problem.name=my_task pipeline=standard memory=writer \
+python run.py problem.name=my_task pipeline=guided memory=writer \
     checkpoint_dir=/data/banks/my_task ...
 
 # Phase B — treatment reads the Phase A bank; control runs memory=none:
-python run.py problem.name=my_task pipeline=standard memory=reader \
+python run.py problem.name=my_task pipeline=memory_guided memory=reader \
     checkpoint_dir=/data/banks/my_task ...
-python run.py problem.name=my_task pipeline=standard memory=none ...
+python run.py problem.name=my_task pipeline=guided memory=none ...
 ```
 
 A fresh store over an existing checkpoint dir cold-loads the bank from disk at

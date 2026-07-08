@@ -8,7 +8,12 @@ defaults:
   - llm: gemini
   - reputation: beta_binomial
   - evictor: recommended
+  - write: end_of_run
   - _self_
+
+capabilities:
+  read: false
+  write: true
 
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider

@@ -2,7 +2,7 @@
 
 Fitness: mean distance of opponent optimizers from the global optimum.
 Falls back to static benchmark optimizers when opponent archive is empty.
-Uses pipeline=standard with opponent config via env vars.
+Uses pipeline=guided with opponent config via env vars.
 """
 
 import math

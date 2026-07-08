@@ -41,7 +41,7 @@ def dummy_experiment(tmp_path: Path, monkeypatch):
           - label: A1
             db: 15
             prefix: test_prefix
-            pipeline: standard
+            pipeline: guided
             problem_name: toy_kadane
             condition: test condition
             mutation_url: https://example.com/v1
@@ -101,7 +101,7 @@ class TestGenerateProducesValidBash:
     def test_contains_run_params(self, dummy_experiment):
         result = generate(dummy_experiment)
         assert "problem.name=toy_kadane" in result
-        assert "pipeline=standard" in result
+        assert "pipeline=guided" in result
         assert "redis.db=15" in result
         assert "model_name=test-model" in result
         # max_generations on the manifest maps to the engine's max_mutants
@@ -155,7 +155,7 @@ class TestNestedSharedOverridesForwarding:
               - label: A1
                 db: 15
                 prefix: test_prefix
-                pipeline: standard
+                pipeline: guided
                 problem_name: toy_kadane
                 condition: test condition
                 mutation_url: https://example.com/v1

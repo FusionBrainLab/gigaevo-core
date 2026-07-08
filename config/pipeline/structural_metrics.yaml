@@ -2,11 +2,18 @@
 # Pipeline: standard + chain structural metrics (dag_depth, max_fan_in, n_deep_retrieval).
 # Used by hover/map-elites-topology experiment on ALL arms (control + treatment).
 
+pipeline:
+  id: structural_metrics
+  reads_external_memory: false
+  archive_gate_mode: none
+
+archive_gate_enabled: false
+
 evolution_context:
   _target_: gigaevo.entrypoint.evolution_context.EvolutionContext
   problem_ctx: ${problem_context}
   llm_wrapper: ${ref:llm}
-  storage: ${program_storage}
+  storage: ${ref:program_storage}
   prompts_dir: ${prompts.dir}
   prompt_fetcher: ${prompt_fetcher}
   memory_provider: ${ref:memory.provider}

@@ -59,6 +59,14 @@ def _make_metrics_tracker() -> MagicMock:
     return tracker
 
 
+def _assert_budget_reached(engine, target_mutants: int) -> None:
+    # The steady-state engine dispatches concurrently. MaxMutantsStopper is
+    # authoritative as a lower-bound budget, but already-dispatched mutants may
+    # finish during shutdown/final sweep.
+    assert engine.metrics.iteration >= target_mutants
+    assert engine.metrics.mutations_created >= target_mutants
+
+
 async def _run_engine(
     archive_size,
     max_generations=1,
@@ -165,12 +173,13 @@ class TestGenerationWallTime:
     ) -> None:
         engine, elapsed_s = await _run_engine(archive_size, redis_url=redis_url)
 
-        assert engine.metrics.iteration == 1
-        progs_per_s = (archive_size + 3) / elapsed_s
+        _assert_budget_reached(engine, 1)
+        progs_per_s = (archive_size + engine.metrics.mutations_created) / elapsed_s
         backend = "redis" if redis_url else "fakeredis"
         print(
             f"BENCHMARK: generation_wall_time N={archive_size} ({backend}): "
-            f"{elapsed_s:.3f}s ({progs_per_s:.1f} prog/s)"
+            f"{elapsed_s:.3f}s ({progs_per_s:.1f} prog/s, "
+            f"mutants={engine.metrics.mutations_created})"
         )
 
 
@@ -184,11 +193,11 @@ class TestGenerationWithCollector:
             archive_size, include_collector=True, redis_url=redis_url
         )
 
-        assert engine.metrics.iteration == 1
+        _assert_budget_reached(engine, 1)
         backend = "redis" if redis_url else "fakeredis"
         print(
             f"BENCHMARK: generation_with_collector N={archive_size} ({backend}): "
-            f"{elapsed_s:.3f}s"
+            f"{elapsed_s:.3f}s (mutants={engine.metrics.mutations_created})"
         )
 
 
@@ -202,10 +211,11 @@ class TestThreeGenerations:
             archive_size, max_generations=3, redis_url=redis_url
         )
 
-        assert engine.metrics.iteration == 3
-        per_gen = elapsed_s / 3
+        _assert_budget_reached(engine, 3)
+        per_gen = elapsed_s / engine.metrics.mutations_created
         backend = "redis" if redis_url else "fakeredis"
         print(
             f"BENCHMARK: 3_generations N={archive_size} ({backend}): "
-            f"{elapsed_s:.3f}s total, {per_gen:.3f}s/gen"
+            f"{elapsed_s:.3f}s total, {per_gen:.3f}s/mutant, "
+            f"mutants={engine.metrics.mutations_created}"
         )

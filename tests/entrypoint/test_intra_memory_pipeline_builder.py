@@ -1,16 +1,16 @@
-"""Tests for ``IntraMemoryPipelineBuilder`` and ``IntraExtraMemoryPipelineBuilder``.
+"""Tests for guided and memory-guided mutation pipeline builders.
 
 Two related pipeline builders share most of their DAG structure:
 
-* ``IntraMemoryPipelineBuilder`` (intra-only, used by ``pipeline=standard``):
+* ``GuidedMutationPipelineBuilder`` (used by ``pipeline=guided``):
     * Per-parent lineage card via ``IntraMemoryStage``
     * Structured suggestions via ``MutationSuggestionStage``
     * NO cross-population memory cards (``MemoryContextStage`` is dropped)
     * NO ``ConcatMemoryStage`` — intra card wires straight to
       ``MutationContextStage.memory``
 
-* ``IntraExtraMemoryPipelineBuilder`` (intra + extra; used by
-  ``pipeline=intra_extra_memory``) is a subclass that re-adds
+* ``MemoryGuidedMutationPipelineBuilder`` (used by
+  ``pipeline=memory_guided``) is a subclass that re-adds
   ``MemoryContextStage`` and feeds the cross-population cards ONLY to
   ``MutationSuggestionStage`` (``memory_cards`` slot). The mutator's
   ``memory`` slot keeps the bare intra card, identical to the base.
@@ -21,6 +21,7 @@ Both drop all legacy lineage stages (``InsightsStage``, ``LineageStage``,
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -30,15 +31,17 @@ import pytest
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.entrypoint.evolution_context import EvolutionContext
 from gigaevo.entrypoint.lineage_memory_pipeline import (
-    IntraExtraMemoryPipelineBuilder,
-    IntraMemoryPipelineBuilder,
+    GuidedMutationPipelineBuilder,
+    MemoryGuidedMutationPipelineBuilder,
 )
+from gigaevo.entrypoint.program_formats import JsonDocumentEvaluationFeature
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.provider import MemoryProvider
 from gigaevo.memory.read.reader import MemorySelection
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
+from gigaevo.programs.stages.json_genome import ParseJsonProgram
 from gigaevo.runner.dag_blueprint import DAGBlueprint
 
 LEGACY_STAGES = (
@@ -70,24 +73,34 @@ def _make_metrics_context() -> MetricsContext:
     )
 
 
-def _make_ctx(memory_provider: MemoryProvider | None = None) -> EvolutionContext:
+def _make_ctx(
+    memory_provider: MemoryProvider | None = None,
+    *,
+    is_contextual: bool = False,
+) -> EvolutionContext:
     metrics_ctx = _make_metrics_context()
     problem_ctx = MagicMock(spec=ProblemContext)
     problem_ctx.problem_dir = Path("/fake/problem")
     problem_ctx.task_description = "Solve the task."
     problem_ctx.metrics_context = metrics_ctx
-    problem_ctx.is_contextual = False
+    problem_ctx.is_contextual = is_contextual
 
     storage = MagicMock(spec=ProgramStorage)
     llm_wrapper = MagicMock(spec=MultiModelRouter)
 
-    extra = {} if memory_provider is None else {"memory_provider": memory_provider}
+    if memory_provider is None:
+        return EvolutionContext(
+            problem_ctx=problem_ctx,
+            llm_wrapper=llm_wrapper,
+            storage=storage,
+            prompts_dir=None,
+        )
     return EvolutionContext(
         problem_ctx=problem_ctx,
         llm_wrapper=llm_wrapper,
         storage=storage,
         prompts_dir=None,
-        **extra,
+        memory_provider=memory_provider,
     )
 
 
@@ -102,14 +115,21 @@ def _edge_src_dest(bp: DAGBlueprint) -> set[tuple[str, str]]:
     return {(e.source_stage, e.destination_stage) for e in bp.data_flow_edges}
 
 
+def _dep_pairs(bp: DAGBlueprint, stage: str) -> set[tuple[str, str]]:
+    return {
+        (dep.stage_name, dep.condition)
+        for dep in (bp.exec_order_deps or {}).get(stage, [])
+    }
+
+
 # ===================================================================
-# IntraMemoryPipelineBuilder — intra-only (pipeline=standard)
+# GuidedMutationPipelineBuilder — no external-memory read
 # ===================================================================
 
 
-class TestIntraMemoryPipelineBuilder:
+class TestGuidedMutationPipelineBuilder:
     def _build(self, **kwargs) -> DAGBlueprint:
-        builder = IntraMemoryPipelineBuilder(_make_ctx(), **kwargs)
+        builder = GuidedMutationPipelineBuilder(_make_ctx(), **kwargs)
         return builder.build_blueprint()
 
     def test_intra_memory_stage_present(self):
@@ -128,6 +148,24 @@ class TestIntraMemoryPipelineBuilder:
     def test_mutation_context_stage_present(self):
         bp = self._build()
         assert "MutationContextStage" in bp.nodes
+
+    def test_contextual_problem_adds_context_stage_automatically(self):
+        bp = GuidedMutationPipelineBuilder(
+            _make_ctx(is_contextual=True)
+        ).build_blueprint()
+        assert "AddContext" in bp.nodes
+        assert (
+            "AddContext",
+            "CallProgramFunction",
+            "context",
+        ) in _edge_triples(bp)
+        assert (
+            "AddContext",
+            "CallValidatorFunction",
+            "context",
+        ) in _edge_triples(bp)
+        assert ("AddContext", "success") in _dep_pairs(bp, "CallProgramFunction")
+        assert ("AddContext", "success") in _dep_pairs(bp, "CallValidatorFunction")
 
     def test_legacy_stages_dropped(self):
         bp = self._build()
@@ -213,25 +251,27 @@ class TestIntraMemoryPipelineBuilder:
 
 
 # ===================================================================
-# IntraExtraMemoryPipelineBuilder — intra + extra (subclass)
+# MemoryGuidedMutationPipelineBuilder — guided + external-memory read
 # ===================================================================
 
 
-class TestIntraExtraMemoryPipelineBuilder:
-    """Regression tests for ``pipeline=intra_extra_memory`` wiring.
+class TestMemoryGuidedMutationPipelineBuilder:
+    """Regression tests for ``pipeline=memory_guided`` wiring.
 
     These pin the wiring exercised by all extant cycle-N intra+extra runs so
-    that the new ``IntraMemoryPipelineBuilder`` split doesn't accidentally
+    that the guided mutation split doesn't accidentally
     drop edges from the extra-channel-enabled variant.
     """
 
     def _build(self, **kwargs) -> DAGBlueprint:
-        builder = IntraExtraMemoryPipelineBuilder(_make_ctx(), **kwargs)
+        builder = MemoryGuidedMutationPipelineBuilder(_make_ctx(), **kwargs)
         return builder.build_blueprint()
 
-    def test_subclasses_intra_memory_builder(self):
+    def test_subclasses_guided_mutation_builder(self):
         """The intra+extra builder is a subclass — both share most wiring."""
-        assert issubclass(IntraExtraMemoryPipelineBuilder, IntraMemoryPipelineBuilder)
+        assert issubclass(
+            MemoryGuidedMutationPipelineBuilder, GuidedMutationPipelineBuilder
+        )
 
     def test_intra_memory_stage_present(self):
         bp = self._build()
@@ -250,6 +290,34 @@ class TestIntraExtraMemoryPipelineBuilder:
     def test_memory_context_stage_present(self):
         bp = self._build()
         assert "MemoryContextStage" in bp.nodes
+
+    def test_contextual_problem_adds_context_stage_automatically(self):
+        bp = MemoryGuidedMutationPipelineBuilder(
+            _make_ctx(is_contextual=True)
+        ).build_blueprint()
+        assert "AddContext" in bp.nodes
+        assert (
+            "AddContext",
+            "CallProgramFunction",
+            "context",
+        ) in _edge_triples(bp)
+        assert (
+            "AddContext",
+            "CallValidatorFunction",
+            "context",
+        ) in _edge_triples(bp)
+
+    def test_memory_context_gated_on_validator_success(self):
+        bp = self._build()
+        assert ("CallValidatorFunction", "success") in _dep_pairs(
+            bp, "MemoryContextStage"
+        )
+
+    def test_memory_context_gated_on_archive_gate_when_enabled(self):
+        bp = self._build(archive_gate_enabled=True)
+        assert ("ArchivePotentialGateStage", "success") in _dep_pairs(
+            bp, "MemoryContextStage"
+        )
 
     def test_legacy_stages_dropped(self):
         bp = self._build()
@@ -381,7 +449,7 @@ class _CardProvider(MemoryProvider):
 
 
 @pytest.fixture
-def warnings_log() -> list[str]:
+def warnings_log() -> Generator[list[str], None, None]:
     messages: list[str] = []
     handle = logger.add(messages.append, level="WARNING", format="{message}")
     yield messages
@@ -398,19 +466,71 @@ class TestArmMismatchWarnings:
     ):
         # arm 2′ (write-cost-controlled baseline) is legitimate and currently
         # used live — this must stay a WARNING, never a raise.
-        IntraExtraMemoryPipelineBuilder(_make_ctx())
+        MemoryGuidedMutationPipelineBuilder(_make_ctx())
         (warning,) = _arm_warnings(warnings_log)
         assert "read path DISABLED" in warning
 
     def test_intra_extra_with_real_provider_is_silent(self, warnings_log):
-        IntraExtraMemoryPipelineBuilder(_make_ctx(_CardProvider()))
+        MemoryGuidedMutationPipelineBuilder(_make_ctx(_CardProvider()))
         assert _arm_warnings(warnings_log) == []
 
     def test_standard_with_real_provider_warns_cards_never_read(self, warnings_log):
-        IntraMemoryPipelineBuilder(_make_ctx(_CardProvider()))
+        GuidedMutationPipelineBuilder(_make_ctx(_CardProvider()))
         (warning,) = _arm_warnings(warnings_log)
         assert "never reads" in warning
 
     def test_standard_with_null_provider_is_silent(self, warnings_log):
-        IntraMemoryPipelineBuilder(_make_ctx())
+        GuidedMutationPipelineBuilder(_make_ctx())
         assert _arm_warnings(warnings_log) == []
+
+
+class TestJsonProgramFormatComposition:
+    def test_guided_json_document_replaces_python_execution_stages(self):
+        bp = GuidedMutationPipelineBuilder(
+            _make_ctx(),
+            program_format_feature=JsonDocumentEvaluationFeature(),
+        ).build_blueprint()
+
+        assert isinstance(bp.nodes["ValidateCodeStage"](), ParseJsonProgram)
+        assert isinstance(bp.nodes["CallProgramFunction"](), ParseJsonProgram)
+        assert (
+            "CallProgramFunction",
+            "CallValidatorFunction",
+            "payload",
+        ) in _edge_triples(bp)
+
+    def test_memory_guided_json_document_keeps_memory_card_reader(self):
+        bp = MemoryGuidedMutationPipelineBuilder(
+            _make_ctx(_CardProvider()),
+            program_format_feature=JsonDocumentEvaluationFeature(),
+        ).build_blueprint()
+
+        assert isinstance(bp.nodes["ValidateCodeStage"](), ParseJsonProgram)
+        assert isinstance(bp.nodes["CallProgramFunction"](), ParseJsonProgram)
+        assert "MemoryContextStage" in bp.nodes
+        assert (
+            "MemoryContextStage",
+            "MutationSuggestionStage",
+            "memory_cards",
+        ) in _edge_triples(bp)
+
+    def test_contextual_json_document_keeps_context_edges(self):
+        bp = GuidedMutationPipelineBuilder(
+            _make_ctx(is_contextual=True),
+            program_format_feature=JsonDocumentEvaluationFeature(),
+        ).build_blueprint()
+
+        assert "AddContext" in bp.nodes
+        assert (
+            "AddContext",
+            "CallProgramFunction",
+            "context",
+        ) in _edge_triples(bp)
+
+    def test_rejects_python_source_optuna_stage(self):
+        with pytest.raises(ValueError, match="program_format=python_source"):
+            GuidedMutationPipelineBuilder(
+                _make_ctx(),
+                enable_optuna_stage=True,
+                program_format_feature=JsonDocumentEvaluationFeature(),
+            )
