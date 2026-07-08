@@ -2,6 +2,73 @@
 
 <!-- version list -->
 
+## v2.11.0 (2026-07-08)
+
+### Bug Fixes
+
+- **memory**: Exclude founding events from harm-eviction
+  ([`5de7921`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5de7921e89cb61a86d105df87fee2a1f351b70ae))
+
+- **memory**: Fail closed on unreadable embed fingerprint
+  ([`1c78750`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1c78750b4203e96cf2ed3e01f3b1b328d1bcb7ec))
+
+- **memory**: Harden final memory review issues
+  ([`c71f52e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c71f52e030903700a19bf4c862f94d1631a12641))
+
+- **memory**: Harden PR2 read/write per tough review
+  ([`17c905b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/17c905bf1da7f09f93dbef6634ca5ee7baa4cdd7))
+
+- **memory**: Typed write verdict replaces the ambiguous "" gate return
+  ([`06be8a4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/06be8a454ceb55ff43b2bf89d2e94eaf285dd5e9))
+
+- **memory**: Whitelist the benign no-op in librarian re-author path
+  ([`395f9d6`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/395f9d6a3919be2f1b2d72f85118ba03498fe9be))
+
+### Documentation
+
+- **infra**: Restore Qwen3-8B chain stand on INTERNAL_IP (4× :8000-8003)
+  ([`49f318d`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/49f318d80a5d27649074d6b9cf62dfde1d682d3b))
+
+- **infra**: Sync inventory to live fleet — proxy INTERNAL_IP, chain stand gone
+  ([`60ec064`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/60ec064eb7ba00f908051d54a8e2378d8792fecb))
+
+- **memory**: Document the founding gain event
+  ([`2a8c844`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2a8c844720d6f5242b6e1b6a40d95d2839068515))
+
+- **reports**: Plain part headers + per-cell SE in fused held-out table
+  ([`d660bf5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d660bf5722fd3d251d420b719c5bf27251a4079e))
+
+### Features
+
+- **memory**: Default full arm to bd_proximity reputation + lineage excluder
+  ([`ac3898f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ac3898fe2071eb014c5c68d371465524c2e41405))
+
+- **memory**: Novelty-admission gate + inline intra-batch consolidation
+  ([`7bafdf4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/7bafdf4869ed8365edb80c2830bb858d90f94a3c))
+
+- **memory**: PR1 rebuild — unified Card model + storage layer
+  ([`70c708a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/70c708ae85565b4674692da5c1c2cce8b4f0e7dc))
+
+- **memory**: Seed insight cards with a founding gain event
+  ([`0aba53b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0aba53b1ab396c3ecc7b9354f6cfa6ed616434b5))
+
+### Refactoring
+
+- **memory**: Borrow cold-card magnitude; loud-fail embedder swaps
+  ([`4b6e2e3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/4b6e2e335560fd9d57503b76679d1c638f1cad7d))
+
+- **memory**: PR2 — read + write systems, ${ref:} assembly, demolition
+  ([`d2f2585`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/d2f258511c1cb999171caf8c23d1ce61285c28d7))
+
+- **memory**: Type mutation changes end-to-end; drop dead keyword-scanning
+  ([`86e21b7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/86e21b79adf141b21e20382ab42c3a67495b8b41))
+
+### Testing
+
+- **memory**: Pin founding harm-strip under the bd_proximity scorer
+  ([`b47f458`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b47f458450e20b3ccf121614f9e1d7dfe05e813c))
+
+
 ## v2.10.0 (2026-07-02)
 
 ### Code Style
