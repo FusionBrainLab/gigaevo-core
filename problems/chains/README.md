@@ -73,10 +73,14 @@ The resolved config should show:
 ```text
 pipeline.id: guided
 program_format.feature: JsonDocumentEvaluationFeature
-loader.pattern: '*.json'
+program_loader.pattern: '*.json'
 memory.provider: NullMemoryProvider
 mutation: StructuredDiffMutationOperator + AllowedToolChainChanges
 ```
+
+`loader.pattern` is only the Hydra override alias provided by
+`config/loader/directory.yaml`; the instantiated loader field to check in the
+resolved config is `program_loader.pattern`.
 
 ## Summarizer DAG-Diff Run
 

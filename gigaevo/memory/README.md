@@ -7,6 +7,8 @@ mutation prompts, tracking each card's realized fitness gain (reputation).
 
 User-facing guide (Hydra knobs, launch recipes, observability):
 [`docs/memory.md`](../../docs/memory.md).
+Diagram-heavy lifecycle tutorial (card birth/read/write/evidence/eviction):
+[`docs/MEMORY_LIFECYCLE_TUTORIAL.md`](../../docs/MEMORY_LIFECYCLE_TUTORIAL.md).
 
 ## Layers
 
@@ -67,11 +69,15 @@ persisted data raises instead of being coerced.
 
 There is no `MemorySystem`, no factory glue, no enable flags. Each
 `config/memory/{none,reader,writer,full,static}.yaml` arm declares the same
-two consumer-facing nodes and swaps `_target_`s (Null variants for disabled
+reader/writer component graph and swaps `_target_`s (Null variants for disabled
 sides); components are declared once and shared by reference:
 
 - pipelines consume `${ref:memory.provider}`
-- engines consume `${ref:memory.writer}` as their `post_run_hook`
+- engines consume `${ref:memory.write.post_run_hook}` as their `post_run_hook`
+  (`memory/write=none` resolves to `NullPostRunHook`, writer-enabled modes
+  resolve to `${ref:memory.writer}`)
+- live writer mode also installs `LiveMemoryRefreshHook` as the global
+  `post_step_hook`
 
 See [`docs/memory.md`](../../docs/memory.md) for the arm matrix, component
 groups, and launch recipes.
