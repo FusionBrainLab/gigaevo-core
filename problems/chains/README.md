@@ -5,12 +5,9 @@ Use `program_format=json_document` with the standard guided pipeline:
 
 ```bash
 python run.py problem.name=chains/hover/full7 \
-    storage=disk \
     pipeline=guided \
     program_format=json_document \
     mutation=carl_with_retrieval_tools \
-    algorithm=single_island_no_distant_parents \
-    enable_chain_structural_metrics=false \
     memory=none \
     --cfg job
 ```
@@ -42,20 +39,18 @@ export no_proxy="$NO_PROXY"
 
 This is the no-memory form of the tool-aware CARL diff experiment used by
 the Qwen diff HoVer runs. It is configured for comparability with the previous
-Qwen diff baseline: the archive is one-dimensional on `fitness`, uses the
-bounded-gap fitness selector from `algorithm=single_island_no_distant_parents`,
-and does not add chain-topology behavior metrics.
+Qwen diff baseline by relying on the standard defaults: the archive is
+one-dimensional on `fitness`, uses the bounded-gap fitness selector from
+`single_island_no_distant_parents`, and does not add chain-topology behavior
+metrics.
 
 ```bash
 CARL_ARGS=(
-    storage=disk
     problem.name=chains/hover/full7
     pipeline=guided
     program_format=json_document
     memory=none
     mutation=carl_with_retrieval_tools
-    algorithm=single_island_no_distant_parents
-    enable_chain_structural_metrics=false
     llm=single
     llm_base_url="$LITELLM_BASE_URL"
     model_name="$CARL_MUTATION_MODEL"
@@ -114,7 +109,6 @@ space.
 
 ```bash
 python run.py \
-    storage=disk \
     problem.name=chains/hover/full7 \
     pipeline=memory_guided \
     program_format=json_document \
@@ -123,8 +117,6 @@ python run.py \
     memory/llm=qwen_instruct \
     checkpoint_dir="$PWD/SHARE_HOVER_DIFF_MEMORY" \
     mutation=carl_with_retrieval_tools \
-    algorithm=single_island_no_distant_parents \
-    enable_chain_structural_metrics=false \
     llm=single \
     llm_base_url="$LITELLM_BASE_URL" \
     model_name="$CARL_MUTATION_MODEL" \
