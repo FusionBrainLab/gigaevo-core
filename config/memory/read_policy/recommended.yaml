@@ -5,6 +5,10 @@
 # assignment, tail-aware expected-gain pricing, bank-cycle EV staleness, top-bid
 # budgeting, warm-card benching, and lineage exclusion.
 defaults:
+  - /memory/context: bd_cell
+  - /memory/prior: empirical_bayes
+  - /memory/no_card_evidence: json
+  - /memory/probe: cold_budget
   - /memory/reputation: bootstrap_bd
   - /memory/auction: thompson_bootstrap
   - /memory/budget: top_bid
@@ -23,6 +27,7 @@ reader:
       digest_max_cards: 50
     reputation: ${ref:memory.reputation}
     store: ${ref:memory.store}
+    context_model: ${ref:memory.context_model}
     # Fused post-research ranking weights. Defaults keep the LLM research order:
     # semantic rank on, explicit reputation/novelty reordering off. Turn on
     # w_rep/w_nov only for ablations; the bench below already removes known

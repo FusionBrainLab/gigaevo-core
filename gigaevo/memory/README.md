@@ -42,10 +42,15 @@ persisted data raises instead of being coerced.
 | `storage/remote.py` | `RemoteMemoryStore` skeleton (httpx; retrieval raises until the remote port lands) |
 | `storage/state.py` | `StoreState` transition table (shared `validate_transition` pattern) |
 | `storage/hf_cache.py` | HuggingFace cache/timeout shims applied before the embedder downloads |
+| `context/models.py` | Shared context models (`GlobalMemoryContext`, `BDCellMemoryContext`) used by reader, shortlist bench, no-card evidence, and write-side baseline fitting |
+| `context/no_card.py` | Persisted no-card evidence (`JsonNoCardEvidenceStore`) and static/null provider for legacy policies |
 | `read/reader.py` | `MemoryReader` facade: shortlist → reputation → auction → budget → render; every stage a Protocol; fails to empty selection |
 | `read/interfaces.py` | Shared Protocols for read components (`ReputationModel`, `Shortlister`, `Auctioneer`, `Budgeter`, renderer, no-card baseline) |
 | `read/shortlist.py` | `ResearchShortlister`: mutation-grounded query → `store.research()`; passes a digest of the newest `digest_max_cards` banked cards (default 50, one description line each) as the planner's context |
 | `read/fused.py` | `FusedRankingShortlister` (fused re-rank of the inner shortlist: `w_sem`/`w_rep`/`w_nov` + self-normalizing `rep_floor_quantile` gate) and `BootstrapFusedRankingShortlister` (default: warm-only bench over the bootstrap-repriced `ev_lo`/`ev_mean`; benched cards merge into `exclude_ids` before research, cold cards stay explorable) |
+| `read/projection.py` | `AuctionCandidateProjector`: attaches context key, EB/static cold prior, no-card evidence, EV support, and staleness to each auction candidate |
+| `read/prior.py` | `FixedMemoryPrior` and `EmpiricalBayesMemoryPrior` for cold-card/no-card priors |
+| `read/probe.py` | `ColdProbePolicy`: explicit small cold-card exploration lane after auction/budget; `NoColdProbePolicy` for legacy arms |
 | `read/reputation.py` | `BetaBinomialReputation` (+ `BDProximityReputation` cell-local variant); posterior/efficacy math over gain events (`block_from_events`); `BootstrapReputation` (default, wraps either): re-prices the gain summary on the mean + low quantile of a staleness-weighted bootstrap over raw oriented deltas, delegating the downside posterior to the inner |
 | `read/auction.py` | `ThompsonAuctioneer` / `EVThompsonAuctioneer` / `BootstrapThompsonAuctioneer` (default: known cards bid one weighted bootstrap resample mean + neutral pseudo-event; true cold cards bid posterior × cold scale; sign gate + round-quantile EV reserve) + `TopThetaBudgeter` / `TopBidBudgeter` |
 | `read/bootstrap.py` | `bootstrap_ev_samples` (weighted resample of known-card EV support + neutral pseudo-event) + `stable_rng` (sha256-seeded, replayable) — shared by reputation and auction |

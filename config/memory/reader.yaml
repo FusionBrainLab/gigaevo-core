@@ -38,6 +38,13 @@ reader:
   reputation: ${ref:memory.reputation}
   auctioneer: ${ref:memory.auction}
   budgeter: ${ref:memory.budget}
+  context_model: ${ref:memory.context_model}
+  candidate_projector:
+    _target_: gigaevo.memory.read.projection.AuctionCandidateProjector
+    prior: ${ref:memory.prior}
+    context_model: ${ref:memory.context_model}
+    no_card_evidence: ${ref:memory.no_card_evidence}
+  probe_policy: ${ref:memory.probe_policy}
   renderer:
     _target_: gigaevo.memory.read.render.EfficacyCardRenderer
   # Injection budget after the auction ranks the recall shortlist above.

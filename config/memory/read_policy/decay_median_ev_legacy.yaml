@@ -4,6 +4,10 @@
 # Explicit decay experiment for the old median-EV stack. Useful as an ablation
 # against bootstrap staleness; not recommended as the default.
 defaults:
+  - /memory/context: bd_cell
+  - /memory/prior: fixed_3_3
+  - /memory/no_card_evidence: none
+  - /memory/probe: none
   - /memory/reputation: bd_proximity_decay
   - /memory/auction: thompson_ev
   - /memory/budget: top_bid
@@ -19,6 +23,7 @@ reader:
       # Planner bank digest size. No bootstrap bench in this legacy policy.
       digest_max_cards: 50
     reputation: ${ref:memory.reputation}
+    context_model: ${ref:memory.context_model}
     # Preserve LLM research order. `w_rep` reads probability lower bound, not
     # bootstrap EV; use only for ranker ablations.
     w_sem: 1.0

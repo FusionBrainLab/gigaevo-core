@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import pytest
+
+from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
+from gigaevo.memory.cards import DecisionContext
+from gigaevo.memory.context import BDCellMemoryContext, GlobalMemoryContext
+
+
+class _Parent:
+    id = "parent"
+    metrics = {"x": 0.2}
+
+
+class _Outcome:
+    def __init__(
+        self,
+        *,
+        oid: str,
+        fitness: float,
+        base_fitness: float,
+        x: float,
+        no_card_control: bool = True,
+    ) -> None:
+        self.id = oid
+        self.fitness = fitness
+        self.base_fitness = base_fitness
+        self.base_metrics = {"x": x}
+        self.base_selected_ids = ()
+        self.no_card_control = no_card_control
+        self.invalid = False
+
+
+def _space() -> BehaviorSpace:
+    return BehaviorSpace(
+        bins={"x": LinearBinning(min_val=0.0, max_val=1.0, num_bins=2)}
+    )
+
+
+def test_global_read_context_uses_primary_parent():
+    context = GlobalMemoryContext().read_context([_Parent()])
+
+    assert context == DecisionContext(parent_metrics={"x": 0.2}, parent_id="parent")
+
+
+def test_bd_context_returns_same_cell_events(make_card, make_event):
+    model = BDCellMemoryContext(behavior_space=_space())
+    card = make_card(
+        gain_events=(
+            make_event(0.2, metrics={"x": 0.2}),
+            make_event(0.4, metrics={"x": 0.8}),
+        )
+    )
+
+    events = model.evidence_events(card, DecisionContext(parent_metrics={"x": 0.1}))
+
+    assert [event.gain for event in events] == [pytest.approx(0.2)]
+
+
+def test_bd_context_falls_back_when_cell_has_only_founding(make_card, make_event):
+    model = BDCellMemoryContext(behavior_space=_space())
+    card = make_card(
+        gain_events=(
+            make_event(0.9, founding=True, metrics={"x": 0.2}),
+            make_event(0.4, metrics={"x": 0.8}),
+        )
+    )
+
+    events = model.evidence_events(card, DecisionContext(parent_metrics={"x": 0.1}))
+
+    assert [event.gain for event in events] == [pytest.approx(0.9), pytest.approx(0.4)]
+
+
+def test_bd_no_card_baseline_uses_cell_with_global_fallback():
+    model = BDCellMemoryContext(behavior_space=_space())
+    baseline = model.fit_no_card_baseline(
+        [
+            _Outcome(oid="a", fitness=0.6, base_fitness=0.5, x=0.2),
+            _Outcome(oid="b", fitness=0.9, base_fitness=0.5, x=0.8),
+        ],
+        higher_is_better=True,
+    )
+
+    assert baseline.baseline_for(
+        _Outcome(oid="q", fitness=0.0, base_fitness=0.0, x=0.2)
+    ) == pytest.approx(0.1)
+    assert baseline.baseline_for(
+        _Outcome(oid="q", fitness=0.0, base_fitness=0.0, x=float("nan"))
+    ) == pytest.approx(0.25)

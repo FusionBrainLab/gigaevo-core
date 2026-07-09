@@ -40,7 +40,7 @@ inner:
     # Confidence threshold on P(help). EV confidence also requires positive
     # pessimistic bootstrap EV.
     confident_threshold: 0.5
-    # Cold no-evidence prior. Must match auction baseline_prior.
+    # Legacy cold no-evidence prior used when no candidate_projector prior is set.
     cold_prior: [3.0, 3.0]
   # Same thresholds for the BD-local in-cell posterior.
   harm_min_events: 3

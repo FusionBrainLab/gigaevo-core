@@ -8,7 +8,7 @@
 # primary metric's `significant_change` from `metrics_context` — so the floor
 # never strands a fresh card on the task's own gain scale.
 _target_: gigaevo.memory.read.auction.EVThompsonAuctioneer
-# No-card baseline arm prior. Must match reputation cold_prior.
+# Fallback no-card baseline arm prior for static/reproduction policies.
 baseline_prior: [3.0, 3.0]
 # Task metrics context; primary metric significant_change supplies cold gain
 # scale when no warm positive card exists.

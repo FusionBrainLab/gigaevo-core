@@ -1,0 +1,2 @@
+# @package memory.context_model
+_target_: gigaevo.memory.context.models.GlobalMemoryContext

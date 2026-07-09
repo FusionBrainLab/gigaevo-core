@@ -4,6 +4,10 @@
 # Same bootstrap auction/benching/lineage behavior as the recommended policy,
 # but global reputation avoids the single shared `behavior_space` dependency.
 defaults:
+  - /memory/context: global
+  - /memory/prior: empirical_bayes
+  - /memory/no_card_evidence: json
+  - /memory/probe: cold_budget
   - /memory/reputation: bootstrap_global
   - /memory/auction: thompson_bootstrap
   - /memory/budget: top_bid
@@ -22,6 +26,7 @@ reader:
       digest_max_cards: 50
     reputation: ${ref:memory.reputation}
     store: ${ref:memory.store}
+    context_model: ${ref:memory.context_model}
     # Keep semantic LLM research order by default. Reputation/novelty weights
     # are explicit ablation knobs; do not tune them unless comparing rankers.
     w_sem: 1.0

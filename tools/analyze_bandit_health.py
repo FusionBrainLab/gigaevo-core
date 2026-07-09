@@ -482,10 +482,16 @@ def rq6(arm: Arm) -> dict:
             n_with_candidates += 1
             if not injected:
                 abstain[s.get("empty_reason") or "gated_out"] += 1
-        # integrity: budgeted subset of winners, at most max_cards
+        # integrity: budgeted subset of auction winners plus explicit cold probes,
+        # at most max_cards.
         winners = set(s.get("auction_winner_ids") or [])
+        probe_winners = {
+            r.get("card_id") for r in s.get("slate") or [] if r.get("probe_selected")
+        }
         bud = set(s.get("budgeted_ids") or [])
-        if not bud <= winners or len(bud) > (s.get("max_cards", 1) or 1):
+        if not bud <= (winners | probe_winners) or len(bud) > (
+            s.get("max_cards", 1) or 1
+        ):
             integrity_ok = False
         for r in s.get("slate") or []:
             gate_total += 1

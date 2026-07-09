@@ -84,6 +84,34 @@ class Auctioneer(Protocol):
 
 
 @runtime_checkable
+class AuctionCandidateProjector(Protocol):
+    """Projects one resolved card/reputation view into auction input."""
+
+    def project(
+        self,
+        *,
+        card: Card,
+        block: CardStatsBlock | None,
+        reputation: ReputationModel,
+        context: DecisionContext | None,
+    ) -> AuctionCandidate: ...
+
+
+@runtime_checkable
+class ProbePolicy(Protocol):
+    """Optional post-auction exploration policy."""
+
+    def apply(
+        self,
+        *,
+        budgeted_ids: list[str],
+        slate: list[AuctionBid],
+        max_cards: int,
+        rng: Any,
+    ) -> tuple[list[str], list[AuctionBid]]: ...
+
+
+@runtime_checkable
 class Budgeter(Protocol):
     """Caps the auction's emergent winner set to the mutator-facing budget."""
 

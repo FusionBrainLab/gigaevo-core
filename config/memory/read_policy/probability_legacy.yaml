@@ -5,6 +5,10 @@
 # budget. Useful for debugging and old safety-only ablations; not the default
 # because it discards gain magnitude and context.
 defaults:
+  - /memory/context: global
+  - /memory/prior: fixed_3_3
+  - /memory/no_card_evidence: none
+  - /memory/probe: none
   - /memory/reputation: beta_binomial
   - /memory/auction: thompson
   - /memory/budget: top_theta
@@ -21,6 +25,7 @@ reader:
       # bench; the digest only helps the retrieval planner avoid obvious misses.
       digest_max_cards: 50
     reputation: ${ref:memory.reputation}
+    context_model: ${ref:memory.context_model}
     # Preserve LLM research order. If enabled, `w_rep` ranks by p_help_lo20
     # probability only; no gain magnitude enters this baseline.
     w_sem: 1.0

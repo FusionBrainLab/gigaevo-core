@@ -46,23 +46,23 @@ def _raw_select(cfg: DictConfig, path: str, default: Any = None) -> Any:
 
 
 def validate_reputation_island_compat(cfg: DictConfig) -> None:
-    """Reject a multi-island algorithm paired with BD-proximity reputation.
+    """Reject multi-island memory configs that require one shared behavior space.
 
-    ``BDProximityReputation`` resolves a single ``${ref:behavior_space}`` and
-    partitions every card's gain events by that one tessellation. A multi-island
+    BD-local memory components resolve a single ``${ref:behavior_space}`` and
+    partition card/no-card evidence by that one tessellation. A multi-island
     algorithm has a per-island behavior space and no top-level ``behavior_space``
     for the ref to bind to, so the pairing has no coherent meaning — fail fast.
     """
     islands = OmegaConf.select(cfg, "islands", default=None)
     if not islands or len(islands) <= 1:
         return
-    reputation = OmegaConf.select(cfg, "memory.reputation", default=None)
-    if reputation is None:
+    memory = OmegaConf.select(cfg, "memory", default=None)
+    if memory is None:
         return
-    raw = OmegaConf.to_container(reputation, resolve=False)
+    raw = OmegaConf.to_container(memory, resolve=False)
     if _references_shared_behavior_space(raw):
         raise NotImplementedError(
-            "BD-proximity memory reputation reads one ${ref:behavior_space}, but "
+            "BD-local memory components read one ${ref:behavior_space}, but "
             f"this algorithm configures {len(islands)} islands with per-island "
             "behavior spaces and no top-level behavior_space for the ref to bind "
             "to. Use a single-island algorithm, or switch to "

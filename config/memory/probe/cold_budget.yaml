@@ -1,0 +1,9 @@
+# @package memory.probe_policy
+# Explicit cold-card exploration lane. It probes only cards with no effective
+# context support; warm exploitation still flows through the auction/budget.
+_target_: gigaevo.memory.read.probe.ColdProbePolicy
+enabled: true
+probe_until_effective_events: 1.0
+max_probe_cards_per_decision: 1
+empty_selection_probe_rate: 0.50
+warm_override_probe_rate: 0.03

@@ -143,7 +143,7 @@ instantiate-once mechanism algorithm configs use for `behavior_space`):
 ```yaml
 defaults:
   - llm: gemini              # memory LLM router (research + librarian agents)
-  - read_policy: recommended # owns reputation + auction + budget + excluder + shortlister
+  - read_policy: adaptive    # owns reputation + auction + budget + excluder + shortlister
   - evictor: recommended     # birth-failure + harm + policy-non-viable eviction
 
 store:      # LocalMemoryStore = card bank + vector index + research agent
@@ -156,12 +156,19 @@ store:      # LocalMemoryStore = card bank + vector index + research agent
 
 reader:
   _target_: gigaevo.memory.read.reader.MemoryReader
-  # read_policy supplies `shortlister`; the recommended policy uses
+  # read_policy supplies `shortlister`; the adaptive policy uses
   # BootstrapFusedRankingShortlister with digest_max_cards=50 and
   # rep_floor_quantile=0.4.
   reputation: ${ref:memory.reputation}
   auctioneer: ${ref:memory.auction}
   budgeter: ${ref:memory.budget}
+  context_model: ${ref:memory.context_model}
+  candidate_projector:
+    _target_: gigaevo.memory.read.projection.AuctionCandidateProjector
+    prior: ${ref:memory.prior}
+    context_model: ${ref:memory.context_model}
+    no_card_evidence: ${ref:memory.no_card_evidence}
+  probe_policy: ${ref:memory.probe_policy}
   renderer: { _target_: gigaevo.memory.read.render.EfficacyCardRenderer }
   max_cards: 1               # injection budget — cards the mutator sees
 
@@ -188,7 +195,11 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | Group | Options | Notes |
 |---|---|---|
 | `memory/llm` | `gemini` (default), `qwen_instruct` | one router shared by the research + librarian agents |
-| `memory/read_policy` | `recommended` (default), `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `recommended` = contextual bootstrap-EV over BD-proximity + bootstrap auction + top-bid budget + warm-card bench + lineage excluder. `portable` = same but global reputation, no `behavior_space` dependency; use for multi-island/no-BD algorithms. Decay variants are explicit experiments, not defaults. Legacy variants preserve old median-EV / probability-only baselines |
+| `memory/read_policy` | `adaptive` (default), `recommended`, `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `adaptive` = contextual bootstrap-EV over BD-proximity + EB cold priors + persisted no-card evidence + explicit cold probes + bootstrap auction + top-bid budget + warm-card bench + lineage excluder. `portable` = same adaptive stack in global context, no `behavior_space` dependency; use for multi-island/no-BD algorithms. `recommended` remains the BD adaptive alias for older commands. Decay variants are explicit experiments. Legacy variants preserve old median-EV / probability-only baselines with fixed priors and no cold probes |
+| `memory/context` | `bd_cell` (default under `adaptive`/`recommended`), `global` | shared context policy used by reader, shortlist bench, no-card evidence, and writer baseline fitting. `bd_cell` recomputes cells under the live behavior space with global fallback; `global` ignores behavior space |
+| `memory/prior` | `empirical_bayes` (adaptive default), `fixed_3_3` | cold-card prior policy. EB learns from banked first non-founding exposures, shrunk toward a neutral seed; fixed is for legacy/reproduction |
+| `memory/no_card_evidence` | `json` (adaptive default), `none` | writer-published no-card controls/natural empty outcomes consumed by the reader's no-card abstention gate. This is distinct from the randomized no-card control rate |
+| `memory/probe` | `cold_budget` (adaptive default), `none` | explicit cold-card exploration lane. It can fill an empty selection, and rarely override a warm winner, only for cards with too little context support |
 | `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bootstrap_ev` (alias), `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; staleness enters as per-event weight `w = 2^(-s/H)`. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
 | `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only |
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |

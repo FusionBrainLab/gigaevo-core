@@ -6,6 +6,8 @@
 # gigaevo/memory/README.md.
 defaults:
   - llm: gemini
+  - context: global
+  - no_card_evidence: json
   - reputation: beta_binomial
   - evictor: recommended
   - write: end_of_run
@@ -40,7 +42,8 @@ writer:
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
-  baseline_estimator: ${ref:memory.reputation}
+  baseline_estimator: ${ref:memory.context_model}
+  no_card_recorder: ${ref:memory.no_card_evidence}
   task_description: ${ref:problem_context::task_description}
   best_programs_percent: 5.0
   ingest_call_timeout_s: 300.0

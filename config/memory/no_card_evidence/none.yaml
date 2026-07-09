@@ -1,0 +1,4 @@
+# @package memory.no_card_evidence
+# Static no-card evidence provider for legacy/reproduction policies.
+_target_: gigaevo.memory.context.no_card.NullNoCardEvidenceProvider
+seed_prior: [3.0, 3.0]

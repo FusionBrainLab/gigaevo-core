@@ -1,0 +1,14 @@
+# @package memory.prior
+# Adaptive cold-card prior. It learns a context/card-kind/category prior from
+# the bank's first non-founding exposures, shrunk toward a neutral seed, so cold
+# cards are neither assumed good nor permanently blocked before a probe.
+_target_: gigaevo.memory.read.prior.EmpiricalBayesMemoryPrior
+store: ${ref:memory.store}
+context_model: ${ref:memory.context_model}
+seed_prior: [1.0, 1.0]
+k_min: 2.0
+k_max: 6.0
+n_ref: 32.0
+shrink_events: 16.0
+first_exposure_only: true
+min_parameter: 0.25

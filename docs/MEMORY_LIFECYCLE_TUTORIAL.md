@@ -84,7 +84,7 @@ The current `memory=full` top-level defaults are:
 | Component | Default | Why |
 |---|---|---|
 | Write cadence | `memory/write=end_of_run` | write once at shutdown unless overridden |
-| Read policy | `memory/read_policy=recommended` | contextual bootstrap-EV bandit |
+| Read policy | `memory/read_policy=adaptive` | contextual bootstrap-EV bandit with EB cold priors, dynamic no-card evidence, and cold probes |
 | Reputation | `BootstrapReputation(BDProximityReputation(...))` | per-BD-cell credit, global fallback |
 | Auction | `BootstrapThompsonAuctioneer` | tail-aware EV bids and no-card-arm gate |
 | Budget | `TopBidBudgeter` | when too many cards win, keep highest EV bid |
@@ -149,7 +149,7 @@ The main override decisions are:
 | `problem.name` | required | Always set it. |
 | `checkpoint_dir` | per-run Hydra output memory dir | Set an absolute path only when sharing or reusing a bank. |
 | `memory/write` | `end_of_run` under `memory=full` | Use `live` for same-run read/write effects. |
-| `memory/read_policy` | `recommended` under `memory=full` | Use `portable` when there is no single shared behavior space. |
+| `memory/read_policy` | `adaptive` under `memory=full` | Use `portable` when there is no single shared behavior space. |
 | `memory.reader.max_cards` | `1` | Increase only if you intentionally want multiple external cards in the suggestion stage. |
 | `memory/llm` | `gemini` | Override for local LiteLLM or another memory/retrieval model. |
 
@@ -163,14 +163,14 @@ python run.py \
   pipeline=memory_guided \
   memory=full \
   memory/write=live \
-  memory/read_policy=recommended \
+  memory/read_policy=adaptive \
   memory/evictor=recommended \
   checkpoint_dir=/path/to/shared_bank
 ```
 
 This expands into the following system.
 
-| Component | Current recommended setting | What it does | Why it is needed | What you see on real cards |
+| Component | Current adaptive setting | What it does | Why it is needed | What you see on real cards |
 |---|---|---|---|---|
 | Store | `LocalMemoryStore` | Owns `cards.json`, Chroma index, and research agent | One shared object lets writer updates become visible to later reads | `MEMORY_STORE_WRITE` rows and growing/merging cards in `cards.json` |
 | Research width | `default_top_k=10`, `research.max_cards=10` | Gives the agentic retrieval loop enough candidates for the auction | A one-card suggestion budget still needs a wider candidate pool | Higgs R1 averaged 3.10 candidates per read after retrieval/filtering |
@@ -178,7 +178,7 @@ This expands into the following system.
 | Shortlister | `BootstrapFusedRankingShortlister` | Benches weak warm cards before research, then may post-filter/rank the researched result | Prevents known weak cards from occupying digest/research slots | Warm non-positive cards vanish before prompt rendering |
 | Bench floor | `rep_floor_quantile=0.4` | Drops bottom warm-card pessimistic-EV quantile before research | Self-normalized bank cleanup without a metric-specific threshold | Bad warm cards become less visible even before eviction |
 | Reputation | `BootstrapReputation(BDProximityReputation)` | Computes contextual posterior and bootstrap EV from gain events | A card can help one BD region and hurt another | Same card can bid differently depending on parent metrics |
-| Cold prior | `Beta(3, 3)` | Neutral posterior for cards with no non-founding evidence | Cold cards need exploration without being treated as winners | Founding-only cards remain explorable but not trusted |
+| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a context/kind/category cold-card prior from first non-founding exposures, shrunk toward a neutral seed | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category tendencies |
 | EV staleness | `half_life_cycles=1.0` | Downweights old EV evidence by bank-cycle age | Old evidence should fade relative to a changing bank | Stale known deltas bid closer to zero |
 | Auction | `BootstrapThompsonAuctioneer` | Samples EV bids and gates against the no-card arm | Handles uncertainty, left-tail loss, and abstention | Higgs R1 rejected 608/1200 reads at auction |
 | EV floor | `ev_floor_quantile=0.765` | Requires bids to be in the high part of the round's own bid distribution | Avoids hardcoded gain deltas and limits low-value injections | Candidate can be retrieved but still fail the auction |
@@ -538,10 +538,14 @@ from its bootstrap EV support. It must pass:
 
 1. A positive EV sign gate.
 2. A round-relative EV floor.
-3. A sampled no-card-arm gate: the auction draws from its fixed
-   `baseline_prior` (`Beta(3, 3)` by default) and Sidak-adjusts that gate over
-   the eligible slate.
+3. A sampled no-card-arm gate: adaptive runs first ask the persisted no-card
+   evidence provider for the current context; if no evidence is available, that
+   provider returns its configured seed prior. Legacy/no-provider runs fall back
+   to the auction's static `baseline_prior` (`Beta(3, 3)` by default). The gate
+   is Sidak-adjusted over the eligible slate.
 4. The external card-block budget.
+5. The explicit cold-probe policy, which may fill an otherwise empty selection
+   or rarely override one warm winner for a genuinely cold candidate.
 
 So there is no single fixed "card selection probability". It depends on the
 retrieved slate, the card posterior, the current bank, the parent's BD cell, and
@@ -561,8 +565,8 @@ real local evidence and blocks fallback.
 
 | Card evidence | Posterior used by auction | EV support | Default behavior |
 |---|---|---|---|
-| No events | `Beta(3, 3)` cold prior | borrowed cold gain scale | Explorable, but must still beat EV and no-card-arm gates |
-| Founding only | `Beta(3, 3)` cold prior | borrowed cold gain scale | Same as cold; founding is origin/audit evidence only |
+| No events | EB cold prior in adaptive runs; legacy `Beta(3, 3)` when no projector prior is set | borrowed cold gain scale | Exploitation path must still beat EV/no-card gates; probe path can spend explicit cold budget |
+| Founding only | Same as no events | borrowed cold gain scale | Founding is origin/audit evidence only; it does not warm the card |
 | Only unused/invalid later exposures | posterior includes forced failures | zero support | No longer cold; likely benched or auction-rejected |
 | Positive later direct use | posterior warms positive | raw positive deltas plus zero pseudo-event | Can win more often |
 | Mixed later direct use | posterior and EV reflect sign and magnitude | raw mixed deltas plus zero pseudo-event | Fat losses lower EV bids |
@@ -596,17 +600,15 @@ parent and no selected card ids. If randomized no-card controls exist anywhere
 in the fitting cohort, those controls are preferred globally. If not, ordinary
 no-card rows are used. The estimator is pluggable:
 
-- `GlobalNoCardBaseline` uses one global median.
-- `BDProximityReputation.fit_no_card_baseline()` uses per-BD-cell medians with a
+- `GlobalMemoryContext.fit_no_card_baseline()` uses one global median.
+- `BDCellMemoryContext.fit_no_card_baseline()` uses per-BD-cell medians with a
   global fallback.
-- `BootstrapReputation` delegates the baseline fit to its inner reputation.
 
-That means `memory=full memory/read_policy=recommended` is not hardcoded global
-aggregation: its writer shares the same contextual `BootstrapReputation` /
-`BDProximityReputation` object, so no-card progress can be BD-cell local with a
-global fallback. By contrast, `memory=writer` defaults to `beta_binomial`, whose
-baseline fit is global unless you explicitly override the reputation/baseline
-estimator.
+That means `memory=full memory/read_policy=adaptive` is not hardcoded global
+aggregation: its writer shares the same `memory.context_model` as the reader.
+Under the adaptive BD preset, no-card progress can be BD-cell local with a global
+fallback. By contrast, `memory=writer` defaults to `memory/context=global` unless
+you explicitly select a contextual model.
 
 The control preference is global before BD partitioning. If a run has any
 randomized no-card controls, ordinary no-card rows are ignored for the baseline;
@@ -749,15 +751,20 @@ harmful." Renderer confidence and bootstrap EV then add the missing magnitude
 check, so a no-op card is not shown as a confident positive lever just because it
 was not harmful.
 
-Cold cards have no usable posterior block, so `posterior_of(None)` returns the
-cold prior:
+Cold cards have no usable posterior block. In legacy/direct construction,
+`posterior_of(None)` returns the reputation's static cold prior. In adaptive
+runs, `AuctionCandidateProjector` replaces that fallback with the configured
+`memory/prior=empirical_bayes` cold prior before the auction sees the candidate:
 
 ```text
-cold_prior = baseline_prior = Beta(3, 3)
+legacy cold prior = Beta(3, 3)
+adaptive cold prior = EB(card kind, category, context, first exposures)
 ```
 
-That prior is deliberately neutral: it lets truly cold cards get occasional
-exploration, but does not claim they are good.
+The no-card auction prior is separate. Adaptive runs get it from
+`no_card_evidence.json` when writer-observed controls exist; otherwise
+`memory/no_card_evidence` returns its configured seed prior. Legacy/no-provider
+runs use the auction's static fallback `baseline_prior`.
 
 ![Reputation posteriors from stored tabular card evidence](assets/memory_reputation_posteriors_tabular.png)
 
@@ -893,7 +900,7 @@ flowchart TD
     D --> E{bid > 0 and bid >= round quantile floor?}
     E -->|no| Reject[Cannot win]
     E -->|yes| F[Eligible slate]
-    F --> G[Draw one no-card-arm theta from baseline_prior]
+    F --> G[Draw one no-card-arm theta from dynamic no-card evidence or fallback baseline_prior]
     G --> H[Sidak-adjust gate over eligible cards]
     H --> I[Draw card theta]
     I --> J{theta > gate_theta?}
@@ -904,8 +911,10 @@ flowchart TD
 
 The default EV floor quantile is `0.765`. It is self-normalized to the current
 round's own bid distribution. It is not a hardcoded metric delta. The no-card
-arm here is the auction's fixed `baseline_prior`, not the fitted no-card
-progress baseline used by the writer.
+arm here is the read-time abstention gate. It is separate from the fitted
+no-card progress baseline used by the writer, though adaptive runs publish
+writer-observed controls into `no_card_evidence.json` so the read gate can use a
+contextual no-card prior instead of only the static fallback.
 
 The budgeter only runs after the auction. If five cards win but
 `memory.reader.max_cards=1`, only the highest realized EV bid reaches the
@@ -915,7 +924,9 @@ suggester.
 
 For each candidate:
 
-1. Resolve its posterior `(a, b)`. Cold cards use `Beta(3, 3)`.
+1. Resolve its posterior `(a, b)`. Adaptive cold cards use
+   `EmpiricalBayesMemoryPrior`; legacy/direct construction falls back to the
+   reputation's cold prior, normally `Beta(3, 3)`.
 2. Build its EV bid support.
    - Known card: its raw later-use direct deltas, zero atoms for invalid/unused
      exposure, plus one neutral zero pseudo-event.
@@ -923,14 +934,18 @@ For each candidate:
 3. Draw one realized EV bid.
 4. Reject it immediately if the bid is not positive.
 5. Reject it if it falls below the round's `0.765` bid quantile.
-6. For remaining eligible cards, draw one no-card arm from `baseline_prior` and
-   Sidak-adjust that gate over the number of eligible cards.
+6. For remaining eligible cards, draw one no-card arm from persisted no-card
+   evidence; if adaptive evidence is empty, use the no-card evidence provider's
+   seed prior. Legacy/no-provider runs use `baseline_prior`. Sidak-adjust that
+   gate over the number of eligible cards.
 7. Draw each card's theta from its Beta posterior.
 8. Select the card only if theta beats the adjusted no-card-arm gate.
 9. If too many cards win, keep the top realized EV bids.
 
-That means cold cards do get exploration, but not free prompt access. They need
-a lucky posterior draw, a positive borrowed-scale bid, and a no-card-gate win.
+That means cold cards get two different chances: the exploitation path still
+needs a lucky posterior draw, a positive borrowed-scale bid, and a no-card-gate
+win; the probe path can deliberately spend a small configured budget on a
+genuinely cold card so it does not become a never-tested zombie.
 
 ## Eviction
 

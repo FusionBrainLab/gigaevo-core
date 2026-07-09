@@ -29,6 +29,7 @@ from gigaevo.llm.agents.factories import (
 )
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import (
     CardAdmissionGate,
@@ -304,6 +305,7 @@ class MemoryWriter(IncrementalPostRunHook):
         checkpoint_dir: str | Path,
         metrics_context: MetricsContext,
         baseline_estimator: NoCardBaselineEstimator | None = None,
+        no_card_recorder: NoCardEvidenceRecorder | None = None,
         task_description: str = "",
         fitness_key: str = "",
         best_programs_percent: float = 5.0,
@@ -354,6 +356,7 @@ class MemoryWriter(IncrementalPostRunHook):
             higher_is_better=self._higher_is_better,
             metrics_context=metrics_context,
             baseline_estimator=baseline_estimator,
+            no_card_recorder=no_card_recorder,
         )
         self._consolidation = ConsolidationScheduler(
             stack=self._stack,

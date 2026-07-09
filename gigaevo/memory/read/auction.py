@@ -60,6 +60,34 @@ class AuctionCandidate(BaseModel):
         description="Bank-cycle evidence discount w = 2**(-s/H), the per-event "
         "bootstrap resample weight; 1.0 (no ageing) under an un-decayed reputation.",
     )
+    prior_source: str = Field(
+        default="reputation",
+        description="Source of posterior_a/posterior_b when the card is cold.",
+    )
+    context_key: str = Field(
+        default="",
+        description="Read-context bucket used by contextual prior/no-card evidence.",
+    )
+    baseline_a: float | None = Field(
+        default=None,
+        description="Optional dynamic no-card baseline alpha for this slate.",
+    )
+    baseline_b: float | None = Field(
+        default=None,
+        description="Optional dynamic no-card baseline beta for this slate.",
+    )
+    baseline_source: str = Field(
+        default="",
+        description="Source of the dynamic no-card baseline prior, if present.",
+    )
+    no_card_baseline: float | None = Field(
+        default=None,
+        description="Robust no-card child-parent delta location for audit only.",
+    )
+    no_card_n: float = Field(
+        default=0.0,
+        description="Effective no-card evidence behind the dynamic baseline prior.",
+    )
 
 
 class AuctionBid(BaseModel):
@@ -118,10 +146,69 @@ class AuctionBid(BaseModel):
     support_n: float = Field(
         default=0.0, description="Effective EV support weight behind this bid."
     )
+    prior_source: str = Field(
+        default="",
+        description="Source of posterior_a/posterior_b for cold/context-cold cards.",
+    )
+    context_key: str = Field(
+        default="",
+        description="Read-context bucket used by contextual prior/no-card evidence.",
+    )
+    baseline_source: str = Field(
+        default="",
+        description="Source of the no-card baseline prior.",
+    )
+    no_card_baseline: float | None = Field(
+        default=None,
+        description="Robust no-card child-parent delta location for audit only.",
+    )
+    no_card_n: float = Field(
+        default=0.0,
+        description="Effective no-card evidence behind the baseline prior.",
+    )
+    rejected_by_ev_floor: bool = Field(
+        default=False,
+        description="True when the candidate failed the EV sign/spread reserve.",
+    )
+    rejected_by_no_card_gate: bool = Field(
+        default=False,
+        description="True when the candidate cleared EV reserve but lost to no-card.",
+    )
+    probe_eligible: bool = Field(
+        default=False,
+        description="True when the cold-probe policy may spend exploration on it.",
+    )
+    probe_selected: bool = Field(
+        default=False,
+        description="True when selected by the explicit cold-probe policy.",
+    )
+    selection_reason: str = Field(
+        default="",
+        description="auction, cold_probe_empty, cold_probe_override, or empty.",
+    )
 
 
 def _bid_dicts(slate: list[AuctionBid]) -> tuple[dict[str, Any], ...]:
     return tuple(bid.model_dump(mode="json") for bid in slate)
+
+
+def _candidate_baseline(
+    candidates: list[AuctionCandidate], fallback: tuple[float, float]
+) -> tuple[float, float, str, float | None, float]:
+    for candidate in candidates:
+        if candidate.baseline_a is None or candidate.baseline_b is None:
+            continue
+        a = float(candidate.baseline_a)
+        b = float(candidate.baseline_b)
+        if math.isfinite(a) and math.isfinite(b) and a > 0.0 and b > 0.0:
+            return (
+                a,
+                b,
+                candidate.baseline_source or "dynamic",
+                candidate.no_card_baseline,
+                float(candidate.no_card_n),
+            )
+    return (float(fallback[0]), float(fallback[1]), "fixed", None, 0.0)
 
 
 class ThompsonAuctioneer(BaseModel):
@@ -145,7 +232,9 @@ class ThompsonAuctioneer(BaseModel):
     def run(
         self, candidates: list[AuctionCandidate], rng: Any
     ) -> tuple[list[str], list[AuctionBid]]:
-        base_a, base_b = self.baseline_prior
+        base_a, base_b, baseline_source, no_card_baseline, no_card_n = (
+            _candidate_baseline(candidates, self.baseline_prior)
+        )
         winners: list[str] = []
         slate: list[AuctionBid] = []
         for candidate in candidates:
@@ -164,6 +253,13 @@ class ThompsonAuctioneer(BaseModel):
                     baseline_b=float(base_b),
                     baseline_theta=base_theta,
                     selected=selected,
+                    prior_source=candidate.prior_source,
+                    context_key=candidate.context_key,
+                    baseline_source=baseline_source,
+                    no_card_baseline=no_card_baseline,
+                    no_card_n=no_card_n,
+                    rejected_by_no_card_gate=not selected,
+                    selection_reason="auction" if selected else "",
                 )
             )
         if slate:
@@ -284,7 +380,9 @@ class EVThompsonAuctioneer(BaseModel):
             and c.magnitude > 0.0
         ]
         cold_magnitude = statistics.median(warm) if warm else self._cold_fallback()
-        base_a, base_b = self.baseline_prior
+        base_a, base_b, baseline_source, no_card_baseline, no_card_n = (
+            _candidate_baseline(candidates, self.baseline_prior)
+        )
         effective_floor = self.ev_floor
         if self.ev_floor_quantile is not None:
             baseline_theta_q = float(
@@ -320,6 +418,15 @@ class EVThompsonAuctioneer(BaseModel):
                     selected=selected,
                     magnitude=float(mag),
                     bid=float(bid_value),
+                    prior_source=candidate.prior_source,
+                    context_key=candidate.context_key,
+                    baseline_source=baseline_source,
+                    no_card_baseline=no_card_baseline,
+                    no_card_n=no_card_n,
+                    rejected_by_ev_floor=not (bid_value > effective_floor),
+                    rejected_by_no_card_gate=bid_value > effective_floor
+                    and not (theta > base_theta),
+                    selection_reason="auction" if selected else "",
                 )
             )
         if slate:
@@ -432,7 +539,9 @@ class BootstrapThompsonAuctioneer(BaseModel):
             and c.magnitude > 0.0
         ]
         cold_magnitude = statistics.median(warm) if warm else self._cold_fallback()
-        base_a, base_b = self.baseline_prior
+        base_a, base_b, baseline_source, no_card_baseline, no_card_n = (
+            _candidate_baseline(candidates, self.baseline_prior)
+        )
         bids: list[float] = []
         support_scales: list[float] = []
         support_kinds: list[str] = []
@@ -504,7 +613,8 @@ class BootstrapThompsonAuctioneer(BaseModel):
         ):
             theta = float(rng.beta(candidate.posterior_a, candidate.posterior_b))
             theta_quantile = float(scipy_beta.cdf(theta, base_a, base_b))
-            selected = can_bid and theta > gate_theta
+            passes_no_card = theta > gate_theta
+            selected = can_bid and passes_no_card
             if selected:
                 winners.append(candidate.card_id)
             mag = (
@@ -529,6 +639,15 @@ class BootstrapThompsonAuctioneer(BaseModel):
                     bid=float(bid_value),
                     support_kind=support_kind,
                     support_n=support_n,
+                    prior_source=candidate.prior_source,
+                    context_key=candidate.context_key,
+                    baseline_source=baseline_source,
+                    no_card_baseline=no_card_baseline,
+                    no_card_n=no_card_n,
+                    rejected_by_ev_floor=not can_bid,
+                    rejected_by_no_card_gate=can_bid and not passes_no_card,
+                    probe_eligible=support_kind == "cold_prior",
+                    selection_reason="auction" if selected else "",
                 )
             )
         if slate:

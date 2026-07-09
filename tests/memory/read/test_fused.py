@@ -186,7 +186,7 @@ async def test_context_mirrors_primary_parent_metrics(make_card, make_event):
     )
     await fused.shortlist(**_shortlist_kwargs())
     assert RecordingReputation.contexts == [
-        DecisionContext(parent_metrics={"score": 1.5})
+        DecisionContext(parent_metrics={"score": 1.5}, parent_id="parent-1")
     ]
 
 
@@ -539,7 +539,7 @@ def test_portable_read_policy_ships_bootstrap_wrapper_with_lineage():
     assert shortlister.w_rep == 0.0
     assert shortlister.w_nov == 0.0
     assert shortlister.get("score_floor") is None
-    assert cfg.defaults[3]["/memory/excluder"] == "lineage"
+    assert cfg.defaults[7]["/memory/excluder"] == "lineage"
     assert (
         shortlister.inner._target_
         == "gigaevo.memory.read.shortlist.ResearchShortlister"

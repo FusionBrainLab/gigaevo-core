@@ -12,5 +12,5 @@ harm_threshold: 0.5
 confident_quantile: 0.20
 # Confidence threshold on P(help) for the Beta posterior.
 confident_threshold: 0.5
-# Cold no-evidence prior. Keep aligned with auction baseline_prior.
+# Legacy cold no-evidence prior used when no candidate_projector prior is set.
 cold_prior: [3.0, 3.0]

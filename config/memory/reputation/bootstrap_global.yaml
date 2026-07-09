@@ -25,5 +25,5 @@ inner:
   harm_threshold: 0.5
   confident_quantile: 0.20
   confident_threshold: 0.5
-  # Cold no-evidence prior. Must match auction baseline_prior.
+  # Legacy cold no-evidence prior used when no candidate_projector prior is set.
   cold_prior: [3.0, 3.0]

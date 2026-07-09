@@ -26,6 +26,7 @@ import math
 from typing import Any
 
 from gigaevo.memory.cards import Card, DecisionContext
+from gigaevo.memory.context import GlobalMemoryContext, MemoryContextModel
 from gigaevo.memory.read.interfaces import ReputationModel, Shortlister
 from gigaevo.memory.storage.base import ResearchResult
 
@@ -47,6 +48,7 @@ class FusedRankingShortlister:
         score_floor: float | None = None,
         rep_floor_quantile: float | None = None,
         store: Any | None = None,
+        context_model: MemoryContextModel | None = None,
     ) -> None:
         for name, weight in (("w_sem", w_sem), ("w_rep", w_rep), ("w_nov", w_nov)):
             if weight < 0:
@@ -73,6 +75,9 @@ class FusedRankingShortlister:
         self._score_floor = score_floor
         self._rep_floor_quantile = rep_floor_quantile
         self._store = store
+        self._context_model = (
+            context_model if context_model is not None else GlobalMemoryContext()
+        )
 
     async def shortlist(
         self,
@@ -84,15 +89,7 @@ class FusedRankingShortlister:
         exclude_ids: frozenset[str] = frozenset(),
         parent_contexts: list[str] | None = None,
     ) -> ResearchResult:
-        # Mirror the reader's decision context: reads anchor on the primary
-        # parent's live metrics.
-        context = (
-            DecisionContext(
-                parent_metrics=dict(getattr(parents[0], "metrics", None) or {})
-            )
-            if parents
-            else None
-        )
+        context = self._context_model.read_context(parents)
         rep_floor, benched_ids = self._bank_bench(context)
         result = await self._inner.shortlist(
             parents=parents,

@@ -1,6 +1,6 @@
 # @package memory.reputation
 # Backward-compatible alias of `bootstrap_bd`. Prefer
-# `memory/reputation=bootstrap_bd` or the public `memory/read_policy=recommended`
+# `memory/reputation=bootstrap_bd` or the public `memory/read_policy=adaptive`
 # name in new configs.
 _target_: gigaevo.memory.read.reputation.BootstrapReputation
 store: ${ref:memory.store}

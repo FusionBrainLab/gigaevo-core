@@ -49,9 +49,10 @@ def _cold_priors(node: Any) -> list[list[float]]:
     return []
 
 
-def test_full_defaults_to_recommended_contextual_bootstrap_with_lineage():
+def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
     cfg = _compose("memory=full")
     memory = cfg.memory
+    raw_memory = OmegaConf.to_container(memory, resolve=False)
 
     assert (
         memory.reputation._target_
@@ -70,6 +71,22 @@ def test_full_defaults_to_recommended_contextual_bootstrap_with_lineage():
         memory.reader.shortlister._target_
         == "gigaevo.memory.read.fused.BootstrapFusedRankingShortlister"
     )
+    assert (
+        memory.context_model._target_
+        == "gigaevo.memory.context.models.BDCellMemoryContext"
+    )
+    assert (
+        memory.prior._target_ == "gigaevo.memory.read.prior.EmpiricalBayesMemoryPrior"
+    )
+    assert (
+        memory.no_card_evidence._target_
+        == "gigaevo.memory.context.no_card.JsonNoCardEvidenceStore"
+    )
+    assert memory.probe_policy._target_ == "gigaevo.memory.read.probe.ColdProbePolicy"
+    assert (
+        memory.reader.candidate_projector._target_
+        == "gigaevo.memory.read.projection.AuctionCandidateProjector"
+    )
     assert memory.excluder._target_ == "gigaevo.memory.read.exclusion.LineageExcluder"
     assert memory.auction.ev_floor_quantile == pytest.approx(0.765)
     assert memory.evictor._target_ == "gigaevo.memory.write.eviction.CompositeEvictor"
@@ -85,6 +102,8 @@ def test_full_defaults_to_recommended_contextual_bootstrap_with_lineage():
         memory.evictor.evictors[2]._target_
         == "gigaevo.memory.write.eviction.PolicyNonViableEvictor"
     )
+    assert raw_memory["writer"]["baseline_estimator"] == "${ref:memory.context_model}"
+    assert raw_memory["writer"]["no_card_recorder"] == "${ref:memory.no_card_evidence}"
     assert memory.neutral_gain == pytest.approx(0.0)
     assert memory.evictor.evictors[2].neutral_gain == pytest.approx(0.0)
 
@@ -114,6 +133,11 @@ def test_reader_defaults_to_portable_bootstrap_with_lineage():
         memory.reputation.inner._target_
         == "gigaevo.memory.read.reputation.BetaBinomialReputation"
     )
+    assert (
+        memory.context_model._target_
+        == "gigaevo.memory.context.models.GlobalMemoryContext"
+    )
+    assert memory.probe_policy._target_ == "gigaevo.memory.read.probe.ColdProbePolicy"
     assert not _contains_behavior_space_ref(raw_reputation)
     assert memory.excluder._target_ == "gigaevo.memory.read.exclusion.LineageExcluder"
 
@@ -121,12 +145,22 @@ def test_reader_defaults_to_portable_bootstrap_with_lineage():
 def test_writer_default_evictor_uses_memory_neutral_gain():
     cfg = _compose("memory=writer")
     memory = cfg.memory
+    raw_memory = OmegaConf.to_container(memory, resolve=False)
 
     assert memory.neutral_gain == pytest.approx(0.0)
     assert (
         memory.evictor.evictors[2]._target_
         == "gigaevo.memory.write.eviction.PolicyNonViableEvictor"
     )
+    assert (
+        memory.context_model._target_
+        == "gigaevo.memory.context.models.GlobalMemoryContext"
+    )
+    assert (
+        memory.no_card_evidence._target_
+        == "gigaevo.memory.context.no_card.JsonNoCardEvidenceStore"
+    )
+    assert raw_memory["writer"]["baseline_estimator"] == "${ref:memory.context_model}"
     assert memory.evictor.evictors[2].neutral_gain == pytest.approx(memory.neutral_gain)
 
 
@@ -139,6 +173,13 @@ def test_portable_policy_contains_no_behavior_space_ref():
 @pytest.mark.parametrize(
     ("policy", "reputation", "auction", "budget", "shortlister"),
     [
+        (
+            "adaptive",
+            "gigaevo.memory.read.reputation.BootstrapReputation",
+            "gigaevo.memory.read.auction.BootstrapThompsonAuctioneer",
+            "gigaevo.memory.read.auction.TopBidBudgeter",
+            "gigaevo.memory.read.fused.BootstrapFusedRankingShortlister",
+        ),
         (
             "recommended",
             "gigaevo.memory.read.reputation.BootstrapReputation",
@@ -184,6 +225,7 @@ def test_read_policy_core_pairings(policy, reputation, auction, budget, shortlis
     "policy",
     [
         "recommended",
+        "adaptive",
         "portable",
         "median_ev_legacy",
         "probability_legacy",

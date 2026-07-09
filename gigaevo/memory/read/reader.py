@@ -15,22 +15,28 @@ from loguru import logger
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from gigaevo.memory.cards import DecisionContext
+from gigaevo.memory.context import GlobalMemoryContext, MemoryContextModel
 from gigaevo.memory.events import (
     MemoryReadSelection,
     emit_memory_event,
     memory_event_context,
     new_decision_id,
 )
-from gigaevo.memory.read.auction import AuctionBid, AuctionCandidate
+from gigaevo.memory.read.auction import AuctionBid
 from gigaevo.memory.read.exclusion import is_card_excluded
+from gigaevo.memory.read.interfaces import (
+    AuctionCandidateProjector as AuctionCandidateProjectorProtocol,
+)
 from gigaevo.memory.read.interfaces import (
     Auctioneer,
     Budgeter,
     CardRenderer,
+    ProbePolicy,
     ReputationModel,
     Shortlister,
 )
+from gigaevo.memory.read.probe import NoColdProbePolicy
+from gigaevo.memory.read.projection import AuctionCandidateProjector
 
 _MILLISECONDS_PER_SECOND = 1000.0
 _TIMING_DECIMALS = 3
@@ -80,6 +86,9 @@ class MemoryReader:
         auctioneer: Auctioneer,
         budgeter: Budgeter,
         renderer: CardRenderer,
+        context_model: MemoryContextModel | None = None,
+        candidate_projector: AuctionCandidateProjectorProtocol | None = None,
+        probe_policy: ProbePolicy | None = None,
         max_cards: int = 1,
         rng: Any = None,
     ) -> None:
@@ -88,6 +97,17 @@ class MemoryReader:
         self._auctioneer = auctioneer
         self._budgeter = budgeter
         self._renderer = renderer
+        self._context_model = (
+            context_model if context_model is not None else GlobalMemoryContext()
+        )
+        self._projector = (
+            candidate_projector
+            if candidate_projector is not None
+            else AuctionCandidateProjector(context_model=self._context_model)
+        )
+        self._probe_policy = (
+            probe_policy if probe_policy is not None else NoColdProbePolicy()
+        )
         self._max_cards = max_cards
         self._rng = rng if rng is not None else np.random.default_rng()
         self._lock = asyncio.Lock()
@@ -172,39 +192,20 @@ class MemoryReader:
         }
 
         started_reputation = perf_counter()
-        # Query cell = parents[0]: no base parent is chosen until the mutator
-        # runs, so the read anchors on the primary parent's live cell. Writes
-        # later anchor each gain_event on the mutator-named base; both map
-        # through the same behavior_space tessellation, so in-cell matching
-        # stays consistent.
-        decision_context = (
-            DecisionContext(
-                parent_metrics=dict(getattr(parents[0], "metrics", None) or {})
-            )
-            if parents
-            else None
-        )
+        decision_context = self._context_model.read_context(parents)
         blocks = {
             card.id: self._reputation.card_stats(card, decision_context)
             for card in candidates.values()
         }
         auction_input = []
         for card_id, block in blocks.items():
-            posterior_a, posterior_b = self._reputation.posterior_of(block)
             card = candidates[card_id]
             auction_input.append(
-                AuctionCandidate(
-                    card_id=card_id,
-                    posterior_a=posterior_a,
-                    posterior_b=posterior_b,
-                    magnitude=self._reputation.magnitude_of(block),
-                    deltas=self._reputation.event_deltas(card, decision_context),
-                    delta_weights=self._reputation.event_weights(
-                        card, decision_context
-                    ),
-                    staleness_weight=self._reputation.staleness_weight(
-                        card, decision_context
-                    ),
+                self._projector.project(
+                    card=card,
+                    block=block,
+                    reputation=self._reputation,
+                    context=decision_context,
                 )
             )
         reputation_ms = _elapsed_ms(started_reputation)
@@ -214,6 +215,12 @@ class MemoryReader:
         auction_ms = _elapsed_ms(started_auction)
         started_budget = perf_counter()
         budgeted_ids = self._budgeter.cap(auction_winner_ids, slate, self._max_cards)
+        budgeted_ids, slate = self._probe_policy.apply(
+            budgeted_ids=budgeted_ids,
+            slate=list(slate),
+            max_cards=self._max_cards,
+            rng=self._rng,
+        )
         budget_ms = _elapsed_ms(started_budget)
         started_render = perf_counter()
         rendered = [

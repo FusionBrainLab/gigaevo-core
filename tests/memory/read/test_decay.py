@@ -226,6 +226,6 @@ def test_decay_yaml_wraps_bd_proximity_and_default_stays_undecayed():
     assert decay.half_life_cycles == 1.0
     full = OmegaConf.load(_REPO_ROOT / "config" / "memory" / "full.yaml")
     full_text = Path(_REPO_ROOT / "config" / "memory" / "full.yaml").read_text()
-    assert "read_policy: recommended" in full_text
+    assert "read_policy: adaptive" in full_text
     assert "reputation: bd_proximity_decay" not in full_text
     assert full is not None

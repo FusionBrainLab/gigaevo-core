@@ -39,6 +39,7 @@ from gigaevo.memory.cards import (
     EvidenceAttribution,
     EvidenceSource,
 )
+from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
 from gigaevo.memory.events import MemoryGainRestamp, emit_memory_event
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
@@ -401,6 +402,20 @@ def card_gain_events_from_programs(
     explicit unused exposure. The base fitness baseline is resolved here from
     the frozen base metrics under ``fitness_key``.
     """
+    rows = injection_outcomes_from_programs(
+        programs, fitness_key=fitness_key, metrics_context=metrics_context
+    )
+    return compute_contextual_gains(
+        rows, higher_is_better=higher_is_better, baseline_estimator=baseline_estimator
+    )
+
+
+def injection_outcomes_from_programs(
+    programs: Sequence[Program],
+    *,
+    fitness_key: str,
+    metrics_context: MetricsContext,
+) -> list[InjectionOutcome]:
     rows = []
     for prog in programs:
         bm = base_metrics(prog)
@@ -418,9 +433,7 @@ def card_gain_events_from_programs(
                 no_card_control=no_card_control(prog),
             )
         )
-    return compute_contextual_gains(
-        rows, higher_is_better=higher_is_better, baseline_estimator=baseline_estimator
-    )
+    return rows
 
 
 class CardStatsStamper(BaseModel):
@@ -516,11 +529,13 @@ class CardStatsUpdater:
         higher_is_better: bool,
         metrics_context: MetricsContext,
         baseline_estimator: NoCardBaselineEstimator | None = None,
+        no_card_recorder: NoCardEvidenceRecorder | None = None,
     ) -> None:
         self._fitness_key = fitness_key
         self._higher_is_better = higher_is_better
         self._metrics_context = metrics_context
         self._baseline_estimator = baseline_estimator
+        self._no_card_recorder = no_card_recorder
         self._logged_orphans: set[str] = set()
 
     def update(
@@ -533,11 +548,23 @@ class CardStatsUpdater:
         dropped before the restamp event, so the telemetry never reports events
         the stamper is about to discard. Blocking I/O (per-card store writes);
         the orchestrator runs it off the event loop."""
-        events = card_gain_events_from_programs(
-            pool,
-            fitness_key=self._fitness_key,
+        rows = injection_outcomes_from_programs(
+            pool, fitness_key=self._fitness_key, metrics_context=self._metrics_context
+        )
+        if self._no_card_recorder is not None:
+            try:
+                self._no_card_recorder.record_outcomes(
+                    rows, higher_is_better=self._higher_is_better
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Memory][Stats] failed to persist no-card evidence: {}; "
+                    "continuing card restamp",
+                    exc,
+                )
+        events = compute_contextual_gains(
+            rows,
             higher_is_better=self._higher_is_better,
-            metrics_context=self._metrics_context,
             baseline_estimator=self._baseline_estimator,
         )
         bank = store.snapshot()

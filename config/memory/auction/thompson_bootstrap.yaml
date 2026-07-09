@@ -11,7 +11,8 @@
 # the abstain-on-all-harmful guarantee. Pairs with
 # `memory/budget=top_bid` and bootstrap reputation.
 _target_: gigaevo.memory.read.auction.BootstrapThompsonAuctioneer
-# No-card baseline arm prior. Must match reputation cold_prior.
+# Fallback no-card baseline arm prior. Adaptive policies may replace this per
+# read with persisted no-card evidence through the candidate projector.
 baseline_prior: [3.0, 3.0]
 # Task metrics context; primary metric significant_change is used only as the
 # cold gain scale fallback when no warm positive card exists in a round.

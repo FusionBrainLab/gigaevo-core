@@ -5,6 +5,10 @@
 # decays the inner Beta posterior/counts, so use it only when stale known cards
 # are demonstrably overconfident and clogging retrieval.
 defaults:
+  - /memory/context: bd_cell
+  - /memory/prior: empirical_bayes
+  - /memory/no_card_evidence: json
+  - /memory/probe: cold_budget
   - /memory/reputation: bootstrap_bd_decay
   - /memory/auction: thompson_bootstrap
   - /memory/budget: top_bid
@@ -22,6 +26,7 @@ reader:
       digest_max_cards: 50
     reputation: ${ref:memory.reputation}
     store: ${ref:memory.store}
+    context_model: ${ref:memory.context_model}
     # Keep LLM research order by default. The point of this preset is posterior
     # decay, not ranker-weight changes.
     w_sem: 1.0

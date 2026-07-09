@@ -6,13 +6,14 @@
 # builds exactly what this file declares. Consumers read two nodes: pipelines
 # take ${ref:memory.provider}, engines take ${ref:memory.writer}.
 #
-# Public read-stack choices live in `memory/read_policy`: `recommended`
-# (default contextual bootstrap), `portable` (global bootstrap for multi-island
-# or no-BD algorithms), and explicit legacy/decay ablations. Override with
-# `memory/read_policy=portable`; tune leaf fields with `memory.reader.max_cards=2`.
+# Public read-stack choices live in `memory/read_policy`: `adaptive`
+# (default contextual bootstrap with EB cold priors, no-card evidence, and cold
+# probes), `portable` (global context), and explicit legacy/decay ablations.
+# Override with `memory/read_policy=portable`; tune leaf fields with
+# `memory.reader.max_cards=2`.
 defaults:
   - llm: gemini
-  - read_policy: recommended
+  - read_policy: adaptive
   - evictor: recommended
   - write: end_of_run
   - _self_
@@ -54,6 +55,13 @@ reader:
   reputation: ${ref:memory.reputation}
   auctioneer: ${ref:memory.auction}
   budgeter: ${ref:memory.budget}
+  context_model: ${ref:memory.context_model}
+  candidate_projector:
+    _target_: gigaevo.memory.read.projection.AuctionCandidateProjector
+    prior: ${ref:memory.prior}
+    context_model: ${ref:memory.context_model}
+    no_card_evidence: ${ref:memory.no_card_evidence}
+  probe_policy: ${ref:memory.probe_policy}
   renderer:
     _target_: gigaevo.memory.read.render.EfficacyCardRenderer
   # Injection budget: cards the mutator sees per child, after the auction ranks
@@ -73,7 +81,8 @@ writer:
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
-  baseline_estimator: ${ref:memory.reputation}
+  baseline_estimator: ${ref:memory.context_model}
+  no_card_recorder: ${ref:memory.no_card_evidence}
   task_description: ${ref:problem_context::task_description}
   best_programs_percent: 5.0
   # Per-call wall-clock bound on each librarian LLM call (reconcile/author). A

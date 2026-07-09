@@ -650,3 +650,61 @@ def test_updater_sweep_removes_harmful_cards(store, make_card, metrics_context):
     gate = CardAdmissionGate(store=store, evictor=EvictAll())
     updater.update([], store=store, gate=gate)
     assert store.get("card-doomed") is None
+
+
+def test_updater_records_no_card_evidence(
+    store, make_card, make_program, metrics_context
+):
+    class Recorder:
+        def __init__(self):
+            self.calls = []
+
+        def record_outcomes(self, outcomes, *, higher_is_better):
+            self.calls.append((tuple(outcomes), higher_is_better))
+
+    recorder = Recorder()
+    store.save(make_card(id="card-a"))
+    parent = no_card_program(make_program)
+    child = make_program(
+        fitness=0.7,
+        metadata=base_meta(selected=["card-a"], used=["card-a"]),
+    )
+    updater = CardStatsUpdater(
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+        no_card_recorder=recorder,
+    )
+    gate = CardAdmissionGate(store=store, evictor=NullEvictor())
+
+    updater.update([parent, child], store=store, gate=gate)
+
+    [(outcomes, higher_is_better)] = recorder.calls
+    assert higher_is_better is True
+    assert {outcome.id for outcome in outcomes} == {parent.id, child.id}
+
+
+def test_updater_continues_when_no_card_recorder_fails(
+    store, make_card, make_program, metrics_context
+):
+    class BrokenRecorder:
+        def record_outcomes(self, outcomes, *, higher_is_better):
+            del outcomes, higher_is_better
+            raise OSError("disk full")
+
+    store.save(make_card(id="card-a"))
+    child = make_program(
+        fitness=0.7,
+        metadata=base_meta(selected=["card-a"], used=["card-a"]),
+    )
+    updater = CardStatsUpdater(
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+        no_card_recorder=BrokenRecorder(),
+    )
+    gate = CardAdmissionGate(store=store, evictor=NullEvictor())
+
+    updater.update([no_card_program(make_program), child], store=store, gate=gate)
+
+    assert len(store.get("card-a").gain_events) == 1
