@@ -22,6 +22,20 @@ capabilities:
 # the no-card counterfactual origin, not a task-specific metric threshold.
 neutral_gain: 0.0
 
+# Shared fallback no-card prior for writer-only no-card evidence and legacy
+# reputation fallbacks.
+baseline_prior: [3.0, 3.0]
+
+evidence:
+  # Minimum effective non-founding card-use evidence before the system can make
+  # a strong keep/delete decision. Writer-only defaults share this with the
+  # global reputation harm gate and policy cleanup.
+  min_effective_events: 3
+
+eviction_safety:
+  min_effective_events: ${memory.evidence.min_effective_events}
+  skip_contextual_without_context: true
+
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
 

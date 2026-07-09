@@ -13,7 +13,7 @@
 _target_: gigaevo.memory.read.auction.BootstrapThompsonAuctioneer
 # Fallback no-card baseline arm prior. Adaptive policies may replace this per
 # read with persisted no-card evidence through the candidate projector.
-baseline_prior: [3.0, 3.0]
+baseline_prior: ${memory.baseline_prior}
 # Task metrics context; primary metric significant_change is used only as the
 # cold gain scale fallback when no warm positive card exists in a round.
 metrics_context: ${ref:problem_context::metrics_context}

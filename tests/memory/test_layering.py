@@ -1,6 +1,6 @@
 """AST-enforced layering of ``gigaevo.memory``.
 
-Layer order: ``cards < events < storage < {read | write} < provider``.
+Layer order: ``cards < events < {context | storage} < {read | write} < provider``.
 ``read/`` and ``write/`` never import each other (eviction's ``CardScorer`` /
 ``CardValueScorer`` Protocols live in ``write/``; ``read/reputation`` implements
 them; config wires them). Chroma is confined to ``storage/index.py``; LLM handles (routers,
@@ -21,12 +21,15 @@ PACKAGE = "gigaevo.memory"
 LAYER_ALLOWED = {
     "cards": frozenset(),
     "events": frozenset({"cards"}),
+    "context": frozenset({"cards", "context"}),
     "storage": frozenset({"cards", "events", "storage"}),
-    "read": frozenset({"cards", "events", "storage", "read"}),
-    "write": frozenset({"cards", "events", "storage", "write"}),
-    "provider": frozenset({"cards", "events", "storage", "read", "write", "provider"}),
+    "read": frozenset({"cards", "context", "events", "storage", "read"}),
+    "write": frozenset({"cards", "context", "events", "storage", "write"}),
+    "provider": frozenset(
+        {"cards", "context", "events", "storage", "read", "write", "provider"}
+    ),
     "live_memory_hook": frozenset(
-        {"cards", "events", "storage", "read", "write", "provider"}
+        {"cards", "context", "events", "storage", "read", "write", "provider"}
     ),
 }
 

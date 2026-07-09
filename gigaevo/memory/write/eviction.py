@@ -16,7 +16,7 @@ from typing import Protocol
 
 from loguru import logger
 
-from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
+from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
 from gigaevo.memory.events import MemoryEvictionSweep, emit_memory_event
 from gigaevo.programs.metrics.context import MetricsContext
 
@@ -29,16 +29,36 @@ class CardScorer(Protocol):
     def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool: ...
 
 
-class CardValueScorer(CardScorer, Protocol):
+class ContextualCardScorer(CardScorer, Protocol):
+    @property
+    def requires_decision_context(self) -> bool: ...
+
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]: ...
+
+
+class CardValueScorer(ContextualCardScorer, Protocol):
+    @property
+    def policy_min_effective_events(self) -> float: ...
+
     def magnitude_of(self, block: CardStatsBlock | None) -> float | None: ...
 
     def event_deltas(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[float, ...]: ...
 
+    def event_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]: ...
+
+    def staleness_weight(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> float: ...
+
 
 class Evictor(Protocol):
     def should_evict(self, card: Card) -> bool: ...
+
+    def eviction_reason(self, card: Card) -> str: ...
 
     def sweep(self, cards: Sequence[Card]) -> list[str]: ...
 
@@ -57,15 +77,51 @@ def _harm_evidence(card: Card) -> Card:
     )
 
 
+def _event_weight(event: ContextualGain) -> float:
+    attr = event.attribution
+    if attr is not None and attr.credit_weight is not None:
+        weight = float(attr.credit_weight)
+    elif event.founding:
+        weight = 0.0
+    else:
+        weight = 1.0
+    return weight if math.isfinite(weight) and weight > 0.0 else 0.0
+
+
+def _has_positive_direct_evidence(card: Card, neutral_gain: float) -> bool:
+    for event in card.gain_events:
+        if (
+            event.founding
+            or event.invalid
+            or event.unused
+            or _event_weight(event) <= 0.0
+            or event.gain is None
+            or not math.isfinite(float(event.gain))
+        ):
+            continue
+        if float(event.gain) > neutral_gain:
+            return True
+    return False
+
+
 class HarmEvictor:
     """Evicts cards whose injection posterior is confidently harmful."""
 
-    def __init__(self, scorer: CardScorer) -> None:
+    def __init__(
+        self,
+        scorer: ContextualCardScorer,
+        *,
+        skip_contextual_without_context: bool = True,
+    ) -> None:
         self._scorer = scorer
+        self._skip_contextual_without_context = bool(skip_contextual_without_context)
 
     def should_evict(self, card: Card) -> bool:
         evidence = _harm_evidence(card)
-        return self._scorer.is_confidently_harmful(self._scorer.card_stats(evidence))
+        contexts = self._eviction_contexts(evidence)
+        return bool(contexts) and all(
+            self._is_harmful_in_context(evidence, context) for context in contexts
+        )
 
     def eviction_reason(self, card: Card) -> str:
         del card
@@ -85,6 +141,24 @@ class HarmEvictor:
             )
         return evicted
 
+    def _eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        contexts = self._scorer.eviction_contexts(card)
+        if contexts:
+            return contexts
+        if (
+            self._skip_contextual_without_context
+            and self._scorer.requires_decision_context
+        ):
+            return ()
+        return (None,)
+
+    def _is_harmful_in_context(
+        self, card: Card, context: DecisionContext | None
+    ) -> bool:
+        return self._scorer.is_confidently_harmful(
+            self._scorer.card_stats(card, context)
+        )
+
 
 class PolicyNonViableEvictor:
     """Evicts cards the active value policy has made non-viable.
@@ -96,30 +170,46 @@ class PolicyNonViableEvictor:
     the normal harm/confidence path.
     """
 
-    def __init__(self, scorer: CardValueScorer, *, neutral_gain: float) -> None:
+    def __init__(
+        self,
+        scorer: CardValueScorer,
+        *,
+        neutral_gain: float,
+        min_effective_events: float | None = None,
+        skip_contextual_without_context: bool = True,
+    ) -> None:
         if not math.isfinite(neutral_gain):
             raise ValueError(f"neutral_gain must be finite, got {neutral_gain}")
+        event_floor = (
+            scorer.policy_min_effective_events
+            if min_effective_events is None
+            else min_effective_events
+        )
+        if event_floor < 0.0 or not math.isfinite(event_floor):
+            raise ValueError(
+                "min_effective_events must be finite and non-negative, "
+                f"got {event_floor}"
+            )
         self._scorer = scorer
         self._neutral_gain = float(neutral_gain)
+        self._min_effective_events = float(event_floor)
+        self._skip_contextual_without_context = bool(skip_contextual_without_context)
 
     def should_evict(self, card: Card) -> bool:
         evidence = _harm_evidence(card)
-        deltas = self._scorer.event_deltas(evidence)
-        if not deltas:
+        if _has_positive_direct_evidence(evidence, self._neutral_gain):
             return False
-        if any(delta > self._neutral_gain for delta in deltas):
-            return False
-        block = self._scorer.card_stats(evidence)
-        ev = self._scorer.magnitude_of(block)
-        return (
-            ev is not None
-            and math.isfinite(float(ev))
-            and float(ev) <= self._neutral_gain
+        contexts = self._eviction_contexts(evidence)
+        return bool(contexts) and all(
+            self._context_is_nonviable(evidence, context) for context in contexts
         )
 
     def eviction_reason(self, card: Card) -> str:
         del card
-        return "policy non-viable: non-positive EV with no positive direct evidence"
+        return (
+            "policy non-viable: enough effective evidence, non-positive EV, "
+            "and no positive direct evidence"
+        )
 
     def sweep(self, cards: Sequence[Card]) -> list[str]:
         evicted = [card.id for card in cards if self.should_evict(card)]
@@ -135,6 +225,57 @@ class PolicyNonViableEvictor:
                 evicted,
             )
         return evicted
+
+    def _eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        contexts = self._scorer.eviction_contexts(card)
+        if contexts:
+            return contexts
+        if (
+            self._skip_contextual_without_context
+            and self._scorer.requires_decision_context
+        ):
+            return ()
+        return (None,)
+
+    def _context_is_nonviable(
+        self, card: Card, context: DecisionContext | None
+    ) -> bool:
+        deltas = self._scorer.event_deltas(card, context)
+        if not deltas:
+            return False
+        if self._effective_support(card, deltas, context) < self._min_effective_events:
+            return False
+        if any(delta > self._neutral_gain for delta in deltas):
+            return False
+        block = self._scorer.card_stats(card, context)
+        ev = self._scorer.magnitude_of(block)
+        return (
+            ev is not None
+            and math.isfinite(float(ev))
+            and float(ev) <= self._neutral_gain
+        )
+
+    def _effective_support(
+        self,
+        card: Card,
+        deltas: Sequence[float],
+        context: DecisionContext | None,
+    ) -> float:
+        weights = self._scorer.event_weights(card, context)
+        if len(weights) != len(deltas):
+            raise ValueError(
+                "event_weights must align with event_deltas: "
+                f"{len(weights)} weights for {len(deltas)} deltas"
+            )
+        event_support = sum(
+            max(0.0, float(weight))
+            for weight in weights
+            if math.isfinite(float(weight))
+        )
+        factor = float(self._scorer.staleness_weight(card, context))
+        if math.isfinite(factor) and factor >= 0.0:
+            event_support *= factor
+        return event_support
 
 
 class BirthFailureEvictor:
@@ -266,10 +407,7 @@ class CompositeEvictor:
     def eviction_reason(self, card: Card) -> str:
         for evictor in self._evictors:
             if evictor.should_evict(card):
-                reason = getattr(evictor, "eviction_reason", None)
-                if callable(reason):
-                    return str(reason(card))
-                return type(evictor).__name__
+                return evictor.eviction_reason(card)
         return ""
 
     def sweep(self, cards: Sequence[Card]) -> list[str]:

@@ -9,7 +9,7 @@
 # never strands a fresh card on the task's own gain scale.
 _target_: gigaevo.memory.read.auction.EVThompsonAuctioneer
 # Fallback no-card baseline arm prior for static/reproduction policies.
-baseline_prior: [3.0, 3.0]
+baseline_prior: ${memory.baseline_prior}
 # Task metrics context; primary metric significant_change supplies cold gain
 # scale when no warm positive card exists.
 metrics_context: ${ref:problem_context::metrics_context}

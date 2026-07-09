@@ -204,7 +204,13 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only |
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
-| `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion, later-use harm eviction, and policy-non-viable active-bank cleanup; `harm` keeps only the later-use harm sweep |
+| `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion, later-use harm eviction, and policy-non-viable active-bank cleanup after the reputation's effective evidence floor; contextual reputations provide explicit supported contexts for that cleanup; `harm` keeps only the later-use harm sweep |
+
+Top-level `memory.baseline_prior` is the shared fallback no-card arm prior
+(`Beta(3,3)` by default). Auctions, persisted no-card evidence, legacy fixed
+cold priors, and reputation fallback cold priors all reference it. Adaptive EB
+cold-card priors intentionally keep their own weaker `seed_prior: [1,1]` so
+bank evidence can move cold-card beliefs quickly.
 
 `memory/llm` is independent of the main mutation `llm`. The default
 `memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
@@ -300,7 +306,8 @@ This is a deliberate departure from the old MAD noise band: per our analysis
 a per-card band could not be designed soundly for these gain distributions,
 so tiny negative deltas do count against a card and the noise guard is the
 counting posterior itself — `harm_min_events: 3` before a card can be judged
-harmful at all, plus the optimistic `harm_quantile` read of P(not harmful).
+harmful at all by default, via `memory.evidence.min_effective_events`, plus the
+optimistic `harm_quantile` read of P(not harmful).
 Measured on run data, that guard holds the sequential false-harm rate to
 ~0.77% at the observed median of ~2 uses per card; revisit the calibration if
 cards start accumulating more than ~5 uses.
@@ -323,9 +330,14 @@ drops the incoming founding event, because the delta was measured for that
 child against its parent — foreign evidence for a pre-existing lever.
 Harm-eviction remains later-use-only; catastrophic origin failures are handled
 by the separate birth-failure policy. The recommended evictor also removes
-policy-non-viable cards whose active value estimate is at or below
-`memory.neutral_gain` and whose direct baseline-adjusted evidence never beat
-that neutral point. Program exemplars keep the zero-evidence-at-birth path.
+policy-non-viable cards after enough effective support when their active value
+estimate is at or below `memory.neutral_gain` and their direct
+baseline-adjusted evidence never beat that neutral point. The default evidence
+floor is the readable shared knob `memory.evidence.min_effective_events: 3`,
+mirrored into `memory.eviction_safety.min_effective_events`. Contextual scorers
+supply explicit supported evidence contexts for harm and policy cleanup; if a
+custom contextual scorer cannot provide them, the default skips contextless
+cleanup. Program exemplars keep the zero-evidence-at-birth path.
 
 ## Tracking: did memory actually flow?
 

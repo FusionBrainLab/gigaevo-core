@@ -4,47 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import math
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
-from gigaevo.memory.context import GlobalMemoryContext
+from gigaevo.memory.context import GlobalMemoryContext, MemoryContextModel
+from gigaevo.memory.context.beta import BetaPrior, coerce_beta_prior
 from gigaevo.memory.storage.base import MemoryStore
-
-
-class BetaPrior(BaseModel):
-    """Validated Beta prior plus provenance for auction telemetry."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    alpha: float = Field(gt=0.0, description="Beta alpha parameter.")
-    beta: float = Field(gt=0.0, description="Beta beta parameter.")
-    source: str = Field(default="fixed", description="Where this prior came from.")
-    support_n: float = Field(
-        default=0.0, ge=0.0, description="Effective evidence behind the prior."
-    )
-
-    @field_validator("alpha", "beta")
-    @classmethod
-    def _finite_positive(cls, value: float) -> float:
-        value = float(value)
-        if not math.isfinite(value) or value <= 0.0:
-            raise ValueError("Beta prior parameters must be finite and positive")
-        return value
-
-    def as_tuple(self) -> tuple[float, float]:
-        return (self.alpha, self.beta)
-
-
-def coerce_beta_prior(value: Any, *, source: str = "fixed") -> BetaPrior:
-    """Accept legacy ``[alpha, beta]`` YAML values at new policy seams."""
-
-    if isinstance(value, BetaPrior):
-        return value
-    if isinstance(value, (list, tuple)) and len(value) == 2:
-        return BetaPrior(alpha=float(value[0]), beta=float(value[1]), source=source)
-    raise TypeError(f"expected BetaPrior or [alpha, beta], got {value!r}")
 
 
 @runtime_checkable
@@ -134,7 +101,7 @@ class EmpiricalBayesMemoryPrior(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     store: MemoryStore = Field(description="Memory bank providing prior evidence.")
-    context_model: Any = Field(default_factory=GlobalMemoryContext)
+    context_model: MemoryContextModel = Field(default_factory=GlobalMemoryContext)
     seed_prior: tuple[float, float] = Field(
         default=(1.0, 1.0),
         description="No-data seed prior for cold-card help probability.",
@@ -187,14 +154,39 @@ class EmpiricalBayesMemoryPrior(BaseModel):
             source="eb_seed",
             support_n=0.0,
         )
-        for source, counts in (
-            ("eb_global", self._counts(context, kind=None, category=None)),
-            ("eb_kind", self._counts(context, kind=card.kind, category=None)),
+        cohorts = [
+            ("eb_global", self._counts(None, kind=None, category=None, local=False)),
+            ("eb_kind", self._counts(None, kind=card.kind, category=None, local=False)),
             (
                 "eb_kind_category",
-                self._counts(context, kind=card.kind, category=card.category),
+                self._counts(None, kind=card.kind, category=card.category, local=False),
             ),
-        ):
+        ]
+        if self.context_model.key_for(context).kind != "global":
+            cohorts.extend(
+                [
+                    (
+                        "eb_context",
+                        self._counts(context, kind=None, category=None, local=True),
+                    ),
+                    (
+                        "eb_context_kind",
+                        self._counts(
+                            context, kind=card.kind, category=None, local=True
+                        ),
+                    ),
+                    (
+                        "eb_context_kind_category",
+                        self._counts(
+                            context,
+                            kind=card.kind,
+                            category=card.category,
+                            local=True,
+                        ),
+                    ),
+                ]
+            )
+        for source, counts in cohorts:
             success, failure = counts
             n = success + failure
             if n <= 0.0:
@@ -221,6 +213,7 @@ class EmpiricalBayesMemoryPrior(BaseModel):
         *,
         kind: CardKind | None,
         category: str | None,
+        local: bool,
     ) -> tuple[float, float]:
         success = 0.0
         failure = 0.0
@@ -233,7 +226,11 @@ class EmpiricalBayesMemoryPrior(BaseModel):
                 continue
             if category is not None and other.category != category:
                 continue
-            events = self.context_model.evidence_events(other, context)
+            events = (
+                self.context_model.local_evidence_events(other, context)
+                if local
+                else self.context_model.evidence_events(other, context)
+            )
             if self.first_exposure_only:
                 first = _first_non_founding_exposure(events)
                 if first is None:

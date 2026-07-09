@@ -24,6 +24,9 @@ class MarkingEvictor:
     def should_evict(self, card) -> bool:
         return card.id in self._harmful
 
+    def eviction_reason(self, card) -> str:
+        return "test evictor"
+
     def sweep(self, cards) -> list[str]:
         return [card.id for card in cards if self.should_evict(card)]
 

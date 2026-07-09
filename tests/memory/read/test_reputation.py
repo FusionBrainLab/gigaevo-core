@@ -29,6 +29,23 @@ def _bs(num_bins: int = 10, max_val: float = 1.0) -> BehaviorSpace:
     )
 
 
+class _NoCardOutcome:
+    def __init__(
+        self,
+        *,
+        fitness: float | None,
+        base_fitness: float | None,
+        no_card_control: bool,
+        base_metrics: dict[str, float] | None = None,
+    ) -> None:
+        self.fitness = fitness
+        self.invalid = False
+        self.base_selected_ids = ()
+        self.base_metrics = base_metrics or {}
+        self.base_fitness = base_fitness
+        self.no_card_control = no_card_control
+
+
 class TestBetaBinomialPosterior:
     def test_no_events_is_prior_with_nan_quantile(self):
         block = beta_binomial_posterior([])
@@ -75,6 +92,19 @@ class TestBetaBinomialPosterior:
         assert block.efficacy_confident is True
         weak = beta_binomial_posterior([0.1, -0.2])
         assert weak.efficacy_confident is False
+
+    def test_no_card_baseline_ignores_unusable_controls(self):
+        natural = _NoCardOutcome(fitness=0.7, base_fitness=0.5, no_card_control=False)
+        baseline = BetaBinomialReputation().fit_no_card_baseline(
+            [
+                _NoCardOutcome(fitness=0.9, base_fitness=None, no_card_control=True),
+                natural,
+            ],
+            higher_is_better=True,
+        )
+
+        assert baseline.has_evidence is True
+        assert baseline.baseline_for(natural) == pytest.approx(0.2)
 
 
 class TestBlockFromEvents:

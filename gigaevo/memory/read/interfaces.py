@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
+from gigaevo.memory.context import NoCardBaselineOutcome
 from gigaevo.memory.read.auction import AuctionBid, AuctionCandidate
 from gigaevo.memory.storage.base import ResearchResult
 
@@ -25,9 +27,23 @@ class Shortlister(Protocol):
     ) -> ResearchResult: ...
 
 
+class NoCardBaseline(Protocol):
+    """Fitted no-card progress baseline used by gain stamping."""
+
+    has_evidence: bool
+
+    def baseline_for(self, outcome: NoCardBaselineOutcome) -> float: ...
+
+
 @runtime_checkable
 class ReputationModel(Protocol):
     """Owns all per-card efficacy statistics derived from injection outcomes."""
+
+    @property
+    def requires_decision_context(self) -> bool: ...
+
+    @property
+    def policy_min_effective_events(self) -> float: ...
 
     def card_stats(
         self, card: Card, context: DecisionContext | None = None
@@ -51,9 +67,15 @@ class ReputationModel(Protocol):
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]: ...
 
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]: ...
+
     def staleness_weight(
         self, card: Card, context: DecisionContext | None = None
     ) -> float: ...
+
+    def fit_no_card_baseline(
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
+    ) -> NoCardBaseline: ...
 
 
 class DecayCompatibleReputation(ReputationModel, Protocol):
@@ -64,14 +86,6 @@ class DecayCompatibleReputation(ReputationModel, Protocol):
     harm_threshold: float
     confident_quantile: float
     confident_threshold: float
-
-
-class NoCardBaseline(Protocol):
-    """Fitted no-card progress baseline used by gain stamping."""
-
-    has_evidence: bool
-
-    def baseline_for(self, outcome: Any) -> float: ...
 
 
 @runtime_checkable

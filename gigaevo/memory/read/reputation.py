@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 import math
 import statistics
-from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +20,11 @@ from scipy.stats import beta
 
 from gigaevo.evolution.strategies.models import BehaviorSpace
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
+from gigaevo.memory.context import (
+    BDCellMemoryContext,
+    GlobalMemoryContext,
+    NoCardBaselineOutcome,
+)
 from gigaevo.memory.read.bootstrap import bootstrap_ev_samples, stable_rng
 from gigaevo.memory.read.interfaces import NoCardBaseline, ReputationModel
 from gigaevo.memory.read.staleness import bank_cycle_weight
@@ -29,89 +33,6 @@ from gigaevo.memory.storage.base import MemoryStore
 
 def _median(values: Sequence[float]) -> float:
     return float(statistics.median(values)) if values else 0.0
-
-
-def _outcome_selected_ids(outcome: Any) -> set[str]:
-    return {
-        cid.strip()
-        for cid in (getattr(outcome, "base_selected_ids", ()) or ())
-        if cid.strip()
-    }
-
-
-def _outcome_no_card_control(outcome: Any) -> bool:
-    return bool(getattr(outcome, "no_card_control", False))
-
-
-def _no_card_cohort(outcomes: Sequence[Any]) -> list[Any]:
-    no_card = [outcome for outcome in outcomes if not _outcome_selected_ids(outcome)]
-    controls = [outcome for outcome in no_card if _outcome_no_card_control(outcome)]
-    return controls if controls else no_card
-
-
-def _outcome_delta(outcome: Any, higher_is_better: bool) -> float | None:
-    fitness = getattr(outcome, "fitness", None)
-    base_fitness = getattr(outcome, "base_fitness", None)
-    if fitness is None or base_fitness is None:
-        return None
-    return (
-        float(fitness) - float(base_fitness)
-        if higher_is_better
-        else float(base_fitness) - float(fitness)
-    )
-
-
-class _GlobalNoCardBaseline:
-    def __init__(self, baseline: float, *, has_evidence: bool) -> None:
-        self._baseline = baseline
-        self.has_evidence = has_evidence
-
-    def baseline_for(self, outcome: Any) -> float:
-        del outcome
-        return self._baseline
-
-
-class _CellNoCardBaseline:
-    def __init__(
-        self,
-        *,
-        behavior_space: BehaviorSpace,
-        global_median: float,
-        by_cell: dict[tuple[int, ...], float],
-        has_evidence: bool,
-    ) -> None:
-        self._behavior_space = behavior_space
-        self._global_median = global_median
-        self._by_cell = by_cell
-        self.has_evidence = has_evidence
-
-    def baseline_for(self, outcome: Any) -> float:
-        metrics = getattr(outcome, "base_metrics", {}) or {}
-        cell = BDProximityReputation._cell_in(self._behavior_space, metrics)
-        if cell is not None and cell in self._by_cell:
-            return self._by_cell[cell]
-        return self._global_median
-
-
-def _global_no_card_baseline(
-    outcomes: Sequence[Any], *, higher_is_better: bool
-) -> _GlobalNoCardBaseline:
-    deltas = _no_card_deltas(outcomes, higher_is_better)
-    return _GlobalNoCardBaseline(_median(deltas), has_evidence=bool(deltas))
-
-
-def _no_card_deltas(outcomes: Sequence[Any], higher_is_better: bool) -> list[float]:
-    deltas: list[float] = []
-    for outcome in _no_card_cohort(outcomes):
-        if getattr(outcome, "base_fitness", None) is not None and getattr(
-            outcome, "invalid", False
-        ):
-            deltas.append(0.0)
-            continue
-        delta = _outcome_delta(outcome, higher_is_better)
-        if delta is not None and math.isfinite(delta):
-            deltas.append(delta)
-    return deltas
 
 
 def _event_weight(event: ContextualGain) -> float:
@@ -348,6 +269,18 @@ class BetaBinomialReputation(BaseModel):
         description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
     )
 
+    @property
+    def requires_decision_context(self) -> bool:
+        """Whether global eviction decisions need an explicit read context."""
+
+        return False
+
+    @property
+    def policy_min_effective_events(self) -> float:
+        """Default evidence floor for active-policy cleanup."""
+
+        return float(self.harm_min_events)
+
     def posterior(
         self, gains: Sequence[float], *, threshold: float = 0.0
     ) -> CardStatsBlock:
@@ -431,6 +364,15 @@ class BetaBinomialReputation(BaseModel):
         """Concrete event rows behind :meth:`event_deltas`."""
         return _ev_events(card.gain_events)
 
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        """Contexts the write-side active-policy cleanup can evaluate.
+
+        Global reputation has one value surface, so one contextless evaluation
+        is the complete active-policy view.
+        """
+        del card
+        return (None,)
+
     def staleness_weight(
         self, card: Card, context: DecisionContext | None = None
     ) -> float:
@@ -459,9 +401,11 @@ class BetaBinomialReputation(BaseModel):
         return float(beta.ppf(self.harm_quantile, a, b)) < self.harm_threshold
 
     def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
-    ) -> Any:
-        return _global_no_card_baseline(outcomes, higher_is_better=higher_is_better)
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
+    ) -> NoCardBaseline:
+        return GlobalMemoryContext().fit_no_card_baseline(
+            outcomes, higher_is_better=higher_is_better
+        )
 
 
 class BDProximityReputation(BetaBinomialReputation):
@@ -489,6 +433,16 @@ class BDProximityReputation(BetaBinomialReputation):
         default_factory=BetaBinomialReputation,
         description="Cold-cell delegate: the global event-derived reputation.",
     )
+
+    @property
+    def requires_decision_context(self) -> bool:
+        """BD-local values are only meaningful for a concrete parent context."""
+
+        return True
+
+    @property
+    def policy_min_effective_events(self) -> float:
+        return float(self.harm_min_events)
 
     @staticmethod
     def _cell_in(
@@ -575,32 +529,34 @@ class BDProximityReputation(BetaBinomialReputation):
             return self.fallback.evidence_events(card, context)
         return _ev_events(in_cell)
 
-    def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
-    ) -> Any:
-        """Median no-card progress by this reputation's BD cell, with global fallback."""
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        """One observed context per BD evidence cell.
+
+        Policy-nonviable eviction is allowed to retire a BD-local card only
+        from contexts where the card already has concrete non-founding EV
+        evidence. It never asks the fallback global view to delete a card that
+        might still be useful in an unobserved cell.
+        """
         space = self.behavior_space.model_copy(deep=True)
-        global_deltas: list[float] = []
-        deltas_by_cell: dict[tuple[int, ...], list[float]] = {}
-        for outcome in _no_card_cohort(outcomes):
-            delta: float | None
-            if getattr(outcome, "base_fitness", None) is not None and getattr(
-                outcome, "invalid", False
-            ):
-                delta = 0.0
-            else:
-                delta = _outcome_delta(outcome, higher_is_better)
-            if delta is None or not math.isfinite(delta):
-                continue
-            global_deltas.append(delta)
-            metrics = getattr(outcome, "base_metrics", {}) or {}
-            if (cell := self._cell_in(space, metrics)) is not None:
-                deltas_by_cell.setdefault(cell, []).append(delta)
-        return _CellNoCardBaseline(
-            behavior_space=space,
-            global_median=_median(global_deltas),
-            by_cell={cell: _median(deltas) for cell, deltas in deltas_by_cell.items()},
-            has_evidence=bool(global_deltas),
+        contexts: list[DecisionContext | None] = []
+        seen: set[tuple[int, ...]] = set()
+        for event in _ev_events(card.gain_events):
+            cell = self._cell_in(space, event.context.parent_metrics)
+            if cell is not None and cell not in seen:
+                seen.add(cell)
+                contexts.append(event.context)
+        return tuple(contexts)
+
+    def fit_no_card_baseline(
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
+    ) -> NoCardBaseline:
+        """Median no-card progress by this reputation's BD cell, with global fallback."""
+        return BDCellMemoryContext(
+            behavior_space=self.behavior_space,
+            fallback=GlobalMemoryContext(),
+        ).fit_no_card_baseline(
+            outcomes,
+            higher_is_better=higher_is_better,
         )
 
 
@@ -658,6 +614,17 @@ class BootstrapReputation:
         self._ev_lo_quantile = ev_lo_quantile
         self._n_bootstrap = n_bootstrap
         self._confident_min_events = confident_min_events
+
+    @property
+    def requires_decision_context(self) -> bool:
+        return self._inner.requires_decision_context
+
+    @property
+    def policy_min_effective_events(self) -> float:
+        return max(
+            float(self._confident_min_events),
+            float(self._inner.policy_min_effective_events),
+        )
 
     def card_stats(
         self, card: Card, context: DecisionContext | None = None
@@ -724,10 +691,10 @@ class BootstrapReputation:
     def evidence_events(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]:
-        evidence = getattr(self._inner, "evidence_events", None)
-        if callable(evidence):
-            return evidence(card, context)
-        return ()
+        return self._inner.evidence_events(card, context)
+
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        return self._inner.eviction_contexts(card)
 
     def staleness_weight(
         self, card: Card, context: DecisionContext | None = None
@@ -740,9 +707,8 @@ class BootstrapReputation:
         )
 
     def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
     ) -> NoCardBaseline:
-        fit = getattr(self._inner, "fit_no_card_baseline", None)
-        if callable(fit):
-            return fit(outcomes, higher_is_better=higher_is_better)
-        return _global_no_card_baseline(outcomes, higher_is_better=higher_is_better)
+        return self._inner.fit_no_card_baseline(
+            outcomes, higher_is_better=higher_is_better
+        )

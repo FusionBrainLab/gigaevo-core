@@ -14,7 +14,7 @@ ev_lo_quantile: 0.20
 # Deterministic resamples for per-card stats.
 n_bootstrap: 512
 # Effective non-stale use-event count required before confidence can be true.
-confident_min_events: 3
+confident_min_events: ${memory.evidence.min_effective_events}
 inner:
   _target_: gigaevo.memory.read.decay.DecayingReputation
   store: ${ref:memory.store}
@@ -23,9 +23,9 @@ inner:
   inner:
     _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
     # Harm/confidence thresholds and aligned cold prior for global evidence.
-    harm_min_events: 3
+    harm_min_events: ${memory.evidence.min_effective_events}
     harm_quantile: 0.80
     harm_threshold: 0.5
     confident_quantile: 0.20
     confident_threshold: 0.5
-    cold_prior: [3.0, 3.0]
+    cold_prior: ${memory.baseline_prior}

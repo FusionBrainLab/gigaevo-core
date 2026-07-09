@@ -3,4 +3,4 @@
 # old-run reproduction. The no-card abstention prior is owned by
 # memory/no_card_evidence.
 _target_: gigaevo.memory.read.prior.FixedMemoryPrior
-cold_card: [3.0, 3.0]
+cold_card: ${memory.baseline_prior}

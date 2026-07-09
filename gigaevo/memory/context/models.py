@@ -19,6 +19,40 @@ from gigaevo.evolution.strategies.models import BehaviorSpace
 from gigaevo.memory.cards import Card, ContextualGain, DecisionContext
 
 
+@runtime_checkable
+class ParentContextSource(Protocol):
+    """Program-like parent fields needed to build a memory decision context."""
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def metrics(self) -> dict[str, float]: ...
+
+
+@runtime_checkable
+class NoCardBaselineOutcome(Protocol):
+    """Outcome fields needed by no-card baseline estimators."""
+
+    @property
+    def fitness(self) -> float | None: ...
+
+    @property
+    def invalid(self) -> bool: ...
+
+    @property
+    def base_selected_ids(self) -> Sequence[str]: ...
+
+    @property
+    def base_metrics(self) -> dict[str, float]: ...
+
+    @property
+    def base_fitness(self) -> float | None: ...
+
+    @property
+    def no_card_control(self) -> bool: ...
+
+
 class ContextKey(BaseModel):
     """Stable, serializable identity of the context bucket a read belongs to."""
 
@@ -39,7 +73,7 @@ class _ConstantNoCardBaseline(BaseModel):
     baseline: float = 0.0
     has_evidence: bool = False
 
-    def baseline_for(self, outcome: Any) -> float:
+    def baseline_for(self, outcome: NoCardBaselineOutcome) -> float:
         del outcome
         return self.baseline
 
@@ -52,9 +86,8 @@ class _CellNoCardBaseline(BaseModel):
     by_cell: dict[tuple[int, ...], float] = Field(default_factory=dict)
     has_evidence: bool = False
 
-    def baseline_for(self, outcome: Any) -> float:
-        metrics = getattr(outcome, "base_metrics", {}) or {}
-        cell = _cell_in(self.behavior_space, metrics)
+    def baseline_for(self, outcome: NoCardBaselineOutcome) -> float:
+        cell = _cell_in(self.behavior_space, outcome.base_metrics)
         if cell is not None and cell in self.by_cell:
             return self.by_cell[cell]
         return self.global_median
@@ -64,7 +97,9 @@ class _CellNoCardBaseline(BaseModel):
 class MemoryContextModel(Protocol):
     """Configurable context policy for memory evidence aggregation."""
 
-    def read_context(self, parents: Sequence[Any]) -> DecisionContext | None: ...
+    def read_context(
+        self, parents: Sequence[ParentContextSource]
+    ) -> DecisionContext | None: ...
 
     def key_for(self, context: DecisionContext | None = None) -> ContextKey: ...
 
@@ -72,8 +107,12 @@ class MemoryContextModel(Protocol):
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]: ...
 
+    def local_evidence_events(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[ContextualGain, ...]: ...
+
     def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
     ) -> Any: ...
 
 
@@ -85,17 +124,19 @@ def _clean_ids(ids: Sequence[str]) -> set[str]:
     return {c.strip() for c in ids if c.strip()}
 
 
-def _outcome_selected_ids(outcome: Any) -> set[str]:
-    return _clean_ids(tuple(getattr(outcome, "base_selected_ids", ()) or ()))
+def _outcome_selected_ids(outcome: NoCardBaselineOutcome) -> set[str]:
+    return _clean_ids(tuple(outcome.base_selected_ids or ()))
 
 
-def _outcome_no_card_control(outcome: Any) -> bool:
-    return bool(getattr(outcome, "no_card_control", False))
+def _outcome_no_card_control(outcome: NoCardBaselineOutcome) -> bool:
+    return bool(outcome.no_card_control)
 
 
-def _oriented_delta(outcome: Any, higher_is_better: bool) -> float | None:
-    fitness = getattr(outcome, "fitness", None)
-    base_fitness = getattr(outcome, "base_fitness", None)
+def _oriented_delta(
+    outcome: NoCardBaselineOutcome, higher_is_better: bool
+) -> float | None:
+    fitness = outcome.fitness
+    base_fitness = outcome.base_fitness
     if fitness is None or base_fitness is None:
         return None
     return (
@@ -105,21 +146,24 @@ def _oriented_delta(outcome: Any, higher_is_better: bool) -> float | None:
     )
 
 
-def _no_card_cohort(outcomes: Sequence[Any]) -> list[Any]:
+def _no_card_cohort(
+    outcomes: Sequence[NoCardBaselineOutcome],
+) -> list[NoCardBaselineOutcome]:
     no_card = [
         outcome
         for outcome in outcomes
-        if getattr(outcome, "base_fitness", None) is not None
-        and not _outcome_selected_ids(outcome)
+        if outcome.base_fitness is not None and not _outcome_selected_ids(outcome)
     ]
     controls = [outcome for outcome in no_card if _outcome_no_card_control(outcome)]
     return controls if controls else no_card
 
 
-def _no_card_deltas(outcomes: Sequence[Any], higher_is_better: bool) -> list[float]:
+def _no_card_deltas(
+    outcomes: Sequence[NoCardBaselineOutcome], higher_is_better: bool
+) -> list[float]:
     deltas: list[float] = []
     for outcome in _no_card_cohort(outcomes):
-        if getattr(outcome, "invalid", False):
+        if outcome.invalid:
             deltas.append(0.0)
             continue
         delta = _oriented_delta(outcome, higher_is_better)
@@ -128,13 +172,15 @@ def _no_card_deltas(outcomes: Sequence[Any], higher_is_better: bool) -> list[flo
     return deltas
 
 
-def _read_context_from_parents(parents: Sequence[Any]) -> DecisionContext | None:
+def _read_context_from_parents(
+    parents: Sequence[ParentContextSource],
+) -> DecisionContext | None:
     if not parents:
         return None
     parent = parents[0]
     return DecisionContext(
-        parent_metrics=dict(getattr(parent, "metrics", None) or {}),
-        parent_id=str(getattr(parent, "id", "") or ""),
+        parent_metrics=dict(parent.metrics or {}),
+        parent_id=str(parent.id or ""),
     )
 
 
@@ -173,7 +219,9 @@ class GlobalMemoryContext(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    def read_context(self, parents: Sequence[Any]) -> DecisionContext | None:
+    def read_context(
+        self, parents: Sequence[ParentContextSource]
+    ) -> DecisionContext | None:
         return _read_context_from_parents(parents)
 
     def key_for(self, context: DecisionContext | None = None) -> ContextKey:
@@ -186,8 +234,13 @@ class GlobalMemoryContext(BaseModel):
         del context
         return tuple(card.gain_events)
 
+    def local_evidence_events(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[ContextualGain, ...]:
+        return self.evidence_events(card, context)
+
     def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
     ) -> Any:
         deltas = _no_card_deltas(outcomes, higher_is_better)
         return _ConstantNoCardBaseline(
@@ -211,7 +264,9 @@ class BDCellMemoryContext(BaseModel):
     )
     fallback: GlobalMemoryContext = Field(default_factory=GlobalMemoryContext)
 
-    def read_context(self, parents: Sequence[Any]) -> DecisionContext | None:
+    def read_context(
+        self, parents: Sequence[ParentContextSource]
+    ) -> DecisionContext | None:
         return self.fallback.read_context(parents)
 
     def key_for(self, context: DecisionContext | None = None) -> ContextKey:
@@ -226,38 +281,43 @@ class BDCellMemoryContext(BaseModel):
     def evidence_events(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]:
+        local = self.local_evidence_events(card, context)
+        if local:
+            return local
+        return self.fallback.evidence_events(card, context)
+
+    def local_evidence_events(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[ContextualGain, ...]:
         if context is None or not card.gain_events:
             return self.fallback.evidence_events(card, context)
         space = self.behavior_space.model_copy(deep=True)
         parent_cell = _cell_in(space, context.parent_metrics)
         if parent_cell is None:
-            return self.fallback.evidence_events(card, context)
+            return ()
         in_cell = tuple(
             event
             for event in card.gain_events
             if _cell_in(space, event.context.parent_metrics) == parent_cell
         )
-        if not in_cell or not _has_non_founding_support(in_cell):
-            return self.fallback.evidence_events(card, context)
-        return in_cell
+        return in_cell if _has_non_founding_support(in_cell) else ()
 
     def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
     ) -> Any:
         space = self.behavior_space.model_copy(deep=True)
         global_deltas: list[float] = []
         deltas_by_cell: dict[tuple[int, ...], list[float]] = {}
         for outcome in _no_card_cohort(outcomes):
             delta: float | None
-            if getattr(outcome, "invalid", False):
+            if outcome.invalid:
                 delta = 0.0
             else:
                 delta = _oriented_delta(outcome, higher_is_better)
             if delta is None or not math.isfinite(delta):
                 continue
             global_deltas.append(delta)
-            metrics = getattr(outcome, "base_metrics", {}) or {}
-            if (cell := _cell_in(space, metrics)) is not None:
+            if (cell := _cell_in(space, outcome.base_metrics)) is not None:
                 deltas_by_cell.setdefault(cell, []).append(delta)
         return _CellNoCardBaseline(
             behavior_space=space,

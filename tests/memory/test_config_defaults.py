@@ -28,11 +28,11 @@ def test_memory_writer_defaults_novelty_gate_off():
     assert parameters["novelty_admission_gate"].default is False
 
 
-def _cold_priors(node: Any) -> list[list[float]]:
+def _cold_priors(node: Any) -> list[Any]:
     if isinstance(node, dict):
         values = []
         if "cold_prior" in node:
-            values.append(list(node["cold_prior"]))
+            values.append(node["cold_prior"])
         for value in node.values():
             values.extend(_cold_priors(value))
         return values
@@ -48,7 +48,9 @@ def test_reputation_cold_priors_match_auction_baseline():
     auction = OmegaConf.load(
         _REPO_ROOT / "config" / "memory" / "auction" / "thompson_bootstrap.yaml"
     )
+    raw_auction = OmegaConf.to_container(auction, resolve=False)
+    assert raw_auction["baseline_prior"] == "${memory.baseline_prior}"
     for path in (_REPO_ROOT / "config" / "memory" / "reputation").glob("*.yaml"):
         raw = OmegaConf.to_container(OmegaConf.load(path), resolve=False)
         for cold_prior in _cold_priors(raw):
-            assert cold_prior == list(auction.baseline_prior)
+            assert cold_prior == raw_auction["baseline_prior"]

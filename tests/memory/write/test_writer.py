@@ -390,6 +390,9 @@ async def test_tombstoned_exemplar_never_repays_author_llm(
         def should_evict(self, card) -> bool:
             return card.id in self._harmful
 
+        def eviction_reason(self, card) -> str:
+            return "test evictor"
+
         def sweep(self, cards) -> list[str]:
             return [c.id for c in cards if self.should_evict(c)]
 

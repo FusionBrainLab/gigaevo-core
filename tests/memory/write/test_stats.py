@@ -157,6 +157,8 @@ def test_no_card_baseline_prefers_randomized_controls_over_policy_abstentions():
 
 def test_used_card_gain_accepts_custom_no_card_estimator():
     class FixedBaseline:
+        has_evidence = True
+
         def fit_no_card_baseline(self, outcomes, *, higher_is_better):
             del outcomes, higher_is_better
             return self
@@ -639,6 +641,9 @@ def test_updater_sweep_removes_harmful_cards(store, make_card, metrics_context):
     class EvictAll:
         def should_evict(self, card) -> bool:
             return True
+
+        def eviction_reason(self, card) -> str:
+            return "test evictor"
 
         def sweep(self, cards) -> list[str]:
             return [card.id for card in cards]

@@ -21,13 +21,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import math
-from typing import Any
 
 from scipy.stats import beta
 
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
+from gigaevo.memory.context import NoCardBaselineOutcome
 from gigaevo.memory.read.interfaces import DecayCompatibleReputation, NoCardBaseline
-from gigaevo.memory.read.reputation import BetaBinomialReputation
 from gigaevo.memory.read.staleness import bank_cycle_weight
 from gigaevo.memory.storage.base import MemoryStore
 
@@ -49,6 +48,14 @@ class DecayingReputation:
         self._inner = inner
         self._store = store
         self._half_life_cycles = half_life_cycles
+
+    @property
+    def requires_decision_context(self) -> bool:
+        return self._inner.requires_decision_context
+
+    @property
+    def policy_min_effective_events(self) -> float:
+        return self._inner.policy_min_effective_events
 
     def card_stats(
         self, card: Card, context: DecisionContext | None = None
@@ -95,10 +102,10 @@ class DecayingReputation:
     def evidence_events(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]:
-        evidence = getattr(self._inner, "evidence_events", None)
-        if callable(evidence):
-            return evidence(card, context)
-        return ()
+        return self._inner.evidence_events(card, context)
+
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        return self._inner.eviction_contexts(card)
 
     def staleness_weight(
         self, card: Card, context: DecisionContext | None = None
@@ -108,12 +115,9 @@ class DecayingReputation:
         return self._weight(card, context)
 
     def fit_no_card_baseline(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
+        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
     ) -> NoCardBaseline:
-        fit = getattr(self._inner, "fit_no_card_baseline", None)
-        if callable(fit):
-            return fit(outcomes, higher_is_better=higher_is_better)
-        return BetaBinomialReputation().fit_no_card_baseline(
+        return self._inner.fit_no_card_baseline(
             outcomes, higher_is_better=higher_is_better
         )
 

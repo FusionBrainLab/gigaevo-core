@@ -228,7 +228,7 @@ def compute_contextual_gains(
     baseline = _fit_no_card_baseline(
         baseline_estimator, programs, higher_is_better=higher_is_better
     )
-    has_baseline_evidence = bool(getattr(baseline, "has_evidence", True))
+    has_baseline_evidence = bool(baseline.has_evidence)
     for p in programs:
         if p.base_fitness is None or not p.base_selected_ids:
             continue
@@ -346,7 +346,7 @@ def _fit_no_card_baseline(
     *,
     higher_is_better: bool,
 ) -> FittedNoCardBaseline:
-    if estimator is None or not hasattr(estimator, "fit_no_card_baseline"):
+    if estimator is None:
         estimator = GlobalNoCardBaseline()
     try:
         return estimator.fit_no_card_baseline(

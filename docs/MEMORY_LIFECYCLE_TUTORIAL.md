@@ -89,7 +89,7 @@ The current `memory=full` top-level defaults are:
 | Auction | `BootstrapThompsonAuctioneer` | tail-aware EV bids and no-card-arm gate |
 | Budget | `TopBidBudgeter` | when too many cards win, keep highest EV bid |
 | Excluder | `LineageExcluder` | do not re-serve an already-applied ancestral card |
-| Evictor | `CompositeEvictor(BirthFailureEvictor, HarmEvictor, PolicyNonViableEvictor)` | delete catastrophic births, later-use harm, and active-bank zombies |
+| Evictor | `CompositeEvictor(BirthFailureEvictor, HarmEvictor, PolicyNonViableEvictor)` | delete catastrophic births, later-use harm, and warm active-bank zombies after enough supported evidence |
 
 `memory.reader.max_cards=1` is the external Memory Cards block budget by
 default: it caps how many rendered cards reach `MutationSuggestionStage`. This
@@ -190,7 +190,7 @@ This expands into the following system.
 | Program exemplars | `enabled=true`, `top_k_per_refresh=4`, `max_cards=12` | Adds bounded top-program cards | Some lessons are best represented by a concrete program exemplar | Banks contain `kind=program` cards with fitness/code hash |
 | Birth eviction | `BirthFailureEvictor(scale_multiplier=2.0)` | Deletes catastrophic founding-loss cards | Prevents severe origin failures from acting like neutral cold advice | Ledger records `rejected_harm` or `evicted` near admission/sweep |
 | Harm eviction | `HarmEvictor` | Deletes cards whose later-use posterior is confidently harmful | Conservative backstop for repeated failures, usually from batched evidence or less conservative policies | Ledger reason says `injection posterior confidently harmful` |
-| Policy non-viable eviction | `PolicyNonViableEvictor(neutral_gain=${memory.neutral_gain})` | Deletes warm cards with non-positive active-policy EV and no positive direct baseline-adjusted gain | Main zombie-card fix: one bad/non-use sample can make a card unattractive without waiting for 3 bad selections | Ledger reason says `policy non-viable`, not confidently harmful |
+| Policy non-viable eviction | `PolicyNonViableEvictor(neutral_gain=${memory.neutral_gain})` | Deletes warm cards with enough effective support, non-positive active-policy EV, and no positive direct baseline-adjusted gain | Main zombie-card fix after repeated non-positive evidence; the evidence floor is `memory.eviction_safety.min_effective_events`, which defaults to `memory.evidence.min_effective_events` | Ledger reason says `policy non-viable`, not confidently harmful |
 
 The recommended settings are conservative in one important way: they do not
 delete every cold card. A card with no later-use evidence can remain in the bank,
@@ -420,9 +420,10 @@ as later-use evidence in the reputation posterior. This matters:
 - A founding-only mildly negative card is still cold statistically.
 - A founding-only catastrophically negative card can be deleted immediately.
 - A later single negative or unused exposure usually does not need to become a
-  "confidently harmful" posterior. If the active policy EV is non-positive and
-  there is no positive direct baseline-adjusted use, `PolicyNonViableEvictor`
-  can remove it as bank hygiene.
+  "confidently harmful" posterior, and it is not enough for policy cleanup.
+  After the configured effective-event floor is reached, if the active policy
+  EV is non-positive and there is no positive direct baseline-adjusted use,
+  `PolicyNonViableEvictor` can remove it as bank hygiene.
 
 Concretely, founding events are excluded from:
 
@@ -540,8 +541,9 @@ from its bootstrap EV support. It must pass:
 2. A round-relative EV floor.
 3. A sampled no-card-arm gate: adaptive runs first ask the persisted no-card
    evidence provider for the current context; if no evidence is available, that
-   provider returns its configured seed prior. Legacy/no-provider runs fall back
-   to the auction's static `baseline_prior` (`Beta(3, 3)` by default). The gate
+   provider returns `memory.baseline_prior` through its configured seed prior.
+   Legacy/no-provider runs fall back to the auction's same
+   `memory.baseline_prior` (`Beta(3, 3)` by default). The gate
    is Sidak-adjusted over the eligible slate.
 4. The external card-block budget.
 5. The explicit cold-probe policy, which may fill an otherwise empty selection
@@ -565,7 +567,7 @@ real local evidence and blocks fallback.
 
 | Card evidence | Posterior used by auction | EV support | Default behavior |
 |---|---|---|---|
-| No events | EB cold prior in adaptive runs; legacy `Beta(3, 3)` when no projector prior is set | borrowed cold gain scale | Exploitation path must still beat EV/no-card gates; probe path can spend explicit cold budget |
+| No events | EB cold prior in adaptive runs; legacy `memory.baseline_prior` when no projector prior is set | borrowed cold gain scale | Exploitation path must still beat EV/no-card gates; probe path can spend explicit cold budget |
 | Founding only | Same as no events | borrowed cold gain scale | Founding is origin/audit evidence only; it does not warm the card |
 | Only unused/invalid later exposures | posterior includes forced failures | zero support | No longer cold; likely benched or auction-rejected |
 | Positive later direct use | posterior warms positive | raw positive deltas plus zero pseudo-event | Can win more often |
@@ -757,14 +759,14 @@ runs, `AuctionCandidateProjector` replaces that fallback with the configured
 `memory/prior=empirical_bayes` cold prior before the auction sees the candidate:
 
 ```text
-legacy cold prior = Beta(3, 3)
-adaptive cold prior = EB(card kind, category, context, first exposures)
+legacy cold prior = memory.baseline_prior
+adaptive cold prior = EB(global, kind, category, then local context cohorts)
 ```
 
 The no-card auction prior is separate. Adaptive runs get it from
 `no_card_evidence.json` when writer-observed controls exist; otherwise
 `memory/no_card_evidence` returns its configured seed prior. Legacy/no-provider
-runs use the auction's static fallback `baseline_prior`.
+runs use the auction's static fallback `memory.baseline_prior`.
 
 ![Reputation posteriors from stored tabular card evidence](assets/memory_reputation_posteriors_tabular.png)
 
@@ -824,13 +826,15 @@ The recommended system connects them deliberately:
 | `PolicyNonViableEvictor` | write sweep after restamp | the same active value scorer, usually bootstrap EV mean | deletes warm cards that the active read policy now prices as non-viable |
 | `HarmEvictor` | write sweep after restamp | downside Beta posterior only | deletes cards with repeated later-use failures |
 
-That split is important. A single negative or unused exposure can make
-bootstrap EV non-positive. The reader may then stop selecting the card, so it
-may never collect the three failures required for a confident-harm posterior.
-`PolicyNonViableEvictor` is the cleanup path for that common case: it asks
-"would our current read policy still pay to show this card, and has it ever had
-a positive direct baseline-adjusted use?" If the answer is no, the card can be
-deleted without pretending we have a high-confidence harm theorem.
+That split is important. Negative or unused exposures can make bootstrap EV
+non-positive. The reader may then stop selecting the card before it collects a
+confident-harm posterior. `PolicyNonViableEvictor` is the cleanup path for that
+case after enough effective evidence has accumulated: it asks "would our current
+read policy still pay to show this card, and has it ever had a positive direct
+baseline-adjusted use?" If the answer is no, the card can be deleted without
+pretending we have a high-confidence harm theorem. Contextual BD scorers provide
+observed evidence contexts, so this cleanup happens only where the card has
+supported local evidence; custom contextual scorers without contexts are skipped.
 
 ```mermaid
 flowchart LR
@@ -846,8 +850,8 @@ flowchart LR
 
 So "bad card cleanup" has two lanes:
 
-1. **Policy non-viable:** common lane for one-bad-sample or ignored cards that
-   the bootstrap reader would no longer select.
+1. **Policy non-viable:** common lane for repeated non-positive or ignored-card
+   evidence that the bootstrap reader would no longer select.
 2. **Confident harm:** conservative backstop for cards that accumulate repeated
    later-use failures before policy retirement removes them.
 
@@ -900,7 +904,7 @@ flowchart TD
     D --> E{bid > 0 and bid >= round quantile floor?}
     E -->|no| Reject[Cannot win]
     E -->|yes| F[Eligible slate]
-    F --> G[Draw one no-card-arm theta from dynamic no-card evidence or fallback baseline_prior]
+    F --> G[Draw one no-card-arm theta from dynamic no-card evidence or memory.baseline_prior]
     G --> H[Sidak-adjust gate over eligible cards]
     H --> I[Draw card theta]
     I --> J{theta > gate_theta?}
@@ -926,7 +930,7 @@ For each candidate:
 
 1. Resolve its posterior `(a, b)`. Adaptive cold cards use
    `EmpiricalBayesMemoryPrior`; legacy/direct construction falls back to the
-   reputation's cold prior, normally `Beta(3, 3)`.
+   reputation's cold prior, normally `memory.baseline_prior`.
 2. Build its EV bid support.
    - Known card: its raw later-use direct deltas, zero atoms for invalid/unused
      exposure, plus one neutral zero pseudo-event.
@@ -936,8 +940,9 @@ For each candidate:
 5. Reject it if it falls below the round's `0.765` bid quantile.
 6. For remaining eligible cards, draw one no-card arm from persisted no-card
    evidence; if adaptive evidence is empty, use the no-card evidence provider's
-   seed prior. Legacy/no-provider runs use `baseline_prior`. Sidak-adjust that
-   gate over the number of eligible cards.
+   seed prior, which defaults to `memory.baseline_prior`. Legacy/no-provider
+   runs use the auction's same fallback. Sidak-adjust that gate over the number
+   of eligible cards.
 7. Draw each card's theta from its Beta posterior.
 8. Select the card only if theta beats the adjusted no-card-arm gate.
 9. If too many cards win, keep the top realized EV bids.
@@ -1012,6 +1017,7 @@ as the reader and checks non-founding, baseline-adjusted evidence only:
 
 ```text
 has non-founding EV support
+and effective support >= effective evidence floor
 and active-policy EV <= neutral_gain
 and no direct baseline-adjusted gain > neutral_gain
 ```
@@ -1022,15 +1028,28 @@ no-card counterfactual. This is not a task metric delta. A raw-negative child ca
 still save the card if it beats the no-card baseline and therefore stamps
 positive card gain.
 
+The effective evidence floor comes from
+`memory.eviction_safety.min_effective_events`, which defaults to the shared
+`memory.evidence.min_effective_events` knob. The reputation confidence floor,
+harm gate, and policy cleanup all read that same default unless a user overrides
+a lower-level component deliberately.
+
 Mixed-sign cards are not deleted by this policy. If a card has ever produced a
 positive direct baseline-adjusted gain, the system leaves it to normal
-reputation, auction, and harm eviction.
+reputation and auction. The harm backstop is also context-aware for BD-local
+scorers, so a bad observed cell does not delete a card that has a positive
+observed cell.
 
-This is the anti-zombie rule for the common case. After a card gets one bad
-direct use, one ignored exposure, or one invalid-use failure, the bootstrap EV
-can become non-positive and the reader may stop selecting it. Rather than
-waiting for two more bad selections that may never happen, the eviction sweep
-can retire it if it has no positive direct baseline-adjusted evidence.
+This is the anti-zombie rule for the common case, but it is deliberately not a
+one-sample deletion rule. After enough effective non-positive support, the
+bootstrap EV can become non-positive and the reader may stop selecting the card.
+Rather than waiting for a formal confident-harm posterior, the eviction sweep can
+retire it if it has no positive direct baseline-adjusted evidence. For adaptive
+BD-local read policies, the scorer supplies one observed evidence context per
+occupied BD cell, so harm and policy cleanup are local to supported cells rather
+than a blind global fallback. If a custom contextual scorer cannot provide
+explicit contexts, the default skips contextless cleanup because a card's value
+may be cell-specific.
 
 ## Evidence Maturity In Real Banks
 
@@ -1061,8 +1080,9 @@ and never gets removed. The current system has several defenses against that:
 - Non-positive warm EV cards are benched before retrieval by the bootstrap fused
   shortlister.
 - The bootstrap auction has a positive-EV sign gate.
-- `PolicyNonViableEvictor` deletes warm cards that the active read policy prices
-  at non-positive EV and that have no positive direct baseline-adjusted use.
+- `PolicyNonViableEvictor` deletes warm cards only after enough effective
+  non-positive support, when the active read policy prices them at non-positive
+  EV and they have no positive direct baseline-adjusted use.
 - `HarmEvictor` deletes cards whose later-use posterior is confidently harmful
   when repeated failures do accumulate.
 - `BirthFailureEvictor` deletes catastrophic founding failures before they are

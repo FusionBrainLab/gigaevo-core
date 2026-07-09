@@ -21,7 +21,14 @@ evictors:
     rescue_ev_threshold: 0.0
   - _target_: gigaevo.memory.write.eviction.HarmEvictor
     scorer: ${ref:memory.reputation}
+    skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}
   - _target_: gigaevo.memory.write.eviction.PolicyNonViableEvictor
     scorer: ${ref:memory.reputation}
     # Derived from the active memory preset's baseline-adjusted reward origin.
     neutral_gain: ${memory.neutral_gain}
+    # Shared evidence floor for all recommended eviction policies.
+    min_effective_events: ${memory.eviction_safety.min_effective_events}
+    # Contextual scorers expose explicit evidence contexts. If a custom scorer
+    # cannot provide them, skip contextless cleanup instead of falling back to a
+    # potentially unsafe global view.
+    skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}

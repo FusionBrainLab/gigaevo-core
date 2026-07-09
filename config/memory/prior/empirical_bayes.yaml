@@ -1,10 +1,14 @@
 # @package memory.prior
-# Adaptive cold-card prior. It learns a context/card-kind/category prior from
-# the bank's first non-founding exposures, shrunk toward a neutral seed, so cold
-# cards are neither assumed good nor permanently blocked before a probe.
+# Adaptive cold-card prior. It learns global -> kind -> category priors from
+# first non-founding exposures, then adds context-local cohorts when the context
+# model has a non-global key. Local BD priors use local evidence only, so other
+# cells do not leak into a local cold-card belief; they still shape the global
+# parent prior.
 _target_: gigaevo.memory.read.prior.EmpiricalBayesMemoryPrior
 store: ${ref:memory.store}
 context_model: ${ref:memory.context_model}
+# Neutral weak seed for cold-card efficacy. This is deliberately weaker than
+# memory.baseline_prior because EB should adapt from bank evidence quickly.
 seed_prior: [1.0, 1.0]
 k_min: 2.0
 k_max: 6.0

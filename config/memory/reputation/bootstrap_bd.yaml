@@ -21,7 +21,7 @@ ev_lo_quantile: 0.20
 n_bootstrap: 512
 # Effective non-stale use-event count required before the bootstrap layer can
 # mark a card efficacy-confident.
-confident_min_events: 3
+confident_min_events: ${memory.evidence.min_effective_events}
 inner:
   _target_: gigaevo.memory.read.reputation.BDProximityReputation
   # The run's MAP-Elites behavior space. Required for contextual reputation;
@@ -30,7 +30,7 @@ inner:
   fallback:
     _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
     # Harm gate: never judge harmful until at least this many intro events.
-    harm_min_events: 3
+    harm_min_events: ${memory.evidence.min_effective_events}
     # Optimistic posterior quantile of P(not harmful) used by the harm gate.
     harm_quantile: 0.80
     # Harmful iff that optimistic P(not harmful) remains below this threshold.
@@ -41,11 +41,11 @@ inner:
     # pessimistic bootstrap EV.
     confident_threshold: 0.5
     # Legacy cold no-evidence prior used when no candidate_projector prior is set.
-    cold_prior: [3.0, 3.0]
+    cold_prior: ${memory.baseline_prior}
   # Same thresholds for the BD-local in-cell posterior.
-  harm_min_events: 3
+  harm_min_events: ${memory.evidence.min_effective_events}
   harm_quantile: 0.80
   harm_threshold: 0.5
   confident_quantile: 0.20
   confident_threshold: 0.5
-  cold_prior: [3.0, 3.0]
+  cold_prior: ${memory.baseline_prior}

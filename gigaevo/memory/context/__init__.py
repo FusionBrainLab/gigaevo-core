@@ -5,6 +5,8 @@ from gigaevo.memory.context.models import (
     ContextKey,
     GlobalMemoryContext,
     MemoryContextModel,
+    NoCardBaselineOutcome,
+    ParentContextSource,
 )
 
 __all__ = [
@@ -12,4 +14,6 @@ __all__ = [
     "ContextKey",
     "GlobalMemoryContext",
     "MemoryContextModel",
+    "NoCardBaselineOutcome",
+    "ParentContextSource",
 ]

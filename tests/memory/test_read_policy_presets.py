@@ -33,11 +33,11 @@ def _contains_behavior_space_ref(node: Any) -> bool:
     return False
 
 
-def _cold_priors(node: Any) -> list[list[float]]:
+def _cold_priors(node: Any) -> list[Any]:
     if isinstance(node, dict):
         values = []
         if "cold_prior" in node:
-            values.append(list(node["cold_prior"]))
+            values.append(node["cold_prior"])
         for value in node.values():
             values.extend(_cold_priors(value))
         return values
@@ -105,7 +105,17 @@ def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
     assert raw_memory["writer"]["baseline_estimator"] == "${ref:memory.context_model}"
     assert raw_memory["writer"]["no_card_recorder"] == "${ref:memory.no_card_evidence}"
     assert memory.neutral_gain == pytest.approx(0.0)
+    assert list(memory.baseline_prior) == [3.0, 3.0]
+    assert list(memory.auction.baseline_prior) == list(memory.baseline_prior)
+    assert list(memory.no_card_evidence.seed_prior) == list(memory.baseline_prior)
     assert memory.evictor.evictors[2].neutral_gain == pytest.approx(0.0)
+    assert memory.evidence.min_effective_events == 3
+    assert memory.eviction_safety.min_effective_events == 3
+    assert memory.reputation.confident_min_events == 3
+    assert memory.reputation.inner.harm_min_events == 3
+    assert memory.evictor.evictors[1].skip_contextual_without_context is True
+    assert memory.evictor.evictors[2].min_effective_events == 3
+    assert memory.evictor.evictors[2].skip_contextual_without_context is True
 
 
 def test_ev_floor_quantile_is_bootstrap_policy_local():
@@ -162,6 +172,14 @@ def test_writer_default_evictor_uses_memory_neutral_gain():
     )
     assert raw_memory["writer"]["baseline_estimator"] == "${ref:memory.context_model}"
     assert memory.evictor.evictors[2].neutral_gain == pytest.approx(memory.neutral_gain)
+    assert list(memory.baseline_prior) == [3.0, 3.0]
+    assert list(memory.no_card_evidence.seed_prior) == list(memory.baseline_prior)
+    assert memory.evidence.min_effective_events == 3
+    assert memory.eviction_safety.min_effective_events == 3
+    assert memory.reputation.harm_min_events == 3
+    assert memory.evictor.evictors[1].skip_contextual_without_context is True
+    assert memory.evictor.evictors[2].min_effective_events == 3
+    assert memory.evictor.evictors[2].skip_contextual_without_context is True
 
 
 def test_portable_policy_contains_no_behavior_space_ref():
@@ -238,4 +256,5 @@ def test_read_policy_cold_priors_match_auction_baseline(policy):
     cfg = _compose("memory=full", f"memory/read_policy={policy}")
     raw_reputation = OmegaConf.to_container(cfg.memory.reputation, resolve=False)
     for cold_prior in _cold_priors(raw_reputation):
-        assert cold_prior == list(cfg.memory.auction.baseline_prior)
+        assert cold_prior == "${memory.baseline_prior}"
+    assert list(cfg.memory.auction.baseline_prior) == list(cfg.memory.baseline_prior)

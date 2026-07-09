@@ -1,12 +1,15 @@
 # @package memory.no_card_evidence
 # Persisted no-card evidence. Writer records randomized controls and natural
 # empty selections here; reader uses the compact summary as the no-card
-# abstention prior. This is not the same as the no-card control rate.
+# abstention prior. Randomized controls dominate natural empty rows when present;
+# sparse local contexts shrink toward a bounded nonlocal pseudo-count. This is
+# not the same as the no-card control rate.
 _target_: gigaevo.memory.context.no_card.JsonNoCardEvidenceStore
 path: ${checkpoint_dir}/no_card_evidence.json
 context_model: ${ref:memory.context_model}
-seed_prior: [3.0, 3.0]
+seed_prior: ${memory.baseline_prior}
 natural_empty_weight: 0.25
 local_min_effective_n: 8.0
+# Maximum nonlocal control pseudo-count for sparse local no-card gates.
 shrink_events: 16.0
 sign_strength_cap: 64.0

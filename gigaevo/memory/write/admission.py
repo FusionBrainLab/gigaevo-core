@@ -345,9 +345,7 @@ class CardAdmissionGate:
 
 
 def _eviction_reason(evictor: Evictor, card: Card, default: str) -> str:
-    reason = getattr(evictor, "eviction_reason", None)
-    if callable(reason):
-        text = str(reason(card)).strip()
-        if text:
-            return text
+    text = evictor.eviction_reason(card).strip()
+    if text:
+        return text
     return default
