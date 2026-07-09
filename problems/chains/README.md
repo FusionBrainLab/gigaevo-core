@@ -5,8 +5,12 @@ Use `program_format=json_document` with the standard guided pipeline:
 
 ```bash
 python run.py problem.name=chains/hover/full7 \
+    storage=disk \
     pipeline=guided \
     program_format=json_document \
+    mutation=carl_with_retrieval_tools \
+    algorithm=single_island_no_distant_parents \
+    enable_chain_structural_metrics=false \
     memory=none \
     --cfg job
 ```
@@ -37,20 +41,26 @@ export no_proxy="$NO_PROXY"
 ## HoVer Tool-Diff Run
 
 This is the no-memory form of the tool-aware CARL diff experiment used by
-`experiments/carl_tool_chain_diff_ab/launch_arm_qwen.sh`.
+the Qwen diff HoVer runs. It is configured for comparability with the previous
+Qwen diff baseline: the archive is one-dimensional on `fitness`, uses the
+bounded-gap fitness selector from `algorithm=single_island_no_distant_parents`,
+and does not add chain-topology behavior metrics.
 
 ```bash
 CARL_ARGS=(
+    storage=disk
     problem.name=chains/hover/full7
     pipeline=guided
     program_format=json_document
     memory=none
     mutation=carl_with_retrieval_tools
+    algorithm=single_island_no_distant_parents
+    enable_chain_structural_metrics=false
     llm=single
     llm_base_url="$LITELLM_BASE_URL"
     model_name="$CARL_MUTATION_MODEL"
     num_parents=1
-    max_mutants=10
+    max_mutants=250
     max_tokens=60000
     stage_timeout=7200
     dag_timeout=14400
@@ -76,6 +86,18 @@ program_format.feature: JsonDocumentEvaluationFeature
 program_loader.pattern: '*.json'
 memory.provider: NullMemoryProvider
 mutation: StructuredDiffMutationOperator + AllowedToolChainChanges
+behavior_space.keys: ['${primary_key}']
+elite_selector: FitnessProportionalTournamentBoundedGapEliteSelector
+enable_chain_structural_metrics: false
+```
+
+Stored program metrics should be exactly:
+
+```text
+fitness
+is_valid
+n_steps
+n_tool_steps
 ```
 
 `loader.pattern` is only the Hydra override alias provided by
@@ -85,13 +107,14 @@ resolved config is `program_loader.pattern`.
 ## HoVer Tool-Diff With Memory
 
 Use `pipeline=memory_guided` when cards should be read before mutation and
-written after evaluation. For topology MAP-Elites archives, also enable the
-chain structural metrics stage; `algorithm=topology_3d_ret` expects
-`dag_depth`, `max_dependency_fan_in`, and `n_retrievals` before archive
-admission.
+written after evaluation. Keep the same fitness-only archive as the no-memory
+baseline when you want the run to be comparable to the previous Qwen diff runs;
+the treatment difference is then memory, not a different MAP-Elites behavior
+space.
 
 ```bash
 python run.py \
+    storage=disk \
     problem.name=chains/hover/full7 \
     pipeline=memory_guided \
     program_format=json_document \
@@ -100,22 +123,23 @@ python run.py \
     memory/llm=qwen_instruct \
     checkpoint_dir="$PWD/SHARE_HOVER_DIFF_MEMORY" \
     mutation=carl_with_retrieval_tools \
-    algorithm=topology_3d_ret \
-    enable_chain_structural_metrics=true \
+    algorithm=single_island_no_distant_parents \
+    enable_chain_structural_metrics=false \
     llm=single \
     llm_base_url="$LITELLM_BASE_URL" \
     model_name="$CARL_MUTATION_MODEL" \
     memory.llm.models.0.base_url="$LITELLM_BASE_URL" \
     num_parents=1 \
-    max_mutants=10 \
+    max_mutants=250 \
     max_tokens=60000 \
     stage_timeout=7200 \
     dag_timeout=14400 \
     --cfg job
 ```
 
-For the two-copy HoVer memory launch with endpoint smoke checks and independent
-memory banks, use:
+For two-copy memory launches with endpoint smoke checks and independent memory
+banks, use the experiment launcher only after confirming its `COMMON_ARGS`
+match the comparable settings above:
 
 ```bash
 OPENAI_API_KEY=sk-gigaevo ./experiments/hover/diff_memory/launch.sh

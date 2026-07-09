@@ -10,6 +10,7 @@ from statistics import mean
 
 from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
+from problems.chains.client import LLMClient
 from problems.chains.hover.full7.config import FULL_CHAIN_CONFIG
 from problems.chains.hover.shared_config import (
     get_llm_config,
@@ -22,7 +23,6 @@ from problems.chains.hover.utils.utils import (
     extract_titles_from_passages,
     normalize_text,
 )
-from problems.chains.usage import ZERO_USAGE, LogAggregatingLLMClient, usage_totals
 
 
 def evaluate_soft_coverage_adaptive(dataset, results, chain):
@@ -76,7 +76,6 @@ def validate(chain_spec: dict) -> dict:
             "is_valid": 0,
             "n_steps": len(steps),
             "n_tool_steps": 0,
-            **ZERO_USAGE,
         }
 
     # 1. Structural validation (full_chain mode)
@@ -95,7 +94,7 @@ def validate(chain_spec: dict) -> dict:
     endpoint = llm_config["client_kwargs"]["base_url"]
     success = True
     try:
-        client = LogAggregatingLLMClient(**llm_config)
+        client = LLMClient(**llm_config)
 
         # make_retrieve_fn is a batch fn (list[dict] -> list[str]) — dispatched
         # via batch_tool_registry, not the per-sample tool_registry.
@@ -130,7 +129,6 @@ def validate(chain_spec: dict) -> dict:
             "is_valid": 1,
             "n_steps": n_steps,
             "n_tool_steps": n_tool_steps,
-            **usage_totals(client),
         }
     except Exception:
         success = False
