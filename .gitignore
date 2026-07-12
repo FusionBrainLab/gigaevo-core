@@ -197,6 +197,8 @@ experiments/*/paper_data.json
 # Evolution outputs scattered at root / top-level
 *results*
 *top_programs
+# Memory-bank checkpoints (SHARE_HOVER_DIFF_MEMORY_*, one dir per memory run)
+SHARE_*/
 
 # Keep 05_results.md despite the broad *results* rule above
 !experiments/**/05_results.md
