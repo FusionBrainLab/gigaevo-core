@@ -1,0 +1,84 @@
+**OBJECTIVE**: Predict a hidden smooth function at 64 fixed grid points.
+
+**RULES**:
+- `entrypoint()` must return a list of exactly **64 floats** — your predictions at the x values below, in order
+- Per-sample score is exp(-2 * abs(prediction - target)); reported fitness is the mean over the 64 samples
+- Evaluation adds small random noise to each per-sample score, so fitness changes of about 0.01-0.02 may be pure noise — only structural accuracy gains matter
+
+**DATA** (x target) — fit these as closely as possible:
+-2.0000 -0.2737
+-1.9365 -0.2096
+-1.8730 -0.1586
+-1.8095 -0.1227
+-1.7460 -0.1032
+-1.6825 -0.1010
+-1.6190 -0.1164
+-1.5556 -0.1494
+-1.4921 -0.1993
+-1.4286 -0.2646
+-1.3651 -0.3435
+-1.3016 -0.4337
+-1.2381 -0.5321
+-1.1746 -0.6354
+-1.1111 -0.7401
+-1.0476 -0.8424
+-0.9841 -0.9383
+-0.9206 -1.0240
+-0.8571 -1.0959
+-0.7937 -1.1507
+-0.7302 -1.1854
+-0.6667 -1.1979
+-0.6032 -1.1863
+-0.5397 -1.1497
+-0.4762 -1.0880
+-0.4127 -1.0016
+-0.3492 -0.8921
+-0.2857 -0.7614
+-0.2222 -0.6124
+-0.1587 -0.4485
+-0.0952 -0.2736
+-0.0317 -0.0920
++0.0317 +0.0920
++0.0952 +0.2736
++0.1587 +0.4485
++0.2222 +0.6124
++0.2857 +0.7614
++0.3492 +0.8921
++0.4127 +1.0016
++0.4762 +1.0880
++0.5397 +1.1497
++0.6032 +1.1863
++0.6667 +1.1979
++0.7302 +1.1854
++0.7937 +1.1507
++0.8571 +1.0959
++0.9206 +1.0240
++0.9841 +0.9383
++1.0476 +0.8424
++1.1111 +0.7401
++1.1746 +0.6354
++1.2381 +0.5321
++1.3016 +0.4337
++1.3651 +0.3435
++1.4286 +0.2646
++1.4921 +0.1993
++1.5556 +0.1494
++1.6190 +0.1164
++1.6825 +0.1010
++1.7460 +0.1032
++1.8095 +0.1227
++1.8730 +0.1586
++1.9365 +0.2096
++2.0000 +0.2737
+
+**STRATEGY**:
+- Any approach works: closed-form fits, splines, interpolation, piecewise models
+- The x grid is numpy.linspace(-2.0, 2.0, 64)
+
+OUTPUT:
+```python
+# Imports as needed
+def entrypoint():
+    # Fix all random seeds if using randomness
+    return predictions  # list of 64 floats
+```

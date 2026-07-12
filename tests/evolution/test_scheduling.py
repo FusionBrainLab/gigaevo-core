@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
+
 import pytest
 
 from gigaevo.evolution.scheduling.feature_extractor import (
@@ -323,6 +326,131 @@ class TestChainFeatureExtractor:
         assert features["n_total_steps"] == 0.0
         assert features["n_examples"] == 0.0
         assert features["has_system_prompt"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Semantic chain features (json_document specs): hop_depth, passages_fetched,
+# instr_chars — the chains_bd3d behavior axes. Specs are parsed with the CARL
+# parse-layer models (problems.chains.types.RawChainSpec), so fixtures must be
+# schema-valid; semantics match the axis-mining study over the six finished
+# hover full7 runs (plans/2026-07-11-chain-bd3d-proposal.md). Non-JSON or
+# schema-invalid code falls back to zeros.
+# ---------------------------------------------------------------------------
+
+
+def _json_chain(steps: list[dict], system_prompt: str = "") -> str:
+    return json.dumps({"system_prompt": system_prompt, "steps": steps})
+
+
+def _tool(number: int, deps: list[int], tool_name: str = "retrieve") -> dict:
+    return {
+        "number": number,
+        "title": f"tool {number}",
+        "step_type": "tool",
+        "step_config": {"tool_name": tool_name, "input_mapping": {}},
+        "dependencies": deps,
+    }
+
+
+def _llm(
+    number: int,
+    deps: list[int],
+    aim: str = "A",
+    stage_action: str = "B",
+    **fields: str,
+) -> dict:
+    return {
+        "number": number,
+        "title": f"llm {number}",
+        "step_type": "llm",
+        "dependencies": deps,
+        "aim": aim,
+        "stage_action": stage_action,
+        **fields,
+    }
+
+
+_SEMANTIC_CHAIN = _json_chain(
+    [
+        _tool(1, []),
+        _llm(
+            2,
+            [1],
+            aim="AAAA",
+            stage_action="BBBBBB",
+            reasoning_questions="<none>",
+            example_reasoning="<none>",
+        ),
+        _tool(3, [2]),
+        _llm(4, [2, 3], stage_action="CCC"),
+        _tool(5, [4], tool_name="retrieve_deep"),
+        _llm(6, [5], example_reasoning="Example 1: X"),
+    ],
+    system_prompt="SYS",
+)
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("mmar_carl") is None,
+    reason="chains extra (mmar_carl) not installed",
+)
+class TestChainSemanticFeatures:
+    def _extract(self, code: str) -> dict[str, float]:
+        return ChainFeatureExtractor().extract(_prog(code))
+
+    def test_hop_depth_counts_tool_steps_in_upstream_closure(self) -> None:
+        """retrieve → llm → retrieve → llm → retrieve_deep = 3 hops."""
+        assert self._extract(_SEMANTIC_CHAIN)["hop_depth"] == 3.0
+
+    def test_hop_depth_parallel_retrievals_are_one_hop(self) -> None:
+        code = _json_chain([_tool(1, []), _tool(2, []), _llm(3, [1, 2])])
+        assert self._extract(code)["hop_depth"] == 1.0
+
+    def test_hop_depth_zero_without_tool_steps(self) -> None:
+        code = _json_chain([_llm(1, []), _llm(2, [1])])
+        assert self._extract(code)["hop_depth"] == 0.0
+
+    def test_hop_depth_terminates_on_dependency_cycle(self) -> None:
+        """Cyclic deps (invalid chain, but must not hang): each tool sees both
+        cycle members upstream, so hop = 1 + 2."""
+        code = _json_chain([_tool(1, [2]), _tool(2, [1])])
+        assert self._extract(code)["hop_depth"] == 3.0
+
+    def test_passages_fetched_weights_shallow_vs_deep(self) -> None:
+        """2 × retrieve (k=7) + 1 × retrieve_deep (k=10) = 24 passages."""
+        assert self._extract(_SEMANTIC_CHAIN)["passages_fetched"] == 24.0
+
+    def test_passages_fetched_ignores_non_retrieval_tools(self) -> None:
+        code = _json_chain([_tool(1, [], tool_name="calculator"), _tool(2, [1])])
+        assert self._extract(code)["passages_fetched"] == 7.0
+
+    def test_instr_chars_sums_guidance_fields_and_system_prompt(self) -> None:
+        """STRUCTURED_FIELDS chars: step2 aim(4)+stage_action(6), step4 1+3,
+        step6 1+1+example_reasoning(12), + system_prompt(3) = 31; '<none>'
+        placeholders excluded, titles (metadata) not counted."""
+        assert self._extract(_SEMANTIC_CHAIN)["instr_chars"] == 31.0
+
+    def test_semantic_features_zero_on_python_source(self) -> None:
+        features = self._extract(_COMPLEX_CHAIN)
+        assert features["hop_depth"] == 0.0
+        assert features["passages_fetched"] == 0.0
+        assert features["instr_chars"] == 0.0
+
+    def test_semantic_features_zero_on_non_dict_json(self) -> None:
+        features = self._extract(json.dumps([1, 2, 3]))
+        assert features["hop_depth"] == 0.0
+        assert features["passages_fetched"] == 0.0
+        assert features["instr_chars"] == 0.0
+
+    def test_semantic_features_zero_on_schema_invalid_spec(self) -> None:
+        """A step violating the parse-layer schema (LLM step without required
+        aim) zeroes the semantics — same gate as validate_chain_spec."""
+        step = _llm(1, [])
+        del step["aim"]
+        features = self._extract(_json_chain([step]))
+        assert features["hop_depth"] == 0.0
+        assert features["passages_fetched"] == 0.0
+        assert features["instr_chars"] == 0.0
 
 
 # ---------------------------------------------------------------------------

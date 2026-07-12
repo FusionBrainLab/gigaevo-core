@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
-from gigaevo.memory.context import NoCardBaselineOutcome
+from gigaevo.memory.context.no_card import NoCardGateSummary
 from gigaevo.memory.read.auction import AuctionBid, AuctionCandidate
 from gigaevo.memory.storage.base import ResearchResult
 
@@ -27,14 +26,6 @@ class Shortlister(Protocol):
     ) -> ResearchResult: ...
 
 
-class NoCardBaseline(Protocol):
-    """Fitted no-card progress baseline used by gain stamping."""
-
-    has_evidence: bool
-
-    def baseline_for(self, outcome: NoCardBaselineOutcome) -> float: ...
-
-
 @runtime_checkable
 class ReputationModel(Protocol):
     """Owns all per-card efficacy statistics derived from injection outcomes."""
@@ -53,8 +44,6 @@ class ReputationModel(Protocol):
 
     def magnitude_of(self, block: CardStatsBlock | None) -> float | None: ...
 
-    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool: ...
-
     def event_deltas(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[float, ...]: ...
@@ -67,18 +56,26 @@ class ReputationModel(Protocol):
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]: ...
 
-    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]: ...
+    def event_ses(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]: ...
 
     def staleness_weight(
         self, card: Card, context: DecisionContext | None = None
     ) -> float: ...
 
-    def fit_no_card_baseline(
-        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
-    ) -> NoCardBaseline: ...
+
+class EvictionFacingReputation(ReputationModel, Protocol):
+    """Reputation that also serves the write-side eviction sweep; the read-side
+    decorators delegate this surface to their inner model, so their inners must
+    declare it even though no read path calls it."""
+
+    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool: ...
+
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]: ...
 
 
-class DecayCompatibleReputation(ReputationModel, Protocol):
+class DecayCompatibleReputation(EvictionFacingReputation, Protocol):
     """Reputation whose threshold fields can drive posterior-count decay."""
 
     harm_min_events: int
@@ -93,13 +90,18 @@ class Auctioneer(Protocol):
     """Decides which candidate cards are injected into a mutation prompt."""
 
     def run(
-        self, candidates: list[AuctionCandidate], rng: Any
+        self,
+        candidates: list[AuctionCandidate],
+        rng: Any,
+        *,
+        baseline: NoCardGateSummary | None = None,
     ) -> tuple[list[str], list[AuctionBid]]: ...
 
 
 @runtime_checkable
-class AuctionCandidateProjector(Protocol):
-    """Projects one resolved card/reputation view into auction input."""
+class CandidateProjector(Protocol):
+    """Projects one resolved card/reputation view into auction input and
+    resolves the decision-level no-card baseline the auctioneer gates on."""
 
     def project(
         self,
@@ -109,6 +111,10 @@ class AuctionCandidateProjector(Protocol):
         reputation: ReputationModel,
         context: DecisionContext | None,
     ) -> AuctionCandidate: ...
+
+    def decision_baseline(
+        self, context: DecisionContext | None
+    ) -> NoCardGateSummary | None: ...
 
 
 @runtime_checkable

@@ -40,6 +40,8 @@ class RecordingReputation(BetaBinomialReputation):
 
 
 class BootstrapEVStubReputation:
+    policy_min_effective_events = 3.0
+
     def __init__(self, ev_by_id: dict[str, float]) -> None:
         self._ev_by_id = ev_by_id
 
@@ -55,6 +57,7 @@ class BootstrapEVStubReputation:
             p_help_lo20=0.8,
             IntroGain_bootstrap_ev_mean=ev,
             IntroGain_bootstrap_ev_lo20=ev,
+            IntroGain_bootstrap_ev_hi80=ev,
         )
 
     def magnitude_of(self, block):
@@ -392,7 +395,9 @@ async def test_bootstrap_rep_floor_keeps_founding_only_card_explorable(
     assert founding_only.id not in inner.calls[0]["exclude_ids"]
 
 
-async def test_bootstrap_rep_floor_benches_unused_only_card(make_card, make_event):
+async def test_bootstrap_single_unused_exposure_stays_explorable(make_card, make_event):
+    # One ignored exposure is not proof of harm; benching at n=1 was the R1
+    # absorbing death. Below the evidence floor the card stays researchable.
     unused_only = make_card(gain_events=(make_event(0.0, unused=True),))
     rep = BootstrapReputation(
         BetaBinomialReputation(), StubStore((unused_only,)), n_bootstrap=32
@@ -408,8 +413,72 @@ async def test_bootstrap_rep_floor_benches_unused_only_card(make_card, make_even
         store=StubStore((unused_only,)),
     )
     out = await fused.shortlist(**_shortlist_kwargs())
+    assert [card.id for card in out.cards] == [unused_only.id]
+    assert unused_only.id not in inner.calls[0]["exclude_ids"]
+
+
+async def test_bootstrap_confident_zero_support_is_benched(make_card, make_event):
+    # Enough ignored exposure to clear the evidence floor with the optimistic
+    # bootstrap EV read still non-positive: a proven no-op, benched upstream.
+    ignored = make_card(
+        gain_events=tuple(make_event(0.0, unused=True) for _ in range(3))
+    )
+    rep = BootstrapReputation(
+        BetaBinomialReputation(), StubStore((ignored,)), n_bootstrap=32
+    )
+    inner = StubShortlister(ResearchResult(cards=(ignored,)))
+    fused = BootstrapFusedRankingShortlister(
+        inner=inner,
+        reputation=rep,
+        w_sem=1.0,
+        w_rep=0.0,
+        w_nov=0.0,
+        rep_floor_quantile=0.4,
+        store=StubStore((ignored,)),
+    )
+    out = await fused.shortlist(**_shortlist_kwargs())
     assert out.cards == ()
-    assert unused_only.id in inner.calls[0]["exclude_ids"]
+    assert ignored.id in inner.calls[0]["exclude_ids"]
+
+
+async def test_bootstrap_single_loss_is_not_benched(make_card, make_event):
+    one_loss = make_card(gain_events=(make_event(-0.5),))
+    rep = BootstrapReputation(
+        BetaBinomialReputation(), StubStore((one_loss,)), n_bootstrap=32
+    )
+    inner = StubShortlister(ResearchResult(cards=(one_loss,)))
+    fused = BootstrapFusedRankingShortlister(
+        inner=inner,
+        reputation=rep,
+        w_sem=1.0,
+        w_rep=0.0,
+        w_nov=0.0,
+        rep_floor_quantile=0.0,
+        store=StubStore((one_loss,)),
+    )
+    out = await fused.shortlist(**_shortlist_kwargs())
+    assert [card.id for card in out.cards] == [one_loss.id]
+    assert one_loss.id not in inner.calls[0]["exclude_ids"]
+
+
+async def test_bootstrap_confident_loser_is_benched(make_card, make_event):
+    loser = make_card(gain_events=tuple(make_event(-0.5) for _ in range(4)))
+    rep = BootstrapReputation(
+        BetaBinomialReputation(), StubStore((loser,)), n_bootstrap=32
+    )
+    inner = StubShortlister(ResearchResult(cards=(loser,)))
+    fused = BootstrapFusedRankingShortlister(
+        inner=inner,
+        reputation=rep,
+        w_sem=1.0,
+        w_rep=0.0,
+        w_nov=0.0,
+        rep_floor_quantile=0.0,
+        store=StubStore((loser,)),
+    )
+    out = await fused.shortlist(**_shortlist_kwargs())
+    assert out.cards == ()
+    assert loser.id in inner.calls[0]["exclude_ids"]
 
 
 async def test_bootstrap_rep_floor_drops_warm_card_below_warm_ev_floor(
@@ -430,7 +499,9 @@ async def test_bootstrap_rep_floor_drops_warm_card_below_warm_ev_floor(
     )
     out = await fused.shortlist(**_shortlist_kwargs())
     assert [card.id for card in out.cards] == [warm_high.id]
-    assert warm_low.id in inner.calls[0]["exclude_ids"]
+    # Below the relative floor means "loses this read", not "proven loser":
+    # the card keeps its research/probe access and can re-enter later.
+    assert warm_low.id not in inner.calls[0]["exclude_ids"]
 
 
 async def test_upstream_exclusion_off_without_rep_floor_quantile(make_card, make_event):
@@ -507,7 +578,7 @@ def test_invalid_arguments_raise(kwargs):
 
 def test_full_yaml_ships_quantile_gated_read_path():
     cfg = OmegaConf.load(
-        _REPO_ROOT / "config" / "memory" / "read_policy" / "recommended.yaml"
+        _REPO_ROOT / "config" / "memory" / "read_policy" / "adaptive.yaml"
     )
     shortlister = cfg.reader.shortlister
     assert (

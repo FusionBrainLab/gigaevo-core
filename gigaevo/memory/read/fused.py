@@ -148,7 +148,7 @@ class FusedRankingShortlister:
         for card in bank:
             block = self._reputation.card_stats(card, context)
             magnitude = None if block is None else self._reputation.magnitude_of(block)
-            stats.append((card, self._p_help_of(block), magnitude))
+            stats.append((card, self._rep_score_of(block), magnitude))
         dist = sorted(p_help for _, p_help, _ in stats)
         floor = dist[int(self._rep_floor_quantile * len(dist))]
         benched = frozenset(
@@ -159,7 +159,7 @@ class FusedRankingShortlister:
         return floor, benched
 
     def _p_help(self, card: Card, context: DecisionContext | None) -> float:
-        return self._p_help_of(self._reputation.card_stats(card, context))
+        return self._rep_score_of(self._reputation.card_stats(card, context))
 
     def _passes_rep_floor(
         self,
@@ -172,7 +172,7 @@ class FusedRankingShortlister:
         return p_help >= rep_floor
 
     @staticmethod
-    def _p_help_of(block: Any) -> float:
+    def _rep_score_of(block: Any) -> float:
         if block is None or block.p_help_lo20 is None:
             return _NEUTRAL_P_HELP
         p_help = float(block.p_help_lo20)
@@ -197,8 +197,12 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
     ranking/flooring and ``IntroGain_bootstrap_ev_mean`` is the central EV. The
     inherited ``p_help_*`` fields stay probabilities. A card with no non-founding
     support stays on the cold path; severe founding failures are deleted by the
-    write-side evictor. A card with only unused/invalid exposure has magnitude 0
-    and is benched instead of receiving cold-start optimism."""
+    write-side evictor. The bench retires only proven losers — cards whose
+    optimistic bootstrap EV (``IntroGain_bootstrap_ev_hi80``) is non-positive
+    with at least the reputation's ``policy_min_effective_events`` of effective
+    evidence. Falling below the relative ``rep_floor_quantile`` only loses the
+    current read; the card keeps research and probe access, so one loss or a
+    couple of ignored exposures is never an absorbing death."""
 
     def _bank_bench(
         self, context: DecisionContext | None
@@ -209,26 +213,31 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
         bank = self._store.snapshot()
         if not bank:
             return None, frozenset()
+        min_events = float(self._reputation.policy_min_effective_events)
         warm = []
         benched_ids: set[str] = set()
         for card in bank:
-            block = self._reputation.card_stats(card, context)
-            magnitude = None if block is None else self._reputation.magnitude_of(block)
             if not self._reputation.event_deltas(card, context):
-                if magnitude is not None and magnitude <= 0.0:
-                    benched_ids.add(card.id)
                 continue
-            warm.append((card, self._p_help_of(block), magnitude))
+            block = self._reputation.card_stats(card, context)
+            if self._proven_loser(block, min_events):
+                benched_ids.add(card.id)
+                continue
+            warm.append(self._rep_score_of(block))
         if not warm:
             return None, frozenset(benched_ids)
-        dist = sorted(ev_lo for _, ev_lo, _ in warm)
+        dist = sorted(warm)
         floor = dist[int(self._rep_floor_quantile * len(dist))]
-        benched_ids.update(
-            card.id
-            for card, ev_lo, ev_mean in warm
-            if ev_lo < floor or (ev_mean is not None and ev_mean <= 0.0)
-        )
         return floor, frozenset(benched_ids)
+
+    @staticmethod
+    def _proven_loser(block: Any, min_events: float) -> bool:
+        if block is None or block.IntroGain_bootstrap_ev_hi80 is None:
+            return False
+        ev_hi = float(block.IntroGain_bootstrap_ev_hi80)
+        if not math.isfinite(ev_hi):
+            return False
+        return ev_hi <= 0.0 and float(block.intro_events) >= min_events
 
     def _passes_rep_floor(
         self,
@@ -244,7 +253,7 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
         return p_help >= rep_floor
 
     @staticmethod
-    def _p_help_of(block: Any) -> float:
+    def _rep_score_of(block: Any) -> float:
         if block is None or block.IntroGain_bootstrap_ev_lo20 is None:
             return 0.0
         ev = float(block.IntroGain_bootstrap_ev_lo20)

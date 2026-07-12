@@ -553,6 +553,23 @@ program_b_score = 75.0 * 1.0 + 1.0 * 0.5 = 75.50
 # Program A wins
 ```
 
+#### PairedBootstrapArchiveSelector
+
+Noise-aware variant of `SumArchiveSelector` (single fitness key only): when both
+programs carry a `per_sample_scores` metadata vector (see `pipeline=memory_guided_noise`),
+replacement requires a paired bootstrap to say the challenger is better with
+probability ≥ `p_accept` (default 0.75); otherwise it falls back to the point
+comparison above. Select via the Hydra group: `archive_selector=paired_bootstrap`
+(default `archive_selector=point` = `SumArchiveSelector`).
+
+```python
+PairedBootstrapArchiveSelector(
+    fitness_keys=["fitness"],
+    fitness_key_higher_is_better=[True],
+    p_accept=0.75,  # 0.5 = OFF (delegates to SumArchiveSelector)
+)
+```
+
 #### ParetoArchiveSelector
 
 Uses Pareto dominance (multi-objective optimization):

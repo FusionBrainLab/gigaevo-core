@@ -9,14 +9,22 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
 from gigaevo.memory.context import GlobalMemoryContext
+from gigaevo.memory.context.no_card import NoCardGateSummary
 from gigaevo.memory.read.auction import AuctionCandidate
 from gigaevo.memory.read.interfaces import ReputationModel
+
+
+def _use_count(card: Card) -> int:
+    """Deterministic injection count: non-founding gain events (one per child
+    the card was actually injected for). Event-based, no wall clock — identical
+    decisions give identical counts regardless of run pacing."""
+    return sum(1 for event in card.gain_events if not event.founding)
 
 
 class AuctionCandidateProjector(BaseModel):
     """Single policy seam that turns reputation evidence into auction input."""
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     prior: Any | None = Field(
         default=None,
@@ -44,11 +52,6 @@ class AuctionCandidateProjector(BaseModel):
             prior = self.prior.cold_card_prior(card, context)
             posterior_a, posterior_b = prior.as_tuple()
             prior_source = prior.source
-        baseline = (
-            self.no_card_evidence.summary_for(context)
-            if self.no_card_evidence is not None
-            else None
-        )
         context_key = self.context_model.key_for(context).label()
         return AuctionCandidate(
             card_id=card.id,
@@ -57,15 +60,19 @@ class AuctionCandidateProjector(BaseModel):
             magnitude=reputation.magnitude_of(block),
             deltas=reputation.event_deltas(card, context),
             delta_weights=reputation.event_weights(card, context),
+            deltas_se=reputation.event_ses(card, context),
             staleness_weight=reputation.staleness_weight(card, context),
             prior_source=prior_source,
             context_key=context_key,
-            baseline_a=baseline.prior.alpha if baseline is not None else None,
-            baseline_b=baseline.prior.beta if baseline is not None else None,
-            baseline_source=baseline.source if baseline is not None else "",
-            no_card_baseline=baseline.baseline if baseline is not None else None,
-            no_card_n=baseline.evidence_n if baseline is not None else 0.0,
+            use_count=_use_count(card),
         )
+
+    def decision_baseline(
+        self, context: DecisionContext | None
+    ) -> NoCardGateSummary | None:
+        if self.no_card_evidence is None:
+            return None
+        return self.no_card_evidence.summary_for(context)
 
     @staticmethod
     def _is_cold_or_corrupt(

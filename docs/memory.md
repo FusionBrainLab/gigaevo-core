@@ -84,9 +84,13 @@ reputation bootstrap-EV re-pricing (mean + low quantile of a staleness-
 auction    Thompson gate vs a no-card baseline arm; known cards bid the
            mean of one weighted bootstrap resample of direct deltas, zero
            atoms for invalid/unused exposures, plus a neutral pseudo-event;
-           genuinely cold cards use the cold scale; gated by bid > 0 and a
-           round-quantile reserve
+           genuinely cold cards use the cold scale; gated by bid > 0, a
+           round-quantile reserve, and a Sidak-adjusted no-card baseline gate
 budget     cap winners to reader.max_cards
+probe      cold-exploration lane after budget: a card whose staleness-scaled
+           effective support is strictly below the evidence floor is probe-
+           eligible and may fill an empty selection or (rarely) displace the
+           weakest budgeted card when the budget is full
 render     mutator-facing prompt block incl. efficacy endorsement
 ```
 
@@ -143,8 +147,9 @@ instantiate-once mechanism algorithm configs use for `behavior_space`):
 ```yaml
 defaults:
   - llm: gemini              # memory LLM router (research + librarian agents)
-  - read_policy: adaptive    # owns reputation + auction + budget + excluder + shortlister
+  - read_policy: adaptive    # owns reputation + auction + budget + excluder + shortlister + probe
   - evictor: recommended     # birth-failure + harm + policy-non-viable eviction
+  - write: end_of_run        # shipped cadence: author once at shutdown (override to live)
 
 store:      # LocalMemoryStore = card bank + vector index + research agent
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
@@ -195,13 +200,13 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | Group | Options | Notes |
 |---|---|---|
 | `memory/llm` | `gemini` (default), `qwen_instruct` | one router shared by the research + librarian agents |
-| `memory/read_policy` | `adaptive` (default), `recommended`, `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `adaptive` = contextual bootstrap-EV over BD-proximity + EB cold priors + persisted no-card evidence + explicit cold probes + bootstrap auction + top-bid budget + warm-card bench + lineage excluder. `portable` = same adaptive stack in global context, no `behavior_space` dependency; use for multi-island/no-BD algorithms. `recommended` remains the BD adaptive alias for older commands. Decay variants are explicit experiments. Legacy variants preserve old median-EV / probability-only baselines with fixed priors and no cold probes |
-| `memory/context` | `bd_cell` (default under `adaptive`/`recommended`), `global` | shared context policy used by reader, shortlist bench, no-card evidence, and writer baseline fitting. `bd_cell` recomputes cells under the live behavior space with global fallback; `global` ignores behavior space |
-| `memory/prior` | `empirical_bayes` (adaptive default), `fixed_3_3` | cold-card prior policy. EB learns from banked first non-founding exposures, shrunk toward a neutral seed; fixed is for legacy/reproduction |
+| `memory/read_policy` | `adaptive` (default), `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `adaptive` = contextual bootstrap-EV over BD-proximity + EB cold priors + persisted no-card evidence + explicit cold probes + bootstrap auction + top-bid budget + warm-card bench + lineage excluder; this is the recommended default. `portable` = same adaptive stack in global context, no `behavior_space` dependency; use for multi-island/no-BD algorithms. Decay variants are explicit experiments. Legacy variants preserve old median-EV / probability-only baselines with fixed priors and no cold probes |
+| `memory/context` | `bd_cell` (default under `adaptive`), `global` | shared context policy used by reader, shortlist bench, no-card evidence, and writer baseline fitting. `bd_cell` recomputes cells under the live behavior space with global fallback; `global` ignores behavior space |
+| `memory/prior` | `empirical_bayes` (adaptive default), `fixed_3_3` | cold-card prior policy. EB learns a config-driven cohort ladder (`levels`, default global → kind → kind+category, then context / context+kind / context+kind+category once the context model resolves a non-global bucket) from banked first non-founding exposures, shrunk toward a neutral `seed_prior: [1,1]` under a `k_max=6` concentration cap; a level whose counts match the previous one is skipped so the same evidence never compounds shrinkage. Fixed is for legacy/reproduction |
 | `memory/no_card_evidence` | `json` (adaptive default), `none` | writer-published no-card controls/natural empty outcomes consumed by the reader's no-card abstention gate. This is distinct from the randomized no-card control rate |
-| `memory/probe` | `cold_budget` (adaptive default), `none` | explicit cold-card exploration lane. It can fill an empty selection, and rarely override a warm winner, only for cards with too little context support |
-| `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bootstrap_ev` (alias), `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; staleness enters as per-event weight `w = 2^(-s/H)`. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
-| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only |
+| `memory/probe` | `cold_budget` (adaptive default), `none` | explicit cold-card exploration lane, run after the auction and budget. A card is probe-eligible iff its bid reports a non-empty support kind and its staleness-scaled effective support is strictly below the evidence floor (`probe_until_effective_events`, wired to `${memory.evidence.min_effective_events}`) — the same measure eviction uses, so probe (strict `<`) and eviction/adjudication (`>=`) partition card-space with no gap. With an empty selection it fills one slot with the best cold candidate at rate 0.50; with warm winners it adds a probe at rate 0.03 and only displaces the weakest budgeted card when the budget is already full (otherwise the probe joins the proven winner). At most one probe card per decision; empty support kinds are never probe-eligible (fail-safe) |
+| `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; staleness enters as per-event weight `w = 2^(-s/H)`. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
+| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption) and a Sidak-adjusted no-card baseline gate (`gate_quantile = baseline_quantile^(1/eligible_count)` against the persisted no-card evidence arm); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only. `thompson_bootstrap_novelty` (add with `+memory/auction=thompson_bootstrap_novelty` — the `+` is required because read_policy owns the group) is `thompson_bootstrap` with a novelty tax: each bid is scaled by `(1 + use_count)^-novelty_power` (use_count = the card's non-founding gain events, a deterministic injection count) before the reserve is computed, so repeat winners make room for fresh cards while injection volume is preserved (the quantile floor re-normalizes over the taxed bids) |
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
 | `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion, later-use harm eviction, and policy-non-viable active-bank cleanup after the reputation's effective evidence floor; contextual reputations provide explicit supported contexts for that cleanup; `harm` keeps only the later-use harm sweep |
@@ -334,7 +339,16 @@ policy-non-viable cards after enough effective support when their active value
 estimate is at or below `memory.neutral_gain` and their direct
 baseline-adjusted evidence never beat that neutral point. The default evidence
 floor is the readable shared knob `memory.evidence.min_effective_events: 3`,
-mirrored into `memory.eviction_safety.min_effective_events`. Contextual scorers
+mirrored into `memory.eviction_safety.min_effective_events`. That same floor
+partitions the card lifecycle: the read-side cold-probe lane keeps a card
+probe-eligible while its staleness-scaled effective support is strictly below
+the floor, and only at or above the floor is the card adjudicable by auction
+merit and evictable by `PolicyNonViableEvictor`. Both lanes compute effective
+support with identical arithmetic (sum of `max(0, w)` over finite event weights,
+times the staleness weight), probe using strict `<` and eviction using `>=`, so
+support exactly at the floor lands in the eviction/adjudication lane — no card
+falls between the lanes into a stuck zombie state where diluted unused/invalid
+exposure could neither probe nor be evicted. Contextual scorers
 supply explicit supported evidence contexts for harm and policy cleanup; if a
 custom contextual scorer cannot provide them, the default skips contextless
 cleanup. Program exemplars keep the zero-evidence-at-birth path.

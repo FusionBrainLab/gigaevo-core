@@ -178,11 +178,12 @@ This expands into the following system.
 | Shortlister | `BootstrapFusedRankingShortlister` | Benches weak warm cards before research, then may post-filter/rank the researched result | Prevents known weak cards from occupying digest/research slots | Warm non-positive cards vanish before prompt rendering |
 | Bench floor | `rep_floor_quantile=0.4` | Drops bottom warm-card pessimistic-EV quantile before research | Self-normalized bank cleanup without a metric-specific threshold | Bad warm cards become less visible even before eviction |
 | Reputation | `BootstrapReputation(BDProximityReputation)` | Computes contextual posterior and bootstrap EV from gain events | A card can help one BD region and hurt another | Same card can bid differently depending on parent metrics |
-| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a context/kind/category cold-card prior from first non-founding exposures, shrunk toward a neutral seed | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category tendencies |
+| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a cold-card prior from first non-founding exposures over a config-driven cohort ladder (`levels`: global → kind → kind+category, then context / context+kind / context+kind+category once the parent resolves a non-global bucket), shrunk toward the neutral seed under a `k_max=6` cap | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category and context-local tendencies |
 | EV staleness | `half_life_cycles=1.0` | Downweights old EV evidence by bank-cycle age | Old evidence should fade relative to a changing bank | Stale known deltas bid closer to zero |
 | Auction | `BootstrapThompsonAuctioneer` | Samples EV bids and gates against the no-card arm | Handles uncertainty, left-tail loss, and abstention | Higgs R1 rejected 608/1200 reads at auction |
 | EV floor | `ev_floor_quantile=0.765` | Requires bids to be in the high part of the round's own bid distribution | Avoids hardcoded gain deltas and limits low-value injections | Candidate can be retrieved but still fail the auction |
 | Budget | `TopBidBudgeter` | Keeps highest realized EV bid when too many cards win | The external card block can hold fewer cards than auction winners | Budget rows show dropped winners by bid |
+| Cold probe | `ColdProbePolicy(empty=0.50, warm_override=0.03)` | After budget, spends a bounded exploration lane on cards whose staleness-scaled effective support is strictly below the evidence floor | Keeps an under-evidenced card explorable instead of dying on one ignored prompt; the strict-`<` floor mirrors eviction's `>=` so probe and eviction partition card-space | Fills an empty selection ~half the time; rarely (3%) displaces the weakest budgeted card, and only when the budget is already full |
 | Excluder | `LineageExcluder` | Filters cards actually applied by ancestors | Avoids repeatedly reusing the same idea down one lineage | Descendants do not re-see cited/applied cards |
 | No-card control | `pipeline_builder.no_card_control_probability=0.10` | Randomly withholds the external Memory Cards block after reader selection | Provides fair baseline rows for attribution | Some reader-selected slates produce no external card exposure and `memory_no_card_control=True` |
 | Writer cadence | `memory/write=live` | Runs live sweeps every 10 ingestor sweeps that landed programs, capped at 24 programs per sweep, plus final flush | Same-run memory needs cards before the run ends | Later read events can retrieve cards written earlier in the run |
@@ -465,7 +466,8 @@ flowchart TD
     G --> H[Reputation stats]
     H --> I[Bootstrap Thompson auction]
     I --> J[TopBidBudgeter]
-    J --> K[Renderer]
+    J --> PB[ColdProbePolicy cold-exploration lane]
+    PB --> K[Renderer]
     K --> L{Non-empty rendered cards?}
     L -->|no| M[No memory_cards block]
     L -->|yes| N{Random no-card control?}
@@ -546,8 +548,13 @@ from its bootstrap EV support. It must pass:
    `memory.baseline_prior` (`Beta(3, 3)` by default). The gate
    is Sidak-adjusted over the eligible slate.
 4. The external card-block budget.
-5. The explicit cold-probe policy, which may fill an otherwise empty selection
-   or rarely override one warm winner for a genuinely cold candidate.
+5. The explicit cold-probe policy. It runs after the auction and budget, and
+   only on cards whose staleness-scaled effective support is strictly below the
+   evidence floor. If the auction selected nothing, it fills one slot with the
+   best cold candidate at probability 0.50. If warm winners exist, it adds a
+   probe at probability 0.03, displacing the weakest budgeted card only when the
+   budget is already full — with a free slot the probe joins the proven winner.
+   At most one probe card per decision.
 
 So there is no single fixed "card selection probability". It depends on the
 retrieved slate, the card posterior, the current bank, the parent's BD cell, and
@@ -581,6 +588,20 @@ retrieval ranking, the EV floor, and the no-card arm. Once a cold card is
 rendered in a writer-enabled run, it should stop being zombie-like: a cited use
 gives direct evidence, and an ignored card gets an unused exposure event once
 baseline evidence exists.
+
+The read and write sides agree on one measure — staleness-scaled effective
+support — and use it to partition card-space. While a card's effective support
+is strictly below `memory.evidence.min_effective_events`, it is probe-eligible:
+the cold-probe lane keeps it in circulation. Once its support reaches that floor,
+it leaves the probe lane and becomes adjudicable by auction merit and evictable
+by `PolicyNonViableEvictor`. Because the probe lane uses strict `<` and eviction
+uses `>=` on the same arithmetic (`sum(max(0, w))` over finite event weights,
+times the staleness weight), support exactly at the floor belongs to the
+eviction lane, and no card can be in both lanes or fall between them. That is
+what keeps a card with only diluted unused/invalid exposure from getting stuck:
+its staleness-scaled support stays below the floor, so it remains probe-eligible
+rather than becoming a zombie that can neither probe nor be evicted, until real
+evidence pushes it across into the adjudicable lane.
 
 ## No-Card Progress Baselines
 
@@ -760,8 +781,20 @@ runs, `AuctionCandidateProjector` replaces that fallback with the configured
 
 ```text
 legacy cold prior = memory.baseline_prior
-adaptive cold prior = EB(global, kind, category, then local context cohorts)
+adaptive cold prior = EB along the config-driven ladder
+                      global -> kind -> kind+category
+                      -> context -> context+kind -> context+kind+category
 ```
+
+The ladder lives in `memory/prior.levels`. A validator enforces its shape: only
+the tokens `{kind, category, context}`, no duplicates, all global levels before
+any context-bearing level, and a strict token-superset (monotone refinement)
+within each block. Context-bearing levels apply only when the context model
+resolves a non-global bucket, and any level whose cohort counts equal the
+previously applied level's is skipped so the same evidence does not compound its
+shrinkage. `parent_mu` deliberately carries across the global-to-local boundary:
+the deepest informative global cohort is the shrinkage parent for the first
+context-bearing level.
 
 The no-card auction prior is separate. Adaptive runs get it from
 `no_card_evidence.json` when writer-observed controls exist; otherwise
@@ -947,10 +980,13 @@ For each candidate:
 8. Select the card only if theta beats the adjusted no-card-arm gate.
 9. If too many cards win, keep the top realized EV bids.
 
-That means cold cards get two different chances: the exploitation path still
-needs a lucky posterior draw, a positive borrowed-scale bid, and a no-card-gate
-win; the probe path can deliberately spend a small configured budget on a
-genuinely cold card so it does not become a never-tested zombie.
+That means cards below the evidence floor get two different chances: the
+exploitation path still needs a lucky posterior draw, a positive borrowed-scale
+bid, and a no-card-gate win; the probe path can deliberately spend a small
+configured budget on an under-evidenced card so it does not become a never-tested
+zombie. The probe lane only touches cards whose staleness-scaled effective
+support is strictly below the floor, the same boundary at which eviction takes
+over, so the two never contend for the same card.
 
 ## Eviction
 
@@ -1068,6 +1104,21 @@ ideas are eventually benched or deleted.
 ## Zombie Cards
 
 A "zombie card" can mean two different things.
+
+The mechanism that rules out a genuine stuck state is a single partition. The
+read and write sides share one measure — staleness-scaled effective support,
+`sum(max(0, w))` over a card's finite non-founding event weights times its
+staleness weight — and split card-space on the evidence floor
+(`memory.evidence.min_effective_events`). Below the floor a card is
+probe-eligible and the cold-probe lane keeps it in circulation; at or above the
+floor it is adjudicable by auction merit and evictable by
+`PolicyNonViableEvictor`. Probe uses strict `<` and eviction uses `>=`, so a card
+lives in exactly one lane — never both, never neither. The old pathology was a
+card whose only history was diluted unused/invalid exposure: too exposed to be a
+fresh cold prior, too thin on confident-harm evidence to evict, and stuck in an
+absorbing state between the two. Under the partition that card simply keeps
+effective support below the floor, so it stays probe-eligible rather than stuck,
+until real evidence pushes it across into the adjudicable lane.
 
 The bad version is a card that is known to be harmful, keeps getting injected,
 and never gets removed. The current system has several defenses against that:

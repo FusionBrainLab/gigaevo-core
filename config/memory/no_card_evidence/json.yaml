@@ -13,3 +13,6 @@ local_min_effective_n: 8.0
 # Maximum nonlocal control pseudo-count for sparse local no-card gates.
 shrink_events: 16.0
 sign_strength_cap: 64.0
+# Retention cap on persisted observations (resource bound, not a statistical
+# threshold); oldest natural rows are pruned before any randomized control.
+max_observations: 1024

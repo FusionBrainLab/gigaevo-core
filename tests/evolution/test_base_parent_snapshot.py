@@ -5,10 +5,12 @@ from gigaevo.evolution.engine.mutation import (
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 
 
 class _FakeParent:
@@ -71,3 +73,27 @@ def test_base_parent_index_accepts_diff_namespace_letters():
 def test_base_parent_index_defaults_to_first_parent_on_garbage():
     assert base_parent_index(None) == 1
     assert base_parent_index("parent A") == 1
+
+
+class _FakeParentWithScores(_FakeParent):
+    def __init__(self, *args, scores=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._scores = scores
+
+    def get_metadata(self, key):
+        if key == PER_SAMPLE_SCORES_KEY:
+            return self._scores
+        return super().get_metadata(key)
+
+
+def test_snapshot_freezes_base_per_sample_scores():
+    parent = _FakeParentWithScores(["card-x"], {"r2": 0.5}, scores=[0.4, 0.6])
+    snap = freeze_base_parent_snapshot([parent], base_parent=1)
+    assert snap[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] == [0.4, 0.6]
+
+
+def test_snapshot_omits_scores_when_parent_has_none():
+    for scores in (None, [], (0.4, 0.6)):
+        parent = _FakeParentWithScores(["card-x"], {"r2": 0.5}, scores=scores)
+        snap = freeze_base_parent_snapshot([parent], base_parent=1)
+        assert MUTATION_MEMORY_BASE_SCORES_METADATA_KEY not in snap

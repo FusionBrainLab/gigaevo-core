@@ -33,6 +33,17 @@ python run.py problem.name=heilbron pipeline=memory_guided memory=full \
   checkpoint_dir=/data/banks/heilbron
 ```
 
+## Noise Variant (`pipeline=memory_guided_noise`)
+
+Wire-identical DAG except the validator stage additionally routes the reserved
+`artifact["_program_metadata"]` namespace (e.g. `per_sample_scores` from
+`validate()`) onto `program.metadata` — the vector never enters prompts. Pair
+with `archive_selector=paired_bootstrap` and a problem whose `validate()` emits
+the vector (e.g. `chains/hover/full7_vectorized`) for noise-aware archive
+replacement; `run.py` rejects the paired selector under any pipeline that does
+not route program metadata. `pipeline=guided_noise` is the memory-free sibling
+(same routing on the plain guided DAG) for no-memory control arms.
+
 ## DAG Contract
 
 `MemoryContextStage` selects cards through `memory.provider` and feeds them only

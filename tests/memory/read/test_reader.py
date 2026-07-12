@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 from gigaevo.memory.cards import Card
+from gigaevo.memory.context.beta import BetaPrior
+from gigaevo.memory.context.no_card import NoCardGateSummary
 from gigaevo.memory.events import MemoryReadSelection
 from gigaevo.memory.read.auction import (
     AuctionBid,
@@ -15,6 +17,7 @@ from gigaevo.memory.read.auction import (
     ThompsonAuctioneer,
     TopThetaBudgeter,
 )
+from gigaevo.memory.read.projection import AuctionCandidateProjector
 from gigaevo.memory.read.reader import MemoryReader, MemorySelection
 from gigaevo.memory.read.render import EfficacyCardRenderer
 from gigaevo.memory.read.reputation import BetaBinomialReputation
@@ -43,7 +46,7 @@ class _ExplodingShortlister:
 
 
 class _WinAllAuctioneer:
-    def run(self, candidates, rng):
+    def run(self, candidates, rng, *, baseline=None):
         slate = [
             AuctionBid(
                 card_id=c.card_id,
@@ -61,7 +64,7 @@ class _WinAllAuctioneer:
 
 
 class _RejectAllAuctioneer:
-    def run(self, candidates, rng):
+    def run(self, candidates, rng, *, baseline=None):
         slate = [
             AuctionBid(
                 card_id=c.card_id,
@@ -154,7 +157,7 @@ class TestSelect:
         seen: list[AuctionCandidate] = []
 
         class _Spy:
-            def run(self, candidates, rng):
+            def run(self, candidates, rng, *, baseline=None):
                 seen.extend(candidates)
                 return [], []
 
@@ -192,6 +195,47 @@ class TestSelect:
         )
         await _select(reader)
         assert sorted(calls) == sorted(c.id for c in cards)
+
+    async def test_no_card_baseline_resolved_once_per_decision(
+        self, make_card, make_event
+    ):
+        # The decision-level no-card summary reaches the auction as one keyword
+        # argument, resolved once per select — never once per candidate (the
+        # JSON-backed store takes a file lock per summary_for call).
+        class _CountingNoCard:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def summary_for(self, context):
+                self.calls += 1
+                return NoCardGateSummary(
+                    prior=BetaPrior(alpha=4.0, beta=2.0), source="dynamic"
+                )
+
+        received: list = []
+
+        class _Spy:
+            def run(self, candidates, rng, *, baseline=None):
+                received.append(baseline)
+                return [], []
+
+        evidence = _CountingNoCard()
+        cards = tuple(make_card(gain_events=(make_event(0.2),)) for _ in range(3))
+        reader = MemoryReader(
+            shortlister=_Shortlister(ResearchResult(cards=cards)),
+            reputation=BetaBinomialReputation(),
+            auctioneer=_Spy(),
+            budgeter=TopThetaBudgeter(),
+            renderer=EfficacyCardRenderer(),
+            candidate_projector=AuctionCandidateProjector(no_card_evidence=evidence),
+            max_cards=3,
+            rng=np.random.default_rng(0),
+        )
+        await _select(reader)
+        assert evidence.calls == 1
+        (baseline,) = received
+        assert (baseline.prior.alpha, baseline.prior.beta) == (4.0, 2.0)
+        assert baseline.source == "dynamic"
 
     async def test_founding_only_card_borrows_warm_scale_end_to_end(
         self, make_card, make_event

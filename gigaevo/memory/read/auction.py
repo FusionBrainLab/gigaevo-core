@@ -16,6 +16,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import beta as scipy_beta
 
+from gigaevo.memory.context.no_card import NoCardGateSummary
 from gigaevo.memory.events import MemoryAuctionRun, MemoryBudgetCap, emit_memory_event
 from gigaevo.memory.read.bootstrap import bootstrap_ev_samples
 from gigaevo.programs.metrics.context import MetricsContext
@@ -55,6 +56,12 @@ class AuctionCandidate(BaseModel):
         default=None,
         description="Causal weights aligned with deltas for weighted bootstrap EV.",
     )
+    deltas_se: tuple[float, ...] | None = Field(
+        default=None,
+        description="Per-event gain ses aligned with deltas (0 = exact, the "
+        "uncertainty-blind point case). Only the bootstrap auction consumes it, "
+        "jittering each resampled atom by N(0, se).",
+    )
     staleness_weight: float = Field(
         default=1.0,
         description="Bank-cycle evidence discount w = 2**(-s/H), the per-event "
@@ -68,25 +75,11 @@ class AuctionCandidate(BaseModel):
         default="",
         description="Read-context bucket used by contextual prior/no-card evidence.",
     )
-    baseline_a: float | None = Field(
-        default=None,
-        description="Optional dynamic no-card baseline alpha for this slate.",
-    )
-    baseline_b: float | None = Field(
-        default=None,
-        description="Optional dynamic no-card baseline beta for this slate.",
-    )
-    baseline_source: str = Field(
-        default="",
-        description="Source of the dynamic no-card baseline prior, if present.",
-    )
-    no_card_baseline: float | None = Field(
-        default=None,
-        description="Robust no-card child-parent delta location for audit only.",
-    )
-    no_card_n: float = Field(
-        default=0.0,
-        description="Effective no-card evidence behind the dynamic baseline prior.",
+    use_count: int = Field(
+        default=0,
+        ge=0,
+        description="Deterministic injection count (the card's non-founding gain "
+        "events). Only the novelty-discounted auction consumes it.",
     )
 
 
@@ -144,7 +137,14 @@ class AuctionBid(BaseModel):
         description="EV support source: cold_prior, ev_rewards, or zero_support.",
     )
     support_n: float = Field(
-        default=0.0, description="Effective EV support weight behind this bid."
+        default=0.0,
+        description="Effective (staleness-scaled) EV support weight behind this "
+        "bid, on the same measure as eviction's effective support.",
+    )
+    use_count: int = Field(
+        default=0,
+        description="Injection count carried from the candidate; under the "
+        "novelty-discounted auction, `bid` already includes the (1+use_count) tax.",
     )
     prior_source: str = Field(
         default="",
@@ -192,21 +192,19 @@ def _bid_dicts(slate: list[AuctionBid]) -> tuple[dict[str, Any], ...]:
     return tuple(bid.model_dump(mode="json") for bid in slate)
 
 
-def _candidate_baseline(
-    candidates: list[AuctionCandidate], fallback: tuple[float, float]
+def _decision_baseline(
+    summary: NoCardGateSummary | None, fallback: tuple[float, float]
 ) -> tuple[float, float, str, float | None, float]:
-    for candidate in candidates:
-        if candidate.baseline_a is None or candidate.baseline_b is None:
-            continue
-        a = float(candidate.baseline_a)
-        b = float(candidate.baseline_b)
+    if summary is not None:
+        a = float(summary.prior.alpha)
+        b = float(summary.prior.beta)
         if math.isfinite(a) and math.isfinite(b) and a > 0.0 and b > 0.0:
             return (
                 a,
                 b,
-                candidate.baseline_source or "dynamic",
-                candidate.no_card_baseline,
-                float(candidate.no_card_n),
+                summary.source or "dynamic",
+                float(summary.baseline),
+                float(summary.evidence_n),
             )
     return (float(fallback[0]), float(fallback[1]), "fixed", None, 0.0)
 
@@ -230,10 +228,14 @@ class ThompsonAuctioneer(BaseModel):
     )
 
     def run(
-        self, candidates: list[AuctionCandidate], rng: Any
+        self,
+        candidates: list[AuctionCandidate],
+        rng: Any,
+        *,
+        baseline: NoCardGateSummary | None = None,
     ) -> tuple[list[str], list[AuctionBid]]:
         base_a, base_b, baseline_source, no_card_baseline, no_card_n = (
-            _candidate_baseline(candidates, self.baseline_prior)
+            _decision_baseline(baseline, self.baseline_prior)
         )
         winners: list[str] = []
         slate: list[AuctionBid] = []
@@ -370,7 +372,11 @@ class EVThompsonAuctioneer(BaseModel):
         return _UNSCALED_COLD_MAGNITUDE
 
     def run(
-        self, candidates: list[AuctionCandidate], rng: Any
+        self,
+        candidates: list[AuctionCandidate],
+        rng: Any,
+        *,
+        baseline: NoCardGateSummary | None = None,
     ) -> tuple[list[str], list[AuctionBid]]:
         warm = [
             c.magnitude
@@ -381,7 +387,7 @@ class EVThompsonAuctioneer(BaseModel):
         ]
         cold_magnitude = statistics.median(warm) if warm else self._cold_fallback()
         base_a, base_b, baseline_source, no_card_baseline, no_card_n = (
-            _candidate_baseline(candidates, self.baseline_prior)
+            _decision_baseline(baseline, self.baseline_prior)
         )
         effective_floor = self.ev_floor
         if self.ev_floor_quantile is not None:
@@ -485,9 +491,15 @@ class BootstrapThompsonAuctioneer(BaseModel):
     probe.
 
     The EV reserve is two self-normalizing gates, neither a Beta assumption nor
-    an absolute scale. (1) A sign gate ``bid > 0``: never inject a card you
-    expect to hurt — this alone yields the abstain-on-all-harmful guarantee (an
-    all-negative round wins nothing). (2) A spread reserve ``bid >=`` the
+    an absolute scale. (1) A sign gate ``bid > 0``: never inject a card whose
+    sampled EV is non-positive. With exact deltas (all ``deltas_se`` zero or
+    absent) this alone yields the abstain-on-all-harmful guarantee — an
+    all-negative round wins nothing. When events price evaluation noise, a
+    confidently-harmful card (mean far below zero on its se scale) still
+    essentially never clears it, while a marginally-harmful one keeps a bounded
+    chance of a positive jittered draw — bounded exploration at the boundary,
+    with the Sidak no-card gate as a partial backstop. (2) A spread reserve
+    ``bid >=`` the
     ``ev_floor_quantile`` quantile of the round's OWN bids: the bid must sit in
     the upper part of the round's realized distribution. The quantile is
     inclusive so ties at the floor do not self-annihilate; true cold bids are
@@ -529,7 +541,11 @@ class BootstrapThompsonAuctioneer(BaseModel):
         return _UNSCALED_COLD_MAGNITUDE
 
     def run(
-        self, candidates: list[AuctionCandidate], rng: Any
+        self,
+        candidates: list[AuctionCandidate],
+        rng: Any,
+        *,
+        baseline: NoCardGateSummary | None = None,
     ) -> tuple[list[str], list[AuctionBid]]:
         warm = [
             c.magnitude
@@ -540,7 +556,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
         ]
         cold_magnitude = statistics.median(warm) if warm else self._cold_fallback()
         base_a, base_b, baseline_source, no_card_baseline, no_card_n = (
-            _candidate_baseline(candidates, self.baseline_prior)
+            _decision_baseline(baseline, self.baseline_prior)
         )
         bids: list[float] = []
         support_scales: list[float] = []
@@ -549,9 +565,20 @@ class BootstrapThompsonAuctioneer(BaseModel):
         for candidate in candidates:
             deltas = candidate.deltas or ()
             weights = candidate.delta_weights
+            # Mirror eviction's _effective_support so the probe and eviction
+            # lanes partition card-space on one staleness-scaled measure.
             support_count = (
-                float(sum(weights)) if weights is not None else float(len(deltas))
+                sum(
+                    max(0.0, float(weight))
+                    for weight in weights
+                    if math.isfinite(float(weight))
+                )
+                if weights is not None
+                else float(len(deltas))
             )
+            staleness = float(candidate.staleness_weight)
+            if math.isfinite(staleness) and staleness >= 0.0:
+                support_count *= staleness
             true_cold = not deltas and candidate.magnitude is None
             support_scale = cold_magnitude if true_cold else 0.0
             support_scales.append(support_scale)
@@ -571,8 +598,12 @@ class BootstrapThompsonAuctioneer(BaseModel):
                     1,
                     rng,
                     delta_weights=weights,
+                    ses=candidate.deltas_se,
                 )
                 bids.append(float(sample[0]))
+        # Price-adjustment seam (consumes no rng, so draw order stays pinned);
+        # applied before the reserve so the quantile floor prices adjusted bids.
+        bids = self._adjust_bids(candidates, bids)
         quantile_floor = (
             float(np.quantile(bids, self.ev_floor_quantile)) if bids else 0.0
         )
@@ -639,6 +670,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
                     bid=float(bid_value),
                     support_kind=support_kind,
                     support_n=support_n,
+                    use_count=candidate.use_count,
                     prior_source=candidate.prior_source,
                     context_key=candidate.context_key,
                     baseline_source=baseline_source,
@@ -683,6 +715,44 @@ class BootstrapThompsonAuctioneer(BaseModel):
                 ),
             )
         return winners, slate
+
+    def _adjust_bids(
+        self, candidates: list[AuctionCandidate], bids: list[float]
+    ) -> list[float]:
+        return bids
+
+
+class NoveltyDiscountedBootstrapAuctioneer(BootstrapThompsonAuctioneer):
+    """Bootstrap auction whose bid pays a novelty tax: each candidate's EV bid
+    is scaled by ``(1 + use_count) ** -novelty_power`` before the round's EV
+    reserve is computed. Because that reserve is a quantile of the round's OWN
+    (taxed) bids, taxing a dominant repeat winner drags the floor down with it —
+    wins redistribute to fresher cards instead of vanishing (offline replay on
+    four hover runs, 2026-07-11: injection volume preserved, top-card share
+    down 20–35% at power 0.5–1.0). ``use_count`` is the candidate projector's
+    deterministic injection count (non-founding gain events — event-based, no
+    wall clock, so identical decisions replay identically); an unused card pays
+    no tax, and ``novelty_power=0`` is bid-for-bid identical to the base
+    auction. The discount consumes no rng and the sign gate still sees the
+    taxed bid, so a known-harmful (negative) bid can never be taxed into
+    eligibility."""
+
+    novelty_power: float = Field(
+        default=0.5,
+        ge=0.0,
+        description="Exponent of the (1 + use_count) bid tax; 0 disables the "
+        "discount, 1 makes a card's k-th injection bid ~1/(1+k) of raw.",
+    )
+
+    def _adjust_bids(
+        self, candidates: list[AuctionCandidate], bids: list[float]
+    ) -> list[float]:
+        if self.novelty_power == 0.0:
+            return bids
+        return [
+            bid * (1.0 + candidate.use_count) ** -self.novelty_power
+            for candidate, bid in zip(candidates, bids)
+        ]
 
 
 class TopThetaBudgeter(BaseModel):

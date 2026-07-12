@@ -1,0 +1,22 @@
+# @package memory.auction
+# Novelty-discounted bootstrap-EV Thompson auction. Identical to
+# `memory/auction=thompson_bootstrap` except each candidate's EV bid pays a
+# `(1 + use_count) ** -novelty_power` tax before the round-relative EV reserve
+# is computed (use_count = the card's non-founding gain events — its
+# deterministic injection count; event-based, no wall clock).
+# The reserve is a quantile of the round's OWN taxed bids, so taxing a dominant
+# repeat winner lowers the floor with it: wins REDISTRIBUTE to fresher cards
+# instead of vanishing. Provenance: offline slate replay of 4 hover diff-memory
+# runs (2026-07-11) — injection volume preserved (±4%), top-card share down
+# 20–35% at power 0.5–1.0; power=0 reproduces the base auction bid-for-bid.
+# Pairs with `memory/budget=top_bid`, which then also ranks by the taxed bid.
+# CLI: `+memory/auction=thompson_bootstrap_novelty` (the `+` is required — the
+# auction group is introduced by memory/read_policy's nested defaults).
+_target_: gigaevo.memory.read.auction.NoveltyDiscountedBootstrapAuctioneer
+baseline_prior: ${memory.baseline_prior}
+metrics_context: ${ref:problem_context::metrics_context}
+# Same round-relative EV reserve as thompson_bootstrap (heilbron evalB/evalD
+# offline calibration, 2026-07-05).
+ev_floor_quantile: 0.765
+# Bid tax exponent: 0 disables, 1 taxes a card's k-th recent injection ~1/(1+k).
+novelty_power: 0.5

@@ -7,6 +7,15 @@
 _target_: gigaevo.memory.read.prior.EmpiricalBayesMemoryPrior
 store: ${ref:memory.store}
 context_model: ${ref:memory.context_model}
+# Cohort refinement ladder below the implicit global top level; each entry is a
+# '+'-joined subset of {kind, category, context}. Global levels must precede
+# context-bearing levels and each block must refine monotonically.
+levels:
+  - kind
+  - kind+category
+  - context
+  - context+kind
+  - context+kind+category
 # Neutral weak seed for cold-card efficacy. This is deliberately weaker than
 # memory.baseline_prior because EB should adapt from bank evidence quickly.
 seed_prior: [1.0, 1.0]

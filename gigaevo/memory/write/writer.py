@@ -38,6 +38,7 @@ from gigaevo.memory.write.admission import (
     WriteResult,
 )
 from gigaevo.memory.write.consolidation import ConsolidationScheduler
+from gigaevo.memory.write.crediting import EffectEstimator
 from gigaevo.memory.write.eviction import Evictor
 from gigaevo.memory.write.extraction import ProgramRecordExtractor, record_note
 from gigaevo.memory.write.librarian import Librarian, NeighborSource, code_sha256
@@ -305,6 +306,7 @@ class MemoryWriter(IncrementalPostRunHook):
         checkpoint_dir: str | Path,
         metrics_context: MetricsContext,
         baseline_estimator: NoCardBaselineEstimator | None = None,
+        effect_estimator: EffectEstimator | None = None,
         no_card_recorder: NoCardEvidenceRecorder | None = None,
         task_description: str = "",
         fitness_key: str = "",
@@ -356,6 +358,7 @@ class MemoryWriter(IncrementalPostRunHook):
             higher_is_better=self._higher_is_better,
             metrics_context=metrics_context,
             baseline_estimator=baseline_estimator,
+            effect_estimator=effect_estimator,
             no_card_recorder=no_card_recorder,
         )
         self._consolidation = ConsolidationScheduler(

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-import statistics
+import math
 from typing import Protocol, runtime_checkable
 
 from loguru import logger
@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
@@ -39,11 +40,14 @@ from gigaevo.memory.cards import (
     EvidenceAttribution,
     EvidenceSource,
 )
+from gigaevo.memory.context.evidence import clean_ids, median, oriented_delta
 from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
 from gigaevo.memory.events import MemoryGainRestamp, emit_memory_event
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
+from gigaevo.memory.write.crediting import EffectEstimator, PointEffectEstimator
 from gigaevo.programs.metrics.context import MetricsContext
+from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 from gigaevo.programs.program import Program
 
 
@@ -86,6 +90,28 @@ def base_id(prog: Program) -> str:
     """The base parent's program id, frozen at birth ("" for legacy programs)."""
     pid = prog.get_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY)
     return pid if isinstance(pid, str) else ""
+
+
+def base_scores(prog: Program) -> tuple[float, ...] | None:
+    """The base parent's per-sample score vector, frozen at birth (None when absent)."""
+    return _score_vector(prog.get_metadata(MUTATION_MEMORY_BASE_SCORES_METADATA_KEY))
+
+
+def child_scores(prog: Program) -> tuple[float, ...] | None:
+    """This program's own live per-sample score vector (None when absent)."""
+    return _score_vector(prog.get_metadata(PER_SAMPLE_SCORES_KEY))
+
+
+def _score_vector(raw: object) -> tuple[float, ...] | None:
+    """Tolerant scalar-sequence coercion; None on anything else. Finiteness and
+    coherence are the effect estimator's checks — this only shields extraction
+    from raising on malformed metadata."""
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    try:
+        return tuple(float(x) for x in raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def no_card_control(prog: Program) -> bool:
@@ -170,6 +196,16 @@ class InjectionOutcome(BaseModel):
         description="Base parent's fitness (base_metrics[fitness_key], resolved at "
         "the write seam); None means no base baseline, so no gain events.",
     )
+    base_scores: tuple[float, ...] | None = Field(
+        default=None,
+        description="Base parent's per-sample score vector, frozen at birth "
+        "alongside base_metrics; None when the eval is scalar-only.",
+    )
+    child_scores: tuple[float, ...] | None = Field(
+        default=None,
+        description="This child's own per-sample score vector, read live at the "
+        "write seam so it coheres with the live fitness; None when absent.",
+    )
     created_at: datetime | None = Field(
         default=None,
         description="This child's creation time (UTC) — the decision-outcome "
@@ -212,19 +248,33 @@ def compute_contextual_gains(
     *,
     higher_is_better: bool = True,
     baseline_estimator: NoCardBaselineEstimator | None = None,
+    effect_estimator: EffectEstimator | None = None,
 ) -> dict[str, list[ContextualGain]]:
     """Map each prompt-selected card id to baseline-adjusted outcome events.
 
     First learn the run-local no-card baseline from children with a frozen base
     baseline and an empty selected slate, preferring rows created by the randomized
-    no-card control arm when any exist. The estimator is injectable: the default
+    no-card control arm when any exist (invalid controls are excluded — a crash
+    has no honest progress magnitude). The estimator is injectable: the default
     is a global median, while contextual reputations can fit per-cell/per-regime
-    baselines behind the same method. Used cards receive ``child-parent -
-    no_card_baseline`` split across cited cards. Selected but unused cards receive
-    a zero-gain ``unused=True`` exposure failure only once a no-card baseline has
-    evidence (invalid children still emit forced-harm / unused events).
+    baselines behind the same method. Used cards share one ``child-parent -
+    no_card_baseline`` event carrying the full delta with ``credit_weight=1/k``
+    (splitting the delta too would price a bundled win at ``1/k**2``). Selected
+    but unused cards receive a zero-gain ``unused=True`` exposure failure at
+    ``credit_weight=1/len(selected)`` — an ignore in a crowded prompt is weak
+    evidence — and only once a no-card baseline has evidence (invalid children
+    still emit forced-harm / unused events).
+
+    ``effect_estimator`` owns how the child-vs-base effect becomes a
+    ``(value, se)`` measurement (default: exact point delta, ``se=0``). The
+    baseline subtraction is a constant shift of the value, so the event's
+    ``gain_se`` is the measurement's se unchanged; invalid/unused events are
+    exact binary observations and never carry an se.
     """
     events: dict[str, list[ContextualGain]] = {}
+    estimator = (
+        effect_estimator if effect_estimator is not None else PointEffectEstimator()
+    )
     baseline = _fit_no_card_baseline(
         baseline_estimator, programs, higher_is_better=higher_is_better
     )
@@ -232,8 +282,8 @@ def compute_contextual_gains(
     for p in programs:
         if p.base_fitness is None or not p.base_selected_ids:
             continue
-        selected = _clean_ids(p.base_selected_ids)
-        used = selected & _clean_ids(p.card_ids_used)
+        selected = clean_ids(p.base_selected_ids)
+        used = selected & clean_ids(p.card_ids_used)
         unused = selected - used
         if not selected:
             continue
@@ -258,12 +308,12 @@ def compute_contextual_gains(
             for card_id in used:
                 events.setdefault(card_id, []).append(gain_event)
         elif used and p.fitness is not None and has_baseline_evidence:
-            delta = _oriented_delta(
-                p.fitness, p.base_fitness, higher_is_better
-            ) - baseline.baseline_for(p)
+            measured = estimator.estimate(p, higher_is_better=higher_is_better)
+            delta = measured.value - baseline.baseline_for(p)
             gain_event = ContextualGain(
                 context=context,
-                gain=delta / len(used),
+                gain=delta,
+                gain_se=measured.se,
                 attribution=EvidenceAttribution(
                     source=EvidenceSource.DIRECT,
                     causal_strength=(
@@ -288,7 +338,7 @@ def compute_contextual_gains(
                     causal_strength=CausalStrength.EXPOSURE,
                     source_child_id=p.id,
                     used_card_count=len(used),
-                    credit_weight=1.0,
+                    credit_weight=1.0 / len(selected),
                 ),
             )
             for card_id in unused:
@@ -296,24 +346,10 @@ def compute_contextual_gains(
     return events
 
 
-def _clean_ids(ids: Sequence[str]) -> set[str]:
-    return {c.strip() for c in ids if c.strip()}
-
-
-def _oriented_delta(
-    child_fitness: float, base_fitness: float, higher_is_better: bool
-) -> float:
-    return (
-        child_fitness - base_fitness
-        if higher_is_better
-        else base_fitness - child_fitness
-    )
-
-
 class GlobalNoCardBaseline(BaseModel):
     """Default no-card estimator: median delta over all no-card children."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     def fit_no_card_baseline(
         self,
@@ -324,7 +360,7 @@ class GlobalNoCardBaseline(BaseModel):
         del self
         deltas = _no_card_deltas(outcomes, higher_is_better)
         return _ConstantNoCardBaseline(
-            baseline=_median(deltas),
+            baseline=median(deltas),
             has_evidence=bool(deltas),
         )
 
@@ -367,25 +403,18 @@ def _no_card_deltas(
     no_card = [
         p
         for p in outcomes
-        if p.base_fitness is not None and not _clean_ids(p.base_selected_ids)
+        if p.base_fitness is not None and not clean_ids(p.base_selected_ids)
     ]
     controls = [p for p in no_card if p.no_card_control]
     cohort = controls if controls else no_card
     deltas: list[float] = []
     for p in cohort:
-        if p.base_fitness is None:
+        if p.base_fitness is None or p.invalid or p.fitness is None:
             continue
-        if p.invalid:
-            deltas.append(0.0)
-            continue
-        if p.fitness is None:
-            continue
-        deltas.append(_oriented_delta(p.fitness, p.base_fitness, higher_is_better))
+        delta = oriented_delta(p.fitness, p.base_fitness, higher_is_better)
+        if delta is not None and math.isfinite(delta):
+            deltas.append(delta)
     return deltas
-
-
-def _median(values: Sequence[float]) -> float:
-    return float(statistics.median(values)) if values else 0.0
 
 
 def card_gain_events_from_programs(
@@ -395,6 +424,7 @@ def card_gain_events_from_programs(
     higher_is_better: bool,
     metrics_context: MetricsContext,
     baseline_estimator: NoCardBaselineEstimator | None = None,
+    effect_estimator: EffectEstimator | None = None,
 ) -> dict[str, list[ContextualGain]]:
     """Selected-card base-relative outcome events per card id, from live programs.
 
@@ -406,7 +436,10 @@ def card_gain_events_from_programs(
         programs, fitness_key=fitness_key, metrics_context=metrics_context
     )
     return compute_contextual_gains(
-        rows, higher_is_better=higher_is_better, baseline_estimator=baseline_estimator
+        rows,
+        higher_is_better=higher_is_better,
+        baseline_estimator=baseline_estimator,
+        effect_estimator=effect_estimator,
     )
 
 
@@ -428,6 +461,8 @@ def injection_outcomes_from_programs(
                 base_metrics=bm,
                 base_id=base_id(prog),
                 base_fitness=metrics_context.strict_fitness(bm, fitness_key),
+                base_scores=base_scores(prog),
+                child_scores=child_scores(prog),
                 created_at=prog.created_at,
                 card_ids_used=tuple(card_ids_used(prog)),
                 no_card_control=no_card_control(prog),
@@ -529,12 +564,14 @@ class CardStatsUpdater:
         higher_is_better: bool,
         metrics_context: MetricsContext,
         baseline_estimator: NoCardBaselineEstimator | None = None,
+        effect_estimator: EffectEstimator | None = None,
         no_card_recorder: NoCardEvidenceRecorder | None = None,
     ) -> None:
         self._fitness_key = fitness_key
         self._higher_is_better = higher_is_better
         self._metrics_context = metrics_context
         self._baseline_estimator = baseline_estimator
+        self._effect_estimator = effect_estimator
         self._no_card_recorder = no_card_recorder
         self._logged_orphans: set[str] = set()
 
@@ -566,6 +603,7 @@ class CardStatsUpdater:
             rows,
             higher_is_better=self._higher_is_better,
             baseline_estimator=self._baseline_estimator,
+            effect_estimator=self._effect_estimator,
         )
         bank = store.snapshot()
         known = {card.id.strip() for card in bank}

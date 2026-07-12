@@ -16,7 +16,8 @@ from typing import Protocol
 
 from loguru import logger
 
-from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
+from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
+from gigaevo.memory.context.evidence import event_weight
 from gigaevo.memory.events import MemoryEvictionSweep, emit_memory_event
 from gigaevo.programs.metrics.context import MetricsContext
 
@@ -77,15 +78,26 @@ def _harm_evidence(card: Card) -> Card:
     )
 
 
-def _event_weight(event: ContextualGain) -> float:
-    attr = event.attribution
-    if attr is not None and attr.credit_weight is not None:
-        weight = float(attr.credit_weight)
-    elif event.founding:
-        weight = 0.0
-    else:
-        weight = 1.0
-    return weight if math.isfinite(weight) and weight > 0.0 else 0.0
+def _has_negative_direct_evidence(card: Card) -> bool:
+    """True when the card has at least one genuinely negative outcome.
+
+    A crash (``invalid``) or a baseline-adjusted loss on a real use counts;
+    being ignored by the mutator (``unused``) never does. Stored gains are
+    already no-card-baseline-relative, so the neutral point is 0.
+    """
+    for event in card.gain_events:
+        if event.founding or event_weight(event) <= 0.0:
+            continue
+        if event.invalid:
+            return True
+        if (
+            not event.unused
+            and event.gain is not None
+            and math.isfinite(float(event.gain))
+            and float(event.gain) < 0.0
+        ):
+            return True
+    return False
 
 
 def _has_positive_direct_evidence(card: Card, neutral_gain: float) -> bool:
@@ -94,7 +106,7 @@ def _has_positive_direct_evidence(card: Card, neutral_gain: float) -> bool:
             event.founding
             or event.invalid
             or event.unused
-            or _event_weight(event) <= 0.0
+            or event_weight(event) <= 0.0
             or event.gain is None
             or not math.isfinite(float(event.gain))
         ):
@@ -105,7 +117,12 @@ def _has_positive_direct_evidence(card: Card, neutral_gain: float) -> bool:
 
 
 class HarmEvictor:
-    """Evicts cards whose injection posterior is confidently harmful."""
+    """Evicts cards whose injection posterior is confidently harmful.
+
+    Harm eviction tombstones the card for the whole run, so the verdict
+    additionally requires at least one genuinely negative outcome (a loss or a
+    crash): exposure-only evidence — however much of it — is never enough.
+    """
 
     def __init__(
         self,
@@ -118,6 +135,8 @@ class HarmEvictor:
 
     def should_evict(self, card: Card) -> bool:
         evidence = _harm_evidence(card)
+        if not _has_negative_direct_evidence(evidence):
+            return False
         contexts = self._eviction_contexts(evidence)
         return bool(contexts) and all(
             self._is_harmful_in_context(evidence, context) for context in contexts

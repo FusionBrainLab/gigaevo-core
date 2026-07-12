@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from pydantic import ValidationError
 import pytest
 from scipy.stats import beta as beta_dist
 
@@ -12,6 +13,7 @@ from gigaevo.memory.read.auction import (
     AuctionCandidate,
     BootstrapThompsonAuctioneer,
     EVThompsonAuctioneer,
+    NoveltyDiscountedBootstrapAuctioneer,
     ThompsonAuctioneer,
     TopBidBudgeter,
     TopThetaBudgeter,
@@ -371,6 +373,29 @@ class TestBootstrapThompsonAuctioneer:
         assert slate[0].bid == 0.0
         assert slate[0].support_kind == "zero_support"
 
+    def test_support_n_is_staleness_scaled_like_eviction_support(self):
+        # Probe eligibility and eviction adjudicability must partition on one
+        # measure: decayed evidence re-earns probe eligibility exactly when it
+        # drops below the eviction floor.
+        auctioneer = BootstrapThompsonAuctioneer(metrics_context=_metrics(0.02))
+
+        _, slate = auctioneer.run(
+            [
+                AuctionCandidate(
+                    card_id="decayed",
+                    posterior_a=3.0,
+                    posterior_b=3.0,
+                    magnitude=0.01,
+                    deltas=(-0.1, -0.2),
+                    delta_weights=(1.0, 1.0),
+                    staleness_weight=0.5,
+                )
+            ],
+            np.random.default_rng(0),
+        )
+
+        assert slate[0].support_n == pytest.approx(1.0)
+
     def test_bootstrap_uses_one_baseline_space_gate_for_slate(self):
         auctioneer = BootstrapThompsonAuctioneer(
             metrics_context=_metrics(0.02), ev_floor_quantile=0.0
@@ -493,3 +518,162 @@ class TestTopBidBudgeter:
             "a",
             "b",
         ]
+
+
+class TestNoveltyDiscountedBootstrapAuctioneer:
+    @staticmethod
+    def _pair(hot_uses: int = 15) -> list[AuctionCandidate]:
+        return [
+            AuctionCandidate(
+                card_id="hot",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.9,
+                deltas=(0.9,) * 8,
+                use_count=hot_uses,
+            ),
+            AuctionCandidate(
+                card_id="fresh",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.5,
+                deltas=(0.5,) * 8,
+                use_count=0,
+            ),
+        ]
+
+    def test_power_zero_is_bid_exact_with_base(self):
+        base = BootstrapThompsonAuctioneer(ev_floor_quantile=0.765)
+        novelty = NoveltyDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.765, novelty_power=0.0
+        )
+        for seed in range(10):
+            base_winners, base_slate = base.run(
+                self._pair(), np.random.default_rng(seed)
+            )
+            nov_winners, nov_slate = novelty.run(
+                self._pair(), np.random.default_rng(seed)
+            )
+            assert nov_winners == base_winners
+            assert [bid.bid for bid in nov_slate] == [bid.bid for bid in base_slate]
+            assert [bid.theta for bid in nov_slate] == [bid.theta for bid in base_slate]
+
+    def test_slate_stores_discounted_bid_and_use_count(self):
+        candidates = self._pair(hot_uses=3)
+        _, base_slate = BootstrapThompsonAuctioneer(ev_floor_quantile=0.5).run(
+            candidates, np.random.default_rng(7)
+        )
+        _, nov_slate = NoveltyDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.5, novelty_power=0.5
+        ).run(candidates, np.random.default_rng(7))
+        for candidate, raw, discounted in zip(candidates, base_slate, nov_slate):
+            assert discounted.use_count == candidate.use_count
+            assert discounted.bid == pytest.approx(
+                raw.bid * (1.0 + candidate.use_count) ** -0.5
+            )
+
+    def test_discount_redistributes_win_without_shrinking_volume(self):
+        base = BootstrapThompsonAuctioneer(ev_floor_quantile=0.5)
+        novelty = NoveltyDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.5, novelty_power=1.0
+        )
+        redistributed = 0
+        for seed in range(30):
+            base_winners, _ = base.run(self._pair(), np.random.default_rng(seed))
+            nov_winners, _ = novelty.run(self._pair(), np.random.default_rng(seed))
+            assert len(nov_winners) == len(base_winners)
+            if base_winners == ["hot"] and nov_winners == ["fresh"]:
+                redistributed += 1
+        assert redistributed >= 25
+
+    def test_zero_use_count_pays_no_tax(self):
+        candidates = [
+            AuctionCandidate(
+                card_id="a",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.5,
+                deltas=(0.5,) * 4,
+            ),
+            AuctionCandidate(
+                card_id="b",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.3,
+                deltas=(0.3,) * 4,
+            ),
+        ]
+        base = BootstrapThompsonAuctioneer(ev_floor_quantile=0.5)
+        novelty = NoveltyDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.5, novelty_power=1.0
+        )
+        for seed in range(10):
+            base_winners, base_slate = base.run(candidates, np.random.default_rng(seed))
+            nov_winners, nov_slate = novelty.run(
+                candidates, np.random.default_rng(seed)
+            )
+            assert nov_winners == base_winners
+            assert [bid.bid for bid in nov_slate] == [bid.bid for bid in base_slate]
+
+    def test_negative_novelty_power_rejected(self):
+        with pytest.raises(ValidationError):
+            NoveltyDiscountedBootstrapAuctioneer(novelty_power=-0.1)
+
+
+class TestBootstrapAuctioneerPricedNoise:
+    def _run(self, se_a, se_b, seed):
+        auctioneer = BootstrapThompsonAuctioneer()
+        candidates = [
+            AuctionCandidate(
+                card_id="a",
+                posterior_a=2.0,
+                posterior_b=2.0,
+                deltas=(0.3, -0.1),
+                deltas_se=se_a,
+            ),
+            AuctionCandidate(
+                card_id="b",
+                posterior_a=2.0,
+                posterior_b=2.0,
+                deltas=(0.2, 0.1),
+                deltas_se=se_b,
+            ),
+        ]
+        return auctioneer.run(candidates, np.random.default_rng(seed))
+
+    def test_zero_ses_replay_the_point_auction_exactly(self):
+        for seed in range(10):
+            absent_winners, absent_slate = self._run(None, None, seed)
+            zero_winners, zero_slate = self._run((0.0, 0.0), (0.0, 0.0), seed)
+            assert zero_winners == absent_winners
+            assert [bid.bid for bid in zero_slate] == [bid.bid for bid in absent_slate]
+
+    def test_confidently_harmful_stays_out_under_priced_noise(self):
+        auctioneer = BootstrapThompsonAuctioneer()
+        candidate = AuctionCandidate(
+            card_id="harmful",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            deltas=(-1.0, -1.2, -0.9),
+            deltas_se=(0.01, 0.01, 0.01),
+        )
+        for seed in range(30):
+            winners, slate = auctioneer.run([candidate], np.random.default_rng(seed))
+            assert winners == []
+            assert slate[0].bid <= 0.0
+
+    def test_marginally_harmful_keeps_a_bounded_positive_chance(self):
+        auctioneer = BootstrapThompsonAuctioneer()
+        candidate = AuctionCandidate(
+            card_id="marginal",
+            posterior_a=2.0,
+            posterior_b=2.0,
+            deltas=(-0.01,),
+            deltas_se=(0.5,),
+        )
+        bids = [
+            auctioneer.run([candidate], np.random.default_rng(seed))[1][0].bid
+            for seed in range(100)
+        ]
+        assert any(bid > 0 for bid in bids)
+        assert any(bid <= 0 for bid in bids)

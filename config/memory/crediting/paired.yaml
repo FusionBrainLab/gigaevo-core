@@ -1,0 +1,12 @@
+# @package memory.crediting
+# Paired per-sample crediting: the event's gain stays the exact oriented delta,
+# plus a paired-bootstrap se over the base vector frozen at the child's birth
+# and the child's live per-sample score vector. Requires a metadata-routing
+# pipeline (pipeline.routes_program_metadata) and a problem whose validate()
+# emits per_sample_scores — enforced by a compose guard. Events without
+# comparable vectors degrade per event to the exact point delta (se=0).
+_target_: gigaevo.memory.write.crediting.PairedEffectEstimator
+comparison:
+  _target_: gigaevo.programs.metrics.paired.PairedBootstrap
+  n_resamples: 2000
+  seed: 0

@@ -12,7 +12,7 @@ from gigaevo.memory.read.auction import AuctionBid
 class NoColdProbePolicy(BaseModel):
     """No-op probe policy for legacy/ablation configs."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     def apply(
         self,
@@ -27,21 +27,35 @@ class NoColdProbePolicy(BaseModel):
 
 
 class ColdProbePolicy(BaseModel):
-    """Spend a small explicit exploration lane on genuinely cold candidates.
+    """Spend a small explicit exploration lane on under-evidenced candidates.
 
     This policy runs after the exploitation auction and hard budget.  If the
-    auction selected nothing, it can fill one slot with a cold card.  If a warm
-    winner exists, it can rarely override one budgeted card.  All probabilities
-    are config fields; there are no hidden constants in the selection rule.
+    auction selected nothing, it can fill one slot with a probe card.  If warm
+    winners exist, it can rarely add a probe, displacing the weakest budgeted
+    card only when the budget is already full.  Eligibility is
+    evidential — any bid that reports a support kind and whose effective
+    (staleness-scaled) support is below ``probe_until_effective_events`` may
+    probe — so a card whose only history is diluted unused/invalid exposure
+    keeps a path back into circulation instead of dying on one ignored prompt.
+    The threshold defaults to the eviction evidence floor, partitioning
+    card-space: below the floor a card may probe, at or above it the card is
+    adjudicable by auction merit or eviction.  Bids with an empty support kind
+    (auctioneers that do not report support) are never probe-eligible, so the
+    lane fails safe instead of reading the field default as cold.  All
+    probabilities are config fields; there are no hidden constants in the
+    selection rule.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = Field(default=True)
     probe_until_effective_events: float = Field(
-        default=1.0,
+        default=3.0,
         ge=0.0,
-        description="Cards with support_n below this remain probe-eligible.",
+        description="Cards with effective support_n below this remain "
+        "probe-eligible; keep equal to the eviction evidence floor "
+        "(memory.evidence.min_effective_events) so no card falls between "
+        "the probe and eviction lanes.",
     )
     max_probe_cards_per_decision: int = Field(
         default=1,
@@ -77,7 +91,7 @@ class ColdProbePolicy(BaseModel):
             bid
             for bid in slate
             if bid.card_id not in selected
-            and bid.support_kind == "cold_prior"
+            and bid.support_kind
             and bid.support_n < self.probe_until_effective_events
         ]
         if not candidates:
@@ -122,7 +136,9 @@ class ColdProbePolicy(BaseModel):
     ) -> tuple[list[str], list[AuctionBid]]:
         kept = list(budgeted)
         if replace and kept:
-            kept = kept[: -len(probes)] if len(probes) < len(kept) else []
+            overflow = len(kept) + len(probes) - max_cards
+            if overflow > 0:
+                kept = kept[:-overflow] if overflow < len(kept) else []
         for probe in probes:
             if len(kept) >= max_cards:
                 break

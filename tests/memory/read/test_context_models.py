@@ -17,10 +17,11 @@ class _Outcome:
         self,
         *,
         oid: str,
-        fitness: float,
+        fitness: float | None,
         base_fitness: float,
         x: float,
         no_card_control: bool = True,
+        invalid: bool = False,
     ) -> None:
         self.id = oid
         self.fitness = fitness
@@ -28,7 +29,7 @@ class _Outcome:
         self.base_metrics = {"x": x}
         self.base_selected_ids = ()
         self.no_card_control = no_card_control
-        self.invalid = False
+        self.invalid = invalid
 
 
 def _space() -> BehaviorSpace:
@@ -57,6 +58,38 @@ def test_bd_context_returns_same_cell_events(make_card, make_event):
     assert [event.gain for event in events] == [pytest.approx(0.2)]
 
 
+def test_bd_evidence_cells_keeps_first_event_per_cell(make_card, make_event):
+    model = BDCellMemoryContext(behavior_space=_space())
+    card = make_card(
+        gain_events=(
+            make_event(0.1, metrics={"x": 0.2}),
+            make_event(0.2, metrics={"x": 0.3}),
+            make_event(0.3, metrics={"x": 0.8}),
+        )
+    )
+
+    events = model.evidence_cells(card.gain_events)
+
+    assert [event.gain for event in events] == [
+        pytest.approx(0.1),
+        pytest.approx(0.3),
+    ]
+
+
+def test_bd_evidence_cells_skips_unbinnable_events(make_card, make_event):
+    model = BDCellMemoryContext(behavior_space=_space())
+    card = make_card(
+        gain_events=(
+            make_event(0.1, metrics={}),
+            make_event(0.2, metrics={"x": 0.8}),
+        )
+    )
+
+    events = model.evidence_cells(card.gain_events)
+
+    assert [event.gain for event in events] == [pytest.approx(0.2)]
+
+
 def test_bd_context_falls_back_when_cell_has_only_founding(make_card, make_event):
     model = BDCellMemoryContext(behavior_space=_space())
     card = make_card(
@@ -69,6 +102,37 @@ def test_bd_context_falls_back_when_cell_has_only_founding(make_card, make_event
     events = model.evidence_events(card, DecisionContext(parent_metrics={"x": 0.1}))
 
     assert [event.gain for event in events] == [pytest.approx(0.9), pytest.approx(0.4)]
+
+
+def test_global_no_card_baseline_excludes_invalid_children():
+    # A crashed control has no measurable delta; scoring it as 0.0 drags the
+    # baseline median toward zero and inflates every card's apparent gain.
+    baseline = GlobalMemoryContext().fit_no_card_baseline(
+        [
+            _Outcome(oid="a", fitness=0.6, base_fitness=0.5, x=0.2),
+            _Outcome(oid="crash", fitness=None, base_fitness=0.5, x=0.2, invalid=True),
+        ],
+        higher_is_better=True,
+    )
+
+    assert baseline.baseline_for(
+        _Outcome(oid="q", fitness=0.0, base_fitness=0.0, x=0.2)
+    ) == pytest.approx(0.1)
+
+
+def test_bd_no_card_baseline_excludes_invalid_children():
+    model = BDCellMemoryContext(behavior_space=_space())
+    baseline = model.fit_no_card_baseline(
+        [
+            _Outcome(oid="a", fitness=0.6, base_fitness=0.5, x=0.2),
+            _Outcome(oid="crash", fitness=None, base_fitness=0.5, x=0.2, invalid=True),
+        ],
+        higher_is_better=True,
+    )
+
+    assert baseline.baseline_for(
+        _Outcome(oid="q", fitness=0.0, base_fitness=0.0, x=0.2)
+    ) == pytest.approx(0.1)
 
 
 def test_bd_no_card_baseline_uses_cell_with_global_fallback():

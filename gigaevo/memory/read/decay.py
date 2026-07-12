@@ -19,14 +19,12 @@ constants, no wall-clock arithmetic.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import math
 
 from scipy.stats import beta
 
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
-from gigaevo.memory.context import NoCardBaselineOutcome
-from gigaevo.memory.read.interfaces import DecayCompatibleReputation, NoCardBaseline
+from gigaevo.memory.read.interfaces import DecayCompatibleReputation
 from gigaevo.memory.read.staleness import bank_cycle_weight
 from gigaevo.memory.storage.base import MemoryStore
 
@@ -104,6 +102,11 @@ class DecayingReputation:
     ) -> tuple[ContextualGain, ...]:
         return self._inner.evidence_events(card, context)
 
+    def event_ses(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        return self._inner.event_ses(card, context)
+
     def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
         return self._inner.eviction_contexts(card)
 
@@ -113,13 +116,6 @@ class DecayingReputation:
         """The bank-cycle discount as the bootstrap resample weight — the same
         ``w`` this decorator applies to the Beta posterior, one mechanism."""
         return self._weight(card, context)
-
-    def fit_no_card_baseline(
-        self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
-    ) -> NoCardBaseline:
-        return self._inner.fit_no_card_baseline(
-            outcomes, higher_is_better=higher_is_better
-        )
 
     def _weight(self, card: Card, context: DecisionContext | None) -> float:
         return bank_cycle_weight(

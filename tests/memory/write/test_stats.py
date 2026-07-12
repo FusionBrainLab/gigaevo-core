@@ -7,6 +7,7 @@ import pytest
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
@@ -14,9 +15,10 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import CardKind, EvidenceAttribution, EvidenceSource
+from gigaevo.memory.context import BDCellMemoryContext
 from gigaevo.memory.events import MemoryGainRestamp
-from gigaevo.memory.read.reputation import BDProximityReputation
 from gigaevo.memory.write.admission import CardAdmissionGate
+from gigaevo.memory.write.crediting import PairedEffectEstimator, PointEffectEstimator
 from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory.write.stats import (
     CardStatsStamper,
@@ -25,8 +27,10 @@ from gigaevo.memory.write.stats import (
     card_gain_events_from_programs,
     compute_contextual_gains,
     founding_gain_event,
+    injection_outcomes_from_programs,
 )
 from gigaevo.programs.metrics.context import VALIDITY_KEY
+from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 
 
 def outcome(**overrides) -> InjectionOutcome:
@@ -82,6 +86,17 @@ def no_card_program(make_program, *, fitness: float = 0.5):
         fitness=fitness,
         metadata=base_meta(selected=[], used=[], no_card_control=True),
     )
+
+
+def test_non_finite_no_card_fitness_does_not_poison_global_baseline():
+    events = compute_contextual_gains(
+        [
+            no_card_outcome(id="nan-control", fitness=float("nan")),
+            no_card_outcome(id="finite-control", fitness=0.6),
+            outcome(fitness=0.8),
+        ]
+    )
+    assert events["card-a"][0].gain == pytest.approx(0.2)
 
 
 def test_used_cards_and_unused_exposures_are_attributed_separately():
@@ -200,7 +215,7 @@ def test_used_card_gain_subtracts_same_bd_cell_no_card_baseline():
                 base_metrics={VALIDITY_KEY: 1.0, "fitness": 0.5, "x": 0.75},
             ),
         ],
-        baseline_estimator=BDProximityReputation(behavior_space=space),
+        baseline_estimator=BDCellMemoryContext(behavior_space=space),
     )
     assert events["card-a"][0].gain == pytest.approx(0.2)
 
@@ -227,7 +242,8 @@ def test_one_child_shares_one_event_object_across_credited_cards():
         ]
     )
     assert events["a"][0] is events["b"][0]
-    assert events["a"][0].gain == pytest.approx(0.1)
+    assert events["a"][0].gain == pytest.approx(0.2)
+    assert events["a"][0].attribution.credit_weight == pytest.approx(0.5)
 
 
 def test_selected_unused_gets_no_use_event_without_child_fitness():
@@ -259,7 +275,10 @@ def test_valid_child_without_baseline_skips_unused_exposures_too():
     assert events == {}
 
 
-def test_used_cards_split_joint_reward_equally():
+def test_bundled_use_keeps_full_delta_and_splits_credit_weight():
+    # One child, one unit of causal evidence: the delta atom stays whole and
+    # only the credit weight is split — splitting both would price a bundled
+    # win at 1/k**2 of a solo win in the EV mean.
     events = compute_contextual_gains(
         [
             no_card_outcome(),
@@ -267,9 +286,48 @@ def test_used_cards_split_joint_reward_equally():
         ]
     )
     assert events["a"][0] is events["b"][0]
-    assert events["a"][0].gain == pytest.approx(0.1)
-    assert events["b"][0].gain == pytest.approx(0.1)
+    assert events["a"][0].gain == pytest.approx(0.2)
+    assert events["a"][0].attribution.credit_weight == pytest.approx(0.5)
+    assert events["b"][0].gain == pytest.approx(0.2)
     assert events["c"][0].unused is True
+
+
+def test_unused_exposure_weight_diluted_by_slate_size():
+    # An ignore inside a crowded prompt is weak evidence: the mutator's
+    # attention was split across the slate, so the exposure failure carries
+    # 1/len(selected), mirroring the 1/k credit split for bundled use.
+    events = compute_contextual_gains(
+        [
+            no_card_outcome(),
+            outcome(base_selected_ids=("a", "b", "c"), card_ids_used=()),
+        ]
+    )
+    assert events["a"][0].unused is True
+    assert events["a"][0].attribution.credit_weight == pytest.approx(1.0 / 3.0)
+
+
+def test_solo_unused_exposure_keeps_full_weight():
+    events = compute_contextual_gains(
+        [
+            no_card_outcome(),
+            outcome(base_selected_ids=("a",), card_ids_used=()),
+        ]
+    )
+    assert events["a"][0].unused is True
+    assert events["a"][0].attribution.credit_weight == pytest.approx(1.0)
+
+
+def test_invalid_no_card_rows_are_excluded_from_the_baseline():
+    # A crashed no-card child has no honest progress magnitude; counting it as
+    # delta 0.0 drags the baseline median toward zero and inflates card gains.
+    events = compute_contextual_gains(
+        [
+            no_card_outcome(id="valid-control", fitness=0.6),
+            no_card_outcome(id="crashed-control", fitness=None, invalid=True),
+            outcome(id="with-card", fitness=0.7),
+        ]
+    )
+    assert events["card-a"][0].gain == pytest.approx(0.1)
 
 
 def test_invalid_child_harms_used_cards_but_marks_unused_exposures():
@@ -713,3 +771,86 @@ def test_updater_continues_when_no_card_recorder_fails(
     updater.update([no_card_program(make_program), child], store=store, gate=gate)
 
     assert len(store.get("card-a").gain_events) == 1
+
+
+BASE_VEC = tuple([0.4, 0.6] * 150)  # mean 0.5, matches the factory base_fitness
+CHILD_VEC = tuple([0.75, 0.65] * 150)  # mean 0.7, matches the factory fitness
+
+
+def test_default_crediting_keeps_gains_exact():
+    (event,) = compute_contextual_gains([no_card_outcome(), outcome()])["card-a"]
+    assert event.gain_se == 0.0
+
+
+def test_point_estimator_matches_default_bit_exact():
+    rows = [no_card_outcome(), outcome()]
+    assert compute_contextual_gains(rows) == compute_contextual_gains(
+        rows, effect_estimator=PointEffectEstimator()
+    )
+
+
+def test_paired_estimator_prices_gain_se_without_moving_the_gain():
+    rows = [
+        no_card_outcome(),
+        outcome(base_scores=BASE_VEC, child_scores=CHILD_VEC),
+    ]
+    point = compute_contextual_gains(rows)
+    paired = compute_contextual_gains(rows, effect_estimator=PairedEffectEstimator())
+    assert paired["card-a"][0].gain == point["card-a"][0].gain
+    assert point["card-a"][0].gain_se == 0.0
+    assert paired["card-a"][0].gain_se > 0.0
+
+
+def test_invalid_and_unused_events_stay_exact_under_paired():
+    rows = [
+        no_card_outcome(),
+        outcome(id="crashed", fitness=None, invalid=True, base_scores=BASE_VEC),
+        outcome(
+            id="mixed",
+            base_selected_ids=("card-a", "card-b"),
+            card_ids_used=("card-a",),
+            base_scores=BASE_VEC,
+            child_scores=CHILD_VEC,
+        ),
+    ]
+    events = compute_contextual_gains(rows, effect_estimator=PairedEffectEstimator())
+    invalid_events = [e for e in events["card-a"] if e.invalid]
+    assert invalid_events and all(e.gain_se == 0.0 for e in invalid_events)
+    assert all(e.unused and e.gain_se == 0.0 for e in events["card-b"])
+    used = [e for e in events["card-a"] if not e.invalid]
+    assert used and all(e.gain_se > 0.0 for e in used)
+
+
+def test_injection_outcomes_stamp_score_vectors(make_program, metrics_context):
+    meta = base_meta(selected=["card-a"], used=["card-a"])
+    meta[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] = [0.4, 0.6]
+    meta[PER_SAMPLE_SCORES_KEY] = [0.6, 0.8]
+    prog = make_program(fitness=0.7, metadata=meta)
+
+    (row,) = injection_outcomes_from_programs(
+        [prog], fitness_key="fitness", metrics_context=metrics_context
+    )
+
+    assert row.base_scores == (0.4, 0.6)
+    assert row.child_scores == (0.6, 0.8)
+
+
+def test_gain_events_from_programs_price_noise_when_vectors_flow(
+    make_program, metrics_context
+):
+    meta = base_meta(selected=["card-a"], used=["card-a"])
+    meta[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] = list(BASE_VEC)
+    meta[PER_SAMPLE_SCORES_KEY] = list(CHILD_VEC)
+    prog = make_program(fitness=0.7, metadata=meta)
+
+    events = card_gain_events_from_programs(
+        [no_card_program(make_program), prog],
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+        effect_estimator=PairedEffectEstimator(),
+    )
+
+    (event,) = events["card-a"]
+    assert event.gain == pytest.approx(0.2)
+    assert event.gain_se > 0.0

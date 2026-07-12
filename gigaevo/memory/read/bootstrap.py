@@ -69,6 +69,23 @@ def _atoms_and_probs(
     return atoms, probs
 
 
+def _atom_ses(
+    deltas: Sequence[float], ses: Sequence[float] | None, size: int
+) -> np.ndarray | None:
+    """Per-atom gain ses aligned with the resample support; the neutral
+    pseudo-atom (and the cold atom) are exact (se=0). Returns ``None`` when
+    every atom is exact so the exact path consumes no extra rng — seed-exact
+    replay of uncertainty-blind runs depends on this."""
+    if ses is None or not deltas:
+        return None
+    if len(ses) != len(deltas):
+        raise ValueError(f"ses length {len(ses)} != deltas length {len(deltas)}")
+    vals = np.asarray(ses, dtype=float)
+    arr = np.zeros(size, dtype=float)
+    arr[: len(deltas)] = np.where(np.isfinite(vals) & (vals > 0.0), vals, 0.0)
+    return arr if arr.any() else None
+
+
 def bootstrap_ev_samples(
     deltas: Sequence[float],
     cold_scale: float,
@@ -77,18 +94,25 @@ def bootstrap_ev_samples(
     rng: np.random.Generator,
     *,
     delta_weights: Sequence[float] | None = None,
+    ses: Sequence[float] | None = None,
 ) -> np.ndarray:
     """``n_samples`` bootstrap-resample means over the weighted delta support.
 
     Each sample draws ``len(atoms)`` atoms with replacement at the staleness-
     weighted probabilities and takes their mean — one Thompson draw of the card's
     expected gain. ``n_samples == 1`` is the live auction bid; a batch is the
-    card's bootstrap-EV distribution.
+    card's bootstrap-EV distribution. ``ses`` (aligned with ``deltas``, 0 =
+    exact) prices per-event evaluation noise: each drawn atom is jittered by
+    ``N(0, se)``, widening the EV distribution without moving its center.
     """
     atoms, probs = _atoms_and_probs(deltas, cold_scale, staleness_weight, delta_weights)
     size = atoms.shape[0]
     idx = rng.choice(size, size=(n_samples, size), replace=True, p=probs)
-    return atoms[idx].mean(axis=1)
+    picked = atoms[idx]
+    atom_ses = _atom_ses(deltas, ses, size)
+    if atom_ses is not None:
+        picked = picked + rng.normal(0.0, 1.0, size=picked.shape) * atom_ses[idx]
+    return picked.mean(axis=1)
 
 
 def bootstrap_ev_quantile(

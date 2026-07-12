@@ -96,9 +96,9 @@ def test_missing_islands_key_is_allowed() -> None:
     )
 
 
-def test_multi_island_with_recommended_read_policy_raises() -> None:
+def test_multi_island_with_adaptive_read_policy_raises() -> None:
     cfg = _cfg(n_islands=2, reputation=None)
-    cfg.memory.reputation = _reputation_from_policy("recommended")
+    cfg.memory.reputation = _reputation_from_policy("adaptive")
     with pytest.raises(NotImplementedError, match="behavior_space"):
         validate_reputation_island_compat(cfg)
 

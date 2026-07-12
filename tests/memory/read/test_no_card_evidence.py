@@ -13,11 +13,12 @@ class _Outcome:
         self,
         *,
         oid: str,
-        fitness: float,
+        fitness: float | None,
         base_fitness: float,
         selected: tuple[str, ...] = (),
         no_card_control: bool = True,
         x: float | None = None,
+        invalid: bool = False,
     ) -> None:
         self.id = oid
         self.fitness = fitness
@@ -28,7 +29,7 @@ class _Outcome:
         self.base_id = "base"
         self.base_selected_ids = selected
         self.no_card_control = no_card_control
-        self.invalid = False
+        self.invalid = invalid
 
 
 def test_json_no_card_evidence_records_controls_and_ignores_selected(tmp_path):
@@ -171,6 +172,33 @@ def test_json_no_card_evidence_shrinkage_uses_limited_nonlocal_pseudocounts(
     assert summary.prior.support_n == pytest.approx(5.0)
 
 
+def test_json_no_card_evidence_invalid_children_fail_sign_but_skip_median(
+    tmp_path,
+):
+    # Crashed no-card children carry no honest progress magnitude: they must
+    # not drag the baseline median toward zero, but they are unconditional
+    # sign failures for the abstention prior.
+    store = JsonNoCardEvidenceStore(
+        path=tmp_path / "no_card.json",
+        local_min_effective_n=1.0,
+    )
+
+    store.record_outcomes(
+        [
+            _Outcome(oid="control-a", fitness=0.7, base_fitness=0.5),
+            _Outcome(oid="control-b", fitness=0.7, base_fitness=0.5),
+            _Outcome(oid="crash-a", fitness=None, base_fitness=0.5, invalid=True),
+            _Outcome(oid="crash-b", fitness=None, base_fitness=0.5, invalid=True),
+        ],
+        higher_is_better=True,
+    )
+    summary = store.summary_for(None)
+
+    assert summary.baseline == pytest.approx(0.2)
+    assert summary.prior.alpha == pytest.approx(4.0)
+    assert summary.prior.beta == pytest.approx(6.0)
+
+
 def test_json_no_card_evidence_updates_existing_outcome(tmp_path):
     store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json")
 
@@ -184,3 +212,60 @@ def test_json_no_card_evidence_updates_existing_outcome(tmp_path):
     )
 
     assert store.summary_for(None).baseline == pytest.approx(0.2)
+
+
+def _stored_ids(store: JsonNoCardEvidenceStore) -> list[str]:
+    return [obs.id for obs in store._read()]
+
+
+def test_json_no_card_evidence_prunes_oldest_naturals_first(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json", max_observations=3)
+
+    store.record_outcomes(
+        [
+            _Outcome(
+                oid="natural-old", fitness=0.6, base_fitness=0.5, no_card_control=False
+            ),
+            _Outcome(oid="control-old", fitness=0.6, base_fitness=0.5),
+            _Outcome(
+                oid="natural-new", fitness=0.7, base_fitness=0.5, no_card_control=False
+            ),
+        ],
+        higher_is_better=True,
+    )
+    store.record_outcomes(
+        [_Outcome(oid="control-new", fitness=0.8, base_fitness=0.5)],
+        higher_is_better=True,
+    )
+
+    assert _stored_ids(store) == ["control-old", "natural-new", "control-new"]
+
+
+def test_json_no_card_evidence_prunes_oldest_controls_when_no_naturals(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json", max_observations=2)
+
+    store.record_outcomes(
+        [
+            _Outcome(oid=f"control-{i}", fitness=0.5 + 0.1 * i, base_fitness=0.5)
+            for i in range(4)
+        ],
+        higher_is_better=True,
+    )
+
+    assert _stored_ids(store) == ["control-2", "control-3"]
+
+
+def test_json_no_card_evidence_below_cap_keeps_everything(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json")
+
+    store.record_outcomes(
+        [
+            _Outcome(
+                oid="natural", fitness=0.6, base_fitness=0.5, no_card_control=False
+            ),
+            _Outcome(oid="control", fitness=0.7, base_fitness=0.5),
+        ],
+        higher_is_better=True,
+    )
+
+    assert sorted(_stored_ids(store)) == ["control", "natural"]

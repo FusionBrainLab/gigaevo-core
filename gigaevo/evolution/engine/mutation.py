@@ -8,6 +8,7 @@ from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
@@ -18,6 +19,7 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
+from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 from gigaevo.programs.program import Program
 
 
@@ -83,7 +85,10 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
     The base parent is the one the mutator named (1-based ``base_parent``); its own
     metadata is overwritten on NO_CACHE requeue, so reward/context must read the
     child's stamp. ``base_fitness`` is derived from ``base_metrics`` at the write
-    seam (where the fitness key is known), so it is not frozen here.
+    seam (where the fitness key is known), so it is not frozen here. The per-sample
+    score vector, when the eval emits one, is frozen with the metrics — it must
+    describe the same evaluation, and the parent's live vector is overwritten on
+    re-eval.
     """
     if not parents:
         return {}
@@ -97,7 +102,7 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
         )
         index = 0
     base = parents[index]
-    return {
+    snapshot = {
         MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY: [
             card_id
             for card_id in (
@@ -111,6 +116,10 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
             base.get_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY)
         ),
     }
+    raw_scores = base.get_metadata(PER_SAMPLE_SCORES_KEY)
+    if isinstance(raw_scores, list) and raw_scores:
+        snapshot[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] = list(raw_scores)
+    return snapshot
 
 
 async def generate_one_mutation(

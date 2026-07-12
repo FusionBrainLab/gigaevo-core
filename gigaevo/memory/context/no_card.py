@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gigaevo.memory.cards import DecisionContext
 from gigaevo.memory.context import ContextKey, GlobalMemoryContext
 from gigaevo.memory.context.beta import BetaPrior, coerce_beta_prior
+from gigaevo.memory.context.evidence import clean_ids, oriented_delta
 
 
 class _JsonFileLock(AbstractContextManager["_JsonFileLock"]):
@@ -111,24 +112,11 @@ class _Observation(BaseModel):
     context_key: ContextKey
     delta: float
     randomized_control: bool = False
+    invalid: bool = False
 
 
-def _clean_ids(ids: Sequence[str]) -> set[str]:
-    return {cid.strip() for cid in ids if cid.strip()}
-
-
-def _oriented_delta(
-    outcome: NoCardEvidenceOutcome, higher_is_better: bool
-) -> float | None:
-    fitness = outcome.fitness
-    base_fitness = outcome.base_fitness
-    if fitness is None or base_fitness is None:
-        return None
-    return (
-        float(fitness) - float(base_fitness)
-        if higher_is_better
-        else float(base_fitness) - float(fitness)
-    )
+_Row = tuple[float, float, bool]
+"""(delta, weight, invalid) evidence row for the sign gate."""
 
 
 def _outcome_context(outcome: NoCardEvidenceOutcome) -> DecisionContext:
@@ -138,11 +126,16 @@ def _outcome_context(outcome: NoCardEvidenceOutcome) -> DecisionContext:
     )
 
 
-def _weighted_median(values: Sequence[tuple[float, float]]) -> float:
+def _weighted_median(values: Sequence[_Row]) -> float:
+    # Invalid children carry no honest progress magnitude; they enter the sign
+    # counts as failures but must not drag the location estimate toward zero.
     finite = sorted(
         (float(value), float(weight))
-        for value, weight in values
-        if math.isfinite(float(value)) and math.isfinite(float(weight)) and weight > 0.0
+        for value, weight, invalid in values
+        if not invalid
+        and math.isfinite(float(value))
+        and math.isfinite(float(weight))
+        and weight > 0.0
     )
     if not finite:
         return 0.0
@@ -160,13 +153,13 @@ def _weighted_median(values: Sequence[tuple[float, float]]) -> float:
     return finite[-1][0]
 
 
-def _signed_counts(
-    values: Sequence[tuple[float, float]], baseline: float
-) -> tuple[float, float]:
+def _signed_counts(values: Sequence[_Row], baseline: float) -> tuple[float, float]:
     success = 0.0
     failure = 0.0
-    for value, weight in values:
-        if value > baseline:
+    for value, weight, invalid in values:
+        if invalid:
+            failure += weight
+        elif value > baseline:
             success += weight
         elif value < baseline:
             failure += weight
@@ -179,7 +172,7 @@ def _signed_counts(
 class JsonNoCardEvidenceStore(BaseModel):
     """JSON-backed no-card evidence store shared by writer and reader."""
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     path: Path = Field(description="JSON file under the memory checkpoint dir.")
     context_model: Any = Field(default_factory=GlobalMemoryContext)
@@ -207,6 +200,12 @@ class JsonNoCardEvidenceStore(BaseModel):
         gt=0.0,
         description="Maximum effective no-card sign evidence in the Beta gate.",
     )
+    max_observations: int = Field(
+        default=1024,
+        gt=0,
+        description="Retention cap on persisted observations; oldest natural "
+        "rows are pruned before any randomized control.",
+    )
 
     def record_outcomes(
         self, outcomes: Sequence[NoCardEvidenceOutcome], *, higher_is_better: bool
@@ -215,10 +214,26 @@ class JsonNoCardEvidenceStore(BaseModel):
         if not fresh:
             return
         with self._file_lock(exclusive=True):
-            observations = self._read_unlocked()
-            by_id = {obs.id: obs for obs in observations}
+            by_id = {obs.id: obs for obs in self._read_unlocked()}
             by_id.update({obs.id: obs for obs in fresh})
-            self._write_unlocked(tuple(sorted(by_id.values(), key=lambda obs: obs.id)))
+            self._write_unlocked(self._pruned(tuple(by_id.values())))
+
+    def _pruned(
+        self, observations: tuple[_Observation, ...]
+    ) -> tuple[_Observation, ...]:
+        overflow = len(observations) - self.max_observations
+        if overflow <= 0:
+            return observations
+        drop: set[str] = set()
+        # Randomized controls are the costlier evidence (a deliberately
+        # withheld injection), so age out naturals first.
+        for controls_pass in (False, True):
+            for obs in observations:
+                if len(drop) >= overflow:
+                    return tuple(o for o in observations if o.id not in drop)
+                if obs.randomized_control == controls_pass:
+                    drop.add(obs.id)
+        return tuple(o for o in observations if o.id not in drop)
 
     def _observations_from(
         self, outcomes: Sequence[NoCardEvidenceOutcome], *, higher_is_better: bool
@@ -227,12 +242,14 @@ class JsonNoCardEvidenceStore(BaseModel):
         for outcome in outcomes:
             if outcome.base_fitness is None:
                 continue
-            if _clean_ids(tuple(outcome.base_selected_ids or ())):
+            if clean_ids(tuple(outcome.base_selected_ids or ())):
                 continue
             if outcome.invalid:
                 delta = 0.0
             else:
-                computed = _oriented_delta(outcome, higher_is_better)
+                computed = oriented_delta(
+                    outcome.fitness, outcome.base_fitness, higher_is_better
+                )
                 if computed is None or not math.isfinite(computed):
                     continue
                 delta = computed
@@ -246,6 +263,7 @@ class JsonNoCardEvidenceStore(BaseModel):
                     context_key=self.context_model.key_for(context),
                     delta=float(delta),
                     randomized_control=bool(outcome.no_card_control),
+                    invalid=bool(outcome.invalid),
                 )
             )
         return tuple(observations)
@@ -258,16 +276,20 @@ class JsonNoCardEvidenceStore(BaseModel):
 
         local = [obs for obs in observations if obs.context_key == key]
 
-        local_controls = [(obs.delta, 1.0) for obs in local if obs.randomized_control]
+        local_controls = [
+            (obs.delta, 1.0, obs.invalid) for obs in local if obs.randomized_control
+        ]
         all_controls = [
-            (obs.delta, 1.0) for obs in observations if obs.randomized_control
+            (obs.delta, 1.0, obs.invalid)
+            for obs in observations
+            if obs.randomized_control
         ]
         if key.kind == "global" and all_controls:
             return self._summary_from(all_controls, "global_control")
-        if sum(weight for _, weight in local_controls) >= self.local_min_effective_n:
+        if sum(weight for _, weight, _ in local_controls) >= self.local_min_effective_n:
             return self._summary_from(local_controls, "local_control")
         nonlocal_controls = [
-            (obs.delta, 1.0)
+            (obs.delta, 1.0, obs.invalid)
             for obs in observations
             if obs.randomized_control and obs.context_key != key
         ]
@@ -277,7 +299,7 @@ class JsonNoCardEvidenceStore(BaseModel):
             return self._summary_from(local_controls, "local_control_sparse")
 
         weighted = [
-            (obs.delta, self.natural_empty_weight)
+            (obs.delta, self.natural_empty_weight, obs.invalid)
             for obs in (local if local else observations)
         ]
         if weighted:
@@ -286,8 +308,8 @@ class JsonNoCardEvidenceStore(BaseModel):
 
     def _shrunk_summary(
         self,
-        local: Sequence[tuple[float, float]],
-        global_controls: Sequence[tuple[float, float]],
+        local: Sequence[_Row],
+        global_controls: Sequence[_Row],
     ) -> NoCardGateSummary:
         global_baseline = _weighted_median(global_controls)
         global_success, global_failure = _signed_counts(
@@ -326,9 +348,7 @@ class JsonNoCardEvidenceStore(BaseModel):
             source="local_shrunk",
         )
 
-    def _summary_from(
-        self, values: Sequence[tuple[float, float]], source: str
-    ) -> NoCardGateSummary:
+    def _summary_from(self, values: Sequence[_Row], source: str) -> NoCardGateSummary:
         baseline = _weighted_median(values)
         success, failure = _signed_counts(values, baseline)
         n = success + failure
@@ -389,8 +409,8 @@ class JsonNoCardEvidenceStore(BaseModel):
         )
         tmp.replace(self.path)
 
-    def _file_lock(self, *, exclusive: bool) -> CardBankFileLock:
-        return CardBankFileLock(
+    def _file_lock(self, *, exclusive: bool) -> _JsonFileLock:
+        return _JsonFileLock(
             self.path.with_suffix(self.path.suffix + ".lock"), exclusive=exclusive
         )
 
@@ -398,7 +418,7 @@ class JsonNoCardEvidenceStore(BaseModel):
 class NullNoCardEvidenceProvider(BaseModel):
     """Static no-card summary used by legacy policies and tests."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     seed_prior: tuple[float, float] = (3.0, 3.0)
 

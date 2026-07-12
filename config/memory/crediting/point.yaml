@@ -1,0 +1,5 @@
+# @package memory.crediting
+# Exact point crediting (default): the oriented child-vs-base delta treated as
+# exact (se=0) — the historical uncertainty-blind behavior, output- and
+# rng-stream-identical to runs before the crediting seam existed.
+_target_: gigaevo.memory.write.crediting.PointEffectEstimator

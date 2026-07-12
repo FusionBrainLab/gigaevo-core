@@ -25,12 +25,7 @@ islands:
     island_id: ${island_id}
     max_size: ${island_max_size}
     behavior_space: ${ref:behavior_space}
-    archive_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
-      fitness_keys:
-        - ${primary_key}
-      fitness_key_higher_is_better:
-        - ${higher_is_better}
+    archive_selector: ${archive_selector}
     elite_selector:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalTournamentEliteSelector
       fitness_key: ${primary_key}

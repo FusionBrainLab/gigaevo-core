@@ -13,8 +13,11 @@ from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
 from gigaevo.config.validation import (
+    validate_algorithm_requirements,
     validate_archive_gate_pipeline_compat,
+    validate_crediting_pipeline_compat,
     validate_memory_pipeline_compat,
+    validate_paired_selector_pipeline_compat,
     validate_program_format_pipeline_compat,
     validate_reputation_island_compat,
 )
@@ -53,6 +56,9 @@ async def run_experiment(cfg: DictConfig) -> None:
         validate_memory_pipeline_compat(cfg)
         validate_archive_gate_pipeline_compat(cfg)
         validate_program_format_pipeline_compat(cfg)
+        validate_paired_selector_pipeline_compat(cfg)
+        validate_crediting_pipeline_compat(cfg)
+        validate_algorithm_requirements(cfg)
         config_with_instances = instantiate(cfg, recursive=True)
         storage = cast(ProgramStorage, config_with_instances.program_storage)
         program_loader: InitialProgramLoader = config_with_instances.program_loader

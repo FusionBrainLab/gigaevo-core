@@ -1,7 +1,7 @@
 # @package memory
 # Portable bootstrap-EV read policy for multi-island or no-BD algorithms.
 #
-# Same bootstrap auction/benching/lineage behavior as the recommended policy,
+# Same bootstrap auction/benching/lineage behavior as the adaptive policy,
 # but global reputation avoids the single shared `behavior_space` dependency.
 defaults:
   - /memory/context: global

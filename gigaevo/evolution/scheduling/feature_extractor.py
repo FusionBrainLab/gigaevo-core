@@ -6,11 +6,35 @@ it for domain-specific features without inheriting anything.
 
 from __future__ import annotations
 
+import json
 import re
+from types import ModuleType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from gigaevo.programs.program import Program
+
+_CHAIN_TYPES: ModuleType | None | bool = False
+
+
+def _chain_spec_types() -> ModuleType | None:
+    """CARL parse-layer models (problems.chains.types), or None when absent.
+
+    Lazy: mmar-carl is an optional 3.12-gated extra, so the import must not
+    run at module load. None → semantic features degrade to zeros; a chains
+    run without the extra fails loudly at evaluation anyway.
+    """
+    global _CHAIN_TYPES
+    if _CHAIN_TYPES is False:
+        try:
+            from problems.chains import types as chain_types
+        except ImportError:
+            _CHAIN_TYPES = None
+        else:
+            _CHAIN_TYPES = chain_types
+    return _CHAIN_TYPES  # type: ignore[return-value]
 
 
 @runtime_checkable
@@ -54,6 +78,79 @@ class ChainFeatureExtractor:
     _TOOL_STEP_RE = re.compile(r'"step_type"\s*:\s*"tool"')
     _LLM_STEP_RE = re.compile(r'"step_type"\s*:\s*"llm"')
     _DEP_RE = re.compile(r'"dependencies"\s*:\s*\[([^\]]*)\]')
+
+    # Passages returned per retrieval tool call. No class-spec home exists:
+    # the k's are call-site literals in each problem's validate.py
+    # (make_retrieve_fn(..., k=7) / retrieve_deep k=10).
+    _PASSAGES_PER_TOOL = {"retrieve": 7.0, "retrieve_deep": 10.0}
+    # Seed-program convention for "field intentionally blank" (initial_programs
+    # baselines) — prompt content, not schema, so not in problems.chains.types.
+    _NONE_PLACEHOLDER = "<none>"
+
+    def _semantic_features(self, code: str) -> dict[str, float]:
+        """Strategy features from a json_document chain spec.
+
+        The spec is parsed with the CARL parse-layer models
+        (``problems.chains.types.RawChainSpec``) and guidance fields come from
+        ``STRUCTURED_FIELDS`` there — the extractor sees exactly the schema
+        ``validate_chain_spec`` enforces.
+
+        - ``hop_depth``: max over tool steps of 1 + #tool steps in the
+          transitive upstream dependency closure (retrieve→reason→retrieve
+          chain length; 0 without tool steps).
+        - ``passages_fetched``: total evidence budget, k-weighted per
+          retrieval tool call.
+        - ``instr_chars``: characters of STRUCTURED_FIELDS (``<none>``
+          placeholders excluded) + system_prompt.
+
+        Non-JSON or schema-invalid code yields zeros — pair the chains_bd3d
+        behavior space with program_format=json_document only.
+        """
+        zeros = {"hop_depth": 0.0, "passages_fetched": 0.0, "instr_chars": 0.0}
+        try:
+            raw = json.loads(code)
+        except ValueError:
+            return zeros
+        if not isinstance(raw, dict):
+            return zeros
+        chain_types = _chain_spec_types()
+        if chain_types is None:
+            return zeros
+        try:
+            spec = chain_types.RawChainSpec.model_validate(raw)
+        except ValidationError:
+            return zeros
+
+        deps_by_num = {s.number: s.dependencies for s in spec.steps}
+        tool_steps = [s for s in spec.steps if s.step_type == "tool"]
+        tool_numbers = {s.number for s in tool_steps}
+
+        hop_depth = 0.0
+        passages = 0.0
+        for step in tool_steps:
+            passages += self._PASSAGES_PER_TOOL.get(step.step_config.tool_name, 0.0)
+            upstream: set[int] = set()
+            stack = list(step.dependencies)
+            while stack:
+                p = stack.pop()
+                if p in upstream:
+                    continue
+                upstream.add(p)
+                stack.extend(deps_by_num.get(p, []))
+            hop_depth = max(hop_depth, float(1 + len(upstream & tool_numbers)))
+
+        instr_chars = len(spec.system_prompt)
+        for step in spec.steps:
+            for field in chain_types.STRUCTURED_FIELDS:
+                value = getattr(step, field, None)
+                if isinstance(value, str) and value and value != self._NONE_PLACEHOLDER:
+                    instr_chars += len(value)
+
+        return {
+            "hop_depth": hop_depth,
+            "passages_fetched": passages,
+            "instr_chars": float(instr_chars),
+        }
 
     def extract(self, program: Program) -> dict[str, float]:
         code = program.code
@@ -130,6 +227,7 @@ class ChainFeatureExtractor:
             "has_system_prompt": has_system_prompt,
             "max_dependency_fan_in": max_deps,
             "dag_depth": dag_depth,
+            **self._semantic_features(code),
         }
 
 

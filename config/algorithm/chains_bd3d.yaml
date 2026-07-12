@@ -1,0 +1,69 @@
+# @package _global_
+# 3D MAP-Elites on chain strategy axes: hop_depth x passages_fetched x instr_chars
+# 5 x 5 x 6 = 150 cells (matches single_island's 150 fitness bins).
+# Axes mined from 1491 valid hover full7 programs — all pairwise |rho| < 0.6
+# (vs 0.88 for dag_depth x fan_in); design: plans/2026-07-11-chain-bd3d-proposal.md.
+# Everything but the behavior space mirrors single_island_no_distant_parents.
+
+defaults:
+  - _base
+
+# The axes are produced by ChainStructuralMetricsStage and parse json_document
+# chain specs — any other program format extracts all-zeros and collapses the
+# space to one cell.
+algorithm_requires:
+  enable_chain_structural_metrics: true
+  program_format.id: json_document
+
+behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - hop_depth
+    - passages_fetched
+    - instr_chars
+  bounds:
+    - [0, 5]
+    - [0, 45]
+    - [0, 2500]
+  resolutions:
+    - 5
+    - 5
+    - 6
+  binning_types:
+    - ${binning_type}
+    - ${binning_type}
+    - ${binning_type}
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
+# Islands
+islands:
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: ${island_id}
+    max_size: ${island_max_size}
+    behavior_space: ${ref:behavior_space}
+    archive_selector: ${archive_selector}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalTournamentBoundedGapEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+      gap_factor: 1.5   # 1.5 ≈ Q3 boundary; ∞ → plain FPT; 0 → identical-fitness only
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migration_rate: ${migration_rate}
+
+# Evolution strategy
+evolution_strategy:
+  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
+  island_configs: ${islands}
+  program_storage: ${ref:program_storage}
+  archive_storage_factory: ${ref:archive_storage_factory}
+  migration_interval: ${migration_interval}
+  enable_migration: ${enable_migration}
+  max_migrants_per_island: ${max_migrants_per_island}

@@ -153,6 +153,23 @@ def test_memory_guided_json_document_format_is_allowed() -> None:
     validate_program_format_pipeline_compat(cfg)
 
 
+def test_memory_guided_noise_composes_like_memory_guided() -> None:
+    cfg = _compose(
+        "pipeline=memory_guided_noise",
+        "program_format=json_document",
+        "memory=reader",
+        "checkpoint_dir=/tmp/bank",
+    )
+
+    assert cfg.pipeline.id == "memory_guided_noise"
+    assert cfg.pipeline.reads_external_memory is True
+    assert cfg.pipeline_builder._target_ == (
+        "gigaevo.entrypoint.noise_aware_pipeline.NoiseAwareMemoryGuidedPipelineBuilder"
+    )
+    validate_memory_pipeline_compat(cfg)
+    validate_program_format_pipeline_compat(cfg)
+
+
 def test_guided_json_document_still_rejects_external_memory_reader() -> None:
     cfg = _compose(
         "pipeline=guided",

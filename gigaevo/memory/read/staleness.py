@@ -16,8 +16,11 @@ readers.
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import UTC, datetime
+import threading
 
 from gigaevo.memory.cards import Card, ContextualGain
 
@@ -67,10 +70,34 @@ def bank_cycle_weight(
     half_life = len(bank) * half_life_cycles
     if half_life <= 0:
         return 1.0
-    staleness = sum(
-        1
+    stamps = _sorted_bank_stamps(bank)
+    staleness = len(stamps) - bisect_right(stamps, latest)
+    return float(2.0 ** (-staleness / half_life))
+
+
+_STAMP_CACHE: OrderedDict[int, tuple[Sequence[Card], list[datetime]]] = OrderedDict()
+_STAMP_CACHE_MAX = 4
+_STAMP_CACHE_LOCK = threading.Lock()
+
+
+def _sorted_bank_stamps(bank: Sequence[Card]) -> list[datetime]:
+    # Only immutable snapshots are safe to key by identity; the strong ref in
+    # the cache entry keeps the id from being reused by a successor tuple.
+    cacheable = isinstance(bank, tuple)
+    if cacheable:
+        with _STAMP_CACHE_LOCK:
+            entry = _STAMP_CACHE.get(id(bank))
+            if entry is not None and entry[0] is bank:
+                return entry[1]
+    stamps = sorted(
+        stamped
         for banked in bank
         for event in banked.gain_events
-        if (stamped := stamp(event.context.timestamp)) is not None and stamped > latest
+        if (stamped := stamp(event.context.timestamp)) is not None
     )
-    return float(2.0 ** (-staleness / half_life))
+    if cacheable:
+        with _STAMP_CACHE_LOCK:
+            _STAMP_CACHE[id(bank)] = (bank, stamps)
+            while len(_STAMP_CACHE) > _STAMP_CACHE_MAX:
+                _STAMP_CACHE.popitem(last=False)
+    return stamps

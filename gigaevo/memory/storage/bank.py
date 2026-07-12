@@ -64,6 +64,7 @@ class CardBank:
         self._path = Path(path)
         self._lock = RLock()
         self._cards: dict[str, Card] = {}
+        self._snapshot_cache: tuple[Card, ...] | None = None
         self._disk_token: tuple[int, int] | None = None
         if self._path.exists():
             self._reload()
@@ -93,14 +94,22 @@ class CardBank:
             raise ValueError("cannot store a card with an empty id")
         with self._lock:
             self._cards[card.id] = card
+            self._snapshot_cache = None
 
     def remove(self, card_id: str) -> bool:
         with self._lock:
-            return self._cards.pop(card_id, None) is not None
+            removed = self._cards.pop(card_id, None) is not None
+            if removed:
+                self._snapshot_cache = None
+            return removed
 
     def snapshot(self) -> tuple[Card, ...]:
         with self._lock:
-            return tuple(sorted(self._cards.values(), key=lambda c: c.id))
+            if self._snapshot_cache is None:
+                self._snapshot_cache = tuple(
+                    sorted(self._cards.values(), key=lambda c: c.id)
+                )
+            return self._snapshot_cache
 
     def restore_snapshot(self, cards: Sequence[Card]) -> None:
         """Replace the in-memory map without persisting.
@@ -111,6 +120,7 @@ class CardBank:
         """
         with self._lock:
             self._cards = {card.id: card for card in cards}
+            self._snapshot_cache = None
 
     def persist(self) -> None:
         with self._lock:
@@ -162,6 +172,7 @@ class CardBank:
                     f"corrupt card bank at {self._path}: {exc}"
                 ) from exc
             self._cards = cards
+            self._snapshot_cache = None
             self._disk_token = self._stat_token()
 
     def _stat_token(self) -> tuple[int, int] | None:

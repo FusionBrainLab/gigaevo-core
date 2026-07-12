@@ -3,6 +3,11 @@
 # Base MAP-Elites configuration shared by all island configs
 # This sets up problem context and metrics, but NOT the islands themselves
 
+# Config prerequisites of the selected preset (dotted path -> required value),
+# e.g. behavior keys produced by opt-in stages. Checked at startup by
+# validate_algorithm_requirements before instantiate.
+algorithm_requires: {}
+
 # Load problem context to extract metrics
 problem_context:
   _target_: gigaevo.problems.context.ProblemContext

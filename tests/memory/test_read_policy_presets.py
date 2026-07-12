@@ -199,13 +199,6 @@ def test_portable_policy_contains_no_behavior_space_ref():
             "gigaevo.memory.read.fused.BootstrapFusedRankingShortlister",
         ),
         (
-            "recommended",
-            "gigaevo.memory.read.reputation.BootstrapReputation",
-            "gigaevo.memory.read.auction.BootstrapThompsonAuctioneer",
-            "gigaevo.memory.read.auction.TopBidBudgeter",
-            "gigaevo.memory.read.fused.BootstrapFusedRankingShortlister",
-        ),
-        (
             "portable",
             "gigaevo.memory.read.reputation.BootstrapReputation",
             "gigaevo.memory.read.auction.BootstrapThompsonAuctioneer",
@@ -242,7 +235,6 @@ def test_read_policy_core_pairings(policy, reputation, auction, budget, shortlis
 @pytest.mark.parametrize(
     "policy",
     [
-        "recommended",
         "adaptive",
         "portable",
         "median_ev_legacy",
@@ -258,3 +250,22 @@ def test_read_policy_cold_priors_match_auction_baseline(policy):
     for cold_prior in _cold_priors(raw_reputation):
         assert cold_prior == "${memory.baseline_prior}"
     assert list(cfg.memory.auction.baseline_prior) == list(cfg.memory.baseline_prior)
+
+
+def test_novelty_auction_override_composes_on_full():
+    # `+` because the auction group enters through read_policy's nested defaults.
+    cfg = _compose("memory=full", "+memory/auction=thompson_bootstrap_novelty")
+    memory = cfg.memory
+
+    assert (
+        memory.auction._target_
+        == "gigaevo.memory.read.auction.NoveltyDiscountedBootstrapAuctioneer"
+    )
+    assert memory.auction.novelty_power == pytest.approx(0.5)
+    assert memory.auction.ev_floor_quantile == pytest.approx(0.765)
+    # The rest of the read stack is untouched by the auction swap.
+    assert memory.budget._target_ == "gigaevo.memory.read.auction.TopBidBudgeter"
+    assert (
+        memory.reader.candidate_projector._target_
+        == "gigaevo.memory.read.projection.AuctionCandidateProjector"
+    )

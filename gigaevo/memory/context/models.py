@@ -10,13 +10,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import math
-import statistics
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.evolution.strategies.models import BehaviorSpace
 from gigaevo.memory.cards import Card, ContextualGain, DecisionContext
+from gigaevo.memory.context.evidence import (
+    clean_ids,
+    event_weight,
+    median,
+    oriented_delta,
+)
 
 
 @runtime_checkable
@@ -116,34 +121,12 @@ class MemoryContextModel(Protocol):
     ) -> Any: ...
 
 
-def _median(values: Sequence[float]) -> float:
-    return float(statistics.median(values)) if values else 0.0
-
-
-def _clean_ids(ids: Sequence[str]) -> set[str]:
-    return {c.strip() for c in ids if c.strip()}
-
-
 def _outcome_selected_ids(outcome: NoCardBaselineOutcome) -> set[str]:
-    return _clean_ids(tuple(outcome.base_selected_ids or ()))
+    return clean_ids(tuple(outcome.base_selected_ids or ()))
 
 
 def _outcome_no_card_control(outcome: NoCardBaselineOutcome) -> bool:
     return bool(outcome.no_card_control)
-
-
-def _oriented_delta(
-    outcome: NoCardBaselineOutcome, higher_is_better: bool
-) -> float | None:
-    fitness = outcome.fitness
-    base_fitness = outcome.base_fitness
-    if fitness is None or base_fitness is None:
-        return None
-    return (
-        float(fitness) - float(base_fitness)
-        if higher_is_better
-        else float(base_fitness) - float(fitness)
-    )
 
 
 def _no_card_cohort(
@@ -161,12 +144,13 @@ def _no_card_cohort(
 def _no_card_deltas(
     outcomes: Sequence[NoCardBaselineOutcome], higher_is_better: bool
 ) -> list[float]:
+    # Invalid children are excluded: a crash has no honest progress magnitude,
+    # and a 0.0 row would drag the baseline median toward zero.
     deltas: list[float] = []
     for outcome in _no_card_cohort(outcomes):
         if outcome.invalid:
-            deltas.append(0.0)
             continue
-        delta = _oriented_delta(outcome, higher_is_better)
+        delta = oriented_delta(outcome.fitness, outcome.base_fitness, higher_is_better)
         if delta is not None and math.isfinite(delta):
             deltas.append(delta)
     return deltas
@@ -184,20 +168,9 @@ def _read_context_from_parents(
     )
 
 
-def _event_weight(event: ContextualGain) -> float:
-    attr = event.attribution
-    if attr is not None and attr.credit_weight is not None:
-        weight = float(attr.credit_weight)
-    elif event.founding:
-        weight = 0.0
-    else:
-        weight = 1.0
-    return weight if math.isfinite(weight) and weight > 0.0 else 0.0
-
-
 def _has_non_founding_support(events: Sequence[ContextualGain]) -> bool:
     for event in events:
-        if event.founding or _event_weight(event) <= 0.0:
+        if event.founding or event_weight(event) <= 0.0:
             continue
         if event.invalid or event.unused:
             return True
@@ -217,7 +190,7 @@ def _cell_in(space: BehaviorSpace, metrics: dict[str, float]) -> tuple[int, ...]
 class GlobalMemoryContext(BaseModel):
     """Portable context model: every event belongs to one global bucket."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     def read_context(
         self, parents: Sequence[ParentContextSource]
@@ -244,7 +217,7 @@ class GlobalMemoryContext(BaseModel):
     ) -> Any:
         deltas = _no_card_deltas(outcomes, higher_is_better)
         return _ConstantNoCardBaseline(
-            baseline=_median(deltas), has_evidence=bool(deltas)
+            baseline=median(deltas), has_evidence=bool(deltas)
         )
 
 
@@ -257,7 +230,7 @@ class BDCellMemoryContext(BaseModel):
     cards.
     """
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     behavior_space: BehaviorSpace = Field(
         description="Shared behavior-space tessellation for this run."
@@ -302,6 +275,20 @@ class BDCellMemoryContext(BaseModel):
         )
         return in_cell if _has_non_founding_support(in_cell) else ()
 
+    def evidence_cells(
+        self, events: Sequence[ContextualGain]
+    ) -> tuple[ContextualGain, ...]:
+        """First event of each distinct BD cell, in event order."""
+        space = self.behavior_space.model_copy(deep=True)
+        first: list[ContextualGain] = []
+        seen: set[tuple[int, ...]] = set()
+        for event in events:
+            cell = _cell_in(space, event.context.parent_metrics)
+            if cell is not None and cell not in seen:
+                seen.add(cell)
+                first.append(event)
+        return tuple(first)
+
     def fit_no_card_baseline(
         self, outcomes: Sequence[NoCardBaselineOutcome], *, higher_is_better: bool
     ) -> Any:
@@ -309,11 +296,11 @@ class BDCellMemoryContext(BaseModel):
         global_deltas: list[float] = []
         deltas_by_cell: dict[tuple[int, ...], list[float]] = {}
         for outcome in _no_card_cohort(outcomes):
-            delta: float | None
             if outcome.invalid:
-                delta = 0.0
-            else:
-                delta = _oriented_delta(outcome, higher_is_better)
+                continue
+            delta = oriented_delta(
+                outcome.fitness, outcome.base_fitness, higher_is_better
+            )
             if delta is None or not math.isfinite(delta):
                 continue
             global_deltas.append(delta)
@@ -321,7 +308,7 @@ class BDCellMemoryContext(BaseModel):
                 deltas_by_cell.setdefault(cell, []).append(delta)
         return _CellNoCardBaseline(
             behavior_space=space,
-            global_median=_median(global_deltas),
-            by_cell={cell: _median(deltas) for cell, deltas in deltas_by_cell.items()},
+            global_median=median(global_deltas),
+            by_cell={cell: median(deltas) for cell, deltas in deltas_by_cell.items()},
             has_evidence=bool(global_deltas),
         )

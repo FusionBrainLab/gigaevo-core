@@ -54,12 +54,7 @@ islands:
     island_id: fitness_island
     max_size: ${island_max_size}
     behavior_space: ${ref:fitness_behavior_space}
-    archive_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
-      fitness_keys:
-        - ${primary_key}
-      fitness_key_higher_is_better:
-        - ${higher_is_better}
+    archive_selector: ${archive_selector}
     elite_selector:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalEliteSelector
       fitness_key: ${primary_key}
@@ -79,6 +74,8 @@ islands:
     island_id: simplicity_island
     max_size: ${island_max_size}
     behavior_space: ${ref:simplicity_behavior_space}
+    # Multi-key selector stays inline: the archive_selector group is single-key
+    # by contract (PairedBootstrapArchiveSelector rejects multi-key configs).
     archive_selector:
       _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
       fitness_keys:

@@ -117,17 +117,19 @@ def captured_events(monkeypatch):
     return events
 
 
-def test_should_evict_delegates_through_scorer(make_card):
-    bad = make_card()
-    good = make_card()
+def test_should_evict_delegates_through_scorer(make_card, make_event):
+    bad = make_card(gain_events=(make_event(-0.1),))
+    good = make_card(gain_events=(make_event(-0.1),))
     evictor = HarmEvictor(MarkedScorer({bad.id}))
     assert evictor.should_evict(bad) is True
     assert evictor.should_evict(good) is False
 
 
-def test_sweep_returns_harmful_ids_and_emits_event(make_card, captured_events):
-    bad = make_card()
-    good = make_card()
+def test_sweep_returns_harmful_ids_and_emits_event(
+    make_card, make_event, captured_events
+):
+    bad = make_card(gain_events=(make_event(-0.1),))
+    good = make_card(gain_events=(make_event(-0.1),))
     evictor = HarmEvictor(MarkedScorer({bad.id}))
     assert evictor.sweep([good, bad]) == [bad.id]
     assert len(captured_events) == 1
@@ -143,6 +145,44 @@ def test_sweep_without_evictions_emits_nothing(make_card, captured_events):
     assert captured_events == []
 
 
+def test_harm_evictor_never_evicts_on_ignores_alone(make_card, make_event):
+    # Being ignored by the mutator is weak exposure evidence, not proof of
+    # harm; harm-eviction tombstones for the whole run, so it must require at
+    # least one genuinely negative outcome (a loss or a crash).
+    evictor = HarmEvictor(BetaBinomialReputation())
+    ignored = make_card(
+        gain_events=tuple(make_event(0.0, unused=True) for _ in range(4))
+    )
+    assert evictor.should_evict(ignored) is False
+
+
+def test_harm_evictor_keeps_card_with_only_wins_and_ignores(make_card, make_event):
+    evictor = HarmEvictor(BetaBinomialReputation())
+    card = make_card(
+        gain_events=(
+            make_event(0.02),
+            make_event(0.0, unused=True),
+            make_event(0.0, unused=True),
+            make_event(0.0, unused=True),
+        )
+    )
+    assert evictor.should_evict(card) is False
+
+
+def test_harm_evictor_still_evicts_genuine_losses(make_card, make_event):
+    evictor = HarmEvictor(BetaBinomialReputation())
+    loser = make_card(gain_events=tuple(make_event(-0.1) for _ in range(4)))
+    assert evictor.should_evict(loser) is True
+
+
+def test_harm_evictor_still_evicts_crash_only_card(make_card, make_event):
+    evictor = HarmEvictor(BetaBinomialReputation())
+    crasher = make_card(
+        gain_events=tuple(make_event(0.0, invalid=True) for _ in range(4))
+    )
+    assert evictor.should_evict(crasher) is True
+
+
 def test_null_evictor_never_evicts(make_card):
     evictor = NullEvictor()
     card = make_card()
@@ -150,9 +190,9 @@ def test_null_evictor_never_evicts(make_card):
     assert evictor.sweep([card]) == []
 
 
-def test_contextual_evictors_skip_without_explicit_context(make_card):
+def test_contextual_evictors_skip_without_explicit_context(make_card, make_event):
     scorer = ContextOnlyScorer()
-    card = make_card()
+    card = make_card(gain_events=(make_event(-0.1),))
 
     assert HarmEvictor(scorer).should_evict(card) is False
     assert PolicyNonViableEvictor(scorer, neutral_gain=0.0).should_evict(card) is False

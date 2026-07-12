@@ -29,23 +29,6 @@ def _bs(num_bins: int = 10, max_val: float = 1.0) -> BehaviorSpace:
     )
 
 
-class _NoCardOutcome:
-    def __init__(
-        self,
-        *,
-        fitness: float | None,
-        base_fitness: float | None,
-        no_card_control: bool,
-        base_metrics: dict[str, float] | None = None,
-    ) -> None:
-        self.fitness = fitness
-        self.invalid = False
-        self.base_selected_ids = ()
-        self.base_metrics = base_metrics or {}
-        self.base_fitness = base_fitness
-        self.no_card_control = no_card_control
-
-
 class TestBetaBinomialPosterior:
     def test_no_events_is_prior_with_nan_quantile(self):
         block = beta_binomial_posterior([])
@@ -92,19 +75,6 @@ class TestBetaBinomialPosterior:
         assert block.efficacy_confident is True
         weak = beta_binomial_posterior([0.1, -0.2])
         assert weak.efficacy_confident is False
-
-    def test_no_card_baseline_ignores_unusable_controls(self):
-        natural = _NoCardOutcome(fitness=0.7, base_fitness=0.5, no_card_control=False)
-        baseline = BetaBinomialReputation().fit_no_card_baseline(
-            [
-                _NoCardOutcome(fitness=0.9, base_fitness=None, no_card_control=True),
-                natural,
-            ],
-            higher_is_better=True,
-        )
-
-        assert baseline.has_evidence is True
-        assert baseline.baseline_for(natural) == pytest.approx(0.2)
 
 
 class TestBlockFromEvents:
@@ -547,3 +517,120 @@ class TestBootstrapReputation:
         assert block.IntroGain_bootstrap_ev_mean <= 0.0
         assert block.IntroGain_bootstrap_ev_lo20 is not None
         assert block.IntroGain_bootstrap_ev_lo20 <= 0.0
+
+
+class TestSoftHarmMass:
+    def test_zero_ses_match_omitted_bit_exact(self):
+        gains = [0.5, -0.2, 0.0, -0.1]
+        assert beta_binomial_posterior(gains, event_ses=[0.0] * 4) == (
+            beta_binomial_posterior(gains)
+        )
+
+    def test_noisy_events_accrue_fractional_harm(self):
+        gains = [0.5, -0.2, 0.0, -0.1]
+        strict = beta_binomial_posterior(gains)
+        soft = beta_binomial_posterior(gains, event_ses=[0.05] * 4)
+        assert strict.k_harm == 2
+        assert soft.k_harm != int(soft.k_harm)
+        assert 2.0 < soft.k_harm < 3.0
+
+    def test_exact_event_at_threshold_is_not_harm(self):
+        assert beta_binomial_posterior([0.0], event_ses=[0.0]).k_harm == 0
+
+    def test_noisy_event_at_threshold_is_half_harm(self):
+        block = beta_binomial_posterior([0.0], event_ses=[0.5])
+        assert block.k_harm == pytest.approx(0.5)
+
+    def test_non_finite_se_degrades_to_exact(self):
+        noisy = beta_binomial_posterior([-0.1, 0.1], event_ses=[nan, inf])
+        assert noisy == beta_binomial_posterior([-0.1, 0.1])
+
+    def test_ses_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="event_ses length"):
+            beta_binomial_posterior([0.1, 0.2], event_ses=[0.1])
+
+    def test_block_from_events_reads_stamped_ses(self, make_event):
+        strict = block_from_events([make_event(-0.1), make_event(0.5)])
+        soft = block_from_events([make_event(-0.1, gain_se=0.05), make_event(0.5)])
+        assert strict is not None and soft is not None
+        assert strict.k_harm == 1
+        assert 0.9 < soft.k_harm < 1.0
+
+
+class TestEventSes:
+    def test_aligned_with_event_deltas(self, make_card, make_event):
+        rep = BetaBinomialReputation()
+        card = make_card(
+            gain_events=(
+                make_event(0.3, gain_se=0.1),
+                make_event(-0.2),
+                make_event(0.0, invalid=True),
+                make_event(0.0, unused=True),
+                make_event(0.9, founding=True),
+            )
+        )
+        deltas = rep.event_deltas(card)
+        ses = rep.event_ses(card)
+        assert len(ses) == len(deltas) == 4
+        assert ses == (0.1, 0.0, 0.0, 0.0)
+
+    def test_infinite_stored_se_degrades_to_exact(self, make_card, make_event):
+        rep = BetaBinomialReputation()
+        card = make_card(gain_events=(make_event(0.3, gain_se=float("inf")),))
+        assert rep.event_ses(card) == (0.0,)
+
+    def test_bd_proximity_partitions_ses_with_deltas(self, make_card, make_event):
+        from gigaevo.memory.cards import DecisionContext
+
+        rep = BDProximityReputation(behavior_space=_bs())
+        card = make_card(
+            gain_events=(
+                make_event(0.5, gain_se=0.2, metrics={"x": 0.11}),
+                make_event(-0.9, metrics={"x": 0.91}),
+            )
+        )
+        near = DecisionContext(parent_metrics={"x": 0.15})
+        assert rep.event_ses(card, near) == (0.2,)
+        assert rep.event_ses(card, None) == rep.fallback.event_ses(card, None)
+        assert rep.event_ses(card, None) == (0.2, 0.0)
+
+    def test_bootstrap_reputation_delegates_to_inner(self, make_card, make_event):
+        card = make_card(gain_events=(make_event(0.2, gain_se=0.1),))
+        rep = BootstrapReputation(
+            BetaBinomialReputation(),
+            _Store((card,)),
+            n_bootstrap=256,
+            confident_min_events=3,
+        )
+        assert rep.event_ses(card) == (0.1,)
+
+    def test_priced_noise_widens_the_ev_distribution(self, make_card, make_event):
+        # Same card id -> same stable rng, so the noisy stack differs from the
+        # exact one only by the jitter it prices in.
+        def block(card):
+            rep = BootstrapReputation(
+                BetaBinomialReputation(),
+                _Store((card,)),
+                n_bootstrap=4096,
+                confident_min_events=3,
+            )
+            return rep.card_stats(card)
+
+        exact = block(
+            make_card(id="fixed", gain_events=(make_event(0.2), make_event(0.1)))
+        )
+        noisy = block(
+            make_card(
+                id="fixed",
+                gain_events=(
+                    make_event(0.2, gain_se=0.5),
+                    make_event(0.1, gain_se=0.5),
+                ),
+            )
+        )
+        assert exact is not None and noisy is not None
+        assert noisy.IntroGain_bootstrap_ev_lo20 < exact.IntroGain_bootstrap_ev_lo20
+        assert noisy.IntroGain_bootstrap_ev_hi80 > exact.IntroGain_bootstrap_ev_hi80
+        assert noisy.IntroGain_bootstrap_ev_mean == pytest.approx(
+            exact.IntroGain_bootstrap_ev_mean, abs=0.05
+        )

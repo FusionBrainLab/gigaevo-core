@@ -52,6 +52,13 @@ MUTATION_MEMORY_BASE_METRICS_METADATA_KEY = "memory_base_metrics"
 #: parent identity that accompanies base_metrics through use-attribution.
 MUTATION_MEMORY_BASE_ID_METADATA_KEY = "memory_base_id"
 
+#: Frozen onto a child at birth: the base parent's per-sample score vector
+#: (``per_sample_scores`` metadata), when the eval emits one. Coherent with the
+#: frozen base_metrics — the parent's own vector is overwritten on re-eval, so
+#: paired crediting must read the child's stamp. Absent when the eval is
+#: scalar-only; crediting degrades to the exact point delta.
+MUTATION_MEMORY_BASE_SCORES_METADATA_KEY = "memory_base_scores"
+
 #: Frozen onto a child at birth: per parent, the cache id of every parent stage
 #: output that produced the child (outputs live content-addressed in the storage
 #: stage-output store). Survives the parent's NO_CACHE stages being overwritten

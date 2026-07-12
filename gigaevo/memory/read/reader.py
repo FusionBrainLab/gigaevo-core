@@ -25,11 +25,9 @@ from gigaevo.memory.events import (
 from gigaevo.memory.read.auction import AuctionBid
 from gigaevo.memory.read.exclusion import is_card_excluded
 from gigaevo.memory.read.interfaces import (
-    AuctionCandidateProjector as AuctionCandidateProjectorProtocol,
-)
-from gigaevo.memory.read.interfaces import (
     Auctioneer,
     Budgeter,
+    CandidateProjector,
     CardRenderer,
     ProbePolicy,
     ReputationModel,
@@ -87,7 +85,7 @@ class MemoryReader:
         budgeter: Budgeter,
         renderer: CardRenderer,
         context_model: MemoryContextModel | None = None,
-        candidate_projector: AuctionCandidateProjectorProtocol | None = None,
+        candidate_projector: CandidateProjector | None = None,
         probe_policy: ProbePolicy | None = None,
         max_cards: int = 1,
         rng: Any = None,
@@ -193,6 +191,7 @@ class MemoryReader:
 
         started_reputation = perf_counter()
         decision_context = self._context_model.read_context(parents)
+        baseline = self._projector.decision_baseline(decision_context)
         blocks = {
             card.id: self._reputation.card_stats(card, decision_context)
             for card in candidates.values()
@@ -211,7 +210,9 @@ class MemoryReader:
         reputation_ms = _elapsed_ms(started_reputation)
 
         started_auction = perf_counter()
-        auction_winner_ids, slate = self._auctioneer.run(auction_input, self._rng)
+        auction_winner_ids, slate = self._auctioneer.run(
+            auction_input, self._rng, baseline=baseline
+        )
         auction_ms = _elapsed_ms(started_auction)
         started_budget = perf_counter()
         budgeted_ids = self._budgeter.cap(auction_winner_ids, slate, self._max_cards)

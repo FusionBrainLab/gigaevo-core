@@ -36,7 +36,7 @@ def test_default_projector_preserves_reputation_cold_prior(make_card):
     assert candidate.prior_source == "reputation"
 
 
-def test_projector_can_override_cold_prior_and_no_card_gate(make_card):
+def test_projector_can_override_cold_prior(make_card):
     rep = BetaBinomialReputation(cold_prior=(2.0, 5.0))
     candidate = AuctionCandidateProjector(
         prior=_Prior(), no_card_evidence=_NoCard()
@@ -44,10 +44,21 @@ def test_projector_can_override_cold_prior_and_no_card_gate(make_card):
 
     assert (candidate.posterior_a, candidate.posterior_b) == (1.0, 9.0)
     assert candidate.prior_source == "test_prior"
-    assert (candidate.baseline_a, candidate.baseline_b) == (5.0, 7.0)
-    assert candidate.baseline_source == "test_no_card"
-    assert candidate.no_card_baseline == pytest.approx(0.12)
-    assert candidate.no_card_n == pytest.approx(8.0)
+
+
+def test_decision_baseline_resolves_no_card_summary():
+    summary = AuctionCandidateProjector(no_card_evidence=_NoCard()).decision_baseline(
+        None
+    )
+
+    assert (summary.prior.alpha, summary.prior.beta) == (5.0, 7.0)
+    assert summary.source == "test_no_card"
+    assert summary.baseline == pytest.approx(0.12)
+    assert summary.evidence_n == pytest.approx(8.0)
+
+
+def test_decision_baseline_none_without_evidence():
+    assert AuctionCandidateProjector().decision_baseline(None) is None
 
 
 def test_projector_keeps_warm_observed_posterior(make_card, make_event):
@@ -63,3 +74,33 @@ def test_projector_keeps_warm_observed_posterior(make_card, make_event):
 
     assert (candidate.posterior_a, candidate.posterior_b) == (2.0, 2.0)
     assert candidate.prior_source == "reputation"
+
+
+def test_projector_use_count_is_nonfounding_event_count(make_card, make_event):
+    card = make_card(
+        gain_events=(
+            make_event(0.1),
+            make_event(-0.05, invalid=True),
+            make_event(0.0, unused=True),
+            make_event(0.2, founding=True),
+        )
+    )
+    candidate = AuctionCandidateProjector().project(
+        card=card,
+        block=None,
+        reputation=BetaBinomialReputation(cold_prior=(2.0, 5.0)),
+        context=None,
+    )
+    # Every injection-produced event counts (helpful, invalid, unused alike);
+    # the founding birth credit is not an injection.
+    assert candidate.use_count == 3
+
+
+def test_projector_use_count_zero_without_events(make_card):
+    candidate = AuctionCandidateProjector().project(
+        card=make_card(),
+        block=None,
+        reputation=BetaBinomialReputation(cold_prior=(2.0, 5.0)),
+        context=None,
+    )
+    assert candidate.use_count == 0

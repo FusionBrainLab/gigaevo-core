@@ -30,6 +30,7 @@ def make_event():
     def _make_event(
         gain: float,
         *,
+        gain_se: float = 0.0,
         invalid: bool = False,
         founding: bool = False,
         unused: bool = False,
@@ -38,6 +39,7 @@ def make_event():
         return ContextualGain(
             context=DecisionContext(parent_metrics=metrics or {}),
             gain=gain,
+            gain_se=gain_se,
             invalid=invalid,
             founding=founding,
             unused=unused,

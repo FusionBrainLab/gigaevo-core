@@ -60,7 +60,7 @@ class EfficacyCardRenderer(BaseModel):
     """Renders one card into the mutator-facing text block: description and the
     efficacy endorsement line (single source: :func:`format_block_efficacy`)."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     def render(self, card: Card | None, block: CardStatsBlock | None = None) -> str:
         if card is None:

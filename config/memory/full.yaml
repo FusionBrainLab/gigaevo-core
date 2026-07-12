@@ -14,6 +14,7 @@
 defaults:
   - llm: gemini
   - read_policy: adaptive
+  - crediting: point
   - evictor: recommended
   - write: end_of_run
   - _self_
@@ -97,6 +98,7 @@ writer:
   checkpoint_dir: ${checkpoint_dir}
   metrics_context: ${ref:problem_context::metrics_context}
   baseline_estimator: ${ref:memory.context_model}
+  effect_estimator: ${ref:memory.crediting}
   no_card_recorder: ${ref:memory.no_card_evidence}
   task_description: ${ref:problem_context::task_description}
   best_programs_percent: 5.0

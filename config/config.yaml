@@ -5,6 +5,7 @@ defaults:
   - /migration_bus: disabled
   - memory: none           # Memory subsystem: none | reader | writer | full | static (flat ${ref:} component graph)
   - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)
+  - archive_selector: point  # Archive replacement rule (override with archive_selector=paired_bootstrap)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)
   - chains/runner: none    # Chain runner preset for chain-task problems (override with chains/runner=simple|dataset|metrics|self_critic*)
   - override hydra/job_logging: disabled   # Suppress Hydra's auto-created {job.name}.log; gigaevo uses loguru → evolution_*.log

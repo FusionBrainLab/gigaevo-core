@@ -167,44 +167,6 @@ def test_cold_card_stays_cold(make_card):
     assert decayed.magnitude_of(None) is None
 
 
-class _Outcome:
-    def __init__(
-        self,
-        *,
-        base_metrics: dict[str, float],
-        fitness: float,
-        base_fitness: float = 0.0,
-    ) -> None:
-        self.base_metrics = base_metrics
-        self.fitness = fitness
-        self.base_fitness = base_fitness
-        self.base_selected_ids = ()
-        self.invalid = False
-        self.no_card_control = True
-
-
-def test_fit_no_card_baseline_delegates_to_bd_inner(make_card):
-    space = BehaviorSpace(
-        bins={"x": LinearBinning(min_val=0.0, max_val=1.0, num_bins=10)}
-    )
-    inner = BDProximityReputation(behavior_space=space)
-    decayed = DecayingReputation(inner=inner, store=StubStore((make_card(),)))
-    baseline = decayed.fit_no_card_baseline(
-        [
-            _Outcome(base_metrics={"x": 0.15}, fitness=1.0),
-            _Outcome(base_metrics={"x": 0.95}, fitness=10.0),
-        ],
-        higher_is_better=True,
-    )
-
-    assert baseline.baseline_for(
-        _Outcome(base_metrics={"x": 0.15}, fitness=0.0)
-    ) == pytest.approx(1.0)
-    assert baseline.baseline_for(
-        _Outcome(base_metrics={"x": 0.95}, fitness=0.0)
-    ) == pytest.approx(10.0)
-
-
 def test_half_life_cycles_must_be_positive():
     inner = BetaBinomialReputation()
     with pytest.raises(ValueError):

@@ -59,8 +59,9 @@ class EvidenceAttribution(BaseModel):
 
     ``ContextualGain`` keeps the numeric reward. This block says how much causal
     credit the reward should carry. A bundled child that used three cards, for
-    example, still stores its split gain on each card but each card receives
-    ``credit_weight=1/3`` in posterior evidence.
+    example, stores the full delta on each card while each card receives
+    ``credit_weight=1/3`` in posterior evidence — the split lives in the weight,
+    never in the gain magnitude.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -104,6 +105,21 @@ class EvidenceAttribution(BaseModel):
     )
 
 
+class Measurement(BaseModel):
+    """A point estimate plus its sampling uncertainty.
+
+    Generic value object for any stochastic evaluation: ``value`` is the
+    estimated effect, ``se`` its standard error. ``se=0`` means the value is
+    treated as exact — the degenerate point case every uncertainty-blind
+    consumer reduces to.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    value: float
+    se: float = Field(default=0.0, ge=0.0)
+
+
 class ContextualGain(BaseModel):
     """One selected-card outcome: the gain a card earned in a context.
 
@@ -118,6 +134,13 @@ class ContextualGain(BaseModel):
 
     context: DecisionContext
     gain: float
+    gain_se: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Standard error of ``gain`` under evaluation stochasticity. "
+        "0 means the gain is treated as exact — the historical point behavior, "
+        "and the truth for deterministic evals.",
+    )
     invalid: bool = Field(
         default=False,
         description="True for an evaluated-and-judged-invalid child — a forced "
@@ -166,8 +189,10 @@ class DecisionMetrics(BaseModel):
     )
     k_harm: float | None = Field(
         default=None,
-        description="Effective introduction-event weight whose baseline-adjusted gain was "
-        "negative (harm, a strict sign test).",
+        description="Effective introduction-event harm mass: per event, the probability "
+        "its baseline-adjusted true gain is negative — the exact sign indicator for an "
+        "exact event (gain_se=0, the historical strict sign test), the Gaussian tail "
+        "mass when the event carries evaluation-noise se. Fractional under noisy events.",
     )
     p_help_mean: float | None = Field(
         default=None, description="Posterior mean P(gain >= threshold), a / (a + b)."
@@ -189,6 +214,11 @@ class DecisionMetrics(BaseModel):
     IntroGain_bootstrap_ev_lo20: float | None = Field(
         default=None,
         description="Lower bootstrap expected-gain quantile used as a pessimistic EV.",
+    )
+    IntroGain_bootstrap_ev_hi80: float | None = Field(
+        default=None,
+        description="Upper bootstrap expected-gain quantile: the optimistic EV read "
+        "that must be non-positive before a card is benched as a proven loser.",
     )
 
 

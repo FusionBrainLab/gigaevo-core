@@ -11,10 +11,26 @@ from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
+from gigaevo.config.helpers import build_archive_gate_provider
+from gigaevo.evolution.strategies.paired_selectors import (
+    PairedBootstrapArchiveSelector,
+)
+from gigaevo.memory.provider import ReaderMemoryProvider
+from gigaevo.memory.write.crediting import PairedEffectEstimator
+
+
+def _target_path(symbol: Any) -> str:
+    """Dotted ``_target_`` path derived from the symbol itself, so moving or
+    renaming it breaks these guards loudly instead of silently skipping them."""
+    return f"{symbol.__module__}.{symbol.__qualname__}"
+
+
 _SHARED_BEHAVIOR_SPACE_REF = "${ref:behavior_space}"
 _DEFAULT_CHECKPOINT_DIR = "${hydra:runtime.output_dir}/memory"
-_READER_PROVIDER_TARGET = "gigaevo.memory.provider.ReaderMemoryProvider"
-_ARCHIVE_GATE_PROVIDER_TARGET = "gigaevo.config.helpers.build_archive_gate_provider"
+_READER_PROVIDER_TARGET = _target_path(ReaderMemoryProvider)
+_ARCHIVE_GATE_PROVIDER_TARGET = _target_path(build_archive_gate_provider)
+_PAIRED_SELECTOR_TARGET = _target_path(PairedBootstrapArchiveSelector)
+_PAIRED_CREDITING_TARGET = _target_path(PairedEffectEstimator)
 _MISSING = object()
 
 
@@ -191,6 +207,85 @@ def validate_archive_gate_pipeline_compat(cfg: DictConfig) -> None:
         f"pipeline={pipeline_id} has unsupported archive_gate_mode={mode!r}. "
         "Expected builder, declarative, or none."
     )
+
+
+def validate_paired_selector_pipeline_compat(cfg: DictConfig) -> None:
+    """Reject the paired archive gate when no pipeline routes per-sample scores.
+
+    ``PairedBootstrapArchiveSelector`` reads ``metadata["per_sample_scores"]``,
+    which only a metadata-routing pipeline populates. Under any other pipeline
+    every comparison silently falls back to the point rule — an inert treatment
+    the run would never surface.
+    """
+
+    group_target = _raw_select(cfg, "archive_selector._target_", None)
+
+    def island_selector_target(island: Any) -> Any:
+        selector = island.get("archive_selector") if isinstance(island, dict) else None
+        if selector == "${archive_selector}":
+            return group_target
+        if isinstance(selector, dict):
+            return selector.get("_target_")
+        return None
+
+    islands = _raw_select(cfg, "islands", default=None) or []
+    if not any(island_selector_target(i) == _PAIRED_SELECTOR_TARGET for i in islands):
+        return
+    if bool(_raw_select(cfg, "pipeline.routes_program_metadata", False)):
+        return
+    pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
+    raise ValueError(
+        "archive_selector=paired_bootstrap needs per_sample_scores on "
+        f"program.metadata, but pipeline={pipeline_id} does not route "
+        "_program_metadata. Pick a pipeline that declares "
+        "routes_program_metadata: true (see config/pipeline/) and a problem "
+        "whose validate() emits the vector, or archive_selector=point for a "
+        "control arm."
+    )
+
+
+def validate_crediting_pipeline_compat(cfg: DictConfig) -> None:
+    """Reject paired crediting when no pipeline routes per-sample scores.
+
+    ``PairedEffectEstimator`` compares the child's live ``per_sample_scores``
+    metadata against the base vector frozen at birth; only a metadata-routing
+    pipeline populates either. Under any other pipeline every event silently
+    degrades to the exact point delta — an inert treatment the run would never
+    surface.
+    """
+
+    if _raw_select(cfg, "memory.crediting._target_", None) != _PAIRED_CREDITING_TARGET:
+        return
+    if bool(_raw_select(cfg, "pipeline.routes_program_metadata", False)):
+        return
+    pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
+    raise ValueError(
+        "memory/crediting=paired needs per_sample_scores on program.metadata, "
+        f"but pipeline={pipeline_id} does not route _program_metadata. Pick a "
+        "pipeline that declares routes_program_metadata: true (see "
+        "config/pipeline/) and a problem whose validate() emits the vector, "
+        "or use memory/crediting=point."
+    )
+
+
+def validate_algorithm_requirements(cfg: DictConfig) -> None:
+    """Enforce the config prerequisites an algorithm preset declares.
+
+    Presets whose behavior-space keys are produced by opt-in wiring declare
+    ``algorithm_requires: {<dotted.cfg.path>: <required value>}``; a mismatch
+    would otherwise surface as a KeyError at first archive insert or, worse,
+    as a silently degenerate behavior space. Domain knowledge stays in the
+    preset yaml — this check is generic.
+    """
+
+    requirements = OmegaConf.select(cfg, "algorithm_requires", default=None) or {}
+    for path, required in requirements.items():
+        actual = OmegaConf.select(cfg, path, default=None)
+        if actual != required:
+            raise ValueError(
+                f"this algorithm preset requires {path}={required}, got "
+                f"{actual}. See algorithm_requires in the preset config."
+            )
 
 
 def validate_program_format_pipeline_compat(cfg: DictConfig) -> None:

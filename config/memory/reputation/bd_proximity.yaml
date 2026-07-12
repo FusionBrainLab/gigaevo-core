@@ -1,6 +1,7 @@
 # @package memory.reputation
 # BD-cell partitioned reputation (selectable; the `memory=full` default policy is
-# `recommended`, which wraps this class): buckets each card's gain events into the
+# `adaptive`, whose `bootstrap_bd` reputation wraps this class): buckets each
+# card's gain events into the
 # query parent's current MAP-Elites cell and bids over the in-cell subset only;
 # a cold cell delegates to the global `fallback`. Requires a single-island
 # algorithm that exposes a top-level `behavior_space` (single_island*,
