@@ -79,8 +79,15 @@ def test_full_live_read_write_is_allowed() -> None:
     validate_memory_pipeline_compat(cfg)
 
 
-def test_full_end_of_run_default_bank_is_rejected() -> None:
+def test_full_default_write_is_live() -> None:
     cfg = _compose("pipeline=memory_guided", "memory=full")
+
+    assert cfg.memory.write.mode == "live"
+    validate_memory_pipeline_compat(cfg)
+
+
+def test_full_end_of_run_default_bank_is_rejected() -> None:
+    cfg = _compose("pipeline=memory_guided", "memory=full", "memory/write=end_of_run")
 
     with pytest.raises(ValueError, match="default per-run bank|memory/write=live"):
         validate_memory_pipeline_compat(cfg)
@@ -90,6 +97,7 @@ def test_full_end_of_run_existing_bank_is_allowed() -> None:
     cfg = _compose(
         "pipeline=memory_guided",
         "memory=full",
+        "memory/write=end_of_run",
         "checkpoint_dir=/tmp/existing-bank",
     )
 

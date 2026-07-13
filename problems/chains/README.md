@@ -41,6 +41,8 @@ CHAIN_DEFAULTS=(
 # Memory ON (recommended exploratory default). The memory bank goes to the
 # default checkpoint dir under the run's output dir; override checkpoint_dir
 # only when a bank must live at a specific path (e.g. shared across tooling).
+# `memory/write=live` is the shipped memory=full default (same-run read+write);
+# it is passed explicitly here to mirror the launcher.
 python run.py "${CHAIN_DEFAULTS[@]}" pipeline=memory_guided_noise \
     memory=full memory/write=live memory/crediting=paired memory/llm=qwen_instruct \
     memory.llm.models.0.base_url="$LITELLM_BASE_URL"

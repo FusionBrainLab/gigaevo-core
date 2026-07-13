@@ -4,8 +4,11 @@
 _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
 # Minimum intro events before a card can be harm-evicted.
 harm_min_events: ${memory.evidence.min_effective_events}
-# Optimistic posterior quantile of P(not harmful) used by the harm gate.
-harm_quantile: 0.80
+# Optimistic posterior quantile of P(not harmful) for the harm gate. 0.95 (not
+# 0.80): the harm tombstone is irreversible for the run and re-checked after every
+# event, so a conservative bar avoids a multiple-looks false tombstone on marginal
+# 3-loss evidence.
+harm_quantile: 0.95
 # Harmful iff that optimistic P(not harmful) remains below this threshold.
 harm_threshold: 0.5
 # Pessimistic posterior quantile used for confidence/display.

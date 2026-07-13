@@ -18,7 +18,7 @@ from scipy.stats import beta as scipy_beta
 
 from gigaevo.memory.context.no_card import NoCardGateSummary
 from gigaevo.memory.events import MemoryAuctionRun, MemoryBudgetCap, emit_memory_event
-from gigaevo.memory.read.bootstrap import bootstrap_ev_samples
+from gigaevo.memory.read.bootstrap import bootstrap_ev_samples, stable_rng
 from gigaevo.programs.metrics.context import MetricsContext
 
 # Last-resort cold magnitude for a degenerate round: all cards cold AND the task
@@ -558,12 +558,16 @@ class BootstrapThompsonAuctioneer(BaseModel):
     inclusive so ties at the floor do not self-annihilate; true cold bids are
     posterior-sampled, so an all-cold slate no longer becomes a fixed point mass.
     Risk mode replaces both with the per-card condition ``P(EV > 0) >= 1 -
-    ev_risk_alpha``, measured on the same bootstrap-EV vector as the bid.
+    ev_risk_alpha``. Its sign probability is read off a CARD-LOCAL bootstrap
+    vector (seeded from the card id, like ``reputation.card_stats``), not the
+    shared-stream bid vector, so a card's admission is independent of which other
+    candidates share the round — the IIA property the reserve promises.
 
     Draw order is pinned for seed-exact replay: one shared uniform world and,
     for known cards, one bootstrap batch per candidate first, then one slate
-    baseline draw. The gate reuses each candidate's world and consumes no
-    second posterior draw.
+    baseline draw. The risk gate's card-local vector rides its own generator, so
+    it consumes none of the shared round RNG — every bid and the baseline draw
+    stay byte-for-byte identical whether or not the gate runs.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -623,6 +627,34 @@ class BootstrapThompsonAuctioneer(BaseModel):
                 return float(sig)
         return _UNSCALED_COLD_MAGNITUDE
 
+    def _risk_probability(
+        self,
+        candidate: AuctionCandidate,
+        deltas: tuple[float, ...],
+        weights: tuple[float, ...] | None,
+        support_scale: float,
+    ) -> float:
+        """P(EV > 0) for the risk reserve, read off a CARD-LOCAL bootstrap vector.
+
+        The gate seeds its own generator from the card id (mirroring
+        ``reputation.card_stats``'s ``stable_rng(card.id, ...)``), so a card's
+        admission never depends on which other candidates share the round — the
+        IIA property the risk reserve promises. It draws from the same weighted
+        delta support as the bid, but off a separate stream, so the shared round
+        RNG that produces every bid and the baseline draw is untouched.
+        """
+        risk_rng = stable_rng(candidate.card_id, len(deltas), self.n_bootstrap)
+        samples = bootstrap_ev_samples(
+            deltas,
+            support_scale,
+            candidate.staleness_weight,
+            self.n_bootstrap,
+            risk_rng,
+            delta_weights=weights,
+            ses=candidate.deltas_se,
+        )
+        return float(np.mean(samples > 0.0))
+
     def run(
         self,
         candidates: list[AuctionCandidate],
@@ -681,7 +713,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
                 )
             else:
                 support_kinds.append("ev_rewards" if deltas else "zero_support")
-                # This bootstrap_ev_samples vector feeds both the u-quantile bid and risk gate.
+                # Bid vector on the shared round RNG: one live Thompson draw.
                 samples = bootstrap_ev_samples(
                     deltas,
                     support_scale,
@@ -695,7 +727,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
                 quantile_index = min(int(u * len(samples)), len(samples) - 1)
                 bids.append(float(samples[quantile_index]))
                 positive_probabilities.append(
-                    float(np.mean(samples > 0.0))
+                    self._risk_probability(candidate, deltas, weights, support_scale)
                     if self.ev_reserve_mode == "risk"
                     else None
                 )

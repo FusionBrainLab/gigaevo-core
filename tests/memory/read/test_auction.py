@@ -19,6 +19,7 @@ from gigaevo.memory.read.auction import (
     TopBidBudgeter,
     TopThetaBudgeter,
 )
+from gigaevo.memory.read.bootstrap import bootstrap_ev_samples, stable_rng
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 
 
@@ -88,26 +89,6 @@ class _CoherenceRng:
         rows = np.arange(n_samples) % int(a)
         self.choice_indices = np.repeat(rows[:, None], n_atoms, axis=1)
         return self.choice_indices
-
-
-class _RiskAtomsRng:
-    """Makes the first card's bootstrap-EV vector exactly 90% positive."""
-
-    def __init__(self) -> None:
-        self.choice_indices = []
-
-    def uniform(self) -> float:
-        return 0.9
-
-    def beta(self, a: float, b: float) -> float:
-        return 0.0
-
-    def choice(self, a, size, replace, p):
-        indices = np.zeros(size, dtype=int)
-        if not self.choice_indices:
-            indices[-1, :] = 1
-        self.choice_indices.append(indices)
-        return indices
 
 
 class TestThompsonAuctioneer:
@@ -400,40 +381,59 @@ class TestBootstrapThompsonAuctioneer:
             bid.model_dump_json() for bid in explicit_slate
         ]
 
-    def test_risk_gate_reuses_bid_bootstrap_ev_vector(self, captured_events):
-        rng = _RiskAtomsRng()
-        candidate = AuctionCandidate(
-            card_id="target",
-            posterior_a=50.0,
-            posterior_b=1.0,
-            magnitude=1.0,
-            deltas=(1.0, -1.0),
+    def test_risk_gate_consumes_no_shared_rng(self, captured_events):
+        # The risk gate reads a CARD-LOCAL bootstrap vector (seeded only from the
+        # card id), so switching quantile -> risk must not perturb the shared
+        # round RNG: every bid, theta and baseline draw stays byte-identical.
+        # Only the ev_* gate telemetry and the eligibility verdict may differ.
+        candidates = [
+            AuctionCandidate(
+                card_id="a",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=1.0,
+                deltas=(1.0, 1.0, -0.5),
+            ),
+            AuctionCandidate(
+                card_id="b",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=1.0,
+                deltas=(0.5, -1.0),
+            ),
+        ]
+        quantile = BootstrapThompsonAuctioneer(n_bootstrap=32, ev_floor_quantile=0.0)
+        risk = BootstrapThompsonAuctioneer(
+            n_bootstrap=32, ev_reserve_mode="risk", ev_risk_alpha=0.2
         )
 
-        winners, slate = BootstrapThompsonAuctioneer(
-            n_bootstrap=10,
-            ev_reserve_mode="risk",
-            ev_risk_alpha=0.2,
-        ).run([candidate], rng)
+        _, quantile_slate = quantile.run(candidates, np.random.default_rng(7))
+        _, risk_slate = risk.run(candidates, np.random.default_rng(7))
 
-        atoms = np.asarray([1.0, -1.0, 0.0])
-        bootstrap_ev = atoms[rng.choice_indices[0]].mean(axis=1)
-        positive_probability = float(np.mean(bootstrap_ev > 0.0))
-        expected_bid = np.sort(bootstrap_ev)[int(0.9 * len(bootstrap_ev))]
-        (bid,) = slate
-        assert len(rng.choice_indices) == 1
-        assert positive_probability == pytest.approx(0.9)
-        assert bid.bid == pytest.approx(expected_bid)
-        assert bid.ev_positive_probability == pytest.approx(positive_probability)
-        assert bid.ev_reserve_mode == "risk"
-        assert bid.ev_risk_alpha == pytest.approx(0.2)
-        assert bid.rejected_by_ev_floor is False
-        assert winners == ["target"]
-        (event,) = captured_events
+        for candidate, q_bid, r_bid in zip(candidates, quantile_slate, risk_slate):
+            # Shared-stream draws are untouched by the card-local gate.
+            assert r_bid.bid == pytest.approx(q_bid.bid)
+            assert r_bid.theta == pytest.approx(q_bid.theta)
+            assert r_bid.baseline_theta == pytest.approx(q_bid.baseline_theta)
+            assert r_bid.magnitude == pytest.approx(q_bid.magnitude)
+            # The reported probability is exactly the card-local bootstrap, off a
+            # generator seeded from (card_id, len(deltas), n_bootstrap) alone.
+            gate = bootstrap_ev_samples(
+                candidate.deltas,
+                0.0,
+                1.0,
+                32,
+                stable_rng(candidate.card_id, len(candidate.deltas), 32),
+            )
+            assert r_bid.ev_positive_probability == pytest.approx(
+                float(np.mean(gate > 0.0))
+            )
+            assert r_bid.ev_reserve_mode == "risk"
+            assert r_bid.ev_risk_alpha == pytest.approx(0.2)
+            assert q_bid.ev_positive_probability is None
+        (event,) = captured_events[-1:]
         assert event.bids[0]["ev_reserve_mode"] == "risk"
-        assert event.bids[0]["ev_positive_probability"] == pytest.approx(0.9)
         assert event.bids[0]["ev_risk_alpha"] == pytest.approx(0.2)
-        assert event.bids[0]["rejected_by_ev_floor"] is False
 
     def test_risk_alpha_one_rejected(self):
         # alpha=1.0 => risk_threshold = 1 - alpha = 0.0, so the sign gate
@@ -445,16 +445,20 @@ class TestBootstrapThompsonAuctioneer:
         with pytest.raises(ValidationError):
             BootstrapThompsonAuctioneer(ev_reserve_mode="risk", ev_risk_alpha=1.0)
 
-    def test_risk_reserve_is_iia_clean_against_strong_slate(self):
+    def test_risk_reserve_admission_is_order_independent(self):
+        # IIA: the risk gate seeds its bootstrap from the card id, so a card's
+        # admission verdict cannot depend on which other cards share the round or
+        # where it sits in the draw order. Under the old shared-stream gate,
+        # trailing `target` behind two co-bidders shifted its EV vector and could
+        # flip the verdict; the card-local vector makes it invariant.
         target = AuctionCandidate(
             card_id="target",
             posterior_a=50.0,
             posterior_b=1.0,
             magnitude=1.0,
-            deltas=(1.0, -1.0),
+            deltas=(1.0, 1.0, 1.0, 1.0, -0.5),
         )
-        strong_slate = [
-            target,
+        strong = [
             AuctionCandidate(
                 card_id="strong-1",
                 posterior_a=50.0,
@@ -470,32 +474,73 @@ class TestBootstrapThompsonAuctioneer:
                 deltas=(2.0, 2.0),
             ),
         ]
-        quantile = BootstrapThompsonAuctioneer(n_bootstrap=10, ev_floor_quantile=0.5)
         risk = BootstrapThompsonAuctioneer(
-            n_bootstrap=10,
-            ev_reserve_mode="risk",
-            ev_risk_alpha=0.2,
+            n_bootstrap=32, ev_reserve_mode="risk", ev_risk_alpha=0.2
         )
 
-        quantile_alone, quantile_alone_slate = quantile.run([target], _RiskAtomsRng())
-        quantile_strong, quantile_slate = quantile.run(strong_slate, _RiskAtomsRng())
-        risk_alone, risk_alone_slate = risk.run([target], _RiskAtomsRng())
-        risk_strong, risk_slate = risk.run(strong_slate, _RiskAtomsRng())
+        alone_winners, alone_slate = risk.run([target], np.random.default_rng(2))
+        # target LAST, so two co-bidders consume the shared RNG before its draw.
+        _, trailing_slate = risk.run([*strong, target], np.random.default_rng(2))
+        alone_bid = alone_slate[0]
+        trailing_bid = next(b for b in trailing_slate if b.card_id == "target")
 
-        assert {
-            quantile_alone_slate[0].bid,
-            quantile_slate[0].bid,
-            risk_alone_slate[0].bid,
-            risk_slate[0].bid,
-        } == {1.0}
-        assert "target" in quantile_alone
-        assert "target" not in quantile_strong
-        assert quantile_slate[0].rejected_by_ev_floor is True
-        assert "target" in risk_alone
-        assert "target" in risk_strong
-        assert risk_alone_slate[0].ev_positive_probability == pytest.approx(0.9)
-        assert risk_slate[0].ev_positive_probability == pytest.approx(0.9)
-        assert risk_slate[0].rejected_by_ev_floor is False
+        # Precondition: target clears the risk gate (P(EV>0) >= 1 - alpha = 0.8),
+        # so the invariance below is exercised on an admitted card.
+        assert alone_bid.rejected_by_ev_floor is False
+        assert alone_bid.ev_positive_probability >= 0.8
+        assert "target" in alone_winners
+        # The risk-gate probability and verdict are identical across orderings.
+        assert trailing_bid.ev_positive_probability == pytest.approx(
+            alone_bid.ev_positive_probability
+        )
+        assert trailing_bid.rejected_by_ev_floor is False
+
+    def test_risk_gate_admits_cold_card_unconditionally(self):
+        # A genuinely cold card (no deltas, no magnitude) has no bootstrap-EV
+        # history, so the risk reserve cannot estimate P(EV>0) from evidence. The
+        # default admits it (probability pinned to 1.0) and defers exploration to
+        # the Thompson draw, the no-card gate, and the probe lane -- a cold card
+        # must NOT be benched the way a warm card with a weak track record is.
+        # Reverting the branch to `None` makes every cold card ineligible (None
+        # is filtered out of `eligible`), so cold cards would never win under
+        # risk mode; the strictest admissible alpha proves the gate is bypassed.
+        cold = AuctionCandidate(
+            card_id="cold",
+            posterior_a=3.0,
+            posterior_b=3.0,
+            magnitude=None,
+            deltas=(),
+        )
+        risk = BootstrapThompsonAuctioneer(
+            n_bootstrap=32, ev_reserve_mode="risk", ev_risk_alpha=0.01
+        )
+        _, slate = risk.run([cold], np.random.default_rng(0))
+        assert slate[0].support_kind == "cold_prior"
+        assert slate[0].ev_positive_probability == pytest.approx(1.0)
+        assert slate[0].rejected_by_ev_floor is False
+
+    def test_risk_gate_rejects_zero_support_known_card(self):
+        # A known card with zero recorded deltas (only invalid/unused exposure,
+        # never a direct causal gain) carries no positive-EV evidence: its
+        # bootstrap support collapses to one zero atom, so P(EV>0)=0 and it is
+        # rejected at every admissible alpha (<1). Under-evidenced cards stay
+        # alive through the probe lane, not the auction, so this rejection is the
+        # intended boundary -- pin it so a future `support_scale` tweak letting
+        # zero-support cards borrow the cold scale cannot land silently.
+        empty = AuctionCandidate(
+            card_id="known-empty",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            magnitude=0.0,
+            deltas=(),
+        )
+        risk = BootstrapThompsonAuctioneer(
+            n_bootstrap=32, ev_reserve_mode="risk", ev_risk_alpha=0.99
+        )
+        _, slate = risk.run([empty], np.random.default_rng(0))
+        assert slate[0].support_kind == "zero_support"
+        assert slate[0].ev_positive_probability == pytest.approx(0.0)
+        assert slate[0].rejected_by_ev_floor is True
 
     @pytest.mark.parametrize(
         ("magnitude", "deltas", "bid_uses_beta"),

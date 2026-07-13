@@ -43,6 +43,7 @@ class ContextualCardScorer(CardScorer, Protocol):
     def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]: ...
 
 
+@runtime_checkable
 class CardValueScorer(ContextualCardScorer, Protocol):
     @property
     def policy_min_effective_events(self) -> float: ...
@@ -204,19 +205,50 @@ def _has_positive_direct_evidence(
 class HarmEvictor:
     """Evicts cards whose injection posterior is confidently harmful.
 
-    Harm eviction tombstones the card for the whole run, so the verdict
-    additionally requires at least one genuinely negative outcome (a loss or a
-    crash): exposure-only evidence — however much of it — is never enough.
+    Harm eviction tombstones the card for the whole run, so the verdict is
+    deliberately conservative on three counts. It requires at least one
+    genuinely negative outcome (a loss or a crash): exposure-only evidence —
+    however much of it — is never enough. It requires the same staleness-aged
+    ``effective_support >= min_effective_events`` floor the read/probe lane uses,
+    so a card the probe still treats as cold cannot be harm-tombstoned by the
+    write lane. And it spares a card whose optimistic bootstrap EV band still
+    clears ``neutral_gain``: the sign gate is magnitude-blind, so a fat-tailed
+    winner (rare large gains, frequent small losses) can read confidently harmful
+    yet carry positive expected value.
+
+    The scorer only needs the ``ContextualCardScorer`` surface to be accepted.
+    The aged-support partition and the EV veto require the ``CardValueScorer``
+    surface; a scorer without it fails closed (never harm-tombstones) rather than
+    raising, keeping the seam usable by minimal contextual scorers.
     """
 
     def __init__(
         self,
         scorer: ContextualCardScorer,
         *,
+        neutral_gain: float = 0.0,
+        min_effective_events: float | None = None,
         skip_contextual_without_context: bool = True,
         task_key: str = "",
     ) -> None:
+        if not math.isfinite(neutral_gain):
+            raise ValueError(f"neutral_gain must be finite, got {neutral_gain}")
+        if min_effective_events is None:
+            event_floor = (
+                scorer.policy_min_effective_events
+                if isinstance(scorer, CardValueScorer)
+                else 0.0
+            )
+        else:
+            event_floor = min_effective_events
+        if event_floor < 0.0 or not math.isfinite(event_floor):
+            raise ValueError(
+                "min_effective_events must be finite and non-negative, "
+                f"got {event_floor}"
+            )
         self._scorer = scorer
+        self._neutral_gain = float(neutral_gain)
+        self._min_effective_events = float(event_floor)
         self._skip_contextual_without_context = bool(skip_contextual_without_context)
         self._task_key = task_key
 
@@ -262,9 +294,22 @@ class HarmEvictor:
         self, card: Card, context: DecisionContext | None
     ) -> bool:
         context = _writer_context(context, self._task_key)
-        return self._scorer.is_confidently_harmful(
-            self._scorer.card_stats(card, context)
-        )
+        if not isinstance(self._scorer, CardValueScorer):
+            return False
+        deltas = self._scorer.event_deltas(card, context)
+        if not deltas:
+            return False
+        if effective_support(self._scorer, card, deltas, context) < (
+            self._min_effective_events
+        ):
+            return False
+        block = self._scorer.card_stats(card, context)
+        if not self._scorer.is_confidently_harmful(block):
+            return False
+        ev_hi = None if block is None else block.IntroGain_bootstrap_ev_hi80
+        if ev_hi is not None and math.isfinite(float(ev_hi)):
+            return float(ev_hi) <= self._neutral_gain
+        return True
 
 
 class PolicyNonViableEvictor:

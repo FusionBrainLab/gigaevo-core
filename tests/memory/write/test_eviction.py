@@ -9,7 +9,7 @@ import pytest
 
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
-from gigaevo.memory.context.evidence import sign_help_counts
+from gigaevo.memory.context.evidence import effective_support, sign_help_counts
 from gigaevo.memory.events import MemoryEvictionSweep
 from gigaevo.memory.read.auction import BootstrapThompsonAuctioneer
 from gigaevo.memory.read.probe import ColdProbePolicy
@@ -52,9 +52,86 @@ class MarkedScorer:
     def requires_decision_context(self) -> bool:
         return False
 
+    @property
+    def policy_min_effective_events(self) -> float:
+        return 1.0
+
     def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
         del card
         return (None,)
+
+    def magnitude_of(self, block: CardStatsBlock | None) -> float | None:
+        del block
+        return None
+
+    def event_deltas(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        del context
+        return tuple(
+            float(event.gain)
+            for event in card.gain_events
+            if not event.founding and event.gain is not None
+        )
+
+    def event_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        return tuple(1.0 for _ in self.event_deltas(card, context))
+
+    def staleness_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        return tuple(1.0 for _ in self.event_deltas(card, context))
+
+
+class EvBandScorer(MarkedScorer):
+    """MarkedScorer that also stamps an optimistic bootstrap EV band.
+
+    Lets a harm test control the ``IntroGain_bootstrap_ev_hi80`` the positive-EV
+    veto reads without wrestling with live bootstrap numerics.
+    """
+
+    def __init__(self, harmful: set[str], ev_hi80: float | None) -> None:
+        super().__init__(harmful)
+        self._ev_hi80 = ev_hi80
+
+    def card_stats(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        self.scored.append(card.id)
+        if card.id in self._harmful:
+            return CardStatsBlock(
+                efficacy_confident=True,
+                IntroGain_bootstrap_ev_hi80=self._ev_hi80,
+            )
+        return None
+
+
+class HarmOnlyContextualScorer:
+    """A ContextualCardScorer without the staleness-aged value/support surface.
+
+    Provides the harm verdict and eviction contexts but none of ``event_deltas``
+    / ``event_weights`` / ``staleness_weights`` / ``policy_min_effective_events``,
+    so it satisfies ``ContextualCardScorer`` but not ``CardValueScorer``.
+    """
+
+    @property
+    def requires_decision_context(self) -> bool:
+        return False
+
+    def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
+        del card
+        return (None,)
+
+    def card_stats(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        del card, context
+        return CardStatsBlock(efficacy_confident=True)
+
+    def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool:
+        return block is not None and bool(block.efficacy_confident)
 
 
 class ContextOnlyScorer:
@@ -167,6 +244,66 @@ def test_sweep_without_evictions_emits_nothing(make_card, captured_events):
     evictor = HarmEvictor(MarkedScorer(set()))
     assert evictor.sweep([make_card(), make_card()]) == []
     assert captured_events == []
+
+
+def test_harm_evictor_spares_card_with_positive_optimistic_ev(make_card, make_event):
+    # Positive-EV veto (Option A): a fat-tailed winner reads confidently harmful
+    # on the sign channel (mostly small losses) yet its optimistic bootstrap EV
+    # band clears neutral. Harm eviction is an irreversible tombstone, so it must
+    # spare a card that still has plausible positive expected value.
+    loser = make_card(gain_events=tuple(make_event(-0.01) for _ in range(4)))
+    evictor = HarmEvictor(EvBandScorer({loser.id}, ev_hi80=5.0))
+    assert evictor.should_evict(loser) is False
+
+
+def test_harm_evictor_evicts_confident_loser_with_nonpositive_ev(make_card, make_event):
+    loser = make_card(gain_events=tuple(make_event(-0.5) for _ in range(4)))
+    evictor = HarmEvictor(EvBandScorer({loser.id}, ev_hi80=-0.2))
+    assert evictor.should_evict(loser) is True
+
+
+def test_harm_evictor_evicts_confident_loser_without_ev_band(make_card, make_event):
+    # No bootstrap EV band (ev_hi80 is None): the sign gate stands unchanged.
+    loser = make_card(gain_events=tuple(make_event(-0.5) for _ in range(4)))
+    evictor = HarmEvictor(EvBandScorer({loser.id}, ev_hi80=None))
+    assert evictor.should_evict(loser) is True
+
+
+def test_harm_evictor_fails_closed_without_value_surface(make_card, make_event):
+    # A scorer that lacks the staleness-aged support surface cannot honor the
+    # probe/eviction partition, so harm eviction fails closed rather than
+    # tombstoning a card the probe might still treat as cold.
+    evictor = HarmEvictor(HarmOnlyContextualScorer())
+    loser = make_card(gain_events=tuple(make_event(-0.5) for _ in range(4)))
+    assert evictor.should_evict(loser) is False
+
+
+def test_harm_evictor_spares_fat_tail_winner_under_bootstrap(make_card, make_event):
+    # End-to-end: frequent tiny losses plus one large win is confidently harmful
+    # on the (magnitude-blind) sign channel but carries a positive optimistic
+    # bootstrap EV band, so the veto spares it. A consistent loser with the same
+    # event count is still evicted.
+    winner = make_card(
+        gain_events=(*(make_event(-0.01) for _ in range(6)), make_event(1000.0))
+    )
+    loser = make_card(gain_events=tuple(make_event(-0.5) for _ in range(7)))
+
+    class Store:
+        def snapshot(self):
+            return (winner, loser)
+
+    context = DecisionContext(task_key="")
+    scorer = BootstrapReputation(BetaBinomialReputation(), Store(), n_bootstrap=256)
+    winner_block = scorer.card_stats(winner, context)
+    loser_block = scorer.card_stats(loser, context)
+    assert scorer.is_confidently_harmful(winner_block) is True
+    assert scorer.is_confidently_harmful(loser_block) is True
+    assert winner_block.IntroGain_bootstrap_ev_hi80 > 0.0
+    assert loser_block.IntroGain_bootstrap_ev_hi80 <= 0.0
+
+    evictor = HarmEvictor(scorer)
+    assert evictor.should_evict(winner) is False
+    assert evictor.should_evict(loser) is True
 
 
 def test_harm_evictor_never_evicts_on_ignores_alone(make_card, make_event):
@@ -645,6 +782,61 @@ def test_probe_and_eviction_effective_support_are_in_lockstep(make_card, make_ev
     assert slate[0].support_n == write_support
     assert marked[0].support_kind == "ev_rewards"
     assert marked[0].probe_eligible is (write_support < 3.0)
+    assert evictor.should_evict(card) is False
+
+
+def test_harm_eviction_respects_shared_aged_support_floor(make_card, make_event):
+    # Partition invariant: a card is probe-eligible iff its staleness-aged
+    # support is strictly below the floor; at/above the floor it is evictable.
+    # The read (probe) and write (harm) lanes must use identical aged support,
+    # so a card the probe still treats as cold cannot be harm-tombstoned. Three
+    # stale losses leave the UNAGED harm posterior confidently harmful while the
+    # AGED support sits below the floor.
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def stamped(gain, hours):
+        event = make_event(gain, task_key="task-a")
+        return event.model_copy(
+            update={
+                "context": event.context.model_copy(
+                    update={"timestamp": start + timedelta(hours=hours)}
+                )
+            }
+        )
+
+    card = make_card(gain_events=(stamped(-0.1, 0), stamped(-0.1, 1), stamped(-0.1, 2)))
+    newer = make_card(gain_events=(stamped(0.1, 3),))
+
+    class Store:
+        def snapshot(self):
+            return (card, newer)
+
+    context = DecisionContext(task_key="task-a")
+    scorer = BootstrapReputation(BetaBinomialReputation(), Store(), n_bootstrap=32)
+    assert scorer.policy_min_effective_events == 3.0
+
+    # Precondition: the unaged harm posterior alone WOULD tombstone the card.
+    assert scorer.is_confidently_harmful(scorer.card_stats(card, context)) is True
+
+    # Aged support is below the shared floor, so the read side keeps probing it.
+    deltas = scorer.event_deltas(card, context)
+    write_support = effective_support(scorer, card, deltas, context)
+    expected_support = 2.0 ** (-3 / 2) + 2.0 ** (-2 / 2) + 2.0 ** (-1 / 2)
+    assert write_support == pytest.approx(expected_support)
+    assert write_support < 3.0
+
+    block = scorer.card_stats(card, context)
+    candidate = AuctionCandidateProjector().project(
+        card=card, block=block, reputation=scorer, context=context
+    )
+    _, slate = BootstrapThompsonAuctioneer().run([candidate], np.random.default_rng(7))
+    _, marked = ColdProbePolicy(enabled=False).apply(
+        budgeted_ids=[], slate=slate, max_cards=1, rng=np.random.default_rng(9)
+    )
+    assert marked[0].probe_eligible is True
+
+    # A probe-eligible (aged-cold) card must not be harm-evicted.
+    evictor = HarmEvictor(scorer, task_key="task-a")
     assert evictor.should_evict(card) is False
 
 

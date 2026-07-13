@@ -32,7 +32,10 @@ inner:
     # Harm gate: never judge harmful until at least this many intro events.
     harm_min_events: ${memory.evidence.min_effective_events}
     # Optimistic posterior quantile of P(not harmful) used by the harm gate.
-    harm_quantile: 0.80
+    # Harm eviction tombstones a card for the whole run and is re-checked after
+    # every event, so the bar is deliberately conservative (0.95, not 0.80) to
+    # avoid a multiple-looks false tombstone on marginal 3-loss evidence.
+    harm_quantile: 0.95
     # Harmful iff that optimistic P(not harmful) remains below this threshold.
     harm_threshold: 0.5
     # Pessimistic posterior quantile used for display/confidence.
@@ -44,9 +47,10 @@ inner:
     prior: ${ref:memory.prior}
     # Legacy cold no-evidence prior used when no candidate_projector prior is set.
     cold_prior: ${memory.baseline_prior}
-  # Same thresholds for the BD-local in-cell posterior.
+  # Same thresholds for the BD-local in-cell posterior. Conservative 0.95 harm
+  # bar (see the fallback above): the tombstone is irreversible for the run.
   harm_min_events: ${memory.evidence.min_effective_events}
-  harm_quantile: 0.80
+  harm_quantile: 0.95
   harm_threshold: 0.5
   confident_quantile: 0.20
   confident_threshold: 0.5

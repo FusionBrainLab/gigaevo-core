@@ -77,19 +77,33 @@ happens when the pipeline can install `MemoryContextStage`.
 | `pipeline=memory_guided memory=reader checkpoint_dir=/path/to/bank` | yes | no | consume an existing bank |
 | `pipeline=memory_guided memory=full memory/write=live checkpoint_dir=/shared/bank` | yes | yes | same-run read/write memory |
 | `pipeline=memory_guided memory=full checkpoint_dir=/existing/bank` | yes | end only | read a prebuilt bank and flush new cards at shutdown |
+| `pipeline=memory_guided_noise memory=full memory/crediting=paired checkpoint_dir=/shared/bank` | yes | yes | same-run memory plus per-sample paired crediting (needs a problem that emits `per_sample_scores`) |
 | `pipeline=memory_guided memory=static memory.provider.levers_file=/path/to/levers.md` | fixed blocks | no | static-card ablation |
 
 The current `memory=full` top-level defaults are:
 
 | Component | Default | Why |
 |---|---|---|
-| Write cadence | `memory/write=end_of_run` | write once at shutdown unless overridden |
+| Write cadence | `memory/write=live` (under `memory=full`) | mid-run writer sweeps + final flush, so the shared bank is non-empty during reads; override to `end_of_run` only to seed a bank for a later run |
 | Read policy | `memory/read_policy=adaptive` | contextual bootstrap-EV bandit with EB cold priors, dynamic no-card evidence, and cold probes |
 | Reputation | `BootstrapReputation(BDProximityReputation(...))` | per-BD-cell credit, global fallback |
 | Auction | `BootstrapThompsonAuctioneer` | tail-aware EV bids and no-card-arm gate |
 | Budget | `TopBidBudgeter` | when too many cards win, keep highest EV bid |
 | Excluder | `LineageExcluder` | do not re-serve an already-applied ancestral card |
-| Evictor | `CompositeEvictor(BirthFailureEvictor, HarmEvictor, PolicyNonViableEvictor)` | delete catastrophic births, later-use harm, and warm active-bank zombies after enough supported evidence |
+| Evictor | `CompositeEvictor(BirthFailureEvictor, HarmEvictor, PolicyNonViableEvictor)`, each wrapped in a `CrossTaskRetentionGuard` | delete catastrophic births, later-use harm, and warm active-bank zombies after enough supported evidence; the guard vetoes any of the three when a foreign task's own evidence is net-helpful |
+| Crediting | `memory/crediting=point` → `PointEffectEstimator` (`gain_se=0`) | honest default: exact child-minus-parent-minus-baseline delta, no per-sample uncertainty |
+
+The alternative `memory/crediting=paired` (`PairedEffectEstimator`, paired
+bootstrap over `per_sample_scores`) needs a pipeline that stamps
+`routes_program_metadata: true` — `pipeline=memory_guided_noise` is the only
+pipeline that both reads external memory and routes metadata, so it is the one
+that can pair with `crediting=paired`. `pipeline=guided_noise` routes metadata
+but does not read memory, and `pipeline=memory_guided` reads memory but does
+not route metadata. The compose guard raises at launch for
+`memory/crediting=paired` under any pipeline that does not set
+`routes_program_metadata: true`. That guard cannot see whether the problem's
+`validate()` actually emits `per_sample_scores`; if it does not, `paired`
+degrades silently, event by event, to the exact point delta.
 
 `memory.reader.max_cards=1` is the external Memory Cards block budget by
 default: it caps how many rendered cards reach `MutationSuggestionStage`. This
@@ -97,12 +111,13 @@ is not the same thing as retrieval width: the research agent can recall up to
 `memory.store.config.research.max_cards=10` cards before the auction and budget
 reduce the slate.
 
-Same-run memory effects require adding `memory/write=live`. Without that,
-`memory=full` writes at the end of the run. That is useful only when
-`checkpoint_dir` points at an existing/prebuilt bank to read during the run. The
-default per-run bank is empty at launch, so the config validator rejects
-`pipeline=memory_guided memory=full` with default `checkpoint_dir` unless
-`memory/write=live` is enabled. The 10% randomized no-card control is a
+Same-run memory effects come from `memory/write=live`, which is the shipped
+`memory=full` default. Overriding to `memory/write=end_of_run` writes at the end
+of the run instead — useful only when `checkpoint_dir` points at an
+existing/prebuilt bank to read during the run. The default per-run bank is empty
+at launch, so the config validator rejects `pipeline=memory_guided memory=full
+memory/write=end_of_run` with the default `checkpoint_dir`. The 10% randomized
+no-card control is a
 `pipeline=memory_guided` default (`pipeline_builder.no_card_control_probability`)
 rather than a `memory=full` component.
 
@@ -148,7 +163,7 @@ The main override decisions are:
 |---|---|---|
 | `problem.name` | required | Always set it. |
 | `checkpoint_dir` | per-run Hydra output memory dir | Set an absolute path only when sharing or reusing a bank. |
-| `memory/write` | `end_of_run` under `memory=full` | Use `live` for same-run read/write effects. |
+| `memory/write` | `live` under `memory=full` | Same-run read/write effects. Override to `end_of_run` only to seed a bank for a later `memory=reader` run against an explicit `checkpoint_dir`. |
 | `memory/read_policy` | `adaptive` under `memory=full` | Use `portable` when there is no single shared behavior space. |
 | `memory.reader.max_cards` | `1` | Increase only if you intentionally want multiple external cards in the suggestion stage. |
 | `memory/llm` | `gemini` | Override for local LiteLLM or another memory/retrieval model. |
@@ -178,10 +193,10 @@ This expands into the following system.
 | Shortlister | `BootstrapFusedRankingShortlister` | Benches weak warm cards before research, then may post-filter/rank the researched result | Prevents known weak cards from occupying digest/research slots | Warm non-positive cards vanish before prompt rendering |
 | Bench floor | `rep_floor_quantile=0.4` | Post-filters sufficiently-observed warm cards in the bottom pessimistic-EV quantile; cards below the shared effective-evidence floor are exempt | Self-normalized ranking without cutting under-observed cards off from auction/probe evidence | Weak adjudicable cards lose the current read; under-observed cards retain exploration access |
 | Reputation | `BootstrapReputation(BDProximityReputation)` | Computes contextual posterior and bootstrap EV from gain events | A card can help one BD region and hurt another | Same card can bid differently depending on parent metrics |
-| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a cold-card prior from each card's temporally first non-founding exposure over a config-driven cohort ladder (`levels`: global → kind → kind+category, then context / context+kind / context+kind+category once the parent resolves a non-global bucket), counting only strictly positive causal gain as help and putting zero, negative, and invalid outcomes in the failure/complement mass, then shrinking toward the neutral seed under a `k_max=6` cap | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category and context-local tendencies |
+| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a cold-card prior from each card's temporally first non-founding exposure over a config-driven cohort ladder (`levels`: global → kind → kind+category → task+kind+category, then context / context+kind / context+kind+category / task+context+kind+category once the parent resolves a non-global bucket), counting only strictly positive causal gain as help and putting zero, negative, and invalid outcomes in the failure/complement mass, then shrinking toward the neutral seed under a `k_max=6` cap | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category and context-local tendencies |
 | EV staleness | `half_life_cycles=1.0` | Downweights each EV event from its own bank-cycle age | Old evidence should fade relative to a changing bank without being revived by one fresh event | Stale known deltas bid closer to zero |
 | Auction | `BootstrapThompsonAuctioneer` | Samples EV bids and gates against the no-card arm | Handles uncertainty, left-tail loss, and abstention | Higgs R1 rejected 608/1200 reads at auction |
-| EV floor | `ev_floor_quantile=0.765` | Requires bids to be in the high part of the round's own bid distribution | Avoids hardcoded gain deltas and limits low-value injections | Candidate can be retrieved but still fail the auction |
+| EV reserve | `ev_reserve_mode=risk`, `ev_risk_alpha=0.2` | Admits a card only when `P(EV > 0) >= 1 - alpha` on its own card-local bootstrap-EV vector (order-independent, IIA-clean) | Avoids hardcoded gain deltas and low-value injections without letting admission depend on the rest of the round | Candidate can be retrieved but still fail the auction; legacy `ev_reserve_mode=quantile` gates on the round's own bid quantile instead |
 | Budget | `TopBidBudgeter` | Keeps highest realized EV bid when too many cards win | The external card block can hold fewer cards than auction winners | Budget rows show dropped winners by bid |
 | Cold probe | `ColdProbePolicy(empty=0.50, warm_override=0.03)` | After budget, spends a bounded exploration lane on cards whose staleness-scaled effective support is strictly below the evidence floor | Keeps an under-evidenced card explorable instead of dying on one ignored prompt; the strict-`<` floor mirrors eviction's `>=` so probe and eviction partition card-space | Fills an empty selection ~half the time; rarely (3%) displaces the weakest budgeted card, and only when the budget is already full |
 | Excluder | `LineageExcluder` | Filters cards actually applied by ancestors | Avoids repeatedly reusing the same idea down one lineage | Descendants do not re-see cited/applied cards |
@@ -190,7 +205,7 @@ This expands into the following system.
 | Dedup | `DedupPolicy(online_top_k=5, max_cards_per_diff=3, consolidation_k=5)` | Uses LLM reconcile and consolidation, not distance thresholds | Prose/card embeddings are not reliable enough for a fixed duplicate cutoff | Ledger has many `merged` and `updated` rows |
 | Program exemplars | `enabled=true`, `top_k_per_refresh=4`, `max_cards=12` | Adds bounded top-program cards | Some lessons are best represented by a concrete program exemplar | Banks contain `kind=program` cards with fitness/code hash |
 | Birth eviction | `BirthFailureEvictor(scale_multiplier=2.0)` | Deletes catastrophic founding-loss cards | Prevents severe origin failures from acting like neutral cold advice | Ledger records `rejected_harm` or `evicted` near admission/sweep |
-| Harm eviction | `HarmEvictor` | Deletes cards whose later-use posterior is confidently harmful | Conservative backstop for repeated failures, usually from batched evidence or less conservative policies | Ledger reason says `injection posterior confidently harmful` |
+| Harm eviction | `HarmEvictor` | Deletes cards that clear the aged-support floor, read confidently harmful under the `0.95` posterior quantile, and lack a positive optimistic EV | Conservative backstop for repeated failures, usually from batched evidence or less conservative policies | Ledger reason says `injection posterior confidently harmful` |
 | Policy non-viable eviction | `PolicyNonViableEvictor(neutral_gain=${memory.neutral_gain})` | Deletes warm cards with enough effective support, non-positive active-policy EV, and no positive direct baseline-adjusted gain | Main zombie-card fix after repeated non-positive evidence; the evidence floor is `memory.eviction_safety.min_effective_events`, which defaults to `memory.evidence.min_effective_events` | Ledger reason says `policy non-viable`, not confidently harmful |
 
 The recommended settings are conservative in one important way: they do not
@@ -594,7 +609,8 @@ support — and use it to partition card-space. While a card's effective support
 is strictly below `memory.evidence.min_effective_events`, it is probe-eligible:
 the cold-probe lane keeps it in circulation. Once its support reaches that floor,
 it leaves the probe lane and becomes adjudicable by auction merit and evictable
-by `PolicyNonViableEvictor`. Because the probe lane uses strict `<` and eviction
+by the harm sweep and `PolicyNonViableEvictor` (both gate deletion on the same
+aged-support floor). Because the probe lane uses strict `<` and eviction
 uses `>=` on the same arithmetic (`sum(max(0, credit_i * w_i))` over finite
 per-event terms), support exactly at the floor belongs to the
 eviction lane, and no card can be in both lanes or fall between them. That is
@@ -1041,19 +1057,23 @@ flowchart TD
     Win --> K[TopBidBudgeter]
 ```
 
-The default EV floor quantile is `0.765`. It is self-normalized to the current
-round's own bid distribution. It is not a hardcoded metric delta. The no-card
-arm here is the read-time abstention gate. It is separate from the fitted
-no-card progress baseline used by the writer, though adaptive runs publish
-writer-observed controls into `no_card_evidence.json` so the read gate can use a
-contextual no-card prior instead of only the static fallback.
+The `memory=full` default EV reserve is the per-card risk gate
+(`ev_reserve_mode=risk`, `ev_risk_alpha=0.2`): a card is admissible iff at least
+`1 - alpha = 0.8` of its own bootstrap-EV samples are positive. It is not a
+hardcoded metric delta. The no-card arm here is the read-time abstention gate. It
+is separate from the fitted no-card progress baseline used by the writer, though
+adaptive runs publish writer-observed controls into `no_card_evidence.json` so
+the read gate can use a contextual no-card prior instead of only the static
+fallback.
 
-An optional IIA-clean reserve sets `ev_reserve_mode=risk` and
-`ev_risk_alpha=<alpha>`. It admits each card when at least `1 - alpha` of that
-card's own bootstrap-EV samples are positive, independent of the other bids in
-the round. The risk probability and the card's `u`-quantile bid consume the
-identical sampled vector; no second bootstrap draw is made. The shipped default
-is `quantile`, so all presets retain the flow above. In risk runs, inspect
+The legacy alternative sets `ev_reserve_mode=quantile` and
+`ev_floor_quantile=<q>`. It rejects any bid below the round's own `q` bid
+quantile, so a card's admission depends on which other candidates share the
+round (not IIA-clean). The risk gate instead reads `P(EV > 0)` off a card-local
+bootstrap vector seeded from the card id — decoupled from the `u`-quantile bid
+vector, so admission is order-independent AND the shared RNG stream that draws
+the bids stays byte-identical to a quantile run. The `memory=full` presets ship
+`risk`; `thompson_bootstrap_novelty` retains `quantile` at `q=0.765`. Inspect
 `ev_reserve_mode`, `ev_positive_probability`, `ev_risk_alpha`, and
 `rejected_by_ev_floor` in each `MEMORY_AUCTION_RUN.bids` row.
 
@@ -1086,7 +1106,10 @@ For each candidate:
    bootstrap-EV batch; a cold card bids `Beta(a, b).ppf(u)` times its borrowed
    scale. The same Beta theta is also computed for known cards.
 4. Reject it immediately if the bid is not positive.
-5. Reject it if it falls below the round's `0.765` bid quantile.
+5. Apply the EV reserve. In the default `risk` mode, reject it unless
+   `P(EV > 0) >= 1 - ev_risk_alpha` on its own card-local bootstrap-EV vector; in
+   legacy `quantile` mode, reject it if it falls below the round's own bid
+   quantile.
 6. For remaining eligible cards, draw one no-card arm from persisted no-card
    evidence; if adaptive evidence is empty, use the no-card evidence provider's
    seed prior, which defaults to `memory.baseline_prior`. Legacy/no-provider
@@ -1106,7 +1129,20 @@ over, so the two never contend for the same card.
 
 ## Eviction
 
-There are three deletion policies in the recommended evictor.
+There are three deletion policies in the recommended evictor, and each is
+wrapped in its own `CrossTaskRetentionGuard` (`memory/evictor=recommended`
+composes `CompositeEvictor` from three separate
+`CrossTaskRetentionGuard(inner=...)` instances, one per policy; the single-lane
+`memory/evictor=harm` preset wraps `HarmEvictor` the same way). Before any of
+the three deletes a card, the guard checks the card's gain events grouped by
+`event.context.task_key` for every task other than the run's own
+`${problem.name}`: if any foreign task's mass reaches
+`total_mass >= min_effective_events` (default `memory.evidence.min_effective_events=3`)
+and `help_mass > 0.5 * total_mass`, deletion is vetoed regardless of what the
+inner policy decided, and the ledger reason gets an appended
+`"deletion vetoed by foreign task <task> help <h>/<t>"` clause. This is the
+shared-bank safety net — a card another task finds net-helpful cannot be
+deleted just because the current task's own evidence looks bad.
 
 Periodic harm eviction destroys the card's gain events, so an optional
 evicted-evidence ledger (default off) lets the EB prior keep counting
@@ -1141,13 +1177,24 @@ behaves when injected later.
 The default harm predicate is:
 
 ```text
-intro_events >= 3
-and Beta(a, b).ppf(0.80) < 0.5
+effective support >= min_effective_events (default 3)
+and Beta(a, b).ppf(0.95) < 0.5
+and not (IntroGain_bootstrap_ev_hi80 > neutral_gain)
 ```
 
-So a single bad use does not delete a card through this path. This is
-deliberately conservative and it is not the main cleanup mechanism for cards
-that become unattractive after one negative or unused exposure.
+The first line is the same aged-support floor the probe lane uses (strict `<`
+there, `>=` here), so a card the probe still treats as cold cannot be
+harm-tombstoned. The posterior quantile is `0.95`, not `0.80`: the harm tombstone
+is irreversible for the run and re-checked after every event, so the conservative
+bar avoids a multiple-looks false tombstone on marginal evidence. The third line
+is a magnitude veto — the `ppf < 0.5` sign gate is magnitude-blind, so a
+fat-tailed winner (rare large gains, frequent small losses) can read confidently
+harmful yet have positive optimistic EV; when its `IntroGain_bootstrap_ev_hi80`
+clears `neutral_gain` the card is spared (a missing or non-finite `ev_hi80`
+leaves the sign gate standing). So a single bad use does not delete a card
+through this path. This is deliberately conservative and it is not the main
+cleanup mechanism for cards that become unattractive after one negative or unused
+exposure.
 
 With the recommended reader, confidently harmful deletion is expected to be
 rare. A bad card may stop winning reads after its first non-founding evidence,
@@ -1410,7 +1457,7 @@ unresolvable card ids.
 |---|---|
 | `pipeline=guided memory=writer` and expecting cards in the prompt | Writer-only fills a bank; it never installs `MemoryContextStage`. |
 | `pipeline=memory_guided memory=reader` with no existing bank | Reads are enabled, but there is nothing useful to retrieve. |
-| `pipeline=memory_guided memory=full` with default per-run bank and no `memory/write=live` | Config validation rejects it because the bank would be empty during reads. |
+| `pipeline=memory_guided memory=full memory/write=end_of_run` with the default per-run bank | Config validation rejects it because the bank would be empty during reads (the shipped `memory=full` default is `live`, which avoids this). |
 | Sharing one bank across incompatible problems, metric scales, or behavior spaces | Retrieval and reputation mix evidence that should not be comparable. |
 | Disabling no-card control during validation | Attribution loses the cleanest baseline cohort. |
 | Treating `MEMORY_READ_SELECTION.selected_ids` as final child exposure | It is emitted before no-card control; inspect child `memory_injected_idea_ids`. |

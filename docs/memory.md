@@ -36,7 +36,7 @@ python run.py problem.name=heilbron pipeline=guided memory=none
 | `memory=none` | `NullMemoryProvider` | `NullPostRunHook` | nothing |
 | `memory=reader` | `ReaderMemoryProvider` | `NullPostRunHook` | injects from a pre-built bank; no extraction |
 | `memory=writer` | `NullMemoryProvider` | `MemoryWriter` | authors a bank for a *later* run; injects nothing |
-| `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir`; use `memory/write=live` for same-run memory effects |
+| `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir`; ships with `memory/write=live` (same-run memory effects) — override to `end_of_run` only to seed a bank |
 | `memory=static` | `StaticLeverMemoryProvider` | `NullPostRunHook` | fixed curated lever blocks; no bank, no embedder, no memory LLM |
 
 > ⚠️ **`writer` and `full` bill the memory LLM** (`memory/llm=gemini` by
@@ -60,11 +60,12 @@ External-memory write is a memory property:
 - `memory/write=live` also installs `LiveMemoryRefreshHook` for mid-run writer
   sweeps and requires `memory={writer,full}`.
 
-With the default per-run `checkpoint_dir`, `pipeline=memory_guided memory=full`
-must use `memory/write=live`: otherwise the reader looks at an empty run-local
-bank until the finalizer writes after the run is already over. End-of-run write
-mode is for bank-building runs or for runs that read an explicit pre-built
-`checkpoint_dir`.
+`memory=full` ships with `memory/write=live` for exactly this reason: with the
+default per-run `checkpoint_dir`, an end-of-run cadence would leave the reader
+looking at an empty run-local bank until the finalizer writes after the run is
+already over — the compose guard rejects that combination. Override to
+`memory/write=end_of_run` only for bank-building runs or runs that read an
+explicit pre-built `checkpoint_dir`.
 
 ## How memory flows through a run
 
@@ -151,7 +152,7 @@ defaults:
   - llm: gemini              # memory LLM router (research + librarian agents)
   - read_policy: adaptive    # owns reputation + auction + budget + excluder + shortlister + probe
   - evictor: recommended     # birth-failure + harm + policy-non-viable eviction
-  - write: end_of_run        # shipped cadence: author once at shutdown (override to live)
+  - write: live              # shipped cadence: same-run read+write via LiveMemoryRefreshHook (override to end_of_run to seed a bank for a later reader)
 
 store:      # LocalMemoryStore = card bank + vector index + research agent
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
@@ -192,8 +193,8 @@ writer:     # ← engines consume this as post_run_hook
 ```
 
 Choose a whole read stack first (`memory/read_policy=portable`) and tune a leaf
-only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
-`memory.reader.max_cards=2`). Raw `memory/reputation`, `memory/auction`, and
+only when needed (`memory.auction.ev_risk_alpha=0.1` to tighten the default risk
+reserve, `memory.reader.max_cards=2`). Raw `memory/reputation`, `memory/auction`, and
 `memory/budget` leaves are still available for ablations, but the public API is
 `memory/read_policy`.
 
@@ -208,7 +209,7 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | `memory/no_card_evidence` | `json` (adaptive default), `none` | writer-published no-card controls/natural empty outcomes consumed by the reader's no-card abstention gate. This is distinct from the randomized no-card control rate |
 | `memory/probe` | `cold_budget` (adaptive default), `none` | explicit cold-card exploration lane, run after the auction and budget. A card is probe-eligible iff its bid reports a non-empty support kind and its staleness-scaled effective support is strictly below the evidence floor (`probe_until_effective_events`, wired to `${memory.evidence.min_effective_events}`) — the same measure eviction uses, so probe (strict `<`) and eviction/adjudication (`>=`) partition card-space with no gap. With an empty selection it fills one slot with the best cold candidate at rate 0.50; with warm winners it adds a probe at rate 0.03 and only displaces the weakest budgeted card when the budget is already full (otherwise the probe joins the proven winner). At most one probe card per decision; empty support kinds are never probe-eligible (fail-safe) |
 | `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; event `i` gets staleness weight `w_i = 2^(-s_i/H)` from its own stamp. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
-| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` draws one `u` per card: a known card bids the empirical `u`-quantile of one staleness-weighted bootstrap-EV batch over its support + a neutral pseudo-event, while a genuinely cold card bids `Beta.ppf(u) × cold scale`; that same `Beta.ppf(u)` is its no-card gate theta. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption) and a Sidak-adjusted no-card baseline gate (`gate_quantile = baseline_quantile^(1/eligible_count)` against the persisted no-card evidence arm); `thompson_ev` likewise shares one `u` between its `θ × gain magnitude` bid and theta gate; `thompson` bids probability only. `thompson_bootstrap_novelty` (add with `+memory/auction=thompson_bootstrap_novelty` — the `+` is required because read_policy owns the group) is `thompson_bootstrap` with a novelty tax: each bid is scaled by `(1 + use_count)^-novelty_power` (use_count = the card's non-founding gain events, a deterministic injection count) before the reserve is computed, so repeat winners make room for fresh cards while injection volume is preserved (the quantile floor re-normalizes over the taxed bids) |
+| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` draws one `u` per card: a known card bids the empirical `u`-quantile of one staleness-weighted bootstrap-EV batch over its support + a neutral pseudo-event, while a genuinely cold card bids `Beta.ppf(u) × cold scale`; that same `Beta.ppf(u)` is its no-card gate theta. It is gated by a per-card EV reserve — the default `ev_reserve_mode=risk` admits a card iff `P(EV>0) >= 1 - ev_risk_alpha` (0.8 at the default `ev_risk_alpha=0.2`), read off a card-local bootstrap vector so admission is IIA-clean (independent of the rest of the slate); the legacy `ev_reserve_mode=quantile` instead requires `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption) — and a Sidak-adjusted no-card baseline gate (`gate_quantile = baseline_quantile^(1/eligible_count)` against the persisted no-card evidence arm); `thompson_ev` likewise shares one `u` between its `θ × gain magnitude` bid and theta gate; `thompson` bids probability only. `thompson_bootstrap_novelty` (add with `+memory/auction=thompson_bootstrap_novelty` — the `+` is required because read_policy owns the group) is `thompson_bootstrap` with a novelty tax: each bid is scaled by `(1 + use_count)^-novelty_power` (use_count = the card's non-founding gain events, a deterministic injection count) before the reserve is computed, so repeat winners make room for fresh cards while injection volume is preserved (the quantile floor re-normalizes over the taxed bids) |
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
 | `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion, later-use harm eviction, and policy-non-viable active-bank cleanup after the reputation's effective evidence floor; contextual reputations provide explicit supported contexts for that cleanup; `harm` keeps only the later-use harm sweep |
@@ -227,13 +228,22 @@ the upward survivorship bias caused when harm-evicted cards drop out of cohort
 help rates; the default is snapshot-only, no shipped preset wires the source,
 and inclusion-propensity/IPS weighting remains a follow-up.
 
-Bootstrap auctions have an opt-in per-card reserve:
-`memory.auction.ev_reserve_mode=risk` with
-`memory.auction.ev_risk_alpha=<alpha>` admits a card when the fraction of its own
-bootstrap-EV samples above zero is at least `1 - alpha`. The probability and the
-bid quantile reuse the identical bootstrap vector, so this gate is independent
-of other bids in the slate. The shipped default remains `quantile`, and no
-shipped preset sets either field. `AuctionBid` records `ev_reserve_mode`,
+The bootstrap auction's per-card reserve is `memory.auction.ev_reserve_mode`.
+The shared `thompson_bootstrap` preset sets it to `risk` with `ev_risk_alpha=0.2`,
+so it is the default for every consumer of that auction — `memory=full`
+(`adaptive`) and `memory=reader` (`portable`) alike, plus the `*_bootstrap_decay`
+variants: a card is admitted when the fraction of its own bootstrap-EV samples
+above zero is at least `1 - alpha` (P(EV>0) >= 0.8). That probability is read off a **card-local**
+bootstrap vector seeded only from the card id (mirroring the per-card stats
+bootstrap), decoupled from the shared-RNG bid draw. Two consequences: admission
+is independent of which other cards share the round or where the card sits in the
+draw order (IIA-clean), and turning the reserve on leaves the shared round RNG —
+every bid plus the baseline draw — byte-identical. The legacy
+`ev_reserve_mode=quantile` (retained by the `BootstrapThompsonAuctioneer` class
+default and the `thompson_bootstrap_novelty` preset — the `*_legacy` read
+policies use a different auctioneer with no EV reserve at all) instead prices an
+inclusive `ev_floor_quantile` reserve over the round's own bids, which is
+round-relative. `AuctionBid` records `ev_reserve_mode`,
 `ev_positive_probability`, `ev_risk_alpha`, and `rejected_by_ev_floor`; those
 fields also appear inside `MEMORY_AUCTION_RUN.bids`.
 
@@ -404,7 +414,8 @@ known card holds its slot only while its own gain distribution keeps beating
 "inject nothing" (a fat left tail bids negative and abstains on the sign gate).
 The downside Beta-Binomial
 posterior is still what the harm gate reads; confidently-harmful posteriors
-get the card evicted. Exact events (`gain_se=0`, including the default point
+get the card evicted, subject to the shared aged-support floor and the
+positive-EV veto detailed below. Exact events (`gain_se=0`, including the default point
 estimator) keep the **strict sign test**. A positive measured se contributes
 its Gaussian below-zero tail mass; a degraded paired measurement stores
 `gain_se=None` and contributes the uninformative wide-limit mass
@@ -419,10 +430,13 @@ a per-card band could not be designed soundly for these gain distributions,
 so tiny exact negative deltas do count against a card and the noise guard is
 the counting posterior itself — `harm_min_events: 3` before a card can be
 judged harmful at all by default, via `memory.evidence.min_effective_events`,
-plus the optimistic `harm_quantile` read of P(not harmful).
-Measured on run data, that guard holds the sequential false-harm rate to
-~0.77% at the observed median of ~2 uses per card; revisit the calibration if
-cards start accumulating more than ~5 uses.
+plus the optimistic `harm_quantile` read of P(not harmful), set to a conservative
+0.95 for the irreversible run-long tombstone (the sweep re-checks after every
+event, so a laxer bar invites a multiple-looks false tombstone on marginal
+3-loss evidence). Measured on run data at the prior 0.80 bar, that guard held the
+sequential false-harm rate to ~0.77% at the observed median of ~2 uses per card,
+and 0.95 is strictly tighter; revisit the calibration if cards start accumulating
+more than ~5 uses.
 
 A freshly-authored **insight** card is born with a *founding* gain event: the
 true signed fitness delta of the parent→child mutation it was distilled from
@@ -441,7 +455,13 @@ survivor. It rides **NEW admits only**: a DUPLICATE or MERGE ruling at ingest
 drops the incoming founding event, because the delta was measured for that
 child against its parent — foreign evidence for a pre-existing lever.
 Harm-eviction remains later-use-only; catastrophic origin failures are handled
-by the separate birth-failure policy. The recommended evictor also removes
+by the separate birth-failure policy. Harm eviction fires only once a card clears
+the same shared aged-support floor the probe lane uses (below), and even then it
+spares any card whose optimistic bootstrap EV band still clears the neutral point
+(`IntroGain_bootstrap_ev_hi80 > memory.neutral_gain`): the sign-based harm gate is
+magnitude-blind, so a fat-tailed winner can read confidently harmful while its
+expected value is positive, and the irreversible tombstone must not delete it.
+The recommended evictor also removes
 policy-non-viable cards after enough effective support when their active value
 estimate is at or below `memory.neutral_gain` and their direct
 baseline-adjusted evidence never beat that neutral point. The default evidence
@@ -450,7 +470,7 @@ mirrored into `memory.eviction_safety.min_effective_events`. That same floor
 partitions the card lifecycle: the read-side cold-probe lane keeps a card
 probe-eligible while its staleness-scaled effective support is strictly below
 the floor, and only at or above the floor is the card adjudicable by auction
-merit and evictable by `PolicyNonViableEvictor`. Both lanes compute effective
+merit and evictable by the harm sweep and `PolicyNonViableEvictor`. Both lanes compute effective
 support with identical arithmetic (`sum(max(0, credit_i * w_i))` over finite
 per-event terms), probe using strict `<` and eviction using `>=`, so
 support exactly at the floor lands in the eviction/adjudication lane — no card

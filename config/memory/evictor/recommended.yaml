@@ -31,6 +31,14 @@ evictors:
       _target_: gigaevo.memory.write.eviction.HarmEvictor
       task_key: ${problem.name}
       scorer: ${ref:memory.reputation}
+      # Positive-EV veto: spare a card whose optimistic bootstrap EV band still
+      # clears this neutral point. The sign-based harm gate is magnitude-blind,
+      # so a fat-tailed winner can read confidently harmful yet have positive EV;
+      # the irreversible tombstone must not delete it.
+      neutral_gain: ${memory.neutral_gain}
+      # Same staleness-aged evidence floor the read/probe lane uses, so a
+      # probe-eligible (aged-cold) card is never harm-tombstoned by the writer.
+      min_effective_events: ${memory.eviction_safety.min_effective_events}
       skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}
   - _target_: gigaevo.memory.write.eviction.CrossTaskRetentionGuard
     task_key: ${problem.name}

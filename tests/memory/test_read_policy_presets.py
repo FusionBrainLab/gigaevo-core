@@ -88,7 +88,8 @@ def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
         == "gigaevo.memory.read.projection.AuctionCandidateProjector"
     )
     assert memory.excluder._target_ == "gigaevo.memory.read.exclusion.LineageExcluder"
-    assert memory.auction.ev_floor_quantile == pytest.approx(0.765)
+    assert memory.auction.ev_reserve_mode == "risk"
+    assert memory.auction.ev_risk_alpha == pytest.approx(0.2)
     assert memory.evictor._target_ == "gigaevo.memory.write.eviction.CompositeEvictor"
     assert (
         memory.evictor.evictors[0]._target_
@@ -125,6 +126,10 @@ def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
     assert memory.eviction_safety.min_effective_events == 3
     assert memory.reputation.confident_min_events == 3
     assert memory.reputation.inner.harm_min_events == 3
+    assert memory.reputation.inner.harm_quantile == pytest.approx(0.95)
+    assert memory.reputation.inner.fallback.harm_quantile == pytest.approx(0.95)
+    assert memory.evictor.evictors[1].inner.neutral_gain == pytest.approx(0.0)
+    assert memory.evictor.evictors[1].inner.min_effective_events == 3
     assert memory.evictor.evictors[1].inner.skip_contextual_without_context is True
     assert memory.evictor.evictors[2].inner.min_effective_events == 3
     assert memory.evictor.evictors[2].inner.skip_contextual_without_context is True
@@ -135,16 +140,19 @@ def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
     )
 
 
-def test_ev_floor_quantile_is_bootstrap_policy_local():
+def test_ev_reserve_is_bootstrap_policy_local():
     recommended = _compose("memory=full")
     median_legacy = _compose("memory=full", "memory/read_policy=median_ev_legacy")
     probability_legacy = _compose(
         "memory=full", "memory/read_policy=probability_legacy"
     )
 
-    assert recommended.memory.auction.ev_floor_quantile == pytest.approx(0.765)
-    assert "ev_floor_quantile" not in median_legacy.memory.auction
-    assert "ev_floor_quantile" not in probability_legacy.memory.auction
+    assert recommended.memory.auction.ev_reserve_mode == "risk"
+    assert recommended.memory.auction.ev_risk_alpha == pytest.approx(0.2)
+    assert "ev_reserve_mode" not in median_legacy.memory.auction
+    assert "ev_risk_alpha" not in median_legacy.memory.auction
+    assert "ev_reserve_mode" not in probability_legacy.memory.auction
+    assert "ev_risk_alpha" not in probability_legacy.memory.auction
 
 
 def test_reader_defaults_to_portable_bootstrap_with_lineage():

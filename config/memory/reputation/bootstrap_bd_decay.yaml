@@ -30,7 +30,11 @@ inner:
       _target_: gigaevo.memory.read.reputation.BetaBinomialReputation
       # Harm/confidence thresholds and aligned cold prior for cold BD cells.
       harm_min_events: ${memory.evidence.min_effective_events}
-      harm_quantile: 0.80
+      # Optimistic posterior quantile of P(not harmful) for the harm gate. 0.95 (not
+      # 0.80): the harm tombstone is irreversible for the run and re-checked after
+      # every event, so a conservative bar avoids a multiple-looks false tombstone on
+      # marginal 3-loss evidence.
+      harm_quantile: 0.95
       harm_threshold: 0.5
       confident_quantile: 0.20
       confident_threshold: 0.5
@@ -39,7 +43,8 @@ inner:
       cold_prior: ${memory.baseline_prior}
     # Harm/confidence thresholds for in-cell BD evidence.
     harm_min_events: ${memory.evidence.min_effective_events}
-    harm_quantile: 0.80
+    # Same conservative 0.95 harm bar as the fallback above (irreversible run-long tombstone).
+    harm_quantile: 0.95
     harm_threshold: 0.5
     confident_quantile: 0.20
     confident_threshold: 0.5

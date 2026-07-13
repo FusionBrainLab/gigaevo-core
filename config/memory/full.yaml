@@ -16,7 +16,11 @@ defaults:
   - read_policy: adaptive
   - crediting: point
   - evictor: recommended
-  - write: end_of_run
+  # Live is the default: memory=full reads and writes one bank, so cards must be
+  # authored mid-run or the reader sees an empty bank (the compose guard rejects
+  # end_of_run + default checkpoint_dir). Override to end_of_run only to seed a
+  # bank for a later memory=reader run against an explicit checkpoint_dir.
+  - write: live
   - _self_
 
 capabilities:
