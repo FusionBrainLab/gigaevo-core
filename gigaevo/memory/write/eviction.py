@@ -12,12 +12,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import math
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
 
-from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
-from gigaevo.memory.context.evidence import event_weight
+from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
+from gigaevo.memory.context.evidence import (
+    effective_support,
+    event_weight,
+    sign_help_counts,
+    split_events_by_task,
+)
 from gigaevo.memory.events import MemoryEvictionSweep, emit_memory_event
 from gigaevo.programs.metrics.context import MetricsContext
 
@@ -51,11 +57,12 @@ class CardValueScorer(ContextualCardScorer, Protocol):
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[float, ...]: ...
 
-    def staleness_weight(
+    def staleness_weights(
         self, card: Card, context: DecisionContext | None = None
-    ) -> float: ...
+    ) -> tuple[float, ...]: ...
 
 
+@runtime_checkable
 class Evictor(Protocol):
     def should_evict(self, card: Card) -> bool: ...
 
@@ -64,28 +71,103 @@ class Evictor(Protocol):
     def sweep(self, cards: Sequence[Card]) -> list[str]: ...
 
 
-def _harm_evidence(card: Card) -> Card:
+def foreign_retention_veto(
+    card: Card, *, task_key: str, min_effective_events: float
+) -> str | None:
+    """Return why foreign hard-sign evidence vetoes deletion, if it does."""
+    if not task_key or min_effective_events <= 0.0:
+        return None
+    by_task: dict[str, list[ContextualGain]] = {}
+    for event in card.gain_events:
+        foreign_task = event.context.task_key
+        if foreign_task and foreign_task != task_key:
+            by_task.setdefault(foreign_task, []).append(event)
+    for foreign_task in sorted(by_task):
+        help_mass, total_mass = sign_help_counts(by_task[foreign_task])
+        if total_mass >= min_effective_events and help_mass > 0.5 * total_mass:
+            return (
+                f"deletion vetoed by foreign task {foreign_task} "
+                f"help {help_mass:.6g}/{total_mass:.6g}"
+            )
+    return None
+
+
+class CrossTaskRetentionGuard(BaseModel):
+    """Veto global deletion when another task has enough net-help evidence."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        arbitrary_types_allowed=True,
+        allow_inf_nan=False,
+    )
+
+    inner: Evictor
+    task_key: str = ""
+    min_effective_events: float = Field(ge=0.0)
+
+    def should_evict(self, card: Card) -> bool:
+        if not self.inner.should_evict(card):
+            return False
+        return self._foreign_veto(card, log=True) is None
+
+    def eviction_reason(self, card: Card) -> str:
+        reason = self.inner.eviction_reason(card)
+        if not self.inner.should_evict(card):
+            return reason
+        veto = self._foreign_veto(card, log=False)
+        if veto is None:
+            return reason
+        return f"{reason}; {veto}"
+
+    def sweep(self, cards: Sequence[Card]) -> list[str]:
+        candidates = self.inner.sweep(cards)
+        by_id = {card.id: card for card in cards}
+        evictable: list[str] = []
+        for card_id in candidates:
+            card = by_id.get(card_id)
+            if card is None or self._foreign_veto(card, log=True) is None:
+                evictable.append(card_id)
+        return evictable
+
+    def _foreign_veto(self, card: Card, *, log: bool) -> str | None:
+        veto = foreign_retention_veto(
+            card,
+            task_key=self.task_key,
+            min_effective_events=self.min_effective_events,
+        )
+        if veto is not None and log:
+            logger.debug(
+                "[Memory][CrossTaskRetentionGuard] vetoed deletion of card {}: {}",
+                card.id,
+                veto,
+            )
+        return veto
+
+
+def _harm_evidence(card: Card, task_key: str) -> Card:
     """The card with founding events dropped, for the harm verdict only.
 
     Founding evidence is origin/admission evidence, not later-use evidence.
     ``HarmEvictor`` remains usage-based; catastrophic origin failures are owned
     by ``BirthFailureEvictor``.
     """
-    if not any(event.founding for event in card.gain_events):
+    native, _ = split_events_by_task(card.gain_events, task_key)
+    proof = tuple(event for event in native if not event.founding)
+    if proof == card.gain_events:
         return card
-    return card.model_copy(
-        update={"gain_events": tuple(e for e in card.gain_events if not e.founding)}
-    )
+    return card.model_copy(update={"gain_events": proof})
 
 
-def _has_negative_direct_evidence(card: Card) -> bool:
+def _has_negative_direct_evidence(card: Card, task_key: str) -> bool:
     """True when the card has at least one genuinely negative outcome.
 
     A crash (``invalid``) or a baseline-adjusted loss on a real use counts;
     being ignored by the mutator (``unused``) never does. Stored gains are
     already no-card-baseline-relative, so the neutral point is 0.
     """
-    for event in card.gain_events:
+    native, _ = split_events_by_task(card.gain_events, task_key)
+    for event in native:
         if event.founding or event_weight(event) <= 0.0:
             continue
         if event.invalid:
@@ -100,8 +182,11 @@ def _has_negative_direct_evidence(card: Card) -> bool:
     return False
 
 
-def _has_positive_direct_evidence(card: Card, neutral_gain: float) -> bool:
-    for event in card.gain_events:
+def _has_positive_direct_evidence(
+    card: Card, neutral_gain: float, task_key: str
+) -> bool:
+    native, _ = split_events_by_task(card.gain_events, task_key)
+    for event in native:
         if (
             event.founding
             or event.invalid
@@ -129,13 +214,15 @@ class HarmEvictor:
         scorer: ContextualCardScorer,
         *,
         skip_contextual_without_context: bool = True,
+        task_key: str = "",
     ) -> None:
         self._scorer = scorer
         self._skip_contextual_without_context = bool(skip_contextual_without_context)
+        self._task_key = task_key
 
     def should_evict(self, card: Card) -> bool:
-        evidence = _harm_evidence(card)
-        if not _has_negative_direct_evidence(evidence):
+        evidence = _harm_evidence(card, self._task_key)
+        if not _has_negative_direct_evidence(evidence, self._task_key):
             return False
         contexts = self._eviction_contexts(evidence)
         return bool(contexts) and all(
@@ -174,6 +261,7 @@ class HarmEvictor:
     def _is_harmful_in_context(
         self, card: Card, context: DecisionContext | None
     ) -> bool:
+        context = _writer_context(context, self._task_key)
         return self._scorer.is_confidently_harmful(
             self._scorer.card_stats(card, context)
         )
@@ -196,6 +284,7 @@ class PolicyNonViableEvictor:
         neutral_gain: float,
         min_effective_events: float | None = None,
         skip_contextual_without_context: bool = True,
+        task_key: str = "",
     ) -> None:
         if not math.isfinite(neutral_gain):
             raise ValueError(f"neutral_gain must be finite, got {neutral_gain}")
@@ -213,10 +302,11 @@ class PolicyNonViableEvictor:
         self._neutral_gain = float(neutral_gain)
         self._min_effective_events = float(event_floor)
         self._skip_contextual_without_context = bool(skip_contextual_without_context)
+        self._task_key = task_key
 
     def should_evict(self, card: Card) -> bool:
-        evidence = _harm_evidence(card)
-        if _has_positive_direct_evidence(evidence, self._neutral_gain):
+        evidence = _harm_evidence(card, self._task_key)
+        if _has_positive_direct_evidence(evidence, self._neutral_gain, self._task_key):
             return False
         contexts = self._eviction_contexts(evidence)
         return bool(contexts) and all(
@@ -259,6 +349,7 @@ class PolicyNonViableEvictor:
     def _context_is_nonviable(
         self, card: Card, context: DecisionContext | None
     ) -> bool:
+        context = _writer_context(context, self._task_key)
         deltas = self._scorer.event_deltas(card, context)
         if not deltas:
             return False
@@ -280,21 +371,7 @@ class PolicyNonViableEvictor:
         deltas: Sequence[float],
         context: DecisionContext | None,
     ) -> float:
-        weights = self._scorer.event_weights(card, context)
-        if len(weights) != len(deltas):
-            raise ValueError(
-                "event_weights must align with event_deltas: "
-                f"{len(weights)} weights for {len(deltas)} deltas"
-            )
-        event_support = sum(
-            max(0.0, float(weight))
-            for weight in weights
-            if math.isfinite(float(weight))
-        )
-        factor = float(self._scorer.staleness_weight(card, context))
-        if math.isfinite(factor) and factor >= 0.0:
-            event_support *= factor
-        return event_support
+        return effective_support(self._scorer, card, deltas, context)
 
 
 class BirthFailureEvictor:
@@ -316,6 +393,7 @@ class BirthFailureEvictor:
         rescue_min_events: float = 3.0,
         rescue_p_help_threshold: float = 0.5,
         rescue_ev_threshold: float = 0.0,
+        task_key: str = "",
     ) -> None:
         if scale is not None and (not math.isfinite(scale) or scale <= 0.0):
             raise ValueError(f"scale must be finite and positive, got {scale}")
@@ -330,14 +408,16 @@ class BirthFailureEvictor:
         self._rescue_min_events = rescue_min_events
         self._rescue_p_help_threshold = rescue_p_help_threshold
         self._rescue_ev_threshold = rescue_ev_threshold
+        self._task_key = task_key
 
     def should_evict(self, card: Card) -> bool:
         scale = self._resolved_scale()
         if scale is None:
             return False
+        native, _ = split_events_by_task(card.gain_events, self._task_key)
         losses = [
             float(event.gain)
-            for event in card.gain_events
+            for event in native
             if event.founding
             and event.gain is not None
             and math.isfinite(float(event.gain))
@@ -350,10 +430,11 @@ class BirthFailureEvictor:
 
     def eviction_reason(self, card: Card) -> str:
         scale = self._resolved_scale()
+        native, _ = split_events_by_task(card.gain_events, self._task_key)
         min_loss = min(
             (
                 float(event.gain)
-                for event in card.gain_events
+                for event in native
                 if event.founding
                 and event.gain is not None
                 and math.isfinite(float(event.gain))
@@ -395,7 +476,10 @@ class BirthFailureEvictor:
     def _has_rescue_evidence(self, card: Card) -> bool:
         if self._scorer is None:
             return False
-        block = self._scorer.card_stats(_harm_evidence(card))
+        evidence = _harm_evidence(card, self._task_key)
+        block = self._scorer.card_stats(
+            evidence, DecisionContext(task_key=self._task_key)
+        )
         if block is None or block.intro_events < self._rescue_min_events:
             return False
         p_help = block.p_help_lo20
@@ -412,6 +496,12 @@ class BirthFailureEvictor:
             and math.isfinite(float(ev))
             and float(ev) > self._rescue_ev_threshold
         )
+
+
+def _writer_context(context: DecisionContext | None, task_key: str) -> DecisionContext:
+    if context is None:
+        return DecisionContext(task_key=task_key)
+    return context.model_copy(update={"task_key": task_key})
 
 
 class CompositeEvictor:

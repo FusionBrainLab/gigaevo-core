@@ -3,7 +3,7 @@
 The router replays scripted SearchPlan/ShortlistDecision responses (or raises
 scripted exceptions), so every loop property — termination, id validation,
 caps, scope filtering, candidate aggregation, fail-to-empty — is asserted
-deterministically against a real bank + Chroma index.
+deterministically against a real bank + in-memory Chroma index.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def make_agent(tmp_path):
         bank = CardBank(tmp_path / "cards.json")
         for card in cards:
             bank.put(card)
-        index = VectorIndex(tmp_path / "chroma", embed)
+        index = VectorIndex(embed)
         index.rebuild(cards)
         return ResearchAgent(
             router,
@@ -331,6 +331,14 @@ def test_candidate_brief_keeps_program_fitness(make_card):
     card = make_card(kind=CardKind.PROGRAM, program_id="prog-1", fitness=0.42)
 
     assert candidate_brief(card)["fitness"] == 0.42
+
+
+def test_candidate_brief_includes_only_nonempty_origin_task(make_card):
+    stamped = candidate_brief(make_card(task_key="origin-task"))
+    legacy = candidate_brief(make_card(task_key=""))
+
+    assert stamped["origin_task"] == "origin-task"
+    assert "origin_task" not in legacy
 
 
 def test_render_briefs_under_budget_keeps_all_cards(make_card):

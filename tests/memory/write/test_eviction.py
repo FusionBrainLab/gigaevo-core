@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+import numpy as np
 import pytest
 
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import Card, CardStatsBlock, DecisionContext
+from gigaevo.memory.context.evidence import sign_help_counts
 from gigaevo.memory.events import MemoryEvictionSweep
+from gigaevo.memory.read.auction import BootstrapThompsonAuctioneer
+from gigaevo.memory.read.probe import ColdProbePolicy
+from gigaevo.memory.read.projection import AuctionCandidateProjector
 from gigaevo.memory.read.reputation import (
     BDProximityReputation,
     BetaBinomialReputation,
+    BootstrapReputation,
 )
 from gigaevo.memory.write.eviction import (
     BirthFailureEvictor,
     CompositeEvictor,
+    CrossTaskRetentionGuard,
     HarmEvictor,
     NullEvictor,
     PolicyNonViableEvictor,
@@ -93,11 +102,10 @@ class ContextOnlyScorer:
         del card, context
         return ()
 
-    def staleness_weight(
+    def staleness_weights(
         self, card: Card, context: DecisionContext | None = None
-    ) -> float:
-        del card, context
-        return 1.0
+    ) -> tuple[float, ...]:
+        return tuple(1.0 for _ in self.event_deltas(card, context))
 
 
 class MismatchedWeightReputation(BetaBinomialReputation):
@@ -106,6 +114,22 @@ class MismatchedWeightReputation(BetaBinomialReputation):
     ) -> tuple[float, ...]:
         del card, context
         return ()
+
+
+class MismatchedStalenessReputation(BetaBinomialReputation):
+    def staleness_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        del card, context
+        return ()
+
+
+class NonFiniteStalenessReputation(BetaBinomialReputation):
+    def staleness_weights(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, ...]:
+        del card, context
+        return (float("nan"), 0.5, -1.0)
 
 
 @pytest.fixture
@@ -175,6 +199,172 @@ def test_harm_evictor_still_evicts_genuine_losses(make_card, make_event):
     assert evictor.should_evict(loser) is True
 
 
+def test_harm_evictor_only_consumes_writer_task_events(make_card, make_event):
+    task_a_loser = make_card(
+        gain_events=tuple(make_event(-0.1, task_key="task-a") for _ in range(4))
+    )
+
+    assert (
+        HarmEvictor(BetaBinomialReputation(), task_key="task-b").should_evict(
+            task_a_loser
+        )
+        is False
+    )
+    assert (
+        HarmEvictor(BetaBinomialReputation(), task_key="task-a").should_evict(
+            task_a_loser
+        )
+        is True
+    )
+
+
+def test_cross_task_guard_is_vacuous_for_single_task_bank(make_card, make_event):
+    cards = [
+        make_card(
+            gain_events=tuple(make_event(-0.1, task_key="task-a") for _ in range(count))
+        )
+        for count in (4, 2)
+    ]
+    cards.append(
+        make_card(
+            gain_events=tuple(make_event(0.1, task_key="task-a") for _ in range(4))
+        )
+    )
+    inner = HarmEvictor(BetaBinomialReputation(), task_key="task-a")
+    guard = CrossTaskRetentionGuard(
+        inner=inner, task_key="task-a", min_effective_events=3
+    )
+
+    assert [guard.should_evict(card) for card in cards] == [
+        inner.should_evict(card) for card in cards
+    ]
+    assert guard.sweep(cards) == inner.sweep(cards)
+    assert [guard.eviction_reason(card) for card in cards] == [
+        inner.eviction_reason(card) for card in cards
+    ]
+
+
+def test_cross_task_guard_vetoes_only_foreign_majority_help(make_card, make_event):
+    native_losses = tuple(make_event(-0.1, task_key="task-a") for _ in range(4))
+    majority_help = make_card(
+        gain_events=(
+            *native_losses,
+            make_event(0.2, task_key="task-b"),
+            make_event(0.1, task_key="task-b"),
+            make_event(-0.1, task_key="task-b"),
+        )
+    )
+    majority_fail = make_card(
+        gain_events=(
+            *native_losses,
+            make_event(0.2, task_key="task-b"),
+            make_event(-0.1, task_key="task-b"),
+            make_event(0.0, invalid=True, task_key="task-b"),
+        )
+    )
+    guard = CrossTaskRetentionGuard(
+        inner=HarmEvictor(BetaBinomialReputation(), task_key="task-a"),
+        task_key="task-a",
+        min_effective_events=3,
+    )
+
+    assert guard.should_evict(majority_help) is False
+    assert "deletion vetoed by foreign task task-b help 2/3" in guard.eviction_reason(
+        majority_help
+    )
+    assert guard.should_evict(majority_fail) is True
+    assert guard.sweep([majority_help, majority_fail]) == [majority_fail.id]
+
+
+def test_cross_task_guard_does_not_veto_below_support_floor(make_card, make_event):
+    card = make_card(
+        gain_events=(
+            *(make_event(-0.1, task_key="task-a") for _ in range(4)),
+            make_event(0.2, task_key="task-b"),
+            make_event(0.1, task_key="task-b"),
+        )
+    )
+    guard = CrossTaskRetentionGuard(
+        inner=HarmEvictor(BetaBinomialReputation(), task_key="task-a"),
+        task_key="task-a",
+        min_effective_events=3,
+    )
+
+    assert guard.should_evict(card) is True
+    assert guard.sweep([card]) == [card.id]
+
+
+def test_cross_task_guard_and_reputation_share_foreign_sign_fold(make_card, make_event):
+    foreign = (
+        make_event(100.0, founding=True, task_key="task-b"),
+        make_event(100.0, unused=True, task_key="task-b"),
+        make_event(0.2, task_key="task-b"),
+        make_event(0.1, task_key="task-b"),
+        make_event(0.0, invalid=True, task_key="task-b"),
+    )
+    card = make_card(
+        gain_events=(
+            *(make_event(-0.1, task_key="task-a") for _ in range(4)),
+            *foreign,
+        )
+    )
+    guard = CrossTaskRetentionGuard(
+        inner=HarmEvictor(BetaBinomialReputation(), task_key="task-a"),
+        task_key="task-a",
+        min_effective_events=3,
+    )
+
+    veto = guard._foreign_veto(card, log=False)
+    block = BetaBinomialReputation().card_stats(
+        card, DecisionContext(task_key="task-a")
+    )
+
+    assert veto == "deletion vetoed by foreign task task-b help 2/3"
+    assert sign_help_counts(foreign) == (2.0, 3.0)
+    assert block is not None
+    assert (block.foreign_help_events, block.foreign_total_events) == (2.0, 3.0)
+
+
+def test_cross_task_veto_is_invariant_to_same_sign_magnitude_and_se(
+    make_card, make_event
+):
+    native_losses = tuple(make_event(-0.1, task_key="task-a") for _ in range(4))
+    foreign_variants = (
+        tuple(
+            make_event(gain, task_key="task-b").model_copy(update={"gain_se": 1e300})
+            for gain in (1e-300, 2e-300, -1e-300)
+        ),
+        tuple(
+            make_event(gain, task_key="task-b").model_copy(update={"gain_se": 0.0})
+            for gain in (1e300, 2e300, -1e300)
+        ),
+    )
+    guard = CrossTaskRetentionGuard(
+        inner=HarmEvictor(BetaBinomialReputation(), task_key="task-a"),
+        task_key="task-a",
+        min_effective_events=3,
+    )
+    cards = [
+        make_card(gain_events=(*native_losses, *foreign))
+        for foreign in foreign_variants
+    ]
+
+    assert [sign_help_counts(events) for events in foreign_variants] == [
+        (2.0, 3.0),
+        (2.0, 3.0),
+    ]
+    assert [guard.should_evict(card) for card in cards] == [False, False]
+
+
+def test_legacy_empty_task_evictor_is_identical(make_card, make_event):
+    loser = make_card(gain_events=tuple(make_event(-0.1) for _ in range(4)))
+
+    assert HarmEvictor(BetaBinomialReputation()).should_evict(loser) is True
+    assert (
+        HarmEvictor(BetaBinomialReputation(), task_key="").should_evict(loser) is True
+    )
+
+
 def test_harm_evictor_still_evicts_crash_only_card(make_card, make_event):
     evictor = HarmEvictor(BetaBinomialReputation())
     crasher = make_card(
@@ -225,6 +415,24 @@ def test_policy_nonviable_rejects_misaligned_scorer_weights(make_card, make_even
 
     with pytest.raises(ValueError, match="event_weights must align"):
         evictor.should_evict(card)
+
+
+def test_policy_nonviable_rejects_misaligned_staleness_weights(make_card, make_event):
+    card = make_card(gain_events=tuple(make_event(-0.1) for _ in range(3)))
+    evictor = PolicyNonViableEvictor(MismatchedStalenessReputation(), neutral_gain=0.0)
+
+    with pytest.raises(ValueError, match="staleness_weights must align"):
+        evictor.should_evict(card)
+
+
+def test_effective_support_sums_only_finite_nonnegative_products(make_card, make_event):
+    card = make_card(gain_events=tuple(make_event(-0.1) for _ in range(3)))
+    scorer = NonFiniteStalenessReputation()
+    evictor = PolicyNonViableEvictor(scorer, neutral_gain=0.0)
+
+    assert evictor._effective_support(
+        card, scorer.event_deltas(card), None
+    ) == pytest.approx(0.5)
 
 
 def test_policy_nonviable_derives_min_support_from_scorer(make_card, make_event):
@@ -371,6 +579,73 @@ def test_birth_failure_evicts_catastrophic_founding_loss(make_card, make_event):
     card = make_card(gain_events=(make_event(-0.21, founding=True),))
     assert evictor.should_evict(card) is True
     assert "catastrophic founding loss" in evictor.eviction_reason(card)
+
+
+def test_birth_failure_only_consumes_writer_task_events(make_card, make_event):
+    card = make_card(gain_events=(make_event(-0.21, founding=True, task_key="task-a"),))
+
+    assert (
+        BirthFailureEvictor(
+            metrics_context=_metrics(0.1), task_key="task-b"
+        ).should_evict(card)
+        is False
+    )
+    assert (
+        BirthFailureEvictor(
+            metrics_context=_metrics(0.1), task_key="task-a"
+        ).should_evict(card)
+        is True
+    )
+
+
+def test_probe_and_eviction_effective_support_are_in_lockstep(make_card, make_event):
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def stamped(gain, task_key, hours):
+        event = make_event(gain, task_key=task_key)
+        return event.model_copy(
+            update={
+                "context": event.context.model_copy(
+                    update={"timestamp": start + timedelta(hours=hours)}
+                )
+            }
+        )
+
+    card = make_card(
+        gain_events=(
+            stamped(-0.1, "task-a", 0),
+            stamped(-0.2, "task-a", 1),
+            stamped(1000.0, "task-b", 100),
+        )
+    )
+    newer = make_card(gain_events=(stamped(0.1, "task-a", 2),))
+
+    class Store:
+        def snapshot(self):
+            return (card, newer)
+
+    context = DecisionContext(task_key="task-a")
+    scorer = BootstrapReputation(BetaBinomialReputation(), Store(), n_bootstrap=32)
+    block = scorer.card_stats(card, context)
+    candidate = AuctionCandidateProjector().project(
+        card=card, block=block, reputation=scorer, context=context
+    )
+    _, slate = BootstrapThompsonAuctioneer().run([candidate], np.random.default_rng(7))
+    evictor = PolicyNonViableEvictor(
+        scorer, neutral_gain=0.0, min_effective_events=3.0, task_key="task-a"
+    )
+    deltas = scorer.event_deltas(card, context)
+    write_support = evictor._effective_support(card, deltas, context)
+    _, marked = ColdProbePolicy(enabled=False).apply(
+        budgeted_ids=[], slate=slate, max_cards=1, rng=np.random.default_rng(9)
+    )
+
+    expected_support = 2.0 ** (-2 / 2) + 2.0 ** (-1 / 2)
+    assert write_support == pytest.approx(expected_support)
+    assert slate[0].support_n == write_support
+    assert marked[0].support_kind == "ev_rewards"
+    assert marked[0].probe_eligible is (write_support < 3.0)
+    assert evictor.should_evict(card) is False
 
 
 def test_birth_failure_uses_metric_scale_not_raw_sign(make_card, make_event):

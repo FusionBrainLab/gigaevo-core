@@ -82,6 +82,10 @@ class _ConstantNoCardBaseline(BaseModel):
         del outcome
         return self.baseline
 
+    def baseline_se_for(self, outcome: NoCardBaselineOutcome) -> float | None:
+        del outcome
+        return None
+
 
 class _CellNoCardBaseline(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -96,6 +100,10 @@ class _CellNoCardBaseline(BaseModel):
         if cell is not None and cell in self.by_cell:
             return self.by_cell[cell]
         return self.global_median
+
+    def baseline_se_for(self, outcome: NoCardBaselineOutcome) -> float | None:
+        del outcome
+        return None
 
 
 @runtime_checkable
@@ -158,11 +166,14 @@ def _no_card_deltas(
 
 def _read_context_from_parents(
     parents: Sequence[ParentContextSource],
+    *,
+    task_key: str = "",
 ) -> DecisionContext | None:
     if not parents:
         return None
     parent = parents[0]
     return DecisionContext(
+        task_key=task_key,
         parent_metrics=dict(parent.metrics or {}),
         parent_id=str(parent.id or ""),
     )
@@ -192,10 +203,14 @@ class GlobalMemoryContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    task_key: str = Field(
+        default="", description="Stable key of the task this read decision runs under."
+    )
+
     def read_context(
         self, parents: Sequence[ParentContextSource]
     ) -> DecisionContext | None:
-        return _read_context_from_parents(parents)
+        return _read_context_from_parents(parents, task_key=self.task_key)
 
     def key_for(self, context: DecisionContext | None = None) -> ContextKey:
         del context
@@ -232,6 +247,9 @@ class BDCellMemoryContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
+    task_key: str = Field(
+        default="", description="Stable key of the task this read decision runs under."
+    )
     behavior_space: BehaviorSpace = Field(
         description="Shared behavior-space tessellation for this run."
     )
@@ -240,7 +258,7 @@ class BDCellMemoryContext(BaseModel):
     def read_context(
         self, parents: Sequence[ParentContextSource]
     ) -> DecisionContext | None:
-        return self.fallback.read_context(parents)
+        return _read_context_from_parents(parents, task_key=self.task_key)
 
     def key_for(self, context: DecisionContext | None = None) -> ContextKey:
         if context is None:

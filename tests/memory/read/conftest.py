@@ -30,7 +30,7 @@ def make_event():
     def _make_event(
         gain: float,
         *,
-        gain_se: float = 0.0,
+        gain_se: float | None = 0.0,
         invalid: bool = False,
         founding: bool = False,
         unused: bool = False,

@@ -42,6 +42,15 @@ def test_survivor_keeps_target_identity(make_card):
     assert merged.category == target.category
 
 
+def test_survivor_keeps_target_task_key(make_card):
+    target = make_card(task_key="authoring-task")
+    incoming = make_card(task_key="consolidating-task")
+
+    merged = merge_cards(target, incoming, replace_description=True)
+
+    assert merged.task_key == "authoring-task"
+
+
 def test_programs_union_preserves_order_and_dedups(make_card):
     target = make_card(programs=("p1", "p2"))
     incoming = make_card(programs=("p2", "p3"))

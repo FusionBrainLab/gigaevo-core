@@ -29,6 +29,7 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
@@ -59,6 +60,7 @@ class EvolutionEngine:
         pre_step_hook: Callable[[], Awaitable[None]] | None = None,
         post_run_hook: PostRunHook | None = None,
         post_step_hook: Callable[[], Awaitable[None]] | None = None,
+        selection_leases: InFlightSelectionRegistry | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
@@ -82,6 +84,7 @@ class EvolutionEngine:
         self._pre_step_hook = pre_step_hook
         self._post_step_hook = post_step_hook
         self._post_run_hook = post_run_hook or NullPostRunHook()
+        self._selection_leases = selection_leases
 
         self._snapshot: EngineSnapshot = EngineSnapshot()
         # Serialises _write_snapshot so the version+Redis writes from

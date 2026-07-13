@@ -32,6 +32,9 @@ neutral_gain: 0.0
 # per read, but static/legacy paths and cold fallback priors stay aligned here.
 baseline_prior: [3.0, 3.0]
 
+context_model:
+  task_key: ${problem.name}
+
 # Shared evidence defaults for confidence, harm, and eviction gates.
 evidence:
   # Minimum effective non-founding card-use evidence before the system can make
@@ -80,15 +83,20 @@ reader:
   probe_policy: ${ref:memory.probe_policy}
   renderer:
     _target_: gigaevo.memory.read.render.EfficacyCardRenderer
+    task_key: ${problem.name}
   # Injection budget: cards the mutator sees per child, after the auction ranks
   # the recall shortlist above. Recall width lives in
   # memory.store.config.research.max_cards.
   max_cards: 1
 
 provider:
-  _target_: gigaevo.memory.provider.ReaderMemoryProvider
-  reader: ${ref:memory.reader}
-  excluder: ${ref:memory.excluder}
+  _target_: gigaevo.memory.provider.LeasedMemoryProvider
+  provider:
+    _target_: gigaevo.memory.provider.ReaderMemoryProvider
+    reader: ${ref:memory.reader}
+    excluder: ${ref:memory.excluder}
+  store: ${ref:memory.store}
+  registry: ${ref:selection_leases}
 
 writer:
   _target_: gigaevo.memory.write.writer.MemoryWriter
@@ -96,6 +104,7 @@ writer:
   evictor: ${ref:memory.evictor}
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
+  task_key: ${problem.name}
   metrics_context: ${ref:problem_context::metrics_context}
   baseline_estimator: ${ref:memory.context_model}
   effect_estimator: ${ref:memory.crediting}
@@ -141,3 +150,5 @@ writer:
   # isolating the gate's own effect is still running.
   novelty_admission_gate: false
   prompts_dir: ${prompts.dir}
+  selection_leases: ${ref:selection_leases}
+  min_effective_events: ${memory.evidence.min_effective_events}

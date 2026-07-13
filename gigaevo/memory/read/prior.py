@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 import math
 from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 from gigaevo.memory.context import GlobalMemoryContext, MemoryContextModel
 from gigaevo.memory.context.beta import BetaPrior, coerce_beta_prior
-from gigaevo.memory.context.evidence import event_weight
+from gigaevo.memory.context.evidence import event_weight, split_events_by_task
+from gigaevo.memory.prior_evidence import EvictedEvidenceSource
 from gigaevo.memory.storage.base import MemoryStore
 
 
@@ -51,9 +54,20 @@ def _first_non_founding_exposure(
     whether its advice helps when acted on, and counting ignores as failures
     would make the cold prior track the mutator use-rate instead of
     ``P(help | used)``.
+
+    Success requires strictly positive causal gain. Zero gain is neutral, not
+    help, so it contributes to the failure/complement mass with negative and
+    invalid outcomes.
     """
 
-    for event in events:
+    ordered = sorted(
+        events,
+        key=lambda event: (
+            event.context.timestamp is None,
+            event.context.timestamp or datetime.min,
+        ),
+    )
+    for event in ordered:
         if event.founding or event.unused:
             continue
         weight = event_weight(event)
@@ -62,11 +76,17 @@ def _first_non_founding_exposure(
         if event.invalid:
             return (weight, False)
         if event.gain is not None and math.isfinite(float(event.gain)):
-            return (weight, float(event.gain) >= 0.0)
+            return (weight, float(event.gain) > 0.0)
     return None
 
 
 def _all_exposures(events: Iterable[ContextualGain]) -> tuple[float, float]:
+    """Count weighted causal outcomes, requiring strictly positive gain for success.
+
+    Zero gain is neutral rather than help and contributes to the
+    failure/complement mass, as do negative and invalid outcomes.
+    """
+
     success = 0.0
     failure = 0.0
     for event in events:
@@ -78,14 +98,14 @@ def _all_exposures(events: Iterable[ContextualGain]) -> tuple[float, float]:
         if event.invalid:
             failure += weight
         elif event.gain is not None and math.isfinite(float(event.gain)):
-            if float(event.gain) >= 0.0:
+            if float(event.gain) > 0.0:
                 success += weight
             else:
                 failure += weight
     return success, failure
 
 
-_COHORT_LEVEL_TOKENS = frozenset({"kind", "category", "context"})
+_COHORT_LEVEL_TOKENS = frozenset({"kind", "category", "context", "task"})
 
 
 class EmpiricalBayesMemoryPrior(BaseModel):
@@ -93,8 +113,9 @@ class EmpiricalBayesMemoryPrior(BaseModel):
 
     The cohort ladder is config-driven: the global cohort is the implicit top
     level, and ``levels`` names the refinements below it as ``'+'``-joined
-    subsets of ``{kind, category, context}``. Context-bearing levels apply only
-    when the context model resolves a non-global bucket, and a level whose
+    subsets of ``{kind, category, context, task}``. Context-bearing levels apply
+    only when the context model resolves a non-global bucket, task-bearing
+    levels apply only for stamped decisions, and a level whose
     counts equal the previously applied level's carries no new information and
     is skipped — the same evidence must not compound its shrinkage once per
     level.
@@ -108,17 +129,26 @@ class EmpiricalBayesMemoryPrior(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     store: MemoryStore = Field(description="Memory bank providing prior evidence.")
+    evicted_evidence: EvictedEvidenceSource | None = Field(
+        default=None,
+        description="Optional evidence source of harm-evicted cards; when set, the EB "
+        "cohort counts union the live snapshot with evicted-card first-exposures to "
+        "correct survivorship bias. Default None = snapshot-only (legacy, "
+        "byte-identical).",
+    )
     context_model: MemoryContextModel = Field(default_factory=GlobalMemoryContext)
     levels: tuple[str, ...] = Field(
         default=(
             "kind",
             "kind+category",
+            "task+kind+category",
             "context",
             "context+kind",
             "context+kind+category",
+            "task+context+kind+category",
         ),
         description="Cohort refinement ladder below the implicit global top level; "
-        "each entry is a '+'-joined subset of {kind, category, context}.",
+        "each entry is a '+'-joined subset of {kind, category, context, task}.",
     )
     seed_prior: tuple[float, float] = Field(
         default=(1.0, 1.0),
@@ -160,6 +190,15 @@ class EmpiricalBayesMemoryPrior(BaseModel):
         if not math.isfinite(float(value)):
             raise ValueError("k_max must be finite")
         return float(value)
+
+    @model_validator(mode="after")
+    def _monotonic_concentration_range(self) -> EmpiricalBayesMemoryPrior:
+        if self.k_max < self.k_min:
+            raise ValueError(
+                f"k_max ({self.k_max}) must be greater than or equal to "
+                f"k_min ({self.k_min})"
+            )
+        return self
 
     @field_validator("levels")
     @classmethod
@@ -217,18 +256,35 @@ class EmpiricalBayesMemoryPrior(BaseModel):
             bank = tuple(self.store.snapshot())
         except Exception:
             return best
+        if self.evicted_evidence is not None:
+            try:
+                known_ids = {banked_card.id for banked_card in bank}
+                evicted_cards: list[Card] = []
+                for evicted_card in self.evicted_evidence.cards():
+                    if evicted_card.id in known_ids:
+                        continue
+                    evicted_cards.append(evicted_card)
+                    known_ids.add(evicted_card.id)
+                bank = (*bank, *evicted_cards)
+            except Exception as exc:
+                logger.warning(
+                    "[Memory][Prior] failed to read evicted evidence: {}", exc
+                )
         # Per-card exposure outcomes are level-independent within the global /
         # local split, so one pass over one snapshot serves the whole ladder.
-        counts_cache: dict[bool, dict[str, tuple[float, float]]] = {True: {}, False: {}}
+        counts_cache: dict[tuple[bool, bool], dict[str, tuple[float, float]]] = {}
         applied: tuple[float, float] | None = None
-        for source, kind, category, local in self._cohort_specs(card, context):
+        for source, kind, category, local, task_local in self._cohort_specs(
+            card, context
+        ):
             counts = self._cohort_counts(
                 bank,
                 context,
                 kind=kind,
                 category=category,
                 local=local,
-                cache=counts_cache[local],
+                task_local=task_local,
+                cache=counts_cache.setdefault((local, task_local), {}),
             )
             success, failure = counts
             n = success + failure
@@ -258,15 +314,19 @@ class EmpiricalBayesMemoryPrior(BaseModel):
 
     def _cohort_specs(
         self, card: Card, context: DecisionContext | None
-    ) -> list[tuple[str, CardKind | None, str | None, bool]]:
-        specs: list[tuple[str, CardKind | None, str | None, bool]] = [
-            ("eb_global", None, None, False)
+    ) -> list[tuple[str, CardKind | None, str | None, bool, bool]]:
+        specs: list[tuple[str, CardKind | None, str | None, bool, bool]] = [
+            ("eb_global", None, None, False, False)
         ]
         context_is_local = self.context_model.key_for(context).kind != "global"
+        has_task = context is not None and bool(context.task_key)
         for level in self.levels:
             tokens = tuple(token.strip() for token in level.split("+"))
             local = "context" in tokens
             if local and not context_is_local:
+                continue
+            task_local = "task" in tokens
+            if task_local and not has_task:
                 continue
             specs.append(
                 (
@@ -274,6 +334,7 @@ class EmpiricalBayesMemoryPrior(BaseModel):
                     card.kind if "kind" in tokens else None,
                     card.category if "category" in tokens else None,
                     local,
+                    task_local,
                 )
             )
         return specs
@@ -286,6 +347,7 @@ class EmpiricalBayesMemoryPrior(BaseModel):
         kind: CardKind | None,
         category: str | None,
         local: bool,
+        task_local: bool,
         cache: dict[str, tuple[float, float]],
     ) -> tuple[float, float]:
         success = 0.0
@@ -297,19 +359,31 @@ class EmpiricalBayesMemoryPrior(BaseModel):
                 continue
             entry = cache.get(other.id)
             if entry is None:
-                entry = self._card_counts(other, context, local=local)
+                entry = self._card_counts(
+                    other, context, local=local, task_local=task_local
+                )
                 cache[other.id] = entry
             success += entry[0]
             failure += entry[1]
         return (success, failure)
 
     def _card_counts(
-        self, other: Card, context: DecisionContext | None, *, local: bool
+        self,
+        other: Card,
+        context: DecisionContext | None,
+        *,
+        local: bool,
+        task_local: bool,
     ) -> tuple[float, float]:
+        scoped = other
+        if task_local or local:
+            assert context is not None
+            native, _ = split_events_by_task(other.gain_events, context.task_key)
+            scoped = other.model_copy(update={"gain_events": native})
         events = (
-            self.context_model.local_evidence_events(other, context)
+            self.context_model.local_evidence_events(scoped, context)
             if local
-            else self.context_model.evidence_events(other, None)
+            else self.context_model.evidence_events(scoped, None)
         )
         if self.first_exposure_only:
             first = _first_non_founding_exposure(events)

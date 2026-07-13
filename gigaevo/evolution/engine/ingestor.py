@@ -85,6 +85,8 @@ async def poll_and_ingest(engine) -> int:
     released = set(handled_ids) | set(leaked_ids)
     if released:
         if leaked_ids:
+            if engine._selection_leases is not None:
+                engine._selection_leases.abandon(leaked_ids)
             logger.warning(
                 "[ingestor] Sweeping {} leaked in-flight programs", len(leaked_ids)
             )

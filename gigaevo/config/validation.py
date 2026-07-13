@@ -15,7 +15,7 @@ from gigaevo.config.helpers import build_archive_gate_provider
 from gigaevo.evolution.strategies.paired_selectors import (
     PairedBootstrapArchiveSelector,
 )
-from gigaevo.memory.provider import ReaderMemoryProvider
+from gigaevo.memory.provider import LeasedMemoryProvider, ReaderMemoryProvider
 from gigaevo.memory.write.crediting import PairedEffectEstimator
 
 
@@ -28,6 +28,7 @@ def _target_path(symbol: Any) -> str:
 _SHARED_BEHAVIOR_SPACE_REF = "${ref:behavior_space}"
 _DEFAULT_CHECKPOINT_DIR = "${hydra:runtime.output_dir}/memory"
 _READER_PROVIDER_TARGET = _target_path(ReaderMemoryProvider)
+_LEASED_PROVIDER_TARGET = _target_path(LeasedMemoryProvider)
 _ARCHIVE_GATE_PROVIDER_TARGET = _target_path(build_archive_gate_provider)
 _PAIRED_SELECTOR_TARGET = _target_path(PairedBootstrapArchiveSelector)
 _PAIRED_CREDITING_TARGET = _target_path(PairedEffectEstimator)
@@ -132,6 +133,8 @@ def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
             )
 
     provider_target = _raw_select(cfg, "memory.provider._target_", None)
+    if provider_target == _LEASED_PROVIDER_TARGET:
+        provider_target = _raw_select(cfg, "memory.provider.provider._target_", None)
     checkpoint_dir = _raw_select(cfg, "checkpoint_dir", None)
     if (
         memory_reads

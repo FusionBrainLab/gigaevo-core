@@ -35,11 +35,15 @@ See ``docs/superpowers/specs/2026-05-13-mutation-throughput-two-sema-design.md``
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
 from loguru import logger
 
 from gigaevo.evolution.engine.mutation import generate_one_mutation
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 
 
 async def run_one_mutant(engine, task_id: int) -> str | None:
@@ -47,6 +51,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
     slot_transferred = False
     buffer_held = False
     ticket: ParentRefreshTicket | None = None
+    selection_lease = None
     new_id: str | None = None
     try:
         parents = await engine._select_parents_for_mutation()
@@ -56,6 +61,13 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
             # rejected by the acceptor.
             await asyncio.sleep(engine.config.loop_interval)
             return None
+
+        if engine._selection_leases is not None:
+            attempt_id = uuid4().hex
+            for parent in parents:
+                selection_lease = engine._selection_leases.open_attempt(
+                    attempt_id, parent.id
+                )
 
         if engine._ss_config.coalesce_refresh:
             try:
@@ -69,6 +81,23 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                 return None
             refreshed = result.refreshed
             engine.metrics.submitted_for_refresh += result.stale_count
+            if selection_lease is not None:
+                for parent in refreshed:
+                    selected = list(
+                        parent.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+                        or []
+                    )
+                    verified = selection_lease.reverify_cards(selected)
+                    if tuple(selected) != verified:
+                        parent.set_metadata(
+                            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, list(verified)
+                        )
+                        logger.info(
+                            "[Memory][Leases] dropped {} vanished coalesced-fresh "
+                            "selection(s) for {}",
+                            len(selected) - len(verified),
+                            parent.id[:8],
+                        )
         else:
             try:
                 ticket = await engine._parent_refresher.refresh_with_ticket(parents)
@@ -100,6 +129,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                 state_manager=engine.state,
                 iteration=my_iteration,
                 task_id=task_id,
+                selection_lease=selection_lease,
             )
         finally:
             engine._llm_active -= 1
@@ -160,6 +190,8 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
         # ``release()`` is idempotent.
         if ticket is not None:
             ticket.release()
+        if selection_lease is not None:
+            selection_lease.release()
 
 
 __all__ = ["run_one_mutant"]

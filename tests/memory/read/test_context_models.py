@@ -44,6 +44,24 @@ def test_global_read_context_uses_primary_parent():
     assert context == DecisionContext(parent_metrics={"x": 0.2}, parent_id="parent")
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        GlobalMemoryContext(task_key="heilbronn"),
+        BDCellMemoryContext(behavior_space=_space(), task_key="heilbronn"),
+    ],
+)
+def test_read_context_stamps_configured_task_key(model):
+    assert model.read_context([_Parent()]).task_key == "heilbronn"
+
+
+@pytest.mark.parametrize(
+    "model", [GlobalMemoryContext(), BDCellMemoryContext(behavior_space=_space())]
+)
+def test_read_context_task_key_defaults_to_empty(model):
+    assert model.read_context([_Parent()]).task_key == ""
+
+
 def test_bd_context_returns_same_cell_events(make_card, make_event):
     model = BDCellMemoryContext(behavior_space=_space())
     card = make_card(

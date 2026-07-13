@@ -73,7 +73,6 @@ async def consolidate(
     """
     cards = store.snapshot()
     consumed: set[str] = set()
-    absorbed: list[str] = []
     # The merge ruling is symmetric, so once the agent declines an unordered pair
     # we must not pay a second LLM call to re-review it as (partner, card) — in
     # this pass or any later one.
@@ -81,9 +80,6 @@ async def consolidate(
         reviewed = set()
     merges = 0
     processed = 0
-    # Absorbed partners are deleted in a finally so a mid-pass agent failure
-    # cannot leave an already-merged partner in the bank (its evidence is now
-    # on the survivor — an undeleted partner would be double-counted).
     try:
         for card in cards:
             processed += 1
@@ -128,6 +124,7 @@ async def consolidate(
                         # absorbed partner's — else the deleted card has no
                         # ledger/replay trace.
                         id=partner.id,
+                        task_key=card.task_key,
                         description=union.description,
                         explanation_summary=union.explanation_summary,
                         # Trust the agent's curated union keyword set; the gate's
@@ -148,18 +145,10 @@ async def consolidate(
                         ),
                     ),
                 )
-                # Queue the partner for deletion ONLY after a committed fold. The
-                # result ``landed`` iff the gate folded the partner's evidence onto
-                # the survivor and persisted it; it does not land on a harmful-union
-                # eviction or a target miss, and it raises if the underlying store
-                # persist fails (the harm-path ``delete`` and ``apply_merges`` both
-                # persist unwrapped). Queuing before the fold would orphan the
-                # partner on either the non-landing result or that raise; queuing
-                # after means the finally only ever deletes committed folds.
+                # The gate retires a banked partner in the same guarded transaction.
                 if not result.landed:
                     consumed.add(card.id)
                     break
-                absorbed.append(partner.id)
                 consumed.add(card.id)
                 consumed.add(partner.id)
                 merges += 1
@@ -170,30 +159,12 @@ async def consolidate(
         # overrun is attributable, then let the caller see the cancellation.
         logger.warning(
             "[Memory][Consolidation] pass cancelled at card {}/{}; {} committed "
-            "merge(s) kept (folded partners still deleted)",
+            "merge(s) kept (folded partners already retired)",
             processed,
             len(cards),
             merges,
         )
         raise
-    finally:
-        # Delete each folded partner independently. store.delete drops the card
-        # from the in-memory bank before its fallible disk persist, so guarding
-        # per-id means one partner's persist failure cannot abort the loop and
-        # leave the remaining partners live-yet-folded — a permanent gain
-        # double-count (their evidence sits on the survivor while they still
-        # score their own). A failed on-disk flush is logged and heals on the
-        # next successful sweep persist.
-        for cid in absorbed:
-            try:
-                store.delete(cid)
-            except Exception as exc:
-                logger.warning(
-                    "[Memory][Consolidation] failed to delete folded partner {} "
-                    "({}); removal flushes on the next sweep persist",
-                    cid,
-                    exc,
-                )
     return merges
 
 

@@ -13,6 +13,7 @@ from gigaevo.memory.write.crediting import (
 )
 from gigaevo.memory.write.stats import InjectionOutcome
 from gigaevo.programs.metrics.context import VALIDITY_KEY
+from gigaevo.programs.metrics.paired import PairedBootstrap
 
 BASE_VEC = tuple([0.4, 0.6] * 150)  # mean 0.5, n=300 — a fixed shared eval set
 CHILD_VEC = tuple([0.55, 0.65] * 150)  # mean 0.6, non-uniform paired diff
@@ -85,40 +86,40 @@ class TestPairedEffectEstimator:
         assert measurement.se == 0.0
         assert not estimator.degraded
 
-    def test_missing_vector_degrades_to_exact(self):
+    def test_missing_vector_degrades_to_unknown(self):
         estimator = PairedEffectEstimator()
         measurement = estimator.estimate(
             outcome(child_scores=None), higher_is_better=True
         )
         assert measurement.value == pytest.approx(0.1)
-        assert measurement.se == 0.0
+        assert measurement.se is None
         assert estimator.degraded == {"missing_vector": 1}
 
-    def test_unusable_vector_degrades_to_exact(self):
+    def test_unusable_vector_degrades_to_unknown(self):
         estimator = PairedEffectEstimator()
         bad = (float("nan"),) * len(BASE_VEC)
         measurement = estimator.estimate(
             outcome(child_scores=bad), higher_is_better=True
         )
-        assert measurement.se == 0.0
+        assert measurement.se is None
         assert estimator.degraded == {"unusable_vector": 1}
 
-    def test_length_mismatch_degrades_to_exact(self):
+    def test_length_mismatch_degrades_to_unknown(self):
         estimator = PairedEffectEstimator()
         measurement = estimator.estimate(
             outcome(child_scores=CHILD_VEC[:100]), higher_is_better=True
         )
-        assert measurement.se == 0.0
+        assert measurement.se is None
         assert estimator.degraded == {"length_mismatch": 1}
 
     def test_incoherent_vector_degrades_but_keeps_scalar_delta(self):
         estimator = PairedEffectEstimator()
         measurement = estimator.estimate(outcome(fitness=0.9), higher_is_better=True)
         assert measurement.value == pytest.approx(0.4)
-        assert measurement.se == 0.0
+        assert measurement.se is None
         assert estimator.degraded == {"incoherent_vector": 1}
 
-    def test_degenerate_comparison_se_degrades_to_exact(self):
+    def test_degenerate_comparison_se_degrades_to_unknown(self):
         class NanSeComparison:
             def probability_better(self, challenger, incumbent):
                 return 0.5
@@ -128,8 +129,36 @@ class TestPairedEffectEstimator:
 
         estimator = PairedEffectEstimator(comparison=NanSeComparison())
         measurement = estimator.estimate(outcome(), higher_is_better=True)
-        assert measurement.se == 0.0
+        assert measurement.se is None
         assert estimator.degraded == {"degenerate_se": 1}
+
+    def test_raising_comparison_degrades_to_unknown(self):
+        class RaisingComparison:
+            def probability_better(self, challenger, incumbent):
+                return 0.5
+
+            def estimate(self, challenger, incumbent):
+                raise RuntimeError("comparison failed")
+
+        estimator = PairedEffectEstimator(comparison=RaisingComparison())
+        measurement = estimator.estimate(outcome(), higher_is_better=True)
+        assert measurement.value == pytest.approx(0.1)
+        assert measurement.se is None
+        assert estimator.degraded == {"comparison_error": 1}
+
+    def test_uncoercible_comparison_se_degrades_to_unknown(self):
+        class InvalidSeComparison:
+            def probability_better(self, challenger, incumbent):
+                return 0.5
+
+            def estimate(self, challenger, incumbent):
+                return SimpleNamespace(value=0.1, se="not-a-number")
+
+        estimator = PairedEffectEstimator(comparison=InvalidSeComparison())
+        measurement = estimator.estimate(outcome(), higher_is_better=True)
+        assert measurement.value == pytest.approx(0.1)
+        assert measurement.se is None
+        assert estimator.degraded == {"comparison_error": 1}
 
     def test_degradations_accumulate_per_reason(self):
         estimator = PairedEffectEstimator()
@@ -143,3 +172,9 @@ class TestPairedEffectEstimator:
             PairedEffectEstimator().estimate(
                 outcome(base_fitness=None), higher_is_better=True
             )
+
+
+@pytest.mark.parametrize("n_resamples", [0, -1])
+def test_paired_bootstrap_rejects_nonpositive_resamples(n_resamples):
+    with pytest.raises(ValueError, match="n_resamples"):
+        PairedBootstrap(n_resamples=n_resamples)

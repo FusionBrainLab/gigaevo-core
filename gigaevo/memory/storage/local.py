@@ -1,14 +1,15 @@
 """LocalMemoryStore — CardBank ∘ VectorIndex ∘ ResearchAgent.
 
-The bank is the source of truth and is persisted on every write; the vector
-index follows it (incremental upserts per write; :meth:`rebuild` re-reads the
-bank and rebuilds the index to heal it). Retrieval failures degrade to empty
-results; bank corruption raises.
+The persisted bank is the source of truth; the process-local in-memory vector
+index follows it through incremental writes and full rebuilds on startup and
+cross-process refresh. Retrieval failures degrade to empty results; bank
+corruption raises.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 import threading
 from time import perf_counter
@@ -16,6 +17,7 @@ from typing import Any
 
 from loguru import logger
 
+from gigaevo.exceptions import MergeAborted, StorageError
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.events import (
     MemoryResearch,
@@ -26,6 +28,7 @@ from gigaevo.memory.events import (
 from gigaevo.memory.storage.bank import CardBank, CardBankFileLock, new_card_id
 from gigaevo.memory.storage.base import (
     MemoryStore,
+    MergeRetireResult,
     ResearchRequest,
     ResearchResult,
     ScoredCard,
@@ -46,9 +49,10 @@ class LocalMemoryStore(MemoryStore):
         self._config = config
         self._state = StoreState.INITIALIZING
         self._lock = threading.RLock()
+        self._bank_lock_state = threading.local()
         try:
             self._bank = CardBank(config.bank_file)
-            self._index = VectorIndex(config.index_dir, config.embed)
+            self._index = VectorIndex(config.embed)
             self._agent = (
                 ResearchAgent(
                     llm,
@@ -101,6 +105,56 @@ class LocalMemoryStore(MemoryStore):
         )
         return card.id
 
+    def update(
+        self, card_id: str, transform: Callable[[Card], Card | None]
+    ) -> Card | None:
+        with self._lock:
+            index_write: tuple[Callable[..., None], list[Card] | list[str]] | None = (
+                None
+            )
+            with self._bank_file_lock(exclusive=True):
+                self._refresh_from_disk_locked()
+                current = self._bank.get(card_id)
+                if current is None:
+                    affected = None
+                    outcome = "not_found"
+                else:
+                    before = self._bank.snapshot()
+                    replacement = transform(current)
+                    if replacement is not None and replacement.id != card_id:
+                        raise ValueError("atomic card update cannot change the card id")
+                    if replacement == current:
+                        affected = current
+                        outcome = "noop"
+                    else:
+                        try:
+                            if replacement is None:
+                                self._bank.remove(card_id)
+                                affected = current
+                                index_write = (self._index.remove, [card_id])
+                            else:
+                                self._bank.put(replacement)
+                                affected = replacement
+                                index_write = (self._index.upsert, [replacement])
+                            self._bank.persist()
+                        except Exception:
+                            self._bank.restore_snapshot(before)
+                            raise
+                        outcome = "ok"
+            if index_write is not None:
+                write, args = index_write
+                self._index_write(write, args)
+            bank_count = len(self._bank)
+        emit_memory_event(
+            MemoryStoreWrite(
+                op="update",
+                outcome=outcome,
+                card_ids=(card_id,),
+                bank_count=bank_count,
+            )
+        )
+        return affected
+
     def get(self, card_id: str) -> Card | None:
         with self._lock:
             with self._bank_file_lock(exclusive=False):
@@ -137,35 +191,98 @@ class LocalMemoryStore(MemoryStore):
                 self._refresh_from_disk_locked()
             return self._bank.snapshot()
 
-    def apply_merges(self, merged: Sequence[Card]) -> list[str]:
+    def merge_retire(
+        self,
+        target_id: str,
+        partner_id: str,
+        fold: Callable[[Card, Card | None], Card | None],
+    ) -> MergeRetireResult:
         with self._lock:
+            survivor: Card | None = None
+            removed_ids: list[str] = []
             with self._bank_file_lock(exclusive=True):
                 self._refresh_from_disk_locked()
-                before = self._bank.snapshot()
-                saved: list[Card] = []
-                try:
-                    for card in merged:
-                        if not card.id:
-                            card = card.model_copy(update={"id": new_card_id()})
-                        self._bank.put(card)
-                        saved.append(card)
-                    if saved:
-                        self._bank.persist()
-                except Exception:
-                    self._bank.restore_snapshot(before)
-                    raise
-            if saved:
-                self._index_write(self._index.upsert, saved)
+                target = self._bank.get(target_id)
+                partner = self._bank.get(partner_id) if partner_id else None
+                if target is None:
+                    result = MergeRetireResult(outcome="target_missing")
+                elif partner_id == target_id:
+                    logger.warning(
+                        "[Memory][Store] aborted merge with identical target and "
+                        "partner id {}",
+                        target_id,
+                    )
+                    result = MergeRetireResult(outcome="aborted")
+                elif partner is not None and target_id in partner.absorbed_ids:
+                    logger.warning(
+                        "[Memory][Store] aborted reverse merge {} <- {}; target is "
+                        "already absorbed by partner",
+                        target_id,
+                        partner_id,
+                    )
+                    result = MergeRetireResult(outcome="aborted")
+                else:
+                    try:
+                        survivor = fold(target, partner)
+                    except MergeAborted:
+                        result = MergeRetireResult(outcome="aborted")
+                    else:
+                        if survivor is not None and survivor.id != target_id:
+                            raise ValueError(
+                                "atomic merge survivor must keep the target id"
+                            )
+                        if (
+                            survivor is not None
+                            and survivor.id in survivor.absorbed_ids
+                        ):
+                            logger.warning(
+                                "[Memory][Store] aborted merge whose survivor {} "
+                                "absorbs itself",
+                                survivor.id,
+                            )
+                            survivor = None
+                            result = MergeRetireResult(outcome="aborted")
+                        else:
+                            before = self._bank.snapshot()
+                            try:
+                                if survivor is None:
+                                    self._bank.remove(target_id)
+                                    removed_ids.append(target_id)
+                                    result = MergeRetireResult(outcome="retired")
+                                else:
+                                    self._bank.put(survivor)
+                                    result = MergeRetireResult(outcome="merged")
+                                if partner is not None:
+                                    self._bank.remove(partner_id)
+                                    removed_ids.append(partner_id)
+                                self._bank.persist()
+                            except Exception:
+                                self._bank.restore_snapshot(before)
+                                raise
+            if result.outcome == "merged" and survivor is not None:
+                self._index_write(self._index.upsert, [survivor])
+            if removed_ids:
+                self._index_write(self._index.remove, removed_ids)
             bank_count = len(self._bank)
         emit_memory_event(
             MemoryStoreWrite(
                 op="merge",
-                outcome="ok" if saved else "noop",
-                card_ids=tuple(card.id for card in saved),
+                outcome=(
+                    "ok"
+                    if result.outcome in {"merged", "retired"}
+                    else "not_found"
+                    if result.outcome == "target_missing"
+                    else "noop"
+                ),
+                card_ids=tuple(
+                    dict.fromkeys(
+                        card_id for card_id in (target_id, partner_id) if card_id
+                    )
+                ),
                 bank_count=bank_count,
             )
         )
-        return [card.id for card in saved]
+        return result
 
     def nearest(
         self, text: str, k: int, kind: CardKind | None = None
@@ -284,11 +401,36 @@ class LocalMemoryStore(MemoryStore):
 
     def _refresh_from_disk_locked(self) -> None:
         """Refresh this process' bank/index view if another process persisted."""
+        if getattr(self._bank_lock_state, "depth", 0) > 1:
+            return
         if self._bank.reload_if_changed():
             self._sync_index("refresh")
 
-    def _bank_file_lock(self, *, exclusive: bool) -> CardBankFileLock:
-        return CardBankFileLock(self._bank.lock_path, exclusive=exclusive)
+    @contextmanager
+    def _bank_file_lock(self, *, exclusive: bool) -> Iterator[None]:
+        depth = getattr(self._bank_lock_state, "depth", 0)
+        if depth:
+            mode = getattr(self._bank_lock_state, "mode", "shared")
+            if exclusive and mode == "shared":
+                raise StorageError(
+                    "cannot upgrade a shared card-bank lock to exclusive"
+                )
+            self._bank_lock_state.depth = depth + 1
+            try:
+                yield
+            finally:
+                self._bank_lock_state.depth = depth
+            return
+
+        mode = "exclusive" if exclusive else "shared"
+        with CardBankFileLock(self._bank.lock_path, exclusive=exclusive):
+            self._bank_lock_state.depth = 1
+            self._bank_lock_state.mode = mode
+            try:
+                yield
+            finally:
+                self._bank_lock_state.depth = 0
+                self._bank_lock_state.mode = None
 
     def _transition(self, new: StoreState) -> None:
         validate_transition(self._state, new)

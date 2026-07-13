@@ -43,3 +43,4 @@ evolution_engine:
   pre_step_hook: ${pre_step_hook}
   post_run_hook: ${ref:memory.write.post_run_hook}
   post_step_hook: ${post_step_hook}
+  selection_leases: ${ref:selection_leases}

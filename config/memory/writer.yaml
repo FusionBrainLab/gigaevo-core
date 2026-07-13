@@ -27,6 +27,9 @@ neutral_gain: 0.0
 # reputation fallbacks.
 baseline_prior: [3.0, 3.0]
 
+context_model:
+  task_key: ${problem.name}
+
 evidence:
   # Minimum effective non-founding card-use evidence before the system can make
   # a strong keep/delete decision. Writer-only defaults share this with the
@@ -56,6 +59,7 @@ writer:
   evictor: ${ref:memory.evictor}
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
+  task_key: ${problem.name}
   metrics_context: ${ref:problem_context::metrics_context}
   baseline_estimator: ${ref:memory.context_model}
   effect_estimator: ${ref:memory.crediting}
@@ -79,4 +83,5 @@ writer:
     max_cards: 12
     min_fitness_gap: 0.0
     store_code: false
+  min_effective_events: ${memory.evidence.min_effective_events}
   prompts_dir: ${prompts.dir}

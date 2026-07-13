@@ -1,17 +1,13 @@
 """Bank-cycle staleness: the single evidence-ageing mechanism.
 
-Staleness ``s`` of a card = the number of gain events stamped anywhere in the
-bank strictly newer than the card's own latest event — an internal rank count,
-no wall clock. The half-life is ``half_life_cycles`` bank sizes (``H = len(bank)
-* half_life_cycles`` — one cycle ~= every card earning one event), so the
-discount ``w = 2**(-s / H)`` is self-normalizing: it scales with how fast the
-bank is actually being exercised, with no absolute constants.
+For task ``T``, staleness ``s_i`` of event ``i`` is the number of native gain
+events strictly newer than that event's own stamp — an internal rank count, no
+wall clock. The half-life is ``half_life_cycles`` task-population cycles, so the
+discount ``w_i = 2**(-s_i / H)`` is self-normalizing and foreign traffic cannot
+age native evidence.
 
-Two consumers share this one function: :class:`~gigaevo.memory.read.decay.
-DecayingReputation` discounts a card's Beta posterior toward the cold prior by
-``w``; the bootstrap auction uses the same ``w`` as the per-event resample
-weight, so stale known-card deltas fade toward neutral zero. One mechanism, two
-readers.
+The posterior, bootstrap EV, probe support, and eviction support all consume
+the same per-event vector, so a fresh event cannot revive older history.
 """
 
 from __future__ import annotations
@@ -23,6 +19,7 @@ from datetime import UTC, datetime
 import threading
 
 from gigaevo.memory.cards import Card, ContextualGain
+from gigaevo.memory.context.evidence import split_events_by_task
 
 
 def stamp(value: datetime | None) -> datetime | None:
@@ -32,72 +29,75 @@ def stamp(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def latest_event_stamp(card: Card) -> datetime | None:
-    """The card's newest gain-event timestamp, or ``None`` when unstamped."""
-    return latest_stamp(card.gain_events)
-
-
-def latest_stamp(events: Sequence[ContextualGain]) -> datetime | None:
-    """Newest timestamp in an evidence subset, or ``None`` when unstamped."""
-    stamps = [
-        stamped
-        for event in events
-        if (stamped := stamp(event.context.timestamp)) is not None
-    ]
-    return max(stamps) if stamps else None
-
-
-def bank_cycle_weight(
-    card: Card,
+def bank_cycle_event_weights(
+    events: Sequence[ContextualGain],
     bank: Sequence[Card],
     half_life_cycles: float,
     *,
-    reference_events: Sequence[ContextualGain] | None = None,
-) -> float:
-    """Evidence discount ``w = 2**(-s / H)`` for a card at read time.
+    task_key: str = "",
+) -> tuple[float, ...]:
+    """Per-event discounts ``w_i = 2**(-s_i / H)`` in input order.
 
-    ``s`` counts bank gain events strictly newer than the card's latest event;
-    ``H = len(bank) * half_life_cycles``. Returns ``1.0`` (no discount) for a
-    card with no stamped events or against an empty/degenerate bank.
+    ``s_i`` counts native bank stamps strictly newer than event ``i``'s own
+    stamp and ``H`` is the task population times ``half_life_cycles``. An
+    unstamped event, or an empty/degenerate task population, has unit weight.
     """
-    latest = (
-        latest_stamp(reference_events)
-        if reference_events is not None
-        else latest_event_stamp(card)
-    )
-    if latest is None:
-        return 1.0
-    half_life = len(bank) * half_life_cycles
+    if not events:
+        return ()
+    stamps, population = _task_bank_stamps(bank, task_key)
+    half_life = population * half_life_cycles
     if half_life <= 0:
-        return 1.0
-    stamps = _sorted_bank_stamps(bank)
-    staleness = len(stamps) - bisect_right(stamps, latest)
-    return float(2.0 ** (-staleness / half_life))
+        return (1.0,) * len(events)
+    weights: list[float] = []
+    for event in events:
+        event_stamp = stamp(event.context.timestamp)
+        if event_stamp is None:
+            weights.append(1.0)
+            continue
+        staleness = len(stamps) - bisect_right(stamps, event_stamp)
+        weights.append(float(2.0 ** (-staleness / half_life)))
+    return tuple(weights)
 
 
-_STAMP_CACHE: OrderedDict[int, tuple[Sequence[Card], list[datetime]]] = OrderedDict()
+_STAMP_CACHE: OrderedDict[
+    tuple[int, str], tuple[Sequence[Card], tuple[list[datetime], int]]
+] = OrderedDict()
 _STAMP_CACHE_MAX = 4
 _STAMP_CACHE_LOCK = threading.Lock()
 
 
-def _sorted_bank_stamps(bank: Sequence[Card]) -> list[datetime]:
+def _task_bank_stamps(
+    bank: Sequence[Card], task_key: str
+) -> tuple[list[datetime], int]:
     # Only immutable snapshots are safe to key by identity; the strong ref in
     # the cache entry keeps the id from being reused by a successor tuple.
     cacheable = isinstance(bank, tuple)
+    cache_key = (id(bank), task_key)
     if cacheable:
         with _STAMP_CACHE_LOCK:
-            entry = _STAMP_CACHE.get(id(bank))
+            entry = _STAMP_CACHE.get(cache_key)
             if entry is not None and entry[0] is bank:
                 return entry[1]
+    partitions = [split_events_by_task(card.gain_events, task_key) for card in bank]
     stamps = sorted(
         stamped
-        for banked in bank
-        for event in banked.gain_events
+        for native, _ in partitions
+        for event in native
         if (stamped := stamp(event.context.timestamp)) is not None
     )
+    # Card-based population: cards with native evidence plus never-evented
+    # cards authored by this task. Foreign traffic — events or card-authoring
+    # floods — cannot shift the half-life, and a single-task bank keeps the
+    # historical len(bank) denominator exactly.
+    population = sum(
+        1
+        for card, (native, foreign) in zip(bank, partitions, strict=True)
+        if native or (not foreign and card.task_key == task_key)
+    )
+    result = (stamps, population)
     if cacheable:
         with _STAMP_CACHE_LOCK:
-            _STAMP_CACHE[id(bank)] = (bank, stamps)
+            _STAMP_CACHE[cache_key] = (bank, result)
             while len(_STAMP_CACHE) > _STAMP_CACHE_MAX:
                 _STAMP_CACHE.popitem(last=False)
-    return stamps
+    return result

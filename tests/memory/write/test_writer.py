@@ -79,7 +79,12 @@ def make_writer(store, metrics_context, tmp_path, **overrides) -> MemoryWriter:
     params.update(overrides)
     writer = MemoryWriter(**params)
     stack = writer._stack
-    stack._gate = CardAdmissionGate(store=store, evictor=NullEvictor())
+    stack._gate = CardAdmissionGate(
+        store=store,
+        evictor=NullEvictor(),
+        task_key=params.get("task_key", ""),
+        min_effective_events=params.get("min_effective_events", 0.0),
+    )
     stack._neighbors = store
     stack._librarian = FakeLibrarian(store)
     stack._consolidation_agent = object()
@@ -118,9 +123,37 @@ async def test_run_increment_ingests_and_authors_exemplars(
     assert exemplar.description == f"exemplar {child.id}"
     assert exemplar.fitness == 0.7
     assert exemplar.task_description_summary == "task-summary"
+    assert exemplar.task_key == ""
 
     await writer.run_increment([parent, child])
     assert len(librarian.ingest_calls) == 1
+
+
+async def test_writer_stamps_task_key_on_founding_event_and_program_exemplar(
+    store, make_program, metrics_context, tmp_path
+):
+    parent = make_program(fitness=0.5, parents=[])
+    child = make_program(
+        fitness=0.7,
+        parents=[parent.id],
+        metadata={
+            MUTATION_MEMORY_BASE_ID_METADATA_KEY: parent.id,
+            MUTATION_MEMORY_BASE_METRICS_METADATA_KEY: {
+                VALIDITY_KEY: 1.0,
+                "fitness": 0.5,
+            },
+            MUTATION_OUTPUT_METADATA_KEY: {
+                "changes": [{"description": "swapped solver", "explanation": ""}]
+            },
+        },
+    )
+    writer = make_writer(store, metrics_context, tmp_path, task_key="heilbronn")
+
+    await writer.run_increment([parent, child])
+
+    call = writer._stack.librarian.ingest_calls[0]
+    assert call["founding_gain"].context.task_key == "heilbronn"
+    assert store.get(f"program-{child.id}").task_key == "heilbronn"
 
 
 async def test_run_increment_folds_same_batch_duplicate_ideas(
@@ -506,6 +539,133 @@ def test_program_exemplar_policy_prunes_to_max_cards(
     assert store.get("program-low") is None
     assert store.get("program-mid") is not None
     assert store.get("program-high") is not None
+
+
+def test_program_exemplar_prune_keeps_foreign_helpful_and_retires_cold(
+    store, make_card, make_event, metrics_context, tmp_path
+):
+    helpful = make_card(
+        id="program-helpful",
+        task_key="own-task",
+        kind=CardKind.PROGRAM,
+        program_id="helpful",
+        fitness=0.1,
+        code_sha256="helpful",
+        gain_events=(
+            make_event(0.2, task_key="foreign-task"),
+            make_event(0.1, task_key="foreign-task"),
+            make_event(-0.1, task_key="foreign-task"),
+        ),
+    )
+    cold = make_card(
+        id="program-cold",
+        task_key="own-task",
+        kind=CardKind.PROGRAM,
+        program_id="cold",
+        fitness=0.2,
+        code_sha256="cold",
+    )
+    best = make_card(
+        id="program-best",
+        task_key="own-task",
+        kind=CardKind.PROGRAM,
+        program_id="best",
+        fitness=0.9,
+        code_sha256="best",
+    )
+    for card in (helpful, cold, best):
+        store.save(card)
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        task_key="own-task",
+        min_effective_events=3,
+        program_exemplars=ProgramExemplarPolicy(max_cards=1),
+    )
+
+    writer._prune_program_exemplars()
+
+    assert store.get(helpful.id) == helpful
+    assert store.get(cold.id) is None
+    assert store.get(best.id) == best
+
+
+def test_program_exemplar_cap_ignores_foreign_task_cards(
+    store, make_card, metrics_context, tmp_path
+):
+    foreign = [
+        make_card(
+            id=f"foreign-{i}",
+            task_key="foreign-task",
+            kind=CardKind.PROGRAM,
+            program_id=f"foreign-{i}",
+            fitness=100.0 + i,
+            code_sha256=f"foreign-{i}",
+        )
+        for i in range(3)
+    ]
+    own = make_card(
+        id="own-only",
+        task_key="own-task",
+        kind=CardKind.PROGRAM,
+        program_id="own-only",
+        fitness=0.5,
+        code_sha256="own-only",
+    )
+    for card in [*foreign, own]:
+        store.save(card)
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        task_key="own-task",
+        program_exemplars=ProgramExemplarPolicy(max_cards=2),
+    )
+
+    writer._prune_program_exemplars()
+
+    assert store.snapshot() == tuple(sorted([*foreign, own], key=lambda c: c.id))
+
+
+def test_program_exemplar_cap_prunes_only_own_task_cards(
+    store, make_card, metrics_context, tmp_path
+):
+    foreign = make_card(
+        id="foreign-best-looking",
+        task_key="foreign-task",
+        kind=CardKind.PROGRAM,
+        program_id="foreign-best-looking",
+        fitness=-100.0,
+        code_sha256="foreign-best-looking",
+    )
+    own = [
+        make_card(
+            id=f"own-{label}",
+            task_key="own-task",
+            kind=CardKind.PROGRAM,
+            program_id=f"own-{label}",
+            fitness=fitness,
+            code_sha256=f"own-{label}",
+        )
+        for label, fitness in [("low", 0.1), ("mid", 0.5), ("high", 0.9)]
+    ]
+    for card in [foreign, *own]:
+        store.save(card)
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        task_key="own-task",
+        program_exemplars=ProgramExemplarPolicy(max_cards=2),
+    )
+
+    writer._prune_program_exemplars()
+
+    assert store.get(foreign.id) == foreign
+    assert store.get("own-low") is None
+    assert store.get("own-mid") is not None
+    assert store.get("own-high") is not None
 
 
 async def test_gain_events_restamp_from_posterior_pool(

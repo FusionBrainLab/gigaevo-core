@@ -79,7 +79,7 @@ class ProgramExemplarPolicy(BaseModel):
     max_cards: int = Field(
         default=12,
         ge=0,
-        description="Hard cap on program exemplar cards kept in the bank.",
+        description="Per-task hard cap on program exemplar cards kept in the bank.",
     )
     min_fitness_gap: float = Field(
         default=0.0,
@@ -106,10 +106,11 @@ def merge_cards(target: Card, incoming: Card, *, replace_description: bool) -> C
             else target.explanation_summary,
             "keywords": incoming.keywords
             if replace_description
-            else _union(target.keywords, incoming.keywords),
-            "programs": _union(target.programs, incoming.programs),
+            else union_strings(target.keywords, incoming.keywords),
+            "programs": union_strings(target.programs, incoming.programs),
             "absorbed_ids": _absorbed_ids(target, incoming),
-            "gain_events": _union_events(target.gain_events, incoming.gain_events),
+            "gain_events": union_events(target.gain_events, incoming.gain_events),
+            "task_key": target.task_key,
             "task_description": target.task_description or incoming.task_description,
             "task_description_summary": target.task_description_summary
             or incoming.task_description_summary,
@@ -117,7 +118,7 @@ def merge_cards(target: Card, incoming: Card, *, replace_description: bool) -> C
     )
 
 
-def _union(a: Sequence[str], b: Sequence[str]) -> tuple[str, ...]:
+def union_strings(a: Sequence[str], b: Sequence[str]) -> tuple[str, ...]:
     out: list[str] = []
     for item in [*a, *b]:
         if item not in out:
@@ -137,7 +138,7 @@ def _absorbed_ids(target: Card, incoming: Card) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _union_events(
+def union_events(
     a: Sequence[ContextualGain], b: Sequence[ContextualGain]
 ) -> tuple[ContextualGain, ...]:
     out: list[ContextualGain] = []

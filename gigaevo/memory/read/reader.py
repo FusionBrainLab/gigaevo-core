@@ -8,6 +8,7 @@ selection on every error path so a memory outage can never sink a mutation.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from time import perf_counter
 from typing import Any
 
@@ -119,6 +120,7 @@ class MemoryReader:
         metrics_description: str,
         exclude_ids: frozenset[str] = frozenset(),
         parent_contexts: list[str] | None = None,
+        pending_counts: Mapping[str, int] | None = None,
     ) -> MemorySelection:
         parent_ids = _ids(parents)
         with memory_event_context(
@@ -144,6 +146,7 @@ class MemoryReader:
                     metrics_description=metrics_description,
                     exclude_ids=exclude_ids,
                     parent_contexts=parent_contexts,
+                    pending_counts=pending_counts,
                     base=base,
                 )
             except Exception as exc:
@@ -169,6 +172,7 @@ class MemoryReader:
         metrics_description: str,
         exclude_ids: frozenset[str],
         parent_contexts: list[str] | None,
+        pending_counts: Mapping[str, int] | None,
         base: MemoryReadSelection,
     ) -> MemorySelection:
         started_total = perf_counter()
@@ -205,6 +209,7 @@ class MemoryReader:
                     block=block,
                     reputation=self._reputation,
                     context=decision_context,
+                    pending_counts=pending_counts,
                 )
             )
         reputation_ms = _elapsed_ms(started_reputation)

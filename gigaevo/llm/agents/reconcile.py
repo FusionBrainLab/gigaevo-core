@@ -71,6 +71,7 @@ class ReconcileState(TypedDict, total=False):
     child_code: str
     unified_diff: str
     note: str
+    task_key: str
     neighbors: list[Card]
     messages: list[BaseMessage]
     llm_response: Any
@@ -93,14 +94,15 @@ class ReconcileAgent(LangGraphAgent):
 
     def build_prompt(self, state: ReconcileState) -> ReconcileState:
         neighbors = "\n".join(
-            f"- {c.id}: {card_brief(c)}" for c in state.get("neighbors", [])
+            f"- {c.id}: {arbiter_card_brief(c, origin_indent='  ')}"
+            for c in state.get("neighbors", [])
         )
         user = self.user_prompt_template.format(
             base_parent_code=state["base_parent_code"],
             child_code=state["child_code"],
             unified_diff=state.get("unified_diff")
             or unified_diff(state["base_parent_code"], state["child_code"]),
-            note=state["note"],
+            note=_with_origin_task(state["note"], state.get("task_key", "")),
             neighbors=neighbors or "(none)",
         )
         state["messages"] = [
@@ -123,16 +125,28 @@ class ReconcileAgent(LangGraphAgent):
         child_code: str,
         note: str,
         neighbors: list[Card],
+        task_key: str = "",
     ) -> ReconcileResponse:
         state: ReconcileState = {
             "base_parent_code": base_parent_code,
             "child_code": child_code,
             "unified_diff": unified_diff(base_parent_code, child_code),
             "note": note,
+            "task_key": task_key,
             "neighbors": neighbors,
         }
         final = await self.graph.ainvoke(state)
         return final["result"]
+
+
+def arbiter_card_brief(card: Card, *, origin_indent: str = "") -> str:
+    return _with_origin_task(card_brief(card), card.task_key, indent=origin_indent)
+
+
+def _with_origin_task(text: str, task_key: str, *, indent: str = "") -> str:
+    if not task_key:
+        return text
+    return f"{text}\n{indent}origin task: {task_key}"
 
 
 def unified_diff(base_parent_code: str, child_code: str) -> str:

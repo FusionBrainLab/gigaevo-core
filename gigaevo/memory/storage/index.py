@@ -1,45 +1,26 @@
-"""Chroma-backed vector index over configured embed scopes.
+"""In-memory Chroma vector index over configured embed scopes.
 
 The only module in the memory system that touches Chroma or embeddings.
-One persistent client, one collection per scope; each collection holds one
-document per card — the labeled concatenation of that scope's card fields.
+Each process derives one collection per scope from its authoritative card bank;
+each collection holds one document per card — the labeled concatenation of that
+scope's card fields.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import json
-import os
-from pathlib import Path
 import threading
 from typing import Any, cast
+from uuid import uuid4
 
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
-from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.storage.config import EmbedConfig
 from gigaevo.memory.storage.hf_cache import ensure_writable_hf_cache
-
-# Written beside the Chroma data. Records the embedding config the persisted
-# vectors were built with, so reopening the dir under a changed embedder fails
-# loudly instead of ranking new queries against incompatible stored vectors.
-_FINGERPRINT_FILE = "embed_fingerprint.json"
-
-
-def _embed_fingerprint(embed: EmbedConfig) -> dict[str, Any]:
-    """The embedding settings that determine the stored vectors: the model and
-    each scope's field set. query_prefix/nearest_scope condition only queries,
-    never the indexed documents, so they are deliberately excluded."""
-    return {
-        "embedding_model": embed.embedding_model,
-        "embed_scopes": {
-            scope: list(fields) for scope, fields in sorted(embed.embed_scopes.items())
-        },
-    }
 
 
 class IndexHit(BaseModel):
@@ -66,68 +47,27 @@ def render_scope_document(card: Card, fields: Sequence[str]) -> str:
 
 
 class VectorIndex:
-    def __init__(self, persist_dir: str | Path, embed: EmbedConfig) -> None:
+    def __init__(self, embed: EmbedConfig) -> None:
         self._embed = embed
         # The reader queries on the event loop while a live restamp upserts on a
         # to_thread worker — serialize all Chroma access so concurrent
         # query/upsert/remove on the one client cannot race.
         self._lock = threading.Lock()
-        Path(persist_dir).mkdir(parents=True, exist_ok=True)
-        self._guard_embed_fingerprint(Path(persist_dir), embed)
-        self._client = chromadb.PersistentClient(path=str(persist_dir))
+        self._client = chromadb.EphemeralClient()
         # sentence-transformers follows HF_HOME and friends; redirect them to a
         # writable dir before the model download begins.
         ensure_writable_hf_cache()
         self._embedding_fn = SentenceTransformerEmbeddingFunction(
             model_name=embed.embedding_model
         )
+        namespace = uuid4().hex
         self._collections = {
             scope: self._client.get_or_create_collection(
-                name=f"cards_{scope}", embedding_function=cast(Any, self._embedding_fn)
+                name=f"cards_{scope}_{namespace}",
+                embedding_function=cast(Any, self._embedding_fn),
             )
             for scope in embed.embed_scopes
         }
-
-    @staticmethod
-    def _guard_embed_fingerprint(persist_dir: Path, embed: EmbedConfig) -> None:
-        """Refuse to reopen a persist dir whose vectors were built with a
-        different embedding config; stamp the fingerprint on first use.
-
-        Chroma keys collections by name only, so a reused dir keeps the old
-        embedder's vectors even after ``rebuild`` (which diffs by document
-        text). Ranking new-embedder queries against them silently corrupts
-        retrieval — or hard-fails on a dimension mismatch. Reject up front and
-        point the user at a fresh ``checkpoint_dir``.
-        """
-        fingerprint = _embed_fingerprint(embed)
-        path = persist_dir / _FINGERPRINT_FILE
-        if path.exists():
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                # A present-but-unreadable fingerprint is more suspicious than an
-                # absent one (a truncated write, a foreign file) — fail closed
-                # rather than silently re-stamp and rank against unknown vectors.
-                raise StorageError(
-                    f"Unreadable embed fingerprint at {path}: {exc}. Cannot verify "
-                    f"the persisted vectors match the run's embedder — use a fresh "
-                    f"checkpoint_dir."
-                ) from exc
-            if existing != fingerprint:
-                raise StorageError(
-                    f"Embedding config changed for memory index {persist_dir}: "
-                    f"persisted vectors were built with {existing}, but the run "
-                    f"requests {fingerprint}. The old vectors are incompatible "
-                    f"with the new embedder — use a fresh checkpoint_dir."
-                )
-        # Atomic stamp: a crashed write leaves the prior fingerprint intact
-        # instead of a truncated file the guard would now reject.
-        tmp = persist_dir / f"{_FINGERPRINT_FILE}.{os.getpid()}.tmp"
-        try:
-            tmp.write_text(json.dumps(fingerprint, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, path)
-        finally:
-            tmp.unlink(missing_ok=True)
 
     @property
     def scopes(self) -> tuple[str, ...]:

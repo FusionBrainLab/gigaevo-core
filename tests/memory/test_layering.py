@@ -1,6 +1,8 @@
 """AST-enforced layering of ``gigaevo.memory``.
 
-Layer order: ``cards < events < {context | storage} < {read | write} < provider``.
+Layer order: ``cards < {events | prior_evidence} < {context | storage} <
+selection_leases < {read | write} < provider``. ``prior_evidence`` (evicted-card
+evidence persistence) is a ``cards``-only leaf consumed by ``read`` and ``write``.
 ``read/`` and ``write/`` never import each other (eviction's ``CardScorer`` /
 ``CardValueScorer`` Protocols live in ``write/``; ``read/reputation`` implements
 them; config wires them). Chroma is confined to ``storage/index.py``; LLM handles (routers,
@@ -21,15 +23,49 @@ PACKAGE = "gigaevo.memory"
 LAYER_ALLOWED = {
     "cards": frozenset(),
     "events": frozenset({"cards"}),
+    "prior_evidence": frozenset({"cards"}),
     "context": frozenset({"cards", "context"}),
     "storage": frozenset({"cards", "events", "storage"}),
-    "read": frozenset({"cards", "context", "events", "storage", "read"}),
-    "write": frozenset({"cards", "context", "events", "storage", "write"}),
+    "selection_leases": frozenset({"cards", "storage", "selection_leases"}),
+    "read": frozenset(
+        {"cards", "context", "events", "prior_evidence", "storage", "read"}
+    ),
+    "write": frozenset(
+        {
+            "cards",
+            "context",
+            "events",
+            "prior_evidence",
+            "selection_leases",
+            "storage",
+            "write",
+        }
+    ),
     "provider": frozenset(
-        {"cards", "context", "events", "storage", "read", "write", "provider"}
+        {
+            "cards",
+            "context",
+            "events",
+            "prior_evidence",
+            "selection_leases",
+            "storage",
+            "read",
+            "write",
+            "provider",
+        }
     ),
     "live_memory_hook": frozenset(
-        {"cards", "context", "events", "storage", "read", "write", "provider"}
+        {
+            "cards",
+            "context",
+            "events",
+            "prior_evidence",
+            "selection_leases",
+            "storage",
+            "read",
+            "write",
+            "provider",
+        }
     ),
 }
 

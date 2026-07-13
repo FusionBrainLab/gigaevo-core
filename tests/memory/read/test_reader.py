@@ -170,6 +170,35 @@ class TestSelect:
         assert (candidate.posterior_a, candidate.posterior_b) == (3.0, 1.0)
         assert candidate.magnitude == pytest.approx(0.3)
 
+    async def test_default_pending_counts_is_byte_identical_zero(self, make_card):
+        card = make_card(description="pending seam")
+        omitted_seen: list[AuctionCandidate] = []
+        explicit_seen: list[AuctionCandidate] = []
+
+        class _Spy:
+            def __init__(self, seen):
+                self._seen = seen
+
+            def run(self, candidates, rng, *, baseline=None):
+                self._seen.extend(candidates)
+                return _WinAllAuctioneer().run(candidates, rng, baseline=baseline)
+
+        omitted_reader = _reader(
+            shortlister=_Shortlister(ResearchResult(cards=(card,))),
+            auctioneer=_Spy(omitted_seen),
+        )
+        explicit_reader = _reader(
+            shortlister=_Shortlister(ResearchResult(cards=(card,))),
+            auctioneer=_Spy(explicit_seen),
+        )
+
+        omitted = await _select(omitted_reader)
+        explicit_none = await _select(explicit_reader, pending_counts=None)
+
+        assert [candidate.pending_count for candidate in omitted_seen] == [0]
+        assert [candidate.pending_count for candidate in explicit_seen] == [0]
+        assert explicit_none.model_dump_json() == omitted.model_dump_json()
+
     async def test_card_stats_resolved_once_per_candidate(self, make_card, make_event):
         # One block_from_events pass per candidate per select: the auction's
         # posterior/magnitude and the winner's render all read the same

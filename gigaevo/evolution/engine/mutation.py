@@ -19,6 +19,7 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
+from gigaevo.memory.selection_leases import SelectionLease
 from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 from gigaevo.programs.program import Program
 
@@ -130,6 +131,7 @@ async def generate_one_mutation(
     state_manager: ProgramStateManager,
     iteration: int,
     task_id: int = 0,
+    selection_lease: SelectionLease | None = None,
 ) -> str | None:
     """Generate a single mutation and persist it. Returns program ID if successful.
 
@@ -209,6 +211,12 @@ async def generate_one_mutation(
 
         await storage.add(program)
         persisted_id = program.id  # Point of no return — ID must be returned
+        if selection_lease is not None:
+            selection_lease.transfer_to_child(
+                program.id,
+                program.get_metadata(MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY)
+                or [],
+            )
 
         prompt_id = mutation_spec.metadata.get(MutationSpec.META_PROMPT_ID, "")
         logger.info(

@@ -5,7 +5,9 @@ __pycache__/
 *.zip
 *.log
 cohn_cache/
+cohn_cache_*/
 reblast_raw/
+conjecture_raw/
 squeeze_test/
 squeeze_test_1800s_1seed_backup/
 squeeze_smoke/

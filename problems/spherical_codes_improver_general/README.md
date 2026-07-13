@@ -25,6 +25,10 @@ Design rationale and the full protocol: `docs/superpowers/specs/2026-06-17-spher
 | `pipeline.py` | default pipeline with a compact artifact formatter |
 | `initial_programs/` | seeds — `paper_evolved.py` (E.7), `paper_evolved_plus.py` (E.8), `riemannian_oblique.py` |
 | `run_full_validation.py` | standalone full90 R=3 head-to-head harness (parallel across configs) |
+| `squeeze_eval.py` | P* single-task executor: warm-start + restart chains under a wall clock (`_squeeze_one`) |
+| `reblast.py` | full90 P* campaign (champion/E7/E8): `run --shard` → `merge` → headline + packings |
+| `cohn_conjectures.py` | Cohn conjecture campaign: champion at P* over the 455 noteworthy cases (`fetch` / `run` / `merge`) |
+| `cohn_conjecture_cases.json` | the 455 `(d,N)` cases from H. Cohn (2026-07): conjectured-exact optima, no optimality proof |
 | `cohn_cache/` | generated download cache for Cohn catalogue files; contents are ignored and re-created on demand |
 
 ## Eval sets (`SPHERICAL_EVAL_SET`)
@@ -85,6 +89,21 @@ Reports mean improvement over Cohn, per-dimension breakdown, **in-panel vs
 out-of-panel** gain with dynamic panel sizes (generalization check), and largest
 gains; writes a per-config JSON.
 Repeat at `--seed 1 --seed 2` for variance.
+
+## Cohn conjecture campaign (455 noteworthy cases)
+
+Champion only, protocol identical to the full90 P* re-blast (wall 3540 s, best-of-3 seeds,
+R unbounded, M=10, σ 1→1e-6, fresh=5, dry_patience=0). Any μ strictly below the catalogue
+value is a candidate disproof of that case's optimality conjecture; `merge` bands gains by
+relative margin (noise <1e-9 < weak < 1e-6 ≤ moderate < 1e-4 ≤ strong).
+
+```bash
+cd problems/spherical_codes_improver_general
+P=python3
+$P cohn_conjectures.py fetch                 # pre-download all cases (needs HTTPS_PROXY)
+$P cohn_conjectures.py run --shard 0/1       # 455×3 tasks, ~160 workers, ~9 h wall
+$P cohn_conjectures.py merge                 # → conjecture_results/{results.json,packings_champion.npz}
+```
 
 ## Integrity & drift
 

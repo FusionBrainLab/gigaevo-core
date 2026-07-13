@@ -9,6 +9,7 @@ Each scope embeds a particular combination of these fields; pick the scope whose
 
 RULES
 - Make queries independent of each other, not near-duplicates of one keyword or sentence.
+- Every plan must include at least one task-agnostic mechanism query phrased about the lever or mechanism itself (component, transformation, or algorithm family), with no task-domain specifics, so cards earned on other tasks are reachable.
 - Be specific. Avoid vague items like "get more details" or "research background".
 - Write each query as a short natural-language sentence that clearly states the relevance signal you need, using full context and entities from the REQUEST and CONTEXT.
 - A long REQUEST carries several distinct signals (task properties, observed weaknesses, candidate mechanisms); write a separate query per signal rather than one query restating the whole REQUEST.

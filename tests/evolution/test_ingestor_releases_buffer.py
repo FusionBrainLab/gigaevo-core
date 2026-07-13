@@ -15,6 +15,7 @@ import pytest
 
 from gigaevo.evolution.engine.ingestor import poll_and_ingest
 from gigaevo.evolution.engine.refresh import ParentRefresher, ParentRefreshTicket
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -26,6 +27,7 @@ class _FakeIngestorEngine:
         self._in_flight_lock = asyncio.Lock()
         self._producer_sema = asyncio.Semaphore(max_in_flight)
         self._buffer_sema = asyncio.Semaphore(max_in_flight)
+        self._selection_leases = None
 
         self.storage = AsyncMock()
         self.strategy = AsyncMock()
@@ -124,8 +126,14 @@ async def test_ingestor_discarded_releases_buffer_not_producer() -> None:
 @pytest.mark.asyncio
 async def test_ingestor_vanished_program_releases_buffer() -> None:
     engine = _FakeIngestorEngine(max_in_flight=3)
+    registry = InFlightSelectionRegistry()
+    engine._selection_leases = registry
     pid = str(uuid.uuid4())
     await engine._add_in_flight(pid)
+    lease = registry.open_attempt("attempt-1", "parent-1")
+    lease.attach_cards(("card-a",))
+    lease.transfer_to_child(pid, ("card-a",))
+    assert registry.is_leased("card-a")
 
     # storage.mget returns no entries — id leaked.
     engine.storage.mget.return_value = []
@@ -136,6 +144,7 @@ async def test_ingestor_vanished_program_releases_buffer() -> None:
     assert engine._buffer_sema._value == 3
     assert engine._producer_sema._value == 3
     assert not engine._in_flight
+    assert not registry.is_leased("card-a")
 
 
 @pytest.mark.asyncio

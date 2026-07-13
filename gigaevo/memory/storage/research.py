@@ -196,11 +196,13 @@ def candidate_brief(card: Card) -> dict[str, Any]:
     brief: dict[str, Any] = {
         "card_id": card.id,
         "kind": card.kind.value,
-        "description": _brief_text(card.description, _BRIEF_DESCRIPTION_CHARS),
-        "evidence_summary": _brief_text(
-            card.explanation_summary, _BRIEF_EVIDENCE_CHARS
-        ),
     }
+    if card.task_key:
+        brief["origin_task"] = card.task_key
+    brief["description"] = _brief_text(card.description, _BRIEF_DESCRIPTION_CHARS)
+    brief["evidence_summary"] = _brief_text(
+        card.explanation_summary, _BRIEF_EVIDENCE_CHARS
+    )
     if card.category:
         brief["category"] = card.category
     if card.task_description_summary:

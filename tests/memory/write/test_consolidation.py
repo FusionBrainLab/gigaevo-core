@@ -11,6 +11,7 @@ import pytest
 from gigaevo.llm.agents.reconcile import LibrarianCard
 from gigaevo.memory.cards import CardKind
 from gigaevo.memory.events import MemoryConsolidationPass
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.consolidation import ConsolidationScheduler, consolidate
@@ -93,6 +94,51 @@ async def test_folds_near_pair_and_deletes_partner(store, make_card):
     assert set(banked.programs) == {"p1", "p2"}
     assert partner.id in banked.absorbed_ids
     assert "dead-0" in banked.absorbed_ids
+
+
+async def test_consolidation_proposal_and_survivor_keep_target_task_key(
+    store, make_card
+):
+    target = make_card(id="card-a", task_key="authoring-task")
+    partner = make_card(id="card-b", task_key="other-task")
+    store.save(target)
+    store.save(partner)
+    pair_neighbors(store, target, partner)
+
+    class CapturingGate:
+        def __init__(self):
+            self.inner = CardAdmissionGate(store=store, evictor=NullEvictor())
+            self.incoming = None
+
+        def merge(self, target_id, incoming):
+            self.incoming = incoming
+            return self.inner.merge(target_id, incoming)
+
+    gate = CapturingGate()
+
+    assert await run_consolidate(store, FakeConsolidateAgent(), gate=gate) == 1
+    assert gate.incoming.task_key == "authoring-task"
+    assert store.get(target.id).task_key == "authoring-task"
+
+
+async def test_leased_partner_is_not_folded_or_retired(store, make_card):
+    survivor = make_card(id="card-a")
+    partner = make_card(id="card-b")
+    store.save(survivor)
+    store.save(partner)
+    pair_neighbors(store, survivor, partner)
+    registry = InFlightSelectionRegistry()
+    lease = registry.open_attempt("attempt-1", "parent-1")
+    lease.attach_cards((partner.id,))
+    gate = CardAdmissionGate(
+        store=store, evictor=NullEvictor(), selection_leases=registry
+    )
+
+    merged = await run_consolidate(store, FakeConsolidateAgent(), gate=gate)
+
+    assert merged == 0
+    assert store.get(survivor.id) == survivor
+    assert store.get(partner.id) == partner
 
 
 async def test_abstain_reviews_symmetric_pair_once(store, make_card):

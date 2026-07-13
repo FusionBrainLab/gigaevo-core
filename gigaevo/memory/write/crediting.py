@@ -8,7 +8,7 @@ outcome carries scalar fitnesses and, optionally, per-sample score vectors.
 ``PointEffectEstimator`` (default) reproduces the historical behavior exactly:
 the oriented delta treated as exact (``se=0``). ``PairedEffectEstimator``
 prices per-sample evaluation stochasticity when both sides carry comparable
-score vectors, degrading per event to the point estimate when they do not.
+score vectors, marking uncertainty unknown per event when they do not.
 Future estimators (K-repeat evals, analytic noise models) plug in behind the
 same Protocol.
 """
@@ -43,7 +43,8 @@ class EffectEstimator(Protocol):
         """Oriented child-vs-base effect with its standard error.
 
         Callers guarantee ``outcome.fitness`` and ``outcome.base_fitness`` are
-        present; ``se=0`` means the effect is exact.
+        present; ``se=0`` means the effect is exact and ``se=None`` means its
+        uncertainty could not be measured.
         """
         ...
 
@@ -71,10 +72,10 @@ class PairedEffectEstimator:
     comes from ``comparison.estimate`` over the outcome's score vectors; it is
     orientation-invariant, so the vectors are never flipped.
 
-    Any missing/unusable/incoherent vector degrades that one event to ``se=0``.
-    Degradations are counted per reason (``degraded``) and logged at debug,
-    never raised — a mixed pool of vector-carrying and scalar-only outcomes
-    still credits every event.
+    Any missing/unusable/incoherent vector degrades that one event to
+    ``se=None`` (unknown, not exact). Degradations are counted per reason
+    (``degraded``) and logged at debug, never raised — a mixed pool of
+    vector-carrying and scalar-only outcomes still credits every event.
     """
 
     def __init__(self, comparison: PairedComparison | None = None) -> None:
@@ -89,7 +90,7 @@ class PairedEffectEstimator:
             raise ValueError("estimate() requires fitness and base_fitness")
         return Measurement(value=delta, se=self._paired_se(outcome))
 
-    def _paired_se(self, outcome: InjectionOutcome) -> float:
+    def _paired_se(self, outcome: InjectionOutcome) -> float | None:
         if outcome.child_scores is None or outcome.base_scores is None:
             return self._degrade(outcome, "missing_vector")
         child = np.asarray(outcome.child_scores, dtype=float)
@@ -110,16 +111,19 @@ class PairedEffectEstimator:
             or abs(float(base.mean()) - float(outcome.base_fitness)) > COHERENCE_TOL
         ):
             return self._degrade(outcome, "incoherent_vector")
-        se = float(self.comparison.estimate(child, base).se)
+        try:
+            se = float(self.comparison.estimate(child, base).se)
+        except Exception:
+            return self._degrade(outcome, "comparison_error")
         if not np.isfinite(se) or se < 0.0:
             return self._degrade(outcome, "degenerate_se")
         return se
 
-    def _degrade(self, outcome: InjectionOutcome, reason: str) -> float:
+    def _degrade(self, outcome: InjectionOutcome, reason: str) -> None:
         self.degraded[reason] += 1
         logger.debug(
-            "[Memory][Crediting] paired se degraded to 0 for program {} ({})",
+            "[Memory][Crediting] paired se unknown for program {} ({})",
             outcome.id,
             reason,
         )
-        return 0.0
+        return None

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
+from loguru import logger
+import numpy as np
 import pytest
 
 from gigaevo.evolution.mutation.constants import (
@@ -17,12 +21,17 @@ from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import CardKind, EvidenceAttribution, EvidenceSource
 from gigaevo.memory.context import BDCellMemoryContext
 from gigaevo.memory.events import MemoryGainRestamp
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
+from gigaevo.memory.storage.config import StoreConfig
+from gigaevo.memory.storage.local import LocalMemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.crediting import PairedEffectEstimator, PointEffectEstimator
 from gigaevo.memory.write.eviction import NullEvictor
+from gigaevo.memory.write.merge import merge_cards
 from gigaevo.memory.write.stats import (
     CardStatsStamper,
     CardStatsUpdater,
+    GlobalNoCardBaseline,
     InjectionOutcome,
     card_gain_events_from_programs,
     compute_contextual_gains,
@@ -31,6 +40,7 @@ from gigaevo.memory.write.stats import (
 )
 from gigaevo.programs.metrics.context import VALIDITY_KEY
 from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
+from tests.fakes.embedding import FakeEmbeddingFunction
 
 
 def outcome(**overrides) -> InjectionOutcome:
@@ -182,11 +192,37 @@ def test_used_card_gain_accepts_custom_no_card_estimator():
             del outcome
             return 0.15
 
+        def baseline_se_for(self, outcome):
+            del outcome
+            return None
+
     events = compute_contextual_gains(
         [outcome(id="with-card", fitness=0.7)],
         baseline_estimator=FixedBaseline(),
     )
     assert events["card-a"][0].gain == pytest.approx(0.05)
+
+
+def test_global_no_card_baseline_exposes_sem_for_multiple_deltas():
+    controls = [
+        no_card_outcome(id="control-low", fitness=0.5),
+        no_card_outcome(id="control-high", fitness=0.7),
+    ]
+    fitted = GlobalNoCardBaseline().fit_no_card_baseline(
+        controls, higher_is_better=True
+    )
+    expected = float(np.std([0.0, 0.2], ddof=1) / np.sqrt(len(controls)))
+
+    assert fitted.baseline_se_for(controls[0]) == pytest.approx(expected)
+
+
+def test_global_no_card_baseline_single_delta_has_unknown_sem():
+    control = no_card_outcome()
+    fitted = GlobalNoCardBaseline().fit_no_card_baseline(
+        [control], higher_is_better=True
+    )
+
+    assert fitted.baseline_se_for(control) is None
 
 
 def test_used_card_gain_subtracts_same_bd_cell_no_card_baseline():
@@ -414,6 +450,30 @@ def test_founding_gain_event_signed_positive_delta(make_program, metrics_context
     assert event.context.timestamp == prog.created_at
 
 
+def test_founding_gain_event_stamps_task_key(make_program, metrics_context):
+    prog = make_program(
+        fitness=0.7, metadata=base_meta(selected=["card-a"], used=["card-a"])
+    )
+
+    event = founding_gain_event(
+        prog,
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+        task_key="heilbronn",
+    )
+
+    assert event.context.task_key == "heilbronn"
+
+
+def test_outcome_events_stamp_task_key():
+    events = compute_contextual_gains(
+        [no_card_outcome(), outcome()], task_key="heilbronn"
+    )
+
+    assert events["card-a"][0].context.task_key == "heilbronn"
+
+
 def test_founding_gain_event_carries_true_negative_delta(make_program, metrics_context):
     prog = make_program(
         fitness=0.3,
@@ -544,6 +604,31 @@ def test_stamper_clears_stale_events_when_uncredited(make_card, make_event):
     assert stamped.gain_events == ()
 
 
+def test_stamper_preserves_unattributed_event_with_external_preservation(
+    make_card, make_event
+):
+    founding = make_event(0.1, founding=True)
+    unattributed = make_event(0.2)
+    in_pool = make_event(0.3).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id="current-child",
+            )
+        }
+    )
+    replacement = make_event(0.4)
+    card = make_card(gain_events=(founding, unattributed, in_pool))
+
+    stamped = CardStatsStamper().stamp_gain_events(
+        card,
+        {card.id: [replacement]},
+        preserve_events_outside_child_ids={"current-child"},
+    )
+
+    assert stamped.gain_events == (founding, unattributed, replacement)
+
+
 def test_stamper_skips_absorbed_fold_for_program_cards(make_card, make_event):
     card = make_card(
         kind=CardKind.PROGRAM,
@@ -563,8 +648,19 @@ def test_updater_restamps_changed_cards_and_sweeps(
 ):
     emitted: list = []
     monkeypatch.setattr("gigaevo.memory.write.stats.emit_memory_event", emitted.append)
+    child = make_program(
+        fitness=0.7, metadata=base_meta(selected=["card-a"], used=["card-a"])
+    )
+    stale_event = make_event(0.5).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id=child.id,
+            )
+        }
+    )
     credited = make_card(id="card-a")
-    stale = make_card(id="card-b", gain_events=(make_event(0.5),))
+    stale = make_card(id="card-b", gain_events=(stale_event,))
     untouched = make_card(id="card-c")
     for card in (credited, stale, untouched):
         store.save(card)
@@ -572,9 +668,7 @@ def test_updater_restamps_changed_cards_and_sweeps(
 
     pool = [
         no_card_program(make_program),
-        make_program(
-            fitness=0.7, metadata=base_meta(selected=["card-a"], used=["card-a"])
-        ),
+        child,
     ]
     updater = CardStatsUpdater(
         fitness_key="fitness", higher_is_better=True, metrics_context=metrics_context
@@ -622,6 +716,306 @@ def test_updater_preserves_events_from_other_program_pools(
         for event in events
         if event.attribution is not None
     } == {"external-child", child.id}
+
+
+def test_restamp_preserves_write_interleaved_after_snapshot(
+    store, make_card, make_event, metrics_context, monkeypatch
+):
+    stale = make_event(0.1).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id="current-child",
+            )
+        }
+    )
+    replacement = make_event(0.2).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id="current-child",
+            )
+        }
+    )
+    concurrent = make_event(0.3).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id="other-run-child",
+            )
+        }
+    )
+    card = make_card(id="card-a", gain_events=(stale,))
+    store.save(card)
+    original_snapshot = store.snapshot
+    interleaved = False
+
+    def snapshot_with_concurrent_write():
+        nonlocal interleaved
+        snapshot = original_snapshot()
+        if not interleaved:
+            interleaved = True
+            store.save(card.model_copy(update={"gain_events": (stale, concurrent)}))
+        return snapshot
+
+    monkeypatch.setattr(store, "snapshot", snapshot_with_concurrent_write)
+    updater = CardStatsUpdater(
+        fitness_key="fitness", higher_is_better=True, metrics_context=metrics_context
+    )
+    gate = CardAdmissionGate(store=store, evictor=NullEvictor())
+
+    updater.restamp_and_sweep(
+        {card.id: [replacement]},
+        store=store,
+        gate=gate,
+        preserve_events_outside_child_ids={"current-child"},
+    )
+
+    assert store.get(card.id).gain_events == (concurrent, replacement)
+
+
+def test_restamp_skips_card_vanished_before_atomic_update(
+    store, make_card, make_event, metrics_context, monkeypatch
+):
+    stale = make_event(0.1)
+    replacement = make_event(0.2)
+    card = make_card(gain_events=(stale,))
+    store.save(card)
+    original_update = store.update
+
+    def vanish_then_update(card_id, transform):
+        store.delete(card_id)
+        return original_update(card_id, transform)
+
+    monkeypatch.setattr(store, "update", vanish_then_update)
+    updater = CardStatsUpdater(
+        fitness_key="fitness", higher_is_better=True, metrics_context=metrics_context
+    )
+    gate = CardAdmissionGate(store=store, evictor=NullEvictor())
+    records: list = []
+    handler = logger.add(records.append, level="DEBUG")
+    try:
+        updater.restamp_and_sweep({card.id: [replacement]}, store=store, gate=gate)
+    finally:
+        logger.remove(handler)
+
+    assert store.get(card.id) is None
+    assert any(
+        card.id in str(record) and "evicted" in str(record) for record in records
+    )
+    assert any("redirected=0 dropped=1" in str(record) for record in records)
+
+
+def test_restamp_redirects_vanished_card_event_to_merge_survivor(
+    tmp_path, make_card, make_event, metrics_context, monkeypatch
+):
+    monkeypatch.setattr(
+        "gigaevo.memory.storage.index.SentenceTransformerEmbeddingFunction",
+        FakeEmbeddingFunction,
+    )
+    config = StoreConfig(path=tmp_path / "shared-store")
+    store_a = LocalMemoryStore(config)
+    store_b = LocalMemoryStore(config)
+    current_child = "current-child"
+    external = make_event(0.7).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id="other-task-child",
+            )
+        }
+    )
+    stale = make_event(-0.1).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id=current_child,
+            )
+        }
+    )
+    replacement = make_event(0.4).model_copy(
+        update={
+            "attribution": EvidenceAttribution(
+                source=EvidenceSource.DIRECT,
+                source_child_id=current_child,
+            )
+        }
+    )
+    absorbed = make_card(id="card-c", gain_events=(stale,))
+    survivor = make_card(id="card-s", gain_events=(external,))
+    store_a.save(absorbed)
+    store_a.save(survivor)
+    original_update = store_a.update
+    merged = False
+
+    def merge_before_update(card_id, transform):
+        nonlocal merged
+        if card_id == absorbed.id and not merged:
+            merged = True
+            result = store_b.merge_retire(
+                survivor.id,
+                absorbed.id,
+                lambda target, partner: merge_cards(
+                    target, partner, replace_description=False
+                ),
+            )
+            assert result.outcome == "merged"
+        return original_update(card_id, transform)
+
+    monkeypatch.setattr(store_a, "update", merge_before_update)
+    updater = CardStatsUpdater(
+        fitness_key="fitness", higher_is_better=True, metrics_context=metrics_context
+    )
+    gate = CardAdmissionGate(store=store_a, evictor=NullEvictor())
+    try:
+        updater.restamp_and_sweep(
+            {absorbed.id: [replacement]},
+            store=store_a,
+            gate=gate,
+            preserve_events_outside_child_ids={current_child},
+        )
+
+        landed = store_a.get(survivor.id)
+        assert landed is not None
+        assert absorbed.id in landed.absorbed_ids
+        assert landed.gain_events == (external, replacement)
+        assert store_a.get(absorbed.id) is None
+    finally:
+        store_a.close()
+        store_b.close()
+
+
+def test_restamp_cleanly_drops_vanished_card_without_absorber(
+    tmp_path, make_card, make_event, metrics_context, monkeypatch
+):
+    monkeypatch.setattr(
+        "gigaevo.memory.storage.index.SentenceTransformerEmbeddingFunction",
+        FakeEmbeddingFunction,
+    )
+    config = StoreConfig(path=tmp_path / "shared-store")
+    store_a = LocalMemoryStore(config)
+    store_b = LocalMemoryStore(config)
+    stale = make_event(-0.1)
+    replacement = make_event(0.4)
+    card = make_card(id="card-c", gain_events=(stale,))
+    store_a.save(card)
+    original_update = store_a.update
+    deleted = False
+
+    def delete_before_update(card_id, transform):
+        nonlocal deleted
+        if card_id == card.id and not deleted:
+            deleted = True
+            assert store_b.delete(card.id)
+        return original_update(card_id, transform)
+
+    monkeypatch.setattr(store_a, "update", delete_before_update)
+    updater = CardStatsUpdater(
+        fitness_key="fitness", higher_is_better=True, metrics_context=metrics_context
+    )
+    gate = CardAdmissionGate(store=store_a, evictor=NullEvictor())
+    records: list = []
+    handler = logger.add(records.append, level="DEBUG")
+    try:
+        updater.restamp_and_sweep({card.id: [replacement]}, store=store_a, gate=gate)
+
+        assert store_a.get(card.id) is None
+        assert any(
+            f"evicted card {card.id} with no absorbing survivor" in str(record)
+            for record in records
+        )
+        assert any("redirected=0 dropped=1" in str(record) for record in records)
+    finally:
+        logger.remove(handler)
+        store_a.close()
+        store_b.close()
+
+
+def test_terminal_child_lease_releases_only_after_restamp_sweep(
+    store, make_card, metrics_context
+):
+    registry = InFlightSelectionRegistry()
+    card = make_card(id="card-a")
+    store.save(card)
+    lease = registry.open_attempt("attempt-1", "parent-1")
+    lease.attach_cards((card.id,))
+    lease.transfer_to_child("child-1", (card.id,))
+
+    class ObserveSweepLease:
+        observed_leased = False
+
+        def should_evict(self, card) -> bool:
+            del card
+            return False
+
+        def eviction_reason(self, card) -> str:
+            del card
+            return ""
+
+        def sweep(self, cards) -> list[str]:
+            del cards
+            self.observed_leased = registry.is_leased(card.id)
+            return []
+
+    evictor = ObserveSweepLease()
+    gate = CardAdmissionGate(store=store, evictor=evictor, selection_leases=registry)
+    updater = CardStatsUpdater(
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+        selection_leases=registry,
+    )
+
+    updater.restamp_and_sweep(
+        {},
+        store=store,
+        gate=gate,
+        preserve_events_outside_child_ids={"child-1"},
+    )
+
+    assert evictor.observed_leased
+    assert not registry.is_leased(card.id)
+
+
+def test_threads_hammer_restamp_update_against_evict_sweep(
+    store, make_card, make_event, metrics_context
+):
+    class StaleCandidateEvictor:
+        def should_evict(self, card) -> bool:
+            return not card.gain_events
+
+        def eviction_reason(self, card) -> str:
+            del card
+            return "no gain evidence"
+
+        def sweep(self, cards) -> list[str]:
+            return [card.id for card in cards]
+
+    events = [make_event(gain) for gain in (0.1, 0.2, 0.3, 0.4)]
+    card = make_card(gain_events=(events[0],))
+    store.save(card)
+    gate = CardAdmissionGate(store=store, evictor=StaleCandidateEvictor())
+    updater = CardStatsUpdater(
+        fitness_key="fitness", higher_is_better=True, metrics_context=metrics_context
+    )
+
+    def restamp_many():
+        for event in events * len(events):
+            updater.restamp_and_sweep({card.id: [event]}, store=store, gate=gate)
+
+    def evict_many():
+        for _ in events * len(events):
+            gate.sweep()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(restamp_many), executor.submit(evict_many)]
+        for future in futures:
+            future.result()
+
+    survived = store.get(card.id)
+    assert survived is not None
+    assert len(survived.gain_events) == 1
+    assert not gate.is_tombstoned(card.id)
 
 
 def test_updater_drops_unresolvable_credit_from_restamp(
@@ -722,8 +1116,8 @@ def test_updater_records_no_card_evidence(
         def __init__(self):
             self.calls = []
 
-        def record_outcomes(self, outcomes, *, higher_is_better):
-            self.calls.append((tuple(outcomes), higher_is_better))
+        def record_outcomes(self, outcomes, *, higher_is_better, task_key=""):
+            self.calls.append((tuple(outcomes), higher_is_better, task_key))
 
     recorder = Recorder()
     store.save(make_card(id="card-a"))
@@ -737,22 +1131,45 @@ def test_updater_records_no_card_evidence(
         higher_is_better=True,
         metrics_context=metrics_context,
         no_card_recorder=recorder,
+        task_key="heilbronn",
     )
     gate = CardAdmissionGate(store=store, evictor=NullEvictor())
 
     updater.update([parent, child], store=store, gate=gate)
 
-    [(outcomes, higher_is_better)] = recorder.calls
+    [(outcomes, higher_is_better, task_key)] = recorder.calls
     assert higher_is_better is True
+    assert task_key == "heilbronn"
     assert {outcome.id for outcome in outcomes} == {parent.id, child.id}
+
+
+def test_updater_stamps_task_key_on_outcome_events(
+    store, make_card, make_program, metrics_context
+):
+    store.save(make_card(id="card-a"))
+    child = make_program(
+        fitness=0.7,
+        metadata=base_meta(selected=["card-a"], used=["card-a"]),
+    )
+    updater = CardStatsUpdater(
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+        task_key="heilbronn",
+    )
+    gate = CardAdmissionGate(store=store, evictor=NullEvictor())
+
+    updater.update([no_card_program(make_program), child], store=store, gate=gate)
+
+    assert store.get("card-a").gain_events[0].context.task_key == "heilbronn"
 
 
 def test_updater_continues_when_no_card_recorder_fails(
     store, make_card, make_program, metrics_context
 ):
     class BrokenRecorder:
-        def record_outcomes(self, outcomes, *, higher_is_better):
-            del outcomes, higher_is_better
+        def record_outcomes(self, outcomes, *, higher_is_better, task_key=""):
+            del outcomes, higher_is_better, task_key
             raise OSError("disk full")
 
     store.save(make_card(id="card-a"))
@@ -799,6 +1216,37 @@ def test_paired_estimator_prices_gain_se_without_moving_the_gain():
     assert paired["card-a"][0].gain == point["card-a"][0].gain
     assert point["card-a"][0].gain_se == 0.0
     assert paired["card-a"][0].gain_se > 0.0
+
+
+def test_direct_stamping_combines_measured_and_global_baseline_uncertainty():
+    controls = [
+        no_card_outcome(id="control-low", fitness=0.5),
+        no_card_outcome(id="control-high", fitness=0.7),
+    ]
+    used = outcome(base_scores=BASE_VEC, child_scores=CHILD_VEC)
+    rows = [*controls, used]
+    estimator = PairedEffectEstimator()
+    measured = estimator.estimate(used, higher_is_better=True)
+    fitted = GlobalNoCardBaseline().fit_no_card_baseline(rows, higher_is_better=True)
+    baseline_se = fitted.baseline_se_for(used)
+
+    assert measured.se is not None and measured.se > 0.0
+    assert baseline_se is not None
+    paired_event = compute_contextual_gains(rows, effect_estimator=estimator)["card-a"][
+        0
+    ]
+    point_event = compute_contextual_gains(
+        rows, effect_estimator=PointEffectEstimator()
+    )["card-a"][0]
+    degraded_event = compute_contextual_gains(
+        [*controls, used.model_copy(update={"child_scores": None})],
+        effect_estimator=PairedEffectEstimator(),
+    )["card-a"][0]
+
+    assert paired_event.gain_se == pytest.approx(np.hypot(measured.se, baseline_se))
+    assert paired_event.gain_se > measured.se
+    assert point_event.gain_se == 0.0
+    assert degraded_event.gain_se is None
 
 
 def test_invalid_and_unused_events_stay_exact_under_paired():

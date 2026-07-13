@@ -5,15 +5,19 @@ from __future__ import annotations
 from math import inf, nan
 
 import pytest
-from scipy.stats import beta
+from scipy.stats import beta, norm
 
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import (
     CardStatsBlock,
     CausalStrength,
+    DecisionContext,
     EvidenceAttribution,
     EvidenceSource,
 )
+from gigaevo.memory.context.evidence import harm_mass
+from gigaevo.memory.read.bootstrap import bootstrap_ev_samples, stable_rng
+from gigaevo.memory.read.interfaces import ReputationModel
 from gigaevo.memory.read.reputation import (
     BDProximityReputation,
     BetaBinomialReputation,
@@ -27,6 +31,31 @@ def _bs(num_bins: int = 10, max_val: float = 1.0) -> BehaviorSpace:
     return BehaviorSpace(
         bins={"x": LinearBinning(min_val=0.0, max_val=max_val, num_bins=num_bins)}
     )
+
+
+def _for_task(event, task_key: str):
+    return event.model_copy(
+        update={"context": event.context.model_copy(update={"task_key": task_key})}
+    )
+
+
+class _StubBetaPrior:
+    source = "stub_cohort"
+
+    def __init__(self, alpha: float, beta: float) -> None:
+        self._parameters = (alpha, beta)
+
+    def as_tuple(self) -> tuple[float, float]:
+        return self._parameters
+
+
+class _StubCohortPrior:
+    def __init__(self, alpha: float, beta: float) -> None:
+        self._prior = _StubBetaPrior(alpha, beta)
+
+    def cold_card_prior(self, card, context=None):
+        del card, context
+        return self._prior
 
 
 class TestBetaBinomialPosterior:
@@ -215,8 +244,164 @@ class TestBlockFromEvents:
         assert block.posterior_a == pytest.approx(1.5)
         assert block.posterior_b == pytest.approx(1.0)
 
+    def test_per_event_staleness_scales_valid_invalid_and_unused_mass(self, make_event):
+        events = (
+            make_event(0.5),
+            make_event(0.0, invalid=True),
+            make_event(0.0, unused=True),
+        )
+
+        block = block_from_events(events, staleness_weights=(0.25, 0.5, 0.125))
+
+        assert block is not None
+        assert block.intro_events == pytest.approx(0.875)
+        assert block.k_harm == pytest.approx(0.625)
+        assert block.posterior_a == pytest.approx(1.25)
+        assert block.posterior_b == pytest.approx(1.625)
+        assert block.IntroGain_best_median is None
+
 
 class TestBetaBinomialReputation:
+    def test_one_win_cannot_lower_help_below_its_cohort_prior(
+        self, make_card, make_event
+    ):
+        prior_parameters = (4.0, 1.0)
+        card = make_card(gain_events=(make_event(0.5),))
+
+        coherent = BetaBinomialReputation(
+            prior=_StubCohortPrior(*prior_parameters)
+        ).card_stats(card)
+        legacy = BetaBinomialReputation().card_stats(card)
+
+        assert coherent is not None and legacy is not None
+        assert coherent.p_help_mean >= prior_parameters[0] / sum(prior_parameters)
+        assert (coherent.posterior_a, coherent.posterior_b) == (5.0, 1.0)
+        assert (legacy.posterior_a, legacy.posterior_b) == (2.0, 1.0)
+        assert legacy.p_help_mean == pytest.approx(2.0 / 3.0)
+
+    def test_card_stats_keeps_native_magnitude_and_folds_foreign_sign_only(
+        self, make_card, make_event
+    ):
+        native = tuple(_for_task(make_event(g), "task-a") for g in (0.2, 0.4))
+        foreign = (
+            _for_task(make_event(1000.0), "task-b"),
+            _for_task(make_event(-1000.0), "task-b"),
+            _for_task(make_event(0.0, invalid=True), "task-b"),
+            _for_task(make_event(0.0, unused=True), "task-b"),
+        )
+        block = BetaBinomialReputation().card_stats(
+            make_card(gain_events=(*native, *foreign)),
+            DecisionContext(task_key="task-a"),
+        )
+
+        assert block is not None
+        assert block.IntroGain_best_median == pytest.approx(0.3)
+        assert block.intro_events == 2
+        assert block.k_harm == 0
+        assert (block.posterior_a, block.posterior_b) == (4.0, 3.0)
+        assert block.foreign_help_events == 1
+        assert block.foreign_total_events == 3
+
+    def test_foreign_only_card_has_sign_posterior_but_no_native_support(
+        self, make_card, make_event
+    ):
+        card = make_card(
+            gain_events=(
+                _for_task(make_event(99.0), "task-b"),
+                _for_task(make_event(-99.0), "task-b"),
+            )
+        )
+
+        block = BetaBinomialReputation().card_stats(
+            card, DecisionContext(task_key="task-a")
+        )
+
+        assert block is not None
+        assert block.intro_events == 0
+        assert block.IntroGain_best_median is None
+        assert (block.posterior_a, block.posterior_b) == (2.0, 2.0)
+        assert block.foreign_help_events == 1
+        assert block.foreign_total_events == 2
+
+    def test_foreign_sign_fold_ignores_magnitude_and_uncertainty(
+        self, make_card, make_event
+    ):
+        variants = (
+            _for_task(make_event(1e-300, gain_se=1e300), "task-b"),
+            _for_task(make_event(1e300, gain_se=0.0), "task-b"),
+        )
+        blocks = [
+            BetaBinomialReputation().card_stats(
+                make_card(gain_events=(foreign,)),
+                DecisionContext(task_key="task-a"),
+            )
+            for foreign in variants
+        ]
+
+        assert all(block is not None for block in blocks)
+        assert [
+            (
+                block.foreign_help_events,
+                block.foreign_total_events,
+                block.posterior_a,
+                block.posterior_b,
+            )
+            for block in blocks
+            if block is not None
+        ] == [(1.0, 1.0, 2.0, 1.0)] * 2
+
+    def test_task_partition_is_byte_identical_when_all_events_are_native(
+        self, make_card, make_event
+    ):
+        events = (make_event(0.2), make_event(-0.1), make_event(0.0, unused=True))
+        card = make_card(gain_events=events)
+
+        expected = block_from_events(events)
+        actual = BetaBinomialReputation().card_stats(card, DecisionContext(task_key=""))
+
+        assert actual is not None and expected is not None
+        assert actual.model_dump_json() == expected.model_dump_json()
+
+    def test_bootstrap_support_excludes_foreign_magnitudes_weights_and_ses(
+        self, make_card, make_event
+    ):
+        native = _for_task(make_event(0.2, gain_se=0.03), "task-a")
+        foreign = _for_task(make_event(900.0, gain_se=80.0), "task-b")
+        card = make_card(gain_events=(native, foreign))
+        context = DecisionContext(task_key="task-a")
+        rep = BetaBinomialReputation()
+
+        assert rep.event_deltas(card, context) == (0.2,)
+        assert rep.event_weights(card, context) == (1.0,)
+        assert rep.evidence_events(card, context) == (native,)
+        assert rep.event_ses(card, context) == (0.03,)
+
+    def test_base_staleness_weights_align_with_ev_events_and_credit_stays_pure(
+        self, make_card, make_event
+    ):
+        credited = make_event(0.2).model_copy(
+            update={
+                "attribution": EvidenceAttribution(
+                    source=EvidenceSource.DIRECT,
+                    causal_strength=CausalStrength.DIRECT_BUNDLED,
+                    used_card_count=2,
+                    credit_weight=0.5,
+                )
+            }
+        )
+        card = make_card(
+            gain_events=(
+                credited,
+                make_event(-0.1),
+                make_event(10.0, founding=True),
+            )
+        )
+        rep = BetaBinomialReputation()
+
+        assert isinstance(rep, ReputationModel)
+        assert rep.staleness_weights(card) == (1.0, 1.0)
+        assert rep.event_weights(card) == (0.5, 1.0)
+
     def test_cold_card_gets_cold_prior(self, make_card):
         rep = BetaBinomialReputation()
         card = make_card()
@@ -292,6 +477,41 @@ class TestBetaBinomialReputation:
 
 
 class TestBDProximityReputation:
+    def test_in_cell_and_fallback_share_the_same_card_prior(
+        self, make_card, make_event
+    ):
+        prior_parameters = (4.0, 1.0)
+        rep = BDProximityReputation(
+            behavior_space=_bs(),
+            prior=_StubCohortPrior(*prior_parameters),
+        )
+        card = make_card(gain_events=(make_event(0.5, metrics={"x": 0.15}),))
+
+        in_cell = rep.card_stats(card, DecisionContext(parent_metrics={"x": 0.15}))
+        fallback = rep.card_stats(card, None)
+
+        assert in_cell is not None and fallback is not None
+        assert (in_cell.posterior_a, in_cell.posterior_b) == (5.0, 1.0)
+        assert (fallback.posterior_a, fallback.posterior_b) == (5.0, 1.0)
+
+    def test_foreign_events_are_not_bucketed_by_parent_metrics(
+        self, make_card, make_event
+    ):
+        native = _for_task(make_event(0.2, metrics={"x": 0.15}), "task-a")
+        foreign = _for_task(make_event(999.0, metrics={"x": 0.15}), "task-b")
+        card = make_card(gain_events=(native, foreign))
+        context = DecisionContext(task_key="task-a", parent_metrics={"x": 0.15})
+        rep = BDProximityReputation(behavior_space=_bs())
+
+        block = rep.card_stats(card, context)
+
+        assert block is not None
+        assert block.intro_events == 1
+        assert block.IntroGain_best_median == pytest.approx(0.2)
+        assert block.foreign_help_events == 1
+        assert block.foreign_total_events == 1
+        assert rep.event_deltas(card, context) == (0.2,)
+
     def test_no_context_delegates_to_fallback(self, make_card, make_event):
         rep = BDProximityReputation(behavior_space=_bs())
         card = make_card(gain_events=(make_event(0.5, metrics={"x": 0.15}),))
@@ -452,6 +672,46 @@ class _Store:
 
 
 class TestBootstrapReputation:
+    def test_all_unit_no_se_bootstrap_replays_the_legacy_draws_exactly(
+        self, make_card, make_event, monkeypatch
+    ):
+        card = make_card(
+            id="unit-weight-replay",
+            gain_events=(make_event(0.5), make_event(-0.25), make_event(0.1)),
+        )
+        n_bootstrap = 256
+        rep = BootstrapReputation(
+            BetaBinomialReputation(),
+            _Store((card,)),
+            n_bootstrap=n_bootstrap,
+        )
+
+        expected = bootstrap_ev_samples(
+            rep.event_deltas(card),
+            0.0,
+            1.0,
+            n_bootstrap,
+            stable_rng(card.id, len(rep.event_deltas(card)), n_bootstrap),
+            delta_weights=rep.event_weights(card),
+            ses=rep.event_ses(card),
+        )
+        captured = {}
+
+        def recording_bootstrap(*args, **kwargs):
+            samples = bootstrap_ev_samples(*args, **kwargs)
+            captured["samples"] = samples
+            return samples
+
+        monkeypatch.setattr(
+            "gigaevo.memory.read.reputation.bootstrap_ev_samples",
+            recording_bootstrap,
+        )
+        block = rep.card_stats(card)
+
+        assert block is not None
+        assert (captured["samples"] == expected).all()
+        assert block.IntroGain_bootstrap_ev_mean == float(expected.mean())
+
     def test_one_positive_use_event_is_priced_but_not_confident(
         self, make_card, make_event
     ):
@@ -520,6 +780,29 @@ class TestBootstrapReputation:
 
 
 class TestSoftHarmMass:
+    @pytest.mark.parametrize("gain", [-0.1, 0.1])
+    def test_unknown_se_is_uninformative_on_either_side_of_threshold(self, gain):
+        assert harm_mass(gain, None, 0.0) == pytest.approx(0.5)
+
+    def test_exact_and_measured_se_regimes_are_preserved(self):
+        assert harm_mass(-0.1, 0.0, 0.0) == 1.0
+        assert harm_mass(0.1, 0.0, 0.0) == 0.0
+        assert harm_mass(-0.1, 0.2, 0.0) == pytest.approx(float(norm.cdf(0.5)))
+
+    def test_degraded_event_contributes_half_its_credit_to_harm(self, make_event):
+        weight = 0.25
+        degraded = make_event(-0.1, gain_se=None).model_copy(
+            update={"attribution": EvidenceAttribution(credit_weight=weight)}
+        )
+        exact = degraded.model_copy(update={"gain_se": 0.0})
+
+        degraded_block = block_from_events([degraded])
+        exact_block = block_from_events([exact])
+
+        assert degraded_block is not None and exact_block is not None
+        assert degraded_block.k_harm == pytest.approx(0.5 * weight)
+        assert exact_block.k_harm == pytest.approx(weight)
+
     def test_zero_ses_match_omitted_bit_exact(self):
         gains = [0.5, -0.2, 0.0, -0.1]
         assert beta_binomial_posterior(gains, event_ses=[0.0] * 4) == (
@@ -573,6 +856,20 @@ class TestEventSes:
         ses = rep.event_ses(card)
         assert len(ses) == len(deltas) == 4
         assert ses == (0.1, 0.0, 0.0, 0.0)
+
+    def test_unknown_stored_se_is_preserved_and_bootstrap_safe(
+        self, make_card, make_event
+    ):
+        card = make_card(gain_events=(make_event(-0.1, gain_se=None),))
+        rep = BetaBinomialReputation()
+
+        assert rep.event_ses(card) == (None,)
+        assert (
+            BootstrapReputation(
+                rep, _Store((card,)), n_bootstrap=32, confident_min_events=1
+            ).card_stats(card)
+            is not None
+        )
 
     def test_infinite_stored_se_degrades_to_exact(self, make_card, make_event):
         rep = BetaBinomialReputation()

@@ -19,9 +19,13 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.engine.mutation import generate_mutations, generate_one_mutation
 from gigaevo.evolution.mutation.base import MutationSpec
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -55,6 +59,36 @@ def _make_deps(mutation_spec=None, storage_get_returns_none: bool = False):
         )
 
     return mutator, storage, state_manager
+
+
+async def test_persisted_child_retains_only_base_selected_lease() -> None:
+    parent = _prog()
+    parent.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, ["card-base"])
+    mutation_spec = MutationSpec(
+        code="def solve(): return 1",
+        parents=[parent],
+        name="leased mutation",
+        metadata={},
+    )
+    mutator, storage, state_manager = _make_deps(mutation_spec=mutation_spec)
+    storage.mget.return_value = []
+    registry = InFlightSelectionRegistry()
+    lease = registry.open_attempt("attempt-1", parent.id)
+    lease.attach_cards(("card-base", "card-non-base"))
+
+    child_id = await generate_one_mutation(
+        [parent],
+        mutator=mutator,
+        storage=storage,
+        state_manager=state_manager,
+        iteration=1,
+        selection_lease=lease,
+    )
+
+    assert child_id is not None
+    assert registry.leased_ids() == frozenset({"card-base"})
+    registry.release_child(child_id)
+    assert registry.leased_ids() == frozenset()
 
 
 # ---------------------------------------------------------------------------

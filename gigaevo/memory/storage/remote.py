@@ -7,13 +7,14 @@ remote service. Retrieval has no remote counterpart yet: ``nearest`` and
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable
 
 import httpx
 
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.storage.base import (
     MemoryStore,
+    MergeRetireResult,
     ResearchRequest,
     ResearchResult,
     ScoredCard,
@@ -43,6 +44,12 @@ class RemoteMemoryStore(MemoryStore):
         response.raise_for_status()
         return str(response.json()["id"])
 
+    def update(
+        self, card_id: str, transform: Callable[[Card], Card | None]
+    ) -> Card | None:
+        del card_id, transform
+        raise NotImplementedError("remote atomic updates have not landed yet")
+
     def get(self, card_id: str) -> Card | None:
         response = self._client.get(f"/cards/{card_id}")
         if response.status_code == httpx.codes.NOT_FOUND:
@@ -63,15 +70,14 @@ class RemoteMemoryStore(MemoryStore):
         cards = (Card.model_validate(data) for data in response.json()["cards"])
         return tuple(sorted(cards, key=lambda card: card.id))
 
-    def apply_merges(self, merged: Sequence[Card]) -> list[str]:
-        if not merged:
-            return []
-        response = self._client.post(
-            "/cards/merge",
-            json={"cards": [card.model_dump(mode="json") for card in merged]},
-        )
-        response.raise_for_status()
-        return [str(card_id) for card_id in response.json()["ids"]]
+    def merge_retire(
+        self,
+        target_id: str,
+        partner_id: str,
+        fold: Callable[[Card, Card | None], Card | None],
+    ) -> MergeRetireResult:
+        del target_id, partner_id, fold
+        raise NotImplementedError("remote atomic merges have not landed yet")
 
     def nearest(
         self, text: str, k: int, kind: CardKind | None = None

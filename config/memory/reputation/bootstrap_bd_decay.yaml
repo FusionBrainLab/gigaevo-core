@@ -34,6 +34,8 @@ inner:
       harm_threshold: 0.5
       confident_quantile: 0.20
       confident_threshold: 0.5
+      # Share the selected cold prior with warm counts (fixed_3_3 warms from Beta(3,3)).
+      prior: ${ref:memory.prior}
       cold_prior: ${memory.baseline_prior}
     # Harm/confidence thresholds for in-cell BD evidence.
     harm_min_events: ${memory.evidence.min_effective_events}
@@ -41,4 +43,6 @@ inner:
     harm_threshold: 0.5
     confident_quantile: 0.20
     confident_threshold: 0.5
+    # Share the selected cold prior with warm counts (fixed_3_3 warms from Beta(3,3)).
+    prior: ${ref:memory.prior}
     cold_prior: ${memory.baseline_prior}

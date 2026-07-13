@@ -11,6 +11,7 @@ no counters and no admission event of its own (no consumer).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -19,10 +20,13 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.exceptions import MergeAborted
 from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.prior_evidence import EvictedEvidenceSink, _JsonlFileLock
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
-from gigaevo.memory.write.eviction import Evictor
-from gigaevo.memory.write.merge import merge_cards
+from gigaevo.memory.write.eviction import Evictor, foreign_retention_veto
+from gigaevo.memory.write.merge import merge_cards, union_events, union_strings
 
 
 class WriteOutcome(StrEnum):
@@ -157,8 +161,9 @@ class WriteLedger:
                 category=category,
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._path.open("a", encoding="utf-8") as f:
-                f.write(row.model_dump_json() + "\n")
+            with _JsonlFileLock(self._path.with_suffix(self._path.suffix + ".lock")):
+                with self._path.open("a", encoding="utf-8") as f:
+                    f.write(row.model_dump_json() + "\n")
         except Exception as exc:
             logger.warning("[Memory][WriteLedger] failed to record: {}", exc)
 
@@ -178,11 +183,23 @@ class CardAdmissionGate:
     """
 
     def __init__(
-        self, *, store: MemoryStore, evictor: Evictor, ledger: WriteLedger | None = None
+        self,
+        *,
+        store: MemoryStore,
+        evictor: Evictor,
+        ledger: WriteLedger | None = None,
+        evicted_evidence_sink: EvictedEvidenceSink | None = None,
+        selection_leases: InFlightSelectionRegistry | None = None,
+        task_key: str = "",
+        min_effective_events: float = 0.0,
     ) -> None:
         self._store = store
         self._evictor = evictor
         self._ledger = ledger
+        self._evicted_evidence_sink = evicted_evidence_sink
+        self._selection_leases = selection_leases
+        self._task_key = task_key
+        self._min_effective_events = min_effective_events
         self._tombstoned: set[str] = set()
 
     def is_tombstoned(self, card_id: str) -> bool:
@@ -193,81 +210,160 @@ class CardAdmissionGate:
         return card_id in self._tombstoned
 
     def admit(self, card: Card) -> WriteResult:
-        incoming_id = card.id.strip()
-        if incoming_id in self._tombstoned:
-            return self._ledger_record(
-                card,
-                "",
-                WriteOutcome.REJECTED_HARM,
-                "tombstoned: harm-evicted earlier this run",
-            )
-        known = bool(incoming_id) and self._store.get(incoming_id) is not None
+        with self._eviction_guard():
+            incoming_id = card.id.strip()
+            if incoming_id in self._tombstoned:
+                return self._ledger_record(
+                    card,
+                    "",
+                    WriteOutcome.REJECTED_HARM,
+                    "tombstoned: harm-evicted earlier this run",
+                )
+            known = bool(incoming_id) and self._store.get(incoming_id) is not None
 
-        if self._evictor.should_evict(card):
-            reason = _eviction_reason(
-                self._evictor, card, "injection posterior confidently harmful"
-            )
-            if known:
-                self._store.delete(incoming_id)
-            if incoming_id:
-                self._tombstoned.add(incoming_id)
-            return self._ledger_record(
-                card,
-                "",
-                WriteOutcome.REJECTED_HARM,
-                reason,
-            )
+            if not known:
+                if self._evictor.should_evict(card):
+                    reason = _eviction_reason(
+                        self._evictor,
+                        card,
+                        "injection posterior confidently harmful",
+                    )
+                    if incoming_id:
+                        self._tombstoned.add(incoming_id)
+                    return self._ledger_record(
+                        card,
+                        "",
+                        WriteOutcome.REJECTED_HARM,
+                        reason,
+                    )
+                final_id = self._store.save(card)
+                return self._ledger_record(
+                    card,
+                    final_id,
+                    WriteOutcome.ADDED,
+                    "librarian-authored card",
+                )
 
-        final_id = self._store.save(card)
-        outcome = WriteOutcome.UPDATED if known else WriteOutcome.ADDED
-        reason = "known id replaced" if known else "librarian-authored card"
-        return self._ledger_record(card, final_id, outcome, reason)
+            harmful = False
+            leased = False
+            reason = ""
+
+            def replace(fresh: Card) -> Card | None:
+                nonlocal harmful, leased, reason
+                merged = card.model_copy(
+                    update={
+                        "gain_events": union_events(
+                            fresh.gain_events, card.gain_events
+                        ),
+                        "absorbed_ids": union_strings(
+                            fresh.absorbed_ids, card.absorbed_ids
+                        ),
+                    }
+                )
+                if not self._evictor.should_evict(merged):
+                    return merged
+                harmful = True
+                reason = _eviction_reason(
+                    self._evictor,
+                    merged,
+                    "injection posterior confidently harmful",
+                )
+                if self._is_leased(fresh.id):
+                    leased = True
+                    return fresh
+                return None
+
+            saved = self._store.update(incoming_id, replace)
+            if saved is None:
+                return _DISCARDED
+            if harmful:
+                if leased:
+                    self._log_leased_skip(incoming_id, reason)
+                else:
+                    self._tombstoned.add(incoming_id)
+                return self._ledger_record(
+                    card,
+                    "",
+                    WriteOutcome.REJECTED_HARM,
+                    reason,
+                )
+            return self._ledger_record(
+                saved,
+                incoming_id,
+                WriteOutcome.UPDATED,
+                "known id replaced",
+                incoming_id=incoming_id,
+            )
 
     def merge(self, target_id: str, card: Card) -> WriteResult:
-        target = self._store.get(target_id)
-        if target is None or target.kind is not CardKind.INSIGHT:
-            return _DISCARDED
-        # merge_cards preserves the target id on the survivor, so capture the
-        # submitted card's id before the fold — the ledger row must report what
-        # happened to the SUBMITTED card, not the merge target.
-        submitted_id = card.id
-        merged = merge_cards(target, card, replace_description=True)
-        if self._evictor.should_evict(merged):
-            reason = _eviction_reason(
-                self._evictor, merged, "merged card confidently harmful"
-            )
-            self._store.delete(target_id)
-            self._tombstoned.add(target_id)
-            if (
-                submitted_id
-                and submitted_id != target_id
-                and self._store.get(submitted_id) is not None
-            ):
-                self._store.delete(submitted_id)
-                self._tombstoned.add(submitted_id)
-            # Two cards die here, so two rows: the banked target's deletion
-            # (EVICTED, same convention as sweep) and the submitted partner's
-            # rejection — one row would leave the target's fate unrecorded.
-            self._ledger_record(target, "", WriteOutcome.EVICTED, reason)
+        with self._eviction_guard():
+            submitted_id = card.id
+            fresh_target: Card | None = None
+            merged: Card | None = None
+            submitted_banked = False
+            reason = ""
+
+            def fold(target: Card, partner: Card | None) -> Card | None:
+                nonlocal fresh_target, merged, submitted_banked, reason
+                fresh_target = target
+                submitted_banked = partner is not None
+                if target.kind is not CardKind.INSIGHT:
+                    raise MergeAborted
+                if partner is not None and self._is_leased(partner.id):
+                    self._log_leased_skip(
+                        partner.id, "librarian merge would retire absorbed partner"
+                    )
+                    raise MergeAborted
+                incoming = card
+                if partner is not None:
+                    incoming = card.model_copy(
+                        update={
+                            "gain_events": union_events(
+                                partner.gain_events, card.gain_events
+                            ),
+                            "absorbed_ids": union_strings(
+                                partner.absorbed_ids, card.absorbed_ids
+                            ),
+                            "programs": union_strings(partner.programs, card.programs),
+                        }
+                    )
+                merged = merge_cards(target, incoming, replace_description=True)
+                if not self._evictor.should_evict(merged):
+                    return merged
+                reason = _eviction_reason(
+                    self._evictor, merged, "merged card confidently harmful"
+                )
+                if self._is_leased(target.id):
+                    self._log_leased_skip(target.id, reason)
+                    raise MergeAborted
+                return None
+
+            result = self._store.merge_retire(target_id, submitted_id, fold)
+            if result.outcome in {"target_missing", "aborted"}:
+                return _DISCARDED
+            if fresh_target is None or merged is None:
+                raise RuntimeError("merge transaction completed without fold state")
+            if result.outcome == "retired":
+                self._tombstoned.add(target_id)
+                if submitted_banked:
+                    self._tombstoned.add(submitted_id)
+                self._ledger_record(fresh_target, "", WriteOutcome.EVICTED, reason)
+                return self._ledger_record(
+                    merged,
+                    "",
+                    WriteOutcome.REJECTED_HARM,
+                    reason,
+                    incoming_id=submitted_id,
+                    merge_targets=(target_id,),
+                )
             return self._ledger_record(
                 merged,
-                "",
-                WriteOutcome.REJECTED_HARM,
-                reason,
+                target_id,
+                WriteOutcome.MERGED,
+                "librarian merge",
                 incoming_id=submitted_id,
                 merge_targets=(target_id,),
             )
-        updated = self._store.apply_merges([merged])
-        if not updated:
-            return _DISCARDED
-        return self._ledger_record(
-            merged,
-            updated[0],
-            WriteOutcome.MERGED,
-            "librarian merge",
-            incoming_id=submitted_id,
-            merge_targets=(target_id,),
-        )
 
     def reject_novelty(self, card: Card, reason: str) -> WriteResult:
         """Record a novelty-judge rejection. The librarian holds the judge; the
@@ -286,41 +382,169 @@ class CardAdmissionGate:
         """
         if card.kind is not CardKind.PROGRAM:
             return _DISCARDED
-        self._store.delete(card.id)
-        return self._ledger_record(card, successor_id, WriteOutcome.UPDATED, reason)
+        with self._eviction_guard():
+            fresh_card: Card | None = None
+            blocker = ""
 
-    def retire_twin(self, twin: Card, *, successor_id: str) -> None:
-        """Delete an exemplar superseded by a strictly-better twin."""
-        self.retire_exemplar(
-            twin,
-            successor_id=successor_id,
-            reason="exemplar superseded by strictly-better twin",
+            def revalidate(fresh: Card) -> Card | None:
+                nonlocal fresh_card, blocker
+                fresh_card = fresh
+                if fresh.kind is not CardKind.PROGRAM:
+                    blocker = "fresh card is not a program exemplar"
+                    return fresh
+                if self._is_leased(fresh.id):
+                    blocker = "card is leased by an in-flight mutation"
+                    return fresh
+                blocker = self._foreign_retention_veto(fresh) or ""
+                return fresh if blocker else None
+
+            if self._store.update(card.id, revalidate) is None:
+                return _DISCARDED
+            if blocker:
+                logger.info(
+                    "[Memory][Admission] skipped retirement of card {}: {}; {}",
+                    card.id,
+                    reason,
+                    blocker,
+                )
+                return _DISCARDED
+            if fresh_card is None:
+                return _DISCARDED
+            return self._ledger_record(
+                fresh_card, successor_id, WriteOutcome.UPDATED, reason
+            )
+
+    def retire_twin(self, twin: Card, *, successor_id: str) -> WriteResult:
+        """Fold a fresh superseded twin into its successor and retire it."""
+        reason = "exemplar superseded by strictly-better twin"
+        fresh_twin: Card | None = None
+        blocker = ""
+
+        def fold(successor: Card, partner: Card | None) -> Card:
+            nonlocal fresh_twin, blocker
+            if partner is None:
+                raise MergeAborted
+            fresh_twin = partner
+            if partner.kind is not CardKind.PROGRAM:
+                blocker = "fresh card is not a program exemplar"
+                raise MergeAborted
+            if self._is_leased(partner.id):
+                blocker = "card is leased by an in-flight mutation"
+                raise MergeAborted
+            blocker = self._foreign_retention_veto(partner) or ""
+            if blocker:
+                raise MergeAborted
+            return merge_cards(successor, partner, replace_description=False)
+
+        with self._eviction_guard():
+            result = self._store.merge_retire(successor_id, twin.id, fold)
+        if result.outcome != "merged" or fresh_twin is None:
+            if blocker:
+                logger.info(
+                    "[Memory][Admission] skipped retirement of card {}: {}; {}",
+                    twin.id,
+                    reason,
+                    blocker,
+                )
+            return _DISCARDED
+        return self._ledger_record(
+            fresh_twin, successor_id, WriteOutcome.UPDATED, reason
         )
 
     def bump_provenance(self, target_id: str, child_id: str) -> WriteResult:
-        target = self._store.get(target_id)
-        if target is None or target.kind is not CardKind.INSIGHT:
+        eligible = False
+
+        def fold(target: Card) -> Card:
+            nonlocal eligible
+            if target.kind is not CardKind.INSIGHT:
+                return target
+            eligible = True
+            if not child_id or child_id in target.programs:
+                return target
+            return target.model_copy(update={"programs": (*target.programs, child_id)})
+
+        target = self._store.update(target_id, fold)
+        if target is None or not eligible:
             return _DISCARDED
-        if child_id and child_id not in target.programs:
-            self._store.save(
-                target.model_copy(update={"programs": (*target.programs, child_id)})
-            )
         return self._ledger_record(
             target, target_id, WriteOutcome.UPDATED, "duplicate provenance bump"
         )
 
     def sweep(self) -> list[str]:
         bank = self._store.snapshot()
-        by_id = {card.id: card for card in bank}
-        evicted = list(self._evictor.sweep(bank))
-        for cid in evicted:
-            self._store.delete(cid)
-            self._tombstoned.add(cid)
-            card = by_id.get(cid)
-            if card is not None:
+        candidates = list(self._evictor.sweep(bank))
+        evicted: list[str] = []
+        for cid in candidates:
+            fresh_card: Card | None = None
+            reason = ""
+            rescued = False
+            leased = False
+
+            def revalidate(card: Card) -> Card | None:
+                nonlocal fresh_card, reason, rescued, leased
+                fresh_card = card
+                if not self._evictor.should_evict(card):
+                    rescued = True
+                    reason = "fresh verdict no longer says evict"
+                    return card
                 reason = _eviction_reason(self._evictor, card, "confidently harmful")
-                self._ledger_record(card, "", WriteOutcome.EVICTED, reason)
+                if self._is_leased(card.id):
+                    leased = True
+                    return card
+                return None
+
+            with self._eviction_guard():
+                if self._store.update(cid, revalidate) is None:
+                    continue
+            if rescued:
+                logger.info(
+                    "[Memory][Admission] rescued card {} from stale eviction: {}",
+                    cid,
+                    reason,
+                )
+                continue
+            if leased:
+                self._log_leased_skip(cid, reason)
+                continue
+            evicted.append(cid)
+            self._tombstoned.add(cid)
+            if fresh_card is not None:
+                if self._evicted_evidence_sink is not None:
+                    try:
+                        self._evicted_evidence_sink.record(fresh_card)
+                    except Exception as exc:
+                        logger.warning(
+                            "[Memory][Admission] failed to record evicted evidence: {}",
+                            exc,
+                        )
+                self._ledger_record(fresh_card, "", WriteOutcome.EVICTED, reason)
         return evicted
+
+    def _eviction_guard(self):
+        if self._selection_leases is None:
+            return nullcontext()
+        return self._selection_leases.eviction_guard()
+
+    def _is_leased(self, card_id: str) -> bool:
+        return bool(
+            self._selection_leases is not None
+            and self._selection_leases.is_leased(card_id)
+        )
+
+    def _foreign_retention_veto(self, card: Card) -> str | None:
+        return foreign_retention_veto(
+            card,
+            task_key=self._task_key,
+            min_effective_events=self._min_effective_events,
+        )
+
+    @staticmethod
+    def _log_leased_skip(card_id: str, reason: str) -> None:
+        logger.info(
+            "[Memory][Admission] skipped eviction of leased card {}: {}",
+            card_id,
+            reason,
+        )
 
     def _ledger_record(
         self,

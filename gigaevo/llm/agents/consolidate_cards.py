@@ -20,9 +20,9 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
-from gigaevo.llm.agents.reconcile import LibrarianCard
+from gigaevo.llm.agents.reconcile import LibrarianCard, arbiter_card_brief
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.memory.cards import Card, card_brief
+from gigaevo.memory.cards import Card
 
 
 class ConsolidateDecision(BaseModel):
@@ -71,8 +71,8 @@ class ConsolidateAgent(LangGraphAgent):
     def build_prompt(self, state: ConsolidateState) -> ConsolidateState:
         a, b = state["card_a"], state["card_b"]
         user = self.user_prompt_template.format(
-            card_a=card_brief(a),
-            card_b=card_brief(b),
+            card_a=arbiter_card_brief(a),
+            card_b=arbiter_card_brief(b),
         )
         state["messages"] = [
             SystemMessage(content=self.system_prompt),

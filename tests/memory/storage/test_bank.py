@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+
+import pytest
+
+from gigaevo.exceptions import MemoryStorageError
+from gigaevo.memory.cards import ContextualGain, DecisionContext
 from gigaevo.memory.storage.bank import CardBank
 
 
@@ -58,3 +65,65 @@ def test_reload_invalidates_snapshot(tmp_path, make_card):
     writer.persist()
     reader.reload()
     assert [c.id for c in reader.snapshot()] == [card.id]
+
+
+def test_task_keys_round_trip_through_local_bank(tmp_path, make_card):
+    path = tmp_path / "bank.json"
+    card = make_card(
+        task_key="heilbronn",
+        gain_events=(
+            ContextualGain(
+                context=DecisionContext(task_key="heilbronn", parent_id="parent-1"),
+                gain=0.2,
+            ),
+        ),
+    )
+    bank = CardBank(path)
+    bank.put(card)
+    bank.persist()
+
+    (restored,) = CardBank(path).snapshot()
+
+    assert restored.task_key == "heilbronn"
+    assert restored.gain_events[0].context.task_key == "heilbronn"
+
+
+def test_reload_rejects_payload_key_embedded_id_mismatch(tmp_path, make_card):
+    path = tmp_path / "bank.json"
+    card = make_card()
+    path.write_text(
+        json.dumps({"cards": {"mem-wrong-key": card.model_dump(mode="json")}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MemoryStorageError, match="embedded card id"):
+        CardBank(path)
+
+
+def test_reload_if_changed_detects_same_size_same_mtime_atomic_replace(
+    tmp_path, make_card
+):
+    path = tmp_path / "bank.json"
+    card = make_card(description="alpha")
+    bank = CardBank(path)
+    bank.put(card)
+    bank.persist()
+    before = path.stat()
+
+    replacement = tmp_path / "replacement.json"
+    replacement_card = card.model_copy(update={"description": "bravo"})
+    replacement.write_text(
+        json.dumps(
+            {"cards": {card.id: replacement_card.model_dump(mode="json")}},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert replacement.stat().st_size == before.st_size
+    os.replace(replacement, path)
+    assert (path.stat().st_dev, path.stat().st_ino) != (before.st_dev, before.st_ino)
+
+    assert bank.reload_if_changed() is True
+    assert bank.get(card.id).description == "bravo"

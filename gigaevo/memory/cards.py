@@ -45,6 +45,10 @@ class DecisionContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    task_key: str = Field(
+        default="",
+        description="Stable key of the task the decision/measurement ran under.",
+    )
     parent_metrics: dict[str, float] = Field(default_factory=dict)
     parent_id: str = Field(
         default="", description="Base parent's program id (whose metrics these are)."
@@ -111,13 +115,14 @@ class Measurement(BaseModel):
     Generic value object for any stochastic evaluation: ``value`` is the
     estimated effect, ``se`` its standard error. ``se=0`` means the value is
     treated as exact — the degenerate point case every uncertainty-blind
-    consumer reduces to.
+    consumer reduces to. ``se=None`` means uncertainty could not be measured,
+    distinct from an exact result.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     value: float
-    se: float = Field(default=0.0, ge=0.0)
+    se: float | None = Field(default=0.0, ge=0.0)
 
 
 class ContextualGain(BaseModel):
@@ -134,12 +139,13 @@ class ContextualGain(BaseModel):
 
     context: DecisionContext
     gain: float
-    gain_se: float = Field(
+    gain_se: float | None = Field(
         default=0.0,
         ge=0.0,
         description="Standard error of ``gain`` under evaluation stochasticity. "
-        "0 means the gain is treated as exact — the historical point behavior, "
-        "and the truth for deterministic evals.",
+        "0 means exact (a deterministic evaluation or point estimator); a positive "
+        "value is the evaluation-noise se; None means a degraded paired measurement "
+        "whose uncertainty is unknown and is treated conservatively wide, never exact.",
     )
     invalid: bool = Field(
         default=False,
@@ -192,7 +198,8 @@ class DecisionMetrics(BaseModel):
         description="Effective introduction-event harm mass: per event, the probability "
         "its baseline-adjusted true gain is negative — the exact sign indicator for an "
         "exact event (gain_se=0, the historical strict sign test), the Gaussian tail "
-        "mass when the event carries evaluation-noise se. Fractional under noisy events.",
+        "mass when gain_se>0, and maximally uncertain 0.5 mass when gain_se is None. "
+        "Fractional under noisy or unknown-uncertainty events.",
     )
     p_help_mean: float | None = Field(
         default=None, description="Posterior mean P(gain >= threshold), a / (a + b)."
@@ -228,6 +235,15 @@ class CardStatsBlock(DecisionMetrics):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    foreign_help_events: float = Field(
+        default=0.0,
+        description="Sign-only effective help mass from uses on other tasks.",
+    )
+    foreign_total_events: float = Field(
+        default=0.0,
+        description="Sign-only effective use mass observed on other tasks.",
+    )
+
     @model_serializer(mode="wrap")
     def serialize_without_unset_defaults(
         self, handler: SerializerFunctionWrapHandler
@@ -255,6 +271,7 @@ class Card(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(description="Stable bank id of the card.")
+    task_key: str = Field(default="", description="Stable key of the authoring task.")
     kind: CardKind = Field(default=CardKind.INSIGHT)
     category: str = Field(
         default="general",

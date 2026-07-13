@@ -12,5 +12,7 @@ harm_threshold: 0.5
 confident_quantile: 0.20
 # Confidence threshold on P(help) for the Beta posterior.
 confident_threshold: 0.5
+# Share the selected cold prior with warm counts (fixed_3_3 warms from Beta(3,3)).
+prior: ${ref:memory.prior}
 # Legacy cold no-evidence prior used when no candidate_projector prior is set.
 cold_prior: ${memory.baseline_prior}

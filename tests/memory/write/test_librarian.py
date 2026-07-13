@@ -166,6 +166,19 @@ async def test_agent_failure_admits_note_verbatim(store, make_librarian):
     assert banked.description == "raw mutation note"
     assert banked.programs == ("child-1",)
     assert banked.task_description == "task"
+    assert banked.task_key == ""
+
+
+async def test_agent_failure_stamps_task_key_on_verbatim_fallback(
+    store, make_librarian
+):
+    agent = FakeReconcileAgent()
+    agent.raise_on_call = True
+    librarian = make_librarian(agent, task_key="heilbronn")
+
+    (card_id,) = await ingest(librarian, note="raw mutation note")
+
+    assert store.get(card_id).task_key == "heilbronn"
 
 
 async def test_agent_failure_verbatim_dedupes_to_exact_twin(
@@ -191,6 +204,17 @@ async def test_new_decision_admits_authored_card(store, make_librarian):
     ids = await ingest(librarian)
     assert len(ids) == 1
     assert store.get(ids[0]).description == "an idea"
+    assert store.get(ids[0]).task_key == ""
+
+
+async def test_new_decision_stamps_task_key_on_authored_card(store, make_librarian):
+    agent = FakeReconcileAgent(ReconcileResponse(items=[item("NEW")]))
+    librarian = make_librarian(agent, task_key="heilbronn")
+
+    (card_id,) = await ingest(librarian)
+
+    assert agent.calls[0]["task_key"] == "heilbronn"
+    assert store.get(card_id).task_key == "heilbronn"
 
 
 async def test_novelty_gate_admits_novel_new_card(store, make_librarian):
@@ -723,6 +747,24 @@ async def test_admit_program_without_twin_admits(store, make_card, make_libraria
     assert store.get(card.id) is not None
 
 
+async def test_admit_program_same_id_preserves_evidence_and_aliases(
+    store, make_card, make_event, make_librarian
+):
+    event = make_event(0.2)
+    banked = program_card(make_card, card_id="program-p1", fitness=0.4).model_copy(
+        update={"gain_events": (event,), "absorbed_ids": ("program-legacy",)}
+    )
+    store.save(banked)
+    librarian = make_librarian(FakeReconcileAgent())
+    replacement = program_card(make_card, card_id="program-p1", fitness=0.5)
+
+    assert librarian.admit_program(replacement, higher_is_better=True) == replacement.id
+
+    saved = store.get(replacement.id)
+    assert saved.gain_events == (event,)
+    assert saved.absorbed_ids == ("program-legacy",)
+
+
 async def test_admit_program_replaces_strictly_worse_twin(
     store, make_card, make_librarian
 ):
@@ -734,6 +776,72 @@ async def test_admit_program_replaces_strictly_worse_twin(
     assert librarian.admit_program(incoming, higher_is_better=True) == incoming.id
     assert store.get(twin.id) is None
     assert store.get(incoming.id) is not None
+
+
+async def test_admit_program_does_not_twin_across_tasks(
+    store, make_card, make_librarian
+):
+    foreign = program_card(
+        make_card, card_id="program-foreign", fitness=0.9
+    ).model_copy(update={"task_key": "maximize-task"})
+    store.save(foreign)
+    librarian = make_librarian(FakeReconcileAgent(), task_key="minimize-task")
+    incoming = program_card(
+        make_card, card_id="program-current", fitness=0.1
+    ).model_copy(update={"task_key": "minimize-task"})
+
+    assert librarian.admit_program(incoming, higher_is_better=True) == incoming.id
+    assert store.get(foreign.id) == foreign
+    assert store.get(incoming.id) == incoming
+
+
+async def test_foreign_fitness_cannot_block_same_code_admission(
+    store, make_card, make_librarian
+):
+    foreign = program_card(
+        make_card, card_id="program-foreign", fitness=-100.0
+    ).model_copy(update={"task_key": "foreign-maximize"})
+    store.save(foreign)
+    librarian = make_librarian(FakeReconcileAgent(), task_key="current-minimize")
+    incoming = program_card(
+        make_card, card_id="program-current", fitness=10.0
+    ).model_copy(update={"task_key": "current-minimize"})
+
+    assert librarian.admit_program(incoming, higher_is_better=False) == incoming.id
+    assert store.get(foreign.id) == foreign
+    assert store.get(incoming.id) == incoming
+
+
+async def test_admit_program_twin_replacement_transfers_evidence_and_aliases(
+    store, make_card, make_event, make_librarian
+):
+    twin_event = make_event(0.2)
+    incoming_event = make_event(0.4)
+    twin = program_card(make_card, card_id="program-old", fitness=0.3).model_copy(
+        update={
+            "gain_events": (twin_event,),
+            "absorbed_ids": ("program-ancestor",),
+        }
+    )
+    store.save(twin)
+    librarian = make_librarian(FakeReconcileAgent())
+    incoming = program_card(make_card, card_id="program-new", fitness=0.6).model_copy(
+        update={
+            "gain_events": (incoming_event,),
+            "absorbed_ids": ("program-incoming-ancestor",),
+        }
+    )
+
+    assert librarian.admit_program(incoming, higher_is_better=True) == incoming.id
+
+    saved = store.get(incoming.id)
+    assert saved.gain_events == (incoming_event, twin_event)
+    assert saved.absorbed_ids == (
+        "program-incoming-ancestor",
+        "program-ancestor",
+        twin.id,
+    )
+    assert store.get(twin.id) is None
 
 
 async def test_admit_program_drops_when_not_strictly_better(

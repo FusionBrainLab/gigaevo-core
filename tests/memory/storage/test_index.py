@@ -1,17 +1,12 @@
-"""VectorIndex over tmpdir Chroma: scope documents, filters, and diff-sync."""
+"""In-memory VectorIndex scope documents, filters, and diff-sync."""
 
 from __future__ import annotations
 
 import pytest
 
-from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import CardKind
 from gigaevo.memory.storage.config import EmbedConfig
-from gigaevo.memory.storage.index import (
-    _FINGERPRINT_FILE,
-    VectorIndex,
-    render_scope_document,
-)
+from gigaevo.memory.storage.index import VectorIndex, render_scope_document
 
 SCOPES = {
     "description": ("description",),
@@ -20,13 +15,13 @@ SCOPES = {
 
 
 @pytest.fixture
-def index(tmp_path):
+def index():
     # Symmetric embedder for the retrieval-mechanics tests below; the asymmetric
     # query_prefix is exercised separately in test_query_prefix_*.
     embed = EmbedConfig(
         embed_scopes=dict(SCOPES), nearest_scope="description", query_prefix=""
     )
-    return VectorIndex(tmp_path / "chroma", embed)
+    return VectorIndex(embed)
 
 
 def test_render_single_field_is_raw_text(make_card):
@@ -95,15 +90,13 @@ def test_kind_and_exclude_filters(index, make_card):
     assert combined == []
 
 
-def test_query_prefix_applies_to_queries_not_documents(
-    tmp_path, make_card, fake_embedder
-):
+def test_query_prefix_applies_to_queries_not_documents(make_card, fake_embedder):
     embed = EmbedConfig(
         embed_scopes={"description": ("description",)},
         nearest_scope="description",
         query_prefix="INSTRUCT: ",
     )
-    index = VectorIndex(tmp_path / "chroma", embed)
+    index = VectorIndex(embed)
     index.upsert([make_card(description="alpha beta")])
     assert fake_embedder.embedded == ["alpha beta"]
     fake_embedder.embedded.clear()
@@ -111,13 +104,13 @@ def test_query_prefix_applies_to_queries_not_documents(
     assert fake_embedder.embedded == ["INSTRUCT: alpha"]
 
 
-def test_empty_query_prefix_is_noop(tmp_path, make_card, fake_embedder):
+def test_empty_query_prefix_is_noop(make_card, fake_embedder):
     embed = EmbedConfig(
         embed_scopes={"description": ("description",)},
         nearest_scope="description",
         query_prefix="",
     )
-    index = VectorIndex(tmp_path / "chroma", embed)
+    index = VectorIndex(embed)
     index.upsert([make_card(description="alpha")])
     fake_embedder.embedded.clear()
     index.query("description", "alpha", 3)
@@ -247,35 +240,11 @@ def _embed(model: str, *, query_prefix: str = "") -> EmbedConfig:
     )
 
 
-def test_reused_dir_with_changed_embedder_raises(tmp_path):
-    # Chroma keys collections by name, so a reused persist dir keeps vectors from
-    # the old embedder; the new embedder would rank against incompatible vectors.
-    # Fail loudly rather than silently corrupt retrieval.
-    persist = tmp_path / "chroma"
-    VectorIndex(persist, _embed("model-a"))
-    with pytest.raises(StorageError, match="[Ee]mbedding config changed"):
-        VectorIndex(persist, _embed("model-b"))
+def test_instances_with_different_embed_configs_are_independent(make_card):
+    first = VectorIndex(_embed("model-a", query_prefix="A: "))
+    second = VectorIndex(_embed("model-b", query_prefix="B: "))
+    card = make_card(description="alpha")
+    first.upsert([card])
 
-
-def test_reused_dir_with_same_embed_config_is_ok(tmp_path):
-    persist = tmp_path / "chroma"
-    VectorIndex(persist, _embed("model-a"))
-    VectorIndex(persist, _embed("model-a"))
-
-
-def test_changed_query_prefix_does_not_invalidate(tmp_path):
-    # query_prefix conditions only queries, never the stored documents, so it is
-    # not part of the fingerprint and must not trip the guard.
-    persist = tmp_path / "chroma"
-    VectorIndex(persist, _embed("model-a", query_prefix="A: "))
-    VectorIndex(persist, _embed("model-a", query_prefix="B: "))
-
-
-def test_corrupt_fingerprint_fails_closed(tmp_path):
-    # A present-but-unreadable fingerprint (truncated write, foreign file) must
-    # fail closed — we cannot prove the stored vectors match the embedder.
-    persist = tmp_path / "chroma"
-    VectorIndex(persist, _embed("model-a"))
-    (persist / _FINGERPRINT_FILE).write_text("{not json", encoding="utf-8")
-    with pytest.raises(StorageError, match="[Uu]nreadable embed fingerprint"):
-        VectorIndex(persist, _embed("model-a"))
+    assert [hit.card_id for hit in first.query("description", "alpha", 1)] == [card.id]
+    assert second.query("description", "alpha", 1) == []

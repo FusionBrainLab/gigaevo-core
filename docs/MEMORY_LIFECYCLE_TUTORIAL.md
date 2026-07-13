@@ -172,14 +172,14 @@ This expands into the following system.
 
 | Component | Current adaptive setting | What it does | Why it is needed | What you see on real cards |
 |---|---|---|---|---|
-| Store | `LocalMemoryStore` | Owns `cards.json`, Chroma index, and research agent | One shared object lets writer updates become visible to later reads | `MEMORY_STORE_WRITE` rows and growing/merging cards in `cards.json` |
+| Store | `LocalMemoryStore` | Owns `cards.json`, an in-memory Chroma index, and the research agent | One shared object lets writer updates become visible to later reads | `MEMORY_STORE_WRITE` rows and growing/merging cards in `cards.json` |
 | Research width | `default_top_k=10`, `research.max_cards=10` | Gives the agentic retrieval loop enough candidates for the auction | A one-card suggestion budget still needs a wider candidate pool | Higgs R1 averaged 3.10 candidates per read after retrieval/filtering |
 | Suggestion-stage card budget | `memory.reader.max_cards=1` | Caps rendered external cards passed into `MutationSuggestionStage` | Keeps the card-derived suggestion source focused and makes credit cleaner | `MEMORY_BUDGET_CAP` appears when multiple cards win |
 | Shortlister | `BootstrapFusedRankingShortlister` | Benches weak warm cards before research, then may post-filter/rank the researched result | Prevents known weak cards from occupying digest/research slots | Warm non-positive cards vanish before prompt rendering |
-| Bench floor | `rep_floor_quantile=0.4` | Drops bottom warm-card pessimistic-EV quantile before research | Self-normalized bank cleanup without a metric-specific threshold | Bad warm cards become less visible even before eviction |
+| Bench floor | `rep_floor_quantile=0.4` | Post-filters sufficiently-observed warm cards in the bottom pessimistic-EV quantile; cards below the shared effective-evidence floor are exempt | Self-normalized ranking without cutting under-observed cards off from auction/probe evidence | Weak adjudicable cards lose the current read; under-observed cards retain exploration access |
 | Reputation | `BootstrapReputation(BDProximityReputation)` | Computes contextual posterior and bootstrap EV from gain events | A card can help one BD region and hurt another | Same card can bid differently depending on parent metrics |
-| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a cold-card prior from first non-founding exposures over a config-driven cohort ladder (`levels`: global → kind → kind+category, then context / context+kind / context+kind+category once the parent resolves a non-global bucket), shrunk toward the neutral seed under a `k_max=6` cap | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category and context-local tendencies |
-| EV staleness | `half_life_cycles=1.0` | Downweights old EV evidence by bank-cycle age | Old evidence should fade relative to a changing bank | Stale known deltas bid closer to zero |
+| Cold prior | `EmpiricalBayesMemoryPrior(seed_prior=[1, 1])` | Learns a cold-card prior from each card's temporally first non-founding exposure over a config-driven cohort ladder (`levels`: global → kind → kind+category, then context / context+kind / context+kind+category once the parent resolves a non-global bucket), counting only strictly positive causal gain as help and putting zero, negative, and invalid outcomes in the failure/complement mass, then shrinking toward the neutral seed under a `k_max=6` cap | Cold cards need exploration without being treated as winners or blocked forever by a static prior | Founding-only cards remain explorable; new cards inherit measured bank-wide/category and context-local tendencies |
+| EV staleness | `half_life_cycles=1.0` | Downweights each EV event from its own bank-cycle age | Old evidence should fade relative to a changing bank without being revived by one fresh event | Stale known deltas bid closer to zero |
 | Auction | `BootstrapThompsonAuctioneer` | Samples EV bids and gates against the no-card arm | Handles uncertainty, left-tail loss, and abstention | Higgs R1 rejected 608/1200 reads at auction |
 | EV floor | `ev_floor_quantile=0.765` | Requires bids to be in the high part of the round's own bid distribution | Avoids hardcoded gain deltas and limits low-value injections | Candidate can be retrieved but still fail the auction |
 | Budget | `TopBidBudgeter` | Keeps highest realized EV bid when too many cards win | The external card block can hold fewer cards than auction winners | Budget rows show dropped winners by bid |
@@ -385,8 +385,8 @@ contains 642 ledger rows: 163 `added`, 250 `merged`, 178 `updated`, 48
 | Idea ingest times out | Partial landed cards are kept; the child record is retried later | A stalled memory LLM call should not block the sweep or permanently drop the child. |
 | Program is top-fitness | Program exemplar card may be authored | Concrete high-performing programs are kept separately from prose insights. |
 | Exemplar authoring fails or times out | Exemplar is skipped | A stalled exemplar LLM call should not freeze the writer. |
-| Exemplar code hash already exists | Equal/worse same-code exemplar is discarded; strictly better twin replaces the older one | Program exemplars dedup by normalized code identity, not prose similarity. |
-| Exemplar cap exceeded | Worst extra exemplar is retired with a non-harm ledger update | `program_exemplars.max_cards=12` bounds exemplar memory. |
+| Exemplar code hash already exists | Equal/worse same-code exemplar is discarded; a strictly better twin transactionally absorbs the fresh older twin unless retirement is guarded | Program exemplars dedup without losing a concurrent restamp. |
+| Exemplar cap exceeded | Worst extra exemplar is retired after fresh lease and foreign-retention checks | `program_exemplars.max_cards=12` bounds exemplar memory without deleting a card that helps another task. |
 | Exemplar id was tombstoned | Authoring is skipped | Harm-deleted cards should not churn back into the bank during the same run. |
 | Catastrophic founding loss | Card is deleted at birth | See birth-failure eviction below. |
 
@@ -595,8 +595,8 @@ is strictly below `memory.evidence.min_effective_events`, it is probe-eligible:
 the cold-probe lane keeps it in circulation. Once its support reaches that floor,
 it leaves the probe lane and becomes adjudicable by auction merit and evictable
 by `PolicyNonViableEvictor`. Because the probe lane uses strict `<` and eviction
-uses `>=` on the same arithmetic (`sum(max(0, w))` over finite event weights,
-times the staleness weight), support exactly at the floor belongs to the
+uses `>=` on the same arithmetic (`sum(max(0, credit_i * w_i))` over finite
+per-event terms), support exactly at the floor belongs to the
 eviction lane, and no card can be in both lanes or fall between them. That is
 what keeps a card with only diluted unused/invalid exposure from getting stuck:
 its staleness-scaled support stays below the floor, so it remains probe-eligible
@@ -637,6 +637,13 @@ The control preference is global before BD partitioning. If a run has any
 randomized no-card controls, ordinary no-card rows are ignored for the baseline;
 a BD cell with no control rows falls back to the global median of the controls,
 not to same-cell ordinary rows.
+
+Noise-aware paired crediting distinguishes exact from unmeasurable uncertainty.
+The default point estimator stamps `gain_se=0` unchanged. A positive paired se
+is combined in quadrature with the global fitted baseline location se,
+`std(no_card_deltas, ddof=1) / sqrt(n)` for `n >= 2`; contextual baseline fits
+do not yet model a location se. A degraded paired comparison stamps
+`gain_se=None` rather than pretending the scalar delta is exact.
 
 ```mermaid
 flowchart TD
@@ -760,13 +767,52 @@ zero.
 For a card's non-founding events:
 
 ```text
+a0, b0 = the card's configured cold prior
 n = total effective event weight
-k_harm = weight of events with gain < 0, plus invalid/unused forced failures
-a = 1 + (n - k_harm)
-b = 1 + k_harm
+k_harm = sum(weight * per_event_harm_mass), plus invalid/unused forced failures
+per_event_harm_mass = 1[gain < 0]                       if gain_se == 0
+                    = NormalCDF((0 - gain) / gain_se)  if gain_se > 0
+                    = NormalCDF(0)                     if gain_se is None
+a = a0 + (n - k_harm)
+b = b0 + k_harm
 p_not_harm_mean = a / (a + b)
 p_not_harm_lo20 = Beta(a, b).ppf(0.20)
 ```
+
+The unknown-se branch is the `se -> infinity` limit, so it contributes exactly
+half of that event's weight regardless of the stored point gain. It is
+uninformative, unlike the exact hard-sign branch.
+
+Those equations are the default `harm_model="soft_count"`, retained for legacy
+and preset byte compatibility. The opt-in `harm_model="mixture"` interprets
+each finite native event as an independent latent harm indicator
+`H_i ~ Bernoulli(p_i)`, where `p_i` is its harm mass. Let `alpha` and `beta` be
+the soft-count parameters above, `N=alpha+beta`, and
+`sigma_K^2=sum(weight_i^2 * p_i * (1-p_i))`. The true mixture has
+
+```text
+mean(theta) = alpha / N
+var(theta) = (alpha * beta + N * sigma_K^2) / (N^2 * (N + 1))
+S = alpha * beta * (N + 1) / (alpha * beta + N * sigma_K^2) - 1
+a_mixture = (alpha / N) * S
+b_mixture = (1 - alpha / N) * S
+```
+
+This is an exact first-two-moment calculation for the latent-sign posterior;
+only the final representation as one Beta is a moment match. When any sign is
+uncertain, `S<N`, so the harm gate reads a wider Beta at the same mean. Exact
+events have `p_i` exactly zero or one and therefore `sigma_K^2=0`; the code
+short-circuits to the original `(alpha,beta)` rather than recovering it through
+floating-point algebra. Invalid and unused failures likewise remain
+deterministic harm and are excluded from `sigma_K^2`, while foreign evidence is
+still folded later as hard signs. Empty histories retain the legacy no-block or
+NaN-quantile behavior. No shipped YAML sets `harm_model`. Add it to the
+posterior-owning node, not to a pure decorator: direct `beta_binomial` and
+`bd_proximity` presets accept `+memory.reputation.harm_model=mixture`; the
+default adaptive `bootstrap_bd` stack uses
+`+memory.reputation.inner.harm_model=mixture` plus
+`+memory.reputation.inner.fallback.harm_model=mixture` when its independently
+configured cold-cell fallback should opt in as well.
 
 The serialized field names are still `p_help_mean` and `p_help_lo20` for
 compatibility, but the safer mental model is "probability this card is not
@@ -782,15 +828,27 @@ runs, `AuctionCandidateProjector` replaces that fallback with the configured
 ```text
 legacy cold prior = memory.baseline_prior
 adaptive cold prior = EB along the config-driven ladder
-                      global -> kind -> kind+category
+                      global -> kind -> kind+category -> task+kind+category
                       -> context -> context+kind -> context+kind+category
+                      -> task+context+kind+category
 ```
 
+The shipped reputation presets pass that same resolved prior into the first
+warm block, so one win adds a success count to `(a0,b0)` rather than resetting
+the card to Beta(2,1). This removes the cold-to-warm cliff: a positive event
+cannot lower a cohort prior's mean merely by changing code paths. The
+`fixed_3_3` legacy presets intentionally move too—their warm posterior now
+starts at Beta(3,3), whereas an explicitly unwired `prior=None` reputation
+keeps the historical Beta(1,1) base.
+
 The ladder lives in `memory/prior.levels`. A validator enforces its shape: only
-the tokens `{kind, category, context}`, no duplicates, all global levels before
+the tokens `{kind, category, context, task}`, no duplicates, all global levels before
 any context-bearing level, and a strict token-superset (monotone refinement)
 within each block. Context-bearing levels apply only when the context model
-resolves a non-global bucket, and any level whose cohort counts equal the
+resolves a non-global bucket and always use native-task events because BD cells
+cannot be compared across task metric spaces. Global non-context levels may pool
+cross-task evidence, but each event contributes only its hard help/no-help sign.
+Any level whose cohort counts equal the
 previously applied level's is skipped so the same evidence does not compound its
 shrinkage. `parent_mu` deliberately carries across the global-to-local boundary:
 the deepest informative global cohort is the shrinkage parent for the first
@@ -837,6 +895,24 @@ The cold gain scale is, in order:
 Known cards therefore do not borrow unrelated positive scale. Their own old
 evidence fades toward zero, not toward optimism.
 
+The number of bootstrap replicates is still the configured `n_bootstrap` (512
+in the shipped reputation presets). What changes with evidence quality is the
+number of atoms drawn inside each replicate. If `q_j` are the exact multinomial
+weights for fused credit×staleness event atoms plus the unit neutral atom, then:
+
+```text
+n_eff = (sum(q_j) ** 2) / sum(q_j ** 2)
+atoms_per_replicate = max(1, round(n_eff))
+```
+
+This is Kish effective sample size. A long list dominated by one or two atoms
+therefore gets wider EV tails than an equally long, uniformly weighted history;
+zero-weight atoms add no precision. Fully credited, unaged histories remain
+seed-exact with the old bootstrap because all weights are one and `n_eff` is
+exactly the old atom count. The reputation block still reports
+`effective_events = sum(credit_i * w_i)` for confidence/support policy; Kish N
+controls only bootstrap draw size.
+
 ![Later-use gain events stamped on cards](assets/memory_gain_event_distribution_tabular.png)
 
 The gain histogram shows why the EV layer matters: losses and wins can have
@@ -854,7 +930,7 @@ The recommended system connects them deliberately:
 |---|---|---|---|
 | Bootstrap EV block | read/scoring time | non-founding gains, unused/invalid zero atoms, neutral pseudo-event, staleness weight | estimates expected card value and left-tail risk |
 | Bootstrap fused bench | before retrieval/research | pessimistic bootstrap EV (`IntroGain_bootstrap_ev_lo20`) | keeps known weak warm cards out of the retrieval prompt |
-| Bootstrap auction | after research | one live bootstrap EV bid plus Beta posterior draw | decides whether a candidate beats the no-card arm |
+| Bootstrap auction | after research | one shared uniform posterior world mapped to a bootstrap-EV bid and Beta gate theta | decides whether a candidate beats the no-card arm without splitting its Thompson draw |
 | Renderer | after budget | central/pessimistic bootstrap EV and posterior confidence | decides how strongly the card is described to the suggester |
 | `PolicyNonViableEvictor` | write sweep after restamp | the same active value scorer, usually bootstrap EV mean | deletes warm cards that the active read policy now prices as non-viable |
 | `HarmEvictor` | write sweep after restamp | downside Beta posterior only | deletes cards with repeated later-use failures |
@@ -890,17 +966,23 @@ So "bad card cleanup" has two lanes:
 
 ## EV Staleness And Posterior Decay
 
-The default bootstrap reputation uses bank-cycle staleness for EV evidence:
+The default bootstrap reputation uses bank-cycle staleness for EV evidence. For
+decision task `T`, `S_T` contains only native bank-event stamps and `N_T` is the
+same task population used by the bank-cycle denominator:
 
 ```text
-s = number of gain events in the bank newer than this card's latest evidence
-H = current_bank_card_count * half_life_cycles
-w = 2 ** (-s / H)
+H = N_T * half_life_cycles
+s_i = number of stamps t in S_T with t > event_i.stamp
+w_i = 2 ** (-s_i / H)
+bootstrap/support weight_i = credit_i * w_i
 ```
 
-With the default `half_life_cycles=1.0`, evidence one bank-wide turn old gets
-half the bootstrap resample weight. A card with no stamped event timestamp gets
-`w = 1.0`; there is no wall-clock decay without evidence timestamps.
+With the default `half_life_cycles=1.0`, an event one task-population turn old
+gets half the bootstrap resample weight. An unstamped event gets `w_i = 1.0`;
+there is no wall-clock decay without evidence timestamps. Foreign traffic is
+excluded from `S_T` and `N_T`, so it cannot age native evidence. Each event is
+ranked from its own stamp: adding one fresh loss does not reset old wins to unit
+weight.
 
 ![Bank-cycle staleness weight](assets/memory_staleness_decay_curve.png)
 
@@ -911,16 +993,29 @@ The downside posterior used by `HarmEvictor` still counts the later-use evidence
 unless a decay preset is selected.
 
 The optional `*_decay` reputation presets wrap the inner reputation with
-`DecayingReputation`. That variant discounts posterior counts as well:
+`DecayingReputation`. That variant rebuilds posterior counts from the same
+per-event weights:
 
 ```text
-a_eff = 1 + w * (a - 1)
-b_eff = 1 + w * (b - 1)
-intro_events_eff = w * intro_events
+n_eff = sum_i(credit_i * w_i)
+k_harm_eff = sum_i(credit_i * w_i * harm_mass_i)
+a_eff = a0 + n_eff - k_harm_eff
+b_eff = b0 + k_harm_eff
 ```
 
-So under explicit posterior decay, old harm evidence can also fall below the
-`harm_min_events` requirement. This is not the `memory=full` default.
+If the inner reputation opts into the mixture harm model, the same aged
+`credit_i * w_i` is also the latent indicator's weight in `sigma_K^2`; the
+decorator itself does not own or override `harm_model`.
+
+Invalid and unused events contribute their own aged forced-failure mass;
+foreign sign-only counts are also aged event by event. So under explicit
+posterior decay, old harm evidence can also fall below the
+`harm_min_events` requirement while the posterior returns to the card's own
+cold prior `(a0,b0)` (Beta(1,1) only when no prior policy is configured). This
+is not the `memory=full` default: ordinary `bootstrap_bd` and
+`bd_proximity` keep their inner Beta posterior credit-only while ageing only EV
+and support. The decayed display magnitude expires once native effective
+evidence falls below one event, matching the harm-gate count expiry.
 
 Decay does not delete a card. Deletion is handled by birth-failure eviction,
 later-use harm eviction, and policy-non-viable active-bank cleanup.
@@ -933,13 +1028,13 @@ The default `BootstrapThompsonAuctioneer` does this for each read decision:
 flowchart TD
     A[Candidate cards] --> B[Resolve posterior a,b]
     B --> C[Build EV support]
-    C --> D[Draw one EV bid per card]
+    C --> D[Draw one u per card; map it to EV bid and Beta theta]
     D --> E{bid > 0 and bid >= round quantile floor?}
     E -->|no| Reject[Cannot win]
     E -->|yes| F[Eligible slate]
     F --> G[Draw one no-card-arm theta from dynamic no-card evidence or memory.baseline_prior]
     G --> H[Sidak-adjust gate over eligible cards]
-    H --> I[Draw card theta]
+    H --> I[Reuse each card theta from the same u]
     I --> J{theta > gate_theta?}
     J -->|yes| Win[Auction winner]
     J -->|no| Reject
@@ -952,6 +1047,25 @@ arm here is the read-time abstention gate. It is separate from the fitted
 no-card progress baseline used by the writer, though adaptive runs publish
 writer-observed controls into `no_card_evidence.json` so the read gate can use a
 contextual no-card prior instead of only the static fallback.
+
+An optional IIA-clean reserve sets `ev_reserve_mode=risk` and
+`ev_risk_alpha=<alpha>`. It admits each card when at least `1 - alpha` of that
+card's own bootstrap-EV samples are positive, independent of the other bids in
+the round. The risk probability and the card's `u`-quantile bid consume the
+identical sampled vector; no second bootstrap draw is made. The shipped default
+is `quantile`, so all presets retain the flow above. In risk runs, inspect
+`ev_reserve_mode`, `ev_positive_probability`, `ev_risk_alpha`, and
+`rejected_by_ev_floor` in each `MEMORY_AUCTION_RUN.bids` row.
+
+An additional code-level opt-in,
+`PendingDiscountedBootstrapAuctioneer`, taxes repeated selection during delayed
+feedback bursts. Before the inner reader runs, `LeasedMemoryProvider` snapshots
+the lease registry's uncredited exposure counts; only earlier outstanding
+owners appear in that snapshot because this round's winners are attached
+afterward. The adjusted bid is
+`bid * (1 + pending_count)^-pending_power`. No shipped preset enables this
+auctioneer, `pending_counts=None` projects zero, and its default
+`pending_power=0` leaves the base bootstrap decision and RNG stream unchanged.
 
 The budgeter only runs after the auction. If five cards win but
 `memory.reader.max_cards=1`, only the highest realized EV bid reaches the
@@ -968,7 +1082,9 @@ For each candidate:
    - Known card: its raw later-use direct deltas, zero atoms for invalid/unused
      exposure, plus one neutral zero pseudo-event.
    - Cold card: one borrowed positive cold-scale atom.
-3. Draw one realized EV bid.
+3. Draw one `u ~ U(0, 1)`. A known card bids the empirical `u`-quantile of one
+   bootstrap-EV batch; a cold card bids `Beta(a, b).ppf(u)` times its borrowed
+   scale. The same Beta theta is also computed for known cards.
 4. Reject it immediately if the bid is not positive.
 5. Reject it if it falls below the round's `0.765` bid quantile.
 6. For remaining eligible cards, draw one no-card arm from persisted no-card
@@ -976,7 +1092,7 @@ For each candidate:
    seed prior, which defaults to `memory.baseline_prior`. Legacy/no-provider
    runs use the auction's same fallback. Sidak-adjust that gate over the number
    of eligible cards.
-7. Draw each card's theta from its Beta posterior.
+7. Reuse each card's `Beta(a, b).ppf(u)` theta from step 3.
 8. Select the card only if theta beats the adjusted no-card-arm gate.
 9. If too many cards win, keep the top realized EV bids.
 
@@ -991,6 +1107,11 @@ over, so the two never contend for the same card.
 ## Eviction
 
 There are three deletion policies in the recommended evictor.
+
+Periodic harm eviction destroys the card's gain events, so an optional
+evicted-evidence ledger (default off) lets the EB prior keep counting
+non-survivors. This restores survivorship inclusion only;
+inclusion-propensity/IPS weighting remains a follow-up.
 
 ### BirthFailureEvictor
 
@@ -1106,12 +1227,13 @@ ideas are eventually benched or deleted.
 A "zombie card" can mean two different things.
 
 The mechanism that rules out a genuine stuck state is a single partition. The
-read and write sides share one measure — staleness-scaled effective support,
-`sum(max(0, w))` over a card's finite non-founding event weights times its
-staleness weight — and split card-space on the evidence floor
+read and write sides share one measure — per-event-aged effective support,
+`sum(max(0, credit_i * w_i))` over a card's finite non-founding event terms —
+and split card-space on the evidence floor
 (`memory.evidence.min_effective_events`). Below the floor a card is
-probe-eligible and the cold-probe lane keeps it in circulation; at or above the
-floor it is adjudicable by auction merit and evictable by
+exempt from the relative warm-card shortlist floor, remains probe-eligible, and
+the cold-probe lane keeps it in circulation; at or above the floor it is
+adjudicable by shortlist/auction merit and evictable by
 `PolicyNonViableEvictor`. Probe uses strict `<` and eviction uses `>=`, so a card
 lives in exactly one lane — never both, never neither. The old pathology was a
 card whose only history was diluted unused/invalid exposure: too exposed to be a
@@ -1179,8 +1301,8 @@ a bad card to be selected three more times after it already looks bad.
 | Harmful merge | Merged union trips evictor | Ledger `evicted` / `rejected_harm` | Target is deleted/tombstoned |
 | Program exemplar authored | Top valid program selected | `kind=program`, fitness, code hash, optional code | Competes like other cards |
 | Program exemplar skipped | Authoring timeout/failure, tombstoned id, or equal/worse same-code twin | No new exemplar | Writer keeps moving without adding a duplicate |
-| Better same-code exemplar | Same normalized code hash but higher fitness | Better twin admitted; older twin retired | Exact-code identity stays bounded |
-| Exemplar cap pruning | `program_exemplars.max_cards` exceeded | Non-harm ledger update | Worst extra exemplar retired |
+| Better same-code exemplar | Same normalized code hash but higher fitness | Better twin admitted; fresh older-twin evidence is folded transactionally before retirement | A lease or majority-helpful foreign evidence keeps the older twin |
+| Exemplar cap pruning | `program_exemplars.max_cards` exceeded | Non-harm ledger update after fresh revalidation | A lease or majority-helpful foreign evidence vetoes retirement |
 | Founding-only good | Birth child improved, no later use | Founding event only | Still cold for posterior; can be explored |
 | Founding-only bad but not catastrophic | Birth child regressed mildly | Founding event only | Still cold unless later evidence appears |
 | Catastrophic birth | Founding loss exceeds task-scaled threshold | Ledger `rejected_harm` or `evicted` | Deleted / tombstoned for the run |
@@ -1221,16 +1343,17 @@ python tools/memory_card_health.py <bank>
 For a shared bank, artifacts are split across two places. Run telemetry lives in
 the Hydra run output, usually `<run>/memory/memory_events.jsonl`. The bank itself
 lives under `checkpoint_dir`, for example `/abs/bank/cards.json`,
-`/abs/bank/chroma/`, and `/abs/bank/write_ledger.jsonl`. You often need both:
-the run-local event stream explains what this run tried, while the shared bank
-files explain what cards currently exist.
+and `/abs/bank/write_ledger.jsonl`. The vector index is process-local,
+in-memory, and rebuilt from `cards.json` at startup and after cross-process bank
+changes. You often need both persisted locations: the run-local event stream
+explains what this run tried, while the shared bank files explain what cards
+currently exist.
 
 | Artifact | Meaning |
 |---|---|
 | `<run>/memory/memory_events.jsonl` | Per-read and per-write telemetry: research, auction, budget, restamp, eviction |
 | `<bank>/cards.json` | Current cards and their gain events |
 | `<bank>/write_ledger.jsonl` | Append-only history of add, merge, update, eviction, rejection |
-| `<bank>/chroma/` | Vector index used by retrieval |
 | `<run>/storage/<problem>/programs/*.json` | Child metadata used for no-card baseline and credit assignment |
 
 Useful event names:

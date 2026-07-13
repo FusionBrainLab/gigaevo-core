@@ -1,9 +1,9 @@
 """Fixtures for the storage layer: deterministic embeddings + test-data factories.
 
-Every test in this directory runs against real Chroma in a tmpdir, but with a
-token-hash embedding function instead of a sentence-transformer: identical
-text embeds to distance 0, disjoint tokens embed (near-)orthogonally, and the
-suite stays fast and network-free.
+Every test in this directory runs against real in-memory Chroma, but with a
+token-hash embedding function instead of a sentence-transformer: identical text
+embeds to distance 0, disjoint tokens embed (near-)orthogonally, and the suite
+stays fast and network-free.
 """
 
 from __future__ import annotations

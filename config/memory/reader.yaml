@@ -21,6 +21,9 @@ capabilities:
 # per read, but static/legacy paths and cold fallback priors stay aligned here.
 baseline_prior: [3.0, 3.0]
 
+context_model:
+  task_key: ${problem.name}
+
 evidence:
   # Shared with reputation configs so read-only runs use the same confidence
   # evidence floor as full/write runs.
@@ -56,6 +59,7 @@ reader:
   probe_policy: ${ref:memory.probe_policy}
   renderer:
     _target_: gigaevo.memory.read.render.EfficacyCardRenderer
+    task_key: ${problem.name}
   # Injection budget after the auction ranks the recall shortlist above.
   max_cards: 1
 

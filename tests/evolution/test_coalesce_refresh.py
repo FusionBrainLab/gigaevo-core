@@ -31,6 +31,10 @@ from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.ingestor import poll_and_ingest
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
 from gigaevo.evolution.engine.refresh import ParentRefresher
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.evolution._fake_dag import FakeDag
@@ -59,6 +63,7 @@ class _FakeEngine:
         self._producer_sema = asyncio.Semaphore(3)
         self._buffer_sema = asyncio.Semaphore(3)
         self._llm_active = 0
+        self._selection_leases = None
 
         self.metrics = type("M", (), {})()
         self.metrics.submitted_for_refresh = 0
@@ -87,7 +92,16 @@ class _FakeEngine:
 def mock_generate_one_mutation(monkeypatch):
     """Patch generate_one_mutation to skip the LLM call and just return an id."""
 
-    async def _fake(parents, mutator, storage, state_manager, iteration, task_id):
+    async def _fake(
+        parents,
+        mutator,
+        storage,
+        state_manager,
+        iteration,
+        task_id,
+        selection_lease=None,
+    ):
+        del selection_lease
         new_id = str(uuid.uuid4())
         prog = Program(
             id=new_id,
@@ -154,6 +168,53 @@ async def test_coalesce_mode_skips_flip_when_fresh(
         await run_one_mutant(engine, task_id=1)
         assert fake_dag.flip_count_for(p1.id) == 1
         assert engine.metrics.submitted_for_refresh == 1
+    finally:
+        await fake_dag.stop()
+
+
+@pytest.mark.asyncio
+async def test_coalesced_refresh_reverifies_selection_before_llm(
+    fakeredis_storage, monkeypatch
+):
+    fake_dag = FakeDag(fakeredis_storage)
+    fake_dag.start()
+    try:
+        parent = await fake_dag.add_program("p1")
+        parent.set_metadata(
+            MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+            ["card-live", "card-vanished"],
+        )
+        await fakeredis_storage.update(parent)
+        engine = _FakeEngine(
+            storage=fakeredis_storage,
+            parents=[parent],
+            coalesce_refresh=True,
+        )
+        registry = InFlightSelectionRegistry()
+
+        class Lookup:
+            @staticmethod
+            def get(card_id):
+                return object() if card_id == "card-live" else None
+
+        registry.bind_store(Lookup())
+        engine._selection_leases = registry
+        await engine.acquire_producer()
+
+        async def verify_before_llm(*, parents, **_kwargs):
+            assert parents[0].get_metadata(
+                MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY
+            ) == ["card-live"]
+            assert registry.leased_ids() == frozenset({"card-live"})
+            return None
+
+        monkeypatch.setattr(
+            "gigaevo.evolution.engine.mutant_task.generate_one_mutation",
+            verify_before_llm,
+        )
+
+        assert await run_one_mutant(engine, task_id=0) is None
+        assert registry.leased_ids() == frozenset()
     finally:
         await fake_dag.stop()
 

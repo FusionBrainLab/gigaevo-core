@@ -4,7 +4,7 @@ import pytest
 
 from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
 from gigaevo.memory.cards import DecisionContext
-from gigaevo.memory.context import BDCellMemoryContext
+from gigaevo.memory.context import BDCellMemoryContext, ContextKey
 from gigaevo.memory.context.no_card import JsonNoCardEvidenceStore
 
 
@@ -32,6 +32,15 @@ class _Outcome:
         self.invalid = invalid
 
 
+class _CapturingContextModel:
+    def __init__(self) -> None:
+        self.contexts = []
+
+    def key_for(self, context=None):
+        self.contexts.append(context)
+        return ContextKey(kind="global")
+
+
 def test_json_no_card_evidence_records_controls_and_ignores_selected(tmp_path):
     store = JsonNoCardEvidenceStore(
         path=tmp_path / "no_card.json",
@@ -54,6 +63,79 @@ def test_json_no_card_evidence_records_controls_and_ignores_selected(tmp_path):
     assert summary.baseline == pytest.approx(0.1)
     assert summary.prior.source == "global_control"
     assert summary.prior.support_n == 1.0
+
+
+def test_json_no_card_observation_context_carries_task_key(tmp_path):
+    context_model = _CapturingContextModel()
+    store = JsonNoCardEvidenceStore(
+        path=tmp_path / "no_card.json", context_model=context_model
+    )
+
+    store.record_outcomes(
+        [_Outcome(oid="control-a", fitness=0.6, base_fitness=0.5)],
+        higher_is_better=True,
+        task_key="heilbronn",
+    )
+
+    assert context_model.contexts[0].task_key == "heilbronn"
+
+
+def test_json_no_card_observation_context_task_key_defaults_to_empty(tmp_path):
+    context_model = _CapturingContextModel()
+    store = JsonNoCardEvidenceStore(
+        path=tmp_path / "no_card.json", context_model=context_model
+    )
+
+    store.record_outcomes(
+        [_Outcome(oid="control-a", fitness=0.6, base_fitness=0.5)],
+        higher_is_better=True,
+    )
+
+    assert context_model.contexts[0].task_key == ""
+
+
+def test_json_no_card_summary_filters_observations_by_task(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json")
+    store.record_outcomes(
+        [_Outcome(oid="task-a", fitness=0.6, base_fitness=0.5)],
+        higher_is_better=True,
+        task_key="task-a",
+    )
+    store.record_outcomes(
+        [
+            _Outcome(oid="task-b-1", fitness=0.1, base_fitness=0.5),
+            _Outcome(oid="task-b-2", fitness=0.2, base_fitness=0.5),
+        ],
+        higher_is_better=True,
+        task_key="task-b",
+    )
+
+    summary = store.summary_for(DecisionContext(task_key="task-a"))
+
+    assert summary.evidence_n == 1.0
+    assert summary.baseline == pytest.approx(0.1)
+
+
+def test_json_no_card_same_outcome_id_coexists_across_tasks(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json")
+    store.record_outcomes(
+        [_Outcome(oid="same", fitness=0.6, base_fitness=0.5)],
+        higher_is_better=True,
+        task_key="a",
+    )
+    store.record_outcomes(
+        [_Outcome(oid="same", fitness=0.9, base_fitness=0.5)],
+        higher_is_better=True,
+        task_key="b",
+    )
+
+    assert [(obs.task_key, obs.id) for obs in store._read()] == [
+        ("a", "same"),
+        ("b", "same"),
+    ]
+    summary = store.summary_for(DecisionContext(task_key="a"))
+    assert summary.evidence_n == 1.0
+    assert summary.baseline == pytest.approx(0.1)
 
 
 def test_json_no_card_evidence_splits_median_ties_neutrally(tmp_path):
@@ -232,10 +314,12 @@ def test_json_no_card_evidence_prunes_oldest_naturals_first(tmp_path):
             ),
         ],
         higher_is_better=True,
+        task_key="task-a",
     )
     store.record_outcomes(
         [_Outcome(oid="control-new", fitness=0.8, base_fitness=0.5)],
         higher_is_better=True,
+        task_key="task-a",
     )
 
     assert _stored_ids(store) == ["control-old", "natural-new", "control-new"]
@@ -253,6 +337,72 @@ def test_json_no_card_evidence_prunes_oldest_controls_when_no_naturals(tmp_path)
     )
 
     assert _stored_ids(store) == ["control-2", "control-3"]
+
+
+def test_task_b_controls_survive_task_a_natural_retention_flood(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json", max_observations=3)
+    store.record_outcomes(
+        [
+            _Outcome(
+                oid=f"a-natural-{i}",
+                fitness=0.6,
+                base_fitness=0.5,
+                no_card_control=False,
+            )
+            for i in range(5)
+        ],
+        higher_is_better=True,
+        task_key="task-a",
+    )
+    store.record_outcomes(
+        [
+            _Outcome(oid=f"b-control-{i}", fitness=0.7, base_fitness=0.5)
+            for i in range(2)
+        ],
+        higher_is_better=True,
+        task_key="task-b",
+    )
+
+    assert [(obs.task_key, obs.id) for obs in store._read()] == [
+        ("task-a", "a-natural-2"),
+        ("task-a", "a-natural-3"),
+        ("task-a", "a-natural-4"),
+        ("task-b", "b-control-0"),
+        ("task-b", "b-control-1"),
+    ]
+
+
+def test_task_a_controls_survive_task_b_natural_retention_flood(tmp_path):
+    store = JsonNoCardEvidenceStore(path=tmp_path / "no_card.json", max_observations=3)
+    store.record_outcomes(
+        [
+            _Outcome(oid=f"a-control-{i}", fitness=0.7, base_fitness=0.5)
+            for i in range(2)
+        ],
+        higher_is_better=True,
+        task_key="task-a",
+    )
+    store.record_outcomes(
+        [
+            _Outcome(
+                oid=f"b-natural-{i}",
+                fitness=0.6,
+                base_fitness=0.5,
+                no_card_control=False,
+            )
+            for i in range(5)
+        ],
+        higher_is_better=True,
+        task_key="task-b",
+    )
+
+    assert [(obs.task_key, obs.id) for obs in store._read()] == [
+        ("task-a", "a-control-0"),
+        ("task-a", "a-control-1"),
+        ("task-b", "b-natural-2"),
+        ("task-b", "b-natural-3"),
+        ("task-b", "b-natural-4"),
+    ]
 
 
 def test_json_no_card_evidence_below_cap_keeps_everything(tmp_path):

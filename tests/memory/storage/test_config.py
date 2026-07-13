@@ -55,10 +55,9 @@ def test_top_k_by_scope_overrides_default():
     assert research.top_k("b") == 2
 
 
-def test_store_config_layout(tmp_path):
+def test_store_config_bank_layout(tmp_path):
     config = StoreConfig(path=tmp_path)
     assert config.bank_file == tmp_path / "cards.json"
-    assert config.index_dir == tmp_path / "chroma"
 
 
 def test_query_scopes_must_be_embed_scopes(tmp_path):

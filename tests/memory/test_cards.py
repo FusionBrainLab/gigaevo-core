@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 
 
 def test_insight_card_rejects_exemplar_fields() -> None:
@@ -63,3 +63,43 @@ def test_card_cannot_absorb_its_own_id() -> None:
 def test_card_absorbs_other_ids() -> None:
     card = Card(id="mem-1", absorbed_ids=("mem-2", "mem-3"))
     assert card.absorbed_ids == ("mem-2", "mem-3")
+
+
+def test_legacy_card_and_gain_event_default_task_keys_to_empty() -> None:
+    legacy = {
+        "id": "mem-legacy",
+        "gain_events": [
+            {
+                "context": {
+                    "parent_metrics": {"fitness": 0.5},
+                    "parent_id": "parent-1",
+                },
+                "gain": 0.2,
+            }
+        ],
+    }
+
+    card = Card.model_validate(legacy)
+    event = ContextualGain.model_validate(legacy["gain_events"][0])
+
+    assert card.task_key == ""
+    assert card.gain_events[0].context.task_key == ""
+    assert event.context.task_key == ""
+
+
+def test_task_keys_survive_model_json_round_trip() -> None:
+    card = Card(
+        id="mem-task",
+        task_key="heilbronn",
+        gain_events=(
+            ContextualGain(
+                context=DecisionContext(task_key="heilbronn", parent_id="parent-1"),
+                gain=0.2,
+            ),
+        ),
+    )
+
+    restored = Card.model_validate_json(card.model_dump_json())
+
+    assert restored.task_key == "heilbronn"
+    assert restored.gain_events[0].context.task_key == "heilbronn"

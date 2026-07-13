@@ -14,12 +14,13 @@ come from
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 import math
 from typing import Protocol, runtime_checkable
 
 from loguru import logger
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from gigaevo.evolution.mutation.constants import (
@@ -43,6 +44,7 @@ from gigaevo.memory.cards import (
 from gigaevo.memory.context.evidence import clean_ids, median, oriented_delta
 from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
 from gigaevo.memory.events import MemoryGainRestamp, emit_memory_event
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.crediting import EffectEstimator, PointEffectEstimator
@@ -125,6 +127,7 @@ def founding_gain_event(
     fitness_key: str,
     higher_is_better: bool,
     metrics_context: MetricsContext,
+    task_key: str = "",
 ) -> ContextualGain | None:
     """The ``founding`` gain event for a freshly-authored card: the true signed
     delta of the child it was distilled from against that child's base parent.
@@ -145,6 +148,7 @@ def founding_gain_event(
     delta = child_fit - base_fit if higher_is_better else base_fit - child_fit
     return ContextualGain(
         context=DecisionContext(
+            task_key=task_key,
             parent_metrics=dict(bm),
             parent_id=base_id(program),
             timestamp=program.created_at,
@@ -230,6 +234,10 @@ class FittedNoCardBaseline(Protocol):
 
     def baseline_for(self, outcome: InjectionOutcome) -> float: ...
 
+    def baseline_se_for(self, outcome: InjectionOutcome) -> float | None:
+        """Sampling se of the fitted location, or None when not modeled."""
+        ...
+
 
 @runtime_checkable
 class NoCardBaselineEstimator(Protocol):
@@ -243,12 +251,28 @@ class NoCardBaselineEstimator(Protocol):
     ) -> FittedNoCardBaseline: ...
 
 
+def _combined_se(measured_se: float | None, baseline_se: float | None) -> float | None:
+    """Combine measured and fitted-baseline uncertainty without inflating exacts."""
+    if measured_se is None:
+        return None
+    measured = float(measured_se)
+    if measured == 0.0:
+        return 0.0
+    if not math.isfinite(measured):
+        return None
+    fitted = 0.0 if baseline_se is None else float(baseline_se)
+    if not math.isfinite(fitted) or fitted < 0.0:
+        fitted = 0.0
+    return float(np.hypot(measured, fitted))
+
+
 def compute_contextual_gains(
     programs: Sequence[InjectionOutcome],
     *,
     higher_is_better: bool = True,
     baseline_estimator: NoCardBaselineEstimator | None = None,
     effect_estimator: EffectEstimator | None = None,
+    task_key: str = "",
 ) -> dict[str, list[ContextualGain]]:
     """Map each prompt-selected card id to baseline-adjusted outcome events.
 
@@ -266,10 +290,10 @@ def compute_contextual_gains(
     still emit forced-harm / unused events).
 
     ``effect_estimator`` owns how the child-vs-base effect becomes a
-    ``(value, se)`` measurement (default: exact point delta, ``se=0``). The
-    baseline subtraction is a constant shift of the value, so the event's
-    ``gain_se`` is the measurement's se unchanged; invalid/unused events are
-    exact binary observations and never carry an se.
+    ``(value, se)`` measurement (default: exact point delta, ``se=0``). Exact
+    measurements stay exact; positive measured se folds the fitted baseline's
+    location se in quadrature, while a degraded ``None`` se stays unknown.
+    Invalid/unused events are exact binary observations and never carry an se.
     """
     events: dict[str, list[ContextualGain]] = {}
     estimator = (
@@ -288,6 +312,7 @@ def compute_contextual_gains(
         if not selected:
             continue
         context = DecisionContext(
+            task_key=task_key,
             parent_metrics=dict(p.base_metrics),
             parent_id=p.base_id,
             timestamp=p.created_at,
@@ -310,10 +335,11 @@ def compute_contextual_gains(
         elif used and p.fitness is not None and has_baseline_evidence:
             measured = estimator.estimate(p, higher_is_better=higher_is_better)
             delta = measured.value - baseline.baseline_for(p)
+            gain_se = _combined_se(measured.se, baseline.baseline_se_for(p))
             gain_event = ContextualGain(
                 context=context,
                 gain=delta,
-                gain_se=measured.se,
+                gain_se=gain_se,
                 attribution=EvidenceAttribution(
                     source=EvidenceSource.DIRECT,
                     causal_strength=(
@@ -359,8 +385,14 @@ class GlobalNoCardBaseline(BaseModel):
     ) -> FittedNoCardBaseline:
         del self
         deltas = _no_card_deltas(outcomes, higher_is_better)
+        baseline_se: float | None = None
+        if len(deltas) >= 2:
+            candidate = float(np.std(deltas, ddof=1) / np.sqrt(len(deltas)))
+            if math.isfinite(candidate):
+                baseline_se = candidate
         return _ConstantNoCardBaseline(
             baseline=median(deltas),
+            baseline_se=baseline_se,
             has_evidence=bool(deltas),
         )
 
@@ -369,11 +401,16 @@ class _ConstantNoCardBaseline(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     baseline: float = 0.0
+    baseline_se: float | None = None
     has_evidence: bool = False
 
     def baseline_for(self, outcome: InjectionOutcome) -> float:
         del outcome
         return self.baseline
+
+    def baseline_se_for(self, outcome: InjectionOutcome) -> float | None:
+        del outcome
+        return self.baseline_se
 
 
 def _fit_no_card_baseline(
@@ -425,6 +462,7 @@ def card_gain_events_from_programs(
     metrics_context: MetricsContext,
     baseline_estimator: NoCardBaselineEstimator | None = None,
     effect_estimator: EffectEstimator | None = None,
+    task_key: str = "",
 ) -> dict[str, list[ContextualGain]]:
     """Selected-card base-relative outcome events per card id, from live programs.
 
@@ -440,6 +478,7 @@ def card_gain_events_from_programs(
         higher_is_better=higher_is_better,
         baseline_estimator=baseline_estimator,
         effect_estimator=effect_estimator,
+        task_key=task_key,
     )
 
 
@@ -541,9 +580,9 @@ class CardStatsStamper(BaseModel):
     ) -> bool:
         if preserve_events_outside_child_ids is None or event.founding:
             return False
-        source_child_id = (
-            event.attribution.source_child_id if event.attribution is not None else ""
-        )
+        if event.attribution is None:
+            return True
+        source_child_id = event.attribution.source_child_id
         return bool(
             source_child_id and source_child_id not in preserve_events_outside_child_ids
         )
@@ -566,6 +605,8 @@ class CardStatsUpdater:
         baseline_estimator: NoCardBaselineEstimator | None = None,
         effect_estimator: EffectEstimator | None = None,
         no_card_recorder: NoCardEvidenceRecorder | None = None,
+        task_key: str = "",
+        selection_leases: InFlightSelectionRegistry | None = None,
     ) -> None:
         self._fitness_key = fitness_key
         self._higher_is_better = higher_is_better
@@ -573,6 +614,8 @@ class CardStatsUpdater:
         self._baseline_estimator = baseline_estimator
         self._effect_estimator = effect_estimator
         self._no_card_recorder = no_card_recorder
+        self._task_key = task_key
+        self._selection_leases = selection_leases
         self._logged_orphans: set[str] = set()
 
     def update(
@@ -591,7 +634,9 @@ class CardStatsUpdater:
         if self._no_card_recorder is not None:
             try:
                 self._no_card_recorder.record_outcomes(
-                    rows, higher_is_better=self._higher_is_better
+                    rows,
+                    higher_is_better=self._higher_is_better,
+                    task_key=self._task_key,
                 )
             except Exception as exc:
                 logger.warning(
@@ -604,6 +649,7 @@ class CardStatsUpdater:
             higher_is_better=self._higher_is_better,
             baseline_estimator=self._baseline_estimator,
             effect_estimator=self._effect_estimator,
+            task_key=self._task_key,
         )
         bank = store.snapshot()
         known = {card.id.strip() for card in bank}
@@ -646,12 +692,95 @@ class CardStatsUpdater:
         longer selected have stale events cleared. Only cards whose
         events changed are rewritten."""
         stamper = CardStatsStamper()
-        for card in store.snapshot():
-            stamped = stamper.stamp_gain_events(
+        bank = store.snapshot()
+        redirected = 0
+        dropped = 0
+        for card in bank:
+            scheduled = stamper.stamp_gain_events(
                 card,
                 card_gain_events,
                 preserve_events_outside_child_ids=preserve_events_outside_child_ids,
             )
-            if stamped.gain_events != card.gain_events:
-                store.save(stamped)
+            if scheduled.gain_events == card.gain_events:
+                continue
+
+            def restamp(fresh: Card) -> Card:
+                return stamper.stamp_gain_events(
+                    fresh,
+                    card_gain_events,
+                    preserve_events_outside_child_ids=preserve_events_outside_child_ids,
+                )
+
+            if store.update(card.id, restamp) is None:
+                if self._reconcile_vanished_restamp(
+                    card.id,
+                    restamp,
+                    store=store,
+                    hop_budget=max(1, len(bank)),
+                ):
+                    redirected += 1
+                else:
+                    dropped += 1
+        if redirected or dropped:
+            logger.debug(
+                "[Memory][Stats] restamp not-found reconciliation redirected={} "
+                "dropped={}",
+                redirected,
+                dropped,
+            )
         gate.sweep()
+        if (
+            self._selection_leases is not None
+            and preserve_events_outside_child_ids is not None
+        ):
+            for child_id in preserve_events_outside_child_ids:
+                self._selection_leases.release_child(child_id)
+
+    @staticmethod
+    def _reconcile_vanished_restamp(
+        card_id: str,
+        restamp: Callable[[Card], Card | None],
+        *,
+        store: MemoryStore,
+        hop_budget: int,
+    ) -> bool:
+        alias_id = card_id
+        seen = {card_id}
+        for hop in range(hop_budget):
+            absorber = next(
+                (card for card in store.snapshot() if alias_id in card.absorbed_ids),
+                None,
+            )
+            if absorber is None:
+                logger.debug(
+                    "[Memory][Stats] dropping restamp for evicted card {} "
+                    "with no absorbing survivor",
+                    card_id,
+                )
+                return False
+            if absorber.id in seen:
+                logger.warning(
+                    "[Memory][Stats] dropping restamp for card {} after cyclic "
+                    "absorbed-id chain at {}",
+                    card_id,
+                    absorber.id,
+                )
+                return False
+            seen.add(absorber.id)
+            if hop:
+                logger.warning(
+                    "[Memory][Stats] following multi-hop restamp alias for card {} "
+                    "through {}",
+                    card_id,
+                    absorber.id,
+                )
+            if store.update(absorber.id, restamp) is not None:
+                return True
+            alias_id = absorber.id
+        logger.warning(
+            "[Memory][Stats] dropping restamp for card {} after exhausting {} "
+            "absorbed-id hop(s)",
+            card_id,
+            hop_budget,
+        )
+        return False

@@ -13,18 +13,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from functools import cached_property
 import math
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
-from scipy.stats import beta, norm
+from scipy.stats import beta
 
 from gigaevo.evolution.strategies.models import BehaviorSpace
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
 from gigaevo.memory.context import BDCellMemoryContext
-from gigaevo.memory.context.evidence import event_weight, median
+from gigaevo.memory.context.evidence import (
+    event_weight,
+    harm_mass,
+    median,
+    sign_help_counts,
+    split_events_by_task,
+)
 from gigaevo.memory.read.bootstrap import bootstrap_ev_samples, stable_rng
 from gigaevo.memory.read.interfaces import EvictionFacingReputation
-from gigaevo.memory.read.staleness import bank_cycle_weight
+from gigaevo.memory.read.staleness import bank_cycle_event_weights
 from gigaevo.memory.storage.base import MemoryStore
 
 
@@ -107,13 +114,21 @@ def _ev_reward_weights(events: Sequence[ContextualGain]) -> tuple[float, ...]:
     return tuple(weights)
 
 
-def _ev_ses(events: Sequence[ContextualGain]) -> tuple[float, ...]:
-    """Per-atom gain ses aligned with :func:`_ev_rewards` (0 = exact).
+def _coerce_gain_se(raw: float | None) -> float | None:
+    """Preserve unknown se; sanitize non-positive/non-finite numbers to exact."""
+    if raw is None:
+        return None
+    se = float(raw)
+    return se if math.isfinite(se) and se > 0.0 else 0.0
+
+
+def _ev_ses(events: Sequence[ContextualGain]) -> tuple[float | None, ...]:
+    """Per-atom gain ses aligned with :func:`_ev_rewards` (0 exact, None unknown).
 
     Invalid/unused zero atoms are exact binary observations; a non-finite or
     negative stored se degrades to exact rather than poisoning the resample.
     """
-    ses: list[float] = []
+    ses: list[float | None] = []
     for event in events:
         if event.founding:
             continue
@@ -123,42 +138,67 @@ def _ev_ses(events: Sequence[ContextualGain]) -> tuple[float, ...]:
         if event.invalid or event.unused:
             ses.append(0.0)
         elif event.gain is not None and math.isfinite(float(event.gain)):
-            se = float(event.gain_se)
-            ses.append(se if math.isfinite(se) and se > 0.0 else 0.0)
+            ses.append(_coerce_gain_se(event.gain_se))
     return tuple(ses)
 
 
-def _harm_mass(gain: float, se: float, threshold: float) -> float:
-    """P(true gain < threshold) for one event: the exact below-threshold
-    indicator when the gain is exact (``se == 0``), else the Gaussian tail
-    mass. The explicit exact branch keeps ``gain == threshold`` from
-    evaluating 0/0."""
-    if se <= 0.0:
-        return 1.0 if gain < threshold else 0.0
-    return float(norm.cdf((threshold - gain) / se))
+def _moment_matched_beta(
+    a0: float, b0: float, sigma2_k: float, n_events: float
+) -> tuple[float, float]:
+    """Beta(a, b) matching the latent-sign mixture's first two moments.
+
+    Mean ``a0 / N`` and variance ``(a0*b0 + N*sigma2_k) / (N**2 * (N+1))`` with
+    ``N = a0 + b0`` and ``sigma2_k`` the summed per-event sign variance. Exact
+    (sign-known) evidence has ``sigma2_k == 0`` and returns ``(a0, b0)``
+    unchanged, so the soft-count / legacy path is byte-exact. The same
+    matching folds foreign hard-sign counts into the native moments, keeping
+    the read posterior and its foreign extension on one formula.
+    """
+    total = a0 + b0
+    if sigma2_k <= 0.0 or n_events == 0 or a0 <= 0 or b0 <= 0:
+        return a0, b0
+    matched_total = a0 * b0 * (total + 1.0) / (a0 * b0 + total * sigma2_k) - 1.0
+    mean = a0 / total
+    matched_a = mean * matched_total
+    matched_b = (1.0 - mean) * matched_total
+    if (
+        matched_a > 0
+        and matched_b > 0
+        and math.isfinite(matched_a)
+        and math.isfinite(matched_b)
+    ):
+        return matched_a, matched_b
+    return a0, b0
 
 
 def beta_binomial_posterior(
     gains: Sequence[float],
     *,
+    prior: tuple[float, float] = (1.0, 1.0),
     threshold: float = 0.0,
     weights: Sequence[float] | None = None,
-    event_ses: Sequence[float] | None = None,
+    staleness_weights: Sequence[float] | None = None,
+    event_ses: Sequence[float | None] | None = None,
     invalid_events: float = 0.0,
     unused_events: float = 0.0,
     confident_quantile: float = 0.20,
     confident_threshold: float = 0.5,
+    harm_model: str = "soft_count",
 ) -> CardStatsBlock:
     """Downside Beta-Binomial posterior on P(not harmful) from per-event gains.
 
-    ``a = 1 + (n - k_harm)``, ``b = 1 + k_harm`` with ``k_harm`` the summed
-    per-event harm mass: the probability the event's true gain lies below
-    ``threshold`` (default 0) — the exact below-threshold indicator for an
-    exact event (its ``event_ses`` entry 0 or absent, the historical strict
-    sign test), the Gaussian tail mass when the entry prices evaluation noise.
-    ``efficacy_confident`` iff the ``confident_quantile`` of Beta(a, b) exceeds
-    ``confident_threshold``. The ``p_help_lo20`` field name is part of the
-    serialized-card stats contract regardless of the configured quantile.
+    ``a = prior_a + (n - k_harm)``, ``b = prior_b + k_harm`` with ``k_harm``
+    the summed per-event harm mass: the probability the event's true gain lies
+    below ``threshold`` (default 0) — the exact below-threshold indicator for
+    an exact event (its ``event_ses`` entry 0 or absent, the historical strict
+    sign test), the Gaussian tail mass when the entry prices evaluation noise,
+    and the maximally uncertain ``Phi(0)`` mass when the entry is ``None``.
+    With ``harm_model="mixture"``, uncertain event signs are independent latent
+    Bernoulli variables and the returned Beta matches the resulting mixture's
+    exact first two moments. ``efficacy_confident`` iff the
+    ``confident_quantile`` of Beta(a, b) exceeds ``confident_threshold``. The
+    ``p_help_lo20`` field name is part of the serialized-card stats contract
+    regardless of the configured quantile.
     ``invalid_events`` are evaluated-and-judged-invalid children;
     ``unused_events`` are prompt exposures the mutator ignored. Both are forced
     failure observations with no gain magnitude and no se.
@@ -168,29 +208,43 @@ def beta_binomial_posterior(
         raise ValueError(
             f"weights length {len(raw_weights)} != gains length {len(gains)}"
         )
+    raw_staleness = tuple(staleness_weights) if staleness_weights is not None else None
+    if raw_staleness is not None and len(raw_staleness) != len(gains):
+        raise ValueError(
+            "staleness_weights length "
+            f"{len(raw_staleness)} != gains length {len(gains)}"
+        )
     raw_ses = tuple(event_ses) if event_ses is not None else ()
     if raw_ses and len(raw_ses) != len(gains):
         raise ValueError(
             f"event_ses length {len(raw_ses)} != gains length {len(gains)}"
         )
-    finite: list[tuple[float, float, float]] = []
+    finite: list[tuple[float, float, float | None]] = []
     for idx, gain in enumerate(gains):
         if gain is None or not math.isfinite(float(gain)):
             continue
-        weight = float(raw_weights[idx]) if raw_weights else 1.0
-        se = float(raw_ses[idx]) if raw_ses else 0.0
-        if not (math.isfinite(se) and se > 0.0):
-            se = 0.0
+        credit = float(raw_weights[idx]) if raw_weights else 1.0
+        age = float(raw_staleness[idx]) if raw_staleness is not None else 1.0
+        weight = credit * age
+        se = _coerce_gain_se(raw_ses[idx]) if raw_ses else 0.0
         if math.isfinite(weight) and weight > 0.0:
             finite.append((float(gain), weight, se))
     forced_failures = invalid_events + unused_events
     n = sum(weight for _, weight, _ in finite) + forced_failures
     k_harm = (
-        sum(weight * _harm_mass(g, se, threshold) for g, weight, se in finite)
+        sum(weight * harm_mass(g, se, threshold) for g, weight, se in finite)
         + forced_failures
     )
-    a = 1.0 + (n - k_harm)
-    b = 1.0 + k_harm
+    prior_a, prior_b = prior
+    a0 = prior_a + (n - k_harm)
+    b0 = prior_b + k_harm
+    sigma2_k = 0.0
+    if harm_model == "mixture":
+        sigma2_k = sum(
+            weight**2 * (p_harm := harm_mass(gain, se, threshold)) * (1.0 - p_harm)
+            for gain, weight, se in finite
+        )
+    a, b = _moment_matched_beta(a0, b0, sigma2_k, n)
     lo = float(beta.ppf(confident_quantile, a, b)) if n else float("nan")
     return CardStatsBlock(
         posterior_a=a,
@@ -206,13 +260,17 @@ def beta_binomial_posterior(
 def block_from_events(
     events: Sequence[ContextualGain],
     *,
+    prior: tuple[float, float] = (1.0, 1.0),
+    staleness_weights: Sequence[float] | None = None,
     confident_quantile: float = 0.20,
     confident_threshold: float = 0.5,
+    harm_model: str = "soft_count",
 ) -> CardStatsBlock | None:
     """Global, unadjusted card block from its gain events: median magnitude plus
     the downside posterior, harm being each event's mass below zero — the exact
     sign indicator for an exact event (``gain_se == 0``, the historical strict
-    sign test), the Gaussian tail mass when the event prices evaluation noise.
+    sign test), the Gaussian tail mass when the event prices evaluation noise,
+    and the maximally uncertain ``Phi(0)`` mass when its se is unknown.
     Each event's harm mass is its own — one event never shifts another's
     verdict — so the harm count is monotone in the events and a uniformly-losing
     card counts every loss; eval noise is absorbed by the counting posterior
@@ -230,29 +288,59 @@ def block_from_events(
     founding-only card is therefore still statistically cold; catastrophic
     founding failures are handled by the write-side birth-failure evictor.
     """
-    proof_events = [event for event in events if not event.founding]
+    ages = tuple(staleness_weights) if staleness_weights is not None else None
+    if ages is not None and len(ages) != len(events):
+        raise ValueError(
+            "staleness_weights must align with events: "
+            f"{len(ages)} weights for {len(events)} events"
+        )
+    indexed_proof = [
+        (idx, event) for idx, event in enumerate(events) if not event.founding
+    ]
+    proof_events = [event for _, event in indexed_proof]
     if not proof_events:
         return None
-    valid = [e for e in proof_events if not e.invalid and not e.unused]
-    invalid_events = sum(event_weight(e) for e in proof_events if e.invalid)
-    unused_events = sum(
-        event_weight(e) for e in proof_events if e.unused and not e.invalid
+    valid = [
+        (idx, event)
+        for idx, event in indexed_proof
+        if not event.invalid and not event.unused
+    ]
+
+    def aged_weight(idx: int, event: ContextualGain) -> float:
+        age = float(ages[idx]) if ages is not None else 1.0
+        weight = event_weight(event) * age
+        return weight if math.isfinite(weight) and weight > 0.0 else 0.0
+
+    invalid_events = sum(
+        aged_weight(idx, event) for idx, event in indexed_proof if event.invalid
     )
-    valid_gains = [float(e.gain) for e in valid]
-    valid_weights = [event_weight(e) for e in valid]
-    valid_ses = [float(e.gain_se) for e in valid]
+    unused_events = sum(
+        aged_weight(idx, event)
+        for idx, event in indexed_proof
+        if event.unused and not event.invalid
+    )
+    valid_gains = [float(event.gain) for _, event in valid]
+    valid_weights = [event_weight(event) for _, event in valid]
+    valid_ages = [float(ages[idx]) for idx, _ in valid] if ages is not None else None
+    valid_ses = [_coerce_gain_se(event.gain_se) for _, event in valid]
     block = beta_binomial_posterior(
         valid_gains,
+        prior=prior,
         weights=valid_weights,
+        staleness_weights=valid_ages,
         event_ses=valid_ses,
         invalid_events=invalid_events,
         unused_events=unused_events,
         confident_quantile=confident_quantile,
         confident_threshold=confident_threshold,
+        harm_model=harm_model,
     )
     use_gains = _use_gains(events)
     magnitude: float | None
-    if use_gains:
+    expired = ages is not None and block.intro_events < 1.0
+    if expired:
+        magnitude = None
+    elif use_gains:
         magnitude = median(use_gains)
     elif invalid_events or unused_events:
         magnitude = 0.0
@@ -265,6 +353,128 @@ def block_from_events(
             and magnitude is not None
             and magnitude > 0,
         }
+    )
+
+
+def _block_from_partition(
+    native: Sequence[ContextualGain],
+    foreign: Sequence[ContextualGain],
+    *,
+    prior: tuple[float, float] = (1.0, 1.0),
+    native_staleness_weights: Sequence[float] | None = None,
+    foreign_staleness_weights: Sequence[float] | None = None,
+    confident_quantile: float,
+    confident_threshold: float,
+    harm_model: str = "soft_count",
+) -> CardStatsBlock | None:
+    block = block_from_events(
+        native,
+        prior=prior,
+        staleness_weights=native_staleness_weights,
+        confident_quantile=confident_quantile,
+        confident_threshold=confident_threshold,
+        harm_model=harm_model,
+    )
+    foreign_help, foreign_total = sign_help_counts(
+        foreign, staleness_weights=foreign_staleness_weights
+    )
+    if foreign_total <= 0.0:
+        return block
+    if block is None:
+        block = beta_binomial_posterior(
+            (),
+            prior=prior,
+            confident_quantile=confident_quantile,
+            confident_threshold=confident_threshold,
+            harm_model=harm_model,
+        )
+    assert block.posterior_a is not None and block.posterior_b is not None
+    # Fold foreign hard-sign counts into the NATIVE moment inputs, not onto the
+    # variance-shrunk matched Beta. Under the mixture the matched total
+    # S = a*+b* is below the true native sample total N, so adding hard counts
+    # to S over-weights foreign evidence. Reconstruct (a0, b0, N) from the
+    # block, recover the native sign variance by inverting the moment match
+    # (S == N under soft-count => sigma2_k == 0 => byte-identical legacy fold),
+    # then re-match with foreign counts added to the exact moments.
+    prior_a, prior_b = prior
+    n_native = float(block.intro_events)
+    a0 = prior_a + (n_native - block.k_harm)
+    b0 = prior_b + block.k_harm
+    native_total = a0 + b0
+    matched_total = float(block.posterior_a) + float(block.posterior_b)
+    sigma2_k = (
+        a0
+        * b0
+        * (native_total - matched_total)
+        / (native_total * (matched_total + 1.0))
+        if native_total > 0.0 and matched_total > -1.0
+        else 0.0
+    )
+    a, b = _moment_matched_beta(
+        a0 + foreign_help,
+        b0 + (foreign_total - foreign_help),
+        sigma2_k,
+        n_native + foreign_total,
+    )
+    lo = float(beta.ppf(confident_quantile, a, b))
+    magnitude = block.IntroGain_best_median
+    return block.model_copy(
+        update={
+            "posterior_a": a,
+            "posterior_b": b,
+            "p_help_mean": a / (a + b),
+            "p_help_lo20": lo,
+            "efficacy_confident": bool(
+                block.intro_events > 0.0
+                and lo > confident_threshold
+                and magnitude is not None
+                and magnitude > 0.0
+            ),
+            "foreign_help_events": foreign_help,
+            "foreign_total_events": foreign_total,
+        }
+    )
+
+
+def _task_block(
+    events: Sequence[ContextualGain],
+    task_key: str,
+    *,
+    prior: tuple[float, float] = (1.0, 1.0),
+    staleness_weights: Sequence[float] | None = None,
+    confident_quantile: float,
+    confident_threshold: float,
+    harm_model: str = "soft_count",
+) -> CardStatsBlock | None:
+    native, foreign = split_events_by_task(events, task_key)
+    native_staleness: tuple[float, ...] | None = None
+    foreign_staleness: tuple[float, ...] | None = None
+    if staleness_weights is not None:
+        ages = tuple(staleness_weights)
+        if len(ages) != len(events):
+            raise ValueError(
+                "staleness_weights must align with events: "
+                f"{len(ages)} weights for {len(events)} events"
+            )
+        native_staleness = tuple(
+            age
+            for event, age in zip(events, ages)
+            if event.context.task_key == task_key
+        )
+        foreign_staleness = tuple(
+            age
+            for event, age in zip(events, ages)
+            if event.context.task_key != task_key
+        )
+    return _block_from_partition(
+        native,
+        foreign,
+        prior=prior,
+        native_staleness_weights=native_staleness,
+        foreign_staleness_weights=foreign_staleness,
+        confident_quantile=confident_quantile,
+        confident_threshold=confident_threshold,
+        harm_model=harm_model,
     )
 
 
@@ -290,6 +500,10 @@ class BetaBinomialReputation(BaseModel):
         default=0.5,
         description="Harmful iff the optimistic P(not harmful) read stays below this.",
     )
+    harm_model: Literal["soft_count", "mixture"] = Field(
+        default="soft_count",
+        description="Uncertain signs use legacy soft counts or an exact-moment mixture.",
+    )
     confident_quantile: float = Field(
         default=0.20,
         description="Pessimistic posterior quantile used for the confidence flag.",
@@ -301,6 +515,10 @@ class BetaBinomialReputation(BaseModel):
     cold_prior: tuple[float, float] = Field(
         default=(3.0, 3.0),
         description="(alpha, beta) Beta prior assumed for cards with no stamped posterior.",
+    )
+    prior: Any | None = Field(
+        default=None,
+        description="Optional cold-card prior policy; when set, the warm posterior and decay shrink toward it instead of Beta(1,1) so cold and warm are one coherent world.",
     )
 
     @property
@@ -323,19 +541,59 @@ class BetaBinomialReputation(BaseModel):
             threshold=threshold,
             confident_quantile=self.confident_quantile,
             confident_threshold=self.confident_threshold,
+            harm_model=self.harm_model,
+        )
+
+    def prior_base(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, float]:
+        if self.prior is None:
+            return (1.0, 1.0)
+        return self.prior.cold_card_prior(card, context).as_tuple()
+
+    def _card_stats_with_prior(
+        self,
+        card: Card,
+        context: DecisionContext | None,
+        *,
+        prior: tuple[float, float],
+        staleness_weights: Sequence[float] | None = None,
+    ) -> CardStatsBlock | None:
+        task_key = context.task_key if context is not None else ""
+        return _task_block(
+            card.gain_events,
+            task_key,
+            prior=prior,
+            staleness_weights=staleness_weights,
+            confident_quantile=self.confident_quantile,
+            confident_threshold=self.confident_threshold,
+            harm_model=self.harm_model,
         )
 
     def card_stats(
         self, card: Card, context: DecisionContext | None = None
     ) -> CardStatsBlock | None:
-        """The single statistics block every per-card efficacy view resolves
-        through: the global, unadjusted block computed from the card's gain
-        events (``None`` when the card has none). ``context`` is the additive
-        read-seam hook contextual reputations condition on; ignored here."""
-        return block_from_events(
-            card.gain_events,
-            confident_quantile=self.confident_quantile,
-            confident_threshold=self.confident_threshold,
+        """Resolve native magnitudes plus sign-only foreign evidence."""
+        a0, b0 = self.prior_base(card, context)
+        return self._card_stats_with_prior(
+            card,
+            context,
+            prior=(a0, b0),
+        )
+
+    def card_stats_with_staleness(
+        self,
+        card: Card,
+        context: DecisionContext | None = None,
+        *,
+        staleness_weights: Sequence[float],
+    ) -> CardStatsBlock | None:
+        a0, b0 = self.prior_base(card, context)
+        return self._card_stats_with_prior(
+            card,
+            context,
+            prior=(a0, b0),
+            staleness_weights=staleness_weights,
         )
 
     def posterior_of(self, block: CardStatsBlock | None) -> tuple[float, float]:
@@ -384,25 +642,33 @@ class BetaBinomialReputation(BaseModel):
         Empty means genuinely cold or founding-only. Unused/invalid exposures
         contribute zero support so they do not receive another cold-start bid.
         """
-        return _ev_rewards(card.gain_events)
+        task_key = context.task_key if context is not None else ""
+        native, _ = split_events_by_task(card.gain_events, task_key)
+        return _ev_rewards(native)
 
     def event_weights(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[float, ...]:
         """Causal weights aligned with :meth:`event_deltas`."""
-        return _ev_reward_weights(card.gain_events)
+        task_key = context.task_key if context is not None else ""
+        native, _ = split_events_by_task(card.gain_events, task_key)
+        return _ev_reward_weights(native)
 
     def evidence_events(
         self, card: Card, context: DecisionContext | None = None
     ) -> tuple[ContextualGain, ...]:
         """Concrete event rows behind :meth:`event_deltas`."""
-        return _ev_events(card.gain_events)
+        task_key = context.task_key if context is not None else ""
+        native, _ = split_events_by_task(card.gain_events, task_key)
+        return _ev_events(native)
 
     def event_ses(
         self, card: Card, context: DecisionContext | None = None
-    ) -> tuple[float, ...]:
-        """Per-atom gain ses aligned with :meth:`event_deltas` (0 = exact)."""
-        return _ev_ses(card.gain_events)
+    ) -> tuple[float | None, ...]:
+        """Per-atom gain ses aligned with deltas (0 exact, None unknown)."""
+        task_key = context.task_key if context is not None else ""
+        native, _ = split_events_by_task(card.gain_events, task_key)
+        return _ev_ses(native)
 
     def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
         """Contexts the write-side active-policy cleanup can evaluate.
@@ -413,14 +679,11 @@ class BetaBinomialReputation(BaseModel):
         del card
         return (None,)
 
-    def staleness_weight(
+    def staleness_weights(
         self, card: Card, context: DecisionContext | None = None
-    ) -> float:
-        """Bank-cycle evidence discount ``w = 2**(-s/H)`` used as the bootstrap
-        resample weight. The un-decayed base never ages evidence (``1.0``); the
-        staleness stack overrides this and the decay reputation reuses the same
-        mechanism."""
-        return 1.0
+    ) -> tuple[float, ...]:
+        """Unit ages aligned with EV evidence; the base owns no store."""
+        return (1.0,) * len(self.evidence_events(card, context))
 
     def is_confidently_harmful(self, block: CardStatsBlock | None) -> bool:
         """True iff the resolved stats block excludes the card as harmful: at
@@ -489,24 +752,83 @@ class BDProximityReputation(BetaBinomialReputation):
         # reputation must delegate those reads byte-for-byte to ``fallback``.
         if context is None or not card.gain_events:
             return None
-        local = self._cell_context.local_evidence_events(card, context)
+        native, _ = split_events_by_task(card.gain_events, context.task_key)
+        if not native:
+            return None
+        scoped = card.model_copy(update={"gain_events": native})
+        local = self._cell_context.local_evidence_events(scoped, context)
         return list(local) if local else None
 
-    def card_stats(
-        self, card: Card, context: DecisionContext | None = None
+    def _card_stats(
+        self,
+        card: Card,
+        context: DecisionContext | None,
+        staleness_weights: Sequence[float] | None,
     ) -> CardStatsBlock | None:
+        a0, b0 = self.prior_base(card, context)
         in_cell = self._in_cell(card, context)
         if in_cell is None:
-            return self.fallback.card_stats(card, context)
+            return self.fallback._card_stats_with_prior(
+                card,
+                context,
+                prior=(a0, b0),
+                staleness_weights=staleness_weights,
+            )
         # Same global block math as the base reputation, but over the in-cell
         # subset only: the cell partition already controls for context, so the
         # harm count and median magnitude are measured BD-locally rather than
         # against a parent-fitness counterfactual. Cold cells delegated above.
-        return block_from_events(
+        assert context is not None
+        native, foreign = split_events_by_task(card.gain_events, context.task_key)
+        in_cell_staleness: tuple[float, ...] | None = None
+        foreign_staleness: tuple[float, ...] | None = None
+        if staleness_weights is not None:
+            ages = tuple(staleness_weights)
+            if len(ages) != len(card.gain_events):
+                raise ValueError(
+                    "staleness_weights must align with events: "
+                    f"{len(ages)} weights for {len(card.gain_events)} events"
+                )
+            native_ages = tuple(
+                age
+                for event, age in zip(card.gain_events, ages)
+                if event.context.task_key == context.task_key
+            )
+            selected = {id(event) for event in in_cell}
+            in_cell_staleness = tuple(
+                age for event, age in zip(native, native_ages) if id(event) in selected
+            )
+            foreign_staleness = tuple(
+                age
+                for event, age in zip(card.gain_events, ages)
+                if event.context.task_key != context.task_key
+            )
+            if len(in_cell_staleness) != len(in_cell):
+                raise ValueError("in-cell evidence must preserve event identity")
+        return _block_from_partition(
             in_cell,
+            foreign,
+            prior=(a0, b0),
+            native_staleness_weights=in_cell_staleness,
+            foreign_staleness_weights=foreign_staleness,
             confident_quantile=self.confident_quantile,
             confident_threshold=self.confident_threshold,
+            harm_model=self.harm_model,
         )
+
+    def card_stats(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> CardStatsBlock | None:
+        return self._card_stats(card, context, None)
+
+    def card_stats_with_staleness(
+        self,
+        card: Card,
+        context: DecisionContext | None = None,
+        *,
+        staleness_weights: Sequence[float],
+    ) -> CardStatsBlock | None:
+        return self._card_stats(card, context, staleness_weights)
 
     def event_deltas(
         self, card: Card, context: DecisionContext | None = None
@@ -538,7 +860,7 @@ class BDProximityReputation(BetaBinomialReputation):
 
     def event_ses(
         self, card: Card, context: DecisionContext | None = None
-    ) -> tuple[float, ...]:
+    ) -> tuple[float | None, ...]:
         in_cell = self._in_cell(card, context)
         if in_cell is None:
             return self.fallback.event_ses(card, context)
@@ -578,13 +900,12 @@ class BootstrapReputation:
     median stays in ``IntroGain_best_median`` so rendering does not call an EV a
     median.
 
-    Staleness reuses the one bank-cycle mechanism ``bank_cycle_weight`` (shared
-    with :class:`~gigaevo.memory.read.decay.DecayingReputation`): the discount
-    ``w = 2**(-s/H)`` enters as the per-event resample weight, so a stale known
-    card's own deltas fade toward neutral zero rather than borrowing unrelated
-    winners' positive scale. A card with no non-founding evidence keeps its
-    inner block untouched; the write-side birth-failure evictor is responsible
-    for deleting catastrophic founding losses before they reach this read path.
+    Staleness reuses ``bank_cycle_event_weights`` (shared with
+    :class:`~gigaevo.memory.read.decay.DecayingReputation`): each discount
+    ``w_i = 2**(-s_i/H)`` multiplies only its aligned event's causal credit, so
+    old deltas fade without a fresh event reviving them. A card with no
+    non-founding evidence keeps its inner block untouched; the write-side
+    birth-failure evictor handles catastrophic founding losses.
     """
 
     def __init__(
@@ -640,7 +961,14 @@ class BootstrapReputation:
             # founding losses are deleted on the write side.
             return block
         weights = self._inner.event_weights(card, context)
-        weight = self.staleness_weight(card, context)
+        staleness = self.staleness_weights(card, context)
+        if len(weights) != len(deltas) or len(staleness) != len(deltas):
+            raise ValueError(
+                "event_weights and staleness_weights must align with event_deltas"
+            )
+        combined = tuple(
+            float(credit) * float(age) for credit, age in zip(weights, staleness)
+        )
         # Deterministic per-card seed: the block's pessimistic EV must be
         # reproducible read-to-read and must never consume the live auction
         # round's RNG stream.
@@ -648,16 +976,16 @@ class BootstrapReputation:
         samples = bootstrap_ev_samples(
             deltas,
             0.0,
-            weight,
+            1.0,
             self._n_bootstrap,
             rng,
-            delta_weights=weights,
+            delta_weights=combined,
             ses=self._inner.event_ses(card, context),
         )
         ev_mean = float(samples.mean())
         ev_lo = float(np.quantile(samples, self._ev_lo_quantile))
         ev_hi = float(np.quantile(samples, 1.0 - self._ev_lo_quantile))
-        effective_events = weight * sum(weights or (1.0 for _ in deltas))
+        effective_events = sum(combined)
         return block.model_copy(
             update={
                 "IntroGain_bootstrap_ev_mean": ev_mean,
@@ -673,6 +1001,11 @@ class BootstrapReputation:
 
     def posterior_of(self, block: CardStatsBlock | None) -> tuple[float, float]:
         return self._inner.posterior_of(block)
+
+    def prior_base(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, float]:
+        return self._inner.prior_base(card, context)
 
     def magnitude_of(self, block: CardStatsBlock | None) -> float | None:
         if block is not None and block.IntroGain_bootstrap_ev_mean is not None:
@@ -699,18 +1032,20 @@ class BootstrapReputation:
 
     def event_ses(
         self, card: Card, context: DecisionContext | None = None
-    ) -> tuple[float, ...]:
+    ) -> tuple[float | None, ...]:
         return self._inner.event_ses(card, context)
 
     def eviction_contexts(self, card: Card) -> tuple[DecisionContext | None, ...]:
         return self._inner.eviction_contexts(card)
 
-    def staleness_weight(
+    def staleness_weights(
         self, card: Card, context: DecisionContext | None = None
-    ) -> float:
-        return bank_cycle_weight(
-            card,
+    ) -> tuple[float, ...]:
+        task_key = context.task_key if context is not None else ""
+        events = self.evidence_events(card, context)
+        return bank_cycle_event_weights(
+            events,
             self._store.snapshot(),
             self._half_life_cycles,
-            reference_events=self.evidence_events(card, context),
+            task_key=task_key,
         )

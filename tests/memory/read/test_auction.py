@@ -14,6 +14,7 @@ from gigaevo.memory.read.auction import (
     BootstrapThompsonAuctioneer,
     EVThompsonAuctioneer,
     NoveltyDiscountedBootstrapAuctioneer,
+    PendingDiscountedBootstrapAuctioneer,
     ThompsonAuctioneer,
     TopBidBudgeter,
     TopThetaBudgeter,
@@ -27,6 +28,10 @@ def _candidate(
     return AuctionCandidate(
         card_id=card_id, posterior_a=a, posterior_b=b, magnitude=magnitude
     )
+
+
+def test_candidate_pending_count_defaults_to_zero():
+    assert _candidate("card").pending_count == 0
 
 
 def _metrics(significant_change: float | None) -> MetricsContext:
@@ -54,6 +59,55 @@ def _bid(card_id: str, *, theta: float = 0.5, bid: float | None = None) -> Aucti
         selected=True,
         bid=bid,
     )
+
+
+class _CoherenceRng:
+    """Controlled RNG that exposes whether bid and gate consume the same u."""
+
+    def __init__(self, u: float, *, bid_uses_beta: bool) -> None:
+        self.u = u
+        self.bid_uses_beta = bid_uses_beta
+        self.uniform_calls = 0
+        self.candidate_beta_calls = 0
+        self.choice_indices = None
+
+    def uniform(self) -> float:
+        self.uniform_calls += 1
+        return self.u
+
+    def beta(self, a: float, b: float) -> float:
+        if (a, b) == (7.0, 11.0):
+            return 0.5
+        self.candidate_beta_calls += 1
+        if self.bid_uses_beta and self.candidate_beta_calls == 1:
+            return 1.0 - self.u
+        return self.u
+
+    def choice(self, a, size, replace, p):
+        n_samples, n_atoms = size
+        rows = np.arange(n_samples) % int(a)
+        self.choice_indices = np.repeat(rows[:, None], n_atoms, axis=1)
+        return self.choice_indices
+
+
+class _RiskAtomsRng:
+    """Makes the first card's bootstrap-EV vector exactly 90% positive."""
+
+    def __init__(self) -> None:
+        self.choice_indices = []
+
+    def uniform(self) -> float:
+        return 0.9
+
+    def beta(self, a: float, b: float) -> float:
+        return 0.0
+
+    def choice(self, a, size, replace, p):
+        indices = np.zeros(size, dtype=int)
+        if not self.choice_indices:
+            indices[-1, :] = 1
+        self.choice_indices.append(indices)
+        return indices
 
 
 class TestThompsonAuctioneer:
@@ -112,7 +166,27 @@ class TestThompsonAuctioneer:
 
 
 class TestEVThompsonAuctioneer:
-    def test_draw_order_bids_first_then_gate_then_baseline(self):
+    @pytest.mark.parametrize("magnitude", [None, 0.4], ids=["cold", "warm"])
+    def test_bid_and_gate_are_monotone_in_the_same_u(self, magnitude):
+        auctioneer = EVThompsonAuctioneer(baseline_prior=(7.0, 11.0))
+        candidate = _candidate("card", a=5.0, b=2.0, magnitude=magnitude)
+        slates = []
+        rngs = []
+        for u in (0.1, 0.9):
+            rng = _CoherenceRng(u, bid_uses_beta=True)
+            _, slate = auctioneer.run([candidate], rng)
+            rngs.append(rng)
+            slates.append(slate[0])
+
+        low, high = slates
+        assert [rng.uniform_calls for rng in rngs] == [1, 1]
+        assert low.theta < high.theta
+        assert low.bid < high.bid
+        assert low.bid / low.magnitude == pytest.approx(low.theta)
+        assert high.bid / high.magnitude == pytest.approx(high.theta)
+        assert high.selected is True
+
+    def test_draw_order_shared_worlds_then_baselines(self):
         auctioneer = EVThompsonAuctioneer(baseline_prior=(3.0, 3.0), ev_floor=0.0)
         candidates = [
             _candidate("c0", a=4.0, b=2.0, magnitude=0.5),
@@ -129,11 +203,15 @@ class TestEVThompsonAuctioneer:
         cold_mag = float(np.median(warm_pool)) if warm_pool else 1.0
         expected_bids = []
         for candidate in candidates:
-            theta_bid = float(replay.beta(candidate.posterior_a, candidate.posterior_b))
+            u = float(replay.uniform())
+            theta = float(
+                beta_dist.ppf(u, candidate.posterior_a, candidate.posterior_b)
+            )
             mag = candidate.magnitude if candidate.magnitude is not None else cold_mag
-            expected_bids.append((mag, theta_bid * mag))
-        for candidate, (mag, bid_value), bid in zip(candidates, expected_bids, slate):
-            theta = float(replay.beta(candidate.posterior_a, candidate.posterior_b))
+            expected_bids.append((mag, theta, theta * mag))
+        for candidate, (mag, theta, bid_value), bid in zip(
+            candidates, expected_bids, slate
+        ):
             base = float(replay.beta(3.0, 3.0))
             assert bid.theta == theta
             assert bid.baseline_theta == base
@@ -291,6 +369,175 @@ class TestEVThompsonAuctioneer:
 
 
 class TestBootstrapThompsonAuctioneer:
+    def test_ev_reserve_defaults_to_byte_exact_legacy_quantile(self):
+        candidates = [
+            AuctionCandidate(
+                card_id="hot",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.9,
+                deltas=(0.9,) * 8,
+            ),
+            AuctionCandidate(
+                card_id="fresh",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.5,
+                deltas=(0.5,) * 8,
+            ),
+        ]
+        legacy = BootstrapThompsonAuctioneer()
+        explicit = BootstrapThompsonAuctioneer(ev_reserve_mode="quantile")
+
+        legacy_winners, legacy_slate = legacy.run(candidates, np.random.default_rng(7))
+        explicit_winners, explicit_slate = explicit.run(
+            candidates, np.random.default_rng(7)
+        )
+
+        assert legacy.ev_reserve_mode == "quantile"
+        assert legacy_winners == explicit_winners
+        assert [bid.model_dump_json() for bid in legacy_slate] == [
+            bid.model_dump_json() for bid in explicit_slate
+        ]
+
+    def test_risk_gate_reuses_bid_bootstrap_ev_vector(self, captured_events):
+        rng = _RiskAtomsRng()
+        candidate = AuctionCandidate(
+            card_id="target",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            magnitude=1.0,
+            deltas=(1.0, -1.0),
+        )
+
+        winners, slate = BootstrapThompsonAuctioneer(
+            n_bootstrap=10,
+            ev_reserve_mode="risk",
+            ev_risk_alpha=0.2,
+        ).run([candidate], rng)
+
+        atoms = np.asarray([1.0, -1.0, 0.0])
+        bootstrap_ev = atoms[rng.choice_indices[0]].mean(axis=1)
+        positive_probability = float(np.mean(bootstrap_ev > 0.0))
+        expected_bid = np.sort(bootstrap_ev)[int(0.9 * len(bootstrap_ev))]
+        (bid,) = slate
+        assert len(rng.choice_indices) == 1
+        assert positive_probability == pytest.approx(0.9)
+        assert bid.bid == pytest.approx(expected_bid)
+        assert bid.ev_positive_probability == pytest.approx(positive_probability)
+        assert bid.ev_reserve_mode == "risk"
+        assert bid.ev_risk_alpha == pytest.approx(0.2)
+        assert bid.rejected_by_ev_floor is False
+        assert winners == ["target"]
+        (event,) = captured_events
+        assert event.bids[0]["ev_reserve_mode"] == "risk"
+        assert event.bids[0]["ev_positive_probability"] == pytest.approx(0.9)
+        assert event.bids[0]["ev_risk_alpha"] == pytest.approx(0.2)
+        assert event.bids[0]["rejected_by_ev_floor"] is False
+
+    def test_risk_alpha_one_rejected(self):
+        # alpha=1.0 => risk_threshold = 1 - alpha = 0.0, so the sign gate
+        # `P(EV>0) >= 0.0` admits even a card whose entire bootstrap-EV vector
+        # is non-positive (P(EV>0)=0). Risk mode has no separate `bid > 0`
+        # check, so that would inject a provably-losing card — the opposite of
+        # an EV reserve. The alpha bound must be exclusive of 1.0, matching the
+        # sibling ev_floor_quantile field.
+        with pytest.raises(ValidationError):
+            BootstrapThompsonAuctioneer(ev_reserve_mode="risk", ev_risk_alpha=1.0)
+
+    def test_risk_reserve_is_iia_clean_against_strong_slate(self):
+        target = AuctionCandidate(
+            card_id="target",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            magnitude=1.0,
+            deltas=(1.0, -1.0),
+        )
+        strong_slate = [
+            target,
+            AuctionCandidate(
+                card_id="strong-1",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=2.0,
+                deltas=(2.0, 2.0),
+            ),
+            AuctionCandidate(
+                card_id="strong-2",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=2.0,
+                deltas=(2.0, 2.0),
+            ),
+        ]
+        quantile = BootstrapThompsonAuctioneer(n_bootstrap=10, ev_floor_quantile=0.5)
+        risk = BootstrapThompsonAuctioneer(
+            n_bootstrap=10,
+            ev_reserve_mode="risk",
+            ev_risk_alpha=0.2,
+        )
+
+        quantile_alone, quantile_alone_slate = quantile.run([target], _RiskAtomsRng())
+        quantile_strong, quantile_slate = quantile.run(strong_slate, _RiskAtomsRng())
+        risk_alone, risk_alone_slate = risk.run([target], _RiskAtomsRng())
+        risk_strong, risk_slate = risk.run(strong_slate, _RiskAtomsRng())
+
+        assert {
+            quantile_alone_slate[0].bid,
+            quantile_slate[0].bid,
+            risk_alone_slate[0].bid,
+            risk_slate[0].bid,
+        } == {1.0}
+        assert "target" in quantile_alone
+        assert "target" not in quantile_strong
+        assert quantile_slate[0].rejected_by_ev_floor is True
+        assert "target" in risk_alone
+        assert "target" in risk_strong
+        assert risk_alone_slate[0].ev_positive_probability == pytest.approx(0.9)
+        assert risk_slate[0].ev_positive_probability == pytest.approx(0.9)
+        assert risk_slate[0].rejected_by_ev_floor is False
+
+    @pytest.mark.parametrize(
+        ("magnitude", "deltas", "bid_uses_beta"),
+        [(None, (), True), (0.6, (0.2, 1.0), False)],
+        ids=["cold", "warm"],
+    )
+    def test_bid_and_gate_are_monotone_in_the_same_u(
+        self, magnitude, deltas, bid_uses_beta
+    ):
+        auctioneer = BootstrapThompsonAuctioneer(
+            baseline_prior=(7.0, 11.0), ev_floor_quantile=0.0
+        )
+        candidate = AuctionCandidate(
+            card_id="card",
+            posterior_a=5.0,
+            posterior_b=2.0,
+            magnitude=magnitude,
+            deltas=deltas,
+        )
+        slates = []
+        rngs = []
+        for u in (0.1, 0.9):
+            rng = _CoherenceRng(u, bid_uses_beta=bid_uses_beta)
+            _, slate = auctioneer.run([candidate], rng)
+            rngs.append(rng)
+            slates.append(slate[0])
+
+        low, high = slates
+        assert [rng.uniform_calls for rng in rngs] == [1, 1]
+        assert low.theta < high.theta
+        assert low.bid < high.bid
+        if deltas:
+            atoms = np.asarray([*deltas, 0.0])
+            for u, rng, bid in zip((0.1, 0.9), rngs, slates):
+                samples = np.sort(atoms[rng.choice_indices].mean(axis=1))
+                index = min(int(u * len(samples)), len(samples) - 1)
+                assert bid.bid == pytest.approx(samples[index])
+        else:
+            assert low.bid / low.magnitude == pytest.approx(low.theta)
+            assert high.bid / high.magnitude == pytest.approx(high.theta)
+        assert high.selected is True
+
     def test_negative_only_candidate_does_not_borrow_positive_fallback(self):
         auctioneer = BootstrapThompsonAuctioneer()
         candidate = AuctionCandidate(
@@ -351,6 +598,23 @@ class TestBootstrapThompsonAuctioneer:
         assert slate[0].magnitude == 0.02
         assert 0.0 < slate[0].bid < 0.02
         assert slate[0].support_kind == "cold_prior"
+
+    def test_auction_leaves_probe_eligibility_to_probe_policy(self):
+        _, slate = BootstrapThompsonAuctioneer().run(
+            [
+                AuctionCandidate(
+                    card_id="cold",
+                    posterior_a=3.0,
+                    posterior_b=3.0,
+                    magnitude=None,
+                    deltas=(),
+                )
+            ],
+            np.random.default_rng(0),
+        )
+
+        assert slate[0].support_kind == "cold_prior"
+        assert slate[0].probe_eligible is False
 
     def test_empty_delta_non_cold_candidate_does_not_borrow_fallback(self):
         auctioneer = BootstrapThompsonAuctioneer(metrics_context=_metrics(0.02))
@@ -620,6 +884,70 @@ class TestNoveltyDiscountedBootstrapAuctioneer:
             NoveltyDiscountedBootstrapAuctioneer(novelty_power=-0.1)
 
 
+class TestPendingDiscountedBootstrapAuctioneer:
+    @staticmethod
+    def _pair() -> list[AuctionCandidate]:
+        return [
+            AuctionCandidate(
+                card_id="pending",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.9,
+                deltas=(0.9,) * 8,
+                pending_count=3,
+            ),
+            AuctionCandidate(
+                card_id="clear",
+                posterior_a=50.0,
+                posterior_b=1.0,
+                magnitude=0.5,
+                deltas=(0.5,) * 8,
+                pending_count=0,
+            ),
+        ]
+
+    def test_power_zero_is_bid_exact_with_base_and_consumes_no_rng(self):
+        base = BootstrapThompsonAuctioneer(ev_floor_quantile=0.5)
+        pending = PendingDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.5, pending_power=0.0
+        )
+        for seed in range(10):
+            base_rng = np.random.default_rng(seed)
+            pending_rng = np.random.default_rng(seed)
+
+            base_winners, base_slate = base.run(self._pair(), base_rng)
+            pending_winners, pending_slate = pending.run(self._pair(), pending_rng)
+
+            assert pending_winners == base_winners
+            assert [bid.bid for bid in pending_slate] == [bid.bid for bid in base_slate]
+            assert [bid.theta for bid in pending_slate] == [
+                bid.theta for bid in base_slate
+            ]
+            assert pending_rng.random() == base_rng.random()
+
+    def test_positive_power_taxes_only_pending_bid_without_rng_draw(self):
+        candidates = self._pair()
+        base_rng = np.random.default_rng(7)
+        pending_rng = np.random.default_rng(7)
+        _, base_slate = BootstrapThompsonAuctioneer(ev_floor_quantile=0.5).run(
+            candidates, base_rng
+        )
+        _, pending_slate = PendingDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.5, pending_power=0.5
+        ).run(candidates, pending_rng)
+
+        assert pending_slate[0].bid < base_slate[0].bid
+        assert pending_slate[0].bid == pytest.approx(
+            base_slate[0].bid * (1.0 + candidates[0].pending_count) ** -0.5
+        )
+        assert pending_slate[1].bid == base_slate[1].bid
+        assert pending_rng.random() == base_rng.random()
+
+    def test_negative_pending_power_rejected(self):
+        with pytest.raises(ValidationError):
+            PendingDiscountedBootstrapAuctioneer(pending_power=-0.1)
+
+
 class TestBootstrapAuctioneerPricedNoise:
     def _run(self, se_a, se_b, seed):
         auctioneer = BootstrapThompsonAuctioneer()
@@ -677,3 +1005,29 @@ class TestBootstrapAuctioneerPricedNoise:
         ]
         assert any(bid > 0 for bid in bids)
         assert any(bid <= 0 for bid in bids)
+
+
+def test_bid_carries_candidate_staleness_audit_fields(captured_events):
+    candidate = AuctionCandidate(
+        card_id="audit",
+        posterior_a=5.0,
+        posterior_b=1.0,
+        deltas=(0.2, 0.3),
+        delta_weights=(0.25, 1.0),
+        support_n_unstaled=2.0,
+        gain_se=0.4,
+    )
+    _, slate = BootstrapThompsonAuctioneer().run([candidate], np.random.default_rng(0))
+    bid = slate[0]
+
+    # The auction copies the audit fields straight from the candidate...
+    assert bid.support_n_unstaled == pytest.approx(2.0)
+    assert bid.gain_se == pytest.approx(0.4)
+    # ...support_n stays the staled reduction of delta_weights (0.25 + 1.0)...
+    assert bid.support_n == pytest.approx(1.25)
+    # ...so the per-event staleness bite is auditable off one slate row...
+    assert bid.support_n / bid.support_n_unstaled == pytest.approx(0.625)
+    # ...and both survive the JSON round-trip into MemoryReadSelection.slate.
+    dumped = bid.model_dump(mode="json")
+    assert dumped["support_n_unstaled"] == pytest.approx(2.0)
+    assert dumped["gain_se"] == pytest.approx(0.4)

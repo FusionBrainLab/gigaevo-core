@@ -30,6 +30,7 @@ from gigaevo.llm.agents.factories import (
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import (
     CardAdmissionGate,
@@ -93,19 +94,25 @@ class LibrarianWriteStack:
         evictor: Evictor,
         store: MemoryStore,
         checkpoint_dir: str | Path,
+        task_key: str = "",
         task_description: str = "",
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
         novelty_admission_gate: bool = False,
+        selection_leases: InFlightSelectionRegistry | None = None,
+        min_effective_events: float = 0.0,
     ) -> None:
         self._llm = llm
         self._evictor = evictor
         self._store = store
         self._checkpoint_dir = Path(checkpoint_dir)
+        self._task_key = task_key
         self._task_description = task_description
         self._dedup_policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._prompts_dir = prompts_dir
         self._novelty_admission_gate = novelty_admission_gate
+        self._selection_leases = selection_leases
+        self._min_effective_events = min_effective_events
         self._gate: CardAdmissionGate | None = None
         self._librarian: Librarian | None = None
         self._neighbors: NeighborSource | None = None
@@ -212,6 +219,9 @@ class LibrarianWriteStack:
             store=store,
             evictor=self._evictor,
             ledger=WriteLedger(self._checkpoint_dir / "write_ledger.jsonl"),
+            selection_leases=self._selection_leases,
+            task_key=self._task_key,
+            min_effective_events=self._min_effective_events,
         )
         # Optional novelty-admission judge: gates freshly-authored idea cards on
         # novelty against the mutator's prior. Off unless the arm turns it on
@@ -238,6 +248,7 @@ class LibrarianWriteStack:
             neighbors=store,
             top_k=policy.online_top_k,
             max_cards=policy.max_cards_per_diff,
+            task_key=self._task_key,
             task_description=self._task_description,
             task_description_summary=summary,
             admission_judge=admission_judge,
@@ -268,8 +279,8 @@ class MemoryWriter(IncrementalPostRunHook):
         store: The one ``MemoryStore`` the run shares (``${ref:memory.store}``);
             the reader reads the same instance, so a write is visible to the
             next read with no cross-view sync.
-        checkpoint_dir: Pins the write ledger under the Hydra output dir (the
-            bank + index live under the shared store's own ``checkpoint_dir``).
+        checkpoint_dir: Pins the write ledger under the shared checkpoint dir
+            alongside the bank.
         metrics_context: Validity/sentinel semantics for record eligibility and
             gain attribution; also the single source of the fitness direction.
         task_description: Human-readable description of the current task.
@@ -308,6 +319,7 @@ class MemoryWriter(IncrementalPostRunHook):
         baseline_estimator: NoCardBaselineEstimator | None = None,
         effect_estimator: EffectEstimator | None = None,
         no_card_recorder: NoCardEvidenceRecorder | None = None,
+        task_key: str = "",
         task_description: str = "",
         fitness_key: str = "",
         best_programs_percent: float = 5.0,
@@ -317,6 +329,8 @@ class MemoryWriter(IncrementalPostRunHook):
         program_exemplars: ProgramExemplarPolicy | None = None,
         prompts_dir: str | Path | None = None,
         novelty_admission_gate: bool = False,
+        selection_leases: InFlightSelectionRegistry | None = None,
+        min_effective_events: float = 0.0,
     ) -> None:
         # Default to the task's primary metric, not a literal "fitness": on a
         # task whose primary key differs, a hardcoded key would resolve to no
@@ -327,6 +341,7 @@ class MemoryWriter(IncrementalPostRunHook):
         self._fitness_key = fitness_key
         self._metrics_context = metrics_context
         self._higher_is_better = metrics_context.is_higher_better(fitness_key)
+        self._task_key = task_key
         self._task_description = task_description
         policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._program_exemplars = (
@@ -343,13 +358,17 @@ class MemoryWriter(IncrementalPostRunHook):
             evictor=evictor,
             store=store,
             checkpoint_dir=checkpoint_dir,
+            task_key=task_key,
             task_description=task_description,
             dedup_policy=policy,
             prompts_dir=prompts_dir,
             novelty_admission_gate=novelty_admission_gate,
+            selection_leases=selection_leases,
+            min_effective_events=min_effective_events,
         )
         self._extractor = ProgramRecordExtractor(
             task_description=task_description,
+            task_key=task_key,
             fitness_key=fitness_key,
             metrics_context=metrics_context,
         )
@@ -360,6 +379,8 @@ class MemoryWriter(IncrementalPostRunHook):
             baseline_estimator=baseline_estimator,
             effect_estimator=effect_estimator,
             no_card_recorder=no_card_recorder,
+            task_key=task_key,
+            selection_leases=selection_leases,
         )
         self._consolidation = ConsolidationScheduler(
             stack=self._stack,
@@ -545,6 +566,7 @@ class MemoryWriter(IncrementalPostRunHook):
                     Card(
                         kind=CardKind.PROGRAM,
                         id=f"program-{prog.id}",
+                        task_key=self._task_key,
                         program_id=prog.id,
                         task_description=self._task_description,
                         task_description_summary=summary,
@@ -575,7 +597,11 @@ class MemoryWriter(IncrementalPostRunHook):
         if not policy.enabled:
             return
         store = self._stack.require_store()
-        exemplars = [c for c in store.snapshot() if c.kind is CardKind.PROGRAM]
+        exemplars = [
+            c
+            for c in store.snapshot()
+            if c.kind is CardKind.PROGRAM and c.task_key == self._task_key
+        ]
         excess = len(exemplars) - policy.max_cards
         if excess <= 0:
             return

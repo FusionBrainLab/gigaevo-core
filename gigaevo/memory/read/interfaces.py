@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.memory.cards import Card, CardStatsBlock, ContextualGain, DecisionContext
@@ -40,6 +41,10 @@ class ReputationModel(Protocol):
         self, card: Card, context: DecisionContext | None = None
     ) -> CardStatsBlock | None: ...
 
+    def prior_base(
+        self, card: Card, context: DecisionContext | None = None
+    ) -> tuple[float, float]: ...
+
     def posterior_of(self, block: CardStatsBlock | None) -> tuple[float, float]: ...
 
     def magnitude_of(self, block: CardStatsBlock | None) -> float | None: ...
@@ -58,11 +63,11 @@ class ReputationModel(Protocol):
 
     def event_ses(
         self, card: Card, context: DecisionContext | None = None
-    ) -> tuple[float, ...]: ...
+    ) -> tuple[float | None, ...]: ...
 
-    def staleness_weight(
+    def staleness_weights(
         self, card: Card, context: DecisionContext | None = None
-    ) -> float: ...
+    ) -> tuple[float, ...]: ...
 
 
 class EvictionFacingReputation(ReputationModel, Protocol):
@@ -83,6 +88,14 @@ class DecayCompatibleReputation(EvictionFacingReputation, Protocol):
     harm_threshold: float
     confident_quantile: float
     confident_threshold: float
+
+    def card_stats_with_staleness(
+        self,
+        card: Card,
+        context: DecisionContext | None = None,
+        *,
+        staleness_weights: Sequence[float],
+    ) -> CardStatsBlock | None: ...
 
 
 @runtime_checkable
@@ -110,6 +123,7 @@ class CandidateProjector(Protocol):
         block: CardStatsBlock | None,
         reputation: ReputationModel,
         context: DecisionContext | None,
+        pending_counts: Mapping[str, int] | None = None,
     ) -> AuctionCandidate: ...
 
     def decision_baseline(

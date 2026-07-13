@@ -17,11 +17,11 @@ from gigaevo.memory.cards import Card
 
 
 def new_card_id() -> str:
-    return f"mem-{uuid4().hex[:12]}"
+    return f"mem-{uuid4().hex}"
 
 
 class CardBankFileLock(AbstractContextManager["CardBankFileLock"]):
-    """Advisory inter-process lock guarding one persisted card-bank file."""
+    """Advisory inter-process lock guarding one persisted file."""
 
     def __init__(self, path: str | Path, *, exclusive: bool = True) -> None:
         self._path = Path(path)
@@ -65,7 +65,7 @@ class CardBank:
         self._lock = RLock()
         self._cards: dict[str, Card] = {}
         self._snapshot_cache: tuple[Card, ...] | None = None
-        self._disk_token: tuple[int, int] | None = None
+        self._disk_token: tuple[int, int, int, int] | None = None
         if self._path.exists():
             self._reload()
 
@@ -163,10 +163,14 @@ class CardBank:
         with self._lock:
             try:
                 payload = json.loads(self._path.read_text(encoding="utf-8"))
-                cards = {
-                    cid: Card.model_validate(data)
-                    for cid, data in payload["cards"].items()
-                }
+                cards = {}
+                for cid, data in payload["cards"].items():
+                    card = Card.model_validate(data)
+                    if cid != card.id:
+                        raise ValueError(
+                            f"payload key {cid!r} != embedded card id {card.id!r}"
+                        )
+                    cards[cid] = card
             except Exception as exc:
                 raise MemoryStorageError(
                     f"corrupt card bank at {self._path}: {exc}"
@@ -175,9 +179,9 @@ class CardBank:
             self._snapshot_cache = None
             self._disk_token = self._stat_token()
 
-    def _stat_token(self) -> tuple[int, int] | None:
+    def _stat_token(self) -> tuple[int, int, int, int] | None:
         try:
             stat = self._path.stat()
         except FileNotFoundError:
             return None
-        return (stat.st_mtime_ns, stat.st_size)
+        return (stat.st_mtime_ns, stat.st_size, stat.st_dev, stat.st_ino)

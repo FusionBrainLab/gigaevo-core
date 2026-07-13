@@ -72,7 +72,11 @@ class NoCardEvidenceProvider(Protocol):
 @runtime_checkable
 class NoCardEvidenceRecorder(Protocol):
     def record_outcomes(
-        self, outcomes: Sequence[NoCardEvidenceOutcome], *, higher_is_better: bool
+        self,
+        outcomes: Sequence[NoCardEvidenceOutcome],
+        *,
+        higher_is_better: bool,
+        task_key: str = "",
     ) -> None: ...
 
 
@@ -109,6 +113,7 @@ class _Observation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
+    task_key: str = ""
     context_key: ContextKey
     delta: float
     randomized_control: bool = False
@@ -119,8 +124,11 @@ _Row = tuple[float, float, bool]
 """(delta, weight, invalid) evidence row for the sign gate."""
 
 
-def _outcome_context(outcome: NoCardEvidenceOutcome) -> DecisionContext:
+def _outcome_context(
+    outcome: NoCardEvidenceOutcome, *, task_key: str = ""
+) -> DecisionContext:
     return DecisionContext(
+        task_key=task_key,
         parent_metrics=dict(outcome.base_metrics or {}),
         parent_id=str(outcome.base_id or ""),
     )
@@ -203,40 +211,59 @@ class JsonNoCardEvidenceStore(BaseModel):
     max_observations: int = Field(
         default=1024,
         gt=0,
-        description="Retention cap on persisted observations; oldest natural "
-        "rows are pruned before any randomized control.",
+        description="Per-task retention cap on persisted observations; oldest "
+        "natural rows are pruned before any randomized control.",
     )
 
     def record_outcomes(
-        self, outcomes: Sequence[NoCardEvidenceOutcome], *, higher_is_better: bool
+        self,
+        outcomes: Sequence[NoCardEvidenceOutcome],
+        *,
+        higher_is_better: bool,
+        task_key: str = "",
     ) -> None:
-        fresh = self._observations_from(outcomes, higher_is_better=higher_is_better)
+        fresh = self._observations_from(
+            outcomes, higher_is_better=higher_is_better, task_key=task_key
+        )
         if not fresh:
             return
         with self._file_lock(exclusive=True):
-            by_id = {obs.id: obs for obs in self._read_unlocked()}
-            by_id.update({obs.id: obs for obs in fresh})
+            by_id = {(obs.task_key, obs.id): obs for obs in self._read_unlocked()}
+            by_id.update({(obs.task_key, obs.id): obs for obs in fresh})
             self._write_unlocked(self._pruned(tuple(by_id.values())))
 
     def _pruned(
         self, observations: tuple[_Observation, ...]
     ) -> tuple[_Observation, ...]:
-        overflow = len(observations) - self.max_observations
-        if overflow <= 0:
-            return observations
-        drop: set[str] = set()
-        # Randomized controls are the costlier evidence (a deliberately
-        # withheld injection), so age out naturals first.
-        for controls_pass in (False, True):
-            for obs in observations:
-                if len(drop) >= overflow:
-                    return tuple(o for o in observations if o.id not in drop)
-                if obs.randomized_control == controls_pass:
-                    drop.add(obs.id)
-        return tuple(o for o in observations if o.id not in drop)
+        by_task: dict[str, list[_Observation]] = {}
+        for obs in observations:
+            by_task.setdefault(obs.task_key, []).append(obs)
+
+        drop: set[tuple[str, str]] = set()
+        for task_observations in by_task.values():
+            overflow = len(task_observations) - self.max_observations
+            if overflow <= 0:
+                continue
+            # Naturals age first because controls cost a withheld injection.
+            task_drop_count = 0
+            for controls_pass in (False, True):
+                for obs in task_observations:
+                    if task_drop_count >= overflow:
+                        break
+                    if obs.randomized_control == controls_pass:
+                        drop.add((obs.task_key, obs.id))
+                        task_drop_count += 1
+                else:
+                    continue
+                break
+        return tuple(obs for obs in observations if (obs.task_key, obs.id) not in drop)
 
     def _observations_from(
-        self, outcomes: Sequence[NoCardEvidenceOutcome], *, higher_is_better: bool
+        self,
+        outcomes: Sequence[NoCardEvidenceOutcome],
+        *,
+        higher_is_better: bool,
+        task_key: str = "",
     ) -> tuple[_Observation, ...]:
         observations: list[_Observation] = []
         for outcome in outcomes:
@@ -256,10 +283,11 @@ class JsonNoCardEvidenceStore(BaseModel):
             oid = str(outcome.id or "")
             if not oid:
                 continue
-            context = _outcome_context(outcome)
+            context = _outcome_context(outcome, task_key=task_key)
             observations.append(
                 _Observation(
                     id=oid,
+                    task_key=task_key,
                     context_key=self.context_model.key_for(context),
                     delta=float(delta),
                     randomized_control=bool(outcome.no_card_control),
@@ -270,7 +298,8 @@ class JsonNoCardEvidenceStore(BaseModel):
 
     def summary_for(self, context: Any = None) -> NoCardGateSummary:
         key = self.context_model.key_for(context)
-        observations = self._read()
+        task_key = context.task_key if context is not None else ""
+        observations = tuple(obs for obs in self._read() if obs.task_key == task_key)
         if not observations:
             return self._seed_summary("seed")
 
@@ -432,6 +461,10 @@ class NullNoCardEvidenceProvider(BaseModel):
         )
 
     def record_outcomes(
-        self, outcomes: Sequence[Any], *, higher_is_better: bool
+        self,
+        outcomes: Sequence[Any],
+        *,
+        higher_is_better: bool,
+        task_key: str = "",
     ) -> None:
-        del outcomes, higher_is_better
+        del outcomes, higher_is_better, task_key

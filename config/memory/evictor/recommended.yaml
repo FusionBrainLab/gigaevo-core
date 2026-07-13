@@ -11,24 +11,39 @@
 # already rescued it.
 _target_: gigaevo.memory.write.eviction.CompositeEvictor
 evictors:
-  - _target_: gigaevo.memory.write.eviction.BirthFailureEvictor
-    scorer: ${ref:memory.reputation}
-    metrics_context: ${ref:problem_context::metrics_context}
-    scale: null
-    scale_multiplier: 2.0
-    rescue_min_events: 3.0
-    rescue_p_help_threshold: 0.5
-    rescue_ev_threshold: 0.0
-  - _target_: gigaevo.memory.write.eviction.HarmEvictor
-    scorer: ${ref:memory.reputation}
-    skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}
-  - _target_: gigaevo.memory.write.eviction.PolicyNonViableEvictor
-    scorer: ${ref:memory.reputation}
-    # Derived from the active memory preset's baseline-adjusted reward origin.
-    neutral_gain: ${memory.neutral_gain}
-    # Shared evidence floor for all recommended eviction policies.
-    min_effective_events: ${memory.eviction_safety.min_effective_events}
-    # Contextual scorers expose explicit evidence contexts. If a custom scorer
-    # cannot provide them, skip contextless cleanup instead of falling back to a
-    # potentially unsafe global view.
-    skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}
+  - _target_: gigaevo.memory.write.eviction.CrossTaskRetentionGuard
+    task_key: ${problem.name}
+    min_effective_events: ${memory.evidence.min_effective_events}
+    inner:
+      _target_: gigaevo.memory.write.eviction.BirthFailureEvictor
+      task_key: ${problem.name}
+      scorer: ${ref:memory.reputation}
+      metrics_context: ${ref:problem_context::metrics_context}
+      scale: null
+      scale_multiplier: 2.0
+      rescue_min_events: ${memory.evidence.min_effective_events}
+      rescue_p_help_threshold: 0.5
+      rescue_ev_threshold: 0.0
+  - _target_: gigaevo.memory.write.eviction.CrossTaskRetentionGuard
+    task_key: ${problem.name}
+    min_effective_events: ${memory.evidence.min_effective_events}
+    inner:
+      _target_: gigaevo.memory.write.eviction.HarmEvictor
+      task_key: ${problem.name}
+      scorer: ${ref:memory.reputation}
+      skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}
+  - _target_: gigaevo.memory.write.eviction.CrossTaskRetentionGuard
+    task_key: ${problem.name}
+    min_effective_events: ${memory.evidence.min_effective_events}
+    inner:
+      _target_: gigaevo.memory.write.eviction.PolicyNonViableEvictor
+      task_key: ${problem.name}
+      scorer: ${ref:memory.reputation}
+      # Derived from the active memory preset's baseline-adjusted reward origin.
+      neutral_gain: ${memory.neutral_gain}
+      # Shared evidence floor for all recommended eviction policies.
+      min_effective_events: ${memory.eviction_safety.min_effective_events}
+      # Contextual scorers expose explicit evidence contexts. If a custom scorer
+      # cannot provide them, skip contextless cleanup instead of falling back to a
+      # potentially unsafe global view.
+      skip_contextual_without_context: ${memory.eviction_safety.skip_contextual_without_context}

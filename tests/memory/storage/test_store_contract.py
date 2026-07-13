@@ -1,14 +1,16 @@
 """MemoryStore contract against both backends, plus backend-specific behavior.
 
-The shared contract runs parametrized over LocalMemoryStore (tmpdir bank +
-Chroma) and RemoteMemoryStore (httpx MockTransport over an in-memory card
-service). Backend-specific sections cover local persistence/retrieval/state
+The shared contract runs parametrized over LocalMemoryStore (persisted bank +
+in-memory Chroma) and RemoteMemoryStore (httpx MockTransport over an in-memory
+card service). Backend-specific sections cover local persistence/retrieval/state
 and the remote skeleton's not-yet-implemented surface.
 """
 
 from __future__ import annotations
 
 import json
+import multiprocessing
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -16,10 +18,30 @@ import pytest
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.cards import CardKind
 from gigaevo.memory.events import memory_event_context
+from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest
+import gigaevo.memory.storage.local as local_module
 from gigaevo.memory.storage.local import LocalMemoryStore
 from gigaevo.memory.storage.remote import RemoteMemoryStore
 from gigaevo.memory.storage.state import StoreState
+
+
+def _make_noop_index(_embed):
+    return Mock()
+
+
+def _append_program_markers(config, card_id, markers, ready, start):
+    local_module.VectorIndex = _make_noop_index
+    store = LocalMemoryStore(config)
+    ready.put(True)
+    start.wait()
+    for marker in markers:
+        store.update(
+            card_id,
+            lambda card, marker=marker: card.model_copy(
+                update={"programs": (*card.programs, marker)}
+            ),
+        )
 
 
 class FakeCardService:
@@ -49,10 +71,6 @@ class FakeCardService:
             return httpx.Response(200, json={"id": card_id})
         if path == "/cards" and method == "GET":
             return httpx.Response(200, json={"cards": list(self.cards.values())})
-        if path == "/cards/merge" and method == "POST":
-            payload = json.loads(request.content)
-            ids = [self._mint(card) for card in payload["cards"]]
-            return httpx.Response(200, json={"ids": ids})
         if path == "/rebuild" and method == "POST":
             self.rebuilds += 1
             return httpx.Response(200)
@@ -125,20 +143,6 @@ def test_program_card_round_trips(store, make_card):
     assert store.get(card.id) == card
 
 
-def test_apply_merges_saves_survivors(store, make_card):
-    survivor = make_card(absorbed_ids=("mem-absorbed00",))
-    fresh = make_card(id="")
-    ids = store.apply_merges([survivor, fresh])
-    assert ids[0] == survivor.id
-    assert ids[1].startswith("mem-")
-    assert store.get(ids[0]) == survivor
-    assert store.get(ids[1]) is not None
-
-
-def test_apply_merges_empty_is_noop(store):
-    assert store.apply_merges([]) == []
-
-
 class TestLocalStore:
     def test_initializes_ready(self, make_store_config):
         store = LocalMemoryStore(make_store_config())
@@ -150,6 +154,63 @@ class TestLocalStore:
         card = make_card()
         LocalMemoryStore(config).save(card)
         assert LocalMemoryStore(config).get(card.id) == card
+
+    def test_startup_rebuilds_index_from_existing_bank(
+        self, make_store_config, make_card
+    ):
+        config = make_store_config()
+        card = make_card(description="startup rebuild target")
+        bank = CardBank(config.bank_file)
+        bank.put(card)
+        bank.persist()
+
+        store = LocalMemoryStore(config)
+
+        assert [hit.card.id for hit in store.nearest(card.description, k=1)] == [
+            card.id
+        ]
+
+    def test_other_store_refreshes_bank_and_its_index(
+        self, make_store_config, make_card
+    ):
+        config = make_store_config()
+        store_a = LocalMemoryStore(config)
+        store_b = LocalMemoryStore(config)
+        card = make_card(description="cross process refresh target")
+
+        store_a.save(card)
+
+        assert store_b.get(card.id) == card
+        assert [hit.card.id for hit in store_b.nearest(card.description, k=1)] == [
+            card.id
+        ]
+
+    def test_update_eviction_removes_card_from_index(
+        self, make_store_config, make_card
+    ):
+        store = LocalMemoryStore(make_store_config())
+        card = make_card(description="eviction index target")
+        store.save(card)
+
+        assert store.update(card.id, lambda _card: None) == card
+        assert store.nearest(card.description, k=1) == []
+
+    def test_same_path_stores_do_not_share_index_state(
+        self, make_store_config, make_card
+    ):
+        config = make_store_config()
+        store_a = LocalMemoryStore(config)
+        store_b = LocalMemoryStore(config)
+        card = make_card(description="isolated index target")
+        store_a.save(card)
+        assert store_b.get(card.id) == card
+
+        store_b._index.remove([card.id])
+
+        assert store_b.nearest(card.description, k=1) == []
+        assert [hit.card.id for hit in store_a.nearest(card.description, k=1)] == [
+            card.id
+        ]
 
     def test_shared_bank_instances_do_not_clobber_each_other(
         self, make_store_config, make_card
@@ -172,6 +233,53 @@ class TestLocalStore:
         assert [hit.card.id for hit in store_a.nearest("beta shared bank", k=2)][
             0
         ] == card_b.id
+
+    def test_atomic_update_preserves_cross_process_writes(
+        self, make_store_config, make_card
+    ):
+        config = make_store_config()
+        card = make_card(id="mem-shared-update")
+        bank = CardBank(config.bank_file)
+        bank.put(card)
+        bank.persist()
+        context = multiprocessing.get_context("fork")
+        ready = context.Queue()
+        start = context.Event()
+        marker_groups = (
+            tuple(f"run-a-{index}" for index in range(8)),
+            tuple(f"run-b-{index}" for index in range(8)),
+        )
+        processes = [
+            context.Process(
+                target=_append_program_markers,
+                args=(config, card.id, markers, ready, start),
+            )
+            for markers in marker_groups
+        ]
+        for process in processes:
+            process.start()
+        for _ in processes:
+            assert ready.get(timeout=30) is True
+        start.set()
+        for process in processes:
+            process.join(timeout=30)
+            assert process.exitcode == 0
+
+        persisted = CardBank(config.bank_file).get(card.id)
+        assert persisted is not None
+        assert set(persisted.programs) == set(marker_groups[0] + marker_groups[1])
+
+    def test_update_missing_skips_transform(self, make_store_config):
+        store = LocalMemoryStore(make_store_config())
+        transformed = False
+
+        def transform(card):
+            nonlocal transformed
+            transformed = True
+            return card
+
+        assert store.update("mem-vanished", transform) is None
+        assert transformed is False
 
     def test_corrupt_bank_raises(self, make_store_config):
         config = make_store_config()
@@ -230,23 +338,30 @@ class TestLocalStore:
 
         assert store.get(card.id) == card
 
-    def test_apply_merges_rolls_back_ram_on_persist_failure(
+    def test_merge_retire_rolls_back_ram_on_persist_failure(
         self, make_store_config, make_card, monkeypatch
     ):
         store = LocalMemoryStore(make_store_config())
-        original = make_card(id="mem-original")
-        store.save(original)
-        incoming = make_card(id="mem-incoming")
+        target = make_card(id="mem-target")
+        partner = make_card(id="mem-partner")
+        store.save(target)
+        store.save(partner)
 
         def fail_persist():
             raise RuntimeError("disk full")
 
         monkeypatch.setattr(store._bank, "persist", fail_persist)
         with pytest.raises(RuntimeError, match="disk full"):
-            store.apply_merges([incoming])
+            store.merge_retire(
+                target.id,
+                partner.id,
+                lambda fresh, _partner: fresh.model_copy(
+                    update={"description": "merged description"}
+                ),
+            )
 
-        assert store.get(original.id) == original
-        assert store.get(incoming.id) is None
+        assert store.get(target.id) == target
+        assert store.get(partner.id) == partner
 
     def test_nearest_ranks_matching_card_first(self, make_store_config, make_card):
         store = LocalMemoryStore(make_store_config())
@@ -321,6 +436,11 @@ class TestRemoteStore:
         store = RemoteMemoryStore(client=FakeCardService().client())
         with pytest.raises(NotImplementedError):
             await store.research(ResearchRequest(query="anything"))
+
+    def test_atomic_merge_not_implemented(self, make_card):
+        store = RemoteMemoryStore(client=FakeCardService().client())
+        with pytest.raises(NotImplementedError):
+            store.merge_retire("target", "partner", lambda target, partner: target)
 
     def test_rebuild_posts(self):
         service = FakeCardService()

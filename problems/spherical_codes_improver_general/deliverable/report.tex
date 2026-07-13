@@ -1,0 +1,310 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black]{hyperref}
+\usepackage{longtable}
+
+\newcommand{\mustar}{\mu^{*}}
+
+\title{Three Improvements in the Spherical-Code Catalogue,\\
+Certified in Exact Arithmetic\\[0.4em]
+\large Cases $(d,N) = (24,555)$, $(9,36)$, $(14,154)$}
+\author{GigaEvo campaign report}
+\date{13 July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We searched a catalogue of 455 spherical-code cases $(d,N)$ with conjectured-exact
+optima and found three whose conjectured optimum is \emph{not} optimal. In each case
+the improvement is certified in exact arithmetic from an explicit witness --- no
+floating-point quantity enters any accept/reject decision. We prove
+\[
+\mustar(24,555)\le \tfrac15,\qquad
+\mustar(9,36)<\tfrac15,\qquad
+\mustar(14,154)<\tfrac{\sqrt{30}}{20},
+\]
+where $\mustar(d,N)$ denotes the minimum over configurations of the maximum pairwise
+inner product. The remaining 452 cases reproduced the catalogue values (every
+non-hit gain was below $10^{-15}$). We also report what we could and could not
+determine about the true optima, and we are explicit about the limits of each claim.
+\end{abstract}
+
+\section{Result}
+
+For a configuration $X=\{x_1,\dots,x_N\}\subset S^{d-1}$ write
+$\mu(X)=\max_{i<j}\langle x_i,x_j\rangle$, and $\mustar(d,N)=\min_X \mu(X)$.
+The catalogue lists, for each case, a conjectured-exact value of $\mustar(d,N)$
+together with a construction attaining it. A case is \emph{disproved} when we exhibit
+a configuration with $\mu(X)$ strictly below the conjectured value: that refutes the
+optimality of the listed construction and the exactness of the listed value.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{llll}
+\toprule
+Case & Conjectured optimum & Certified & Best numeric found \\
+\midrule
+$(24,555)$ & root of $39x^2{+}72x{-}16$, $\approx 0.2004565282$ & $\mustar \le 1/5$          & $1/5 + 2\cdot10^{-15}$ \\
+$(9,36)$   & $1/5$ (Ericson--Zinoviev 1995)                     & $\mustar < 1/5$            & $0.1998567715977$ \\
+$(14,154)$ & $\sqrt{30}/20 \approx 0.2738612788$                & $\mustar < \sqrt{30}/20$   & $0.2737223554347$ \\
+\bottomrule
+\end{tabular}
+\caption{The three disproved cases. ``Certified'' is proved in exact arithmetic
+(Section~\ref{sec:certs}). ``Best numeric found'' is the deepest local optimum located
+after high-precision refinement; it is \emph{not} part of any proof, and the
+certificates were extracted from earlier, slightly shallower witnesses, so the
+refinements only widen the certified margins.}
+\end{table}
+
+\noindent
+The certified margins below the conjectured values are
+$4.49\cdot10^{-4}$ for $(24,555)$,
+$1.42\cdot10^{-4}$ for $(9,36)$, and
+$1.37\cdot10^{-4}$ for $(14,154)$ --- four to five orders of magnitude above any
+plausible numerical tolerance.
+
+\section{Certificates}
+\label{sec:certs}
+
+\paragraph{$(9,36)$ and $(14,154)$: pointwise rational certificates.}
+Each point is an exactly rational point of the sphere. Given an integer vector $a$ and
+an integer $D$, we set
+\[
+\text{num} = (2aD,\; D^2-|a|^2), \qquad \text{den} = D^2+|a|^2,
+\]
+so that $|\text{num}|^2 = \text{den}^2$ \emph{identically} over $\mathbb{Z}$ --- the
+points are exactly on the sphere, with no rounding. Every pairwise inner product is
+then compared to the bound in integer arithmetic:
+for the bound $1/5$ we check $5\cdot\text{dot} < \text{den}_i\,\text{den}_j$;
+for $\sqrt{30}/20$ we check $\text{dot}\le 0$ or
+$(20\cdot\text{dot})^2 < 30\,(\text{den}_i \text{den}_j)^2$.
+Floating point is used \emph{only} to select the integers $a$; the accept/reject
+decision is entirely arbitrary-precision integer arithmetic.
+
+Re-running the standalone verifier on the shipped payloads (this report's artifacts)
+gives, in exact rational arithmetic, the following maximum inner products.
+
+\begin{quote}
+$(9,36)$, attained by the pair $(19,35)$:
+{\small
+\[
+\mu \;=\; \frac{3289968493528219134480000000}{16461508776597853891737988032}
+\;\approx\; 0.199858259542122 \;<\; \tfrac15 .
+\]}%
+$(14,154)$, attained by the pair $(0,76)$:
+{\footnotesize
+\[
+\mu \;=\; \frac{3999241176665180072971855716360000000000}
+               {14610476242607498207941934031493697586588}
+\;\approx\; 0.273724217490083 \;<\; \frac{\sqrt{30}}{20}.
+\]}
+\end{quote}
+
+\paragraph{$(14,154)$: a low-height quadratic is also excluded.}
+The natural low-height guess near our first-round numeric --- the larger root of
+$17x^2-x-1$, i.e.\ $(1+\sqrt{69})/34$ --- is ruled out \emph{exactly} by the same
+certificate (regenerated at $D=10^{10}$): the exact maximum inner product above is
+strictly below that root. So the true optimum is not that quadratic irrational.
+
+\paragraph{$(24,555)$: a structural certificate.}
+Here the witness is $272$ equiangular lines at $\pm 1/5$ (the regular two-graph on
+$276$ vertices minus a $4$-subset containing exactly two coherent triples), together
+with $11$ additional points carrying strict slack. The line Gram matrix
+$A = I + S/5$ satisfies
+\[
+A = A[:,J]\; B^{-1} A[J,:] \quad\text{exactly over } \mathbb{Q},
+\]
+for a $23$-line basis $J$ with $B=A[J,J]\succ 0$ (exact $LDL$, $23/23$ positive pivots).
+The identity forces $A$ to be PSD of rank $23$, so the $272$ lines embed exactly in
+$\mathbb{R}^{23}$; the $11$ extra points use the remaining dimension and are given by
+rational stereographic parameters, with squared norm exactly $1$. The verifier also
+re-checks that $S$ is symmetric with zero diagonal and $\pm1$ off-diagonal, i.e.\ that it
+really is the Seidel matrix of a set of equiangular lines at angle $\arccos(1/5)$.
+
+All pairwise inner products among the $2\cdot272+11 = 555$ points are then checked over
+$\mathbb{Q}$: exact $\max|C_{ij}| = 0.199164088266$ (point/line) and
+$\max G_{ij} = 0.199160322560$ (point/point), with zero violations. Coincident points
+would surface as an inner product of $1$, so the same checks establish that the $555$
+points are distinct. Hence $\mustar(24,555)\le 1/5 < 0.2004565\ldots$
+
+\paragraph{A conjecture in the other direction.}
+For $(24,555)$ we also have evidence \emph{for} the construction being beaten by
+exactly $1/5$ and no more: the $272$-line core is locally rigid (jitter up to
+$3\cdot10^{-2}$ always relaxes back to $1/5$), and unconstrained optimization
+plateaus at $1/5 + 8\cdot10^{-6}$. We would conjecture $\mustar(24,555)=1/5$: dropping
+from $556$ (where $1/5$ is impossible by the two-graph deep-hole obstruction) to $555$
+already releases all the tension.
+
+\section{What the true optima look like}
+
+\paragraph{$(14,154)$: a rigid vertex, and not an algebraic number of catalogue height.}
+High-precision refinement lands at a locally rigid KKT vertex,
+\[
+\mu = 0.2737223554347402446891941044531204632367\ldots
+\]
+Of the $154$ points, $146$ form a rigid frame with $1807$ contacts, \emph{all} contact
+forces strictly positive (minimum multiplier $7.2\cdot10^{-7}$), plus $8$ genuine
+rattlers; the nearest non-contact pair sits $3.8\cdot10^{-6}$ below $\mu$. Because the
+vertex is nondegenerate, the optimum is an isolated root of a square analytic system,
+so Newton is well posed and digits are cheap: mixed-precision iterative refinement
+against the frame pins $\mu$ to $1987$ decimal places, two independent runs agreeing
+digit for digit.
+
+That precision is what makes an integer-relation search meaningful. Detecting a
+degree-$n$ relation of height $H$ requires roughly $(n+1)\log_{10}H$ digits, so we do
+not quote one blanket coefficient bound; at each degree we search up to the largest
+height the precision actually supports. Working at a $1900$-digit tolerance (comfortably
+inside the verified range), PSLQ finds \emph{no} integer relation for any degree
+$2 \le n \le 30$, at heights up to $10^{20}$ throughout.
+
+For calibration: the exact values in your catalogue run to degree $14$ with
+coefficients below $5\cdot10^{7}$. So the sweep excludes the entire regime of the
+table, with roughly twelve orders of magnitude to spare on the height and twice the
+degree. The same code recovers $40x^2-3$ for $\sqrt{30}/20$, and recovers the
+catalogue's own deepest entry --- the degree-$14$ minimal polynomial at $(3,38)$ ---
+exactly, so a null result here is informative rather than a failure to search.
+
+We are not claiming $\mustar(14,154)$ is transcendental. We are claiming it is not an
+algebraic number of the size the catalogue's other entries have.
+
+\paragraph{$(9,36)$: a degenerate optimum, and a correction we had to make ourselves.}
+This case is harder, and we report a mistake we made and caught. Refinement first
+descends to $\mu \approx 0.19985677170944$, which we initially took for the optimum.
+It is not: it is a \emph{saddle}. It is a $251$-contact stationary point whose contact
+forces cannot be balanced --- the best nonnegative dual leaves residual
+$\approx 2\cdot10^{-6}$, so it fails the KKT conditions. Continued descent reaches
+\[
+\mu \approx 0.199856771597745,
+\]
+about $1.1\cdot10^{-10}$ below it.
+
+Unlike $(14,154)$, this optimum is \emph{degenerate}: it carries a rattler and flat
+contact-preserving directions, so there is no isolated KKT vertex to polish against
+and we cannot pin it to comparable precision. Our best value is stable to about $15$
+digits across smoothing levels and working precisions. We therefore make \textbf{no
+claim} about an exact closed form for $\mustar(9,36)$, and we do not report a PSLQ
+verdict for it: at $15$ digits such a sweep could only exclude very low-degree,
+tiny-coefficient relations, which would prove nothing.
+
+We note also that an apparent $S_3\times S_3$ symmetry (order $36$) in our first-round
+witness is an artefact of an unconverged iterate --- the symmetric configuration is
+not locally optimal, and the true optimum is asymmetric.
+
+None of this affects the certificate: $\mustar(9,36)<1/5$ is proved from an exactly
+rational witness, and a deeper optimum only widens its margin.
+
+\section{Search protocol and replication}
+
+The search is an evolutionary loop in which a language model proposes and mutates
+candidate optimizer \emph{programs}; the artifact that evolves is an optimizer, not a
+configuration. A single champion program, held fixed, was then run on all 455 cases
+under a fixed protocol (one hour of wall-clock per case per seed).
+
+All 455 cases were run on seeds $0,1,2$; the 404-case subset whose conjectured optimum
+is a polynomial root was then re-run on three fresh seeds $3,4,5$. Grading is
+best-of-seeds per case, with relative gain banded as
+$\text{none} < 10^{-9} \le \text{weak} < 10^{-6} \le \text{moderate} < 10^{-4} \le
+\text{strong}$.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Seeds & strong & moderate & weak & none \\
+\midrule
+$0,1,2$ (455 cases)          & 3 & 0 & 0 & 452 \\
+$0,\dots,5$ (merged, 455 cases) & 3 & 0 & 0 & 452 \\
+\bottomrule
+\end{tabular}
+\caption{Band counts are unchanged by doubling the seed budget on the heavy subset.}
+\end{table}
+
+\noindent
+The three hits are seed-reproducible rather than lucky single-seed basins, and the
+three extra seeds surfaced \emph{no} fourth case. One numeric best did improve:
+$(24,555)$ went from $0.200008302046$ (seed 2) to $0.200007553381$ (seed 5). This is
+irrelevant downstream --- both are above $1/5$, and the structural certificate
+$\mustar \le 1/5$ dominates any numeric value --- but we record it because the
+identical band counts would otherwise hide it.
+
+Per-case results, including the conjectured value, the best value found, the winning
+seed, and the margin, are in \texttt{results.json}.
+
+\section{What we are \emph{not} claiming}
+
+We think it is worth being precise about the scope of these results.
+
+\begin{itemize}
+\item We disprove the \textbf{conjectured optimum values} and the optimality of the
+listed constructions. We do not claim to refute any published \emph{theorem}.
+\item For $(9,36)$, the conjectured value $1/5$ is the value of the Ericson--Zinoviev
+(1995) construction. Our result shows that construction is not optimal for $(9,36)$.
+We make no assessment of any optimality claim those authors may have made.
+\item We do not claim exact values for any of the three true optima. For $(14,154)$ we
+show only that it is not algebraic of degree $\le 30$ and height $\le 10^{20}$; that is
+an exclusion, not a proof of transcendence. For $(9,36)$ we claim nothing about its
+arithmetic nature.
+\item The certificates are upper bounds on $\mustar$ from explicit witnesses. They say
+nothing about how far below the true optimum might lie, except for $(24,555)$, where
+we separately conjecture (but do not prove) $\mustar = 1/5$.
+\end{itemize}
+
+\section{Artifacts and how to verify}
+
+Everything needed to check the three claims independently is included. Both verifiers
+are stdlib Python 3 --- no numpy, no floating point anywhere in a decision --- they read
+the JSON certificates and nothing else, and they exit nonzero on any violation.
+
+\begin{verbatim}
+cd certificates
+
+# (9,36):    mu* < 1/5
+python3 verify_certificate.py certificate_9_36_rational.json 9 36 "1/5"
+
+# (14,154):  mu* < sqrt(30)/20, and the 17x^2-x-1 root is excluded too
+python3 verify_certificate.py certificate_14_154_rational.json 14 154 \
+        "sqrt:30/400" "root:17,-1,-1"
+
+# (24,555):  mu* <= 1/5
+python3 verify_24_555.py
+\end{verbatim}
+
+\noindent
+All three commands were re-run from a clean copy of the bundle immediately before this
+report was generated, and all pass.
+
+{\small
+\begin{longtable}{ll}
+\toprule
+File & Contents \\
+\midrule
+\endhead
+\multicolumn{2}{l}{\texttt{certificates/}} \\
+\quad\texttt{verify\_certificate.py}       & JSON-only verifier, rational-point certificates \\
+\quad\texttt{verify\_24\_555.py}             & JSON-only verifier, $(24,555)$ structural certificate \\
+\quad\texttt{certificate\_9\_36\_rational.json}   & 36 rational points in $\mathbb{R}^9$ \\
+\quad\texttt{certificate\_14\_154\_rational.json} & 154 rational points in $\mathbb{R}^{14}$ \\
+\quad\texttt{certificate\_24\_555\_stereographic.json} & line basis $J$, rational stereographic params \\
+\quad\texttt{certificate\_24\_555\_seidel272.json}    & $272\times272$ integer Seidel matrix \\
+\multicolumn{2}{l}{\texttt{generators/}\quad (need numpy; how the certificates were produced)} \\
+\quad\texttt{cert\_rational\_points.py}    & float witness $\to$ rational witness \\
+\quad\texttt{cert\_stereographic.py}       & float witness $\to$ $(24,555)$ certificate \\
+\quad\texttt{exact\_candidate\_24\_555*.npy} & the float witness and its Seidel matrix \\
+\multicolumn{2}{l}{\texttt{campaign/}} \\
+\quad\texttt{results.json}                 & per-case results, all 455 cases, seeds 0--5 \\
+\quad\texttt{packings\_champion.npz}       & best packing found per case \\
+\quad\texttt{pinned\_14\_154\_kkt.json}      & $(14,154)$ KKT vertex: $\sim$90 digits, contacts, multipliers \\
+\multicolumn{2}{l}{\texttt{analysis/}\quad (need numpy + mpmath; the $(14,154)$ arithmetic study)} \\
+\quad\texttt{refine\_14\_154.py}            & KKT pin $\to$ $\mu$ at arbitrary precision \\
+\quad\texttt{pslq\_sweep.py}                & integer-relation sweep, per-degree height bounds \\
+\quad\texttt{mu\_14\_154.txt}               & $\mu^*(14,154)$ to 1950 decimal places \\
+\bottomrule
+\end{longtable}}
+
+\end{document}

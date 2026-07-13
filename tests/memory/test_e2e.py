@@ -3,7 +3,7 @@ then a fresh reader run (new store, new components — nothing shared in-process
 retrieves those cards into a mutation-facing selection.
 
 Both runs use the production component stack from ``config/memory/full.yaml``
-(real ``LocalMemoryStore`` + Chroma in a tmpdir); only the embedder and the
+(real ``LocalMemoryStore`` + in-memory Chroma); only the embedder and the
 LLM router are scripted doubles.
 """
 
@@ -24,7 +24,8 @@ from gigaevo.llm.agents.reconcile import (
 from gigaevo.llm.agents.task_summary import TaskSummaryResponse
 from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.provider import ReaderMemoryProvider
-from gigaevo.memory.read.auction import EVThompsonAuctioneer, TopBidBudgeter
+from gigaevo.memory.read.auction import BootstrapThompsonAuctioneer, TopBidBudgeter
+from gigaevo.memory.read.probe import ColdProbePolicy
 from gigaevo.memory.read.reader import MemoryReader
 from gigaevo.memory.read.render import EfficacyCardRenderer
 from gigaevo.memory.read.reputation import BetaBinomialReputation
@@ -165,9 +166,10 @@ async def test_writer_bank_feeds_fresh_reader_run(tmp_path):
     reader = MemoryReader(
         shortlister=ResearchShortlister(store=store),
         reputation=BetaBinomialReputation(),
-        auctioneer=EVThompsonAuctioneer(),
+        auctioneer=BootstrapThompsonAuctioneer(),
         budgeter=TopBidBudgeter(),
         renderer=EfficacyCardRenderer(),
+        probe_policy=ColdProbePolicy(empty_selection_probe_rate=1.0),
         max_cards=1,
         rng=np.random.default_rng(1),
     )

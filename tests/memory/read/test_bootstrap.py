@@ -1,4 +1,4 @@
-"""Bootstrap EV substrate: exact-path rng identity and priced-noise jitter."""
+"""Bootstrap EV: effective-N draws, exact replay, and priced-noise jitter."""
 
 from __future__ import annotations
 
@@ -14,6 +14,94 @@ def _samples(*, seed: int = 7, n: int = 256, **kwargs) -> np.ndarray:
     return bootstrap_ev_samples(
         DELTAS, 0.0, 1.0, n, np.random.default_rng(seed), **kwargs
     )
+
+
+def _legacy_rows_plus_neutral_samples(
+    deltas, weights, n_samples: int, rng: np.random.Generator
+) -> np.ndarray:
+    atoms = np.asarray([*deltas, 0.0], dtype=float)
+    sampling_weights = np.asarray([*weights, 1.0], dtype=float)
+    probs = sampling_weights / sampling_weights.sum()
+    indices = rng.choice(
+        len(atoms),
+        size=(n_samples, len(atoms)),
+        replace=True,
+        p=probs,
+    )
+    return atoms[indices].mean(axis=1)
+
+
+class TestEffectiveResampleCount:
+    def test_skewed_weights_widen_ev_band_relative_to_rows_plus_neutral(self):
+        deltas = [1.0, -1.0, *([1.0, -1.0] * 25)]
+        weights = [1.0, 1.0, *([0.01] * 50)]
+        n_samples = 8192
+        actual = bootstrap_ev_samples(
+            deltas,
+            0.0,
+            1.0,
+            n_samples,
+            np.random.default_rng(23),
+            delta_weights=weights,
+        )
+        legacy = _legacy_rows_plus_neutral_samples(
+            deltas, weights, n_samples, np.random.default_rng(23)
+        )
+
+        actual_lo, actual_hi = np.quantile(actual, (0.2, 0.8))
+        legacy_lo, legacy_hi = np.quantile(legacy, (0.2, 0.8))
+        assert actual_hi - actual_lo == pytest.approx(0.75)
+        assert actual_hi - actual_lo > legacy_hi - legacy_lo
+
+    def test_all_unit_weights_replay_legacy_samples_and_rng_position_exactly(self):
+        weights = [1.0] * len(DELTAS)
+        actual_rng = np.random.default_rng(29)
+        legacy_rng = np.random.default_rng(29)
+
+        actual = bootstrap_ev_samples(
+            DELTAS,
+            0.0,
+            1.0,
+            256,
+            actual_rng,
+            delta_weights=weights,
+        )
+        legacy = _legacy_rows_plus_neutral_samples(DELTAS, weights, 256, legacy_rng)
+
+        np.testing.assert_array_equal(actual, legacy)
+        assert actual_rng.random() == legacy_rng.random()
+
+    def test_zero_weight_atoms_do_not_inflate_the_resample_count(self):
+        compact = bootstrap_ev_samples(
+            [1.0],
+            0.0,
+            1.0,
+            512,
+            np.random.default_rng(31),
+            delta_weights=[1.0],
+        )
+        padded = bootstrap_ev_samples(
+            [1.0, 9.0, -9.0],
+            0.0,
+            1.0,
+            512,
+            np.random.default_rng(31),
+            delta_weights=[1.0, 0.0, 0.0],
+        )
+
+        np.testing.assert_array_equal(padded, compact)
+
+    def test_all_zero_event_weights_stay_on_finite_neutral_atom(self):
+        samples = bootstrap_ev_samples(
+            [9.0, -9.0],
+            0.0,
+            1.0,
+            64,
+            np.random.default_rng(37),
+            delta_weights=[0.0, 0.0],
+        )
+
+        np.testing.assert_array_equal(samples, np.zeros(64))
 
 
 class TestPricedNoiseJitter:

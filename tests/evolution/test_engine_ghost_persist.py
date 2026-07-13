@@ -292,6 +292,7 @@ class _FakeEngine:
         self._in_flight_lock = asyncio.Lock()
         self._producer_sema = asyncio.Semaphore(8)
         self._buffer_sema = asyncio.Semaphore(8)
+        self._selection_leases = None
         self.metrics = type("M", (), {})()
         self.metrics.iteration = 0
         self.metrics.mutations_created = 0

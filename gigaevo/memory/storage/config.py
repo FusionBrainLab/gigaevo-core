@@ -107,21 +107,21 @@ class ResearchConfig(BaseModel):
 
 
 class StoreConfig(BaseModel):
-    """Persistence layout and retrieval knobs of a local store."""
+    """Bank persistence and retrieval knobs of a local store.
+
+    The card bank is persisted under ``path``; the vector index is in-memory
+    and derived from the bank by each process.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    path: Path = Field(description="Checkpoint directory owning bank + index.")
+    path: Path = Field(description="Checkpoint directory owning the card bank.")
     embed: EmbedConfig = Field(default_factory=EmbedConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
 
     @property
     def bank_file(self) -> Path:
         return self.path / "cards.json"
-
-    @property
-    def index_dir(self) -> Path:
-        return self.path / "chroma"
 
     @model_validator(mode="after")
     def _validate_research_scopes(self) -> StoreConfig:

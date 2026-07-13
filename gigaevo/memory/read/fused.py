@@ -27,6 +27,7 @@ from typing import Any
 
 from gigaevo.memory.cards import Card, DecisionContext
 from gigaevo.memory.context import GlobalMemoryContext, MemoryContextModel
+from gigaevo.memory.context.evidence import effective_support
 from gigaevo.memory.read.interfaces import ReputationModel, Shortlister
 from gigaevo.memory.storage.base import ResearchResult
 
@@ -200,9 +201,12 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
     write-side evictor. The bench retires only proven losers — cards whose
     optimistic bootstrap EV (``IntroGain_bootstrap_ev_hi80``) is non-positive
     with at least the reputation's ``policy_min_effective_events`` of effective
-    evidence. Falling below the relative ``rep_floor_quantile`` only loses the
-    current read; the card keeps research and probe access, so one loss or a
-    couple of ignored exposures is never an absorbing death."""
+    evidence. Cards below that same staleness-scaled effective-support boundary
+    are exempt from the relative ``rep_floor_quantile`` and retain research and
+    probe access to earn adjudicating evidence. A sufficiently-observed card
+    below the relative floor loses only the current read and can re-enter as
+    decay and the relative warm distribution shift; that is not an absorbing
+    death either."""
 
     def _bank_bench(
         self, context: DecisionContext | None
@@ -217,10 +221,12 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
         warm = []
         benched_ids: set[str] = set()
         for card in bank:
-            if not self._reputation.event_deltas(card, context):
+            deltas = self._reputation.event_deltas(card, context)
+            if not deltas:
                 continue
             block = self._reputation.card_stats(card, context)
-            if self._proven_loser(block, min_events):
+            support = effective_support(self._reputation, card, deltas, context)
+            if self._proven_loser(block, support, min_events):
                 benched_ids.add(card.id)
                 continue
             warm.append(self._rep_score_of(block))
@@ -231,13 +237,13 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
         return floor, frozenset(benched_ids)
 
     @staticmethod
-    def _proven_loser(block: Any, min_events: float) -> bool:
+    def _proven_loser(block: Any, support: float, min_events: float) -> bool:
         if block is None or block.IntroGain_bootstrap_ev_hi80 is None:
             return False
         ev_hi = float(block.IntroGain_bootstrap_ev_hi80)
         if not math.isfinite(ev_hi):
             return False
-        return ev_hi <= 0.0 and float(block.intro_events) >= min_events
+        return ev_hi <= 0.0 and support >= min_events
 
     def _passes_rep_floor(
         self,
@@ -246,10 +252,15 @@ class BootstrapFusedRankingShortlister(FusedRankingShortlister):
         p_help: float,
         rep_floor: float,
     ) -> bool:
-        if not self._reputation.event_deltas(card, context):
+        deltas = self._reputation.event_deltas(card, context)
+        if not deltas:
             block = self._reputation.card_stats(card, context)
             magnitude = None if block is None else self._reputation.magnitude_of(block)
             return magnitude is None or magnitude > 0.0
+        if effective_support(self._reputation, card, deltas, context) < float(
+            self._reputation.policy_min_effective_events
+        ):
+            return True
         return p_help >= rep_floor
 
     @staticmethod

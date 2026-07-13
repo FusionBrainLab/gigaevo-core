@@ -16,6 +16,7 @@ You do NOT solve the task in CONTEXT below. You do NOT write code.
 ## DECIDE: SAME LEVER?
 
 Merge only when both cards prescribe the SAME underlying mechanism — the same move a mutation would make to a program — even if worded differently or scoped slightly apart. Abstain (`merge: false`) when they share a topic, vocabulary, or goal but prescribe different moves: e.g. one bounds a quantity while the other reshapes how it is computed; one adds a guard while the other swaps the representation; one changes an objective while the other changes an init scheme. Shared surface wording is not lever identity — when in doubt that the two moves are truly one, abstain.
+The two cards may originate from different tasks (shown as "origin task"); merge across tasks only when the mechanism genuinely transfers, never merely because prose overlaps.
 
 Three hard rules sharpen this. Merge only when both cards state the same mechanism under the same condition. And a card that contradicts the other — prescribing the opposite move on the same knob (structured initialization vs. random initialization, say) — is NEVER the same lever, however close the embedding: abstain and keep both; an honest contradiction in the bank beats silently absorbing one side. Finally, the union you author must cover the evidence of BOTH cards; if one honest description cannot subsume the two, they were not the same lever — abstain.
 

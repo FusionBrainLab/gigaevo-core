@@ -81,10 +81,12 @@ research   LangGraph agent over the store: plan → retrieve → reflect
 reputation bootstrap-EV re-pricing (mean + low quantile of a staleness-
            weighted bootstrap over each card's raw oriented gain deltas)
            over the cell-local BD-proximity posterior
-auction    Thompson gate vs a no-card baseline arm; known cards bid the
-           mean of one weighted bootstrap resample of direct deltas, zero
-           atoms for invalid/unused exposures, plus a neutral pseudo-event;
-           genuinely cold cards use the cold scale; gated by bid > 0, a
+auction    Thompson gate vs a no-card baseline arm; each card draws one u;
+           known cards bid the empirical u-quantile of one weighted bootstrap
+           batch over direct deltas, zero atoms for invalid/unused exposures,
+           plus a neutral pseudo-event, while genuinely cold cards bid
+           Beta.ppf(u) times the cold scale; the same Beta.ppf(u) serves the
+           no-card gate; gated by bid > 0, a
            round-quantile reserve, and a Sidak-adjusted no-card baseline gate
 budget     cap winners to reader.max_cards
 probe      cold-exploration lane after budget: a card whose staleness-scaled
@@ -200,22 +202,100 @@ only when needed (`memory.auction.ev_floor_quantile=0.5` for bootstrap policies,
 | Group | Options | Notes |
 |---|---|---|
 | `memory/llm` | `gemini` (default), `qwen_instruct` | one router shared by the research + librarian agents |
-| `memory/read_policy` | `adaptive` (default), `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `adaptive` = contextual bootstrap-EV over BD-proximity + EB cold priors + persisted no-card evidence + explicit cold probes + bootstrap auction + top-bid budget + warm-card bench + lineage excluder; this is the recommended default. `portable` = same adaptive stack in global context, no `behavior_space` dependency; use for multi-island/no-BD algorithms. Decay variants are explicit experiments. Legacy variants preserve old median-EV / probability-only baselines with fixed priors and no cold probes |
+| `memory/read_policy` | `adaptive` (default), `portable`, `median_ev_legacy`, `probability_legacy`, `contextual_bootstrap_decay`, `portable_bootstrap_decay`, `decay_median_ev_legacy` | whole read-stack presets. `adaptive` = contextual bootstrap-EV over BD-proximity + EB cold priors + persisted no-card evidence + explicit cold probes + bootstrap auction + top-bid budget + warm-card bench + lineage excluder; its relative warm-card floor exempts cards below the shared effective-evidence boundary so they retain auction/probe access. This is the recommended default. `portable` = same adaptive stack in global context, no `behavior_space` dependency; use for multi-island/no-BD algorithms. Decay variants are explicit experiments. Legacy variants preserve old median-EV / probability-only baselines with fixed priors and no cold probes |
 | `memory/context` | `bd_cell` (default under `adaptive`), `global` | shared context policy used by reader, shortlist bench, no-card evidence, and writer baseline fitting. `bd_cell` recomputes cells under the live behavior space with global fallback; `global` ignores behavior space |
-| `memory/prior` | `empirical_bayes` (adaptive default), `fixed_3_3` | cold-card prior policy. EB learns a config-driven cohort ladder (`levels`, default global → kind → kind+category, then context / context+kind / context+kind+category once the context model resolves a non-global bucket) from banked first non-founding exposures, shrunk toward a neutral `seed_prior: [1,1]` under a `k_max=6` concentration cap; a level whose counts match the previous one is skipped so the same evidence never compounds shrinkage. Fixed is for legacy/reproduction |
+| `memory/prior` | `empirical_bayes` (adaptive default), `fixed_3_3` | cold-card prior policy and warm Beta-Binomial base. EB learns a config-driven global/kind/category/task/context cohort ladder from each card's temporally first non-founding exposure, counting only strictly positive causal gain as help; zero, negative, and invalid outcomes enter the failure/complement mass. Context levels are native-task-only because BD metrics cannot be compared across tasks; global levels pool only these hard help/no-help signs. Counts shrink toward `seed_prior: [1,1]` under a `k_max=6` cap, and duplicate counts never compound shrinkage. Fixed is for legacy/reproduction; its warm posterior now coherently starts at Beta(3,3), not Beta(1,1) |
 | `memory/no_card_evidence` | `json` (adaptive default), `none` | writer-published no-card controls/natural empty outcomes consumed by the reader's no-card abstention gate. This is distinct from the randomized no-card control rate |
 | `memory/probe` | `cold_budget` (adaptive default), `none` | explicit cold-card exploration lane, run after the auction and budget. A card is probe-eligible iff its bid reports a non-empty support kind and its staleness-scaled effective support is strictly below the evidence floor (`probe_until_effective_events`, wired to `${memory.evidence.min_effective_events}`) — the same measure eviction uses, so probe (strict `<`) and eviction/adjudication (`>=`) partition card-space with no gap. With an empty selection it fills one slot with the best cold candidate at rate 0.50; with warm winners it adds a probe at rate 0.03 and only displaces the weakest budgeted card when the budget is already full (otherwise the probe joins the proven winner). At most one probe card per decision; empty support kinds are never probe-eligible (fail-safe) |
-| `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; staleness enters as per-event weight `w = 2^(-s/H)`. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
-| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` bids the mean of one staleness-weighted bootstrap resample of the card's EV support + a neutral pseudo-event; genuinely cold cards bid posterior × cold scale. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption) and a Sidak-adjusted no-card baseline gate (`gate_quantile = baseline_quantile^(1/eligible_count)` against the persisted no-card evidence arm); `thompson_ev` bids expected value (θ × gain magnitude); `thompson` bids probability only. `thompson_bootstrap_novelty` (add with `+memory/auction=thompson_bootstrap_novelty` — the `+` is required because read_policy owns the group) is `thompson_bootstrap` with a novelty tax: each bid is scaled by `(1 + use_count)^-novelty_power` (use_count = the card's non-founding gain events, a deterministic injection count) before the reserve is computed, so repeat winners make room for fresh cards while injection volume is preserved (the quantile floor re-normalizes over the taxed bids) |
+| `memory/reputation` | `bootstrap_bd`, `bootstrap_global`, `bootstrap_bd_decay`, `bootstrap_global_decay`, `bd_proximity`, `beta_binomial`, `bd_proximity_decay` | expert leaves used by read policies. Prefer selecting `memory/read_policy` unless running an ablation. `bootstrap_bd` wraps `bd_proximity` and re-prices each card's gain summary on the mean + low quantile of a weighted bootstrap over raw oriented deltas; event `i` gets staleness weight `w_i = 2^(-s_i/H)` from its own stamp. `bd_proximity` needs a single shared `behavior_space`; use `bootstrap_global`/`portable` otherwise |
+| `memory/auction` | `thompson_bootstrap` (default), `thompson_ev`, `thompson` | `thompson_bootstrap` draws one `u` per card: a known card bids the empirical `u`-quantile of one staleness-weighted bootstrap-EV batch over its support + a neutral pseudo-event, while a genuinely cold card bids `Beta.ppf(u) × cold scale`; that same `Beta.ppf(u)` is its no-card gate theta. It is gated by `bid > 0` plus an inclusive `ev_floor_quantile` reserve over the round's own bids (self-normalizing, no Beta assumption) and a Sidak-adjusted no-card baseline gate (`gate_quantile = baseline_quantile^(1/eligible_count)` against the persisted no-card evidence arm); `thompson_ev` likewise shares one `u` between its `θ × gain magnitude` bid and theta gate; `thompson` bids probability only. `thompson_bootstrap_novelty` (add with `+memory/auction=thompson_bootstrap_novelty` — the `+` is required because read_policy owns the group) is `thompson_bootstrap` with a novelty tax: each bid is scaled by `(1 + use_count)^-novelty_power` (use_count = the card's non-founding gain events, a deterministic injection count) before the reserve is computed, so repeat winners make room for fresh cards while injection volume is preserved (the quantile floor re-normalizes over the taxed bids) |
 | `memory/budget` | `top_bid` (default), `top_theta` | pair `top_bid` with the EV bidders (`thompson_bootstrap`, `thompson_ev`) and `top_theta` with `thompson` |
 | `memory/excluder` | `lineage` (default), `none` | `lineage` excludes cards already applied on the parent's lineage before research |
 | `memory/evictor` | `recommended` (default), `harm`, `none` | `recommended` composes catastrophic birth-failure deletion, later-use harm eviction, and policy-non-viable active-bank cleanup after the reputation's effective evidence floor; contextual reputations provide explicit supported contexts for that cleanup; `harm` keeps only the later-use harm sweep |
+
+`PendingDiscountedBootstrapAuctioneer` is a code-level opt-in only; no shipped
+preset selects it. It scales each bid by
+`(1 + pending_count)^-pending_power`, where `pending_count` is the lease
+registry's pre-selection snapshot of uncredited in-flight exposures. The
+snapshot is taken before the current winners are attached, so a card never
+taxes its own current selection. `pending_counts=None` projects zero exposure,
+and the auctioneer's default `pending_power=0` is bid-for-bid identical to the
+base bootstrap auction without consuming another RNG draw.
+
+EB cold priors can optionally consume an evicted-card evidence source to correct
+the upward survivorship bias caused when harm-evicted cards drop out of cohort
+help rates; the default is snapshot-only, no shipped preset wires the source,
+and inclusion-propensity/IPS weighting remains a follow-up.
+
+Bootstrap auctions have an opt-in per-card reserve:
+`memory.auction.ev_reserve_mode=risk` with
+`memory.auction.ev_risk_alpha=<alpha>` admits a card when the fraction of its own
+bootstrap-EV samples above zero is at least `1 - alpha`. The probability and the
+bid quantile reuse the identical bootstrap vector, so this gate is independent
+of other bids in the slate. The shipped default remains `quantile`, and no
+shipped preset sets either field. `AuctionBid` records `ev_reserve_mode`,
+`ev_positive_probability`, `ev_risk_alpha`, and `rejected_by_ev_floor`; those
+fields also appear inside `MEMORY_AUCTION_RUN.bids`.
 
 Top-level `memory.baseline_prior` is the shared fallback no-card arm prior
 (`Beta(3,3)` by default). Auctions, persisted no-card evidence, legacy fixed
 cold priors, and reputation fallback cold priors all reference it. Adaptive EB
 cold-card priors intentionally keep their own weaker `seed_prior: [1,1]` so
 bank evidence can move cold-card beliefs quickly.
+
+Every shipped reputation preset also passes the selected card prior `(a0,b0)`
+into its warm downside posterior: `a = a0 + (n-k_harm)` and
+`b = b0 + k_harm`. The first valid event therefore updates the same Bayesian
+world the zero-event projector exposed instead of resetting to Beta(1,1).
+Explicit posterior-decay presets shrink evidence back toward that same `(a0,b0)`;
+only direct/unwired `prior=None` construction retains the historical Beta(1,1)
+warm base and decay target.
+
+The reputation field `harm_model` defaults to `soft_count`, preserving those
+updates exactly. The opt-in `mixture` model treats each finite event's latent
+harm sign as an independent Bernoulli draw with probability `p_i=harm_mass_i`.
+For legacy posterior parameters `alpha=a0+n-k_harm`, `beta=b0+k_harm`,
+`N=alpha+beta`, and
+`sigma_K^2=sum(weight_i^2 * p_i * (1-p_i))`, it returns a Beta with the same
+mean and matched total pseudo-count
+`S=alpha*beta*(N+1)/(alpha*beta+N*sigma_K^2)-1`:
+`a_mix=(alpha/N)*S`, `b_mix=(beta/N)*S`. Thus uncertain signs widen the Beta
+without moving its mean. Invalid/unused failures are deterministic harm and add
+no sign variance; exact events also have `sigma_K^2=0`, so both cases
+short-circuit to byte-identical legacy parameters. Foreign cross-task evidence
+remains a hard-sign fold after the native mixture. No shipped preset enables
+this field. Set it on each posterior-owning reputation, never on a bootstrap or
+decay decorator. A direct `beta_binomial`/`bd_proximity` preset accepts
+`+memory.reputation.harm_model=mixture`. The default adaptive `bootstrap_bd`
+stack uses
+`+memory.reputation.inner.harm_model=mixture` and, if cold-cell fallback should
+use it too, `+memory.reputation.inner.fallback.harm_model=mixture`; the fallback
+intentionally owns its setting independently.
+
+Staleness is per event, not per card. For decision task `T`, let `S_T` be the
+native bank event stamps and let `N_T` be the task population used by the
+existing bank-cycle denominator. Then
+`H = N_T * half_life_cycles`,
+`s_i = |{t in S_T : t > stamp_i}|`, and `w_i = 2^(-s_i/H)`; unstamped events
+have `w_i=1`. Foreign bank traffic is excluded from `S_T` and `N_T`, so it
+cannot age native evidence. Bootstrap EV and the shared probe/eviction support
+use `credit_i * w_i`; a new event therefore does not restore the weight of old
+history. Default non-decay reputations keep the Beta posterior credit-only.
+Only `*_decay` presets also apply `credit_i * w_i` to each posterior soft count,
+invalid/unused failure mass, and foreign sign count before rebuilding the
+posterior around `(a0,b0)`.
+
+Bootstrap uncertainty uses that same fused event-weight vector rather than the
+raw row count. After appending the unit neutral pseudo-event, let the exact
+multinomial sampling weights be `q_j`. Each bootstrap replicate draws
+`max(1, round(n_eff))` atoms, where
+`n_eff = (sum(q_j) ** 2) / sum(q_j ** 2)` (Kish effective N). Zero-weight
+events contribute to neither sum and therefore cannot make a stale history look
+more precise. `n_bootstrap` remains the number of independent replicates, while
+the block's `effective_events` remains `sum(credit_i * w_i)`; neither is replaced
+by Kish N. When every event weight is `1.0`, the neutral weight is also `1.0`,
+so `n_eff` equals the historical atom count exactly and seeded sampling consumes
+the identical RNG stream.
 
 `memory/llm` is independent of the main mutation `llm`. The default
 `memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
@@ -261,13 +341,27 @@ for a symmetric embedder that takes no query instruction.
 `research.{max_iters,default_top_k,max_cards,query_scopes}` bound the research
 loop.
 
-The index fingerprints its embedding config (`embedding_model` + each scope's
-field set) beside the Chroma data. Reopening a checkpoint dir under a *changed*
-embedder fails loudly — the old vectors are incompatible with the new one, and
-Chroma keys collections by name, so they would otherwise linger and silently
-corrupt retrieval. **Changing the embedder means a fresh `checkpoint_dir`.**
-(`query_prefix`/`nearest_scope` tune only queries, not stored vectors, so
-they are not fingerprinted and can change freely against an existing bank.)
+The card bank is the source of truth. Each process keeps an in-memory Chroma
+index, rebuilds it from `cards.json` at store startup, and rebuilds it again
+after observing a cross-process bank change. No vectors or embedding
+fingerprints are persisted, so existing `chroma/` directories are ignored dead
+data. A process always embeds its locked bank view with its configured model and
+scopes; changing embedding settings takes effect on its next startup rebuild.
+
+Shared-bank deletions consult `selection_leases.json`, an atomic flock-guarded
+owner registry under `checkpoint_dir`. A selected card remains protected across
+processes until its attempt or credited child releases it. Same-host crashed
+owners expire by PID liveness plus the `/proc/<pid>/stat` `pid_start` identity,
+with `pid_start=0` conservatively falling back to PID-only checks; the two-hour
+deadline is only a fallback for owners on other hosts. Unreadable or corrupt
+lease state is preserved and fails closed bank-wide: deletion checks skip
+eviction, and acquisitions roll back locally and raise instead of returning an
+unpublished lease. Recovery is to remove `selection_leases.json` (and its
+`.lock` sibling) after runs are quiescent, or accept that live owners republish
+their full state on their next lease mutation. There is one accepted narrow
+race: another process can delete a card between selection revalidation and the
+durable lease write; that render can lose one credit event, which the stats
+reconciliation drop path logs.
 
 ### `memory=static` — curated lever baseline
 
@@ -288,6 +382,9 @@ degraded arm.
 
 One `Card` model (`gigaevo/memory/cards.py`), `kind ∈ {insight, program}`:
 
+Each card stores its authoring `task_key`; every gain event's decision context
+stores the task key under which its measurement ran.
+
 - **insight** — a distilled, transferable optimization lever: `description`
   (the mechanism), `explanation_summary` (one-line *why*, indexed as its own
   retrieval scope), `task_description_summary`, `keywords`, `category`.
@@ -297,22 +394,32 @@ One `Card` model (`gigaevo/memory/cards.py`), `kind ∈ {insight, program}`:
 When a card is injected and the child evaluates, the writer stamps a gain
 event on the card: the base-relative fitness delta plus the decision context
 (parent metrics). Reputation re-prices those events by weighted bootstrap over
-the raw oriented deltas (mean + low quantile; staleness fades old evidence via
-the bank-cycle resample weight toward neutral zero), and the auction bids the
-mean of one such resample against a no-card Thompson baseline arm. Genuinely
-cold cards use the round's borrowed gain scale for their first probe, so a
+the raw oriented deltas (mean + low quantile; each event's own bank-cycle age
+fades it toward neutral zero), and the auction draws one
+uniform posterior world per card. A warm card bids that world's empirical
+quantile from one bootstrap-EV batch; its Beta gate theta is the same uniform
+quantile of its help posterior. Genuinely cold cards reuse that theta times the
+round's borrowed gain scale for their first probe, so a
 known card holds its slot only while its own gain distribution keeps beating
 "inject nothing" (a fat left tail bids negative and abstains on the sign gate).
 The downside Beta-Binomial
 posterior is still what the harm gate reads; confidently-harmful posteriors
-get the card evicted. Harm counting
-is a **strict sign test** — any event with gain below zero counts as harm.
-This is a deliberate departure from the old MAD noise band: per our analysis
+get the card evicted. Exact events (`gain_se=0`, including the default point
+estimator) keep the **strict sign test**. A positive measured se contributes
+its Gaussian below-zero tail mass; a degraded paired measurement stores
+`gain_se=None` and contributes the uninformative wide-limit mass
+`Phi(0)=0.5`, never a definite sign. With the optional mixture harm model,
+those fractional probabilities widen the downside Beta rather than acting as a
+deterministic fractional count; the legacy/default soft-count model is
+unchanged. For the global no-card median, measured
+paired se also includes `std(no_card_deltas, ddof=1) / sqrt(n)` in quadrature
+when at least two controls exist; exact point estimates stay exactly zero-se.
+This remains a deliberate departure from the old MAD noise band: per our analysis
 a per-card band could not be designed soundly for these gain distributions,
-so tiny negative deltas do count against a card and the noise guard is the
-counting posterior itself — `harm_min_events: 3` before a card can be judged
-harmful at all by default, via `memory.evidence.min_effective_events`, plus the
-optimistic `harm_quantile` read of P(not harmful).
+so tiny exact negative deltas do count against a card and the noise guard is
+the counting posterior itself — `harm_min_events: 3` before a card can be
+judged harmful at all by default, via `memory.evidence.min_effective_events`,
+plus the optimistic `harm_quantile` read of P(not harmful).
 Measured on run data, that guard holds the sequential false-harm rate to
 ~0.77% at the observed median of ~2 uses per card; revisit the calibration if
 cards start accumulating more than ~5 uses.
@@ -344,14 +451,19 @@ partitions the card lifecycle: the read-side cold-probe lane keeps a card
 probe-eligible while its staleness-scaled effective support is strictly below
 the floor, and only at or above the floor is the card adjudicable by auction
 merit and evictable by `PolicyNonViableEvictor`. Both lanes compute effective
-support with identical arithmetic (sum of `max(0, w)` over finite event weights,
-times the staleness weight), probe using strict `<` and eviction using `>=`, so
+support with identical arithmetic (`sum(max(0, credit_i * w_i))` over finite
+per-event terms), probe using strict `<` and eviction using `>=`, so
 support exactly at the floor lands in the eviction/adjudication lane — no card
 falls between the lanes into a stuck zombie state where diluted unused/invalid
 exposure could neither probe nor be evicted. Contextual scorers
 supply explicit supported evidence contexts for harm and policy cleanup; if a
 custom contextual scorer cannot provide them, the default skips contextless
 cleanup. Program exemplars keep the zero-evidence-at-birth path.
+
+Across tasks, only each used event's hard help/no-help sign is shared: foreign
+gain magnitude, uncertainty, and raw metrics never enter another task's
+statistics or deletion decisions. Majority-helpful foreign evidence at the
+shared floor vetoes harm eviction, exemplar pruning, and twin retirement.
 
 ## Tracking: did memory actually flow?
 
@@ -385,6 +497,7 @@ Per run, under `checkpoint_dir`:
 | `memory_events.jsonl` | canonical event stream: read decisions, research steps, auction slates, budget caps, store writes/syncs, gain restamps, eviction sweeps, consolidation passes |
 | `write_ledger.jsonl` | append-only admission/eviction verdicts (outcomes: `added`, `updated`, `merged`, `rejected_harm`, `rejected_novelty`, `evicted`; a benign no-op ingest — `DISCARDED` — writes no row) |
 | `cards.json` | the bank itself |
+| `selection_leases.json` | live cross-process owners and their leased card ids; created on first lease |
 
 First stop when debugging empty selections, repeated winners, or evictions:
 

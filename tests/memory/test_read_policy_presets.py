@@ -92,14 +92,26 @@ def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
     assert memory.evictor._target_ == "gigaevo.memory.write.eviction.CompositeEvictor"
     assert (
         memory.evictor.evictors[0]._target_
-        == "gigaevo.memory.write.eviction.BirthFailureEvictor"
+        == "gigaevo.memory.write.eviction.CrossTaskRetentionGuard"
     )
     assert (
         memory.evictor.evictors[1]._target_
-        == "gigaevo.memory.write.eviction.HarmEvictor"
+        == "gigaevo.memory.write.eviction.CrossTaskRetentionGuard"
     )
     assert (
         memory.evictor.evictors[2]._target_
+        == "gigaevo.memory.write.eviction.CrossTaskRetentionGuard"
+    )
+    assert (
+        memory.evictor.evictors[0].inner._target_
+        == "gigaevo.memory.write.eviction.BirthFailureEvictor"
+    )
+    assert (
+        memory.evictor.evictors[1].inner._target_
+        == "gigaevo.memory.write.eviction.HarmEvictor"
+    )
+    assert (
+        memory.evictor.evictors[2].inner._target_
         == "gigaevo.memory.write.eviction.PolicyNonViableEvictor"
     )
     assert raw_memory["writer"]["baseline_estimator"] == "${ref:memory.context_model}"
@@ -108,14 +120,19 @@ def test_full_defaults_to_adaptive_contextual_bootstrap_with_lineage():
     assert list(memory.baseline_prior) == [3.0, 3.0]
     assert list(memory.auction.baseline_prior) == list(memory.baseline_prior)
     assert list(memory.no_card_evidence.seed_prior) == list(memory.baseline_prior)
-    assert memory.evictor.evictors[2].neutral_gain == pytest.approx(0.0)
+    assert memory.evictor.evictors[2].inner.neutral_gain == pytest.approx(0.0)
     assert memory.evidence.min_effective_events == 3
     assert memory.eviction_safety.min_effective_events == 3
     assert memory.reputation.confident_min_events == 3
     assert memory.reputation.inner.harm_min_events == 3
-    assert memory.evictor.evictors[1].skip_contextual_without_context is True
-    assert memory.evictor.evictors[2].min_effective_events == 3
-    assert memory.evictor.evictors[2].skip_contextual_without_context is True
+    assert memory.evictor.evictors[1].inner.skip_contextual_without_context is True
+    assert memory.evictor.evictors[2].inner.min_effective_events == 3
+    assert memory.evictor.evictors[2].inner.skip_contextual_without_context is True
+    assert all(
+        evictor.task_key == memory.writer.task_key
+        and evictor.inner.task_key == memory.writer.task_key
+        for evictor in memory.evictor.evictors
+    )
 
 
 def test_ev_floor_quantile_is_bootstrap_policy_local():
@@ -159,7 +176,7 @@ def test_writer_default_evictor_uses_memory_neutral_gain():
 
     assert memory.neutral_gain == pytest.approx(0.0)
     assert (
-        memory.evictor.evictors[2]._target_
+        memory.evictor.evictors[2].inner._target_
         == "gigaevo.memory.write.eviction.PolicyNonViableEvictor"
     )
     assert (
@@ -171,15 +188,17 @@ def test_writer_default_evictor_uses_memory_neutral_gain():
         == "gigaevo.memory.context.no_card.JsonNoCardEvidenceStore"
     )
     assert raw_memory["writer"]["baseline_estimator"] == "${ref:memory.context_model}"
-    assert memory.evictor.evictors[2].neutral_gain == pytest.approx(memory.neutral_gain)
+    assert memory.evictor.evictors[2].inner.neutral_gain == pytest.approx(
+        memory.neutral_gain
+    )
     assert list(memory.baseline_prior) == [3.0, 3.0]
     assert list(memory.no_card_evidence.seed_prior) == list(memory.baseline_prior)
     assert memory.evidence.min_effective_events == 3
     assert memory.eviction_safety.min_effective_events == 3
     assert memory.reputation.harm_min_events == 3
-    assert memory.evictor.evictors[1].skip_contextual_without_context is True
-    assert memory.evictor.evictors[2].min_effective_events == 3
-    assert memory.evictor.evictors[2].skip_contextual_without_context is True
+    assert memory.evictor.evictors[1].inner.skip_contextual_without_context is True
+    assert memory.evictor.evictors[2].inner.min_effective_events == 3
+    assert memory.evictor.evictors[2].inner.skip_contextual_without_context is True
 
 
 def test_portable_policy_contains_no_behavior_space_ref():

@@ -179,10 +179,12 @@ class ProgramRecordExtractor:
         self,
         *,
         task_description: str,
+        task_key: str = "",
         fitness_key: str,
         metrics_context: MetricsContext,
     ) -> None:
         self._task_description = task_description
+        self._task_key = task_key
         self._fitness_key = fitness_key
         self._metrics_context = metrics_context
         self._higher_is_better = metrics_context.is_higher_better(fitness_key)
@@ -234,6 +236,7 @@ class ProgramRecordExtractor:
                     fitness_key=self._fitness_key,
                     higher_is_better=self._higher_is_better,
                     metrics_context=self._metrics_context,
+                    task_key=self._task_key,
                 ),
             )
             for p in eligible

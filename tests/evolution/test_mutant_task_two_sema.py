@@ -19,6 +19,7 @@ import pytest
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
 from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -43,6 +44,7 @@ class _FakeEngine:
         # around generate_one_mutation. Required attribute since the steady-
         # state engine started sampling per-LLM occupancy for backpressure.
         self._llm_active: int = 0
+        self._selection_leases = None
 
         self.metrics = type("M", (), {})()
         self.metrics.iteration = 0
@@ -146,6 +148,40 @@ async def test_llm_returns_none_releases_producer_no_buffer(monkeypatch) -> None
     assert engine._producer_sema._value == 2
     assert engine._buffer_sema._value == 2  # untouched
     assert not engine._in_flight
+
+
+@pytest.mark.asyncio
+async def test_cancel_mid_llm_releases_attempt_selection_lease(monkeypatch) -> None:
+    parent = _make_parent()
+    engine = _FakeEngine(parent, max_in_flight=2)
+    registry = InFlightSelectionRegistry()
+    engine._selection_leases = registry
+    await _hold_producer_slot(engine)
+    llm_started = asyncio.Event()
+    stay_in_llm = asyncio.Event()
+
+    async def refresh_with_selection(parents):
+        registry.attach_cards_for_parent(parents[0].id, ("card-a",))
+        return ParentRefreshTicket(refreshed=parents, _locks=[])
+
+    engine._parent_refresher.refresh_with_ticket = refresh_with_selection
+
+    async def fake_gen(**_k):
+        assert registry.is_leased("card-a")
+        llm_started.set()
+        await stay_in_llm.wait()
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+    )
+    task = asyncio.create_task(run_one_mutant(engine, task_id=0))
+    await llm_started.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not registry.is_leased("card-a")
 
 
 @pytest.mark.asyncio

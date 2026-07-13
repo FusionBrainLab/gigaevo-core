@@ -73,6 +73,12 @@ class BootstrapEVStubReputation:
             if not event.invalid and not event.founding and not event.unused
         )
 
+    def event_weights(self, card, context=None):
+        return tuple(1.0 for _ in self.event_deltas(card, context))
+
+    def staleness_weights(self, card, context=None):
+        return tuple(1.0 for _ in self.event_deltas(card, context))
+
 
 def _parents() -> list:
     return [SimpleNamespace(id="parent-1", metrics={"score": 1.5})]
@@ -481,10 +487,15 @@ async def test_bootstrap_confident_loser_is_benched(make_card, make_event):
     assert loser.id in inner.calls[0]["exclude_ids"]
 
 
-async def test_bootstrap_rep_floor_drops_warm_card_below_warm_ev_floor(
-    make_card, make_event
+@pytest.mark.parametrize(
+    ("support_n", "expected_low_survives"),
+    [(2, True), (3, False)],
+    ids=["under-observed-exempt", "observed-dropped"],
+)
+async def test_bootstrap_rep_floor_respects_effective_support_boundary(
+    make_card, make_event, support_n, expected_low_survives
 ):
-    warm_low = make_card(gain_events=(make_event(0.2),))
+    warm_low = make_card(gain_events=tuple(make_event(0.2) for _ in range(support_n)))
     warm_high = make_card(gain_events=(make_event(4.0),))
     rep = BootstrapEVStubReputation({warm_low.id: 0.2, warm_high.id: 4.0})
     inner = StubShortlister(ResearchResult(cards=(warm_low, warm_high)))
@@ -498,10 +509,55 @@ async def test_bootstrap_rep_floor_drops_warm_card_below_warm_ev_floor(
         store=StubStore((warm_low, warm_high)),
     )
     out = await fused.shortlist(**_shortlist_kwargs())
-    assert [card.id for card in out.cards] == [warm_high.id]
-    # Below the relative floor means "loses this read", not "proven loser":
-    # the card keeps its research/probe access and can re-enter later.
+    expected = [warm_low.id, warm_high.id] if expected_low_survives else [warm_high.id]
+    assert [card.id for card in out.cards] == expected
     assert warm_low.id not in inner.calls[0]["exclude_ids"]
+
+
+def _old_event(gain: float, *, hours_ago: float) -> ContextualGain:
+    return ContextualGain(
+        context=DecisionContext(
+            timestamp=datetime.now(UTC) - timedelta(hours=hours_ago)
+        ),
+        gain=gain,
+        gain_se=0.0,
+    )
+
+
+async def test_bootstrap_bench_exempts_card_below_aged_effective_support(make_card):
+    # Drift guard: a card whose raw loss COUNT clears the floor but whose
+    # staleness-aged effective support is BELOW it must stay explorable. The
+    # write evictor retains it (aged support < floor); the read bench must use
+    # the SAME aged boundary, else the card is benched from auction AND probe
+    # yet is unevictable — an absorbing zombie. Benching on the unaged
+    # ``block.intro_events`` (which the bootstrap layer never re-ages) is the
+    # bug: four old losses give raw count 4 >= 3 but aged support ~2.0 < 3.
+    stale_loser = make_card(
+        gain_events=tuple(_old_event(-0.5, hours_ago=1000.0) for _ in range(4))
+    )
+    fillers = tuple(
+        make_card(gain_events=(_old_event(1.0, hours_ago=1.0),)) for _ in range(14)
+    )
+    bank = (stale_loser, *fillers)
+    rep = BootstrapReputation(
+        BetaBinomialReputation(),
+        StubStore(bank),
+        n_bootstrap=64,
+        confident_min_events=3,
+    )
+    inner = StubShortlister(ResearchResult(cards=(stale_loser,)))
+    fused = BootstrapFusedRankingShortlister(
+        inner=inner,
+        reputation=rep,
+        w_sem=1.0,
+        w_rep=0.0,
+        w_nov=0.0,
+        rep_floor_quantile=0.5,
+        store=StubStore(bank),
+    )
+    out = await fused.shortlist(**_shortlist_kwargs())
+    assert stale_loser.id not in inner.calls[0]["exclude_ids"]
+    assert [card.id for card in out.cards] == [stale_loser.id]
 
 
 async def test_upstream_exclusion_off_without_rep_floor_quantile(make_card, make_event):

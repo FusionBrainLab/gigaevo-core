@@ -54,6 +54,7 @@ class Librarian:
         neighbors: NeighborSource,
         top_k: int = 5,
         max_cards: int = 3,
+        task_key: str = "",
         task_description: str = "",
         task_description_summary: str = "",
         admission_judge: NoveltyAdmissionAgent | None = None,
@@ -65,6 +66,7 @@ class Librarian:
         self._neighbors = neighbors
         self._top_k = top_k
         self._max_cards = max_cards
+        self._task_key = task_key
         self._task_description = task_description
         self._task_description_summary = task_description_summary
         self._admission_judge = admission_judge
@@ -119,6 +121,7 @@ class Librarian:
                 child_code=child_code,
                 note=note,
                 neighbors=[h.card for h in hits],
+                task_key=self._task_key,
             )
         except Exception as exc:
             logger.warning(
@@ -128,6 +131,7 @@ class Librarian:
             )
             card = Card(
                 id="",
+                task_key=self._task_key,
                 description=note,
                 programs=(child_id,),
                 task_description=self._task_description,
@@ -146,6 +150,7 @@ class Librarian:
         for item in resp.items[: self._max_cards]:
             card = Card(
                 id="",
+                task_key=self._task_key,
                 description=item.card.description,
                 explanation_summary=item.card.explanation_summary,
                 keywords=tuple(item.card.keywords),
@@ -304,7 +309,11 @@ class Librarian:
             return []
         out: list[Card] = []
         for other in self._store.snapshot():
-            if other.kind is not CardKind.PROGRAM or other.id == card.id:
+            if (
+                other.kind is not CardKind.PROGRAM
+                or other.id == card.id
+                or other.task_key != card.task_key
+            ):
                 continue
             if program_code_sha256(other) == code_identity:
                 out.append(other)

@@ -155,6 +155,36 @@ def test_unreported_support_is_never_probe_eligible():
     assert all(bid.probe_eligible is False for bid in out)
 
 
+def test_probe_eligibility_is_recomputed_for_every_row_without_decision_change():
+    slate = [
+        _bid(
+            "selected-under-floor",
+            selected=True,
+            support_kind="ev_rewards",
+            support_n=1.0,
+        ),
+        _bid(
+            "unselected-at-floor",
+            support_kind="ev_rewards",
+            support_n=3.0,
+        ).model_copy(update={"probe_eligible": True}),
+    ]
+    rng = np.random.default_rng(17)
+    expected_next_draw = float(np.random.default_rng(17).random())
+
+    budgeted, out = ColdProbePolicy(warm_override_probe_rate=1.0).apply(
+        budgeted_ids=["selected-under-floor"],
+        slate=slate,
+        max_cards=1,
+        rng=rng,
+    )
+
+    assert budgeted == ["selected-under-floor"]
+    assert [bid.selected for bid in out] == [True, False]
+    assert [bid.probe_eligible for bid in out] == [True, False]
+    assert float(rng.random()) == expected_next_draw
+
+
 def test_probe_threshold_config_extends_re_entry_to_low_support_losers():
     slate = [_bid("loser", support_kind="ev_rewards", support_n=4.0, bid=-0.1)]
     budgeted, _ = ColdProbePolicy(
@@ -203,6 +233,45 @@ def test_warm_override_adds_probe_when_budget_has_room():
     cold = next(bid for bid in out if bid.card_id == "cold")
     assert warm.selected is True
     assert cold.probe_selected is True
+
+
+def test_warm_override_displaces_weakest_budgeted_card():
+    budgeted_ids = ["lower", "higher"]
+    slate = [
+        _bid(
+            "lower",
+            selected=True,
+            support_kind="ev_rewards",
+            support_n=3.0,
+            bid=0.1,
+            theta=0.2,
+        ),
+        _bid(
+            "higher",
+            selected=True,
+            support_kind="ev_rewards",
+            support_n=3.0,
+            bid=0.9,
+            theta=0.8,
+        ),
+        _bid("cold", support_kind="cold_prior", support_n=0.0),
+    ]
+
+    budgeted, out = ColdProbePolicy(
+        enabled=True,
+        warm_override_probe_rate=1.0,
+        max_probe_cards_per_decision=1,
+    ).apply(
+        budgeted_ids=budgeted_ids,
+        slate=slate,
+        max_cards=2,
+        rng=type("ZeroRng", (), {"random": lambda self: 0.0})(),
+    )
+
+    # The former tail-drop kept the weaker bid.
+    assert budgeted_ids[:-1] == ["lower"]
+    assert budgeted == ["higher", "cold"]
+    assert next(bid for bid in out if bid.card_id == "cold").probe_selected is True
 
 
 def test_warm_winner_can_be_replaced_by_explicit_override():

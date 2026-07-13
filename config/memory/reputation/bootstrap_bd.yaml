@@ -9,9 +9,9 @@
 # and `BootstrapFusedRankingShortlister`.
 _target_: gigaevo.memory.read.reputation.BootstrapReputation
 store: ${ref:memory.store}
-# Staleness half-life for bootstrap EV evidence, measured in bank cycles:
-# one cycle ~= current bank size newer gain events. 1.0 means a card's old
-# deltas get half the resample weight after one bank-wide turn of newer evidence.
+# Staleness half-life for bootstrap EV evidence, measured in task-bank cycles:
+# one cycle ~= current task population newer native events. 1.0 means each old
+# delta gets half the resample weight after one task-wide turn of newer evidence.
 half_life_cycles: 1.0
 # Low EV quantile stamped into `IntroGain_bootstrap_ev_lo20`; the warm-card
 # bench uses this pessimistic expected-gain read. Lower = more conservative.
@@ -40,6 +40,8 @@ inner:
     # Confidence threshold on P(help). EV confidence also requires positive
     # pessimistic bootstrap EV.
     confident_threshold: 0.5
+    # Share the selected cold prior with warm counts (fixed_3_3 warms from Beta(3,3)).
+    prior: ${ref:memory.prior}
     # Legacy cold no-evidence prior used when no candidate_projector prior is set.
     cold_prior: ${memory.baseline_prior}
   # Same thresholds for the BD-local in-cell posterior.
@@ -48,4 +50,6 @@ inner:
   harm_threshold: 0.5
   confident_quantile: 0.20
   confident_threshold: 0.5
+  # Share the selected cold prior with warm counts (fixed_3_3 warms from Beta(3,3)).
+  prior: ${ref:memory.prior}
   cold_prior: ${memory.baseline_prior}

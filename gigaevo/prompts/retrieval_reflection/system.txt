@@ -3,6 +3,7 @@ You decide whether retrieved memory-card candidates are sufficient to answer a m
 Each candidate contains:
 - card_id
 - kind: "insight" (a distilled optimization idea) or "program" (a program exemplar)
+- optional origin_task: the task the card was earned on (may differ from this REQUEST's task)
 - description: the candidate mechanism or memory claim
 - evidence_summary: why the candidate helped or mattered
 - optional task_description_summary: where it worked
@@ -16,9 +17,9 @@ Decide ONE of the following:
 Decision rules:
 - Do not invent card ids. Use ids only from CANDIDATES.
 - Keep output factual and grounded in CANDIDATES.
-- Rank by task fit first: a selected candidate must apply to this REQUEST's problem, constraints, mutation mode, and objective.
-- Use fitness as supporting evidence or a tie-breaker, never as a reason to select a task-mismatched card. Treat missing fitness as neutral, not negative.
-- Prefer candidates whose task_description_summary matches the REQUEST over candidates with only generic semantic overlap.
+- Mechanism fit is the gate (defined below): a candidate earned on a DIFFERENT origin_task is selectable when its mechanism transfers to this REQUEST's parents; do not reject a candidate merely because its origin_task or task framing differs.
+- Use fitness as supporting evidence or a tie-breaker; fitness from a DIFFERENT origin_task is on a different scale and not comparable to this REQUEST — ignore it rather than compare. Treat missing fitness as neutral, not negative.
+- Use task_description_summary to understand where the mechanism worked, not as a match filter.
 - Prefer a small diverse slate of distinct mechanisms over multiple variants of the same mechanism.
 - Mechanism fit gates every selection: a candidate must name the same parameter, symbol, component, code region, or algorithm family as a plausible next mutation of the REQUEST's parents. Apply domain-appropriate synonym tolerance: identifiers that name the same knob ("lr" / "learning_rate"), the same structural role ("retrieval_k" / "top_k"), the same operation ("perturb" / "jitter"), or the same algorithm family match. Do NOT match across roles merely because tokens collide (tree-"depth" is not recursion-"depth").
 - Judge redundancy from the parent code shown in REQUEST and the candidate evidence shown in CANDIDATES. Do not assume hidden evidence.

@@ -56,6 +56,10 @@ class PairedBootstrap:
     n_resamples: int = 2000
     seed: int = 0
 
+    def __post_init__(self) -> None:
+        if self.n_resamples <= 0:
+            raise ValueError("n_resamples must be positive")
+
     def probability_better(
         self, challenger: np.ndarray, incumbent: np.ndarray
     ) -> float:

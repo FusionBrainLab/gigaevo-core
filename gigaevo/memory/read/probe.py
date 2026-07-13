@@ -83,19 +83,26 @@ class ColdProbePolicy(BaseModel):
         max_cards: int,
         rng: Any,
     ) -> tuple[list[str], list[AuctionBid]]:
+        marked_slate = [
+            bid.model_copy(
+                update={
+                    "probe_eligible": bool(bid.support_kind)
+                    and bid.support_n < self.probe_until_effective_events
+                }
+            )
+            for bid in slate
+        ]
         if not self.enabled or max_cards <= 0 or self.max_probe_cards_per_decision <= 0:
-            return list(budgeted_ids), list(slate)
+            return list(budgeted_ids), marked_slate
         budgeted = list(budgeted_ids)
         selected = set(budgeted)
         candidates = [
             bid
-            for bid in slate
-            if bid.card_id not in selected
-            and bid.support_kind
-            and bid.support_n < self.probe_until_effective_events
+            for bid in marked_slate
+            if bid.card_id not in selected and bid.probe_eligible
         ]
         if not candidates:
-            return budgeted, list(slate)
+            return budgeted, marked_slate
         candidates.sort(
             key=lambda bid: (
                 -(bid.bid if bid.bid is not None else 0.0),
@@ -105,19 +112,19 @@ class ColdProbePolicy(BaseModel):
         )
         if not budgeted:
             if float(rng.random()) >= self.empty_selection_probe_rate:
-                return budgeted, self._mark_probe_eligible(slate, candidates)
+                return budgeted, marked_slate
             return self._select_probe(
                 budgeted,
-                slate,
+                marked_slate,
                 candidates[: self.max_probe_cards_per_decision],
                 reason="cold_probe_empty",
                 max_cards=max_cards,
             )
         if float(rng.random()) >= self.warm_override_probe_rate:
-            return budgeted, self._mark_probe_eligible(slate, candidates)
+            return budgeted, marked_slate
         return self._select_probe(
             budgeted,
-            slate,
+            marked_slate,
             candidates[: self.max_probe_cards_per_decision],
             reason="cold_probe_override",
             max_cards=max_cards,
@@ -138,7 +145,23 @@ class ColdProbePolicy(BaseModel):
         if replace and kept:
             overflow = len(kept) + len(probes) - max_cards
             if overflow > 0:
-                kept = kept[:-overflow] if overflow < len(kept) else []
+                if overflow >= len(kept):
+                    kept = []
+                else:
+                    bids = {bid.card_id: bid for bid in slate}
+
+                    def _rank(cid: str) -> tuple[float, float, str]:
+                        bid = bids.get(cid)
+                        if bid is None:
+                            return (0.0, 0.0, cid)
+                        return (
+                            -(bid.bid if bid.bid is not None else 0.0),
+                            -bid.theta,
+                            bid.card_id,
+                        )
+
+                    drop = set(sorted(kept, key=_rank)[len(kept) - overflow :])
+                    kept = [cid for cid in kept if cid not in drop]
         for probe in probes:
             if len(kept) >= max_cards:
                 break
@@ -149,7 +172,7 @@ class ColdProbePolicy(BaseModel):
             bid.model_copy(
                 update={
                     "selected": bid.card_id in final_selected,
-                    "probe_eligible": bid.probe_eligible or bid.card_id in probe_ids,
+                    "probe_eligible": bid.probe_eligible,
                     "probe_selected": bid.card_id in probe_ids,
                     "selection_reason": reason
                     if bid.card_id in probe_ids
@@ -161,17 +184,6 @@ class ColdProbePolicy(BaseModel):
                     if bid.card_id in probe_ids
                     else bid.rejected_by_no_card_gate,
                 }
-            )
-            for bid in slate
-        ]
-
-    def _mark_probe_eligible(
-        self, slate: list[AuctionBid], candidates: list[AuctionBid]
-    ) -> list[AuctionBid]:
-        ids = {bid.card_id for bid in candidates}
-        return [
-            bid.model_copy(
-                update={"probe_eligible": bid.probe_eligible or bid.card_id in ids}
             )
             for bid in slate
         ]

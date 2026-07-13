@@ -52,7 +52,7 @@ _event_path: ContextVar[Path | None] = ContextVar("memory_event_path", default=N
 
 
 def new_decision_id() -> str:
-    return f"memsel-{uuid4().hex[:12]}"
+    return f"memsel-{uuid4().hex}"
 
 
 def resolve_memory_event_path(
@@ -168,10 +168,12 @@ def emit_memory_event(
 
 class MemoryStoreWrite(MemoryEvent):
     event: ClassVar[str] = "MEMORY_STORE_WRITE"
-    description: ClassVar[str] = "A card-bank mutation (save/delete/merge) completed."
+    description: ClassVar[str] = (
+        "A card-bank mutation (save/update/delete/merge) completed."
+    )
     health_question: ClassVar[str] = "Is the write path landing cards in the bank?"
 
-    # {"save", "delete", "merge"}
+    # {"save", "update", "delete", "merge"}
     op: str
     # {"ok", "not_found", "noop"}
     outcome: str

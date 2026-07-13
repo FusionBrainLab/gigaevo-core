@@ -68,6 +68,13 @@ def _exemplar_line() -> str:
     )
 
 
+def _foreign_sign_line() -> str:
+    return format_block_efficacy(
+        _mcard(),
+        CardStatsBlock(foreign_help_events=1.5, foreign_total_events=2.0),
+    )
+
+
 class TestEfficacyDescriptionMatchesRenderer:
     """The analyst must describe the line it will actually be handed."""
 
@@ -96,6 +103,12 @@ class TestEfficacyDescriptionMatchesRenderer:
     def test_prompt_describes_exemplar_token(self) -> None:
         assert "exemplar fitness" in _exemplar_line()
         assert "exemplar fitness" in MutationSuggestionsPrompts.system()
+
+    def test_prompt_describes_foreign_sign_only_token(self) -> None:
+        line = _foreign_sign_line()
+        for token in ("helped in", "uses on other tasks"):
+            assert token in line
+            assert token in MutationSuggestionsPrompts.system()
 
     def test_prompt_drops_removed_downside_field(self) -> None:
         # The refactor removed the downside-rate field from the rendered line;

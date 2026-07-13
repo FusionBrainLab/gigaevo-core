@@ -8,8 +8,9 @@ Retrieval is an implementation detail of storage: a store answers
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable
 from types import TracebackType
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,6 +49,12 @@ class ResearchResult(BaseModel):
     iterations: int = 0
 
 
+class MergeRetireResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["merged", "retired", "target_missing", "aborted"]
+
+
 class MemoryStore(ABC):
     """Typed card storage with retrieval built in.
 
@@ -68,6 +75,16 @@ class MemoryStore(ABC):
         """
 
     @abstractmethod
+    def update(
+        self, card_id: str, transform: Callable[[Card], Card | None]
+    ) -> Card | None:
+        """Atomically transform a fresh card, or delete it by returning ``None``.
+
+        The load, transform, and persistence share one exclusive transaction.
+        Returns the affected card, or ``None`` when ``card_id`` was absent.
+        """
+
+    @abstractmethod
     def get(self, card_id: str) -> Card | None: ...
 
     @abstractmethod
@@ -79,9 +96,13 @@ class MemoryStore(ABC):
         """A stable view of the whole bank, ordered by card id."""
 
     @abstractmethod
-    def apply_merges(self, merged: Sequence[Card]) -> list[str]:
-        """Persist merge survivors (each carries its absorbed ids) in one
-        batch; returns the ids saved."""
+    def merge_retire(
+        self,
+        target_id: str,
+        partner_id: str,
+        fold: Callable[[Card, Card | None], Card | None],
+    ) -> MergeRetireResult:
+        """Atomically fold fresh cards and retire the target or partner."""
 
     @abstractmethod
     def nearest(

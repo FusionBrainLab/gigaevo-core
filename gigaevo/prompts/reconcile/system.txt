@@ -36,6 +36,7 @@ A lever is a mechanism that **transfers**: it would help on another program faci
 Retrieval proximity is not identity: two cards can sit close in the ranking yet name different levers. Judge by the underlying mechanism, never by distance alone.
 
 MERGE identity is strict: merge only when both cards state the same mechanism under the same condition. A lever that contradicts the target — prescribing the opposite move on the same knob — is NEVER a MERGE: decide NEW and let the two cards coexist; an honest contradiction in the bank beats silently absorbing one side. And the union you author must cover the evidence of BOTH cards; if one description cannot honestly subsume the two, they were not the same lever — decide NEW.
+Neighbors may originate from different tasks (shown as "origin task"); MERGE/DUPLICATE across tasks only when the mechanism genuinely transfers beyond task-specific artifacts.
 
 ### Examples — mechanism shape only; never copy these literals or invent magnitudes
 
