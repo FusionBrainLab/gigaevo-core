@@ -51,6 +51,7 @@ from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
+    from gigaevo.memory.ope.reporter import MemoryOpeReporter
 
 
 async def _shielded_to_thread(func, *args, cancel_log: str, **kwargs):
@@ -336,6 +337,7 @@ class MemoryWriter(IncrementalPostRunHook):
         selection_leases: InFlightSelectionRegistry | None = None,
         min_effective_events: float = 0.0,
         evicted_evidence: EvictedEvidenceSink | None = None,
+        ope_reporter: MemoryOpeReporter | None = None,
     ) -> None:
         # Default to the task's primary metric, not a literal "fitness": on a
         # task whose primary key differs, a hardcoded key would resolve to no
@@ -394,6 +396,7 @@ class MemoryWriter(IncrementalPostRunHook):
             every_n=consolidation_every_n,
             k=policy.consolidation_k,
         )
+        self._ope_reporter = ope_reporter
 
     async def on_run_complete(self, storage: ProgramStorage) -> None:
         """Called by EvolutionEngine after the generation loop finishes."""
@@ -428,6 +431,11 @@ class MemoryWriter(IncrementalPostRunHook):
             await self._run_increment_locked(
                 programs, posterior_programs=posterior_programs
             )
+        # After the lock releases (both live sweeps and the final on_run_complete
+        # route through here), refresh the probe-ITT summary off the loop so tau
+        # lands beside the ledger in-progress. Read-only; never raises.
+        if self._ope_reporter is not None:
+            await asyncio.to_thread(self._ope_reporter.refresh)
 
     async def _run_increment_locked(
         self,

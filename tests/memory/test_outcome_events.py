@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from experiments.hover.diff_memory.reconcile_assignments import reconcile_rows
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
@@ -12,6 +11,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_OUTCOME_METADATA_KEY,
 )
 from gigaevo.memory.events import MemoryOutcome, MemoryOutcomeUpdate
+from gigaevo.memory.ope.reconcile import reconcile_rows
 from gigaevo.memory.outcomes import record_program_memory_outcome
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program

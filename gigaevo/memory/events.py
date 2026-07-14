@@ -520,3 +520,41 @@ class MemoryReadSelection(MemoryEvent):
     empty_reason: str = ""
     timing_ms: dict[str, float] = Field(default_factory=dict)
     error: str = ""
+
+
+class MemoryOpeSummary(BaseEvent):
+    """Run-level DR-AIPW probe-ITT effect of the card policy over the ledger.
+
+    Plain ``BaseEvent`` (no per-decision correlation) emitted via ``emit`` — NOT
+    ``emit_memory_event`` — so it never appends to ``memory_events.jsonl`` and
+    cannot pollute the ledger it summarizes.
+    """
+
+    event: ClassVar[str] = "MEMORY_OPE_SUMMARY"
+    description: ClassVar[str] = (
+        "Auto-computed DR-AIPW probe-ITT effect (tau) of the card policy."
+    )
+    health_question: ClassVar[str] = (
+        "Is the card policy causally helping, and does its ledger reconcile?"
+    )
+
+    # {"ok", "insufficient_data"}
+    status: str
+    n: int = 0
+    n_treated: int = 0
+    n_control: int = 0
+    tau_dr: float | None = None
+    se_dr: float | None = None
+    ci_lo: float | None = None
+    ci_hi: float | None = None
+    z_score: float | None = None
+    p_value: float | None = None
+    tau_ips: float | None = None
+    low_power: bool = False
+    propensity_warning: bool = False
+    # Reconciliation health of the ledger the estimate was read from.
+    assignments: int = 0
+    reconciled: int = 0
+    orphans: int = 0
+    dupes: int = 0
+    duplicate_assignments: int = 0

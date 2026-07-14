@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from experiments.hover.diff_memory.reconcile_assignments import (
+from gigaevo.memory.cards import AssignmentRecord, DecisionContext
+from gigaevo.memory.context import GlobalMemoryContext
+from gigaevo.memory.ope.reconcile import (
     estimate_probe_itt_dr,
     reconcile_rows,
 )
-from gigaevo.memory.cards import AssignmentRecord, DecisionContext
-from gigaevo.memory.context import GlobalMemoryContext
 from gigaevo.memory.read.auction import AuctionBid
 from gigaevo.memory.read.reader import MemoryReader
 

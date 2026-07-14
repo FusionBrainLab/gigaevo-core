@@ -55,6 +55,16 @@ evicted_evidence:
   path: ${checkpoint_dir}/evicted_evidence.jsonl
   max_cards: 10000
 
+# Off-policy evaluation of the card policy. The writer refreshes this after each
+# increment (live sweeps + final), so the DR-AIPW probe-ITT effect (tau) lands in
+# ${checkpoint_dir}/ope_summary.json in-progress, not only at completion. It reads
+# the run's own memory_events.jsonl and never affects evolution (read-only, all
+# errors swallowed). eps/alpha/propensity_tolerance are OPE-computation defaults
+# (estimator hygiene, not memory-policy magnitudes) and default in the estimator.
+ope_reporter:
+  _target_: gigaevo.memory.ope.reporter.MemoryOpeReporter
+  checkpoint_dir: ${checkpoint_dir}
+
 # One store per run, owning bank + vector index + research agent under the
 # run's checkpoint dir. The reader and the writer share this single instance by
 # reference (below) — a write is visible to the next read with no cross-view
@@ -162,3 +172,4 @@ writer:
   selection_leases: ${ref:selection_leases}
   min_effective_events: ${memory.evidence.min_effective_events}
   evicted_evidence: ${ref:memory.evicted_evidence}
+  ope_reporter: ${ref:memory.ope_reporter}

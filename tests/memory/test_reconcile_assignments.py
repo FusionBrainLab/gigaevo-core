@@ -4,7 +4,8 @@ import logging
 
 import pytest
 
-from experiments.hover.diff_memory.reconcile_assignments import (
+from gigaevo.memory.cards import AssignmentRecord, DecisionContext
+from gigaevo.memory.ope.reconcile import (
     assert_aa_balance,
     assert_probe_dr_baselines,
     assert_probe_itt_calibration,
@@ -12,7 +13,6 @@ from experiments.hover.diff_memory.reconcile_assignments import (
     neutral_arm,
     reconcile_rows,
 )
-from gigaevo.memory.cards import AssignmentRecord, DecisionContext
 
 
 def _assignment_row(
