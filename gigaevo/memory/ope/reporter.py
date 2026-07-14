@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from loguru import logger
@@ -177,13 +179,20 @@ class MemoryOpeReporter:
             ),
         }
         path = self._checkpoint_dir / OPE_SUMMARY_FILENAME
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(
-            json.dumps(_json_safe(payload), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        text = json.dumps(_json_safe(payload), ensure_ascii=False, indent=2)
+        # Unique temp per refresh: off-loop refreshes overlap, so a fixed .tmp
+        # name would let two writers corrupt each other's half-written summary.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=self._checkpoint_dir, prefix=".ope_summary.", suffix=".tmp"
         )
-        # Atomic swap so a concurrent reader never sees a half-written summary.
-        tmp.replace(path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            # Atomic swap so a concurrent reader never sees a half-written summary.
+            os.replace(tmp_name, path)
+        except Exception:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def _summary_dict(summary: ProbeDRITTSummary) -> dict[str, Any]:

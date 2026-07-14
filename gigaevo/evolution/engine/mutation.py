@@ -140,7 +140,14 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
 
     parent_assignments: dict[str, dict] = {}
     card_sources: dict[str, dict] = {}
-    for parent in parents:
+    # Base parent first: a card cited by both parents is credited against the
+    # anchor baseline (the same parent the child's overall gain uses), not by
+    # arbitrary parent order.
+    ordered_parents = [
+        parents[index],
+        *(p for i, p in enumerate(parents) if i != index),
+    ]
+    for parent in ordered_parents:
         raw_assignment = parent.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY)
         assignment: AssignmentRecord | None = None
         if isinstance(raw_assignment, dict):

@@ -33,6 +33,7 @@ def _outcome_payload(
     decision_id: str,
     base_id: str,
     base_metrics: dict[str, float],
+    ope_eligible: bool,
 ) -> dict[str, Any]:
     primary_metric = ""
     higher_is_better = True
@@ -78,6 +79,7 @@ def _outcome_payload(
         "base_id": base_id,
         "primary_metric": primary_metric,
         "higher_is_better": higher_is_better,
+        "ope_eligible": ope_eligible,
     }
 
 
@@ -124,6 +126,28 @@ def _decision_sources(
     ]
 
 
+def _probe_decision_ids(program: Program) -> set[str]:
+    """Distinct randomized-probe (treated/control) decision ids on this child."""
+    raw_assignments = program.get_metadata(
+        MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY
+    )
+    probe_ids: set[str] = set()
+    if isinstance(raw_assignments, dict):
+        for raw_assignment in raw_assignments.values():
+            if not isinstance(raw_assignment, dict):
+                continue
+            try:
+                assignment = AssignmentRecord.model_validate(raw_assignment)
+            except Exception:
+                continue
+            if assignment.decision_id and assignment.probe_arm in (
+                "treated",
+                "control",
+            ):
+                probe_ids.add(assignment.decision_id)
+    return probe_ids
+
+
 async def record_program_memory_outcome(
     program: Program,
     *,
@@ -140,6 +164,10 @@ async def record_program_memory_outcome(
     if not sources:
         return "not_applicable"
 
+    # A child born from >1 randomized-probe decision cannot be attributed to any
+    # single probe arm: its one outcome would enter multiple estimator arms. Mark
+    # all its terminals ineligible so the DR-AIPW estimator excludes them.
+    child_ope_eligible = len(_probe_decision_ids(program)) <= 1
     payloads = {
         decision_id: _outcome_payload(
             program,
@@ -147,6 +175,7 @@ async def record_program_memory_outcome(
             decision_id=decision_id,
             base_id=base_id,
             base_metrics=base_metrics,
+            ope_eligible=child_ope_eligible,
         )
         for decision_id, base_id, base_metrics in sources
     }

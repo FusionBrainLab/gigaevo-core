@@ -35,6 +35,7 @@ class TerminalRecord:
     kind: Literal["outcome", "invalid", "censor"]
     outcome: float | None
     source: str
+    ope_eligible: bool = True
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,14 @@ def _outcome(row: Mapping[str, Any]) -> float | None:
     return None
 
 
+def _ope_eligible(row: Mapping[str, Any]) -> bool:
+    for mapping in _mappings(row):
+        value = mapping.get("ope_eligible")
+        if isinstance(value, bool):
+            return value
+    return True
+
+
 def _censor_reason(row: Mapping[str, Any]) -> str:
     for mapping in _mappings(row):
         for key in CENSOR_KEYS:
@@ -226,6 +235,7 @@ def _terminal(row: Mapping[str, Any]) -> TerminalRecord | None:
         return None
     source = f"{row.get('_source_path', '<memory>')}:{row.get('_source_line', '?')}"
     outcome = _outcome(row)
+    eligible = _ope_eligible(row)
     if _censor_reason(row):
         return TerminalRecord(decision_id, "censor", None, source)
     if _is_invalid(row):
@@ -234,12 +244,12 @@ def _terminal(row: Mapping[str, Any]) -> TerminalRecord | None:
     if event.startswith("MEMORY_") and event not in MEMORY_TERMINAL_EVENTS:
         return None
     if any(token in event for token in ("OUTCOME", "EXPOSURE", "GAIN")):
-        return TerminalRecord(decision_id, "outcome", outcome, source)
+        return TerminalRecord(decision_id, "outcome", outcome, source, eligible)
     state = str(row.get("state", "")).lower()
     if outcome is not None and state in {"done", "complete", "completed", "evaluated"}:
-        return TerminalRecord(decision_id, "outcome", outcome, source)
+        return TerminalRecord(decision_id, "outcome", outcome, source, eligible)
     if outcome is not None and event not in {"MEMORY_READ_SELECTION", ASSIGNMENT_EVENT}:
-        return TerminalRecord(decision_id, "outcome", outcome, source)
+        return TerminalRecord(decision_id, "outcome", outcome, source, eligible)
     return None
 
 
@@ -482,6 +492,8 @@ def assert_probe_dr_baselines(
         (terminal,) = terminal_records
         if terminal.kind != "outcome" or terminal.outcome is None:
             continue
+        if not terminal.ope_eligible:
+            continue
         n_with_outcome += 1
         q_hat_1 = _number(assignment.get("q_hat_treated"))
         q_hat_0 = _number(assignment.get("q_hat_control"))
@@ -581,6 +593,7 @@ def estimate_probe_itt_dr(
     n_treated = 0
     n_control = 0
     n_ips_fallback = 0
+    n_excluded_contaminated = 0
 
     for decision_id in reconciliation.reconciled_ids:
         assignment = reconciliation.assignments[decision_id]
@@ -603,6 +616,9 @@ def estimate_probe_itt_dr(
 
         (terminal,) = reconciliation.terminals[decision_id]
         if terminal.kind != "outcome" or terminal.outcome is None:
+            continue
+        if not terminal.ope_eligible:
+            n_excluded_contaminated += 1
             continue
         outcome = terminal.outcome
         offered_id, raw_propensity = _offered_propensity(decision_id, assignment)
@@ -639,6 +655,11 @@ def estimate_probe_itt_dr(
             - (1.0 - treatment) / (1.0 - propensity) * (outcome - q_hat_0)
         )
 
+    if n_excluded_contaminated:
+        LOGGER.info(
+            "probe DR ITT excluded %d contaminated (multi-probe) terminal(s)",
+            n_excluded_contaminated,
+        )
     if not dr_scores:
         raise AssertionError(
             "probe DR ITT requires a reconciled treated/control outcome"

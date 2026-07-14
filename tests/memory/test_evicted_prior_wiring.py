@@ -159,3 +159,46 @@ def test_writer_eviction_feeds_same_bounded_store_used_by_cold_prior(
     ]
     assert len(rows) == 2
     assert {row["schema_version"] for row in rows} == {"prior_evidence.v1"}
+
+
+def test_evicted_evidence_is_recorded_before_the_card_leaves_the_store(
+    tmp_path, monkeypatch
+) -> None:
+    # The cold prior samples the live bank plus the evicted cohort. If eviction
+    # deleted the card and only then recorded it, a prior sampled during that
+    # window would miss the card from BOTH cohorts — survivorship bias. The sink
+    # must see the card while it is still live in the store.
+    class _OrderingSpy:
+        def __init__(self, store: _Store) -> None:
+            self._store = store
+            self.present_at_record: dict[str, bool] = {}
+            self.recorded: list[str] = []
+
+        def record(self, card: Card) -> None:
+            self.present_at_record[card.id] = self._store.get(card.id) is not None
+            self.recorded.append(card.id)
+
+    harmful = _card("harmful", -1.0)
+    store = _Store((_card("survivor", 1.0), harmful))
+    spy = _OrderingSpy(store)
+    for factory in (
+        "create_reconcile_agent",
+        "create_program_author_agent",
+        "create_consolidate_agent",
+    ):
+        monkeypatch.setattr(
+            f"gigaevo.memory.write.writer.{factory}", lambda *args, **kwargs: object()
+        )
+    stack = LibrarianWriteStack(
+        llm=object(),
+        evictor=_EvictNegative(),
+        store=store,
+        checkpoint_dir=tmp_path,
+        evicted_evidence=spy,
+    )
+    stack._build("")
+
+    assert stack.require_gate().sweep() == ["harmful"]
+    assert spy.recorded == ["harmful"]
+    assert spy.present_at_record["harmful"] is True
+    assert store.get("harmful") is None

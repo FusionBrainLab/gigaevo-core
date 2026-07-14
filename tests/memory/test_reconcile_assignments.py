@@ -293,3 +293,24 @@ def test_control_arm_terminal_outcome_prefers_child_y_over_card_credit() -> None
     (terminal,) = result.terminals["control-y"]
     assert terminal.outcome == 1.25
     assert terminal.source == "<memory>:?"
+
+
+def test_probe_dr_itt_excludes_ope_ineligible_terminals(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A terminal marked ope_eligible=False (its child was born from >1 probe
+    # decision) must be dropped from the DR estimator arms, and the exclusion
+    # count logged — else its outcome pollutes an arm it cannot be attributed to.
+    rows = _probe_rows(n_per_arm=2, tau=0.5)
+    baseline = estimate_probe_itt_dr(reconcile_rows(rows))
+    assert (baseline.n_treated, baseline.n_control) == (2, 2)
+
+    for row in rows:
+        if row.get("event") == "MEMORY_OUTCOME" and row["decision_id"] == "treated-0":
+            row["ope_eligible"] = False
+
+    with caplog.at_level(logging.INFO):
+        excluded = estimate_probe_itt_dr(reconcile_rows(rows))
+
+    assert (excluded.n_treated, excluded.n_control) == (1, 2)
+    assert "excluded 1 contaminated" in caplog.text

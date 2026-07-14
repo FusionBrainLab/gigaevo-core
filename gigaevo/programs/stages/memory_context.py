@@ -176,11 +176,17 @@ class MemoryContextStage(Stage):
             [bid.model_dump() for bid in selection.slate],
         )
 
-        withheld_for_control = bool(selection.card_ids) and (
-            self._no_card_control_rng.random() < self._no_card_control_probability
+        assignment = selection.assignment
+        # The randomized cold-probe lane and the no-card control lane must be
+        # mutually exclusive: withholding a probe arm's card would leave probe_arm
+        # labelling a unit that received nothing, biasing the DR-AIPW probe-ITT.
+        is_probe = assignment is not None and assignment.probe_arm != "none"
+        withheld_for_control = (
+            not is_probe
+            and bool(selection.card_ids)
+            and (self._no_card_control_rng.random() < self._no_card_control_probability)
         )
         delivered_ids = () if withheld_for_control else selection.card_ids
-        assignment = selection.assignment
         if assignment is not None:
             assignment = assignment.model_copy(
                 update={

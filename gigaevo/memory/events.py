@@ -457,6 +457,7 @@ class MemoryOutcome(MemoryEvent):
     base_id: str
     primary_metric: str = ""
     higher_is_better: bool = True
+    ope_eligible: bool = True
 
 
 class MemoryOutcomeUpdate(MemoryEvent):
@@ -478,6 +479,7 @@ class MemoryOutcomeUpdate(MemoryEvent):
     base_id: str
     primary_metric: str = ""
     higher_is_better: bool = True
+    ope_eligible: bool = True
 
 
 class MemoryDelivery(MemoryEvent):

@@ -9,7 +9,9 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
     MUTATION_MEMORY_OUTCOME_METADATA_KEY,
+    MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY,
 )
+from gigaevo.memory.cards import AssignmentRecord, DecisionContext
 from gigaevo.memory.events import MemoryOutcome, MemoryOutcomeUpdate
 from gigaevo.memory.ope.reconcile import reconcile_rows
 from gigaevo.memory.outcomes import record_program_memory_outcome
@@ -39,6 +41,79 @@ def _child(*, child_fitness: float, base_fitness: float) -> Program:
         {"is_valid": 1.0, "fitness": base_fitness},
     )
     return child
+
+
+def _crossover_child(
+    *,
+    probe_arms: tuple[str, ...],
+    child_fitness: float = 0.8,
+    base_fitness: float = 0.5,
+) -> Program:
+    child = Program(code="def child(): return 1")
+    child.metrics = {"is_valid": 1.0, "fitness": child_fitness}
+    parent_assignments: dict[str, dict] = {}
+    for index, arm in enumerate(probe_arms):
+        parent_id = f"parent-{index}"
+        is_probe = arm != "none"
+        assignment = AssignmentRecord(
+            decision_id=f"decision-{index}",
+            policy_version="TestPolicy:v1",
+            task_key="hover",
+            assigned_ids=("offered",) if arm == "treated" else (),
+            arm="injected" if arm == "treated" else "none",
+            probe_arm=arm,
+            randomized=is_probe,
+            propensity_kind="probe_bernoulli" if is_probe else "observational",
+            propensities={"offered": 0.5} if is_probe else {},
+            context=DecisionContext(
+                parent_id=parent_id,
+                parent_metrics={"is_valid": 1.0, "fitness": base_fitness},
+            ),
+        )
+        parent_assignments[parent_id] = assignment.model_dump(mode="json")
+    child.set_metadata(
+        MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY, parent_assignments
+    )
+    return child
+
+
+@pytest.mark.asyncio
+async def test_multi_probe_crossover_marks_all_terminals_ope_ineligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A child born from >1 randomized-probe decision cannot be attributed to any
+    # single probe arm: its one outcome would enter multiple estimator arms. Every
+    # terminal it emits must be flagged ope_eligible=False for the DR estimator.
+    emitted = []
+    monkeypatch.setattr("gigaevo.memory.outcomes.emit_memory_event", emitted.append)
+    child = _crossover_child(probe_arms=("treated", "control"))
+
+    result = await record_program_memory_outcome(
+        child, storage=AsyncMock(), metrics_context=_metrics_context()
+    )
+
+    assert result == "emitted"
+    assert len(emitted) == 2
+    assert all(isinstance(event, MemoryOutcome) for event in emitted)
+    assert all(event.ope_eligible is False for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_single_probe_crossover_keeps_terminals_ope_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One probe arm plus one observational (non-probe) parent is a single probe
+    # decision — attributable, so its terminals stay eligible.
+    emitted = []
+    monkeypatch.setattr("gigaevo.memory.outcomes.emit_memory_event", emitted.append)
+    child = _crossover_child(probe_arms=("treated", "none"))
+
+    await record_program_memory_outcome(
+        child, storage=AsyncMock(), metrics_context=_metrics_context()
+    )
+
+    assert emitted
+    assert all(event.ope_eligible is True for event in emitted)
 
 
 @pytest.mark.asyncio
