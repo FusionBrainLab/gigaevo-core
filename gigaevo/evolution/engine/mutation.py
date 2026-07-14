@@ -6,19 +6,30 @@ from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY,
+    MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
+    MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_USED_METADATA_KEY,
     MUTATION_PARENT_STAGE_OUTPUTS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
+from gigaevo.memory.cards import (
+    AssignmentRecord,
+    CardAssignmentSource,
+    DecisionContext,
+    MutationAssignmentRecord,
+)
 from gigaevo.memory.selection_leases import SelectionLease
 from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 from gigaevo.programs.program import Program
@@ -117,9 +128,71 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
             base.get_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY)
         ),
     }
+    decision_id = base.get_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY)
+    if isinstance(decision_id, str) and decision_id:
+        snapshot[MUTATION_MEMORY_DECISION_ID_METADATA_KEY] = decision_id
+    assignment = base.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY)
+    if isinstance(assignment, dict):
+        snapshot[MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY] = dict(assignment)
     raw_scores = base.get_metadata(PER_SAMPLE_SCORES_KEY)
     if isinstance(raw_scores, list) and raw_scores:
         snapshot[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] = list(raw_scores)
+
+    parent_assignments: dict[str, dict] = {}
+    card_sources: dict[str, dict] = {}
+    for parent in parents:
+        raw_assignment = parent.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY)
+        assignment: AssignmentRecord | None = None
+        if isinstance(raw_assignment, dict):
+            try:
+                assignment = AssignmentRecord.model_validate(raw_assignment)
+            except Exception:
+                logger.warning(
+                    "[mutation] ignoring malformed memory assignment on parent {}",
+                    parent.short_id,
+                )
+        selected_ids = parent.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY)
+        parent_metrics = dict(parent.metrics or {})
+        context = (
+            assignment.context
+            if assignment is not None
+            else DecisionContext(parent_id=parent.id, parent_metrics=parent_metrics)
+        )
+        if not context.parent_id or not context.parent_metrics:
+            context = context.model_copy(
+                update={
+                    "parent_id": context.parent_id or parent.id,
+                    "parent_metrics": context.parent_metrics or parent_metrics,
+                }
+            )
+        if assignment is not None:
+            assignment = assignment.model_copy(update={"context": context})
+            parent_assignments[parent.id] = assignment.model_dump(mode="json")
+        scores = parent.get_metadata(PER_SAMPLE_SCORES_KEY)
+        try:
+            frozen_scores = (
+                tuple(float(value) for value in scores)
+                if isinstance(scores, list) and scores
+                else None
+            )
+        except (TypeError, ValueError):
+            frozen_scores = None
+        for raw_card_id in selected_ids if isinstance(selected_ids, list) else ():
+            card_id = str(raw_card_id).strip()
+            if not card_id or card_id in card_sources:
+                continue
+            source = CardAssignmentSource(
+                source_card_id=card_id,
+                parent_id=parent.id,
+                decision_id=assignment.decision_id if assignment is not None else "",
+                source_context=context,
+                bd_cell=assignment.bd_cell if assignment is not None else None,
+                parent_metrics=dict(context.parent_metrics or parent_metrics),
+                parent_scores=frozen_scores,
+            )
+            card_sources[card_id] = source.model_dump(mode="json")
+    snapshot[MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY] = parent_assignments
+    snapshot[MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY] = card_sources
     return snapshot
 
 
@@ -191,8 +264,34 @@ async def generate_one_mutation(
             MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
             lineage_applied_closure(applied_ids=applied_ids, parents=parents),
         )
-        for key, value in freeze_base_parent_snapshot(parents, base_parent).items():
+        memory_snapshot = freeze_base_parent_snapshot(parents, base_parent)
+        for key, value in memory_snapshot.items():
             program.set_metadata(key, value)
+        card_sources = {
+            card_id: CardAssignmentSource.model_validate(source)
+            for card_id, source in memory_snapshot.get(
+                MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY, {}
+            ).items()
+        }
+        mutation_assignment = MutationAssignmentRecord(
+            mutation_id=program.id,
+            parent_ids=tuple(parent.id for parent in parents),
+            delivered_ids=tuple(injected_ids),
+            source_decision_ids=tuple(
+                sorted(
+                    {
+                        source.decision_id
+                        for source in card_sources.values()
+                        if source.decision_id
+                    }
+                )
+            ),
+            card_sources=card_sources,
+        )
+        program.set_metadata(
+            MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+            mutation_assignment.model_dump(mode="json"),
+        )
 
         # Freeze the parent stage outputs that produced this child (debug only —
         # must never block the mutation, so failures are swallowed).
@@ -214,8 +313,7 @@ async def generate_one_mutation(
         if selection_lease is not None:
             selection_lease.transfer_to_child(
                 program.id,
-                program.get_metadata(MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY)
-                or [],
+                injected_ids,
             )
 
         prompt_id = mutation_spec.metadata.get(MutationSpec.META_PROMPT_ID, "")
