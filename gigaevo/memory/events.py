@@ -26,12 +26,13 @@ import json
 import math
 from pathlib import Path
 from threading import Lock
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from loguru import logger
 from pydantic import Field
 
+from gigaevo.memory.cards import AssignmentRecord
 from gigaevo.monitoring.emit import emit
 from gigaevo.monitoring.events import BaseEvent
 
@@ -121,6 +122,105 @@ class MemoryEvent(BaseEvent):
     parent_ids: tuple[str, ...] = ()
 
 
+class BufferedMemoryEvents:
+    def __init__(self) -> None:
+        self._events: list[tuple[MemoryEvent, str | Path | None]] = []
+
+    def append(self, event: MemoryEvent, event_path: str | Path | None) -> None:
+        self._events.append((event, event_path))
+
+    @staticmethod
+    def _retain_assignment(
+        assignment: AssignmentRecord, selected_ids: tuple[str, ...]
+    ) -> AssignmentRecord:
+        assigned_ids = tuple(sorted(set(selected_ids)))
+        retained = set(assigned_ids)
+        return assignment.model_copy(
+            update={
+                "assigned_ids": assigned_ids,
+                "delivered_ids": assigned_ids,
+                "arm": "injected" if assigned_ids else "none",
+                "probe_arm": assignment.probe_arm,
+                "propensities": dict(assignment.propensities),
+                "predicted_help": dict(assignment.predicted_help),
+                "predicted_gain": dict(assignment.predicted_gain),
+                "predicted_no_card_gain": dict(assignment.predicted_no_card_gain),
+                "pending_by_card": {
+                    card_id: value
+                    for card_id, value in assignment.pending_by_card.items()
+                    if card_id in retained
+                },
+                "pending_discount_by_card": {
+                    card_id: value
+                    for card_id, value in assignment.pending_discount_by_card.items()
+                    if card_id in retained
+                },
+            }
+        )
+
+    def rewrite_terminal_selection(
+        self,
+        *,
+        decision_id: str,
+        selected_ids: tuple[str, ...],
+        assignment: AssignmentRecord | None,
+    ) -> AssignmentRecord | None:
+        corrected_assignment = (
+            self._retain_assignment(assignment, selected_ids)
+            if assignment is not None
+            else None
+        )
+        rewritten: list[tuple[MemoryEvent, str | Path | None]] = []
+        for event, event_path in self._events:
+            if event.decision_id == decision_id and isinstance(
+                event, MemoryReadSelection
+            ):
+                empty_reason = event.empty_reason
+                if selected_ids:
+                    empty_reason = ""
+                elif event.selected_ids:
+                    empty_reason = "lease_vanished"
+                event = event.model_copy(
+                    update={
+                        "selected_ids": selected_ids,
+                        "empty_reason": empty_reason,
+                    }
+                )
+            elif event.decision_id == decision_id and isinstance(
+                event, MemoryAssignment
+            ):
+                event = event.model_copy(
+                    update={
+                        "assignment": self._retain_assignment(
+                            event.assignment, selected_ids
+                        )
+                    }
+                )
+            rewritten.append((event, event_path))
+        self._events = rewritten
+        return corrected_assignment
+
+    def commit(self) -> None:
+        events, self._events = self._events, []
+        for event, event_path in events:
+            _emit_stamped_memory_event(event, event_path=event_path)
+
+
+_event_buffer: ContextVar[BufferedMemoryEvents | None] = ContextVar(
+    "memory_event_buffer", default=None
+)
+
+
+@contextmanager
+def memory_event_buffer() -> Iterator[BufferedMemoryEvents]:
+    buffer = BufferedMemoryEvents()
+    token = _event_buffer.set(buffer)
+    try:
+        yield buffer
+    finally:
+        _event_buffer.reset(token)
+
+
 def _finite(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _finite(v) for k, v in value.items()}
@@ -147,13 +247,27 @@ def emit_memory_event(
             "parent_ids": event.parent_ids or _parent_ids.get(),
         }
     )
+    buffer = _event_buffer.get()
+    if buffer is not None:
+        buffer.append(stamped, event_path)
+        return stamped
+    return _emit_stamped_memory_event(stamped, event_path=event_path)
+
+
+def _emit_stamped_memory_event(
+    stamped: MemoryEvent, *, event_path: str | Path | None = None
+) -> MemoryEvent:
     emit(stamped)
 
     target = Path(event_path) if event_path is not None else _event_path.get()
     if target is None:
         target = resolve_memory_event_path()
     if target is not None:
-        row = {"event": type(stamped).event, **stamped.model_dump(mode="json")}
+        row = {
+            "event": type(stamped).event,
+            "schema_version": type(stamped).schema_version,
+            **stamped.model_dump(mode="json"),
+        }
         line = json.dumps(_finite(row), ensure_ascii=False) + "\n"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -286,6 +400,20 @@ class MemoryEvictionSweep(MemoryEvent):
     evicted_ids: tuple[str, ...] = ()
 
 
+class MemoryPriorCohort(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_PRIOR_COHORT"
+    description: ClassVar[str] = (
+        "Live and evicted card counts backing an empirical-Bayes cold prior."
+    )
+    health_question: ClassVar[str] = (
+        "Is cold-prior evidence retaining the evicted cohort?"
+    )
+
+    live_card_count: int = 0
+    evicted_card_count: int = 0
+    cohort_card_count: int = 0
+
+
 class MemoryConsolidationPass(MemoryEvent):
     event: ClassVar[str] = "MEMORY_CONSOLIDATION_PASS"
     description: ClassVar[str] = (
@@ -300,6 +428,74 @@ class MemoryConsolidationPass(MemoryEvent):
     merged: int = 0
     failures: int = 0
     error: str = ""
+
+
+class MemoryAssignment(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_ASSIGNMENT"
+    description: ClassVar[str] = "One durable memory read-policy assignment."
+    health_question: ClassVar[str] = (
+        "Can every memory decision be joined to exactly one child outcome?"
+    )
+
+    assignment: AssignmentRecord
+
+
+class MemoryOutcome(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_OUTCOME"
+    description: ClassVar[str] = (
+        "The first terminal child evaluation for one memory assignment."
+    )
+    health_question: ClassVar[str] = (
+        "Does every durable assignment receive exactly one honest child-level outcome?"
+    )
+
+    status: Literal["outcome", "invalid", "censored"]
+    fitness_delta: float | None = None
+    invalid: bool = False
+    censor_reason: str = ""
+    child_id: str
+    base_id: str
+    primary_metric: str = ""
+    higher_is_better: bool = True
+    ope_eligible: bool = True
+
+
+class MemoryOutcomeUpdate(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_OUTCOME_UPDATE"
+    description: ClassVar[str] = (
+        "A changed re-evaluation of a child whose terminal memory outcome is frozen."
+    )
+    health_question: ClassVar[str] = (
+        "Are re-evaluations changing frozen memory-assignment outcomes?"
+    )
+
+    status: Literal["outcome", "invalid", "censored"]
+    previous_status: Literal["outcome", "invalid", "censored"]
+    fitness_delta: float | None = None
+    previous_fitness_delta: float | None = None
+    invalid: bool = False
+    censor_reason: str = ""
+    child_id: str
+    base_id: str
+    primary_metric: str = ""
+    higher_is_better: bool = True
+    ope_eligible: bool = True
+
+
+class MemoryDelivery(MemoryEvent):
+    event: ClassVar[str] = "MEMORY_DELIVERY"
+    description: ClassVar[str] = (
+        "The final mutation-prompt delivery after downstream no-card withholding."
+    )
+    health_question: ClassVar[str] = (
+        "Which assigned cards actually reached the mutator?"
+    )
+
+    assignment: AssignmentRecord
+    assigned_ids: tuple[str, ...] = ()
+    delivered_ids: tuple[str, ...] = ()
+    withheld_for_control: bool = False
+    no_card_control_probability: float = 0.0
 
 
 class MemoryReadSelection(MemoryEvent):
@@ -322,7 +518,45 @@ class MemoryReadSelection(MemoryEvent):
     selected_ids: tuple[str, ...] = ()
     slate: tuple[dict[str, Any], ...] = ()
     # one of: "", "max_cards_nonpositive", "research_empty", "auction_rejected",
-    # "budget_empty", "render_empty", "exception"
+    # "budget_empty", "render_empty", "lease_vanished", "exception"
     empty_reason: str = ""
     timing_ms: dict[str, float] = Field(default_factory=dict)
     error: str = ""
+
+
+class MemoryOpeSummary(BaseEvent):
+    """Run-level DR-AIPW probe-ITT effect of the card policy over the ledger.
+
+    Plain ``BaseEvent`` (no per-decision correlation) emitted via ``emit`` — NOT
+    ``emit_memory_event`` — so it never appends to ``memory_events.jsonl`` and
+    cannot pollute the ledger it summarizes.
+    """
+
+    event: ClassVar[str] = "MEMORY_OPE_SUMMARY"
+    description: ClassVar[str] = (
+        "Auto-computed DR-AIPW probe-ITT effect (tau) of the card policy."
+    )
+    health_question: ClassVar[str] = (
+        "Is the card policy causally helping, and does its ledger reconcile?"
+    )
+
+    # {"ok", "insufficient_data"}
+    status: str
+    n: int = 0
+    n_treated: int = 0
+    n_control: int = 0
+    tau_dr: float | None = None
+    se_dr: float | None = None
+    ci_lo: float | None = None
+    ci_hi: float | None = None
+    z_score: float | None = None
+    p_value: float | None = None
+    tau_ips: float | None = None
+    low_power: bool = False
+    propensity_warning: bool = False
+    # Reconciliation health of the ledger the estimate was read from.
+    assignments: int = 0
+    reconciled: int = 0
+    orphans: int = 0
+    dupes: int = 0
+    duplicate_assignments: int = 0

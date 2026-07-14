@@ -29,6 +29,11 @@ evidence:
   # evidence floor as full/write runs.
   min_effective_events: 3
 
+evicted_evidence:
+  _target_: gigaevo.memory.prior_evidence.JsonlEvictedEvidence
+  path: ${checkpoint_dir}/evicted_evidence.jsonl
+  max_cards: 10000
+
 store:
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
   config:

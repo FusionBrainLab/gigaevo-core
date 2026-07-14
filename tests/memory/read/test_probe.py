@@ -6,6 +6,16 @@ from gigaevo.memory.read.auction import AuctionBid
 from gigaevo.memory.read.probe import ColdProbePolicy, NoColdProbePolicy
 
 
+class _CountingRng:
+    def __init__(self, seed: int) -> None:
+        self._rng = np.random.default_rng(seed)
+        self.calls = 0
+
+    def random(self) -> float:
+        self.calls += 1
+        return float(self._rng.random())
+
+
 def _bid(
     card_id: str,
     *,
@@ -56,7 +66,57 @@ def test_empty_selection_can_probe_best_cold_bid():
     high = next(bid for bid in out if bid.card_id == "high")
     assert high.selected is True
     assert high.probe_selected is True
+    assert high.probe_offered is True
+    assert high.probe_propensity == 1.0
     assert high.selection_reason == "cold_probe_empty"
+
+
+def test_probe_recording_preserves_legacy_selection_and_bid_fields_by_seed():
+    rate = 0.37
+    old_field_names = set(AuctionBid.model_fields) - {
+        "probe_offered",
+        "probe_propensity",
+        "probe_control_selected",
+        "probe_treated_selected",
+    }
+    observed_outcomes: set[bool] = set()
+
+    for seed in range(64):
+        source = _bid("cold", bid=0.2, theta=0.7)
+        expected_draw = float(np.random.default_rng(seed).random())
+        expected_fired = expected_draw < rate
+        observed_outcomes.add(expected_fired)
+        rng = _CountingRng(seed)
+
+        kept_ids, out = ColdProbePolicy(empty_selection_probe_rate=rate).apply(
+            budgeted_ids=[],
+            slate=[source],
+            max_cards=1,
+            rng=rng,
+        )
+
+        expected = source.model_copy(update={"probe_eligible": True})
+        if expected_fired:
+            expected = expected.model_copy(
+                update={
+                    "selected": True,
+                    "probe_selected": True,
+                    "selection_reason": "cold_probe_empty",
+                    "rejected_by_ev_floor": False,
+                    "rejected_by_no_card_gate": False,
+                }
+            )
+        (recorded,) = out
+        assert rng.calls == 1
+        assert kept_ids == (["cold"] if expected_fired else [])
+        assert recorded.model_dump(include=old_field_names) == expected.model_dump(
+            include=old_field_names
+        )
+        assert recorded.probe_offered is True
+        assert recorded.probe_propensity == rate
+        assert recorded.probe_selected is expected_fired
+
+    assert observed_outcomes == {False, True}
 
 
 def test_warm_winner_not_replaced_when_override_rate_zero():
@@ -64,17 +124,34 @@ def test_warm_winner_not_replaced_when_override_rate_zero():
         _bid("warm", selected=True, support_kind="ev_rewards", support_n=3.0),
         _bid("cold", selected=False, support_kind="cold_prior", support_n=0.0),
     ]
+    rng = _CountingRng(0)
     budgeted, out = ColdProbePolicy(warm_override_probe_rate=0.0).apply(
         budgeted_ids=["warm"],
         slate=slate,
         max_cards=1,
-        rng=np.random.default_rng(0),
+        rng=rng,
     )
 
+    old_field_names = set(AuctionBid.model_fields) - {
+        "probe_offered",
+        "probe_propensity",
+        "probe_control_selected",
+        "probe_treated_selected",
+    }
+    expected = [
+        slate[0].model_copy(update={"probe_eligible": False}),
+        slate[1].model_copy(update={"probe_eligible": True}),
+    ]
+    assert rng.calls == 1
     assert budgeted == ["warm"]
+    assert [bid.model_dump(include=old_field_names) for bid in out] == [
+        bid.model_dump(include=old_field_names) for bid in expected
+    ]
     cold = next(bid for bid in out if bid.card_id == "cold")
     assert cold.probe_eligible is True
     assert cold.probe_selected is False
+    assert cold.probe_offered is True
+    assert cold.probe_propensity == 0.0
 
 
 def test_sub_threshold_support_card_is_probe_eligible_regardless_of_kind():

@@ -175,6 +175,22 @@ class AuctionBid(BaseModel):
         description="Injection count carried from the candidate; under the "
         "novelty-discounted auction, `bid` already includes the (1+use_count) tax.",
     )
+    pending_count: int = Field(
+        default=0,
+        ge=0,
+        description="Uncredited in-flight exposures observed for this card.",
+    )
+    pending_effective_support: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Per-event-aged effective support used to price pending load.",
+    )
+    pending_discount: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=1.0,
+        description="Multiplicative pending-load factor applied to the raw bid.",
+    )
     prior_source: str = Field(
         default="",
         description="Source of posterior_a/posterior_b for cold/context-cold cards.",
@@ -225,9 +241,27 @@ class AuctionBid(BaseModel):
         default=False,
         description="True when the cold-probe policy may spend exploration on it.",
     )
+    probe_offered: bool = Field(
+        default=False,
+        description="True for the argmax candidate offered the randomized probe.",
+    )
+    probe_propensity: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Configured fire probability for the offered probe candidate.",
+    )
     probe_selected: bool = Field(
         default=False,
         description="True when selected by the explicit cold-probe policy.",
+    )
+    probe_control_selected: bool = Field(
+        default=False,
+        description="True when this card belongs to the complete probe-control slate.",
+    )
+    probe_treated_selected: bool = Field(
+        default=False,
+        description="True when this card belongs to the complete probe-treated slate.",
     )
     selection_reason: str = Field(
         default="",
@@ -733,7 +767,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
                 )
         # Price-adjustment seam (consumes no rng, so draw order stays pinned);
         # applied before the legacy reserve so its floor prices adjusted bids.
-        bids = self._adjust_bids(candidates, bids)
+        bids, pending_discounts = self._adjust_bids(candidates, bids, support_counts)
         if self.ev_reserve_mode == "quantile":
             quantile_floor = (
                 float(np.quantile(bids, self.ev_floor_quantile)) if bids else 0.0
@@ -778,6 +812,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
             support_scale,
             support_kind,
             support_n,
+            pending_discount,
             positive_probability,
             can_bid,
         ) in zip(
@@ -787,6 +822,7 @@ class BootstrapThompsonAuctioneer(BaseModel):
             support_scales,
             support_kinds,
             support_counts,
+            pending_discounts,
             positive_probabilities,
             eligible,
         ):
@@ -820,6 +856,9 @@ class BootstrapThompsonAuctioneer(BaseModel):
                     support_n_unstaled=candidate.support_n_unstaled,
                     gain_se=candidate.gain_se,
                     use_count=candidate.use_count,
+                    pending_count=candidate.pending_count,
+                    pending_effective_support=support_n,
+                    pending_discount=pending_discount,
                     prior_source=candidate.prior_source,
                     context_key=candidate.context_key,
                     baseline_source=baseline_source,
@@ -877,9 +916,13 @@ class BootstrapThompsonAuctioneer(BaseModel):
         return winners, slate
 
     def _adjust_bids(
-        self, candidates: list[AuctionCandidate], bids: list[float]
-    ) -> list[float]:
-        return bids
+        self,
+        candidates: list[AuctionCandidate],
+        bids: list[float],
+        support_counts: list[float],
+    ) -> tuple[list[float], list[float]]:
+        del candidates, support_counts
+        return bids, [1.0] * len(bids)
 
 
 class NoveltyDiscountedBootstrapAuctioneer(BootstrapThompsonAuctioneer):
@@ -904,43 +947,69 @@ class NoveltyDiscountedBootstrapAuctioneer(BootstrapThompsonAuctioneer):
     )
 
     def _adjust_bids(
-        self, candidates: list[AuctionCandidate], bids: list[float]
-    ) -> list[float]:
+        self,
+        candidates: list[AuctionCandidate],
+        bids: list[float],
+        support_counts: list[float],
+    ) -> tuple[list[float], list[float]]:
+        del support_counts
         if self.novelty_power == 0.0:
-            return bids
-        return [
-            bid * (1.0 + candidate.use_count) ** -self.novelty_power
-            for candidate, bid in zip(candidates, bids)
-        ]
+            return bids, [1.0] * len(bids)
+        return (
+            [
+                bid * (1.0 + candidate.use_count) ** -self.novelty_power
+                for candidate, bid in zip(candidates, bids)
+            ],
+            [1.0] * len(bids),
+        )
 
 
 class PendingDiscountedBootstrapAuctioneer(BootstrapThompsonAuctioneer):
     """Bootstrap auction whose bid pays for uncredited in-flight exposure.
 
-    Each candidate's EV bid is scaled by
-    ``(1 + pending_count) ** -pending_power`` before the round's EV reserve is
-    computed. ``pending_count`` excludes the current selection because the
-    provider snapshots lease counts before attaching this round's winners.
-    ``pending_power=0`` is bid-for-bid identical to the base auction, and the
-    adjustment consumes no rng.
+    The raw pending/support ratio is mapped to
+    ``pending / (pending + effective_support)`` before the bid tax is applied.
+    This maps finite load to [0, 1], with the positive-pending cold-card limit
+    equal to 1. ``pending_power=0`` is bid-for-bid identical to the base
+    auction, and the adjustment consumes no rng.
     """
 
     pending_power: float = Field(
         default=0.0,
         ge=0.0,
-        description="Exponent of the (1 + pending_count) bid tax; 0 disables "
-        "the discount.",
+        allow_inf_nan=False,
+        description="Exponent of the bounded pending/effective-support bid tax; "
+        "0 disables the discount.",
     )
 
     def _adjust_bids(
-        self, candidates: list[AuctionCandidate], bids: list[float]
-    ) -> list[float]:
+        self,
+        candidates: list[AuctionCandidate],
+        bids: list[float],
+        support_counts: list[float],
+    ) -> tuple[list[float], list[float]]:
         if self.pending_power == 0.0:
-            return bids
-        return [
-            bid * (1.0 + candidate.pending_count) ** -self.pending_power
-            for candidate, bid in zip(candidates, bids)
+            return bids, [1.0] * len(bids)
+        discounts = [
+            self._pending_discount(candidate.pending_count, support_count)
+            for candidate, support_count in zip(candidates, support_counts)
         ]
+        return (
+            [bid * discount for bid, discount in zip(bids, discounts)],
+            discounts,
+        )
+
+    def _pending_discount(self, pending_count: int, effective_support: float) -> float:
+        if pending_count <= 0:
+            return 1.0
+        support = float(effective_support)
+        if not math.isfinite(support):
+            bounded_load = 0.0 if support > 0.0 else 1.0
+        elif support <= 0.0:
+            bounded_load = 1.0
+        else:
+            bounded_load = pending_count / (pending_count + support)
+        return (1.0 + bounded_load) ** -self.pending_power
 
 
 class TopThetaBudgeter(BaseModel):

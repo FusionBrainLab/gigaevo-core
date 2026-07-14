@@ -516,6 +516,7 @@ Per run, under `checkpoint_dir`:
 |---|---|
 | `memory_events.jsonl` | canonical event stream: read decisions, research steps, auction slates, budget caps, store writes/syncs, gain restamps, eviction sweeps, consolidation passes |
 | `write_ledger.jsonl` | append-only admission/eviction verdicts (outcomes: `added`, `updated`, `merged`, `rejected_harm`, `rejected_novelty`, `evicted`; a benign no-op ingest — `DISCARDED` — writes no row) |
+| `ope_summary.json` | auto-computed DR-AIPW probe-ITT effect (`tau_dr`, CI, IPS cross-check) of the card policy over the ledger, plus reconciliation health (orphans/dupes). Refreshed by the writer after each increment, so it lands in-progress, not only at completion; `status: insufficient_data` until a reconciled treated/control probe outcome exists. Also emitted as a `MEMORY_OPE_SUMMARY` event line |
 | `cards.json` | the bank itself |
 | `selection_leases.json` | live cross-process owners and their leased card ids; created on first lease |
 
@@ -524,6 +525,7 @@ First stop when debugging empty selections, repeated winners, or evictions:
 ```bash
 python tools/memory_event_report.py <run-dir>    # events + ledger + bank summary
 python tools/analyze_bandit_health.py <run-dir>  # auction/posterior health + figures
+python -m gigaevo.memory.ope.reconcile <run-dir> # off-policy probe-ITT (tau) + A/A + reconciliation, on demand
 ```
 
 All memory logs carry a `[Memory][<Component>]` prefix.

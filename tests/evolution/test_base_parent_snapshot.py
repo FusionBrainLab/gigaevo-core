@@ -7,6 +7,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
@@ -97,3 +98,16 @@ def test_snapshot_omits_scores_when_parent_has_none():
         parent = _FakeParentWithScores(["card-x"], {"r2": 0.5}, scores=scores)
         snap = freeze_base_parent_snapshot([parent], base_parent=1)
         assert MUTATION_MEMORY_BASE_SCORES_METADATA_KEY not in snap
+
+
+def test_shared_card_provenance_credits_base_parent_not_listing_order():
+    # Both parents cite the SAME card; base_parent=2 (the second-listed parent).
+    # A card credited against an arbitrary parent's baseline would use the wrong
+    # counterfactual — the retained provenance must anchor the shared card to the
+    # base parent, whose baseline the child's overall gain is measured against.
+    donor = _FakeParent(["shared-card"], {"r2": 0.4}, pid="donor")
+    base = _FakeParent(["shared-card"], {"r2": 0.9}, pid="base")
+    snap = freeze_base_parent_snapshot([donor, base], base_parent=2)
+    sources = snap[MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY]
+    assert sources["shared-card"]["parent_id"] == "base"
+    assert sources["shared-card"]["parent_metrics"] == {"r2": 0.9}

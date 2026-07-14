@@ -220,6 +220,7 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
 
     for prog in completed:
         try:
+            await engine._record_memory_outcome(prog)
             if not engine.config.program_acceptor.is_accepted(prog):
                 logger.info(
                     "[ingestor] {} REJECTED by acceptor (metrics={})",

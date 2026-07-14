@@ -6,10 +6,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from gigaevo.memory.cards import Card
+from gigaevo.memory.cards import Card, DecisionContext
+from gigaevo.memory.context import ContextKey
 from gigaevo.memory.context.beta import BetaPrior
 from gigaevo.memory.context.no_card import NoCardGateSummary
-from gigaevo.memory.events import MemoryReadSelection
+from gigaevo.memory.events import MemoryAssignment, MemoryReadSelection
 from gigaevo.memory.read.auction import (
     AuctionBid,
     AuctionCandidate,
@@ -17,6 +18,7 @@ from gigaevo.memory.read.auction import (
     ThompsonAuctioneer,
     TopThetaBudgeter,
 )
+from gigaevo.memory.read.probe import ColdProbePolicy
 from gigaevo.memory.read.projection import AuctionCandidateProjector
 from gigaevo.memory.read.reader import MemoryReader, MemorySelection
 from gigaevo.memory.read.render import EfficacyCardRenderer
@@ -28,6 +30,17 @@ class _Parent:
     def __init__(self, pid: str = "prog-1", metrics: dict | None = None) -> None:
         self.id = pid
         self.metrics = metrics or {"fitness": 0.5}
+        self.iteration = 7
+
+
+class _CountingRng:
+    def __init__(self, seed: int) -> None:
+        self._rng = np.random.default_rng(seed)
+        self.calls = 0
+
+    def random(self) -> float:
+        self.calls += 1
+        return float(self._rng.random())
 
 
 class _Shortlister:
@@ -81,6 +94,91 @@ class _RejectAllAuctioneer:
         return [], slate
 
 
+class _ColdRejectAllAuctioneer:
+    def run(self, candidates, rng, *, baseline=None):
+        del rng, baseline
+        slate = [
+            AuctionBid(
+                card_id=c.card_id,
+                posterior_a=c.posterior_a,
+                posterior_b=c.posterior_b,
+                theta=0.2,
+                baseline_a=3.0,
+                baseline_b=3.0,
+                baseline_theta=0.8,
+                selected=False,
+                bid=0.1,
+                support_kind="cold_prior",
+                support_n=0.0,
+            )
+            for c in candidates
+        ]
+        return [], slate
+
+
+class _DRBaselineAuctioneer:
+    def run(self, candidates, rng, *, baseline=None):
+        del rng, baseline
+        warm, bootstrap, cold, irrelevant = candidates
+        return [warm.card_id, bootstrap.card_id], [
+            AuctionBid(
+                card_id=warm.card_id,
+                posterior_a=3.0,
+                posterior_b=1.0,
+                theta=0.9,
+                baseline_a=3.0,
+                baseline_b=3.0,
+                baseline_theta=0.2,
+                selected=True,
+                magnitude=2.0,
+                bid=0.01,
+                pending_discount=0.1,
+            ),
+            AuctionBid(
+                card_id=bootstrap.card_id,
+                posterior_a=4.0,
+                posterior_b=1.0,
+                theta=0.85,
+                baseline_a=3.0,
+                baseline_b=3.0,
+                baseline_theta=0.2,
+                selected=True,
+                magnitude=0.4,
+                bid=0.004,
+                support_kind="ev_rewards",
+                support_n=4.0,
+                pending_discount=0.1,
+            ),
+            AuctionBid(
+                card_id=cold.card_id,
+                posterior_a=1.0,
+                posterior_b=3.0,
+                theta=0.8,
+                baseline_a=3.0,
+                baseline_b=3.0,
+                baseline_theta=0.9,
+                selected=False,
+                magnitude=None,
+                bid=0.8,
+                support_kind="cold_prior",
+                support_n=0.0,
+                no_card_baseline=-0.2,
+            ),
+            AuctionBid(
+                card_id=irrelevant.card_id,
+                posterior_a=9.0,
+                posterior_b=1.0,
+                theta=0.9,
+                baseline_a=3.0,
+                baseline_b=3.0,
+                baseline_theta=0.8,
+                selected=False,
+                magnitude=10.0,
+                bid=9.0,
+            ),
+        ]
+
+
 class _EmptyBudgeter:
     def cap(self, card_ids, slate, max_cards):
         return []
@@ -97,6 +195,7 @@ def _reader(
     auctioneer=None,
     budgeter=None,
     renderer=None,
+    probe_policy=None,
     max_cards: int = 1,
     rng=None,
 ) -> MemoryReader:
@@ -106,6 +205,7 @@ def _reader(
         auctioneer=auctioneer if auctioneer is not None else _WinAllAuctioneer(),
         budgeter=budgeter if budgeter is not None else TopThetaBudgeter(),
         renderer=renderer if renderer is not None else EfficacyCardRenderer(),
+        probe_policy=probe_policy,
         max_cards=max_cards,
         rng=rng if rng is not None else np.random.default_rng(0),
     )
@@ -126,6 +226,10 @@ def _selection_events(events) -> list[MemoryReadSelection]:
     return [e for e in events if isinstance(e, MemoryReadSelection)]
 
 
+def _assignment_events(events) -> list[MemoryAssignment]:
+    return [e for e in events if isinstance(e, MemoryAssignment)]
+
+
 class TestSelect:
     async def test_happy_path_renders_budgeted_winners(
         self, make_card, captured_events
@@ -143,6 +247,11 @@ class TestSelect:
         assert event.auction_winner_ids == (cards[0].id, cards[1].id)
         assert event.selected_ids == (cards[0].id,)
         assert event.research_iterations == 2
+        (assignment_event,) = _assignment_events(captured_events)
+        assert assignment_event.decision_id == event.decision_id
+        assert assignment_event.assignment.decision_id == selection.decision_id
+        assert assignment_event.assignment.assigned_ids == (cards[0].id,)
+        assert assignment_event.assignment.context.search_phase == "iteration:7"
         assert set(event.timing_ms) == {
             "research",
             "reputation",
@@ -151,6 +260,158 @@ class TestSelect:
             "render",
             "total",
         }
+
+    async def test_assignment_records_assigned_card_pending_state(
+        self, make_card, captured_events
+    ):
+        card = make_card(description="pending assignment")
+
+        class _AuditedWin:
+            def run(self, candidates, rng, *, baseline=None):
+                del rng, baseline
+                candidate = candidates[0]
+                return [candidate.card_id], [
+                    AuctionBid(
+                        card_id=candidate.card_id,
+                        posterior_a=candidate.posterior_a,
+                        posterior_b=candidate.posterior_b,
+                        theta=1.0,
+                        baseline_a=3.0,
+                        baseline_b=3.0,
+                        baseline_theta=0.0,
+                        selected=True,
+                        pending_count=candidate.pending_count,
+                        pending_effective_support=2.5,
+                        pending_discount=0.8,
+                    )
+                ]
+
+        selection = await _select(
+            _reader(
+                shortlister=_Shortlister(ResearchResult(cards=(card,))),
+                auctioneer=_AuditedWin(),
+            ),
+            pending_counts={card.id: 3},
+        )
+
+        assert selection.assignment is not None
+        assert selection.assignment.propensity_kind == "observational"
+        assert selection.assignment.pending_by_card == {card.id: 3}
+        assert selection.assignment.pending_discount_by_card == {card.id: 0.8}
+        (assignment_event,) = _assignment_events(captured_events)
+        assert assignment_event.assignment.pending_by_card == {card.id: 3}
+        (selection_event,) = _selection_events(captured_events)
+        assert selection_event.slate[0]["pending_count"] == 3
+        assert selection_event.slate[0]["pending_discount"] == 0.8
+
+    async def test_assignment_records_dr_baselines_from_assigned_and_offered_slate(
+        self, make_card
+    ):
+        warm = make_card(description="warm")
+        bootstrap = make_card(description="bootstrap")
+        cold = make_card(description="cold")
+        irrelevant = make_card(description="irrelevant")
+        selection = await _select(
+            _reader(
+                shortlister=_Shortlister(
+                    ResearchResult(cards=(warm, bootstrap, cold, irrelevant))
+                ),
+                auctioneer=_DRBaselineAuctioneer(),
+                probe_policy=ColdProbePolicy(warm_override_probe_rate=0.0),
+                max_cards=2,
+                rng=np.random.default_rng(0),
+            )
+        )
+
+        assert selection.card_ids == (warm.id, bootstrap.id)
+        assert selection.assignment is not None
+        assert selection.assignment.propensities == {cold.id: 0.0}
+        assert selection.assignment.predicted_help == {
+            warm.id: 0.75,
+            bootstrap.id: 0.8,
+            cold.id: 0.25,
+        }
+        assert selection.assignment.predicted_gain == {
+            warm.id: 1.5,
+            bootstrap.id: 0.4,
+        }
+        assert selection.assignment.predicted_no_card_gain == {cold.id: -0.2}
+        assert irrelevant.id not in selection.assignment.predicted_help
+
+    async def test_assignment_records_withheld_empty_probe_as_control(
+        self, make_card, captured_events
+    ):
+        card = make_card(description="withheld cold probe")
+        rate = 0.5
+        selection = await _select(
+            _reader(
+                shortlister=_Shortlister(ResearchResult(cards=(card,))),
+                auctioneer=_ColdRejectAllAuctioneer(),
+                probe_policy=ColdProbePolicy(empty_selection_probe_rate=rate),
+                rng=np.random.default_rng(0),
+            )
+        )
+
+        assert selection.card_ids == ()
+        assert selection.assignment is not None
+        assert selection.assignment.probe_arm == "control"
+        assert selection.assignment.arm == "none"
+        assert selection.assignment.randomized is True
+        assert selection.assignment.propensity_kind == "probe_bernoulli"
+        assert selection.assignment.propensities == {card.id: rate}
+        (offered,) = selection.slate
+        assert offered.probe_offered is True
+        assert offered.probe_propensity == rate
+        assert offered.probe_selected is False
+        assert card.id not in selection.assignment.assigned_ids
+        (assignment_event,) = _assignment_events(captured_events)
+        assert assignment_event.assignment == selection.assignment
+
+    async def test_assignment_records_fired_empty_probe_as_treated(
+        self, make_card, captured_events
+    ):
+        card = make_card(description="fired cold probe")
+        rate = 0.5
+        selection = await _select(
+            _reader(
+                shortlister=_Shortlister(ResearchResult(cards=(card,))),
+                auctioneer=_ColdRejectAllAuctioneer(),
+                probe_policy=ColdProbePolicy(empty_selection_probe_rate=rate),
+                rng=np.random.default_rng(2),
+            )
+        )
+
+        assert selection.assignment is not None
+        assert selection.assignment.probe_arm == "treated"
+        assert selection.assignment.randomized is True
+        assert selection.assignment.propensity_kind == "probe_bernoulli"
+        assert selection.assignment.propensities == {card.id: rate}
+        assert selection.assignment.assigned_ids == (card.id,)
+        (offered,) = selection.slate
+        assert offered.probe_offered is True
+        assert offered.probe_propensity == rate
+        assert offered.probe_selected is True
+        (assignment_event,) = _assignment_events(captured_events)
+        assert assignment_event.assignment == selection.assignment
+
+    async def test_assignment_records_no_probe_offer_as_observational(self, make_card):
+        card = make_card(description="ineligible for probing")
+        selection = await _select(
+            _reader(
+                shortlister=_Shortlister(ResearchResult(cards=(card,))),
+                auctioneer=_RejectAllAuctioneer(),
+                probe_policy=ColdProbePolicy(empty_selection_probe_rate=1.0),
+            )
+        )
+
+        assert selection.assignment is not None
+        assert selection.assignment.probe_arm == "none"
+        assert selection.assignment.randomized is False
+        assert selection.assignment.propensity_kind == "observational"
+        assert selection.assignment.propensities == {}
+        (ineligible,) = selection.slate
+        assert ineligible.probe_offered is False
+        assert ineligible.probe_propensity is None
 
     async def test_reputation_feeds_auction_candidates(self, make_card, make_event):
         card = make_card(gain_events=(make_event(0.2), make_event(0.4)))
@@ -197,7 +458,9 @@ class TestSelect:
 
         assert [candidate.pending_count for candidate in omitted_seen] == [0]
         assert [candidate.pending_count for candidate in explicit_seen] == [0]
-        assert explicit_none.model_dump_json() == omitted.model_dump_json()
+        assert explicit_none.model_dump_json(
+            exclude={"decision_id", "assignment"}
+        ) == omitted.model_dump_json(exclude={"decision_id", "assignment"})
 
     async def test_card_stats_resolved_once_per_candidate(self, make_card, make_event):
         # One block_from_events pass per candidate per select: the auction's
@@ -328,14 +591,17 @@ class TestSelect:
         shortlister = _Shortlister()
         reader = _reader(shortlister=shortlister, max_cards=0)
         selection = await _select(reader)
-        assert selection == MemorySelection()
+        assert selection.cards == selection.card_ids == selection.slate == ()
+        assert selection.assignment is not None
+        assert selection.assignment.arm == "none"
         assert shortlister.calls == []
         (event,) = _selection_events(captured_events)
         assert event.empty_reason == "max_cards_nonpositive"
 
     async def test_empty_research(self, captured_events):
         selection = await _select(_reader())
-        assert selection == MemorySelection()
+        assert selection.cards == selection.card_ids == selection.slate == ()
+        assert selection.assignment is not None
         (event,) = _selection_events(captured_events)
         assert event.empty_reason == "research_empty"
 
@@ -356,7 +622,7 @@ class TestSelect:
             budgeter=_EmptyBudgeter(),
         )
         selection = await _select(reader)
-        assert selection == MemorySelection(slate=selection.slate)
+        assert selection.cards == selection.card_ids == ()
         (event,) = _selection_events(captured_events)
         assert event.empty_reason == "budget_empty"
 
@@ -376,7 +642,8 @@ class TestSelect:
     async def test_component_failure_degrades_to_empty(self, captured_events):
         reader = _reader(shortlister=_ExplodingShortlister())
         selection = await _select(reader)
-        assert selection == MemorySelection()
+        assert selection.cards == selection.card_ids == selection.slate == ()
+        assert selection.assignment is not None
         (event,) = _selection_events(captured_events)
         assert event.empty_reason == "exception"
         assert "shortlist blew up" in event.error
@@ -388,8 +655,72 @@ class TestSelect:
         (event,) = _selection_events(captured_events)
         assert event.empty_reason == ""
 
+    async def test_assignment_freezes_decision_time_bd_cell(self, make_card):
+        class _BDContext:
+            task_key = "hover"
+
+            def read_context(self, parents):
+                return DecisionContext(
+                    task_key=self.task_key,
+                    parent_metrics=dict(parents[0].metrics),
+                    parent_id=parents[0].id,
+                )
+
+            def key_for(self, context=None):
+                return ContextKey(kind="bd_cell", parts=("3", "5"))
+
+        card = make_card(description="cell card")
+        reader = MemoryReader(
+            shortlister=_Shortlister(ResearchResult(cards=(card,))),
+            reputation=BetaBinomialReputation(),
+            auctioneer=_WinAllAuctioneer(),
+            budgeter=TopThetaBudgeter(),
+            renderer=EfficacyCardRenderer(),
+            context_model=_BDContext(),
+            max_cards=1,
+            rng=np.random.default_rng(0),
+        )
+
+        selection = await _select(reader)
+
+        assert selection.assignment is not None
+        assert selection.assignment.bd_cell == (3, 5)
+
 
 class TestSeedExactReproducibility:
+    async def test_dr_recording_preserves_selection_and_rng_position_for_64_seeds(
+        self, make_card
+    ):
+        card = make_card(description="probe selection")
+        rate = 0.37
+        observed_outcomes: set[bool] = set()
+
+        for seed in range(64):
+            expected_fired = float(np.random.default_rng(seed).random()) < rate
+            observed_outcomes.add(expected_fired)
+            rng = _CountingRng(seed)
+            selection = await _select(
+                _reader(
+                    shortlister=_Shortlister(ResearchResult(cards=(card,))),
+                    auctioneer=_ColdRejectAllAuctioneer(),
+                    probe_policy=ColdProbePolicy(empty_selection_probe_rate=rate),
+                    rng=rng,
+                )
+            )
+            expected = MemorySelection(
+                cards=((card.description,) if expected_fired else ()),
+                card_ids=((card.id,) if expected_fired else ()),
+            )
+
+            assert rng.calls == 1
+            assert selection.model_dump_json(include={"cards", "card_ids"}) == (
+                expected.model_dump_json(include={"cards", "card_ids"})
+            )
+            assert selection.assignment is not None
+            assert selection.assignment.predicted_help == {card.id: 0.5}
+
+        assert observed_outcomes == {False, True}
+
     async def test_same_seed_same_selection(self, make_card, make_event):
         def _cards() -> tuple[Card, ...]:
             counter = iter(range(100))
@@ -418,5 +749,7 @@ class TestSeedExactReproducibility:
         first = await _select(_build(11))
         second = await _select(_build(11))
         third = await _select(_build(12))
-        assert first == second
+        assert first.model_dump(exclude={"decision_id", "assignment"}) == (
+            second.model_dump(exclude={"decision_id", "assignment"})
+        )
         assert [b.theta for b in first.slate] != [b.theta for b in third.slate]

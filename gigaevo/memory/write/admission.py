@@ -491,6 +491,17 @@ class CardAdmissionGate:
                 if self._is_leased(card.id):
                     leased = True
                     return card
+                # Persist evicted evidence BEFORE the card leaves the live bank so
+                # the empirical-Bayes cold prior never sees a survivorship-biased
+                # cohort during the delete window (evict only, not rescued/leased).
+                if self._evicted_evidence_sink is not None:
+                    try:
+                        self._evicted_evidence_sink.record(card)
+                    except Exception as exc:
+                        logger.warning(
+                            "[Memory][Admission] failed to record evicted evidence: {}",
+                            exc,
+                        )
                 return None
 
             with self._eviction_guard():
@@ -509,14 +520,6 @@ class CardAdmissionGate:
             evicted.append(cid)
             self._tombstoned.add(cid)
             if fresh_card is not None:
-                if self._evicted_evidence_sink is not None:
-                    try:
-                        self._evicted_evidence_sink.record(fresh_card)
-                    except Exception as exc:
-                        logger.warning(
-                            "[Memory][Admission] failed to record evicted evidence: {}",
-                            exc,
-                        )
                 self._ledger_record(fresh_card, "", WriteOutcome.EVICTED, reason)
         return evicted
 

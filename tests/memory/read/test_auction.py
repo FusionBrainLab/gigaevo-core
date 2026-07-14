@@ -970,7 +970,9 @@ class TestPendingDiscountedBootstrapAuctioneer:
             ]
             assert pending_rng.random() == base_rng.random()
 
-    def test_positive_power_taxes_only_pending_bid_without_rng_draw(self):
+    def test_positive_power_taxes_only_pending_bid_without_rng_draw(
+        self, captured_events
+    ):
         candidates = self._pair()
         base_rng = np.random.default_rng(7)
         pending_rng = np.random.default_rng(7)
@@ -982,11 +984,47 @@ class TestPendingDiscountedBootstrapAuctioneer:
         ).run(candidates, pending_rng)
 
         assert pending_slate[0].bid < base_slate[0].bid
+        bounded_load = candidates[0].pending_count / (
+            candidates[0].pending_count + pending_slate[0].support_n
+        )
         assert pending_slate[0].bid == pytest.approx(
-            base_slate[0].bid * (1.0 + candidates[0].pending_count) ** -0.5
+            base_slate[0].bid * (1.0 + bounded_load) ** -0.5
+        )
+        assert pending_slate[0].pending_count == candidates[0].pending_count
+        assert pending_slate[0].pending_effective_support == pytest.approx(8.0)
+        assert pending_slate[0].pending_discount == pytest.approx(
+            (1.0 + bounded_load) ** -0.5
         )
         assert pending_slate[1].bid == base_slate[1].bid
+        assert pending_slate[1].pending_discount == 1.0
         assert pending_rng.random() == base_rng.random()
+        event = [e for e in captured_events if isinstance(e, MemoryAuctionRun)][-1]
+        assert event.bids[0]["pending_count"] == candidates[0].pending_count
+        assert event.bids[0]["pending_effective_support"] == pytest.approx(8.0)
+        assert event.bids[0]["pending_discount"] == pytest.approx(
+            (1.0 + bounded_load) ** -0.5
+        )
+
+    def test_zero_effective_support_uses_finite_bounded_cold_limit(self):
+        candidate = AuctionCandidate(
+            card_id="cold-pending",
+            posterior_a=50.0,
+            posterior_b=1.0,
+            pending_count=4,
+        )
+        _, base_slate = BootstrapThompsonAuctioneer(ev_floor_quantile=0.0).run(
+            [candidate], np.random.default_rng(12)
+        )
+        _, pending_slate = PendingDiscountedBootstrapAuctioneer(
+            ev_floor_quantile=0.0, pending_power=0.75
+        ).run([candidate], np.random.default_rng(12))
+
+        assert pending_slate[0].pending_effective_support == 0.0
+        assert pending_slate[0].pending_discount == pytest.approx(2.0**-0.75)
+        assert np.isfinite(pending_slate[0].pending_discount)
+        assert pending_slate[0].bid == pytest.approx(
+            base_slate[0].bid * pending_slate[0].pending_discount
+        )
 
     def test_negative_pending_power_rejected(self):
         with pytest.raises(ValidationError):
