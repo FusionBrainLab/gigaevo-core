@@ -18,6 +18,22 @@ from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import OPTIMIZATION_STAGES, Program
 
+MechanismSource = Literal[
+    "own_synthesis",
+    "program",
+    "metrics",
+    "intra_memory",
+    "memory_cards",
+    "ancestral_trail",
+    "evolutionary_statistics",
+]
+
+# mechanism_source when the mechanism cites no input at all. A named member rather
+# than "": Gemini rejects an empty enum value, 400ing the whole declaration. Renders
+# as an unattributed mechanism, which is what the empty sentinel used to mean.
+# Typed as MechanismSource so the sentinel cannot drift out of its own enum.
+UNSOURCED_MECHANISM: MechanismSource = "own_synthesis"
+
 
 class ProgramInsight(BaseModel):
     """Single structured insight about a program.
@@ -61,22 +77,14 @@ class ProgramInsight(BaseModel):
             "Must be concrete — vague claims like 'improves performance' are rejected."
         ),
     )
-    mechanism_source: Literal[
-        "",
-        "program",
-        "metrics",
-        "intra_memory",
-        "memory_cards",
-        "ancestral_trail",
-        "evolutionary_statistics",
-    ] = Field(
-        default="",
+    mechanism_source: MechanismSource = Field(
+        default=UNSOURCED_MECHANISM,
         description=(
             "Which input the LEVER IDEA (mechanism) came from — distinct from "
             "evidence_source, which records where the anchor_quote came from. "
             "A suggestion that transposes a card mechanism onto a code anchor "
             "therefore has evidence_source=program but mechanism_source=memory_cards. "
-            "Empty when the mechanism is the analyst's own synthesis."
+            "own_synthesis when the mechanism is the analyst's own, from no input."
         ),
     )
     card_id: str = Field(

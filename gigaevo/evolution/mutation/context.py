@@ -7,7 +7,11 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
-from gigaevo.llm.agents.insights import ProgramInsight, ProgramInsights
+from gigaevo.llm.agents.insights import (
+    UNSOURCED_MECHANISM,
+    ProgramInsight,
+    ProgramInsights,
+)
 from gigaevo.llm.agents.lineage import TransitionAnalysis
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -126,6 +130,8 @@ class InsightsMutationContext(MutationContext):
             )
         if mechanism:
             mech_source = (insight.mechanism_source or "").strip()
+            if mech_source == UNSOURCED_MECHANISM:
+                mech_source = ""  # unattributed: render bare, as the empty sentinel did
             parts.append(
                 f"mechanism({mech_source}): {mechanism}"
                 if mech_source

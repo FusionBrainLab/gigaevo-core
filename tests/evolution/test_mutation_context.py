@@ -127,6 +127,27 @@ class TestInsightsMutationContext:
             result
         )
 
+    def test_format_renders_unsourced_mechanism_bare(self) -> None:
+        """An unattributed mechanism renders with no source parenthetical.
+
+        `mechanism_source` defaults to the named member `own_synthesis` because
+        Gemini rejects an empty enum value. That member is a *sentinel*, not a
+        source, so it must not leak into the mutator's prompt as one.
+        """
+        insights = ProgramInsights(
+            insights=[
+                ProgramInsight(
+                    type="threshold_tuning",
+                    mechanism="tight threshold prunes boundary moves",
+                    tag="rigid",
+                    severity="medium",
+                )
+            ]
+        )
+        result = InsightsMutationContext(insights=insights).format()
+        assert "mechanism: tight threshold prunes boundary moves" in result
+        assert "own_synthesis" not in result
+
     def test_format_empty_insights(self) -> None:
         insights = ProgramInsights(insights=[])
         ctx = InsightsMutationContext(insights=insights)
