@@ -50,6 +50,11 @@ eviction_safety:
   min_effective_events: ${memory.evidence.min_effective_events}
   skip_contextual_without_context: true
 
+evicted_evidence:
+  _target_: gigaevo.memory.prior_evidence.JsonlEvictedEvidence
+  path: ${checkpoint_dir}/evicted_evidence.jsonl
+  max_cards: 10000
+
 # One store per run, owning bank + vector index + research agent under the
 # run's checkpoint dir. The reader and the writer share this single instance by
 # reference (below) — a write is visible to the next read with no cross-view
@@ -156,3 +161,4 @@ writer:
   prompts_dir: ${prompts.dir}
   selection_leases: ${ref:selection_leases}
   min_effective_events: ${memory.evidence.min_effective_events}
+  evicted_evidence: ${ref:memory.evicted_evidence}

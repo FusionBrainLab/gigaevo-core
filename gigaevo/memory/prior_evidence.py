@@ -51,19 +51,52 @@ class _JsonlFileLock(AbstractContextManager["_JsonlFileLock"]):
 
 
 class JsonlEvictedEvidence:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, max_cards: int = 10_000) -> None:
+        if max_cards <= 0:
+            raise ValueError("max_cards must be positive")
         self._path = Path(path)
+        self._max_cards = max_cards
+
+    @staticmethod
+    def _row(card: Card) -> dict:
+        return {
+            "schema_version": "prior_evidence.v1",
+            "card": card.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _parse_card(line: str) -> Card | None:
+        try:
+            row = json.loads(line)
+            if row.get("schema_version") != "prior_evidence.v1":
+                raise ValueError("unsupported prior-evidence schema")
+            return Card.model_validate(row["card"])
+        except Exception as exc:
+            logger.warning("[Memory][PriorEvidence] skipped malformed row: {}", exc)
+            return None
 
     def record(self, card: Card) -> None:
         try:
-            row = {
-                "schema_version": "prior_evidence.v1",
-                "card": card.model_dump(mode="json"),
-            }
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with _JsonlFileLock(self._path.with_suffix(self._path.suffix + ".lock")):
-                with self._path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(row) + "\n")
+                cards_by_id: dict[str, Card] = {}
+                try:
+                    lines = self._path.read_text(encoding="utf-8").splitlines()
+                except FileNotFoundError:
+                    lines = []
+                for line in lines:
+                    existing = self._parse_card(line)
+                    if existing is not None:
+                        cards_by_id.pop(existing.id, None)
+                        cards_by_id[existing.id] = existing
+                cards_by_id.pop(card.id, None)
+                cards_by_id[card.id] = card
+                bounded = list(cards_by_id.values())[-self._max_cards :]
+                temporary = self._path.with_suffix(self._path.suffix + ".tmp")
+                with temporary.open("w", encoding="utf-8") as f:
+                    for retained in bounded:
+                        f.write(json.dumps(self._row(retained)) + "\n")
+                temporary.replace(self._path)
         except Exception as exc:
             logger.warning("[Memory][PriorEvidence] failed to record: {}", exc)
 
@@ -73,13 +106,12 @@ class JsonlEvictedEvidence:
             with self._path.open(encoding="utf-8") as f:
                 for line in f:
                     try:
-                        row = json.loads(line)
-                        card = Card.model_validate(row["card"])
-                    except Exception as exc:
-                        logger.warning(
-                            "[Memory][PriorEvidence] skipped malformed row: {}", exc
-                        )
+                        card = self._parse_card(line)
+                    except Exception:
                         continue
+                    if card is None:
+                        continue
+                    cards_by_id.pop(card.id, None)
                     cards_by_id[card.id] = card
             return tuple(cards_by_id.values())
         except FileNotFoundError:

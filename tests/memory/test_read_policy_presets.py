@@ -296,3 +296,15 @@ def test_novelty_auction_override_composes_on_full():
         memory.reader.candidate_projector._target_
         == "gigaevo.memory.read.projection.AuctionCandidateProjector"
     )
+
+
+def test_pending_auction_override_composes_disabled_on_full():
+    cfg = _compose("memory=full", "+memory/auction=thompson_bootstrap_pending")
+    memory = cfg.memory
+
+    assert (
+        memory.auction._target_
+        == "gigaevo.memory.read.auction.PendingDiscountedBootstrapAuctioneer"
+    )
+    assert memory.auction.pending_power == 0.0
+    assert memory.auction.ev_reserve_mode == "risk"

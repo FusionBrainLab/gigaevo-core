@@ -40,6 +40,11 @@ eviction_safety:
   min_effective_events: ${memory.evidence.min_effective_events}
   skip_contextual_without_context: true
 
+evicted_evidence:
+  _target_: gigaevo.memory.prior_evidence.JsonlEvictedEvidence
+  path: ${checkpoint_dir}/evicted_evidence.jsonl
+  max_cards: 10000
+
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
 
@@ -84,4 +89,5 @@ writer:
     min_fitness_gap: 0.0
     store_code: false
   min_effective_events: ${memory.evidence.min_effective_events}
+  evicted_evidence: ${ref:memory.evicted_evidence}
   prompts_dir: ${prompts.dir}
