@@ -9,7 +9,9 @@ from typing import Any, cast
 from loguru import logger
 
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+    MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
@@ -18,7 +20,9 @@ from gigaevo.evolution.mutation.context import (
     EvolutionaryStatisticsMutationContext,
     MemoryMutationContext,
 )
+from gigaevo.memory.events import MemoryDelivery, emit_memory_event
 from gigaevo.memory.provider import MemoryProvider
+from gigaevo.memory.read.reader import extend_policy_version
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
 from gigaevo.programs.stages.base import Stage
@@ -149,6 +153,8 @@ class MemoryContextStage(Stage):
         program.set_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, [])
         program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, [])
         program.set_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY, False)
+        program.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "")
+        program.set_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY, None)
 
         # Arm B (reorder off): pass None so the selector falls back to the stale
         # parent.metadata[MUTATION_CONTEXT] block — the pre-reorder behaviour.
@@ -163,6 +169,9 @@ class MemoryContextStage(Stage):
         )
 
         program.set_metadata(
+            MUTATION_MEMORY_DECISION_ID_METADATA_KEY, selection.decision_id
+        )
+        program.set_metadata(
             MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
             [bid.model_dump() for bid in selection.slate],
         )
@@ -170,6 +179,44 @@ class MemoryContextStage(Stage):
         withheld_for_control = bool(selection.card_ids) and (
             self._no_card_control_rng.random() < self._no_card_control_probability
         )
+        delivered_ids = () if withheld_for_control else selection.card_ids
+        assignment = selection.assignment
+        if assignment is not None:
+            assignment = assignment.model_copy(
+                update={
+                    "delivered_ids": tuple(sorted(delivered_ids)),
+                    "policy_version": extend_policy_version(
+                        assignment.policy_version,
+                        downstream_delivery={
+                            "fresh_context_reorder": self._fresh_context_reorder,
+                            "no_card_control_probability": self._no_card_control_probability,
+                            "reverse_repack": self._reverse_repack,
+                        },
+                    ),
+                }
+            )
+            program.set_metadata(
+                MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+                assignment.model_dump(mode="json"),
+            )
+            try:
+                emit_memory_event(
+                    MemoryDelivery(
+                        decision_id=assignment.decision_id,
+                        program_id=program.id,
+                        assignment=assignment,
+                        assigned_ids=assignment.assigned_ids,
+                        delivered_ids=assignment.delivered_ids,
+                        withheld_for_control=withheld_for_control,
+                        no_card_control_probability=self._no_card_control_probability,
+                    )
+                )
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "[Memory][ContextStage] delivery telemetry emit failed; continuing"
+                )
+        else:
+            program.set_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY, None)
         if withheld_for_control:
             program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, [])
             program.set_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY, True)

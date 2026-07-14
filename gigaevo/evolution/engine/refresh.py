@@ -27,6 +27,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Iterable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 import time
 import weakref
@@ -218,7 +219,12 @@ class ParentRefresher:
         finally:
             ticket.release()
 
-    async def refresh_with_ticket(self, parents: list[Program]) -> ParentRefreshTicket:
+    async def refresh_with_ticket(
+        self,
+        parents: list[Program],
+        *,
+        refresh_scope: AbstractContextManager[None] | None = None,
+    ) -> ParentRefreshTicket:
         """Same as :meth:`refresh` but returns a :class:`ParentRefreshTicket`
         whose lifetime the caller owns.
 
@@ -252,7 +258,8 @@ class ParentRefresher:
             for lk in locks:
                 await lk.acquire()
                 acquired.append(lk)
-            refreshed = await self._do_refresh(ordered)
+            with refresh_scope if refresh_scope is not None else nullcontext():
+                refreshed = await self._do_refresh(ordered)
             return ParentRefreshTicket(refreshed=refreshed, _locks=acquired)
         except BaseException:
             # Release every lock we managed to grab — otherwise the parent
@@ -262,7 +269,12 @@ class ParentRefresher:
                 lk.release()
             raise
 
-    async def refresh_if_stale(self, parents: list[Program]) -> CoalescedRefreshResult:
+    async def refresh_if_stale(
+        self,
+        parents: list[Program],
+        *,
+        refresh_scope: AbstractContextManager[None] | None = None,
+    ) -> CoalescedRefreshResult:
         """Refresh only parents not currently in ``_fresh`` (coalesced mode).
 
         Locks are held only across the freshness check + flip, then released
@@ -310,7 +322,8 @@ class ParentRefresher:
             refreshed_by_id: dict[str, Program] = {}
 
             if stale_programs:
-                refreshed_stale = await self._do_refresh(stale_programs)
+                with refresh_scope if refresh_scope is not None else nullcontext():
+                    refreshed_stale = await self._do_refresh(stale_programs)
                 for p in refreshed_stale:
                     refreshed_by_id[p.id] = p
                 self._fresh.update(p.id for p in refreshed_stale)

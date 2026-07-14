@@ -17,6 +17,7 @@ light for leaf tools. Import the heavy nodes from their submodules directly:
 from __future__ import annotations
 
 from gigaevo.memory.cards import (
+    AssignmentRecord,
     Card,
     CardKind,
     CausalStrength,
@@ -28,6 +29,7 @@ from gigaevo.memory.cards import (
 )
 
 __all__ = [
+    "AssignmentRecord",
     "Card",
     "CardKind",
     "CausalStrength",

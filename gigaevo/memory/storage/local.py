@@ -47,6 +47,10 @@ class LocalMemoryStore(MemoryStore):
         prompts_dir: str | Path | None = None,
     ) -> None:
         self._config = config
+        self._policy_identifiers = {
+            "embedding_model": config.embed.embedding_model,
+            "retrieval_models": tuple(getattr(llm, "model_names", ()) or ()),
+        }
         self._state = StoreState.INITIALIZING
         self._lock = threading.RLock()
         self._bank_lock_state = threading.local()

@@ -172,10 +172,12 @@ def _read_context_from_parents(
     if not parents:
         return None
     parent = parents[0]
+    iteration = getattr(parent, "iteration", None)
     return DecisionContext(
         task_key=task_key,
         parent_metrics=dict(parent.metrics or {}),
         parent_id=str(parent.id or ""),
+        search_phase=(f"iteration:{iteration}" if isinstance(iteration, int) else ""),
     )
 
 

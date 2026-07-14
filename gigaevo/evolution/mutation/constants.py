@@ -9,6 +9,24 @@ from typing import Literal
 MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
 MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY = "memory_no_card_control"
+MUTATION_MEMORY_DECISION_ID_METADATA_KEY = "memory_assignment_decision_id"
+MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY = "memory_assignment"
+
+#: Durable at-most-once claim for the production MEMORY_OUTCOME row. The first
+#: terminal evaluation owns Y; later evaluations are classified as duplicate or
+#: MEMORY_OUTCOME_UPDATE without creating a second terminal for the decision.
+MUTATION_MEMORY_OUTCOME_METADATA_KEY = "memory_outcome_terminal"
+
+#: Child-birth snapshot of every parent's durable read assignment, keyed by
+#: parent id. This is authoritative for crossover attribution.
+MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY = "memory_parent_assignments"
+
+#: Child-birth map from each delivered card id to its source parent decision and
+#: context. Original ids remain keys so later absorbed-id aliasing stays resolvable.
+MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY = "memory_card_provenance"
+
+#: Mutation-level audit assignment for the full delivered slate across parents.
+MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY = "memory_mutation_assignment"
 
 #: Frozen onto a child at birth: sorted union of the parents' prompt-time
 #: selected card ids. Posterior attribution reads this stamp — the parents'

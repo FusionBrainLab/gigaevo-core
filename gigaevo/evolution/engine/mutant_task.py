@@ -35,6 +35,7 @@ See ``docs/superpowers/specs/2026-05-13-mutation-throughput-two-sema-design.md``
 from __future__ import annotations
 
 import asyncio
+import inspect
 from uuid import uuid4
 
 from loguru import logger
@@ -52,6 +53,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
     buffer_held = False
     ticket: ParentRefreshTicket | None = None
     selection_lease = None
+    attempt_id: str | None = None
     new_id: str | None = None
     try:
         parents = await engine._select_parents_for_mutation()
@@ -71,7 +73,20 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
 
         if engine._ss_config.coalesce_refresh:
             try:
-                result = await engine._parent_refresher.refresh_if_stale(parents)
+                refresh_scope = (
+                    engine._selection_leases.activate_attempt(
+                        attempt_id, (parent.id for parent in parents)
+                    )
+                    if engine._selection_leases is not None and attempt_id is not None
+                    else None
+                )
+                refresh_method = engine._parent_refresher.refresh_if_stale
+                refresh_kwargs = (
+                    {"refresh_scope": refresh_scope}
+                    if "refresh_scope" in inspect.signature(refresh_method).parameters
+                    else {}
+                )
+                result = await refresh_method(parents, **refresh_kwargs)
             except (ValueError, TimeoutError) as exc:
                 logger.warning(
                     "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",
@@ -100,7 +115,20 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                         )
         else:
             try:
-                ticket = await engine._parent_refresher.refresh_with_ticket(parents)
+                refresh_scope = (
+                    engine._selection_leases.activate_attempt(
+                        attempt_id, (parent.id for parent in parents)
+                    )
+                    if engine._selection_leases is not None and attempt_id is not None
+                    else None
+                )
+                refresh_method = engine._parent_refresher.refresh_with_ticket
+                refresh_kwargs = (
+                    {"refresh_scope": refresh_scope}
+                    if "refresh_scope" in inspect.signature(refresh_method).parameters
+                    else {}
+                )
+                ticket = await refresh_method(parents, **refresh_kwargs)
             except (ValueError, TimeoutError) as exc:
                 logger.warning(
                     "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",

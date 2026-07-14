@@ -15,6 +15,13 @@ from loguru import logger
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
+from gigaevo.memory.cards import AssignmentRecord, DecisionContext
+import gigaevo.memory.events as memory_events
+from gigaevo.memory.events import (
+    MemoryAssignment,
+    MemoryReadSelection,
+    MemoryResearchStep,
+)
 from gigaevo.memory.provider import LeasedMemoryProvider, MemoryProvider
 from gigaevo.memory.read.projection import AuctionCandidateProjector
 from gigaevo.memory.read.reader import MemorySelection
@@ -50,6 +57,54 @@ class FixedProvider(MemoryProvider):
         )
         del program, task_description, metrics_description, parent_context
         return self._selection
+
+
+class PendingAwareSingleSlotProvider(MemoryProvider):
+    def __init__(self, card_id: str) -> None:
+        self._card_id = card_id
+        self._initial_arrivals = 0
+        self._initial_ready = asyncio.Event()
+        self.pending_counts_seen: list[dict[str, int]] = []
+
+    @property
+    def consumes_pending_counts(self) -> bool:
+        return True
+
+    async def select_cards(
+        self,
+        program,
+        *,
+        task_description,
+        metrics_description,
+        parent_context=None,
+        pending_counts=None,
+    ) -> MemorySelection:
+        del program, task_description, metrics_description, parent_context
+        snapshot = dict(pending_counts or {})
+        self.pending_counts_seen.append(snapshot)
+        if self._initial_arrivals < 2:
+            self._initial_arrivals += 1
+            if self._initial_arrivals == 2:
+                self._initial_ready.set()
+            await self._initial_ready.wait()
+        if snapshot.get(self._card_id, 0):
+            return MemorySelection()
+        return MemorySelection(cards=("single slot",), card_ids=(self._card_id,))
+
+
+class EventfulPendingAwareSingleSlotProvider(PendingAwareSingleSlotProvider):
+    async def select_cards(
+        self, *args, pending_counts=None, **kwargs
+    ) -> MemorySelection:
+        memory_events.emit_memory_event(
+            MemoryResearchStep(
+                step=(pending_counts or {}).get(self._card_id, 0),
+                decision="continue",
+            )
+        )
+        return await super().select_cards(
+            *args, pending_counts=pending_counts, **kwargs
+        )
 
 
 class EvictAll:
@@ -148,6 +203,130 @@ async def test_provider_drops_vanished_selection_before_acquiring_lease(
     assert registry.leased_ids() == frozenset({card.id})
 
 
+async def test_non_pending_provider_does_not_rerun_after_pending_version_change(
+    store, make_card
+):
+    card = make_card(id="card-selected-once")
+    store.save(card)
+    parent = Program(code="x = 1")
+    registry = InFlightSelectionRegistry()
+    registry.open_attempt("attempt-current", parent.id)
+    contender = registry.open_attempt("attempt-contender", "parent-contender")
+
+    class CountingProvider(FixedProvider):
+        calls = 0
+
+        async def select_cards(self, *args, **kwargs) -> MemorySelection:
+            self.calls += 1
+            contender.attach_cards(("card-pending-bump",))
+            return await super().select_cards(*args, **kwargs)
+
+    inner = CountingProvider(
+        MemorySelection(cards=("selected once",), card_ids=(card.id,))
+    )
+    provider = LeasedMemoryProvider(provider=inner, store=store, registry=registry)
+
+    selection = await provider.select_cards(
+        parent,
+        task_description="task",
+        metrics_description="metrics",
+    )
+
+    assert selection.card_ids == (card.id,)
+    assert inner.calls == 1
+    assert inner.pending_counts_seen == [{}]
+
+
+@pytest.mark.parametrize(
+    ("probe_arm", "offered_id"),
+    [("treated", "card-vanished"), ("control", "card-offered")],
+)
+async def test_vanished_selection_rewrites_committed_terminal_rows(
+    store, monkeypatch, probe_arm, offered_id
+):
+    parent = Program(code="x = 1")
+    registry = InFlightSelectionRegistry()
+    registry.open_attempt("attempt-vanished", parent.id)
+    prediction_ids = {"card-vanished", offered_id}
+    predicted_help = {card_id: 0.6 for card_id in prediction_ids}
+    predicted_gain = {card_id: 0.2 for card_id in prediction_ids}
+    predicted_no_card_gain = {card_id: 0.05 for card_id in prediction_ids}
+    assignment = AssignmentRecord(
+        decision_id="decision-vanished",
+        policy_version="test-policy",
+        task_key="test-task",
+        assigned_ids=("card-vanished",),
+        arm="injected",
+        probe_arm=probe_arm,
+        randomized=True,
+        propensity_kind="probe_bernoulli",
+        propensities={offered_id: 0.5},
+        predicted_help=predicted_help,
+        predicted_gain=predicted_gain,
+        predicted_no_card_gain=predicted_no_card_gain,
+        pending_by_card={"card-vanished": 1},
+        context=DecisionContext(parent_id=parent.id),
+    )
+
+    class TerminalProvider(FixedProvider):
+        async def select_cards(self, *args, **kwargs) -> MemorySelection:
+            memory_events.emit_memory_event(
+                MemoryReadSelection(
+                    decision_id=assignment.decision_id,
+                    selected_ids=assignment.assigned_ids,
+                )
+            )
+            memory_events.emit_memory_event(
+                MemoryAssignment(
+                    decision_id=assignment.decision_id,
+                    assignment=assignment,
+                )
+            )
+            return await super().select_cards(*args, **kwargs)
+
+    provider = LeasedMemoryProvider(
+        provider=TerminalProvider(
+            MemorySelection(
+                cards=("vanished",),
+                card_ids=("card-vanished",),
+                decision_id=assignment.decision_id,
+                assignment=assignment,
+            )
+        ),
+        store=store,
+        registry=registry,
+    )
+    emitted = []
+    monkeypatch.setattr(memory_events, "emit", emitted.append)
+
+    selection = await provider.select_cards(
+        parent,
+        task_description="task",
+        metrics_description="metrics",
+    )
+
+    decisions = [event for event in emitted if isinstance(event, MemoryReadSelection)]
+    assignments = [event for event in emitted if isinstance(event, MemoryAssignment)]
+    assert selection.card_ids == ()
+    assert selection.assignment is not None
+    assert selection.assignment.assigned_ids == selection.card_ids
+    assert selection.assignment.probe_arm == probe_arm
+    assert selection.assignment.propensities == {offered_id: 0.5}
+    assert selection.assignment.predicted_help == predicted_help
+    assert selection.assignment.predicted_gain == predicted_gain
+    assert selection.assignment.predicted_no_card_gain == predicted_no_card_gain
+    assert len(decisions) == 1
+    assert decisions[0].selected_ids == selection.card_ids
+    assert decisions[0].empty_reason == "lease_vanished"
+    assert len(assignments) == 1
+    assert assignments[0].assignment.assigned_ids == selection.card_ids
+    assert assignments[0].assignment.probe_arm == probe_arm
+    assert assignments[0].assignment.propensities == {offered_id: 0.5}
+    assert assignments[0].assignment.predicted_help == predicted_help
+    assert assignments[0].assignment.predicted_gain == predicted_gain
+    assert assignments[0].assignment.predicted_no_card_gain == (predicted_no_card_gain)
+
+
 async def test_provider_snapshots_prior_pending_count_before_current_attach(
     store, make_card
 ):
@@ -205,6 +384,141 @@ async def test_provider_snapshots_prior_pending_count_before_current_attach(
     assert inner.pending_counts_seen == [{card.id: 1}]
     assert [candidate.pending_count for candidate in inner.projected] == [1]
     assert registry.pending_counts() == {card.id: 2}
+
+
+async def test_provider_reserves_only_the_active_attempt_not_parent_fanout(
+    store, make_card
+):
+    card = make_card(id="card-active-attempt")
+    store.save(card)
+    parent = Program(code="x = 1")
+    registry = InFlightSelectionRegistry()
+    first = registry.open_attempt("attempt-first", parent.id)
+    registry.open_attempt("attempt-waiting", parent.id)
+    provider = LeasedMemoryProvider(
+        provider=FixedProvider(MemorySelection(cards=("active",), card_ids=(card.id,))),
+        store=store,
+        registry=registry,
+    )
+
+    with registry.activate_attempt(first.attempt_id, (parent.id,)):
+        selection = await provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+        )
+
+    assert selection.card_ids == (card.id,)
+    assert registry._attempt_cards["attempt-first"] == {card.id}
+    assert registry._attempt_cards["attempt-waiting"] == set()
+
+
+async def test_local_provider_cas_retries_identical_decisions_sequentially(
+    store, make_card
+):
+    card = make_card(id="card-single-slot")
+    store.save(card)
+    parent = Program(code="x = 1")
+    registry = InFlightSelectionRegistry()
+    first = registry.open_attempt("attempt-first", parent.id)
+    second = registry.open_attempt("attempt-second", parent.id)
+    inner = PendingAwareSingleSlotProvider(card.id)
+    provider = LeasedMemoryProvider(provider=inner, store=store, registry=registry)
+
+    selections = await asyncio.gather(
+        provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+            selection_attempt_id=first.attempt_id,
+        ),
+        provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+            selection_attempt_id=second.attempt_id,
+        ),
+    )
+
+    assert sorted(len(selection.card_ids) for selection in selections) == [0, 1]
+    assert inner.pending_counts_seen[:2] == [{}, {}]
+    assert inner.pending_counts_seen[2:] == [{card.id: 1}]
+    assert registry.pending_counts() == {card.id: 1}
+    first.release()
+    second.release()
+    assert registry.pending_counts() == {}
+
+
+async def test_provider_emits_only_cas_committed_decision_attempts(
+    store, make_card, monkeypatch
+):
+    card = make_card(id="card-event-buffer")
+    store.save(card)
+    parent = Program(code="x = 1")
+    registry = InFlightSelectionRegistry()
+    first = registry.open_attempt("attempt-first", parent.id)
+    second = registry.open_attempt("attempt-second", parent.id)
+    inner = EventfulPendingAwareSingleSlotProvider(card.id)
+    provider = LeasedMemoryProvider(provider=inner, store=store, registry=registry)
+    emitted = []
+    monkeypatch.setattr(memory_events, "emit", emitted.append)
+
+    await asyncio.gather(
+        provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+            selection_attempt_id=first.attempt_id,
+        ),
+        provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+            selection_attempt_id=second.attempt_id,
+        ),
+    )
+
+    assert sorted(event.step for event in emitted) == [0, 1]
+
+
+async def test_shared_provider_cas_retries_identical_decisions_sequentially(
+    tmp_path, store, make_card
+):
+    card = make_card(id="card-shared-single-slot")
+    store.save(card)
+    parent = Program(code="x = 1")
+    path = tmp_path / "selection_leases.json"
+    registry_a = SharedSelectionRegistry(path)
+    registry_b = SharedSelectionRegistry(path)
+    first = registry_a.open_attempt("attempt-first", parent.id)
+    second = registry_b.open_attempt("attempt-second", parent.id)
+    inner = PendingAwareSingleSlotProvider(card.id)
+    provider_a = LeasedMemoryProvider(provider=inner, store=store, registry=registry_a)
+    provider_b = LeasedMemoryProvider(provider=inner, store=store, registry=registry_b)
+
+    selections = await asyncio.gather(
+        provider_a.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+            selection_attempt_id=first.attempt_id,
+        ),
+        provider_b.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="metrics",
+            selection_attempt_id=second.attempt_id,
+        ),
+    )
+
+    assert sorted(len(selection.card_ids) for selection in selections) == [0, 1]
+    assert inner.pending_counts_seen[:2] == [{}, {}]
+    assert inner.pending_counts_seen[2:] == [{card.id: 1}]
+    assert registry_a.pending_counts() == {card.id: 1}
+    assert registry_b.pending_counts() == {card.id: 1}
+    first.release()
+    second.release()
+    assert registry_a.pending_counts() == {}
 
 
 def test_selection_acquire_and_threaded_sweep_share_one_guard(
@@ -266,6 +580,25 @@ def test_same_card_stays_leased_until_every_owner_releases():
     assert not registry.is_leased("card-shared")
 
 
+def test_shared_reverify_drops_card_deleted_after_publish(tmp_path, monkeypatch):
+    registry = SharedSelectionRegistry(tmp_path / "selection_leases.json")
+    lease = registry.open_attempt("attempt-reverify", "parent-reverify")
+    existing = {"card-raced"}
+    registry._card_lookup = lambda card_id: object() if card_id in existing else None
+    publish = registry._publish_acquisition_locked
+
+    def publish_then_delete(attached_by_attempt) -> None:
+        publish(attached_by_attempt)
+        existing.clear()
+
+    monkeypatch.setattr(registry, "_publish_acquisition_locked", publish_then_delete)
+
+    verified = lease.reverify_cards(("card-raced",))
+
+    assert verified == ()
+    assert not registry.is_leased("card-raced")
+
+
 def test_pending_counts_returns_refcounts_as_an_isolated_snapshot():
     registry = InFlightSelectionRegistry()
     first = registry.open_attempt("attempt-1", "parent-1")
@@ -278,6 +611,26 @@ def test_pending_counts_returns_refcounts_as_an_isolated_snapshot():
     assert snapshot == {"card-shared": 2, "card-first": 1}
     snapshot["card-shared"] = 99
     assert registry.pending_counts() == {"card-shared": 2, "card-first": 1}
+
+
+def test_local_reservation_lookup_failure_rolls_back_attempt_lease():
+    registry = InFlightSelectionRegistry()
+    registry.open_attempt("attempt-1", "parent-1")
+    snapshot = registry.selection_snapshot()
+
+    def fail_lookup(_card_id):
+        raise RuntimeError("lookup failed")
+
+    with pytest.raises(RuntimeError, match="lookup failed"):
+        registry.reserve_selection(
+            "attempt-1",
+            ("card-a",),
+            expected_version=snapshot.version,
+            card_lookup=fail_lookup,
+        )
+
+    assert registry.pending_counts() == {}
+    assert registry._attempt_cards["attempt-1"] == set()
 
 
 def test_transfer_retains_only_base_selected_ids():
@@ -538,6 +891,31 @@ def test_shared_registry_acquisition_write_failure_raises_and_rolls_back(
         "failed to sync sidecar" in str(record) and "disk unavailable" in str(record)
         for record in records
     )
+
+
+def test_shared_reservation_write_failure_rolls_back_attempt_lease(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "selection_leases.json"
+    registry = SharedSelectionRegistry(path)
+    registry.open_attempt("attempt", "parent")
+    snapshot = registry.selection_snapshot()
+
+    def fail_write(_owners) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(registry, "_write_owners_unlocked", fail_write)
+
+    with pytest.raises(MemoryStorageError, match="selection_leases.json"):
+        registry.reserve_selection(
+            "attempt",
+            ("card-local",),
+            expected_version=snapshot.version,
+            card_lookup=lambda _card_id: object(),
+        )
+
+    assert registry.leased_ids() == frozenset()
+    assert registry._attempt_cards["attempt"] == set()
 
 
 def test_shared_registry_release_write_failure_is_best_effort(tmp_path, monkeypatch):

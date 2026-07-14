@@ -29,6 +29,7 @@ from gigaevo.evolution.mutation.mutation_operator import (
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
+from gigaevo.memory.outcomes import record_program_memory_outcome
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
@@ -304,6 +305,7 @@ class EvolutionEngine:
 
         for prog in completed:
             try:
+                await self._record_memory_outcome(prog)
                 if not self.config.program_acceptor.is_accepted(prog):
                     # rejected by basic checks
                     rej_valid += 1
@@ -414,6 +416,24 @@ class EvolutionEngine:
             logger.warning(
                 "[EvolutionEngine] on_program_ingested hook failed for {}: {} "
                 "(non-fatal, program state unchanged)",
+                prog.short_id,
+                exc,
+            )
+
+    async def _record_memory_outcome(self, prog: Program) -> None:
+        """Record assignment Y before archive acceptance can mutate child state."""
+        try:
+            await record_program_memory_outcome(
+                prog,
+                storage=self.storage,
+                metrics_context=getattr(
+                    self.mutation_operator, "metrics_context", None
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[EvolutionEngine] memory outcome emit failed for {}: {} "
+                "(non-fatal, evaluation remains terminal)",
                 prog.short_id,
                 exc,
             )

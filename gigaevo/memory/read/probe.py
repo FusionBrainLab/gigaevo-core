@@ -111,18 +111,32 @@ class ColdProbePolicy(BaseModel):
             )
         )
         if not budgeted:
-            if float(rng.random()) >= self.empty_selection_probe_rate:
-                return budgeted, marked_slate
-            return self._select_probe(
+            marked_slate = self._record_offer(
+                marked_slate,
+                offered_id=candidates[0].card_id,
+                propensity=self.empty_selection_probe_rate,
+            )
+            treated_ids, treated_slate = self._select_probe(
                 budgeted,
                 marked_slate,
                 candidates[: self.max_probe_cards_per_decision],
                 reason="cold_probe_empty",
                 max_cards=max_cards,
             )
-        if float(rng.random()) >= self.warm_override_probe_rate:
-            return budgeted, marked_slate
-        return self._select_probe(
+            marked_slate = self._mark_action_slates(
+                marked_slate, control_ids=budgeted, treated_ids=treated_ids
+            )
+            if float(rng.random()) >= self.empty_selection_probe_rate:
+                return budgeted, marked_slate
+            return treated_ids, self._mark_action_slates(
+                treated_slate, control_ids=budgeted, treated_ids=treated_ids
+            )
+        marked_slate = self._record_offer(
+            marked_slate,
+            offered_id=candidates[0].card_id,
+            propensity=self.warm_override_probe_rate,
+        )
+        treated_ids, treated_slate = self._select_probe(
             budgeted,
             marked_slate,
             candidates[: self.max_probe_cards_per_decision],
@@ -130,6 +144,46 @@ class ColdProbePolicy(BaseModel):
             max_cards=max_cards,
             replace=True,
         )
+        marked_slate = self._mark_action_slates(
+            marked_slate, control_ids=budgeted, treated_ids=treated_ids
+        )
+        if float(rng.random()) >= self.warm_override_probe_rate:
+            return budgeted, marked_slate
+        return treated_ids, self._mark_action_slates(
+            treated_slate, control_ids=budgeted, treated_ids=treated_ids
+        )
+
+    @staticmethod
+    def _mark_action_slates(
+        slate: list[AuctionBid], *, control_ids: list[str], treated_ids: list[str]
+    ) -> list[AuctionBid]:
+        control = set(control_ids)
+        treated = set(treated_ids)
+        return [
+            bid.model_copy(
+                update={
+                    "probe_control_selected": bid.card_id in control,
+                    "probe_treated_selected": bid.card_id in treated,
+                }
+            )
+            for bid in slate
+        ]
+
+    @staticmethod
+    def _record_offer(
+        slate: list[AuctionBid], *, offered_id: str, propensity: float
+    ) -> list[AuctionBid]:
+        return [
+            bid.model_copy(
+                update={
+                    "probe_offered": True,
+                    "probe_propensity": propensity,
+                }
+            )
+            if bid.card_id == offered_id
+            else bid
+            for bid in slate
+        ]
 
     def _select_probe(
         self,
