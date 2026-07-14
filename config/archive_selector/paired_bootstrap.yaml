@@ -1,0 +1,14 @@
+# Noise-aware paired replacement gate: accept the challenger iff the paired
+# bootstrap gives P(mean per-sample diff > 0) >= p_accept; falls back to the
+# point rule when either program lacks a usable per_sample_scores vector.
+# Requires a problem whose validate() emits the vector (e.g.
+# chains/hover/full7_vectorized) plus pipeline=memory_guided_noise to land it
+# on program.metadata. p_accept=0.5 is the documented OFF position.
+# Tune via the group node only (archive_selector.p_accept=0.65); islands bind
+# ${archive_selector} by interpolation, so per-island overrides detach it.
+_target_: gigaevo.evolution.strategies.paired_selectors.PairedBootstrapArchiveSelector
+fitness_keys:
+  - ${primary_key}
+fitness_key_higher_is_better:
+  - ${higher_is_better}
+p_accept: 0.75

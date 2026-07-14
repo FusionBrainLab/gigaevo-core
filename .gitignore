@@ -209,6 +209,8 @@ experiment_*/
 evolution_experiment_*/
 program_archive/
 archive_*/
+# archive_*/ targets run-output dirs; re-include the config group it also catches
+!config/archive_selector/
 archives/
 evolution_data*
 fitness_*.csv

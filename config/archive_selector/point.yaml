@@ -1,0 +1,9 @@
+# Point comparison (default): challenger replaces the elite iff its weighted
+# fitness sum is strictly greater — single-eval scalars, no noise handling.
+# Islands bind ${archive_selector} by interpolation: override the group node,
+# not islands.N.archive_selector.* (per-island overrides detach the binding).
+_target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+fitness_keys:
+  - ${primary_key}
+fitness_key_higher_is_better:
+  - ${higher_is_better}
