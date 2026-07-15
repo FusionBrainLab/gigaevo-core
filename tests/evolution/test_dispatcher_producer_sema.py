@@ -27,9 +27,13 @@ class _FakeDispatcherEngine:
         self._max = max_in_flight
         self._spawn_count = 0
         self._reached = False
+        self._failure_limit_reached = False
 
     def _reached_mutant_cap(self) -> bool:
         return self._reached
+
+    def mutation_failure_limit_reached(self) -> bool:
+        return self._failure_limit_reached
 
     async def _select_parents_for_mutation(self):  # never called in these tests
         return []
@@ -63,6 +67,26 @@ async def test_dispatcher_acquires_producer_sema(monkeypatch) -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_stops_at_mutation_failure_limit(monkeypatch) -> None:
+    engine = _FakeDispatcherEngine(max_in_flight=1)
+    spawned: list[int] = []
+
+    async def fake_run_one_mutant(eng, task_id: int) -> None:
+        spawned.append(task_id)
+        eng._failure_limit_reached = True
+        eng._producer_sema.release()
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.dispatcher.run_one_mutant", fake_run_one_mutant
+    )
+
+    await asyncio.wait_for(dispatcher_loop(engine), timeout=1.0)
+
+    assert spawned == [0]
+    assert engine._producer_sema._value == 1
 
 
 @pytest.mark.asyncio

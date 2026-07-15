@@ -84,6 +84,15 @@ class EngineConfig(BaseModel):
             "for 3-4 servers with 4 runs."
         ),
     )
+    max_consecutive_mutation_failures: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Stop dispatch after this many consecutive mutation-generation failures. "
+            "Zero disables the guard. A successful persisted mutation resets the count. "
+            "Use this to bound LLM/schema failure loops that do not advance max_mutants."
+        ),
+    )
     parent_selector: ParentSelector = Field(
         default_factory=lambda: RandomParentSelector(num_parents=1)
     )

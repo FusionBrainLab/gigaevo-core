@@ -59,6 +59,8 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # generate_one_mutation, decremented after. Sampled by backpressure_sampler
         # to break down producer occupancy into LLM vs DAG phases.
         self._llm_active: int = 0
+        self._consecutive_mutation_failures: int = 0
+        self._mutation_failure_limit_logged: bool = False
 
         self._parent_refresher = ParentRefresher(storage=self.storage)
 
@@ -69,6 +71,25 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # of producer/buffer/in_flight held counts. Lifecycle mirrors the
         # dispatcher/ingestor tasks (start in run(), cancel in finally).
         self._sampler_task: asyncio.Task | None = None
+
+    def record_mutation_result(self, *, succeeded: bool) -> None:
+        if succeeded:
+            self._consecutive_mutation_failures = 0
+            return
+        self._consecutive_mutation_failures += 1
+
+    def mutation_failure_limit_reached(self) -> bool:
+        limit = self._ss_config.max_consecutive_mutation_failures
+        reached = limit > 0 and self._consecutive_mutation_failures >= limit
+        if reached and not self._mutation_failure_limit_logged:
+            self._mutation_failure_limit_logged = True
+            logger.error(
+                "[SteadyState] Stopping after {} consecutive mutation-generation "
+                "failures (limit={})",
+                self._consecutive_mutation_failures,
+                limit,
+            )
+        return reached
 
     async def run(self) -> None:
         logger.info(

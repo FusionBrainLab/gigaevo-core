@@ -3,6 +3,9 @@
 
 temperature: 0.6
 max_tokens: 81920
+# Optional hard cap for reasoning tokens on compatible OpenAI-style endpoints.
+# Set a concrete value only with an LLM preset that forwards this parameter.
+thinking_token_budget: null
 request_timeout: 600
 
 # Global cap on in-flight async LLM calls across the whole process.

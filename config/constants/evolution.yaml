@@ -15,3 +15,6 @@ post_step_hook: null
 # Override per run: post_step_hook_timeout_s=<seconds>.
 post_step_hook_timeout_s: 300.0
 max_in_flight: 8
+# Guard against structured-output/schema failures that do not increment max_mutants.
+# Zero preserves legacy behavior; set per run for bounded LLM experiments.
+max_consecutive_mutation_failures: 0

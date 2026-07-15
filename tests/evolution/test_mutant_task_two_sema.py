@@ -44,6 +44,7 @@ class _FakeEngine:
         # around generate_one_mutation. Required attribute since the steady-
         # state engine started sampling per-LLM occupancy for backpressure.
         self._llm_active: int = 0
+        self._consecutive_mutation_failures: int = 0
         self._selection_leases = None
 
         self.metrics = type("M", (), {})()
@@ -73,6 +74,12 @@ class _FakeEngine:
 
     async def _write_snapshot(self, **_kwargs) -> None:
         return None
+
+    def record_mutation_result(self, *, succeeded: bool) -> None:
+        if succeeded:
+            self._consecutive_mutation_failures = 0
+        else:
+            self._consecutive_mutation_failures += 1
 
 
 async def _hold_producer_slot(engine: _FakeEngine) -> None:
@@ -148,6 +155,24 @@ async def test_llm_returns_none_releases_producer_no_buffer(monkeypatch) -> None
     assert engine._producer_sema._value == 2
     assert engine._buffer_sema._value == 2  # untouched
     assert not engine._in_flight
+    assert engine._consecutive_mutation_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_mutation_resets_failure_streak(monkeypatch) -> None:
+    engine = _FakeEngine(_make_parent(), max_in_flight=2)
+    engine._consecutive_mutation_failures = 4
+    await _hold_producer_slot(engine)
+
+    async def fake_gen(**_k):
+        return "new-id-reset"
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+    )
+
+    assert await run_one_mutant(engine, task_id=0) == "new-id-reset"
+    assert engine._consecutive_mutation_failures == 0
 
 
 @pytest.mark.asyncio
