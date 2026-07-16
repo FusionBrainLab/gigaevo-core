@@ -53,6 +53,12 @@ class DedupPolicy(BaseModel):
         "every one is offered to the consolidate agent as a merge candidate "
         "(pure top-k, no distance cut).",
     )
+    preserve_survivor_payload: bool = Field(
+        default=False,
+        description="Keep the banked card's mutator-facing text when an incoming "
+        "card is ruled equivalent. This lets causal evidence remain attached to "
+        "one stable intervention while provenance is merged.",
+    )
 
 
 class ProgramExemplarPolicy(BaseModel):

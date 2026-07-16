@@ -3,6 +3,7 @@
 import pytest
 
 from gigaevo.evolution.strategies.models import (
+    BehaviorModelTransform,
     BehaviorSpace,
     DynamicBehaviorSpace,
     LinearBinning,
@@ -65,6 +66,30 @@ class TestLinearBinning:
         b = LinearBinning(min_val=0.0, max_val=10.0, num_bins=5)
         changed = b.update_bounds(new_min=0.0)
         assert changed is False
+
+    def test_model_coordinate_is_invariant_to_archive_rebinning(self):
+        b = LinearBinning(
+            min_val=0.0,
+            max_val=100.0,
+            num_bins=10,
+            model_transform=BehaviorModelTransform(
+                lower_bound=0.0,
+                upper_bound=100.0,
+                transform="log1p",
+            ),
+        )
+        stable_before = b.normalize_for_model(20.0)
+        live_before = b.normalize_for_archive(20.0)
+
+        b.update_bounds(new_min=10.0, new_max=40.0)
+
+        assert b.normalize_for_model(20.0) == pytest.approx(stable_before)
+        assert b.normalize_for_archive(20.0) != pytest.approx(live_before)
+        assert b.model_transform == BehaviorModelTransform(
+            lower_bound=0.0,
+            upper_bound=100.0,
+            transform="log1p",
+        )
 
     def test_update_bounds_invalid_raises(self):
         b = LinearBinning(min_val=0.0, max_val=10.0, num_bins=5)

@@ -11,12 +11,17 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_OUTCOME_METADATA_KEY,
     MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY,
 )
+from gigaevo.evolution.mutation.terminal_failure import (
+    MutationTerminalFailureStage,
+    set_mutation_terminal_failure,
+)
 from gigaevo.memory.cards import AssignmentRecord, DecisionContext
 from gigaevo.memory.events import MemoryOutcome, MemoryOutcomeUpdate
 from gigaevo.memory.ope.reconcile import reconcile_rows
 from gigaevo.memory.outcomes import record_program_memory_outcome
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState
 
 
 def _metrics_context(*, higher_is_better: bool = True) -> MetricsContext:
@@ -210,3 +215,57 @@ async def test_failed_terminal_claim_is_retryable(
     )
     assert result == "emitted"
     assert len(emitted) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_status"),
+    [
+        (MutationTerminalFailureStage.DAG_TIMEOUT, "invalid"),
+        (MutationTerminalFailureStage.DAG_EXECUTION, "invalid"),
+        (MutationTerminalFailureStage.DAG_BUILD, "censored"),
+        (MutationTerminalFailureStage.SCHEDULER_ORPHAN, "censored"),
+    ],
+)
+async def test_discarded_child_uses_typed_failure_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: MutationTerminalFailureStage,
+    expected_status: str,
+) -> None:
+    emitted = []
+    monkeypatch.setattr("gigaevo.memory.outcomes.emit_memory_event", emitted.append)
+    child = _child(child_fitness=0.0, base_fitness=0.5)
+    child.state = ProgramState.DISCARDED
+    set_mutation_terminal_failure(child, failure_stage)
+
+    await record_program_memory_outcome(
+        child, storage=AsyncMock(), metrics_context=_metrics_context()
+    )
+
+    (event,) = emitted
+    assert isinstance(event, MemoryOutcome)
+    assert event.status == expected_status
+    assert event.invalid is (expected_status == "invalid")
+    assert event.failure_stage == failure_stage.value
+    assert event.censor_reason == (
+        failure_stage.value if expected_status == "censored" else ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_unclassified_discard_is_censored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted = []
+    monkeypatch.setattr("gigaevo.memory.outcomes.emit_memory_event", emitted.append)
+    child = _child(child_fitness=0.0, base_fitness=0.5)
+    child.state = ProgramState.DISCARDED
+
+    await record_program_memory_outcome(
+        child, storage=AsyncMock(), metrics_context=_metrics_context()
+    )
+
+    (event,) = emitted
+    assert event.status == "censored"
+    assert event.invalid is False
+    assert event.censor_reason == "child_discarded_unclassified"

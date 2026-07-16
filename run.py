@@ -17,6 +17,7 @@ from gigaevo.config.validation import (
     validate_archive_gate_pipeline_compat,
     validate_crediting_pipeline_compat,
     validate_memory_pipeline_compat,
+    validate_memory_v2_scope,
     validate_paired_selector_pipeline_compat,
     validate_program_format_pipeline_compat,
     validate_reputation_island_compat,
@@ -24,6 +25,7 @@ from gigaevo.config.validation import (
 from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
+from gigaevo.memory_v2.ledger import SqliteCausalLedger
 from gigaevo.monitoring.emit import (
     configure_event_counters_from_cfg,
     reset_event_counters,
@@ -51,9 +53,11 @@ async def run_experiment(cfg: DictConfig) -> None:
 
     storage: ProgramStorage | None = None
     writer: LogWriter | None = None
+    causal_ledger: SqliteCausalLedger | None = None
     try:
         validate_reputation_island_compat(cfg)
         validate_memory_pipeline_compat(cfg)
+        validate_memory_v2_scope(cfg)
         validate_archive_gate_pipeline_compat(cfg)
         validate_program_format_pipeline_compat(cfg)
         validate_paired_selector_pipeline_compat(cfg)
@@ -65,6 +69,11 @@ async def run_experiment(cfg: DictConfig) -> None:
         dag_runner: DagRunner = config_with_instances.dag_runner
         evolution_engine: EvolutionEngine = config_with_instances.evolution_engine
         writer = cast(LogWriter, config_with_instances.writer)
+        memory_config = config_with_instances.get("memory")
+        if memory_config is not None:
+            ledger_candidate = memory_config.get("ledger")
+            if isinstance(ledger_candidate, SqliteCausalLedger):
+                causal_ledger = ledger_candidate
 
         if isinstance(storage, DiskProgramStorage):
             location = f"disk storage at {storage.config.root_dir}"
@@ -76,6 +85,8 @@ async def run_experiment(cfg: DictConfig) -> None:
         configure_event_counters_from_cfg(cfg)
 
         await storage.acquire_instance_lock()
+        if causal_ledger is not None:
+            causal_ledger.activate()
 
         resume = await check_storage_resume(
             storage,
@@ -130,6 +141,8 @@ async def run_experiment(cfg: DictConfig) -> None:
     finally:
         reset_event_counters()
         await default_exec_runner_pool().shutdown()
+        if causal_ledger is not None:
+            causal_ledger.close()
         if storage is not None:
             await storage.close()
         if writer is not None:

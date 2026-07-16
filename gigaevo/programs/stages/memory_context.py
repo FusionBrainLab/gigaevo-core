@@ -248,6 +248,8 @@ class MemoryContextStage(Stage):
                 program.id[:8],
                 selection.card_ids,
             )
+            if selection.preformatted:
+                return StringContainer(data="\n\n".join(selection.cards))
             pairs = list(zip(selection.cards, selection.card_ids))
             # Reverse repacking (lost-in-the-middle mitigation): present cards
             # worst-first so the strongest candidate sits last, nearest the

@@ -151,6 +151,12 @@ class InFlightSelectionRegistry:
                 return next(iter(attempts))
             return None
 
+    def active_attempt_for_parent(self, parent_id: str) -> str | None:
+        """Return only an attempt currently scoped around a parent refresh."""
+
+        with self._lock:
+            return self._active_attempt_by_parent.get(parent_id.strip())
+
     def attempts_for_parent(self, parent_id: str) -> tuple[str, ...]:
         with self._lock:
             return tuple(sorted(self._parent_attempts.get(parent_id.strip(), ())))

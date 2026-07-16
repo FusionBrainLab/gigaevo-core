@@ -6,10 +6,11 @@ and the register_resolvers function.
 
 from __future__ import annotations
 
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 import pytest
 
-from gigaevo.config.resolvers import _ref_resolver
+from gigaevo.config.resolvers import _ref_resolver, register_resolvers
 
 
 class TestRefResolver:
@@ -35,3 +36,27 @@ class TestRefResolver:
         cfg = OmegaConf.create({"a": {"b": 42}})
         with pytest.raises(ValueError, match="Invalid syntax"):
             _ref_resolver("a::invalid-name", _root_=cfg)
+
+    def test_recursive_instantiation_preserves_shared_object_identity(self):
+        register_resolvers()
+        cfg = OmegaConf.create(
+            {
+                "strategy": {
+                    "_target_": "types.SimpleNamespace",
+                    "name": "live",
+                },
+                "engine": {
+                    "_target_": "types.SimpleNamespace",
+                    "strategy": "${ref:strategy}",
+                },
+                "context": {
+                    "_target_": "types.SimpleNamespace",
+                    "strategy": "${ref:strategy}",
+                },
+            }
+        )
+
+        instances = instantiate(cfg, _recursive_=True)
+
+        assert instances.strategy is instances.engine.strategy
+        assert instances.strategy is instances.context.strategy

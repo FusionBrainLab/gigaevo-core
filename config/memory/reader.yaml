@@ -17,6 +17,9 @@ capabilities:
   read: true
   write: false
 
+outcome_sink:
+  _target_: gigaevo.memory.outcomes.NullMemoryOutcomeSink
+
 # Shared fallback no-card arm prior. Dynamic no-card evidence can override this
 # per read, but static/legacy paths and cold fallback priors stay aligned here.
 baseline_prior: [3.0, 3.0]

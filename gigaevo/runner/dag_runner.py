@@ -14,6 +14,10 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.state_manager import ProgramStateManager
+from gigaevo.evolution.mutation.terminal_failure import (
+    MutationTerminalFailureStage,
+    set_mutation_terminal_failure,
+)
 from gigaevo.evolution.scheduling.prioritizer import (
     CachedFirstPrioritizer,
     ProgramPrioritizer,
@@ -291,6 +295,9 @@ class DagRunner:
                         )
                         self._metrics.record_timeout()
                         continue
+                    set_mutation_terminal_failure(
+                        prog, MutationTerminalFailureStage.DAG_TIMEOUT
+                    )
                     await self._state_manager.set_program_state(
                         prog, ProgramState.DISCARDED
                     )
@@ -357,6 +364,9 @@ class DagRunner:
                 orphaned = await self._storage.mget(orphaned_ids)
                 for p in [p for p in orphaned if p is not None]:
                     try:
+                        set_mutation_terminal_failure(
+                            p, MutationTerminalFailureStage.SCHEDULER_ORPHAN
+                        )
                         await self._state_manager.set_program_state(
                             p, ProgramState.DISCARDED
                         )
@@ -418,6 +428,9 @@ class DagRunner:
                 logger.error("[DagScheduler] Traceback:\n{}", traceback.format_exc())
                 self._metrics.record_build_failure()
                 try:
+                    set_mutation_terminal_failure(
+                        program, MutationTerminalFailureStage.DAG_BUILD
+                    )
                     await self._state_manager.set_program_state(
                         program, ProgramState.DISCARDED
                     )
@@ -496,6 +509,9 @@ class DagRunner:
             )
         else:
             try:
+                set_mutation_terminal_failure(
+                    program, MutationTerminalFailureStage.DAG_EXECUTION
+                )
                 await self._state_manager.set_program_state(
                     program, ProgramState.DISCARDED
                 )

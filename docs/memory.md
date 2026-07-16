@@ -12,6 +12,10 @@ end-to-end explanation of card birth, read selection, no-card baselines,
 posteriors, decay, and eviction, see
 [`MEMORY_LIFECYCLE_TUTORIAL.md`](MEMORY_LIFECYCLE_TUTORIAL.md).
 
+The new singleton-parent causal Bayesian iteration is documented separately in
+[`memory_v2.md`](memory_v2.md). It preserves the v1 card/write machinery but
+does not reuse the v1 reputation or bootstrap-auction evidence model.
+
 ## The 30-second version
 
 ```bash

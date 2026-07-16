@@ -1,0 +1,207 @@
+# memory=v2: v1 card machinery with a content-addressed Bayesian causal core.
+# The initial production scope is singleton-parent chains_bd3d. Multi-parent
+# crossover is rejected by startup validation until decisions move to mutation level.
+defaults:
+  - llm: gemini
+  - context: global
+  - no_card_evidence: none
+  - excluder: lineage
+  - write: live
+  - _self_
+
+capabilities:
+  read: true
+  write: true
+  causal_v2: true
+
+run_seed: 0
+# A causal decision is scoped to one mutation attempt. Reusing a cached parent
+# assignment across concurrent mutations would give one decision multiple outcomes.
+coalesce_refresh: false
+
+neutral_gain: 0.0
+baseline_prior: [3.0, 3.0]
+evidence:
+  min_effective_events: 3
+
+evictor:
+  _target_: gigaevo.memory_v2.eviction.CausalPosteriorEvictor
+  ledger: ${ref:memory.ledger}
+  posterior: ${ref:memory.posterior}
+  safety: ${ref:memory.safety}
+  min_treated: 2
+  min_control: 2
+  min_distinct_contexts: 2
+  posterior_samples: 4096
+  max_viability_probability: 0.05
+  mc_confidence_z: 2.576
+
+environment:
+  _target_: gigaevo.memory_v2.models.EnvironmentFingerprint
+  task_key: ${problem.name}
+  problem_name: ${problem.name}
+  llm:
+    _target_: gigaevo.memory_v2.models.LLMFingerprint
+    model_name: ${model_name}
+    base_url: ${llm_base_url}
+    temperature: ${temperature}
+  mutation_operator: ${get_object:${mutation_operator._target_}}
+  program_format: ${program_format.id}
+  pipeline: ${pipeline.id}
+  algorithm: ${hydra:runtime.choices.algorithm}
+
+map_context_config:
+  _target_: gigaevo.memory_v2.context.MapContextConfig
+  neighbor_radius: 1
+
+credit:
+  _target_: gigaevo.memory_v2.models.LineageCreditConfig
+  # Depth 1 is the original immediate-child endpoint. Larger depths use one
+  # best-descendant outcome per randomized decision after a fixed number of
+  # mutation opportunities in the root's pre-treatment MAP-Elites island.
+  lineage_depth: 1
+  opportunity_budget: 32
+
+context_source:
+  _target_: gigaevo.memory_v2.context.MapElitesContextSource
+  strategy: ${ref:evolution_strategy}
+  metrics_context: ${ref:problem_context::metrics_context}
+  environment: ${ref:memory.environment}
+  config: ${ref:memory.map_context_config}
+  credit: ${ref:memory.credit}
+  trajectory_id_source: ${ref:memory.ledger}
+
+ledger:
+  _target_: gigaevo.memory_v2.ledger.SqliteCausalLedger
+  path: ${checkpoint_dir}/memory_v2_evidence.sqlite3
+  environment: ${ref:memory.environment}
+
+outcome_sink: ${ref:memory.ledger}
+
+feature_config:
+  _target_: gigaevo.memory_v2.features.FeatureConfig
+  behavior_keys: [hop_depth, passages_fetched, instr_chars]
+  progress_log_scale: 100.0
+
+feature_map:
+  _target_: gigaevo.memory_v2.features.HierarchicalFeatureMap
+  config: ${ref:memory.feature_config}
+
+posterior_config:
+  _target_: gigaevo.memory_v2.posterior.TerminalUtilityPosteriorConfig
+  baseline_prior_sd: 0.75
+  shared_effect_prior_sd: 0.35
+  card_effect_prior_sd: 0.25
+  reward_residual_sd_initial: 0.20
+  reward_residual_log_prior_sd: 0.75
+  reward_residual_mode_grid_points: 17
+  reward_residual_quadrature_mass_rtol: 1.0e-5
+  reward_residual_moment_rtol: 1.0e-3
+  reward_coefficient_mean_tolerance: 1.0e-3
+  reward_residual_upper_boundary_mass_limit: 1.0e-4
+  reward_residual_quadrature_max_depth: 8
+  unknown_measurement_sd: 0.15
+  reference_offer_probability: 0.50
+  safety_integration_tolerance: 1.0e-8
+  invalidity_prior_probability: 0.05
+  safety_baseline_prior_sd: 0.15
+  safety_shared_effect_prior_mean: 0.0
+  safety_shared_effect_prior_sd: 0.20
+  safety_card_effect_prior_sd: 0.60
+
+posterior:
+  _target_: gigaevo.memory_v2.posterior.HierarchicalTerminalUtilityPosterior
+  feature_map: ${ref:memory.feature_map}
+  config: ${ref:memory.posterior_config}
+
+safety:
+  _target_: gigaevo.memory_v2.policy.SafetyConstraint
+  max_treated_invalid_probability: 0.25
+  max_incremental_invalid_probability: 0.10
+  alpha: 0.10
+
+policy_config:
+  _target_: gigaevo.memory_v2.policy.ProbabilityMatchingConfig
+  offer_probability: 0.50
+  proposal_exploration_probability: 0.05
+  posterior_summary_samples: 1024
+  proposal_worlds: 512
+  abstain_effect: 0.0
+  max_pending_per_card: 2
+
+policy:
+  _target_: gigaevo.memory_v2.policy.ChanceConstrainedProbabilityMatchingPolicy
+  safety: ${ref:memory.safety}
+  config: ${ref:memory.policy_config}
+
+store:
+  _target_: gigaevo.memory.storage.local.LocalMemoryStore
+  config:
+    _target_: gigaevo.memory.storage.config.StoreConfig
+    path: ${checkpoint_dir}
+  llm: ${ref:memory.llm}
+  prompts_dir: ${prompts.dir}
+
+candidate_source:
+  _target_: gigaevo.memory_v2.candidates.WholeBankCandidateSource
+  store: ${ref:memory.store}
+  excluder: ${ref:memory.excluder}
+  allow_cross_task: false
+  allowed_kinds: [insight, program]
+  # The first v2 iteration gives every eligible bank card policy support.
+  # A future learned retrieval stage must log its own inclusion propensities.
+  max_candidates: 0
+
+renderer:
+  _target_: gigaevo.memory_v2.render.ImmutableCardRenderer
+
+provider:
+  _target_: gigaevo.memory_v2.provider.CausalBanditMemoryProvider
+  candidate_source: ${ref:memory.candidate_source}
+  context_source: ${ref:memory.context_source}
+  ledger: ${ref:memory.ledger}
+  posterior: ${ref:memory.posterior}
+  policy: ${ref:memory.policy}
+  renderer: ${ref:memory.renderer}
+  store: ${ref:memory.store}
+  selection_leases: ${ref:selection_leases}
+  task_key: ${problem.name}
+  run_seed: ${memory.run_seed}
+
+context_model:
+  task_key: ${problem.name}
+
+causal_writer_updater:
+  _target_: gigaevo.memory_v2.writer.CausalV2ContentOnlyUpdater
+  ledger: ${ref:memory.ledger}
+  selection_leases: ${ref:selection_leases}
+
+writer:
+  _target_: gigaevo.memory.write.writer.MemoryWriter
+  llm: ${ref:memory.llm}
+  evictor: ${ref:memory.evictor}
+  store: ${ref:memory.store}
+  checkpoint_dir: ${checkpoint_dir}
+  task_key: ${problem.name}
+  metrics_context: ${ref:problem_context::metrics_context}
+  stats_updater: ${ref:memory.causal_writer_updater}
+  task_description: ${ref:problem_context::task_description}
+  best_programs_percent: 5.0
+  ingest_call_timeout_s: 300.0
+  consolidation_every_n: 32
+  dedup_policy:
+    _target_: gigaevo.memory.write.merge.DedupPolicy
+    online_top_k: 5
+    max_cards_per_diff: 3
+    consolidation_k: 5
+    preserve_survivor_payload: true
+  program_exemplars:
+    _target_: gigaevo.memory.write.merge.ProgramExemplarPolicy
+    enabled: true
+    top_k_per_refresh: 4
+    max_cards: 32
+    min_fitness_gap: 0.0
+    store_code: false
+  selection_leases: ${ref:selection_leases}
+  min_effective_events: ${memory.evidence.min_effective_events}
+  prompts_dir: ${prompts.dir}

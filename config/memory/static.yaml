@@ -17,5 +17,7 @@ provider:
   # Guards the treatment: a mangled `---` separator fails the launch instead
   # of silently running a merged/shrunken arm.
   expected_blocks: 6
+outcome_sink:
+  _target_: gigaevo.memory.outcomes.NullMemoryOutcomeSink
 writer:
   _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

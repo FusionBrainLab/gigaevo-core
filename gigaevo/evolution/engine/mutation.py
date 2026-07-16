@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
+
 from loguru import logger
 
 from gigaevo.database.program_storage import ProgramStorage
@@ -9,6 +14,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY,
@@ -24,6 +30,7 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
+from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import (
     AssignmentRecord,
     CardAssignmentSource,
@@ -31,8 +38,36 @@ from gigaevo.memory.cards import (
     MutationAssignmentRecord,
 )
 from gigaevo.memory.selection_leases import SelectionLease
-from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
+from gigaevo.programs.metrics.paired import (
+    PER_SAMPLE_SCORES_KEY,
+    PER_SAMPLE_SIGNATURE_KEY,
+)
 from gigaevo.programs.program import Program
+
+
+@dataclass(frozen=True)
+class MutationFailure:
+    """Classification for an attempt that ended before child persistence."""
+
+    status: Literal["invalid", "censored"]
+    stage: str
+
+
+def _pre_persist_failure_status(
+    exc: Exception, *, failure_stage: str
+) -> Literal["invalid", "censored"]:
+    """Classify failures before a child becomes observable in storage.
+
+    Only typed infrastructure failures are independent of the selected action
+    and therefore censorable. Unknown exceptions remain invalid evidence: they
+    may be deterministic consequences of malformed generated content.
+    """
+
+    if failure_stage == "mutation_persistence" and isinstance(
+        exc, (StorageError, ConnectionError, TimeoutError, OSError)
+    ):
+        return "censored"
+    return "invalid"
 
 
 def lineage_applied_closure(
@@ -91,6 +126,23 @@ def applied_memory_ids(injected_ids: list[str], mutation_output: object) -> list
     return sorted(injected & used)
 
 
+def proposed_probe_ids(parents: list[Program]) -> list[str]:
+    """Frozen randomized arms whose card revisions must survive to outcome."""
+
+    proposed: set[str] = set()
+    for parent in parents:
+        raw = parent.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY)
+        if not isinstance(raw, dict):
+            continue
+        try:
+            assignment = AssignmentRecord.model_validate(raw)
+        except Exception:
+            continue
+        if assignment.probe_arm in ("treated", "control"):
+            proposed.update(card_id for card_id in assignment.propensities if card_id)
+    return sorted(proposed)
+
+
 def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
     """Snapshot the base parent's selected ids and metrics for use-attribution.
 
@@ -137,6 +189,9 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
     raw_scores = base.get_metadata(PER_SAMPLE_SCORES_KEY)
     if isinstance(raw_scores, list) and raw_scores:
         snapshot[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] = list(raw_scores)
+        signature = base.get_metadata(PER_SAMPLE_SIGNATURE_KEY)
+        if isinstance(signature, str) and signature:
+            snapshot[MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY] = signature
 
     parent_assignments: dict[str, dict] = {}
     card_sources: dict[str, dict] = {}
@@ -184,6 +239,14 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
             )
         except (TypeError, ValueError):
             frozen_scores = None
+        raw_signature = parent.get_metadata(PER_SAMPLE_SIGNATURE_KEY)
+        frozen_signature = (
+            raw_signature
+            if frozen_scores is not None
+            and isinstance(raw_signature, str)
+            and raw_signature
+            else ""
+        )
         for raw_card_id in selected_ids if isinstance(selected_ids, list) else ():
             card_id = str(raw_card_id).strip()
             if not card_id or card_id in card_sources:
@@ -196,6 +259,7 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
                 bd_cell=assignment.bd_cell if assignment is not None else None,
                 parent_metrics=dict(context.parent_metrics or parent_metrics),
                 parent_scores=frozen_scores,
+                parent_score_signature=frozen_signature,
             )
             card_sources[card_id] = source.model_dump(mode="json")
     snapshot[MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY] = parent_assignments
@@ -212,6 +276,8 @@ async def generate_one_mutation(
     iteration: int,
     task_id: int = 0,
     selection_lease: SelectionLease | None = None,
+    failure_observer: Callable[[MutationFailure], None] | None = None,
+    child_observer: Callable[[str], None] | None = None,
 ) -> str | None:
     """Generate a single mutation and persist it. Returns program ID if successful.
 
@@ -233,10 +299,20 @@ async def generate_one_mutation(
     MemoryContextStage, the child is marked ``memory_used=True``.
     """
     persisted_id: str | None = None
+    failure_stage = "mutation_generation"
+    failure_observed = False
+
+    def observe_failure(failure: MutationFailure) -> None:
+        nonlocal failure_observed
+        if failure_observer is not None and not failure_observed:
+            failure_observed = True
+            failure_observer(failure)
+
     try:
         mutation_spec = await mutator.mutate_single(parents)
 
         if mutation_spec is None:
+            observe_failure(MutationFailure(status="invalid", stage=failure_stage))
             logger.debug(
                 "[mutation] Task {}: mutate_single returned None (parents={})",
                 task_id,
@@ -244,6 +320,7 @@ async def generate_one_mutation(
             )
             return None
 
+        failure_stage = "mutation_materialization"
         program = Program.from_mutation_spec(mutation_spec)
         program.iteration = iteration
 
@@ -260,6 +337,7 @@ async def generate_one_mutation(
                 if card_id
             }
         )
+        retained_probe_ids = sorted(set(injected_ids) | set(proposed_probe_ids(parents)))
         mutation_output = mutation_spec.metadata.get(MutationSpec.META_OUTPUT)
         base_parent = 1
         if isinstance(mutation_output, dict):
@@ -315,12 +393,18 @@ async def generate_one_mutation(
                 snap_exc,
             )
 
+        failure_stage = "mutation_persistence"
+        if child_observer is not None:
+            # Durable causal handoff precedes Redis persistence. A crash after
+            # this point leaves either a linked child or a linked-missing child
+            # that startup reconciliation can close without guessing.
+            child_observer(program.id)
         await storage.add(program)
         persisted_id = program.id  # Point of no return — ID must be returned
         if selection_lease is not None:
             selection_lease.transfer_to_child(
                 program.id,
-                injected_ids,
+                retained_probe_ids,
             )
 
         prompt_id = mutation_spec.metadata.get(MutationSpec.META_PROMPT_ID, "")
@@ -365,7 +449,20 @@ async def generate_one_mutation(
             )
             return persisted_id
         # Not yet persisted — safe to handle normally.
+        if isinstance(exc, asyncio.CancelledError):
+            observe_failure(
+                MutationFailure(status="censored", stage="mutation_cancelled")
+            )
+            raise
         if isinstance(exc, Exception):
+            observe_failure(
+                MutationFailure(
+                    status=_pre_persist_failure_status(
+                        exc, failure_stage=failure_stage
+                    ),
+                    stage=failure_stage,
+                )
+            )
             logger.error(
                 "[mutation] Task {}: Failed to generate/persist mutation: {}",
                 task_id,

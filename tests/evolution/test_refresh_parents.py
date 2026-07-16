@@ -90,15 +90,15 @@ async def test_refresh_overlapping_parents_serialised(fakeredis_storage):
 
 
 @pytest.mark.asyncio
-async def test_refresh_discarded_parent_raises(fakeredis_storage):
-    """A DISCARDED parent passed in raises rather than flipping it."""
+async def test_refresh_uses_live_state_when_caller_copy_is_discarded(fakeredis_storage):
+    """A stale caller copy cannot override the durable parent state."""
     refresher, parent, fake_dag = await build_test_refresher(fakeredis_storage)
     try:
-        # Mutate the in-memory copy directly — caller passes a Program whose
-        # state field is DISCARDED, simulating a stale producer view.
+        # Only the caller copy is stale; durable storage remains DONE.
         parent.state = ProgramState.DISCARDED
-        with pytest.raises(ValueError, match="DISCARDED"):
-            await refresher.refresh([parent])
+        refreshed = await refresher.refresh([parent])
+        assert refreshed[0].state == ProgramState.DONE
+        assert fake_dag.flip_count_for(parent.id) == 1
     finally:
         await fake_dag.stop()
 
@@ -731,6 +731,79 @@ class TestRefreshWithTicket:
             await fake_dag.stop()
 
     @pytest.mark.asyncio
+    async def test_waiting_refresh_ignores_stale_caller_state(self, fakeredis_storage):
+        """A queued caller must still trigger its own refresh after lock handoff.
+
+        Archive objects can retain RUNNING from an earlier refresh while durable
+        storage has already returned to DONE. Basing the flip on that stale field
+        reused the preceding mutation attempt's memory assignment.
+        """
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        try:
+            first = await refresher.refresh_with_ticket([p1])
+            stale = p1.model_copy(deep=True)
+            stale.state = ProgramState.RUNNING
+            second_task = asyncio.create_task(refresher.refresh_with_ticket([stale]))
+            await asyncio.sleep(0.05)
+            assert not second_task.done()
+
+            first.release()
+            second = await asyncio.wait_for(second_task, timeout=5.0)
+            try:
+                assert fake_dag.flip_count_for(p1.id) == 2
+                assert second.refreshed[0].state == ProgramState.DONE
+            finally:
+                second.release()
+        finally:
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
+    async def test_attempt_scope_starts_after_older_evaluation_finishes(
+        self, fakeredis_storage
+    ):
+        """An older DAG must not observe the next mutation's attempt id."""
+        refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
+        events: list[str] = []
+
+        @contextlib.contextmanager
+        def attempt_scope():
+            events.append("enter")
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+        try:
+            fake_dag.frozen_ids.add(p1.id)
+            transitioned = await fakeredis_storage.batch_transition_by_ids(
+                [p1.id],
+                ProgramState.DONE.value,
+                ProgramState.QUEUED.value,
+            )
+            assert transitioned == 1
+
+            task = asyncio.create_task(
+                refresher.refresh_with_ticket(
+                    [p1],
+                    refresh_scope=attempt_scope(),
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not task.done()
+            assert events == []
+
+            fake_dag.frozen_ids.discard(p1.id)
+            ticket = await asyncio.wait_for(task, timeout=5.0)
+            try:
+                assert events == ["enter", "exit"]
+                assert fake_dag.flip_count_for(p1.id) == 2
+            finally:
+                ticket.release()
+        finally:
+            fake_dag.frozen_ids.discard(p1.id)
+            await fake_dag.stop()
+
+    @pytest.mark.asyncio
     async def test_release_is_idempotent(self, fakeredis_storage):
         refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
         try:
@@ -777,7 +850,7 @@ class TestRefreshWithTicket:
         id would be stranded behind a permanent lock."""
         refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
         try:
-            p1.state = ProgramState.DISCARDED  # forces _do_refresh to raise
+            await fake_dag.discard(p1.id)
             with pytest.raises(ValueError, match="DISCARDED"):
                 await refresher.refresh_with_ticket([p1])
             # Lock must be releasable / not stranded — a fresh caller proceeds.
@@ -1016,7 +1089,7 @@ class TestRefreshIfStale:
         be updated for the stale set, so the next caller retries."""
         refresher, p1, fake_dag = await build_test_refresher(fakeredis_storage)
         try:
-            p1.state = ProgramState.DISCARDED
+            await fake_dag.discard(p1.id)
             with pytest.raises(ValueError, match="DISCARDED"):
                 await refresher.refresh_if_stale([p1])
             assert p1.id not in refresher._fresh

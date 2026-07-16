@@ -258,8 +258,10 @@ class ParentRefresher:
             for lk in locks:
                 await lk.acquire()
                 acquired.append(lk)
-            with refresh_scope if refresh_scope is not None else nullcontext():
-                refreshed = await self._do_refresh(ordered)
+            refreshed = await self._do_refresh(
+                ordered,
+                refresh_scope=refresh_scope,
+            )
             return ParentRefreshTicket(refreshed=refreshed, _locks=acquired)
         except BaseException:
             # Release every lock we managed to grab — otherwise the parent
@@ -322,8 +324,10 @@ class ParentRefresher:
             refreshed_by_id: dict[str, Program] = {}
 
             if stale_programs:
-                with refresh_scope if refresh_scope is not None else nullcontext():
-                    refreshed_stale = await self._do_refresh(stale_programs)
+                refreshed_stale = await self._do_refresh(
+                    stale_programs,
+                    refresh_scope=refresh_scope,
+                )
                 for p in refreshed_stale:
                     refreshed_by_id[p.id] = p
                 self._fresh.update(p.id for p in refreshed_stale)
@@ -369,33 +373,49 @@ class ParentRefresher:
                 self._locks[pid] = lock
             return lock
 
-    async def _do_refresh(self, targets: list[Program]) -> list[Program]:
-        for p in targets:
-            if p.state == ProgramState.DISCARDED:
-                raise ValueError(
-                    f"ParentRefresher: parent {p.short_id} is DISCARDED; refusing to flip"
-                )
-
-        done_ids = [p.id for p in targets if p.state == ProgramState.DONE]
-        if done_ids:
-            await self._storage.batch_transition_by_ids(
-                done_ids,
-                ProgramState.DONE.value,
-                ProgramState.QUEUED.value,
-            )
-            logger.debug(
-                "[ParentRefresher] flipped {} parents DONE->QUEUED",
-                len(done_ids),
-            )
-
-        return await self._await_done([p.id for p in targets])
-
-    async def _await_done(self, pids: list[str]) -> list[Program]:
+    async def _do_refresh(
+        self,
+        targets: list[Program],
+        *,
+        refresh_scope: AbstractContextManager[None] | None = None,
+    ) -> list[Program]:
+        target_ids = [p.id for p in targets]
         deadline = (
             time.monotonic() + self._timeout_seconds
             if self._timeout_seconds is not None
             else None
         )
+
+        # Parent objects come from the archive and may have been selected well
+        # before this caller acquired the per-parent locks. Their state field is
+        # therefore not authoritative. Quiesce any older evaluation before
+        # activating this attempt; otherwise that older DAG can consume the new
+        # attempt id and bind its decision to the wrong child.
+        await self._await_done(target_ids, deadline=deadline)
+        with refresh_scope if refresh_scope is not None else nullcontext():
+            transitioned = await self._storage.batch_transition_by_ids(
+                target_ids,
+                ProgramState.DONE.value,
+                ProgramState.QUEUED.value,
+            )
+            if transitioned != len(target_ids):
+                raise ValueError(
+                    "ParentRefresher: live parent state changed while starting "
+                    f"refresh ({transitioned}/{len(target_ids)} transitioned)"
+                )
+            logger.debug(
+                "[ParentRefresher] flipped {} parents DONE->QUEUED",
+                transitioned,
+            )
+
+            return await self._await_done(target_ids, deadline=deadline)
+
+    async def _await_done(
+        self,
+        pids: list[str],
+        *,
+        deadline: float | None,
+    ) -> list[Program]:
         while True:
             programs = await self._storage.mget(pids, exclude=EXCLUDE_STAGE_RESULTS)
             found_ids = {p.id for p in programs}

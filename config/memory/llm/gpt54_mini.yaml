@@ -1,0 +1,18 @@
+# @package memory.llm
+
+_target_: gigaevo.llm.models.MultiModelRouter
+_convert_: all
+name: memory
+models:
+  - _target_: langchain_openai.ChatOpenAI
+    model: openai/gpt-5.4-mini
+    api_key: ${oc.env:OPENROUTER_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+    request_timeout: ${request_timeout}
+    extra_body:
+      reasoning:
+        effort: low
+probabilities: [1.0]
+max_concurrent: 16
+writer: ${ref:writer}
+structured_output_method: auto

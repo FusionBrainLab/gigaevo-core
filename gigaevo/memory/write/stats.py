@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY,
@@ -51,7 +52,10 @@ from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.crediting import EffectEstimator, PointEffectEstimator
 from gigaevo.programs.metrics.context import MetricsContext
-from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
+from gigaevo.programs.metrics.paired import (
+    PER_SAMPLE_SCORES_KEY,
+    PER_SAMPLE_SIGNATURE_KEY,
+)
 from gigaevo.programs.program import Program
 
 
@@ -104,6 +108,16 @@ def base_scores(prog: Program) -> tuple[float, ...] | None:
 def child_scores(prog: Program) -> tuple[float, ...] | None:
     """This program's own live per-sample score vector (None when absent)."""
     return _score_vector(prog.get_metadata(PER_SAMPLE_SCORES_KEY))
+
+
+def base_score_signature(prog: Program) -> str:
+    raw = prog.get_metadata(MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY)
+    return raw if isinstance(raw, str) else ""
+
+
+def child_score_signature(prog: Program) -> str:
+    raw = prog.get_metadata(PER_SAMPLE_SIGNATURE_KEY)
+    return raw if isinstance(raw, str) else ""
 
 
 def _score_vector(raw: object) -> tuple[float, ...] | None:
@@ -233,6 +247,8 @@ class InjectionOutcome(BaseModel):
         description="This child's own per-sample score vector, read live at the "
         "write seam so it coheres with the live fitness; None when absent.",
     )
+    base_score_signature: str = ""
+    child_score_signature: str = ""
     created_at: datetime | None = Field(
         default=None,
         description="This child's creation time (UTC) — the decision-outcome "
@@ -276,6 +292,7 @@ def _card_source_outcome(
             "base_id": source.parent_id,
             "base_fitness": outcome.card_base_fitness.get(card_id),
             "base_scores": source.parent_scores,
+            "base_score_signature": source.parent_score_signature,
         }
     )
     return sourced, context, (source.parent_id, source.decision_id)
@@ -578,6 +595,8 @@ def injection_outcomes_from_programs(
                 base_fitness=metrics_context.strict_fitness(bm, fitness_key),
                 base_scores=base_scores(prog),
                 child_scores=child_scores(prog),
+                base_score_signature=base_score_signature(prog),
+                child_score_signature=child_score_signature(prog),
                 created_at=prog.created_at,
                 card_ids_used=tuple(card_ids_used(prog)),
                 no_card_control=no_card_control(prog),

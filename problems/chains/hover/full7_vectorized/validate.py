@@ -14,6 +14,7 @@ gold article matches, regardless of their position in the chain.
 
 from statistics import mean
 
+from gigaevo.programs.metrics.paired import sample_sequence_signature
 from problems.chains.chain_runner import run_chain_on_dataset_stepwise
 from problems.chains.chain_validation import validate_chain_spec
 from problems.chains.client import LLMClient
@@ -136,7 +137,12 @@ def validate(chain_spec: dict) -> dict:
             "is_valid": 1,
             "n_steps": n_steps,
             "n_tool_steps": n_tool_steps,
-        }, {"_program_metadata": {"per_sample_scores": [float(s) for s in scores]}}
+        }, {
+            "_program_metadata": {
+                "per_sample_scores": [float(s) for s in scores],
+                "per_sample_signature": sample_sequence_signature(dataset),
+            }
+        }
     except Exception:
         success = False
         raise

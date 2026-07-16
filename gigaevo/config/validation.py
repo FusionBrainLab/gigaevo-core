@@ -7,16 +7,21 @@ interpolation or silently mis-wiring a shared object.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
+from hydra.utils import get_class
 from omegaconf import DictConfig, OmegaConf
 
 from gigaevo.config.helpers import build_archive_gate_provider
+from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.strategies.paired_selectors import (
     PairedBootstrapArchiveSelector,
 )
 from gigaevo.memory.provider import LeasedMemoryProvider, ReaderMemoryProvider
 from gigaevo.memory.write.crediting import PairedEffectEstimator
+from gigaevo.memory_v2.eviction import CausalPosteriorEvictor
+from gigaevo.memory_v2.writer import CausalV2ContentOnlyUpdater
 
 
 def _target_path(symbol: Any) -> str:
@@ -32,6 +37,8 @@ _LEASED_PROVIDER_TARGET = _target_path(LeasedMemoryProvider)
 _ARCHIVE_GATE_PROVIDER_TARGET = _target_path(build_archive_gate_provider)
 _PAIRED_SELECTOR_TARGET = _target_path(PairedBootstrapArchiveSelector)
 _PAIRED_CREDITING_TARGET = _target_path(PairedEffectEstimator)
+_MEMORY_V2_WRITER_TARGET = _target_path(CausalV2ContentOnlyUpdater)
+_MEMORY_V2_EVICTOR_TARGET = _target_path(CausalPosteriorEvictor)
 _MISSING = object()
 
 
@@ -147,6 +154,97 @@ def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
             "populate that bank during the run. Set checkpoint_dir=/path/to/an/"
             "existing/bank, use memory/write=live for same-run read+write, or "
             "use pipeline=guided memory=writer to build a bank for a later run."
+        )
+
+
+def validate_memory_v2_scope(cfg: DictConfig) -> None:
+    """Fail fast outside the first causally identified memory-v2 scope."""
+
+    if not bool(_raw_select(cfg, "memory.capabilities.causal_v2", False)):
+        return
+    num_parents = int(_raw_select(cfg, "num_parents", 1))
+    if num_parents != 1:
+        raise ValueError(
+            "memory=v2 currently requires num_parents=1. Per-parent decisions in "
+            "crossover create post-treatment anchor selection and unidentified "
+            "interference; v2 will support crossover only after the decision moves "
+            "to the complete mutation-level parent slate."
+        )
+    if bool(_raw_select(cfg, "memory.coalesce_refresh", True)):
+        raise ValueError(
+            "memory=v2 requires memory.coalesce_refresh=false so every mutation "
+            "attempt receives a distinct persisted behavior-policy decision."
+        )
+    if not bool(_raw_select(cfg, "pipeline_builder.fresh_context_reorder", False)):
+        raise ValueError(
+            "memory=v2 requires pipeline_builder.fresh_context_reorder=true so "
+            "the frozen decision context and mutation baseline use the same "
+            "fresh parent evaluation."
+        )
+    if not bool(_raw_select(cfg, "pipeline.routes_program_metadata", False)):
+        pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
+        raise ValueError(
+            "memory=v2 requires paired evaluation metadata, but "
+            f"pipeline={pipeline_id} does not route _program_metadata."
+        )
+    mutation_target = _raw_select(cfg, "mutation_operator._target_", None)
+    try:
+        mutation_operator = get_class(str(mutation_target))
+    except (ImportError, AttributeError, ValueError) as exc:
+        raise ValueError(
+            f"memory=v2 cannot resolve mutation operator {mutation_target!r}"
+        ) from exc
+    if not issubclass(mutation_operator, MutationOperator) or inspect.isabstract(
+        mutation_operator
+    ):
+        raise ValueError(
+            "memory=v2 requires a concrete MutationOperator class, got "
+            f"{mutation_operator!r}"
+        )
+    environment_operator = OmegaConf.select(
+        cfg, "memory.environment.mutation_operator", default=None
+    )
+    if environment_operator is not mutation_operator:
+        raise ValueError(
+            "memory=v2 environment fingerprint must reference the configured "
+            "concrete mutation operator class"
+        )
+    exploration = float(
+        _raw_select(
+            cfg,
+            "memory.policy_config.proposal_exploration_probability",
+            0.0,
+        )
+    )
+    if exploration < 0.01:
+        raise ValueError(
+            "memory=v2 requires proposal_exploration_probability>=0.01 to "
+            "preserve practical support for every eligible card."
+        )
+    offer_probability = float(
+        _raw_select(cfg, "memory.policy_config.offer_probability", 0.0)
+    )
+    if not 0.10 <= offer_probability <= 0.90:
+        raise ValueError(
+            "memory=v2 requires offer_probability in [0.10, 0.90] for "
+            "treatment/control overlap."
+        )
+    if int(_raw_select(cfg, "memory.candidate_source.max_candidates", -1)) != 0:
+        raise ValueError(
+            "memory=v2 requires candidate_source.max_candidates=0 until a "
+            "retrieval policy logs exact candidate-inclusion propensities."
+        )
+    updater_target = _raw_select(cfg, "memory.causal_writer_updater._target_", None)
+    if updater_target != _MEMORY_V2_WRITER_TARGET:
+        raise ValueError(
+            "memory=v2 requires the content-only causal writer updater; legacy "
+            "gain restamping would create a second observational efficacy policy."
+        )
+    evictor_target = _raw_select(cfg, "memory.evictor._target_", None)
+    if evictor_target != _MEMORY_V2_EVICTOR_TARGET:
+        raise ValueError(
+            "memory=v2 requires the causal Bayesian harm evictor; legacy mutable "
+            "card-stat eviction is not valid for the randomized v2 ledger."
         )
 
 

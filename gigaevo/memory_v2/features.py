@@ -1,0 +1,246 @@
+"""Explicit mixed-effect features for the memory-v2 terminal-utility model."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
+
+from gigaevo.memory_v2.models import CardSnapshot, EvolutionContext
+
+
+class FeatureConfig(BaseModel):
+    """Stable feature schema; changing it changes the model-config hash."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    behavior_keys: tuple[str, ...]
+    progress_log_scale: float = Field(default=100.0, gt=1.0)
+
+
+class HierarchicalFeatureMap:
+    def __init__(self, *, config: FeatureConfig) -> None:
+        if len(set(config.behavior_keys)) != len(config.behavior_keys):
+            raise ValueError("behavior_keys must be unique")
+        self.config = config
+
+    def space(self, cards: tuple[CardSnapshot, ...]) -> FeatureSpace:
+        return FeatureSpace(self.config, cards)
+
+
+class FeatureSpace:
+    """Finite design space with shared and contextual card-lineage effects."""
+
+    def __init__(self, config: FeatureConfig, cards: tuple[CardSnapshot, ...]) -> None:
+        all_cards = tuple(cards)
+        by_treatment: dict[str, CardSnapshot] = {}
+        for card in all_cards:
+            previous = by_treatment.get(card.treatment_id)
+            if previous is not None and previous.bank_card_id != card.bank_card_id:
+                raise ValueError(
+                    f"conflicting card lineage {card.treatment_id!r}"
+                )
+            # Historical decisions retain their exact payload snapshots. The
+            # latest snapshot is only a descriptor; model features depend on the
+            # stable treatment lineage, not prose revisions.
+            by_treatment[card.treatment_id] = card
+        self.config = config
+        self.cards = tuple(
+            sorted(by_treatment.values(), key=lambda row: row.treatment_id)
+        )
+        self._canonical_bank_id, self._bank_lineage_members = (
+            self._resolve_bank_lineages(all_cards)
+        )
+        bank_ids = sorted(set(self._canonical_bank_id.values()))
+        self._bank_index = {card_id: index for index, card_id in enumerate(bank_ids)}
+
+    @staticmethod
+    def _resolve_bank_lineages(
+        cards: tuple[CardSnapshot, ...],
+    ) -> tuple[dict[str, str], dict[str, frozenset[str]]]:
+        """Resolve transitive consolidation aliases to one unambiguous survivor."""
+
+        adjacency: dict[str, set[str]] = {}
+        absorbed: set[str] = set()
+        actual: set[str] = set()
+        for card in cards:
+            actual.add(card.bank_card_id)
+            adjacency.setdefault(card.bank_card_id, set())
+            for alias in card.absorbed_bank_card_ids:
+                absorbed.add(alias)
+                adjacency.setdefault(alias, set()).add(card.bank_card_id)
+                adjacency[card.bank_card_id].add(alias)
+
+        canonical: dict[str, str] = {}
+        members_by_canonical: dict[str, frozenset[str]] = {}
+        unseen = set(adjacency)
+        while unseen:
+            seed = min(unseen)
+            component: set[str] = set()
+            frontier = [seed]
+            while frontier:
+                node = frontier.pop()
+                if node in component:
+                    continue
+                component.add(node)
+                frontier.extend(adjacency[node] - component)
+            unseen.difference_update(component)
+            roots = sorted((component & actual) - absorbed)
+            if len(roots) != 1:
+                raise ValueError(
+                    "bank consolidation lineage must have exactly one survivor; "
+                    f"component={sorted(component)!r}, survivors={roots!r}"
+                )
+            survivor = roots[0]
+            frozen_members = frozenset(component)
+            members_by_canonical[survivor] = frozen_members
+            canonical.update({member: survivor for member in component})
+        return canonical, members_by_canonical
+
+    def bank_lineage_id(self, card: CardSnapshot) -> str:
+        try:
+            return self._canonical_bank_id[card.bank_card_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"card bank id {card.bank_card_id!r} is outside this feature space"
+            ) from exc
+
+    def bank_lineage_members(self, card: CardSnapshot) -> frozenset[str]:
+        return self._bank_lineage_members[self.bank_lineage_id(card)]
+
+    @property
+    def context_dim(self) -> int:
+        # Intercept, oriented fitness, progress, and stable behavior coordinates.
+        return 3 + len(self.config.behavior_keys)
+
+    @property
+    def baseline_dim(self) -> int:
+        return self.context_dim
+
+    @property
+    def shared_effect_dim(self) -> int:
+        return self.context_dim
+
+    @property
+    def card_context_dim(self) -> int:
+        # Card rankings vary only by intercept, parent fitness, and MAP position.
+        return 2 + len(self.config.behavior_keys)
+
+    @property
+    def card_effect_slice(self) -> slice:
+        start = self.shared_effect_dim
+        return slice(start, start + len(self._bank_index) * self.card_context_dim)
+
+    @property
+    def effect_dim(self) -> int:
+        return self.card_effect_slice.stop
+
+    @property
+    def outcome_dim(self) -> int:
+        return self.baseline_dim + self.effect_dim
+
+    def context_features(self, context: EvolutionContext) -> np.ndarray:
+        snapshot = context.map_elites
+        coordinates = {row.key: row for row in snapshot.coordinates}
+        if set(coordinates) != set(self.config.behavior_keys):
+            raise ValueError(
+                "context behavior axes differ from the configured feature schema"
+            )
+        primary_metric = context.reward.primary_metric
+        if primary_metric not in context.parent_metrics:
+            raise ValueError(f"parent metrics omit primary metric {primary_metric!r}")
+        primary_raw = context.parent_metrics[primary_metric]
+        primary_normalized = (
+            primary_raw - context.reward.metric_lower_bound
+        ) / context.reward.scale
+        primary_normalized = min(max(primary_normalized, 0.0), 1.0)
+        oriented_primary = (
+            primary_normalized
+            if context.reward.higher_is_better
+            else 1.0 - primary_normalized
+        )
+        progress = math.log1p(context.parent_iteration) / math.log1p(
+            self.config.progress_log_scale
+        )
+        result = [
+            1.0,
+            2.0 * oriented_primary - 1.0,
+            min(progress, 1.0),
+        ]
+        semantic = [
+            2.0 * coordinates[key].semantic_normalized - 1.0
+            for key in self.config.behavior_keys
+        ]
+        result.extend(semantic)
+        return np.asarray(result, dtype=float)
+
+    def baseline(self, card: CardSnapshot, context: EvolutionContext) -> np.ndarray:
+        self.bank_lineage_id(card)
+        return self.context_features(context)
+
+    def _card_deviation(
+        self, card: CardSnapshot, context: EvolutionContext
+    ) -> np.ndarray:
+        bank_id = self.bank_lineage_id(card)
+        shared = self.context_features(context)
+        card_context = np.concatenate((shared[:2], shared[3:]))
+        result = np.zeros(len(self._bank_index) * self.card_context_dim)
+        start = self._bank_index[bank_id] * self.card_context_dim
+        result[start : start + self.card_context_dim] = card_context
+        return result / math.sqrt(self.card_context_dim)
+
+    def effect(self, card: CardSnapshot, context: EvolutionContext) -> np.ndarray:
+        result = np.zeros(self.effect_dim, dtype=float)
+        context_features = self.context_features(context)
+        result[: self.context_dim] = context_features
+        result[self.card_effect_slice] = self._card_deviation(card, context)
+        return result
+
+    def design(
+        self,
+        card: CardSnapshot,
+        context: EvolutionContext,
+        treatment: bool | float,
+    ) -> np.ndarray:
+        action_weight = float(treatment)
+        effect = action_weight * self.effect(card, context)
+        return np.concatenate((self.baseline(card, context), effect))
+
+    def baseline_design(
+        self, card: CardSnapshot, context: EvolutionContext
+    ) -> np.ndarray:
+        return self.design(card, context, False)
+
+    def effect_design(
+        self, card: CardSnapshot, context: EvolutionContext
+    ) -> np.ndarray:
+        return self.effect(card, context)
+
+    def prior_variance(
+        self,
+        *,
+        baseline_sd: float,
+        shared_effect_sd: float,
+        card_effect_sd: float,
+    ) -> np.ndarray:
+        values = np.full(self.outcome_dim, shared_effect_sd**2, dtype=float)
+        values[: self.baseline_dim] = baseline_sd**2
+        effect_start = self.baseline_dim
+        values[
+            effect_start + self.card_effect_slice.start : effect_start
+            + self.card_effect_slice.stop
+        ] = card_effect_sd**2
+        return values
+
+    def effect_coefficients(self, coefficients: np.ndarray) -> np.ndarray:
+        return coefficients[self.baseline_dim :]
+
+    def linear_predictor(
+        self,
+        coefficients: np.ndarray,
+        card: CardSnapshot,
+        context: EvolutionContext,
+        treatment: bool,
+    ) -> float:
+        return float(self.design(card, context, treatment) @ coefficients)

@@ -451,8 +451,14 @@ class MemoryOutcome(MemoryEvent):
 
     status: Literal["outcome", "invalid", "censored"]
     fitness_delta: float | None = None
+    fitness_delta_se: float | None = Field(default=None, ge=0.0)
+    n_pairs: int | None = Field(default=None, ge=2)
+    measurement_kind: Literal["scalar", "paired", "deterministic"] = "scalar"
+    pairing_signature: str = ""
     invalid: bool = False
     censor_reason: str = ""
+    failure_stage: str = ""
+    completion_ordinal: int | None = Field(default=None, ge=0)
     child_id: str
     base_id: str
     primary_metric: str = ""
@@ -473,8 +479,14 @@ class MemoryOutcomeUpdate(MemoryEvent):
     previous_status: Literal["outcome", "invalid", "censored"]
     fitness_delta: float | None = None
     previous_fitness_delta: float | None = None
+    fitness_delta_se: float | None = Field(default=None, ge=0.0)
+    n_pairs: int | None = Field(default=None, ge=2)
+    measurement_kind: Literal["scalar", "paired", "deterministic"] = "scalar"
+    pairing_signature: str = ""
     invalid: bool = False
     censor_reason: str = ""
+    failure_stage: str = ""
+    completion_ordinal: int | None = Field(default=None, ge=0)
     child_id: str
     base_id: str
     primary_metric: str = ""

@@ -11,6 +11,8 @@ the same fallback predicate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any, Protocol, runtime_checkable
 
 from loguru import logger
@@ -20,6 +22,20 @@ from gigaevo.memory.cards import Measurement
 from gigaevo.programs.program import Program
 
 PER_SAMPLE_SCORES_KEY = "per_sample_scores"
+PER_SAMPLE_SIGNATURE_KEY = "per_sample_signature"
+
+
+def sample_sequence_signature(samples: Any) -> str:
+    """Content-address the ordered evaluation cohort used by paired scores."""
+
+    encoded = json.dumps(
+        samples,
+        default=str,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 # Float slack for mean(per_sample_scores) == metrics[key]; a larger gap means
 # the vector no longer describes the gated metric (silent contract drift).

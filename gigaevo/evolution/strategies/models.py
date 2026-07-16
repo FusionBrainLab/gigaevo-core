@@ -1,9 +1,38 @@
 from __future__ import annotations
 
 import abc
+import math
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+
+
+class BehaviorModelTransform(BaseModel):
+    """Stable statistical coordinate for one mutable archive dimension."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    lower_bound: float
+    upper_bound: float
+    transform: Literal["linear", "log1p"] = "linear"
+
+    @model_validator(mode="after")
+    def check_domain(self) -> BehaviorModelTransform:
+        if self.upper_bound <= self.lower_bound:
+            raise ValueError("behavior model bounds must be finite and increasing")
+        if self.transform == "log1p" and self.lower_bound < 0.0:
+            raise ValueError("log1p behavior model bounds must be non-negative")
+        return self
+
+    def normalize(self, value: float) -> float:
+        """Map a raw metric to its stable, clipped unit coordinate."""
+
+        clipped = min(max(float(value), self.lower_bound), self.upper_bound)
+        if self.transform == "log1p":
+            lower = math.log1p(self.lower_bound)
+            upper = math.log1p(self.upper_bound)
+            return (math.log1p(clipped) - lower) / (upper - lower)
+        return (clipped - self.lower_bound) / (self.upper_bound - self.lower_bound)
 
 
 class BinningStrategy(BaseModel, abc.ABC):
@@ -12,6 +41,7 @@ class BinningStrategy(BaseModel, abc.ABC):
     min_val: float
     max_val: float
     num_bins: int = Field(gt=0)
+    model_transform: BehaviorModelTransform | None = None
 
     @model_validator(mode="after")
     def check_bounds(self) -> BinningStrategy:
@@ -19,7 +49,39 @@ class BinningStrategy(BaseModel, abc.ABC):
             raise ValueError(
                 f"Invalid bounds: min ({self.min_val}) > max ({self.max_val})"
             )
+        if self.model_transform is None:
+            if self.min_val < self.max_val:
+                object.__setattr__(
+                    self,
+                    "model_transform",
+                    BehaviorModelTransform(
+                        lower_bound=self.min_val,
+                        upper_bound=self.max_val,
+                    ),
+                )
         return self
+
+    def normalize_for_model(self, value: float) -> float:
+        """Return the stable statistical coordinate, independent of rebinning."""
+
+        if self.model_transform is None:
+            raise RuntimeError("behavior model transform was not initialized")
+        return self.model_transform.normalize(value)
+
+    def model_transform_payload(self) -> dict[str, Any]:
+        """Return the serialized stable transform used in replay schemas."""
+
+        if self.model_transform is None:
+            raise RuntimeError("behavior model transform was not initialized")
+        return self.model_transform.model_dump(mode="json")
+
+    def normalize_for_archive(self, value: float) -> float:
+        """Return position relative to the current mutable archive bounds."""
+
+        if self.max_val == self.min_val:
+            return 0.5
+        clipped = self._clamp(float(value))
+        return (clipped - self.min_val) / (self.max_val - self.min_val)
 
     def _clamp(self, value: float) -> float:
         return max(self.min_val, min(value, self.max_val))

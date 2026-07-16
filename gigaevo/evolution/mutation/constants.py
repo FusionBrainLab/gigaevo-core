@@ -17,6 +17,11 @@ MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY = "memory_assignment"
 #: MEMORY_OUTCOME_UPDATE without creating a second terminal for the decision.
 MUTATION_MEMORY_OUTCOME_METADATA_KEY = "memory_outcome_terminal"
 
+#: Typed failure classification written atomically with a child transition to
+#: DISCARDED. Outcome attribution parses this record instead of inferring causal
+#: eligibility from the generic program state.
+MUTATION_TERMINAL_FAILURE_METADATA_KEY = "mutation_terminal_failure"
+
 #: Child-birth snapshot of every parent's durable read assignment, keyed by
 #: parent id. This is authoritative for crossover attribution.
 MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY = "memory_parent_assignments"
@@ -76,6 +81,9 @@ MUTATION_MEMORY_BASE_ID_METADATA_KEY = "memory_base_id"
 #: paired crediting must read the child's stamp. Absent when the eval is
 #: scalar-only; crediting degrades to the exact point delta.
 MUTATION_MEMORY_BASE_SCORES_METADATA_KEY = "memory_base_scores"
+
+#: Ordered evaluation-cohort digest aligned with ``memory_base_scores``.
+MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY = "memory_base_score_signature"
 
 #: Frozen onto a child at birth: per parent, the cache id of every parent stage
 #: output that produced the child (outputs live content-addressed in the storage

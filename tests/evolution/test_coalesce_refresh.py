@@ -64,6 +64,7 @@ class _FakeEngine:
         self._buffer_sema = asyncio.Semaphore(3)
         self._llm_active = 0
         self._selection_leases = None
+        self._outcome_failure_counts: dict[str, int] = {}
 
         self.metrics = type("M", (), {})()
         self.metrics.submitted_for_refresh = 0
@@ -87,6 +88,15 @@ class _FakeEngine:
     async def acquire_producer(self) -> None:
         await self._producer_sema.acquire()
 
+    def _record_memory_attempt_failure(self, _parents, **_payload) -> None:
+        return None
+
+    def _link_memory_attempt_child(self, **_payload) -> None:
+        return None
+
+    async def _record_memory_outcome(self, _program) -> None:
+        return None
+
 
 @pytest.fixture
 def mock_generate_one_mutation(monkeypatch):
@@ -100,8 +110,10 @@ def mock_generate_one_mutation(monkeypatch):
         iteration,
         task_id,
         selection_lease=None,
+        failure_observer=None,
+        child_observer=None,
     ):
-        del selection_lease
+        del selection_lease, failure_observer
         new_id = str(uuid.uuid4())
         prog = Program(
             id=new_id,
@@ -109,6 +121,8 @@ def mock_generate_one_mutation(monkeypatch):
             state=ProgramState.QUEUED,
         )
         prog.lineage.parents = [p.id for p in parents]
+        if child_observer is not None:
+            child_observer(new_id)
         await storage.add(prog)
         return new_id
 

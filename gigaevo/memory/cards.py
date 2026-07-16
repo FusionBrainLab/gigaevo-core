@@ -142,6 +142,7 @@ class CardAssignmentSource(BaseModel):
     bd_cell: tuple[int, ...] | None = None
     parent_metrics: dict[str, float] = Field(default_factory=dict)
     parent_scores: tuple[float, ...] | None = None
+    parent_score_signature: str = ""
 
 
 class MutationAssignmentRecord(BaseModel):

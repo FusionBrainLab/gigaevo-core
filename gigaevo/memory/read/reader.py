@@ -75,6 +75,10 @@ class MemorySelection(BaseModel):
     assignment: AssignmentRecord | None = Field(
         default=None, description="Durable assignment ledger payload."
     )
+    preformatted: bool = Field(
+        default=False,
+        description="Cards already contain their complete mutator-facing wrapper.",
+    )
 
 
 def _elapsed_ms(started: float) -> float:

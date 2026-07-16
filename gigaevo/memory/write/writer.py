@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from loguru import logger
 
@@ -52,6 +52,15 @@ from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
     from gigaevo.memory.ope.reporter import MemoryOpeReporter
+
+
+@runtime_checkable
+class CardEvidenceUpdater(Protocol):
+    """Writer-side maintenance after content proposals have landed."""
+
+    def update(
+        self, pool: list[Program], *, store: MemoryStore, gate: CardAdmissionGate
+    ) -> None: ...
 
 
 async def _shielded_to_thread(func, *args, cancel_log: str, **kwargs):
@@ -103,6 +112,7 @@ class LibrarianWriteStack:
         novelty_admission_gate: bool = False,
         selection_leases: InFlightSelectionRegistry | None = None,
         min_effective_events: float = 0.0,
+        max_task_cards: int | None = None,
         evicted_evidence: EvictedEvidenceSink | None = None,
     ) -> None:
         self._llm = llm
@@ -116,6 +126,8 @@ class LibrarianWriteStack:
         self._novelty_admission_gate = novelty_admission_gate
         self._selection_leases = selection_leases
         self._min_effective_events = min_effective_events
+        self._max_task_cards = max_task_cards
+        self._preserve_survivor_payload = self._dedup_policy.preserve_survivor_payload
         self._evicted_evidence = evicted_evidence
         self._gate: CardAdmissionGate | None = None
         self._librarian: Librarian | None = None
@@ -226,6 +238,8 @@ class LibrarianWriteStack:
             selection_leases=self._selection_leases,
             task_key=self._task_key,
             min_effective_events=self._min_effective_events,
+            max_task_cards=self._max_task_cards,
+            preserve_survivor_payload=self._preserve_survivor_payload,
             evicted_evidence_sink=self._evicted_evidence,
         )
         # Optional novelty-admission judge: gates freshly-authored idea cards on
@@ -321,6 +335,7 @@ class MemoryWriter(IncrementalPostRunHook):
         store: MemoryStore,
         checkpoint_dir: str | Path,
         metrics_context: MetricsContext,
+        stats_updater: CardEvidenceUpdater | None = None,
         baseline_estimator: NoCardBaselineEstimator | None = None,
         effect_estimator: EffectEstimator | None = None,
         no_card_recorder: NoCardEvidenceRecorder | None = None,
@@ -336,6 +351,7 @@ class MemoryWriter(IncrementalPostRunHook):
         novelty_admission_gate: bool = False,
         selection_leases: InFlightSelectionRegistry | None = None,
         min_effective_events: float = 0.0,
+        max_task_cards: int | None = None,
         evicted_evidence: EvictedEvidenceSink | None = None,
         ope_reporter: MemoryOpeReporter | None = None,
     ) -> None:
@@ -372,6 +388,7 @@ class MemoryWriter(IncrementalPostRunHook):
             novelty_admission_gate=novelty_admission_gate,
             selection_leases=selection_leases,
             min_effective_events=min_effective_events,
+            max_task_cards=max_task_cards,
             evicted_evidence=evicted_evidence,
         )
         self._extractor = ProgramRecordExtractor(
@@ -380,15 +397,27 @@ class MemoryWriter(IncrementalPostRunHook):
             fitness_key=fitness_key,
             metrics_context=metrics_context,
         )
-        self._stats = CardStatsUpdater(
-            fitness_key=fitness_key,
-            higher_is_better=self._higher_is_better,
-            metrics_context=metrics_context,
-            baseline_estimator=baseline_estimator,
-            effect_estimator=effect_estimator,
-            no_card_recorder=no_card_recorder,
-            task_key=task_key,
-            selection_leases=selection_leases,
+        if stats_updater is not None and any(
+            value is not None
+            for value in (baseline_estimator, effect_estimator, no_card_recorder)
+        ):
+            raise ValueError(
+                "a custom card evidence updater cannot be combined with legacy "
+                "baseline/effect/no-card estimators"
+            )
+        self._stats: CardEvidenceUpdater = (
+            stats_updater
+            if stats_updater is not None
+            else CardStatsUpdater(
+                fitness_key=fitness_key,
+                higher_is_better=self._higher_is_better,
+                metrics_context=metrics_context,
+                baseline_estimator=baseline_estimator,
+                effect_estimator=effect_estimator,
+                no_card_recorder=no_card_recorder,
+                task_key=task_key,
+                selection_leases=selection_leases,
+            )
         )
         self._consolidation = ConsolidationScheduler(
             stack=self._stack,
