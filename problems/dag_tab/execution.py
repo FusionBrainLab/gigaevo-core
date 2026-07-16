@@ -303,13 +303,22 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
     return result.loc[:, list(dict.fromkeys(output_cols))]
 
 
+# Shares no positional landmark with the full frame: drops both endpoints so
+# first/last-row broadcasts differ, strides so neighbour ops (shift/diff) differ.
+_PROBE_SUBSET = slice(1, -1, 2)
+
+
 def assert_split_invariant(graph: FeatureGraph, frame: pd.DataFrame) -> None:
     # Each eval split is built from a raw array and so carries a fresh
     # RangeIndex; the probe must too, or index-derived features look invariant
     # here and turn positional at eval.
+    if len(frame) < 4:
+        raise FeatureExecutionError(
+            f"split-invariance probe needs at least 4 rows; got {len(frame)}"
+        )
     full = execute_graph(graph, frame.reset_index(drop=True))
-    subset = execute_graph(graph, frame.iloc[1::2].reset_index(drop=True))
-    full_subset = full.iloc[1::2].reset_index(drop=True)
+    subset = execute_graph(graph, frame.iloc[_PROBE_SUBSET].reset_index(drop=True))
+    full_subset = full.iloc[_PROBE_SUBSET].reset_index(drop=True)
     diff_cols = [
         col for col in full.columns if not full_subset[col].equals(subset[col])
     ]

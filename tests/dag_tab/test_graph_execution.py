@@ -261,6 +261,28 @@ def test_split_invariance_probe_rejects_position_dependent_output():
         assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))
 
 
+def test_split_invariance_probe_rejects_last_row_broadcast():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df['x0'].iloc[-1]\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent behavior"):
+        assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))
+
+
+def test_split_invariance_probe_rejects_first_row_broadcast():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df['x0'].iloc[0]\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent behavior"):
+        assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))
+
+
 def test_split_invariance_probe_allows_row_wise_output():
     graph = FeatureGraph(
         dataset="california",

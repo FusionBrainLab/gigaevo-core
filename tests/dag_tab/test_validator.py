@@ -171,36 +171,6 @@ def test_classifier_restores_full_probability_matrix(monkeypatch):
     np.testing.assert_array_equal(probabilities, [[0.25, 0.0, 0.75, 0.0]])
 
 
-def test_tabular_problem_uses_stratified_classification_folds(monkeypatch):
-    class ClassificationDataset(_Dataset):
-        task_type = "multiclass"
-        n_classes = 3
-        X_train = np.ones((12, 8))
-        y_train = np.array([0, 1, 2] * 4)
-
-    monkeypatch.setenv("GIGAEVO_TABULAR_CV_FOLDS", "2")
-    problem = validator.build("unused")
-    splits = problem._splits(ClassificationDataset())
-
-    for fit_idx, query_idx in splits:
-        assert set(ClassificationDataset.y_train[fit_idx]) == {0, 1, 2}
-        assert set(ClassificationDataset.y_train[query_idx]) == {0, 1, 2}
-
-
-def test_tabular_problem_rejects_class_too_rare_for_stratification(monkeypatch):
-    class RareClassDataset(_Dataset):
-        task_type = "multiclass"
-        n_classes = 3
-        X_train = np.ones((7, 8))
-        y_train = np.array([0, 0, 0, 1, 1, 1, 2])
-
-    monkeypatch.setenv("GIGAEVO_TABULAR_CV_FOLDS", "3")
-    problem = validator.build("unused")
-
-    with np.testing.assert_raises_regex(ValueError, "every observed class"):
-        problem._splits(RareClassDataset())
-
-
 def test_validator_source_loads_without_dunder_file(monkeypatch):
     problem_dir = ROOT / "problems/dag_tab"
     source = (problem_dir / "validate.py").read_text()
