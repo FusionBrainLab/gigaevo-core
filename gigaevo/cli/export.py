@@ -12,25 +12,15 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import re
+from typing import TYPE_CHECKING
 
 import click
-import pandas as pd
 
 from gigaevo.cli.run_resolver import RunResolver
 
-
-def _build_redis_config(run_config, redis_host: str, redis_port: int):
-    """Build a RedisRunConfig from a monitoring RunConfig."""
-    from gigaevo.database.factory import RedisRunConfig
-
-    spec = run_config.run_spec
-    return RedisRunConfig(
-        redis_host=redis_host,
-        redis_port=redis_port,
-        redis_db=spec.db,
-        redis_prefix=spec.prefix,
-        label=spec.label,
-    )
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def _fetch_dataframe(run_config, redis_host: str, redis_port: int) -> pd.DataFrame:
@@ -129,8 +119,10 @@ def _verify_prefixes_exist(
             host=redis_host, port=redis_port, db=spec.db, decode_responses=True
         )
         try:
-            probe = r.scan(0, match=f"{spec.prefix}:*", count=1)
-            if probe[1]:
+            if (
+                next(r.scan_iter(match=f"{spec.prefix}:*", count=1000), None)
+                is not None
+            ):
                 continue
         except RedisError:
             return
@@ -148,8 +140,27 @@ def _verify_prefixes_exist(
 
 
 def _labeled_path(base: Path, label: str) -> Path:
-    """Insert `_<label>` between stem and suffix of `base`."""
-    return base.with_name(f"{base.stem}_{label}{base.suffix}")
+    """Insert a filesystem-safe label between the stem and suffix."""
+    safe_label = re.sub(r"[^A-Za-z0-9._@-]+", "_", label).strip("._") or "run"
+    return base.with_name(f"{base.stem}_{safe_label}{base.suffix}")
+
+
+def _fanout_paths(base: Path, labels: list[str]) -> dict[str, Path]:
+    """Build non-colliding output paths for a multi-run export."""
+    paths = {label: _labeled_path(base, label) for label in labels}
+    by_path: dict[Path, list[str]] = {}
+    for label, path in paths.items():
+        by_path.setdefault(path, []).append(label)
+    collisions = [items for items in by_path.values() if len(items) > 1]
+    if collisions:
+        rendered = "; ".join(
+            ", ".join(repr(label) for label in group) for group in collisions
+        )
+        raise click.ClickException(
+            "Run labels produce the same output filename after sanitization: "
+            f"{rendered}. Choose distinct alphanumeric labels."
+        )
+    return paths
 
 
 def _emit_summary(summaries: list[dict]) -> None:
@@ -192,12 +203,15 @@ def csv_cmd(ctx: click.Context, labels: tuple[str, ...], output_file: str) -> No
     base = Path(output_file)
     base.parent.mkdir(parents=True, exist_ok=True)
     multi = len(run_configs) > 1
+    output_paths = (
+        _fanout_paths(base, [rc.run_spec.label for rc in run_configs]) if multi else {}
+    )
 
     summaries: list[dict] = []
     for rc in run_configs:
         df = _fetch_dataframe(rc, redis_host, redis_port)
         df = _serialize_complex_columns(df)
-        out_path = _labeled_path(base, rc.run_spec.label) if multi else base
+        out_path = output_paths[rc.run_spec.label] if multi else base
         df.to_csv(out_path, index=False)
         summaries.append(
             {
@@ -224,11 +238,16 @@ def csv_cmd(ctx: click.Context, labels: tuple[str, ...], output_file: str) -> No
     ),
 )
 @click.option("--metric", default="fitness", help="Metric for frontier values.")
+@click.option("--minimize", is_flag=True, default=False, help="Lower is better.")
 @click.pass_context
 def frontier(
-    ctx: click.Context, labels: tuple[str, ...], output_file: str, metric: str
+    ctx: click.Context,
+    labels: tuple[str, ...],
+    output_file: str,
+    metric: str,
+    minimize: bool,
 ) -> None:
-    """Export frontier-only CSV with gen and best_val columns.
+    """Export the cumulative best value by generation.
 
     \b
     Usage:
@@ -244,6 +263,9 @@ def frontier(
     base = Path(output_file)
     base.parent.mkdir(parents=True, exist_ok=True)
     multi = len(run_configs) > 1
+    output_paths = (
+        _fanout_paths(base, [rc.run_spec.label for rc in run_configs]) if multi else {}
+    )
 
     summaries: list[dict] = []
     for rc in run_configs:
@@ -257,18 +279,27 @@ def frontier(
             return
 
         gen_col = "generation" if "generation" in df.columns else "iteration"
-        frontier_df = df.groupby(gen_col)[fitness_col].max().reset_index()
+        grouped = df.groupby(gen_col)[fitness_col]
+        frontier_df = (grouped.min() if minimize else grouped.max()).reset_index()
         frontier_df.columns = ["gen", "best_val"]
         frontier_df = frontier_df.sort_values("gen").reset_index(drop=True)
+        if minimize:
+            frontier_df["best_val"] = frontier_df["best_val"].cummin()
+        else:
+            frontier_df["best_val"] = frontier_df["best_val"].cummax()
 
-        out_path = _labeled_path(base, rc.run_spec.label) if multi else base
+        out_path = output_paths[rc.run_spec.label] if multi else base
         frontier_df.to_csv(out_path, index=False)
+        best_value = (
+            None if frontier_df.empty else float(frontier_df["best_val"].iloc[-1])
+        )
         summaries.append(
             {
                 "label": rc.run_spec.label,
                 "output_file": str(out_path),
                 "generations": len(frontier_df),
-                "best_value": float(frontier_df["best_val"].max()),
+                "best_value": best_value,
+                "direction": "minimize" if minimize else "maximize",
             }
         )
 

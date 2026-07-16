@@ -417,7 +417,7 @@ Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `
 | `tools/wizard/` | Interactive problem scaffolding |
 
 For disk runs, pass the storage directory as the run spec, e.g.
-`gigaevo -r outputs/<date>/<time>/storage top -n 5`. See
+`gigaevo -r 'outputs/<date>/<time>/storage' top -n 5`. See
 [tools/README.md](tools/README.md) for the full CLI reference and Redis key
 schema.
 

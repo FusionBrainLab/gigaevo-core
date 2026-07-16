@@ -11,25 +11,8 @@ import click
 import pandas as pd
 
 from gigaevo.cli.run_resolver import RunResolver
-from gigaevo.database.factory import RedisRunConfig
 
 SmoothingMethod = Literal["lowess", "ema", "savgol", "gaussian", "rolling", "none"]
-
-
-def _build_redis_config(
-    run_config,
-    redis_host: str = "localhost",
-    redis_port: int = 6379,
-) -> RedisRunConfig:
-    """Build a RedisRunConfig from a monitoring RunConfig."""
-    spec = run_config.run_spec
-    return RedisRunConfig(
-        redis_host=redis_host,
-        redis_port=redis_port,
-        redis_db=spec.db,
-        redis_prefix=spec.prefix,
-        label=spec.label,
-    )
 
 
 def _parse_csv_spec(arg: str) -> tuple[Path, str]:
@@ -53,6 +36,7 @@ def _load_csv_data(
     metric: str = "fitness",
     no_frontier_labels: set[str] | None = None,
     sentinel_value: float | None = None,
+    minimize: bool = False,
 ) -> list[tuple[str, pd.DataFrame]]:
     """Load and prepare DataFrames from exported CSVs. Symmetric to ``_fetch_run_data``.
 
@@ -86,6 +70,7 @@ def _load_csv_data(
             fitness_col=fitness_col,
             compute_frontier=not skip_frontier,
             sentinel_value=sentinel_value,
+            minimize=minimize,
         )
         if prepared.empty:
             continue
@@ -100,11 +85,12 @@ def _fetch_run_data(
     metric: str = "fitness",
     no_frontier_labels: set[str] | None = None,
     sentinel_value: float | None = None,
+    minimize: bool = False,
 ) -> list[tuple[str, pd.DataFrame]]:
     """Fetch and prepare DataFrames for each run. Returns list of (label, df).
 
     Args:
-        no_frontier_labels: Set of run labels for which frontier (cummax) should
+        no_frontier_labels: Set of run labels for which the cumulative frontier
             be suppressed. Useful for adversarial Improver populations where
             fitness is non-monotonic.
         sentinel_value: Exact fitness value used for invalid programs (e.g. -1.0).
@@ -128,14 +114,14 @@ def _fetch_run_data(
         raw_df = asyncio.run(_fetch())
         if raw_df.empty:
             continue
-        config = _build_redis_config(rc, redis_host, redis_port)
-        label = config.display_label()
+        label = spec.label
         skip_frontier = no_frontier_labels is not None and label in no_frontier_labels
         prepared = prepare_iteration_dataframe(
             raw_df,
             fitness_col=f"metric_{metric}",
             compute_frontier=not skip_frontier,
             sentinel_value=sentinel_value,
+            minimize=minimize,
         )
         if prepared.empty:
             continue
@@ -266,11 +252,12 @@ def plot() -> None:
 @click.option("--window", type=int, default=5, help="Smoothing window size.")
 @click.option("--show", is_flag=True, default=False, help="Show plot interactively.")
 @click.option("--metric", default="fitness", help="Metric to plot.")
+@click.option("--minimize", is_flag=True, default=False, help="Lower is better.")
 @click.option(
     "--no-frontier",
     is_flag=True,
     default=False,
-    help="Suppress frontier (cummax) line for ALL runs.",
+    help="Suppress the cumulative-best frontier for ALL runs.",
 )
 @click.option(
     "--no-frontier-for",
@@ -322,6 +309,7 @@ def comparison(
     window: int,
     show: bool,
     metric: str,
+    minimize: bool,
     no_frontier: bool,
     no_frontier_for: str | None,
     annotate_frontier: bool,
@@ -364,6 +352,15 @@ def comparison(
 
     if from_csv:
         csv_specs = [_parse_csv_spec(arg) for arg in from_csv]
+        csv_labels = [label for _, label in csv_specs]
+        duplicates = sorted(
+            {label for label in csv_labels if csv_labels.count(label) > 1}
+        )
+        if duplicates:
+            raise click.ClickException(
+                "CSV labels must be unique; duplicate label(s): "
+                f"{', '.join(duplicates)}. Add distinct :LABEL suffixes."
+            )
         actual_no_frontier: set[str] | None
         if no_frontier_labels and "__ALL__" in no_frontier_labels:
             actual_no_frontier = {label for _, label in csv_specs}
@@ -374,6 +371,7 @@ def comparison(
             metric=metric,
             no_frontier_labels=actual_no_frontier,
             sentinel_value=sentinel,
+            minimize=minimize,
         )
     else:
         run_configs = RunResolver.resolve(
@@ -386,12 +384,7 @@ def comparison(
         # When --no-frontier applies to ALL runs, pass all labels; otherwise pass specific ones
         if no_frontier_labels and "__ALL__" in no_frontier_labels:
             # Resolve all labels first, then suppress frontier for all
-            all_labels = {
-                _build_redis_config(
-                    rc, ctx.obj["redis_host"], ctx.obj["redis_port"]
-                ).display_label()
-                for rc in run_configs
-            }
+            all_labels = {rc.run_spec.label for rc in run_configs}
             actual_no_frontier = all_labels
         else:
             actual_no_frontier = no_frontier_labels
@@ -403,6 +396,7 @@ def comparison(
             metric=metric,
             no_frontier_labels=actual_no_frontier,
             sentinel_value=sentinel,
+            minimize=minimize,
         )
 
     if not prepared_dfs:
@@ -508,7 +502,7 @@ def comparison(
                     ax,
                     iters.values,
                     agg["frontier_fitness"].values,
-                    minimize=False,
+                    minimize=minimize,
                     max_annotations=max_annotations,
                     color=color,
                 )
@@ -540,6 +534,7 @@ def comparison(
         "runs": run_labels,
         "smoothing": smoothing,
         "metric": metric,
+        "direction": "minimize" if minimize else "maximize",
         "no_frontier": no_frontier,
         "no_frontier_for": no_frontier_for,
         "annotate_frontier": annotate_frontier,
@@ -558,6 +553,7 @@ def comparison(
     help="Output directory for plot files.",
 )
 @click.option("--metric", default="fitness", help="Metric to plot.")
+@click.option("--minimize", is_flag=True, default=False, help="Lower is better.")
 @click.option("--pdf", is_flag=True, default=False, help="Also save as PDF.")
 @click.option(
     "--no-best", is_flag=True, default=False, help="Suppress best fitness line."
@@ -582,6 +578,7 @@ def trajectory(
     ctx: click.Context,
     output_dir: str,
     metric: str,
+    minimize: bool,
     pdf: bool,
     no_best: bool,
     no_mean: bool,
@@ -612,6 +609,7 @@ def trajectory(
         ctx.obj["redis_port"],
         metric=metric,
         sentinel_value=sentinel,
+        minimize=minimize,
     )
 
     if not prepared_dfs:
@@ -680,6 +678,7 @@ def trajectory(
     summary = {
         "output_dir": str(out_path),
         "metric": metric,
+        "direction": "minimize" if minimize else "maximize",
         "files": files_created,
     }
     click.echo(json.dumps(summary, indent=2))
@@ -694,6 +693,7 @@ def trajectory(
     help="Output directory for plot files.",
 )
 @click.option("--metric", default="fitness", help="Metric to plot.")
+@click.option("--minimize", is_flag=True, default=False, help="Lower is better.")
 @click.option(
     "--paired",
     type=str,
@@ -753,6 +753,7 @@ def arms_race(
     ctx: click.Context,
     output_dir: str,
     metric: str,
+    minimize: bool,
     paired: str,
     show_max: bool,
     smoothing: str,
@@ -806,6 +807,7 @@ def arms_race(
         metric=metric,
         no_frontier_labels=d_labels,
         sentinel_value=sentinel,
+        minimize=minimize,
     )
 
     if not prepared_dfs:
@@ -900,7 +902,7 @@ def arms_race(
                     ax,
                     iters.values,
                     agg["frontier_fitness"].values,
-                    minimize=False,
+                    minimize=minimize,
                     max_annotations=max_annotations,
                     color=color,
                 )
@@ -978,6 +980,7 @@ def arms_race(
         "output_dir": str(out_path),
         "pairs": pair_labels,
         "metric": metric,
+        "direction": "minimize" if minimize else "maximize",
         "show_max": show_max,
         "paper": paper,
         "files": files_created,

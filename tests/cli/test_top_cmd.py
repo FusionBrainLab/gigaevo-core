@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from click.testing import CliRunner
 import fakeredis
@@ -94,6 +95,23 @@ class TestTopBasic:
         )
         assert result.exit_code == 0, result.output
         assert "abcdef123456" in result.output
+
+    def test_fetch_uses_scan_instead_of_blocking_keys(self):
+        from gigaevo.cli.top import _fetch_top_programs
+
+        client = MagicMock()
+        client.scan_iter.return_value = iter(["p:program:a"])
+        client.get.return_value = json.dumps(
+            {
+                "id": "a",
+                "metrics": {"fitness": 1.0},
+                "state": "completed",
+            }
+        )
+        programs = _fetch_top_programs(client, "p", "fitness", 1)
+        assert programs[0]["id"] == "a"
+        client.scan_iter.assert_called_once_with(match="p:program:*", count=1000)
+        client.keys.assert_not_called()
 
 
 class TestTopCodeFlag:

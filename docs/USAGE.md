@@ -177,8 +177,8 @@ Inspect a disk run with the CLI by passing the storage path as the run
 spec (read-only, safe while the run is live):
 
 ```bash
-gigaevo -r outputs/<run dir>/storage top -n 5
-gigaevo -r outputs/<run dir>/storage:mylabel export csv -o out.csv
+gigaevo -r 'outputs/<run dir>/storage' top -n 5
+gigaevo -r 'outputs/<run dir>/storage:mylabel' export csv -o out.csv
 ```
 
 Supported by `top`, `export`, and `plot`; Redis-only commands (`status`,

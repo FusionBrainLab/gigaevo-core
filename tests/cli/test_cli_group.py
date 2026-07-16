@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
@@ -66,6 +67,15 @@ class TestLazyImports:
         assert matplotlib_mods == [], (
             f"matplotlib imported at CLI load: {matplotlib_mods}"
         )
+
+    def test_root_help_does_not_import_lazy_commands(self):
+        from gigaevo.cli import main
+
+        runner = CliRunner()
+        with patch("gigaevo.cli.importlib.import_module") as lazy_import:
+            result = runner.invoke(main, ["--help"], catch_exceptions=False)
+        assert result.exit_code == 0
+        lazy_import.assert_not_called()
 
 
 class TestContextObject:

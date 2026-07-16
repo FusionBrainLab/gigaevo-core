@@ -21,7 +21,7 @@ def _fetch_top_programs(
     minimize: bool = False,
 ) -> list[dict]:
     """Fetch top N programs from Redis by metric value."""
-    program_keys = r.keys(f"{prefix}:program:*")
+    program_keys = r.scan_iter(match=f"{prefix}:program:*", count=1000)
     programs = []
     for key in program_keys:
         raw = r.get(key)

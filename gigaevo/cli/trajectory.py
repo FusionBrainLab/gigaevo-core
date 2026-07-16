@@ -40,18 +40,19 @@ def _fetch_trajectory(
             pass
 
     all_iters = sorted(set(frontier_by_iter.keys()) | set(mean_by_iter.keys()))
-    running_best: float | None = None
+    current_frontier: float | None = None
     rows: list[dict] = []
     for it in all_iters:
         best = frontier_by_iter.get(it)
         if best is not None:
-            if running_best is None or best > running_best:
-                running_best = best
+            # This history is already the canonical frontier. Carry its latest
+            # value forward without assuming whether lower or higher is better.
+            current_frontier = best
         mean = mean_by_iter.get(it)
         rows.append(
             {
                 "Iter": it,
-                "Best": running_best,
+                "Best": current_frontier,
                 "Mean": mean,
             }
         )
@@ -59,7 +60,12 @@ def _fetch_trajectory(
 
 
 @click.command()
-@click.option("--tail", type=int, default=None, help="Show only last N iterations.")
+@click.option(
+    "--tail",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Show the last N iterations per run and metric.",
+)
 @click.option(
     "--metric",
     multiple=True,
@@ -87,7 +93,7 @@ def trajectory(
 ) -> None:
     """Show iteration-by-iteration metric trajectory (running best + per-iter mean).
 
-    Reads `valid_frontier_<metric>` (running best, fitness-only monotone)
+    Reads `valid_frontier_<metric>` (the canonical running frontier)
     and `valid_iter_<metric>_mean` histories from Redis. Values are plain
     (unsmoothed); use `gigaevo plot trajectory` for smoothed plots.
 
@@ -142,6 +148,8 @@ def trajectory(
             for m in metrics_to_show:
                 rows = _fetch_trajectory(r, spec.prefix, m)
                 rows_per_metric[m] += len(rows)
+                if tail is not None:
+                    rows = rows[-tail:]
                 for row in rows:
                     if len(run_configs) > 1:
                         row["Label"] = spec.label
@@ -161,9 +169,6 @@ def trajectory(
                 f"Check the metric name or whether the run has emitted data yet.",
                 err=True,
             )
-
-    if tail is not None and tail > 0:
-        all_rows = all_rows[-tail:]
 
     columns = ["Iter", "Best", "Mean"]
     if len(run_configs) > 1:

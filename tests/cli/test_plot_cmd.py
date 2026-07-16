@@ -207,6 +207,30 @@ class TestComparisonCommand:
         )
         assert result.exit_code == 0, f"Failed: {result.output}"
 
+    @patch("gigaevo.cli.plot_group._fetch_run_data")
+    def test_comparison_passes_minimize_to_preparation(self, mock_fetch, tmp_path):
+        from gigaevo.cli import main
+
+        mock_fetch.return_value = [("A", _make_iteration_df(5))]
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "p@0:A",
+                "plot",
+                "comparison",
+                "--minimize",
+                "--smoothing",
+                "none",
+                "-o",
+                str(tmp_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_fetch.call_args.kwargs["minimize"] is True
+        assert json.loads(result.output)["direction"] == "minimize"
+
     def test_comparison_requires_output_dir(self):
         """comparison fails without -o flag."""
         from gigaevo.cli import main
@@ -387,6 +411,24 @@ class TestLoadCsvData:
 
         assert [label for label, _ in result] == ["A", "B"]
 
+    def test_minimize_computes_cumulative_minimum(self, tmp_path):
+        from gigaevo.cli.plot_group import _load_csv_data
+
+        csv_path = tmp_path / "loss.csv"
+        pd.DataFrame(
+            {
+                "iteration": [1, 2, 3, 4],
+                "metric_loss": [5.0, 4.0, 4.5, 3.0],
+            }
+        ).to_csv(csv_path, index=False)
+        result = _load_csv_data(
+            [(csv_path, "loss")],
+            metric="loss",
+            minimize=True,
+        )
+        # The high-side outlier filter removes 5.0 for a minimization metric.
+        assert result[0][1]["frontier_fitness"].tolist() == [4.0, 4.0, 3.0]
+
     def test_missing_file_raises_click_exception(self, tmp_path):
         from gigaevo.cli.plot_group import _load_csv_data
 
@@ -460,6 +502,30 @@ class TestComparisonFromCsv:
         summary = json.loads(result.output.strip())
         assert summary["runs"] == ["Alpha", "Beta"]
 
+    def test_duplicate_csv_labels_are_rejected(self, tmp_path):
+        from gigaevo.cli import main
+
+        a = tmp_path / "alpha.csv"
+        b = tmp_path / "beta.csv"
+        _write_evolution_csv(a, n_rows=5)
+        _write_evolution_csv(b, n_rows=5)
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "plot",
+                "comparison",
+                "--from-csv",
+                f"{a}:same",
+                "--from-csv",
+                f"{b}:same",
+                "-o",
+                str(tmp_path / "out"),
+            ],
+        )
+        assert result.exit_code == 1
+        assert "CSV labels must be unique" in result.output
+
     def test_comparison_from_csv_label_defaults_to_stem(self, tmp_path):
         from gigaevo.cli import main
 
@@ -531,3 +597,28 @@ class TestComparisonFromCsv:
 
         assert result.exit_code != 0
         assert "missing.csv" in result.output
+
+
+class TestPlotDiskStorage:
+    def test_comparison_reads_disk_storage(self, seed_disk_run, tmp_path):
+        from gigaevo.cli import main
+
+        root, _ = seed_disk_run(fitnesses=(0.5, 0.8, 0.65))
+        output_dir = tmp_path / "plots"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                str(root),
+                "plot",
+                "comparison",
+                "--smoothing",
+                "none",
+                "-o",
+                str(output_dir),
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert (output_dir / "evolution_runs_comparison.png").exists()

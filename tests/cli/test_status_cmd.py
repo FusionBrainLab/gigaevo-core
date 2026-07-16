@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 import fakeredis
-import pytest
 
 from gigaevo.cli import main
 from gigaevo.monitoring.run_spec import RunSpec
@@ -30,7 +29,12 @@ def _populate_run(
 ) -> None:
     """Populate a fakeredis DB with standard run data."""
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_mutants=iteration)
+    write_engine_snapshot_sync(
+        r,
+        prefix,
+        total_mutants=iteration,
+        programs_processed=iteration,
+    )
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(iteration, fitness),
@@ -84,10 +88,6 @@ class TestStatusSingleRun:
         assert result.exit_code == 0, result.output
         assert "A" in result.output
 
-    @pytest.mark.skip(
-        reason="Pre-existing CI failure on main: Iter field reads 0 instead of "
-        "the seeded total_mutants=10. Unblocks CI; tracked separately."
-    )
     def test_json_output_has_expected_fields(self):
         """Status JSON output includes run data from monitoring lib."""
         server = fakeredis.FakeServer()
@@ -163,7 +163,9 @@ class TestStatusUsesMonitoringLib:
             valid_programs=450,
         )
 
-        with patch("gigaevo.cli.status.ExperimentMonitor") as mock_monitor_cls:
+        with patch(
+            "gigaevo.monitoring.experiment_monitor.ExperimentMonitor"
+        ) as mock_monitor_cls:
             mock_instance = mock_monitor_cls.return_value
             mock_instance.collect.return_value = [snapshot]
 

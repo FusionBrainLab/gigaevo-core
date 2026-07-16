@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import importlib
 import os
 import sys
@@ -11,24 +12,79 @@ import click
 
 from gigaevo.cli.output_formatter import OutputFormatter
 
-# Lazy subcommand registry: name -> (module_path, attr_name)
-_LAZY_SUBCOMMANDS: dict[str, tuple[str, str]] = {
-    "status": ("gigaevo.cli.status", "status"),
-    "trajectory": ("gigaevo.cli.trajectory", "trajectory"),
-    "top": ("gigaevo.cli.top", "top"),
-    "logs": ("gigaevo.cli.logs", "logs"),
-    "plot": ("gigaevo.cli.plot_group", "plot"),
-    "export": ("gigaevo.cli.export", "export"),
-    "flush": ("gigaevo.cli.flush", "flush"),
-    "watchdog": ("gigaevo.cli.watchdog_cmd", "watchdog"),
-    "checkpoint": ("gigaevo.cli.checkpoint", "checkpoint"),
-    "manifest": ("gigaevo.cli.manifest_cmd", "manifest"),
-    "inspect": ("gigaevo.cli.inspect_cmd", "inspect"),
-    "launch": ("gigaevo.cli.launch_cmd", "launch"),
-    "events": ("gigaevo.cli.events_cmd", "events"),
-    "profiler": ("gigaevo.cli.profiler_cmd", "profiler"),
-    "metrics": ("gigaevo.cli.metrics_cmd", "metrics"),
-    "memory": ("gigaevo.cli.memory_cmd", "memory"),
+
+@dataclass(frozen=True)
+class LazyCommandSpec:
+    module: str
+    attribute: str
+    help: str
+
+
+# Click's default Group.format_commands imports every command for its short
+# help. Keeping help in this registry lets root help remain genuinely lazy.
+_LAZY_SUBCOMMANDS: dict[str, LazyCommandSpec] = {
+    "status": LazyCommandSpec(
+        "gigaevo.cli.status", "status", "Show live Redis run status and health."
+    ),
+    "trajectory": LazyCommandSpec(
+        "gigaevo.cli.trajectory",
+        "trajectory",
+        "Show Redis metric frontier and mean histories.",
+    ),
+    "top": LazyCommandSpec(
+        "gigaevo.cli.top", "top", "Inspect top programs from Redis or disk storage."
+    ),
+    "logs": LazyCommandSpec(
+        "gigaevo.cli.logs", "logs", "List or tail experiment log files."
+    ),
+    "plot": LazyCommandSpec(
+        "gigaevo.cli.plot_group",
+        "plot",
+        "Plot runs from Redis, disk storage, or exported CSV.",
+    ),
+    "export": LazyCommandSpec(
+        "gigaevo.cli.export",
+        "export",
+        "Export Redis or disk program data to CSV.",
+    ),
+    "flush": LazyCommandSpec(
+        "gigaevo.cli.flush", "flush", "Stop run processes and flush Redis databases."
+    ),
+    "watchdog": LazyCommandSpec(
+        "gigaevo.cli.watchdog_cmd",
+        "watchdog",
+        "Run experiment monitoring and notifications.",
+    ),
+    "checkpoint": LazyCommandSpec(
+        "gigaevo.cli.checkpoint",
+        "checkpoint",
+        "Collect a one-shot Redis status summary.",
+    ),
+    "manifest": LazyCommandSpec(
+        "gigaevo.cli.manifest_cmd",
+        "manifest",
+        "Read and update experiment manifests.",
+    ),
+    "inspect": LazyCommandSpec(
+        "gigaevo.cli.inspect_cmd", "inspect", "Discover GigaEvo prefixes in Redis."
+    ),
+    "launch": LazyCommandSpec(
+        "gigaevo.cli.launch_cmd", "launch", "Validate and launch an experiment."
+    ),
+    "events": LazyCommandSpec(
+        "gigaevo.cli.events_cmd", "events", "Audit and plot canonical run events."
+    ),
+    "profiler": LazyCommandSpec(
+        "gigaevo.cli.profiler_cmd",
+        "profiler",
+        "Build profiling reports from run logs.",
+    ),
+    "metrics": LazyCommandSpec(
+        "gigaevo.cli.metrics_cmd", "metrics", "Dump raw Redis metric histories."
+    ),
+    "memory": LazyCommandSpec(
+        "gigaevo.cli.memory_cmd", "memory", "Analyze and calibrate memory ledgers."
+    ),
 }
 
 
@@ -49,10 +105,36 @@ class LazyGroup(click.Group):
             return cmd
         # Lazy-load from registry
         if cmd_name in _LAZY_SUBCOMMANDS:
-            module_path, attr_name = _LAZY_SUBCOMMANDS[cmd_name]
-            mod = importlib.import_module(module_path)
-            return getattr(mod, attr_name)
+            spec = _LAZY_SUBCOMMANDS[cmd_name]
+            mod = importlib.import_module(spec.module)
+            return getattr(mod, spec.attribute)
         return None
+
+    def format_commands(
+        self, ctx: click.Context, formatter: click.HelpFormatter
+    ) -> None:
+        """Render root command help without importing lazy command modules."""
+        commands: list[tuple[str, click.Command | None, str]] = []
+        for name in self.list_commands(ctx):
+            eager = super().get_command(ctx, name)
+            if eager is not None:
+                if not eager.hidden:
+                    commands.append((name, eager, ""))
+            elif name in _LAZY_SUBCOMMANDS:
+                commands.append((name, None, _LAZY_SUBCOMMANDS[name].help))
+
+        if not commands:
+            return
+        limit = formatter.width - 6 - max(len(name) for name, _, _ in commands)
+        rows = [
+            (
+                name,
+                static_help if command is None else command.get_short_help_str(limit),
+            )
+            for name, command, static_help in commands
+        ]
+        with formatter.section("Commands"):
+            formatter.write_dl(rows)
 
     def invoke(self, ctx: click.Context) -> Any:
         try:
@@ -97,7 +179,7 @@ class LazyGroup(click.Group):
     multiple=True,
     help=(
         "Run spec 'prefix@db[:label]' (e.g. 'adv_k5_1_G@1:K5_1_G') or a "
-        "disk storage path '/path/to/storage[:label]' for storage=disk "
+        "disk storage path 'outputs/run/storage[:label]' for storage=disk "
         "runs. Repeatable — pass multiple times to target several runs."
     ),
 )
@@ -180,10 +262,21 @@ def main(
       gigaevo -e heilbron/k5-budget-v3 manifest get runs
       gigaevo flush --db 1 2 3 --confirm              # no -e/-r needed
 
-    Target selection: pass `-e/--experiment` to auto-discover all runs
-    from the manifest, OR `-r/--run` (repeatable) to target specific
-    prefix@db pairs or disk storage paths (storage=disk runs; supported
-    by top/export/plot). Some commands (flush, inspect) ignore both.
+    Target selection: pass `-e/--experiment` to load Redis runs from the
+    manifest, OR repeat `-r/--run` to target Redis and/or disk runs.
+    Labels must be unique when several runs are selected.
+
+    \b
+    Storage support
+    ---------------
+      Redis + disk   top, export, plot
+      Redis only     status, trajectory, metrics, checkpoint
+      Files/logs     logs, profiler, events
+      No run target  flush, inspect
+
+    Redis specs: prefix@db[:label], db[:label], or @db[:label].
+    Disk specs: /path/to/storage[:label], ./relative/storage[:label],
+    or any slash-containing relative path without '@'.
     """
     ctx.ensure_object(dict)
     ctx.obj["formatter"] = OutputFormatter(format_name=format_name, quiet=quiet)

@@ -99,6 +99,15 @@ class TestResolveErrors:
                 redis_port=6379,
             )
 
+    def test_duplicate_labels_are_rejected(self):
+        with pytest.raises(click.UsageError, match="labels must be unique.*same"):
+            RunResolver.resolve(
+                experiment=None,
+                runs=["p@1:same", "q@2:same"],
+                redis_host="localhost",
+                redis_port=6379,
+            )
+
 
 class TestResolveDiskRuns:
     def _make_storage_dir(self, tmp_path, prefix: str = "toy"):
@@ -142,6 +151,32 @@ class TestResolveDiskRuns:
             redis_port=6379,
         )
         assert configs[0].run_spec.label == "mylabel"
+
+    def test_relative_path_without_dot_prefix(self, tmp_path, monkeypatch):
+        self._make_storage_dir(tmp_path, "toy")
+        monkeypatch.chdir(tmp_path)
+        configs = RunResolver.resolve(
+            experiment=None,
+            runs=["storage" + "/toy"],
+            redis_host="localhost",
+            redis_port=6379,
+        )
+        assert configs[0].run_spec.is_disk
+        assert configs[0].run_spec.prefix == "toy"
+
+    def test_duplicate_disk_auto_labels_are_rejected(self, tmp_path):
+        roots = []
+        for name in ("run-a", "run-b"):
+            root = tmp_path / name / "storage"
+            (root / "toy" / "programs").mkdir(parents=True)
+            roots.append(root)
+        with pytest.raises(click.UsageError, match="labels must be unique.*toy"):
+            RunResolver.resolve(
+                experiment=None,
+                runs=[str(root) for root in roots],
+                redis_host="localhost",
+                redis_port=6379,
+            )
 
     def test_missing_dir_raises(self, tmp_path):
         with pytest.raises(click.UsageError, match="not a directory"):
@@ -204,3 +239,30 @@ class TestVerifyPrefixesSkipsDisk:
         ctx.obj = {}
         spec = RunSpec(prefix="toy", db=-1, label="toy", path=str(tmp_path))
         _verify_prefixes_exist(ctx, [RunConfig(run_spec=spec)], "localhost", 6379)
+
+
+class TestVerifyRedisPrefixes:
+    def test_probe_uses_scan_iter_and_accepts_program_data(self):
+        from gigaevo.cli.export import _verify_prefixes_exist
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+
+        ctx = MagicMock()
+        ctx.obj = {}
+        client = MagicMock()
+        client.scan_iter.return_value = iter(["p:program:abc"])
+        spec = RunSpec(prefix="p", db=4, label="p")
+        with (
+            patch(
+                "gigaevo.cli.inspect_cmd.discover_prefixes",
+                return_value=[],
+            ),
+            patch("redis.Redis", return_value=client),
+        ):
+            _verify_prefixes_exist(
+                ctx,
+                [RunConfig(run_spec=spec)],
+                "localhost",
+                6379,
+            )
+        client.scan_iter.assert_called_once_with(match="p:*", count=1000)
+        client.scan.assert_not_called()

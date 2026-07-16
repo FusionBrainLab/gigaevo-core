@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 import click
 import yaml
 
-from gigaevo.monitoring.experiment_monitor import RunConfig
 from gigaevo.monitoring.run_spec import RunSpec
 
 if TYPE_CHECKING:
     from gigaevo.database.program_storage import ProgramStorage
+    from gigaevo.monitoring.experiment_monitor import RunConfig
 
 
 def build_readonly_storage(
@@ -39,6 +39,32 @@ def reject_disk_specs(run_configs: list[RunConfig], command: str) -> None:
             f"`{command}` requires Redis-backed runs; disk-path specs are "
             f"not supported: {', '.join(disk)}"
         )
+
+
+def _validate_unique_labels(run_configs: list[RunConfig]) -> None:
+    """Require labels to identify exactly one run in multi-run commands."""
+    by_label: dict[str, list[RunSpec]] = {}
+    for run_config in run_configs:
+        spec = run_config.run_spec
+        by_label.setdefault(spec.label, []).append(spec)
+
+    duplicates = {label: specs for label, specs in by_label.items() if len(specs) > 1}
+    if not duplicates:
+        return
+
+    details = []
+    for label, specs in sorted(duplicates.items()):
+        targets = [
+            str(Path(spec.path) / spec.prefix)
+            if spec.is_disk and spec.path is not None
+            else f"{spec.prefix}@{spec.db}"
+            for spec in specs
+        ]
+        details.append(f"{label!r} ({', '.join(targets)})")
+    raise click.UsageError(
+        "Run labels must be unique; duplicate label(s): "
+        f"{'; '.join(details)}. Add a distinct :LABEL to each -r spec."
+    )
 
 
 def _load_manifest(experiment: str):
@@ -101,9 +127,12 @@ class RunResolver:
             raise click.UsageError("Provide --experiment or at least one --run")
 
         if has_runs:
-            return RunResolver._resolve_from_runs(runs, redis_host, redis_port)
-        assert experiment is not None  # guaranteed by checks above
-        return RunResolver._resolve_from_experiment(experiment)
+            configs = RunResolver._resolve_from_runs(runs, redis_host, redis_port)
+        else:
+            assert experiment is not None  # guaranteed by checks above
+            configs = RunResolver._resolve_from_experiment(experiment)
+        _validate_unique_labels(configs)
+        return configs
 
     @staticmethod
     def _resolve_from_runs(
@@ -111,6 +140,8 @@ class RunResolver:
         redis_host: str = "localhost",
         redis_port: int = 6379,
     ) -> list[RunConfig]:
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+
         configs = []
         for raw in runs:
             try:
@@ -165,7 +196,7 @@ class RunResolver:
     def _autodiscover_prefix(
         spec: RunSpec, redis_host: str, redis_port: int
     ) -> RunSpec:
-        """Resolve a prefix-less RunSpec by finding the instance lock in Redis."""
+        """Resolve a prefix-less RunSpec from recognized keys in Redis."""
         from gigaevo.cli.inspect_cmd import discover_prefixes
 
         prefixes = discover_prefixes(redis_host, redis_port, spec.db)
@@ -185,6 +216,8 @@ class RunResolver:
 
     @staticmethod
     def _resolve_from_experiment(experiment: str) -> list[RunConfig]:
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+
         manifest = _load_manifest(experiment)
         configs = []
         for run in manifest.contract.runs:

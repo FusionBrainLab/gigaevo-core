@@ -148,18 +148,17 @@ class TestFetchRunDataSentinelPassthrough:
         )
 
     @patch("gigaevo.cli.plot_group.asyncio")
-    @patch("gigaevo.cli.plot_group._build_redis_config")
-    def test_fetch_run_data_passes_sentinel_value(
-        self, mock_build_config, mock_asyncio
-    ) -> None:
+    def test_fetch_run_data_passes_sentinel_value(self, mock_asyncio) -> None:
         """_fetch_run_data with sentinel_value=-1.0 passes it to prepare_iteration_dataframe."""
         from gigaevo.cli.plot_group import _fetch_run_data
 
         raw_df = self._make_raw_df([0.5, -1.0, 0.6, -1.0, 0.8])
-        mock_config = MagicMock()
-        mock_config.display_label.return_value = "test_label"
-        mock_build_config.return_value = mock_config
-        mock_asyncio.run.return_value = raw_df
+
+        def run_fetch(coro):
+            coro.close()
+            return raw_df
+
+        mock_asyncio.run.side_effect = run_fetch
 
         mock_rc = MagicMock()
         mock_rc.run_spec = RunSpec(prefix="test_prefix", db=0, label="test_label")
@@ -172,18 +171,17 @@ class TestFetchRunDataSentinelPassthrough:
         assert -1.0 not in df["metric_fitness"].values
 
     @patch("gigaevo.cli.plot_group.asyncio")
-    @patch("gigaevo.cli.plot_group._build_redis_config")
-    def test_fetch_run_data_default_no_sentinel_filtering(
-        self, mock_build_config, mock_asyncio
-    ) -> None:
+    def test_fetch_run_data_default_no_sentinel_filtering(self, mock_asyncio) -> None:
         """_fetch_run_data with sentinel_value=None (default) does not filter sentinels."""
         from gigaevo.cli.plot_group import _fetch_run_data
 
         raw_df = self._make_raw_df([0.5, -1.0, 0.6, -1.0, 0.8])
-        mock_config = MagicMock()
-        mock_config.display_label.return_value = "test_label"
-        mock_build_config.return_value = mock_config
-        mock_asyncio.run.return_value = raw_df
+
+        def run_fetch(coro):
+            coro.close()
+            return raw_df
+
+        mock_asyncio.run.side_effect = run_fetch
 
         mock_rc = MagicMock()
         mock_rc.run_spec = RunSpec(prefix="test_prefix", db=0, label="test_label")

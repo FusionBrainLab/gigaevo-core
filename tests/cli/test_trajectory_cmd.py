@@ -103,6 +103,44 @@ class TestTrajectoryTail:
         assert data[0]["Iter"] == 8
         assert data[2]["Iter"] == 10
 
+    def test_tail_is_applied_per_run(self):
+        server = fakeredis.FakeServer()
+        values = [(i, float(i), float(i)) for i in range(1, 5)]
+        _populate_trajectory(server, 1, "p", values)
+        _populate_trajectory(server, 2, "q", values)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "p@1:A",
+                "-r",
+                "q@2:B",
+                "-f",
+                "json",
+                "trajectory",
+                "--tail",
+                "2",
+            ],
+            obj=_make_obj(server),
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data) == 4
+        assert {(row["Label"], row["Iter"]) for row in data} == {
+            ("A", 3),
+            ("A", 4),
+            ("B", 3),
+            ("B", 4),
+        }
+
+    def test_tail_rejects_zero(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["-r", "p@1:A", "trajectory", "--tail", "0"])
+        assert result.exit_code == 2
+
 
 class TestTrajectoryEmptyRedis:
     def test_empty_redis_shows_no_data(self):
@@ -184,6 +222,24 @@ class TestTrajectoryMetricOption:
         assert len(data) == 2
         assert data[0]["Best"] == 0.80
         assert data[1]["Mean"] == 0.75
+
+    def test_decreasing_frontier_is_not_forced_to_cummax(self):
+        server = fakeredis.FakeServer()
+        _populate_trajectory(
+            server,
+            4,
+            "test/prefix",
+            [(1, 5.0, 6.0), (2, 4.0, 5.0), (3, 3.0, 4.0)],
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", "test/prefix@4:O", "-f", "json", "trajectory"],
+            obj=_make_obj(server),
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert [row["Best"] for row in json.loads(result.output)] == [5.0, 4.0, 3.0]
 
 
 def _populate_metric_trajectory(

@@ -49,8 +49,10 @@ class RunSpec:
         empty and must be resolved later via auto-discovery from Redis.
 
         Specs starting with '/', './', '../', or '~' are disk storage
-        paths ('/path/to/storage[:label]'); the prefix is resolved later
-        by directory discovery.
+        paths ('/path/to/storage[:label]'). A slash-containing spec without
+        an '@' is also a disk path, so common relative paths such as
+        'outputs/run/storage' work without a leading './'. The prefix is
+        resolved later by directory discovery.
 
         Handles:
         - Quote stripping (single and double quotes)
@@ -66,7 +68,10 @@ class RunSpec:
         if not s:
             raise ValueError(f"Empty run spec: {raw!r}")
 
-        if s.startswith(("/", "./", "../", "~")):
+        is_disk_path = s.startswith(("/", "./", "../", "~")) or (
+            "/" in s and "@" not in s
+        )
+        if is_disk_path:
             path, label = s, None
             if ":" in s:
                 cand_path, cand_label = s.rsplit(":", 1)
@@ -87,7 +92,7 @@ class RunSpec:
             except ValueError:
                 raise ValueError(
                     f"Run spec must contain '@' or be a bare db number: got {raw!r}. "
-                    f"Expected format: prefix@db[:label] or just db"
+                    "Expected prefix@db[:label], a bare db number, or a disk path"
                 )
             if db < 0:
                 raise ValueError(
@@ -122,7 +127,7 @@ class RunSpec:
         if not prefix:
             return cls(prefix="", db=db, label=label or f"@{db}")
 
-        if label is None:
+        if not label:
             label = f"{prefix}@{db}"
 
         return cls(prefix=prefix, db=db, label=label)

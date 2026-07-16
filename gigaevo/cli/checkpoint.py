@@ -1,4 +1,4 @@
-"""Checkpoint subcommand -- composite status + notify in one shot."""
+"""Checkpoint subcommand -- one-shot detailed Redis status snapshot."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import click
 from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
 from gigaevo.cli.status import _format_metric_value, _load_metric_specs
-from gigaevo.monitoring.experiment_monitor import ExperimentMonitor
 
 
 def _snapshot_to_row(snap, metric_specs: dict[str, dict] | None = None) -> dict:
@@ -40,18 +39,6 @@ def _build_columns(rows: list[dict]) -> list[str]:
 
 @click.command()
 @click.option(
-    "--no-notify",
-    is_flag=True,
-    default=False,
-    help="Skip notification dispatch (status only).",
-)
-@click.option(
-    "--no-plots",
-    is_flag=True,
-    default=False,
-    help="Skip plot generation.",
-)
-@click.option(
     "-f",
     "--format",
     "format_name",
@@ -64,10 +51,12 @@ def _build_columns(rows: list[dict]) -> list[str]:
     ),
 )
 @click.pass_context
-def checkpoint(
-    ctx: click.Context, no_notify: bool, no_plots: bool, format_name: str | None
-) -> None:
-    """Run a checkpoint: collect status, generate plots, dispatch notifications."""
+def checkpoint(ctx: click.Context, format_name: str | None) -> None:
+    """Collect a one-shot Redis status snapshot with program totals.
+
+    This command is read-only. Scheduled plots, checkpoint markers, and
+    notifications are produced by `gigaevo watchdog`, not this command.
+    """
     formatter = ctx.obj["formatter"]
     if format_name is not None:
         formatter = OutputFormatter(format_name=format_name)
@@ -92,6 +81,8 @@ def checkpoint(
 
     metric_specs = _load_metric_specs(experiment)
 
+    from gigaevo.monitoring.experiment_monitor import ExperimentMonitor
+
     redis_factory = ctx.obj.get("redis_factory")
     monitor = ExperimentMonitor(
         redis_host=redis_host,
@@ -104,20 +95,3 @@ def checkpoint(
     rows = [_snapshot_to_row(s, metric_specs) for s in snapshots]
     columns = _build_columns(rows)
     formatter.echo(rows, columns=columns, title="Checkpoint Status")
-
-    if no_notify:
-        return
-
-    # Dispatch notifications
-    from gigaevo.monitoring.dispatcher import NotificationDispatcher
-    from gigaevo.monitoring.notifications import StatusUpdate
-
-    update = StatusUpdate(
-        experiment_name=experiment or "ad-hoc",
-        snapshots=snapshots,
-    )
-
-    dispatcher = NotificationDispatcher([])
-    import asyncio
-
-    asyncio.run(dispatcher.dispatch(update))

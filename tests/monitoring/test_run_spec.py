@@ -87,6 +87,11 @@ def test_prefix_with_slashes() -> None:
     assert result.label == "T1_A"
 
 
+def test_empty_explicit_label_uses_default() -> None:
+    result = RunSpec.parse("prefix@3:")
+    assert result.label == "prefix@3"
+
+
 # ---------------------------------------------------------------------------
 # c) Error tests (ValueError)
 # ---------------------------------------------------------------------------
@@ -210,6 +215,7 @@ def test_display_name_with_auto_label() -> None:
         ("/tmp/run1/storage", "/tmp/run1/storage", "storage"),
         ("/tmp/run1/storage:mylabel", "/tmp/run1/storage", "mylabel"),
         ("./outputs/run/storage", "./outputs/run/storage", "storage"),
+        ("outputs/run/storage", "outputs/run/storage", "storage"),
         ("../other/storage:X", "../other/storage", "X"),
     ],
 )
@@ -235,3 +241,9 @@ def test_bare_db_spec_is_not_disk() -> None:
 def test_disk_spec_does_not_need_prefix_autodiscovery() -> None:
     spec = RunSpec.parse("/tmp/run1/storage")
     assert not spec.needs_prefix
+
+
+def test_slash_containing_redis_spec_still_requires_db() -> None:
+    spec = RunSpec.parse("chains/hover/static@4")
+    assert not spec.is_disk
+    assert spec.prefix == "chains/hover/static"

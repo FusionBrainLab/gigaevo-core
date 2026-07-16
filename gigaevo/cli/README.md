@@ -1,463 +1,276 @@
-# GigaEvo CLI Module
+# GigaEvo CLI
 
-The CLI module provides **stateless query and control operations** over experiment manifests and live runs. All commands read from or write to the single source of truth (`experiment.yaml` and Redis run state), with no CLI-specific state.
+`gigaevo` is the supported interface for inspecting runs, exporting program
+data, plotting results, and operating experiment manifests. Run
+`gigaevo --help` for the command list and `gigaevo COMMAND --help` for the
+authoritative options of a command.
 
-## Overview
-
-This module implements a **lazy-loaded command hierarchy** using Click, with a global context that carries experiment name, run specifications, and output formatting preferences. Commands are organized into logical groups based on their purpose.
-
-## Design Principles
-
-1. **Stateless** — CLI has no memory. All state lives in `experiment.yaml` (manifest) or Redis (run data).
-2. **Transparent** — Each command maps 1:1 to manifest operations or monitoring queries. No business logic in CLI layer.
-3. **Lazy-loaded** — Subcommand modules import only when invoked (5x faster startup).
-4. **Composable** — Global flags (`-e`, `-r`, `-f`, etc.) are available to all subcommands without repetition.
-
-## Global Flags
-
-All commands inherit these global flags from the `main()` group:
-
-```
--e, --experiment TEXT
-    Experiment name (task/name). Reads experiment.yaml for run discovery.
-    Required for manifest commands. Optional for monitoring commands.
-
--r, --run TEXT
-    Run specification: prefix@db[:label] or shorthand db / @db / db:label.
-    Repeatable. Optional for monitoring — filters to specific runs.
-
--f, --format [table|json|csv|markdown]
-    Output format. Auto-detects: table for terminal, json for pipe.
-
--q, --quiet
-    Suppress output (useful in scripts).
-
--v, --verbose
-    Verbose output (debug-level logging).
-
---redis-host TEXT
-    Redis server hostname. Default: localhost.
-
---redis-port INTEGER
-    Redis server port. Default: 6379.
-```
-
-## Command Categories
-
-### Manifest Commands (`gigaevo manifest ...`)
-
-**Purpose**: Read and write experiment.yaml fields atomically with state machine enforcement.
-
-**Subcommands**:
-
-- `get FIELD` — Read a field from experiment.yaml using dotted path syntax (e.g., `lifecycle.status`, `contract.runs[0].db`, `lifecycle.launch.time`)
-- `set FIELD VALUE` — Set a field and enforce state machine rules (e.g., set status → validates new status is in VALID_TRANSITIONS)
-- `update FIELD VALUE` — Update a field via closure function (low-level; prefer `set` for status changes)
-- `gate STATUS` — Verify experiment is in given status without reading output. Exit code 0 if match, non-zero otherwise. Used as a hard gate in shell scripts.
-- `pr-description [--push]` — Generate PR description from manifest. Optionally push to GitHub PR.
-- `record-pids --pids-file PATH --labels LABEL1 LABEL2 ...` — Record run PIDs from file into runs[] array after launch.
-- `reset-status DESIRED_STATUS [--reason TEXT]` — Force status transition (debug only). Requires `--reason` for audit trail.
-
-**Example workflow**:
+## Install
 
 ```bash
-# Check status is implemented
-gigaevo -e hover/foo manifest gate implemented
-
-# Read a nested field
-gigaevo -e hover/foo manifest get runs --format json
-
-# Update launch time
-gigaevo -e hover/foo manifest update lifecycle.launch.time "2026-04-14T10:00:00Z"
-
-# Transition status with state-machine validation
-gigaevo -e hover/foo manifest update status running
+pip install -e .
+gigaevo --help
 ```
 
-**Key behaviors**:
-
-- `get` — Returns field value as plain text (or JSON with `--format json`)
-- `set` — Validates state machine transition rules. Fails if invalid. Writes atomically to experiment.yaml via Redis lock.
-- `gate` — Hard gate for shell scripts. No output on success (exit 0), error message on failure (exit 1).
-
-### Monitoring Commands
-
-**Purpose**: Query live run state from Redis. Read-only, no manifest changes.
-
-#### Status (`gigaevo status`)
-Live experiment monitoring: generation, metrics, PIDs, watchdog status.
-
-**Flags**:
-- `-e, --experiment` — required
-- `-r, --run` — optional; filter specific runs
-- `--freq SECONDS` — refresh interval (0 = once)
-- `--format` — table, json, csv
-
-**Output**: Gen number, best fitness, run status (ALIVE/DEAD/STALLED), watchdog PID, last update timestamp.
-
-#### Trajectory (`gigaevo trajectory`)
-Generation-by-generation fitness history for each run.
-
-**Flags**:
-- `-e, --experiment` — required
-- `-r, --run` — optional
-- `--window INT` — show last N generations
-- `--format` — table, json, csv
-
-#### Top (`gigaevo top`)
-Best programs by fitness. Displays program code, fitness, gen discovered, run label.
-
-**Flags**:
-- `-e, --experiment` — required
-- `-r, --run` — optional
-- `--limit INT` — how many programs to show (default: 10)
-- `--format` — table, json, csv
-
-#### Logs (`gigaevo logs`)
-Tail per-run experiment log files at `experiments/<exp>/run_<label>.log`.
-
-**Resolution priority** (highest first):
-1. Explicit `--file PATH` (bypasses manifest entirely)
-2. Positional `LABELS` (resolved via manifest to `experiments/<exp>/run_<label>.log`)
-3. No labels + `--experiment` → list mode (table of candidate run logs)
-
-**Flags**:
-- `-e, --experiment` — required for label resolution and list mode
-- `--file PATH` — explicit log file path (no manifest required)
-- `-f, --follow` — live tail (`tail -f`)
-- `-n, --tail LINES` — show last N lines (default: 50; ignored with `-f`)
-
-**Examples**:
-```bash
-gigaevo -e hover/foo logs                  # List all run logs (sizes, mtimes)
-gigaevo -e hover/foo logs A3_G             # Tail run_A3_G.log
-gigaevo -e hover/foo logs A3_G -f          # Live tail
-gigaevo -e hover/foo logs A3_G B5_D -f     # Multiplex live tail across runs
-gigaevo logs --file /tmp/foo.log           # Tail an arbitrary file
-```
-
-Unknown labels exit non-zero with a list of known labels. Missing log files exit non-zero with the resolved path.
-
-#### Plot (`gigaevo plot ...`)
-Multi-run fitness visualization.
-
-**Subcommands**:
-- `comparison` — Multi-run fitness curves (one per run)
-- `trajectory` — Single-run generation-by-generation trajectory
-- `arms-race` — Dual-panel (defender vs adversary) for adversarial experiments
-
-**Flags**:
-- `-e, --experiment` — required (unless `--from-csv` is used)
-- `--from-csv PATH[:LABEL]` — read from exported CSV instead of Redis (repeatable, mutually exclusive with `-r/-e`); pair with `gigaevo export csv` for offline / archived-run plotting
-- `--paper` — 300 DPI + Okabe-Ito palette (publication-ready)
-- `--no-frontier` — skip Pareto frontier for adversarial runs
-
-#### Export (`gigaevo export ...`)
-Bulk export of evolution data for analysis.
-
-**Subcommands**:
-- `csv` — Full evolution data to CSV (gen, fitness, run label, etc.)
-- `frontier` — Frontier-only CSV (gen, best_val per generation)
-
-**Selection semantics**:
-1. No positional labels → operate on all runs resolved from `-e`/`-r`
-2. Positional labels → filter resolved runs to only those labels (unknown → error)
-3. **1 run in scope** → write to the exact `-o` path; emit flat JSON summary
-4. **>1 run in scope** → fan out to `<stem>_<label><suffix>`; emit JSON list summary
-
-**Flags**:
-- `-e, --experiment` — experiment scope (or use `-r` directly)
-- `-r, --run` — repeatable run spec (alternative to `-e`)
-- `-o, --output-file PATH` — required; treated as a base path under fan-out
-- `--metric NAME` — frontier only; metric used for `best_val` (default: `fitness`)
-
-**Examples**:
-```bash
-# Export all runs in an experiment (fans out to results_A3_G.csv, results_A3_D.csv, ...)
-gigaevo -e hover/foo export csv -o results.csv
-
-# Export a single run (writes exactly to results.csv, flat JSON summary)
-gigaevo -e hover/foo export csv A3_G -o results.csv
-
-# Export selected runs (fans out only over the listed labels)
-gigaevo -e hover/foo export csv A3_G B5_D -o results.csv
-
-# Frontier with a custom metric
-gigaevo -e hover/foo export frontier --metric actual_fitness -o frontier.csv
-```
-
-#### Metrics (`gigaevo metrics`)
-Dump raw metrics history from Redis, one record per line. Grep-friendly — composes with `grep | awk | sort` and friends. No plotting, no aggregations, no writes.
-
-**Flags**:
-
-| Flag | Description |
-|------|-------------|
-| `--tag PATTERN` | `fnmatch` glob on tag names (e.g. `valid/iter/*`, `*tokens*`). Exact (no-glob) patterns match a single tag even if absent from the `latest` hash (useful for histograms). |
-| `--since INT` | Earliest step/iteration to include (inclusive). |
-| `--until INT` | Latest step/iteration to include (inclusive). |
-| `--kind {scalar,hist,text,all}` | Filter by metric kind. Default: `scalar`. |
-| `--format {plain,tsv,json}` | Output format. Default: `plain`. |
-| `--tail N` | Keep only the last N records per tag. |
-
-**Plain output** (default), one record per line:
-```
-<tag>\tstep=<n>\twall=<iso>\tvalue=<v>
-```
-
-**Examples**:
-```bash
-# Everything, then grep
-gigaevo -r heilbron@0 metrics | grep tokens
-
-# Glob-filter tags
-gigaevo -r heilbron@0 metrics --tag "valid/frontier/*"
-gigaevo -r heilbron@0 metrics --tag "*context_tokens" --tail 20
-
-# Step window
-gigaevo -r heilbron@0 metrics --tag "loss" --since 100 --until 200
-
-# Spreadsheet pipeline
-gigaevo -r heilbron@0 metrics --tag "*tokens*" --format tsv > tokens.tsv
-
-# Multi-run (`label=` appears as a leading field in plain output)
-gigaevo -r p@1:A -r p@2:B metrics --tag fitness --tail 5
-```
-
-**Notes**:
-- Tag enumeration uses the `latest` hash, which RedisMetricsBackend doesn't update for histograms. To inspect a known histogram tag pass its exact name via `--tag` together with `--kind hist`.
-- Read-only. Never modifies Redis.
-
-#### Inspect (`gigaevo inspect`)
-Discover experiment prefix(es) in a Redis DB via `:__instance_lock__`.
-
-**Flags**:
-- `--db INT` — Redis DB number (required)
-
-**Output**: Experiment name(s) in that DB.
-
-### Memory Commands
-
-#### Safety calibration (`gigaevo memory calibrate-safety`)
-
-Replay one or more memory-v2 causal ledgers without modifying them. Inputs may
-be ledger files, checkpoint directories, or run directories. Incompatible
-task/model/mutation-operator environments are reported separately.
+Plotting and profiler commands require the plotting extra:
 
 ```bash
-gigaevo -f json memory calibrate-safety \
-  outputs/run-a outputs/run-b \
-  --output safety_calibration.json
+pip install -e ".[plotting]"
 ```
 
-The command scores outcome-independent safety-prior candidates prequentially,
-replays the chance-constrained admission gate over every frozen candidate set,
-and reports calibration, gate retention, and randomized-overlap cost. When an
-environment has enough observations it emits all five corresponding Hydra
-overrides. The base experiment uses memory v2 with 70% delivery / 30% matched
-control; balanced validation runs should override both offer settings to 0.50.
+## Argument Order
 
-Useful options:
+Global options must appear before the command. Command-specific options appear
+after it.
 
-- `--prior-probabilities`: candidate control invalidity rates.
-- `--baseline-sds`: candidate contextual baseline prior scales.
-- `--shared-effect-means`: outcome-independent delivery-effect prior means.
-- `--min-observations`: minimum closed proposals required for recommendations.
-- `--min-gate-retention`: minimum cold/new-card candidate retention.
-- `--offer-rates`: delivery rates included in the overlap-cost table.
-- `--mutation-operator`: typed fallback only for legacy ledgers lacking Hydra metadata.
-- `--output`: complete machine-readable JSON report.
+```bash
+# Correct: -r and global -f are before the command.
+gigaevo -r chains/hover/full7@4:run-a -f json trajectory --tail 20
 
-### Infrastructure Commands
-
-**Purpose**: Control experiment execution (watchdog, checkpoints, DB flushing).
-
-#### Watchdog (`gigaevo watchdog`)
-Start the per-experiment watchdog loop (manual invocation; usually started by `/experiment-launch` skill).
-
-**Flags**:
-- `-e, --experiment` — required
-- `--freq SECONDS` — polling interval (default: 30)
-- `--no-auto-restart` — don't auto-restart dead workers
-
-**Behavior**: Runs indefinitely. Monitors PIDs, records metrics, flushes stalled generations, handles invalid runs.
-
-#### Checkpoint (`gigaevo checkpoint`)
-Snapshot current frontier and generation state.
-
-**Flags**:
-- `-e, --experiment` — required
-- `-r, --run` — optional
-- `--note TEXT` — human-readable checkpoint note
-
-**Behavior**: Records checkpoint event in experiment.yaml under `checkpoints[]` with timestamp and note.
-
-#### Flush (`gigaevo flush`)
-Kill all run workers and flush Redis DBs.
-
-**Flags**:
-- `--db INT` — DB number(s) to flush (repeatable)
-- `--confirm` — require explicit confirmation
-
-**Behavior**: Finds all run processes in target DBs, kills them, flushes Redis (data lost permanently).
-
-## Lazy Loading Architecture
-
-Commands are **not** imported at CLI startup. Instead, the `LazyGroup` class delays module import until a subcommand is invoked.
-
-**Flow**:
-
-```
-gigaevo status --experiment hover/foo
-    ↓
-main() (global context setup)
-    ↓
-LazyGroup.get_command('status')
-    ↓ (only now)
-importlib.import_module('gigaevo.cli.status')
-    ↓
-status.status (Click command object)
-    ↓
-status(...) (command execution)
+# Correct: logs -f is the command-local --follow flag.
+gigaevo -e hover/my-experiment logs run-a -f
 ```
 
-**Benefits**:
-- Startup time: 0.5s (not 2.5s with full import graph)
-- No dependency on unused commands
-- Scales with command count
+The global target options are mutually exclusive:
 
-**How it works** (`gigaevo/cli/__init__.py`):
+- `-e/--experiment TASK/NAME` loads Redis runs from
+  `experiments/TASK/NAME/experiment.yaml`.
+- `-r/--run SPEC` targets a run directly. It is repeatable and can refer to
+  Redis or disk storage.
 
-```python
-_LAZY_SUBCOMMANDS = {
-    "status": ("gigaevo.cli.status", "status"),
-    "trajectory": ("gigaevo.cli.trajectory", "trajectory"),
-    ...
-}
+Commands such as `flush` and `inspect` take their own Redis DB options and do
+not require `-e` or `-r`.
 
-class LazyGroup(click.Group):
-    def get_command(self, ctx, cmd_name):
-        if cmd_name in _LAZY_SUBCOMMANDS:
-            module_path, attr_name = _LAZY_SUBCOMMANDS[cmd_name]
-            mod = importlib.import_module(module_path)
-            return getattr(mod, attr_name)
-        return None
+## Run Specifications
+
+### Redis
+
+| Form | Example | Meaning |
+|---|---|---|
+| `prefix@db:label` | `chains/hover/full7@4:run-a` | Explicit prefix, DB, and display label |
+| `prefix@db` | `chains/hover/full7@4` | Label defaults to `prefix@db` |
+| `db:label` | `4:run-a` | Discover the prefix in DB 4 |
+| `db` or `@db` | `4` or `@4` | Discover the prefix; use the default label |
+
+Prefix discovery scans instance-lock, run-state, and program keys, so it also
+works after a cleanly stopped run has released its lock. It fails when the DB
+has no discovered prefix or more than one. Use `gigaevo inspect --db 4` and
+then pass the full `prefix@db` form when a DB is ambiguous.
+
+### Disk
+
+Disk specs point to the `storage` directory produced by a `storage=disk` run,
+or directly to its one prefix directory:
+
+```text
+outputs/run/storage/
+  chains_hover_full7/
+    programs/
+    archives/
 ```
 
-To add a new command:
-1. Create `gigaevo/cli/my_cmd.py` with a Click command named `my_cmd`
-2. Add entry to `_LAZY_SUBCOMMANDS`: `"my_cmd": ("gigaevo.cli.my_cmd", "my_cmd")`
-3. That's it — no changes to imports or registration code
+Accepted forms:
 
-## Output Formatting
+| Form | Example |
+|---|---|
+| Absolute path | `/data/runs/run-a/storage` |
+| Relative path containing `/` | `outputs/run-a/storage` |
+| Explicit relative path | `./storage` or `../run-a/storage` |
+| Path with display label | `outputs/run-a/storage:run-a` |
+| Direct prefix directory | `outputs/run-a/storage/chains_hover_full7` |
 
-All commands respect the global `--format` flag via `OutputFormatter`:
+When the storage root is given, it must contain exactly one directory with a
+`programs/` child. If it contains several prefixes, point `-r` directly at the
+desired prefix directory. Disk access is read-only and does not take the
+writer lock.
 
-```
-table   — Human-readable table (default for terminal)
-json    — Compact JSON (single line)
-csv     — RFC 4180 CSV
-markdown — Markdown table
-```
+### Labels
 
-Auto-detection: If stdout is a tty (interactive terminal), default to `table`. If piped, default to `json`.
+Labels identify runs in tables, plot legends, positional export filters, and
+multi-run output filenames. Labels must be unique within one command. Add an
+explicit `:label` when two disk paths resolve to the same prefix name.
 
-**Custom formatting** in commands:
+For multi-run exports, labels are made filesystem-safe. For example, the
+default Redis label `chains/hover/full7@4` becomes
+`chains_hover_full7@4` in the filename while remaining unchanged in output
+metadata.
 
-```python
-formatter = ctx.obj["formatter"]
-formatter.output(data)  # Formats according to --format flag
-```
+## Backend Support
+
+| Command | Redis | Disk | CSV/log files | Notes |
+|---|:---:|:---:|:---:|---|
+| `top` | yes | yes | no | Reads stored programs |
+| `export csv` | yes | yes | no | Reads stored programs |
+| `export frontier` | yes | yes | no | Reads stored programs |
+| `plot comparison` | yes | yes | yes | CSV input uses `--from-csv` |
+| `plot trajectory` | yes | yes | no | Reads stored programs |
+| `plot arms-race` | yes | yes | no | Requires unique paired labels |
+| `status` | yes | no | no | Uses Redis engine state and metrics |
+| `trajectory` | yes | no | no | Uses Redis metric histories |
+| `metrics` | yes | no | no | Uses Redis metric histories |
+| `checkpoint` | yes | no | no | Read-only one-shot status snapshot |
+| `logs` | no | no | yes | Reads experiment log files |
+| `events` | no | no | yes | Audits and plots canonical log events |
+| `profiler` | no | no | yes | Profiles run logs |
+| `manifest`, `launch`, `watchdog` | yes | no | manifest/logs | Experiment control plane |
+| `inspect`, `flush` | yes | no | no | Direct Redis operations |
+
+Redis-only monitoring commands reject disk paths with a usage error. Disk
+program storage does not contain the live PID state and Redis metric lists
+those commands query. Use `top`, `export`, or `plot` for disk runs, and inspect
+the run's `metrics/*.jsonl` or logs for disk telemetry.
 
 ## Common Workflows
 
-### Monitor a running experiment
-```bash
-gigaevo -e hover/foo status --freq 30  # Refresh every 30s
-```
-
-### Analyze best programs
-```bash
-gigaevo -e hover/foo top --limit 20 --format json | \
-  python analyze_frontier.py
-```
-
-### Export data for paper
-```bash
-gigaevo -e hover/foo export csv -o results.csv         # fans out per run
-gigaevo -e hover/foo export csv A3_G -o results.csv    # single run, exact path
-gigaevo -e hover/foo plot comparison --paper --output fig1.png
-```
-
-### Checkpoint mid-run
-```bash
-gigaevo -e hover/foo checkpoint --note "Good frontier at gen 100"
-```
-
-### Debug a specific run
-```bash
-gigaevo -e hover/foo logs                 # List all run logs
-gigaevo -e hover/foo logs A3_G -f         # Live tail one run by label
-gigaevo -e hover/foo trajectory -r "prefix@5"
-```
-
-### Flush and restart
-```bash
-gigaevo flush --db 5 6 7 --confirm  # Kill workers + flush 3 DBs
-gigaevo -e hover/foo manifest update status implemented  # Reset
-/experiment-restart hover/foo  # Launch again with current code
-```
-
-## Error Handling
-
-Commands validate inputs and provide actionable error messages:
-
-- **Missing required flags** — "Error: manifest commands require --experiment / -e flag"
-- **Invalid status transition** — "Error: invalid transition running → preregistered (not in VALID_TRANSITIONS)"
-- **Redis unreachable** — "Cannot connect to Redis at localhost:6379. Fix: Start Redis or set REDIS_HOST/REDIS_PORT"
-- **Manifest not found** — "FileNotFoundError: experiments/hover/foo/experiment.yaml"
-
-## Integration with Skills
-
-Skills invoke CLI commands for atomic operations:
+### Inspect Programs
 
 ```bash
-# In /experiment-launch skill:
-gigaevo -e "$EXP" manifest gate implemented    # Hard gate
-gigaevo -e "$EXP" manifest get runs            # Discover run specs
-gigaevo -e "$EXP" manifest update status running  # State transition
+# Redis
+gigaevo -r chains/hover/full7@4:run-a top -n 5 --code
 
-# In /experiment-checkpoint skill:
-gigaevo -e "$EXP" checkpoint --note "frontier improved"
+# Disk
+gigaevo -r outputs/run-a/storage:run-a top -n 5 --code
+
+# Lower metric values are better
+gigaevo -r outputs/run-a/storage top --metric loss --minimize
 ```
 
-The skill layer is **orchestration** (human gates, error recovery); the CLI is **stateless operations**.
+### Export Data
 
-## Dependencies
-
-- **Click**: Command-line interface framework
-- **Pydantic**: Manifest schema validation (indirectly via `gigaevo.experiment.manifest`)
-- **Redis**: Live run state (indirectly via CLI command modules)
-
-## Testing
-
-CLI commands are tested in `tests/cli/`:
-
-- `test_manifest_cmd.py` — `manifest get/set/gate` operations
-- `test_status_cmd.py` — Status monitoring
-- `test_export_cmd.py` — Data export (positional labels + multi-run fan-out)
-- `test_logs_cmd.py` — Log tailing (explicit --file / labels / list mode)
-- `test_metrics_cmd.py` — Metrics dump (tag glob, step window, format, multi-run labels)
-- `test_run_resolver.py` — `-e`/`-r` → RunConfig resolution
-- etc.
-
-Run all CLI tests:
 ```bash
-/run-tests tests/cli/
+# One run writes the exact path.
+gigaevo -r chains/hover/full7@4:run-a export csv -o data/run-a.csv
+
+# Several runs fan out to data/runs_run-a.csv and data/runs_run-b.csv.
+gigaevo \
+  -r outputs/run-a/storage:run-a \
+  -r outputs/run-b/storage:run-b \
+  export csv -o data/runs.csv
+
+# Cumulative best-by-generation frontier for a minimization metric.
+gigaevo -r outputs/run-a/storage \
+  export frontier --metric loss --minimize -o data/frontier.csv
 ```
 
-## See Also
+`export frontier` computes the best value within each generation and then the
+cumulative best through that generation. Maximization is the default; pass
+`--minimize` when lower values are better.
 
-- `gigaevo/experiment/README.md` — Manifest module (source of truth for experiment state)
-- `.claude/skills/experiment-launch/` — Multi-step launch workflow (uses CLI commands)
-- `tools/README.md` — Lower-level run tools (scripts, not CLI)
+### Plot Runs
+
+```bash
+gigaevo \
+  -r outputs/run-a/storage:run-a \
+  -r chains/hover/full7@4:run-b \
+  plot comparison -o plots/ --metric fitness
+
+gigaevo -r outputs/run-a/storage \
+  plot trajectory -o plots/loss --metric loss --minimize
+
+gigaevo plot comparison \
+  --from-csv data/run-a.csv:run-a \
+  --from-csv data/run-b.csv:run-b \
+  -o plots/
+```
+
+`--from-csv` is mutually exclusive with `-e` and `-r`. Its input must use the
+schema produced by `gigaevo export csv`, including `iteration` and the selected
+`metric_<name>` column.
+
+### Monitor Redis Runs
+
+```bash
+gigaevo -e hover/my-experiment status
+gigaevo -r chains/hover/full7@4:run-a trajectory --tail 20
+gigaevo -r chains/hover/full7@4:run-a metrics --tag "valid/frontier/*"
+gigaevo -r chains/hover/full7@4:run-a checkpoint
+```
+
+`trajectory --tail N` keeps the last N rows for every selected run and metric.
+The frontier history is already canonical, so the command does not assume that
+the metric is maximized.
+
+`checkpoint` is a read-only detailed status snapshot. The watchdog is the
+component that generates scheduled plots, writes milestone markers, and sends
+notifications:
+
+```bash
+gigaevo -e hover/my-experiment watchdog
+```
+
+### Logs and Profiling
+
+```bash
+gigaevo -e hover/my-experiment logs
+gigaevo -e hover/my-experiment logs run-a -f
+gigaevo logs --file outputs/run-a/run.log -n 100
+gigaevo profiler --file outputs/run-a/run.log --out-dir reports/run-a
+```
+
+### Manifest and Lifecycle
+
+```bash
+gigaevo -e hover/my-experiment manifest get contract.runs -f json
+gigaevo -e hover/my-experiment manifest update lifecycle.status running
+gigaevo -e hover/my-experiment manifest gate running
+gigaevo -e hover/my-experiment manifest record-pids \
+  --pids-file /tmp/pids --labels run-a,run-b
+gigaevo -e hover/my-experiment launch
+```
+
+Available manifest operations are listed by `gigaevo manifest --help`; there
+is no separate `manifest set` command.
+
+## Output Formats
+
+The global `-f/--format` option supports `table`, `json`, `csv`, and
+`markdown`. It must be placed before the command. Commands that also expose a
+local `-f/--format` accept it after the command as an override.
+
+```bash
+gigaevo -r chains/hover/full7@4 -f json top -n 1
+gigaevo -r chains/hover/full7@4 top -n 1 -f json
+```
+
+## Troubleshooting
+
+**A disk path was parsed as Redis**
+
+Use a path containing `/`, such as `outputs/run/storage`, or prefix a local
+name with `./`, such as `./storage`.
+
+**A disk root contains several prefixes**
+
+Point directly at one prefix directory:
+
+```bash
+gigaevo -r outputs/run/storage/chains_hover_full7 top
+```
+
+**Duplicate run label**
+
+Add explicit unique labels:
+
+```bash
+gigaevo -r outputs/a/storage:a -r outputs/b/storage:b top
+```
+
+**Global option rejected after a command**
+
+Move `-e`, `-r`, global `-f`, `--redis-host`, or `--redis-port` before the
+command name.
+
+**Redis DB has multiple prefixes**
+
+```bash
+gigaevo inspect --db 4
+gigaevo -r exact/prefix@4:run-a status
+```
+
+## Lazy Loading
+
+The root command keeps a static command-help registry, so `gigaevo --help`
+does not import every command module. `LazyGroup.get_command()` imports only
+the selected command. Each `_LAZY_SUBCOMMANDS` entry contains its module,
+attribute, and root-help text in one typed record; tests enforce that root help
+remains lazy.

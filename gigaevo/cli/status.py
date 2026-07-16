@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 import yaml
 
 from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
-from gigaevo.monitoring.experiment_monitor import ExperimentMonitor, RunConfig
-from gigaevo.monitoring.snapshot import RunSnapshot
+
+if TYPE_CHECKING:
+    from gigaevo.monitoring.experiment_monitor import RunConfig
+    from gigaevo.monitoring.snapshot import RunSnapshot
 
 
 def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
@@ -173,6 +176,8 @@ def status(ctx: click.Context, format_name: str | None) -> None:
     reject_disk_specs(run_configs, "status")
 
     metric_specs = _load_metric_specs(experiment)
+
+    from gigaevo.monitoring.experiment_monitor import ExperimentMonitor
 
     redis_factory = ctx.obj.get("redis_factory")
     monitor = ExperimentMonitor(

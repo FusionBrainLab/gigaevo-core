@@ -1,4 +1,4 @@
-"""Tests for the checkpoint CLI composite command."""
+"""Tests for the checkpoint CLI status snapshot command."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 
 from click.testing import CliRunner
 import fakeredis
-import pytest
 
 from gigaevo.cli import main
 from gigaevo.monitoring.run_spec import RunSpec
@@ -26,7 +25,12 @@ def _populate_run(
     fitness: float,
 ) -> None:
     r = fakeredis.FakeRedis(server=server, db=db, decode_responses=True)
-    write_engine_snapshot_sync(r, prefix, total_mutants=iteration)
+    write_engine_snapshot_sync(
+        r,
+        prefix,
+        total_mutants=iteration,
+        programs_processed=iteration,
+    )
     r.rpush(
         f"{prefix}:metrics:history:program_metrics:valid_frontier_fitness",
         _metric_entry(iteration, fitness),
@@ -59,10 +63,6 @@ class TestCheckpointRequiresExperiment:
 
 
 class TestCheckpointCollectsStatus:
-    @pytest.mark.skip(
-        reason="Pre-existing CI failure on main: Iter field reads 0 instead of "
-        "the seeded total_mutants=10. Unblocks CI; tracked separately."
-    )
     def test_json_output_with_snapshots(self):
         """Checkpoint collects snapshots and outputs status JSON."""
         server = fakeredis.FakeServer()
@@ -71,7 +71,7 @@ class TestCheckpointCollectsStatus:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-r", "test/prefix@4:A", "-f", "json", "checkpoint", "--no-notify"],
+            ["-r", "test/prefix@4:A", "-f", "json", "checkpoint"],
             obj=_make_obj(server),
             catch_exceptions=False,
         )
@@ -83,21 +83,20 @@ class TestCheckpointCollectsStatus:
         assert data[0]["Iter"] == 10
 
 
-class TestCheckpointNoNotify:
-    def test_no_notify_skips_dispatch(self):
-        """--no-notify returns after status display without importing dispatcher."""
+class TestCheckpointReadOnly:
+    def test_returns_status_without_dispatch(self):
+        """Checkpoint returns status without invoking notification machinery."""
         server = fakeredis.FakeServer()
         _populate_run(server, 4, "test/prefix", iteration=10, fitness=0.76)
 
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-r", "test/prefix@4:A", "-f", "json", "checkpoint", "--no-notify"],
+            ["-r", "test/prefix@4:A", "-f", "json", "checkpoint"],
             obj=_make_obj(server),
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
-        # Verify we got data back (dispatch was skipped, not errored)
         data = json.loads(result.output)
         assert len(data) == 1
 
@@ -112,7 +111,7 @@ class TestCheckpointMultipleRuns:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-r", "p@1:A", "-r", "p@2:B", "-f", "json", "checkpoint", "--no-notify"],
+            ["-r", "p@1:A", "-r", "p@2:B", "-f", "json", "checkpoint"],
             obj=_make_obj(server),
             catch_exceptions=False,
         )

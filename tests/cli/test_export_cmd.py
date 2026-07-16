@@ -253,6 +253,53 @@ class TestFrontierExportCommand:
         written = pd.read_csv(output_file)
         assert "best_val" in written.columns
 
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_frontier_is_cumulative(self, mock_fetch, tmp_path):
+        from gigaevo.cli import main
+
+        mock_fetch.return_value = pd.DataFrame(
+            {
+                "generation": [1, 1, 2, 2, 3],
+                "metric_fitness": [1.0, 2.0, 1.5, 1.0, 3.0],
+            }
+        )
+        output_file = tmp_path / "frontier.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", "p@0:A", "export", "frontier", "-o", str(output_file)],
+        )
+        assert result.exit_code == 0, result.output
+        assert pd.read_csv(output_file)["best_val"].tolist() == [2.0, 2.0, 3.0]
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_frontier_minimize(self, mock_fetch, tmp_path):
+        from gigaevo.cli import main
+
+        mock_fetch.return_value = pd.DataFrame(
+            {
+                "generation": [1, 1, 2, 2, 3],
+                "metric_fitness": [5.0, 4.0, 4.5, 4.2, 3.0],
+            }
+        )
+        output_file = tmp_path / "frontier.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "p@0:A",
+                "export",
+                "frontier",
+                "--minimize",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert pd.read_csv(output_file)["best_val"].tolist() == [4.0, 4.0, 3.0]
+        assert json.loads(result.output)["direction"] == "minimize"
+
     def test_frontier_requires_output_file(self):
         """frontier fails without -o flag."""
         from gigaevo.cli import main
@@ -325,6 +372,53 @@ class TestCsvMultiRun:
         assert len(summary) == 2
         labels = {s["label"] for s in summary}
         assert labels == {"A", "B"}
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_default_prefix_labels_are_safe_filenames(self, mock_fetch, tmp_path):
+        from gigaevo.cli import main
+
+        mock_fetch.side_effect = [_make_evolution_df(1), _make_evolution_df(1)]
+        output_file = tmp_path / "out.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "chains/hover/static@1",
+                "-r",
+                "chains/hover/static@2",
+                "export",
+                "csv",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "out_chains_hover_static@1.csv").exists()
+        assert (tmp_path / "out_chains_hover_static@2.csv").exists()
+
+    @patch("gigaevo.cli.export._fetch_dataframe")
+    def test_sanitized_filename_collision_is_rejected(self, mock_fetch, tmp_path):
+        from gigaevo.cli import main
+
+        output_file = tmp_path / "out.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "-r",
+                "p@1:a/b",
+                "-r",
+                "q@2:a_b",
+                "export",
+                "csv",
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 1
+        assert "same output filename" in result.output
+        assert mock_fetch.call_count == 0
 
 
 class TestCsvPositionalLabel:
@@ -484,3 +578,19 @@ class TestExportDiskStorage:
         df = pd.read_csv(out)
         assert len(df) == 2
         assert "metric_fitness" in df.columns
+
+    def test_frontier_export_from_disk_spec(self, seed_disk_run, tmp_path):
+        from gigaevo.cli import main
+
+        root, _ = seed_disk_run(fitnesses=(0.5, 0.8, 0.65))
+        out = tmp_path / "frontier.csv"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", str(root), "export", "frontier", "-o", str(out)],
+            obj={},
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        frame = pd.read_csv(out)
+        assert frame["best_val"].iloc[-1] == 0.8

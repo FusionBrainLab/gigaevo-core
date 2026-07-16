@@ -25,7 +25,7 @@ export GIGAEVO_PYTHON=python3  # adjust for your environment
 
 #### Run spec formats (`-r`)
 
-The `-r/--run` flag accepts several shorthand forms. Prefix is auto-discovered from the Redis DB's `{prefix}:__instance_lock__` key when omitted.
+The `-r/--run` flag accepts several shorthand forms. When omitted, the prefix is auto-discovered non-blockingly from Redis instance-lock, run-state, and program keys, including cleanly stopped runs.
 
 | Form | Example | Meaning |
 |------|---------|---------|
@@ -34,11 +34,11 @@ The `-r/--run` flag accepts several shorthand forms. Prefix is auto-discovered f
 | `db` | `4` | Bare DB number — prefix auto-discovered from `:__instance_lock__` |
 | `@db` | `@4` | Same as bare `db` |
 | `db:label` | `4:O` | Bare DB with custom label |
-| `/path/to/storage[:label]` | `outputs/run/storage:disk1` | Disk storage path (`storage=disk` runs) — must start with `/`, `./`, `../`, or `~` |
+| `path/to/storage[:label]` | `outputs/run/storage:disk1` | Disk storage path (`storage=disk` runs); slash-containing relative paths are accepted |
 
 The auto-discover path fails if the DB is empty or contains multiple prefixes. Run `gigaevo inspect --db N` first to see what's there.
 
-**Disk-path specs** point at the storage root written by a `storage=disk` run (Hydra default: `<output_dir>/storage`). Accepts either the root (its single `<prefix>/programs/` subdirectory is auto-discovered; errors if there are zero or several) or the prefix directory itself. The label defaults to the resolved prefix directory name. Disk specs are read-only and lock-free, so it's safe to inspect a live run. Supported by program-reading commands: `top`, `export csv/frontier`, `plot`. Redis-only commands (`status`, `trajectory`, `metrics`, `checkpoint`) reject disk specs with a usage error — their data (live PIDs, metric history) lives in the disk run's `metrics/*.jsonl` and log files instead.
+**Disk-path specs** point at the storage root written by a `storage=disk` run (Hydra default: `<output_dir>/storage`). Absolute paths, `./`/`../` paths, and slash-containing relative paths are accepted. The root's single `<prefix>/programs/` subdirectory is auto-discovered; if there are zero or several, point directly at a prefix directory. The label defaults to the resolved prefix directory name and must be unique in a multi-run command. Disk specs are read-only and lock-free, so it is safe to inspect a live run. Supported by program-reading commands: `top`, `export csv/frontier`, `plot`. Redis-only commands (`status`, `trajectory`, `metrics`, `checkpoint`) reject disk specs with a usage error; their data (live PIDs and Redis metric history) is not part of disk program storage.
 
 ### Commands
 
@@ -67,6 +67,7 @@ gigaevo -e hover/my-exp logs
 # Fitness comparison across runs (png/pdf/svg)
 gigaevo -e adversarial/adversarial-vs-solo plot comparison -o plots/
 gigaevo -r A@4:A -r B@5:B plot comparison -o plots/ --paper --smoothing lowess
+gigaevo -r outputs/run/storage plot comparison -o plots/ --metric loss --minimize
 
 # Suppress cummax frontier for adversarial Improver runs
 gigaevo -e ... plot comparison -o plots/ --no-frontier-for D1,D2
@@ -89,7 +90,7 @@ gigaevo -e ... plot arms-race -o plots/ --paired C1_A:C1_B,C2_A:C2_B --show-max
 # Full evolution data to CSV
 gigaevo -r chains/hotpotqa/static@4:O export csv -o data/evolution.csv
 
-# Frontier-only CSV (gen, best_val)
+# Cumulative best-by-generation CSV (gen, best_val); add --minimize when needed
 gigaevo -r chains/hotpotqa/static@4:O export frontier -o data/frontier.csv --metric fitness
 ```
 
