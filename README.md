@@ -69,7 +69,7 @@ GigaEvo uses two LLM routes:
 | Route | Used for | Config group |
 |---|---|---|
 | Main mutation LLM | Writes child programs | `llm=...` |
-| Memory LLM | Writes/reconciles memory cards when `memory=writer/full` | `memory/llm=...` |
+| Memory LLM | Writes/reconciles memory cards (`memory=v2` by default) | `memory/llm=...` |
 
 Create a `.env` file with the keys required by the configs you select:
 
@@ -79,6 +79,9 @@ OPENAI_API_KEY=sk-or-v1-your-openrouter-or-proxy-key
 
 # Default `memory/llm=gemini` reads this key.
 OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
+
+# Shared OpenAI-compatible endpoint for locally served models and chain evaluators.
+LOCAL_LLM_PROXY=http://127.0.0.1:4000/v1
 
 # Optional: Langfuse tracing
 LANGFUSE_PUBLIC_KEY=<key>
@@ -95,29 +98,29 @@ python run.py problem.name=heilbron \
     model_name=google/gemini-3-flash-preview
 ```
 
-Local LiteLLM/vLLM-compatible proxy example:
+Local LiteLLM/vLLM-compatible proxy example (`LOCAL_LLM_PROXY` is read from
+`.env`):
 
 ```bash
-export OPENAI_API_KEY=sk-local
 export NO_PROXY=127.0.0.1,localhost
 
 python run.py problem.name=heilbron \
-    llm=single \
-    llm_base_url=http://127.0.0.1:4000/v1 \
+    llm=local_proxy \
     model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
 ```
 
-Memory runs can use a different, usually cheaper, instruct model:
+Memory v2 is the base-experiment default. It can use a different, usually
+cheaper, instruct model:
 
 ```bash
 python run.py problem.name=heilbron \
-    pipeline=memory_guided memory=full memory/write=live \
     memory/llm=qwen_instruct \
     checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
 ```
 
-`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets the configured
-LiteLLM proxy. `memory/llm=gemini` reads `OPENROUTER_API_KEY`.
+`llm=local_proxy` and `memory/llm=qwen_instruct` both read
+`LOCAL_LLM_PROXY`; the latter reads `OPENAI_API_KEY` for authentication.
+`memory/llm=gemini` reads `OPENROUTER_API_KEY`.
 
 ### 3. Choose Storage
 
@@ -143,8 +146,11 @@ redis-server
 python run.py problem.name=heilbron
 ```
 
-Evolution starts immediately with the guided mutation pipeline. Logs are saved
-to `outputs/`, with disk-backed programs under the same run directory.
+Evolution starts with singleton-parent memory v2, live card writing, and the
+metadata-routing memory-guided pipeline. Conditional on proposing a card, normal
+runs deliver it with probability 0.70 and retain a 0.30 matched control arm.
+Logs are saved to `outputs/`, with disk-backed programs under the same run
+directory.
 
 ### Common Run Recipes
 
@@ -158,10 +164,15 @@ python run.py problem.name=heilbron pipeline=guided memory=none
 # Redis-backed storage, if you need the Redis workflow
 python run.py problem.name=heilbron storage=redis redis.db=5
 
-# Read and write memory during the same run
+# Default read/write memory v2 run (shown explicitly)
 python run.py problem.name=heilbron \
-    pipeline=memory_guided memory=full memory/write=live \
+    pipeline=memory_guided_noise memory=v2 memory/write=live num_parents=1 \
     checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# Balanced memory-v2 validation (50% delivery / 50% control)
+python run.py problem.name=heilbron \
+    memory.posterior_config.reference_offer_probability=0.50 \
+    memory.policy_config.offer_probability=0.50
 
 # Build a memory bank for later use
 python run.py problem.name=heilbron \
@@ -321,14 +332,16 @@ shell before launching a run.
 |----------|--------|
 | `OPENAI_API_KEY` | Primary LLM credential — read by the default mutation router (`config/llm/single.yaml`) and most LLM configs in `config/llm/`, plus the `qwen_instruct` memory router (`config/memory/llm/qwen_instruct.yaml`). Holds a LiteLLM-proxy key or a provider key depending on the configured `base_url`. |
 | `OPENROUTER_API_KEY` | Read only by the OpenRouter-keyed configs: the main routers `config/llm/gemini35_flash.yaml` and `config/llm/gpt54_mini.yaml`, and the default memory router `config/memory/llm/gemini.yaml`. Needed only when one of those is selected. |
+| `LOCAL_LLM_PROXY` | Shared OpenAI-compatible base URL for `llm=local_proxy`, `memory/llm=qwen_instruct`, and chain evaluators unless a task-specific URL overrides it. Include the `/v1` suffix. |
 
 The env-var name does **not** track the provider — e.g. the OpenRouter-targeted
 `openrouter_bandit`/`openrouter_ensemble` main routers read `OPENAI_API_KEY`, not
 `OPENROUTER_API_KEY`. Which key a run needs is determined by the selected `llm` and
 `memory/llm` configs, not by the model vendor.
 
-Memory-LLM model, endpoint, and structured-output method are Hydra knobs on the
-`memory/llm` group (`config/memory/llm/*.yaml`), not environment variables.
+Memory-LLM model and structured-output method are Hydra knobs on the
+`memory/llm` group (`config/memory/llm/*.yaml`). Locally served presets take
+their endpoint from `LOCAL_LLM_PROXY` so an address change is made once.
 
 **Execution sandbox**
 
@@ -394,6 +407,7 @@ Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `
 | `gigaevo -e EXP plot comparison -o DIR` | Multi-run fitness curve plots |
 | `gigaevo -e EXP plot arms-race -o DIR` | Dual-panel adversarial arms-race plot |
 | `gigaevo -e EXP profiler` | Profile runner logs into text summary + HTML dashboard |
+| `gigaevo -f json memory calibrate-safety RUN...` | Replay memory-v2 safety priors and emit Hydra overrides |
 | `gigaevo -e EXP manifest gate <status>` | Hard-gate on experiment status (preregistered/implemented/running/complete) |
 | `gigaevo -r RUN export csv -o FILE` | Export evolution data to CSV |
 | `gigaevo flush --db N --confirm` | Safely flush Redis DBs (kills workers first) |

@@ -5,11 +5,10 @@ import os
 from pathlib import Path
 
 # --- LLM Configuration ---
-# All chain requests go through the LiteLLM proxy (INTERNAL_IP:4000),
-# which load-balances across backend servers defined in infrastructure.yaml.
+# All chain requests go through LOCAL_LLM_PROXY unless a HoVer-specific endpoint
+# is explicitly supplied. The proxy load-balances across its configured backends.
 # Start the proxy with: bash tools/litellm.sh --background
 
-_CHAIN_URL = os.environ.get("HOVER_CHAIN_URL", "http://localhost:8000/v1")
 _CHAIN_MODEL = os.environ.get("HOVER_CHAIN_MODEL", "Qwen/Qwen3-8B")
 
 LLM_CONFIG = {
@@ -29,14 +28,23 @@ LLM_CONFIG = {
     },
     "client_kwargs": {
         "api_key": "sk-gigaevo",
-        "base_url": _CHAIN_URL,
     },
 }
 
 
 def get_llm_config() -> dict:
     """Return LLM config. Load balancing is handled by litellm proxy."""
-    return dict(LLM_CONFIG)
+    base_url = os.environ.get("HOVER_CHAIN_URL") or os.environ.get("LOCAL_LLM_PROXY")
+    if not base_url:
+        raise RuntimeError(
+            "set LOCAL_LLM_PROXY in .env or provide HOVER_CHAIN_URL explicitly"
+        )
+    config = dict(LLM_CONFIG)
+    config["client_kwargs"] = {
+        **LLM_CONFIG["client_kwargs"],
+        "base_url": base_url,
+    }
+    return config
 
 
 def release_chain_endpoint(url: str, *, success: bool = True) -> None:

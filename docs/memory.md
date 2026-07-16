@@ -12,15 +12,20 @@ end-to-end explanation of card birth, read selection, no-card baselines,
 posteriors, decay, and eviction, see
 [`MEMORY_LIFECYCLE_TUTORIAL.md`](MEMORY_LIFECYCLE_TUTORIAL.md).
 
-The new singleton-parent causal Bayesian iteration is documented separately in
-[`memory_v2.md`](memory_v2.md). It preserves the v1 card/write machinery but
+The default singleton-parent causal Bayesian iteration is documented separately
+in [`memory_v2.md`](memory_v2.md). It preserves the v1 card/write machinery but
 does not reuse the v1 reputation or bootstrap-auction evidence model.
 
 ## The 30-second version
 
 ```bash
-# Memory ON within the same run (read + live writes against one bank):
-python run.py problem.name=heilbron pipeline=memory_guided memory=full memory/write=live
+# Default: memory v2, live writes, one parent, 70% delivery / 30% control:
+python run.py problem.name=heilbron
+
+# Balanced validation of the same system:
+python run.py problem.name=heilbron \
+  memory.posterior_config.reference_offer_probability=0.50 \
+  memory.policy_config.offer_probability=0.50
 
 # Read from a pre-built bank:
 python run.py problem.name=heilbron pipeline=memory_guided memory=reader \
@@ -30,20 +35,22 @@ python run.py problem.name=heilbron pipeline=memory_guided memory=reader \
 python run.py problem.name=heilbron pipeline=guided memory=none
 ```
 
-`memory={none,reader,writer,full,static}` chooses the read/write components.
+`memory=v2` is the base-experiment default. The v1 presets
+`memory={none,reader,writer,full,static}` remain explicit choices.
 `memory/write={none,end_of_run,live}` chooses write cadence. Pipelines read
-`${ref:memory.provider}` only when `pipeline=memory_guided`; engines read
+`${ref:memory.provider}` only in memory-guided pipelines; engines read
 `${ref:memory.write.post_run_hook}` as their finalizer.
 
 | Arm | provider (read side) | writer (write side) | What runs |
 |---|---|---|---|
+| `memory=v2` | `CausalBanditMemoryProvider` | `MemoryWriter` with causal updater | whole-bank contextual Bayesian selection plus live content writing; one card, one parent, 70/30 delivery/control |
 | `memory=none` | `NullMemoryProvider` | `NullPostRunHook` | nothing |
 | `memory=reader` | `ReaderMemoryProvider` | `NullPostRunHook` | injects from a pre-built bank; no extraction |
 | `memory=writer` | `NullMemoryProvider` | `MemoryWriter` | authors a bank for a *later* run; injects nothing |
 | `memory=full` | `ReaderMemoryProvider` | `MemoryWriter` | reader + writer share one bank under `checkpoint_dir`; ships with `memory/write=live` (same-run memory effects) — override to `end_of_run` only to seed a bank |
 | `memory=static` | `StaticLeverMemoryProvider` | `NullPostRunHook` | fixed curated lever blocks; no bank, no embedder, no memory LLM |
 
-> ⚠️ **`writer` and `full` bill the memory LLM** (`memory/llm=gemini` by
+> ⚠️ **`v2`, `writer`, and `full` bill the memory LLM** (`memory/llm=gemini` by
 > default). A no-memory baseline is `pipeline=guided memory=none` — both
 > sides off in one preset. Do not use `memory=writer` as a "no-memory" run: it
 > pays full write-side cost for cards nobody reads (it is the deliberate
@@ -54,8 +61,8 @@ python run.py problem.name=heilbron pipeline=guided memory=none
 External-memory read is a pipeline property:
 
 - `pipeline=guided` never reads external memory cards.
-- `pipeline=memory_guided` reads external memory cards and requires
-  `memory={reader,full,static}`.
+- `pipeline={memory_guided,memory_guided_noise}` reads external memory cards and
+  requires `memory={v2,reader,full,static}`.
 
 External-memory write is a memory property:
 
@@ -313,9 +320,9 @@ the identical RNG stream.
 
 `memory/llm` is independent of the main mutation `llm`. The default
 `memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
-`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets the configured
-LiteLLM-compatible proxy; pair it with a larger thinking model on the main
-`llm=single` route when mutation and card work should use different models.
+`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets
+`LOCAL_LLM_PROXY`; pair it with a larger thinking model on the main
+`llm=local_proxy` route when mutation and card work should use different models.
 
 ### The read funnel — three distinct widths
 

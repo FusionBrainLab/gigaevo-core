@@ -12,9 +12,14 @@ defaults:
   - /evolution: default
   - /algorithm: single_island_no_distant_parents
   - /mutation: llm_rewrite
-  - /pipeline: guided
+  - /pipeline: memory_guided_noise
   - /runner: default
   - /scheduling: cached_first
   - /loader: directory
   - /logging: tensorboard
   - /metrics: default
+  - /memory: v2
+
+# Memory v2 assigns one intervention to one mutation attempt. Multi-parent
+# crossover remains an explicit opt-in together with a compatible memory preset.
+num_parents: 1

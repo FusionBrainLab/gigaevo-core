@@ -103,6 +103,11 @@ async def test_map_elites_context_is_typed_smooth_and_frozen(
         credit=LineageCreditConfig(),
     )
 
+    assert source.behavior_keys == (
+        "hop_depth",
+        "passages_fetched",
+        "instr_chars",
+    )
     context = await source.snapshot(parent)
 
     assert context.parent_iteration == 0
@@ -284,6 +289,10 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.memory.candidate_source.max_candidates == 0
         assert cfg.memory.credit.lineage_depth == 1
         assert cfg.memory.credit.opportunity_budget == 32
+        assert cfg.memory.policy_config.offer_probability == pytest.approx(0.70)
+        assert cfg.memory.posterior_config.reference_offer_probability == pytest.approx(
+            0.70
+        )
         assert "max_task_cards" not in cfg.memory.writer
         assert cfg.memory.ledger._target_.endswith("SqliteCausalLedger")
         # ``compose`` does not populate HydraConfig's runtime choice table.
@@ -307,7 +316,7 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         cfg.memory.policy_config.offer_probability = 0.01
         with pytest.raises(ValueError, match="offer_probability"):
             validate_memory_v2_scope(cfg)
-        cfg.memory.policy_config.offer_probability = 0.5
+        cfg.memory.policy_config.offer_probability = 0.7
 
         cfg.memory.candidate_source.max_candidates = 4
         with pytest.raises(ValueError, match="max_candidates=0"):

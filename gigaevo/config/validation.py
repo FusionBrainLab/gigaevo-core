@@ -121,14 +121,16 @@ def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
     if pipeline_reads and not memory_reads:
         raise ValueError(
             f"pipeline={pipeline_id} reads external memory cards, but the selected "
-            "memory preset has read=false. Use memory=reader, memory=full, or "
-            "memory=static; use pipeline=guided for no external-memory reads."
+            "memory preset has read=false. Use memory=v2, memory=reader, "
+            "memory=full, or memory=static; use pipeline=guided for no "
+            "external-memory reads."
         )
 
     if (write_enabled or write_mode in {"end_of_run", "live"}) and not memory_writes:
         raise ValueError(
             f"memory/write={write_mode} requires a writer-enabled memory preset. "
-            "Use memory=writer or memory=full, or switch to memory/write=none."
+            "Use memory=v2, memory=writer, or memory=full, or switch to "
+            "memory/write=none."
         )
 
     if write_mode == "live":

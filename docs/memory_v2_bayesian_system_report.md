@@ -181,8 +181,9 @@ z_j(A, x) = [ baseline(x), A * effect_j(x) ]
 
 The effect weight is `0` for withheld control and `1` for delivered treatment.
 All proposed-but-withheld cards therefore share the same contextual control arm;
-only delivered cards add a stable card effect. Delivery is still randomized
-with fixed probability `e = 0.5`.
+only delivered cards add a stable card effect. Normal post-validation runs use
+fixed probability `e = 0.7`; balanced validation runs use `e = 0.5` to collect
+information faster.
 
 ### Valid-gain model
 
@@ -342,7 +343,8 @@ For each mutation attempt:
 11. **Draw one proposal.** Sample either one card or abstention from that exact finite
     distribution.
 12. **Randomize delivery.** If card `j` was proposed, deliver it with probability
-    `e=0.5`; otherwise withhold it as the matched control.
+    `e=0.7` in a normal run; otherwise withhold it as the matched control. Use
+    `e=0.5` for balanced validation.
 13. **Commit before exposure.** Persist the candidate set, posterior diagnostics,
     every probability, sampled action, and frozen predictions before the prompt can
     see a card.
@@ -354,8 +356,8 @@ The logged leaf probabilities are:
 
 ```text
 P(abstain)                 = rho_0
-P(propose j and deliver)   = rho_j * 0.5
-P(propose j and withhold)  = rho_j * 0.5
+P(propose j and deliver)   = rho_j * 0.7
+P(propose j and withhold)  = rho_j * 0.3
 ```
 
 ### How the system decides which card is better
@@ -435,9 +437,10 @@ claim. The analytics must inspect:
   sensitivity;
 - terminal closure, bounded gains, immutable hashes, and ledger accounting.
 
-Expected cold-start behavior is broad uncertainty, near-symmetric safe-card proposal
-mass, and 50/50 delivery/control conditional on proposal. Early posterior movement is
-diagnostic, not enough to declare a card superior.
+Expected cold-start behavior is broad uncertainty and near-symmetric safe-card
+proposal mass. Balanced validation expects 50/50 delivery/control; normal runs
+expect 70/30. Early posterior movement is diagnostic, not enough to declare a
+card superior.
 
 ## ELI5 Bayesian glossary
 
@@ -453,7 +456,7 @@ diagnostic, not enough to declare a card superior.
 | Shrinkage | With little data, extreme estimates are pulled toward the common center. Strong evidence can overcome that pull. |
 | Treatment | The proposed card was actually shown to the mutator. |
 | Control | The same card was proposed but deliberately withheld, giving a comparable no-card outcome. |
-| Propensity | The logged probability that the policy assigned a particular action. Here it includes proposal probability and the 0.5 offer probability. |
+| Propensity | The logged probability that the policy assigned a particular action. Here it includes proposal probability and the configured offer probability (0.7 normally, 0.5 in balanced validation). |
 | Shared control baseline | Every withheld proposal uses the same contextual no-card baseline; a delivered card adds its contextual effect. |
 | Nuisance effect | A necessary background term, such as some parents/cards naturally having different baseline outcomes, that is not itself the causal card effect of interest. |
 | Gaussian / Normal | A bell-shaped uncertainty model used for valid numeric gains and coefficient uncertainty. |

@@ -68,7 +68,7 @@ The main mutation LLM and the memory subsystem LLM are configured separately.
 
 | Route | Config | Typical key |
 |---|---|---|
-| Main mutation | `llm=...`, `llm_base_url=...`, `model_name=...` | `OPENAI_API_KEY` for `llm=single` |
+| Main mutation | `llm=...`, `llm_base_url=...`, `model_name=...` | `OPENAI_API_KEY` for `llm=single` or `llm=local_proxy` |
 | Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for `memory/llm=gemini`, `OPENAI_API_KEY` for `memory/llm=qwen_instruct` |
 
 Hosted/OpenRouter style:
@@ -81,15 +81,13 @@ python run.py problem.name=toy_example \
     model_name=google/gemini-3-flash-preview
 ```
 
-Local LiteLLM/vLLM-compatible proxy:
+Local LiteLLM/vLLM-compatible proxy (`LOCAL_LLM_PROXY` is defined in `.env`):
 
 ```bash
-export OPENAI_API_KEY=sk-local
 export NO_PROXY=127.0.0.1,localhost
 
 python run.py problem.name=toy_example \
-    llm=single \
-    llm_base_url=http://127.0.0.1:4000/v1 \
+    llm=local_proxy \
     model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
 ```
 
@@ -97,10 +95,13 @@ Memory with a separate instruct model:
 
 ```bash
 python run.py problem.name=toy_example \
-    pipeline=memory_guided memory=full memory/write=live \
     memory/llm=qwen_instruct \
     checkpoint_dir=$PWD/SHARE_TOY_MEMORY
 ```
+
+The base experiment uses `memory=v2`, `pipeline=memory_guided_noise`,
+`num_parents=1`, and 70% delivery / 30% matched control. Use
+`pipeline=guided memory=none` for an explicit no-memory run.
 
 ### LLM I/O Audit Trail
 

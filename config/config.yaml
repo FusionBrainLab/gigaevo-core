@@ -3,7 +3,6 @@ defaults:
   - program_format: python_source  # Candidate representation: python_source | json_document
   - storage: disk          # Program/archive storage backend (override with storage=redis)
   - /migration_bus: disabled
-  - memory: none           # Memory subsystem: none | reader | writer | full | static (flat ${ref:} component graph)
   - aggregator: none       # NullAggregator sentinel (override with aggregator=<name>)
   - archive_selector: point  # Archive replacement rule (override with archive_selector=paired_bootstrap)
   - stopper: max_mutants  # Pluggable stopper (override with stopper=wall_clock, stopper=fitness_plateau, ...)

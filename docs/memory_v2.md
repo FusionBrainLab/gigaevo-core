@@ -9,10 +9,19 @@ The full posterior, selection, lifecycle, diagrams, and plain-English Bayesian
 glossary are in [the Bayesian system report](memory_v2_bayesian_system_report.md).
 
 This first iteration is intentionally narrow. It supports one proposed card per
-mutation and `num_parents=1`. It does not claim multi-card attribution,
-crossover identification, or full retrieval-policy OPE.
+mutation and `num_parents=1` on bounded MAP-Elites tasks. It does not claim
+multi-card attribution, crossover identification, or full retrieval-policy OPE.
 
 ## Run Surface
+
+The base experiment now selects memory v2, the metadata-routing memory pipeline,
+and one parent. A normal bounded task therefore needs no memory overrides:
+
+```bash
+python run.py problem.name=heilbron
+```
+
+The equivalent fully explicit HoVer recipe is:
 
 ```bash
 python run.py \
@@ -27,6 +36,12 @@ python run.py \
   pipeline=memory_guided_noise \
   memory=v2 memory/write=live
 ```
+
+Normal runs use 70% delivery and 30% matched control after validation. Balanced
+validation launchers override both
+`memory.posterior_config.reference_offer_probability` and
+`memory.policy_config.offer_probability` to `0.50`. Use
+`pipeline=guided memory=none` for a true no-memory arm.
 
 The startup validator rejects multi-parent use, metadata-dropping pipelines,
 and refresh coalescing. A causal decision belongs to one mutation attempt;
@@ -115,14 +130,15 @@ exchangeable categories. Each decision freezes:
 - absolute oriented parent fitness and archive quality quantile;
 - local neighbor occupancy, parent cell, iteration, and generation.
 
-The binning objects own stable model transforms: linear normalization for
-`hop_depth` and log normalization for `passages_fetched` and `instr_chars`.
-Mutable archive bounds never change these model coordinates. The minimal shared
-context is intercept, parent fitness, progress, and the three behavior values.
-Each card has one shrunk contextual deviation over intercept, fitness, and those
-behavior values. No dynamic
-cell coordinate, quadratic, lexical, keyword, category, or hashed-text feature
-enters the posterior.
+Each binning object owns its stable model transform. Memory v2 reads the common
+ordered axis schema from the live behavior spaces; HoVer, for example, uses
+linear normalization for `hop_depth` and log normalization for
+`passages_fetched` and `instr_chars`. Mutable archive bounds never change these
+model coordinates. The minimal shared context is intercept, parent fitness,
+progress, and the task's behavior values. Each card has one shrunk contextual
+deviation over intercept, fitness, and those behavior values. No dynamic cell
+coordinate, quadratic, lexical, keyword, category, or hashed-text feature enters
+the posterior.
 
 ## Bounded Hierarchical Utility
 
@@ -161,8 +177,8 @@ effect(x,j) = q_1 - q_0
 The design is `baseline(x) + A * card_effect(x)`: proposed-but-withheld controls
 all use the same contextual baseline, while delivered cards add their lineage and
 stable card effect. A fixed conditional offer probability `e` supplies randomized
-overlap (`0.5` by default); mixed offer propensities inside one fitted ledger are
-rejected by this first implementation.
+overlap (`0.7` by default for normal runs); mixed offer propensities inside one
+fitted ledger are rejected by this first implementation.
 Invalidity learns from every randomized terminal; valid gain learns only where a
 gain exists. The composite value still assigns invalidity its parent-specific
 pessimistic consequence instead of treating it as missing or zero.
@@ -331,11 +347,11 @@ candidate on those same trajectories is retrospective model selection. Its
 score is therefore a development estimate. A recommendation from one
 trajectory is labeled provisional and still needs a fresh run. The CLI also
 reports the homoscedastic overlap proxy for alternative delivery rates. Under
-that standard design approximation, 75% delivery retains
-75% of the binary-contrast information of a 50/50 experiment per proposal; 80%
-retains 64%. These rows do not estimate the effect of changing the full proposal
-policy, and gate replay does not identify the trajectory induced by changing
-admission.
+that standard design approximation, 70% delivery retains 84% of the
+binary-contrast information of a 50/50 experiment per proposal; 75% retains 75%,
+and 80% retains 64%. These rows do not estimate the effect of changing the full
+proposal policy, and gate replay does not identify the trajectory induced by
+changing admission.
 
 ## Deliberately Deferred
 

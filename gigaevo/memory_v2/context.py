@@ -74,6 +74,23 @@ class MapElitesContextSource:
         self.credit = credit
         self.trajectory_id_source = trajectory_id_source
 
+    @property
+    def behavior_keys(self) -> tuple[str, ...]:
+        """Return the common ordered model axes from the live behavior spaces."""
+
+        schemas = {
+            tuple(island.config.behavior_space.behavior_keys)
+            for island in self.strategy.islands.values()
+        }
+        if not schemas:
+            raise ValueError("memory v2 requires at least one MAP-Elites island")
+        if len(schemas) != 1:
+            raise ValueError(
+                "memory v2 requires one shared ordered behavior schema across "
+                f"islands, got {sorted(schemas)!r}"
+            )
+        return next(iter(schemas))
+
     async def snapshot(self, program: Program) -> EvolutionContext:
         island = self._island_for(program)
         elites = await island.get_elites()
@@ -134,9 +151,7 @@ class MapElitesContextSource:
             ),
             lineage_depth=self.credit.lineage_depth,
             lineage_opportunity_budget=(
-                1
-                if self.credit.lineage_depth == 1
-                else self.credit.opportunity_budget
+                1 if self.credit.lineage_depth == 1 else self.credit.opportunity_budget
             ),
         )
         return EvolutionContext(

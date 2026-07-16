@@ -168,7 +168,6 @@ def _maybe_enable_llm_io_dump(cfg: DictConfig, output_dir: Path) -> None:
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    load_dotenv()
     log_file_path = Path(
         setup_logger(
             log_dir=cfg.logging.log_dir,
@@ -315,5 +314,7 @@ def _finalize_live_artifacts(
 
 
 if __name__ == "__main__":
+    # Load endpoint and credential variables before Hydra composes/resolves config.
+    load_dotenv()
     register_resolvers()
     main()

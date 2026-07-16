@@ -1,6 +1,6 @@
-# memory=v2: v1 card machinery with a content-addressed Bayesian causal core.
-# The initial production scope is singleton-parent chains_bd3d. Multi-parent
-# crossover is rejected by startup validation until decisions move to mutation level.
+# memory=v2: v1 card machinery with a contextual Bayesian causal core.
+# The initial production scope is bounded, singleton-parent MAP-Elites evolution.
+# Multi-parent crossover is rejected until decisions move to mutation level.
 defaults:
   - llm: gemini
   - context: global
@@ -80,7 +80,8 @@ outcome_sink: ${ref:memory.ledger}
 
 feature_config:
   _target_: gigaevo.memory_v2.features.FeatureConfig
-  behavior_keys: [hop_depth, passages_fetched, instr_chars]
+  # The live BehaviorSpace owns the ordered statistical axes and transforms.
+  behavior_keys: ${ref:memory.context_source::behavior_keys}
   progress_log_scale: 100.0
 
 feature_map:
@@ -101,7 +102,9 @@ posterior_config:
   reward_residual_upper_boundary_mass_limit: 1.0e-4
   reward_residual_quadrature_max_depth: 8
   unknown_measurement_sd: 0.15
-  reference_offer_probability: 0.50
+  # Ordinary runs use 70/30 delivery/control after a balanced validation run.
+  # Validation launchers override both reference and policy probabilities to 0.50.
+  reference_offer_probability: 0.70
   safety_integration_tolerance: 1.0e-8
   invalidity_prior_probability: 0.05
   safety_baseline_prior_sd: 0.15
@@ -122,7 +125,7 @@ safety:
 
 policy_config:
   _target_: gigaevo.memory_v2.policy.ProbabilityMatchingConfig
-  offer_probability: 0.50
+  offer_probability: 0.70
   proposal_exploration_probability: 0.05
   posterior_summary_samples: 1024
   proposal_worlds: 512
