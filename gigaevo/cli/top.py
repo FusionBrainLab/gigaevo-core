@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import re
 
 import click
 import redis as redis_lib
@@ -32,22 +33,36 @@ def _fetch_top_programs(
         except (json.JSONDecodeError, TypeError):
             continue
         metrics = prog.get("metrics", {})
-        val = metrics.get(metric)
-        if val is None:
+        raw_value = metrics.get(metric)
+        try:
+            val = float(raw_value)
+        except (TypeError, ValueError):
             continue
+        lineage = prog.get("lineage")
+        lineage_generation = (
+            lineage.get("generation") if isinstance(lineage, dict) else None
+        )
+        generation = prog.get("generation")
         programs.append(
             {
-                "id": prog.get("id", "?"),
-                "generation": prog.get("generation")
-                or prog.get("lineage", {}).get("generation"),
+                "id": str(prog.get("id") or "?"),
+                "generation": (
+                    generation if generation is not None else lineage_generation
+                ),
                 metric: val,
                 "state": prog.get("state", "?"),
-                "code": prog.get("code", ""),
+                "code": str(prog.get("code", "")),
             }
         )
 
     programs.sort(key=lambda p: p.get(metric, 0), reverse=not minimize)
     return programs[:n]
+
+
+def _filename_token(value: object) -> str:
+    """Return a short program identifier safe for a single filename."""
+    token = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)[:64]).strip("._")
+    return (token or "program")[:32]
 
 
 def _fetch_top_programs_storage(
@@ -83,7 +98,11 @@ def _fetch_top_programs_storage(
 
 @click.command()
 @click.option("-n", "--top-n", type=int, default=5, help="Number of top programs.")
-@click.option("--metric", default="fitness", help="Metric to rank by.")
+@click.option(
+    "--metric",
+    default=None,
+    help="Metric to rank by. Defaults to the manifest primary metric or fitness.",
+)
 @click.option("--minimize", is_flag=True, default=False, help="Lower is better.")
 @click.option(
     "--code", "show_code", is_flag=True, default=False, help="Show source code."
@@ -107,7 +126,7 @@ def _fetch_top_programs_storage(
 def top(
     ctx: click.Context,
     top_n: int,
-    metric: str,
+    metric: str | None,
     minimize: bool,
     show_code: bool,
     save_dir: str | None,
@@ -132,9 +151,8 @@ def top(
     redis_host = ctx.obj["redis_host"]
     redis_port = ctx.obj["redis_port"]
 
-    # Use manifest's problem.metric_name as default when in --experiment mode
-    # and user didn't explicitly pass --metric (still has Click default "fitness")
-    if metric == "fitness" and experiment:
+    # Use the manifest primary metric only when the user omitted --metric.
+    if metric is None and experiment:
         try:
             from gigaevo.experiment.manifest import load_manifest
 
@@ -143,6 +161,8 @@ def top(
                 metric = manifest.contract.problem.metric_name
         except Exception:
             pass  # fall back to "fitness"
+    if metric is None:
+        metric = "fitness"
 
     run_configs = RunResolver.resolve(
         experiment=experiment,
@@ -156,20 +176,30 @@ def top(
 
     for rc in run_configs:
         spec = rc.run_spec
-        if spec.is_disk:
-            storage = build_readonly_storage(spec, redis_host, redis_port)
-            progs = _fetch_top_programs_storage(storage, metric, top_n, minimize)
-        else:
-            if redis_factory:
-                r = redis_factory(spec.db)
+        try:
+            if spec.is_disk:
+                storage = build_readonly_storage(spec, redis_host, redis_port)
+                progs = _fetch_top_programs_storage(storage, metric, top_n, minimize)
             else:
-                r = redis_lib.Redis(
-                    host=redis_host, port=redis_port, db=spec.db, decode_responses=True
-                )
-            try:
-                progs = _fetch_top_programs(r, spec.prefix, metric, top_n, minimize)
-            finally:
-                r.close()
+                if redis_factory:
+                    r = redis_factory(spec.db)
+                else:
+                    r = redis_lib.Redis(
+                        host=redis_host,
+                        port=redis_port,
+                        db=spec.db,
+                        decode_responses=True,
+                    )
+                try:
+                    progs = _fetch_top_programs(r, spec.prefix, metric, top_n, minimize)
+                finally:
+                    r.close()
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to read programs for {spec.label}: {exc}"
+            ) from exc
         for p in progs:
             p["label"] = spec.label
         all_programs.extend(progs)
@@ -201,6 +231,6 @@ def top(
         out = Path(save_dir)
         out.mkdir(parents=True, exist_ok=True)
         for i, p in enumerate(all_programs):
-            path = out / f"top_{i + 1}_{p['id'][:12]}.py"
-            path.write_text(p.get("code", ""))
+            path = out / f"top_{i + 1}_{_filename_token(p['id'])}.py"
+            path.write_text(str(p.get("code", "")))
         click.echo(f"Saved {len(all_programs)} programs to {save_dir}")

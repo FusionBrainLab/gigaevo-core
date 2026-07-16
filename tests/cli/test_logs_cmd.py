@@ -14,8 +14,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
+import pytest
 
 from gigaevo.cli import main
+
+
+@pytest.fixture(autouse=True)
+def _project_root(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("gigaevo.experiment.manifest.PROJ", tmp_path)
 
 
 def _mock_manifest(labels: list[str]):
@@ -26,6 +32,7 @@ def _mock_manifest(labels: list[str]):
         run.label = label
         run.db = 1
         run.prefix = f"pfx_{label}"
+        run.log_path = None
         manifest.contract.runs.append(run)
     return manifest
 
@@ -58,6 +65,44 @@ class TestLogsExplicitFile:
 
 
 class TestLogsByLabel:
+    def test_manifest_log_paths_do_not_depend_on_cwd(self, tmp_path: Path, monkeypatch):
+        exp_dir = tmp_path / "experiments" / "task" / "exp1"
+        exp_dir.mkdir(parents=True)
+        (exp_dir / "run_A.log").write_text("project-root log\n")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        with patch(
+            "gigaevo.cli.logs._load_manifest", return_value=_mock_manifest(["A"])
+        ):
+            result = CliRunner().invoke(
+                main,
+                ["-e", "task/exp1", "logs", "A"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "project-root log" in result.output
+
+    def test_uses_manifest_log_path(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exp_dir = tmp_path / "experiments" / "task" / "exp1"
+        exp_dir.mkdir(parents=True)
+        (exp_dir / "custom-a.log").write_text("configured path\n")
+        manifest = _mock_manifest(["A"])
+        manifest.contract.runs[0].log_path = "custom-a.log"
+
+        with patch("gigaevo.cli.logs._load_manifest", return_value=manifest):
+            result = CliRunner().invoke(
+                main,
+                ["-e", "task/exp1", "logs", "A"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "configured path" in result.output
+
     def test_tails_run_log_by_label(self, tmp_path: Path, monkeypatch):
         """Positional label resolves to experiments/<exp>/run_<label>.log."""
         monkeypatch.chdir(tmp_path)
@@ -128,8 +173,8 @@ class TestLogsByLabel:
         assert result.exit_code == 0, result.output
         call_args = mock_sub.run.call_args[0][0]
         assert "tail" in call_args
-        assert "experiments/task/exp1/run_A3_G.log" in call_args
-        assert "experiments/task/exp1/run_B5_G.log" in call_args
+        assert str(exp_dir / "run_A3_G.log") in call_args
+        assert str(exp_dir / "run_B5_G.log") in call_args
 
     def test_follow_flag_with_label(self, tmp_path: Path, monkeypatch):
         """-f with a label calls tail -f on the resolved run_<label>.log."""
@@ -145,7 +190,7 @@ class TestLogsByLabel:
             ),
             patch("gigaevo.cli.logs.subprocess") as mock_sub,
         ):
-            mock_sub.run.return_value = None
+            mock_sub.run.return_value = MagicMock(returncode=0)
             runner = CliRunner()
             result = runner.invoke(
                 main,
@@ -157,7 +202,7 @@ class TestLogsByLabel:
         call_args = mock_sub.run.call_args[0][0]
         assert "tail" in call_args
         assert "-f" in call_args
-        assert "experiments/task/exp1/run_A3_G.log" in call_args
+        assert str(exp_dir / "run_A3_G.log") in call_args
 
     def test_missing_log_file_errors(self, tmp_path: Path, monkeypatch):
         """Known label but log file absent exits with error mentioning path."""
@@ -214,3 +259,28 @@ class TestLogsListMode:
             catch_exceptions=False,
         )
         assert result.exit_code != 0
+
+
+class TestLogsTailErrors:
+    def test_tail_stderr_is_reported(self, tmp_path: Path):
+        log = tmp_path / "test.log"
+        log.write_text("content\n")
+        completed = MagicMock(stdout="", stderr="tail failed\n", returncode=2)
+        with patch("gigaevo.cli.logs.subprocess.run", return_value=completed):
+            result = CliRunner().invoke(
+                main,
+                ["logs", "--file", str(log)],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 2
+        assert "tail failed" in result.output
+
+    def test_negative_tail_is_rejected(self, tmp_path: Path):
+        log = tmp_path / "test.log"
+        log.write_text("content\n")
+        result = CliRunner().invoke(
+            main,
+            ["logs", "--file", str(log), "--tail", "-1"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 2

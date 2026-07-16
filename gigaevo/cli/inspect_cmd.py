@@ -8,6 +8,9 @@ import redis
 _LOCK_SUFFIX = ":__instance_lock__"
 _RUN_STATE_SUFFIX = ":run_state"
 _PROGRAM_MARKER = ":program:"
+_METRICS_MARKER = ":metrics:"
+_STATUS_MARKER = ":status:"
+_ARCHIVE_SUFFIX = ":archive"
 
 
 def discover_prefixes(
@@ -15,7 +18,7 @@ def discover_prefixes(
     redis_port: int,
     db: int,
 ) -> list[str]:
-    """Return prefixes inferred from lock, run-state, and program keys."""
+    """Return prefixes inferred from recognized GigaEvo keys."""
     r = redis.Redis(host=redis_host, port=redis_port, db=db, decode_responses=True)
     try:
         prefixes = {
@@ -31,6 +34,20 @@ def discover_prefixes(
             for key in r.scan_iter(match=f"*{_PROGRAM_MARKER}*", count=1000)
             if _PROGRAM_MARKER in key
         )
+        prefixes.update(
+            key.split(_METRICS_MARKER, 1)[0]
+            for key in r.scan_iter(match=f"*{_METRICS_MARKER}*", count=1000)
+            if _METRICS_MARKER in key
+        )
+        prefixes.update(
+            key.rsplit(_STATUS_MARKER, 1)[0]
+            for key in r.scan_iter(match=f"*{_STATUS_MARKER}*", count=1000)
+            if _STATUS_MARKER in key
+        )
+        prefixes.update(
+            key.removesuffix(_ARCHIVE_SUFFIX)
+            for key in r.scan_iter(match=f"*{_ARCHIVE_SUFFIX}", count=1000)
+        )
     finally:
         r.close()
     return sorted(prefixes)
@@ -41,7 +58,7 @@ def discover_prefixes(
     "--db",
     multiple=True,
     required=True,
-    type=int,
+    type=click.IntRange(min=0),
     help="Redis DB number(s) to inspect (repeat for multiple).",
 )
 @click.pass_context
@@ -57,16 +74,21 @@ def inspect(ctx: click.Context, db: tuple[int, ...]) -> None:
     redis_host: str = ctx.obj["redis_host"]
     redis_port: int = ctx.obj["redis_port"]
 
+    failed = False
     for d in db:
-        if not 0 <= d <= 15:
-            click.echo(f"Error: DB number {d} out of range (0-15)", err=True)
-            ctx.exit(1)
-            return
-
-    for d in db:
-        prefixes = discover_prefixes(redis_host, redis_port, d)
+        try:
+            prefixes = discover_prefixes(redis_host, redis_port, d)
+        except redis.RedisError as exc:
+            click.echo(
+                f"db={d}  ERROR connecting to {redis_host}:{redis_port}: {exc}",
+                err=True,
+            )
+            failed = True
+            continue
         if prefixes:
             for p in sorted(prefixes):
                 click.echo(f"db={d}  prefix={p}")
         else:
             click.echo(f"db={d}  (empty or no recognized keys)")
+    if failed:
+        ctx.exit(1)

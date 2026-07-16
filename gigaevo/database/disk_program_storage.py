@@ -117,19 +117,27 @@ class DiskProgramStorage(ProgramStorage):
             self._run_state = dict(_loads(run_state_path.read_text()))
 
     def _persist_program(self, program: Program) -> None:
-        self._programs_dir.mkdir(parents=True, exist_ok=True)
-        (self._programs_dir / f"{program.id}.json").write_text(
-            program.model_dump_json()
+        self._atomic_write_text(
+            self._programs_dir / f"{program.id}.json", program.model_dump_json()
         )
 
     def _persist_status_sets(self) -> None:
-        self.base_dir.mkdir(parents=True, exist_ok=True)
         payload = {s: sorted(ids) for s, ids in self._status_sets.items()}
-        (self.base_dir / STATUS_SETS_FILE).write_text(_dumps(payload))
+        self._atomic_write_text(self.base_dir / STATUS_SETS_FILE, _dumps(payload))
 
     def _persist_run_state(self) -> None:
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        (self.base_dir / RUN_STATE_FILE).write_text(_dumps(self._run_state))
+        self._atomic_write_text(self.base_dir / RUN_STATE_FILE, _dumps(self._run_state))
+
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        """Replace a JSON state file atomically for concurrent read-only tools."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            temporary.write_text(content, encoding="utf-8")
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _store(self, program: Program) -> Program:
         """Deep-copy, stamp revision counter, keep in memory + write through."""

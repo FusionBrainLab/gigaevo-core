@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from click.testing import CliRunner
 import fakeredis
@@ -177,7 +177,7 @@ class TestStatusUsesMonitoringLib:
             )
 
         assert result.exit_code == 0, result.output
-        mock_instance.collect.assert_called_once()
+        mock_instance.collect.assert_called_once_with(ANY, event_window_minutes=0)
         data = json.loads(result.output)
         assert data[0]["Iter"] == 42
 

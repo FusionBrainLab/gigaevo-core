@@ -113,6 +113,25 @@ class TestTopBasic:
         client.scan_iter.assert_called_once_with(match="p:program:*", count=1000)
         client.keys.assert_not_called()
 
+    def test_fetch_preserves_generation_zero(self):
+        from gigaevo.cli.top import _fetch_top_programs
+
+        client = MagicMock()
+        client.scan_iter.return_value = iter(["p:program:a"])
+        client.get.return_value = json.dumps(
+            {
+                "id": "a",
+                "generation": 0,
+                "lineage": {"generation": 99},
+                "metrics": {"fitness": 1.0},
+                "state": "completed",
+            }
+        )
+
+        programs = _fetch_top_programs(client, "p", "fitness", 1)
+
+        assert programs[0]["generation"] == 0
+
 
 class TestTopCodeFlag:
     def test_show_code_prints_source(self):
@@ -153,6 +172,31 @@ class TestTopSaveDir:
         saved_files = list(Path(save_dir).glob("*.py"))
         assert len(saved_files) == 1
         assert "return 42" in saved_files[0].read_text()
+
+    def test_save_dir_sanitizes_corrupt_program_id(self, tmp_path: Path):
+        server = fakeredis.FakeServer()
+        _store_program(
+            server,
+            4,
+            "p",
+            "../../outside",
+            1,
+            0.90,
+            code="def solve(): return 42",
+        )
+
+        save_dir = tmp_path / "saved"
+        result = CliRunner().invoke(
+            main,
+            ["-r", "p@4:A", "top", "-n", "1", "--save-dir", str(save_dir)],
+            obj=_make_obj(server),
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        saved_files = list(save_dir.glob("*.py"))
+        assert len(saved_files) == 1
+        assert saved_files[0].parent == save_dir
 
 
 class TestTopEmptyRedis:
@@ -305,6 +349,54 @@ class TestTopManifestDefaultMetric:
             assert len(data) == 1
             assert "Quality" in data[0]
             assert data[0]["Quality"] == 0.95
+
+    def test_explicit_fitness_overrides_manifest(self):
+        from unittest.mock import patch
+
+        from gigaevo.monitoring.experiment_monitor import RunConfig
+        from gigaevo.monitoring.run_spec import RunSpec
+
+        server = fakeredis.FakeServer()
+        r = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
+        r.set(
+            "p:program:aaa111111111",
+            json.dumps(
+                {
+                    "id": "aaa111111111",
+                    "generation": 1,
+                    "metrics": {"fitness": 0.5, "actual_fitness": 0.8},
+                    "state": "DONE",
+                    "code": "def solve(): pass",
+                }
+            ),
+        )
+        manifest = MagicMock()
+        manifest.contract.problem.metric_name = "actual_fitness"
+        configs = [RunConfig(run_spec=RunSpec(prefix="p", db=4, label="A"))]
+        obj = _make_obj(server)
+        obj.update(experiment="test/exp", runs=())
+
+        with (
+            patch("gigaevo.experiment.manifest.load_manifest", return_value=manifest),
+            patch.object(RunResolver, "resolve", return_value=configs),
+        ):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-e",
+                    "test/exp",
+                    "-f",
+                    "json",
+                    "top",
+                    "--metric",
+                    "fitness",
+                ],
+                obj=obj,
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)[0]["Fitness"] == 0.5
 
 
 class TestTopDiskStorage:

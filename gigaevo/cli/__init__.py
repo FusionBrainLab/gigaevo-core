@@ -29,7 +29,7 @@ _LAZY_SUBCOMMANDS: dict[str, LazyCommandSpec] = {
     "trajectory": LazyCommandSpec(
         "gigaevo.cli.trajectory",
         "trajectory",
-        "Show Redis metric frontier and mean histories.",
+        "Show Redis or disk metric frontier and mean histories.",
     ),
     "top": LazyCommandSpec(
         "gigaevo.cli.top", "top", "Inspect top programs from Redis or disk storage."
@@ -53,7 +53,7 @@ _LAZY_SUBCOMMANDS: dict[str, LazyCommandSpec] = {
     "watchdog": LazyCommandSpec(
         "gigaevo.cli.watchdog_cmd",
         "watchdog",
-        "Run experiment monitoring and notifications.",
+        "Run legacy experiment monitoring and notifications.",
     ),
     "checkpoint": LazyCommandSpec(
         "gigaevo.cli.checkpoint",
@@ -80,7 +80,9 @@ _LAZY_SUBCOMMANDS: dict[str, LazyCommandSpec] = {
         "Build profiling reports from run logs.",
     ),
     "metrics": LazyCommandSpec(
-        "gigaevo.cli.metrics_cmd", "metrics", "Dump raw Redis metric histories."
+        "gigaevo.cli.metrics_cmd",
+        "metrics",
+        "Dump raw Redis or disk metric histories.",
     ),
     "memory": LazyCommandSpec(
         "gigaevo.cli.memory_cmd", "memory", "Analyze and calibrate memory ledgers."
@@ -179,8 +181,8 @@ class LazyGroup(click.Group):
     multiple=True,
     help=(
         "Run spec 'prefix@db[:label]' (e.g. 'adv_k5_1_G@1:K5_1_G') or a "
-        "disk storage path 'outputs/run/storage[:label]' for storage=disk "
-        "runs. Repeatable — pass multiple times to target several runs."
+        "disk run path 'outputs/run[:label]' for storage=disk runs. The path "
+        "may also name storage/ or its prefix directory. Repeatable."
     ),
 )
 @click.option(
@@ -198,22 +200,19 @@ class LazyGroup(click.Group):
     ),
 )
 @click.option(
-    "-q", "--quiet", is_flag=True, default=False, help="Suppress non-error output."
-)
-@click.option(
-    "-v",
-    "--verbose",
-    is_flag=True,
-    default=False,
-    help="Emit debug-level progress messages.",
-)
-@click.option(
     "--redis-host",
     default="localhost",
-    help="Redis server hostname (default: localhost).",
+    envvar="REDIS_HOST",
+    show_default=True,
+    help="Redis server hostname. Also read from REDIS_HOST.",
 )
 @click.option(
-    "--redis-port", type=int, default=6379, help="Redis server port (default: 6379)."
+    "--redis-port",
+    type=click.IntRange(min=1, max=65535),
+    default=6379,
+    envvar="REDIS_PORT",
+    show_default=True,
+    help="Redis server port. Also read from REDIS_PORT.",
 )
 @click.pass_context
 def main(
@@ -221,8 +220,6 @@ def main(
     experiment: str | None,
     run: tuple[str, ...],
     format_name: str | None,
-    quiet: bool,
-    verbose: bool,
     redis_host: str,
     redis_port: int,
 ) -> None:
@@ -231,13 +228,13 @@ def main(
     Run `gigaevo <subcommand> --help` for per-command documentation.
     Common workflows: `status` for run health, `trajectory`/`top` for
     fitness inspection, `plot` for visualisations, `logs` for tailing,
-    `manifest` for experiment.yaml edits, `launch`/`watchdog` for
-    lifecycle control, `flush` for teardown.
+    `manifest` for experiment.yaml edits, `launch` for lifecycle control,
+    and `flush` for teardown.
 
     \b
     Argument order
     --------------
-    Global flags (-e, -r, -f, -q, -v, --redis-host, --redis-port) MUST
+    Global flags (-e, -r, -f, --redis-host, --redis-port) MUST
     appear BEFORE the subcommand. Click consumes them first, so
     subcommands can re-use the same short letters without collision:
 
@@ -248,8 +245,6 @@ def main(
        -r/--run                     --
        -f/--format                  logs -f  = --follow
                                     top/trajectory/manifest get -f = format override
-       -q/--quiet                   --
-       -v/--verbose                 --
 
     \b
     Examples
@@ -269,19 +264,18 @@ def main(
     \b
     Storage support
     ---------------
-      Redis + disk   top, export, plot
-      Redis only     status, trajectory, metrics, checkpoint
+      Redis + disk   top, export, plot, trajectory, metrics
+      Redis only     status, checkpoint
       Files/logs     logs, profiler, events
       No run target  flush, inspect
 
     Redis specs: prefix@db[:label], db[:label], or @db[:label].
-    Disk specs: /path/to/storage[:label], ./relative/storage[:label],
-    or any slash-containing relative path without '@'.
+    Disk specs: /path/to/run[:label], ./relative/storage[:label], or any
+    slash-containing relative path without '@'.
     """
     ctx.ensure_object(dict)
-    ctx.obj["formatter"] = OutputFormatter(format_name=format_name, quiet=quiet)
+    ctx.obj["formatter"] = OutputFormatter(format_name=format_name)
     ctx.obj["experiment"] = experiment
     ctx.obj["runs"] = run
     ctx.obj["redis_host"] = redis_host
     ctx.obj["redis_port"] = redis_port
-    ctx.obj["verbose"] = verbose

@@ -42,13 +42,13 @@ def _serialize_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     for col in df.columns:
         if df[col].dtype == object:
-            sample = df[col].dropna().head(1)
-            if len(sample) > 0 and isinstance(sample.iloc[0], (dict, list)):
-                df[col] = df[col].apply(
-                    lambda x: (
-                        json.dumps(x, default=str) if isinstance(x, (dict, list)) else x
-                    )
+            df[col] = df[col].apply(
+                lambda value: (
+                    json.dumps(value, default=str)
+                    if isinstance(value, (dict, list))
+                    else value
                 )
+            )
     return df
 
 
@@ -209,10 +209,22 @@ def csv_cmd(ctx: click.Context, labels: tuple[str, ...], output_file: str) -> No
 
     summaries: list[dict] = []
     for rc in run_configs:
-        df = _fetch_dataframe(rc, redis_host, redis_port)
+        try:
+            df = _fetch_dataframe(rc, redis_host, redis_port)
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to read programs for {rc.run_spec.label}: {exc}"
+            ) from exc
         df = _serialize_complex_columns(df)
         out_path = output_paths[rc.run_spec.label] if multi else base
-        df.to_csv(out_path, index=False)
+        try:
+            df.to_csv(out_path, index=False)
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to write {rc.run_spec.label} to {out_path}: {exc}"
+            ) from exc
         summaries.append(
             {
                 "label": rc.run_spec.label,
@@ -269,7 +281,14 @@ def frontier(
 
     summaries: list[dict] = []
     for rc in run_configs:
-        df = _fetch_dataframe(rc, redis_host, redis_port)
+        try:
+            df = _fetch_dataframe(rc, redis_host, redis_port)
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to read programs for {rc.run_spec.label}: {exc}"
+            ) from exc
         if fitness_col not in df.columns:
             click.echo(
                 f"Error: column {fitness_col} not found (run {rc.run_spec.label})",
@@ -289,7 +308,12 @@ def frontier(
             frontier_df["best_val"] = frontier_df["best_val"].cummax()
 
         out_path = output_paths[rc.run_spec.label] if multi else base
-        frontier_df.to_csv(out_path, index=False)
+        try:
+            frontier_df.to_csv(out_path, index=False)
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to write {rc.run_spec.label} to {out_path}: {exc}"
+            ) from exc
         best_value = (
             None if frontier_df.empty else float(frontier_df["best_val"].iloc[-1])
         )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from click.testing import CliRunner
 
@@ -16,7 +16,7 @@ class TestFlushDryRunDefault:
             patch("gigaevo.cli.flush.flush_db") as mock_flush,
             patch("gigaevo.cli.flush.find_exec_runner_pids", return_value=[]),
             patch("gigaevo.cli.flush.kill_workers"),
-            patch("gigaevo.cli.flush.kill_run_writers"),
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[]),
         ):
             mock_flush.return_value = True
             runner = CliRunner()
@@ -30,7 +30,7 @@ class TestFlushDryRunDefault:
             patch("gigaevo.cli.flush.flush_db") as mock_flush,
             patch("gigaevo.cli.flush.find_exec_runner_pids", return_value=[]),
             patch("gigaevo.cli.flush.kill_workers"),
-            patch("gigaevo.cli.flush.kill_run_writers"),
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[]),
         ):
             mock_flush.return_value = True
             runner = CliRunner()
@@ -50,7 +50,7 @@ class TestFlushConfirm:
             patch("gigaevo.cli.flush.flush_db") as mock_flush,
             patch("gigaevo.cli.flush.find_exec_runner_pids", return_value=[]),
             patch("gigaevo.cli.flush.kill_workers"),
-            patch("gigaevo.cli.flush.kill_run_writers"),
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[]),
         ):
             mock_flush.return_value = True
             runner = CliRunner()
@@ -66,7 +66,7 @@ class TestFlushConfirm:
             patch("gigaevo.cli.flush.flush_db") as mock_flush,
             patch("gigaevo.cli.flush.find_exec_runner_pids", return_value=[]),
             patch("gigaevo.cli.flush.kill_workers"),
-            patch("gigaevo.cli.flush.kill_run_writers"),
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[]),
         ):
             mock_flush.return_value = True
             runner = CliRunner()
@@ -78,20 +78,63 @@ class TestFlushConfirm:
             assert result.exit_code == 0, result.output
             assert mock_flush.call_count == 2
 
+    def test_worker_pids_are_captured_before_writers_are_killed(self):
+        order = MagicMock()
+        with (
+            patch("gigaevo.cli.flush.flush_db", return_value=True),
+            patch(
+                "gigaevo.cli.flush.find_exec_runner_pids", return_value=[123]
+            ) as find,
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[456]) as writers,
+            patch("gigaevo.cli.flush.kill_workers") as workers,
+            patch("gigaevo.cli.flush.time.sleep"),
+        ):
+            order.attach_mock(find, "find")
+            order.attach_mock(writers, "writers")
+            order.attach_mock(workers, "workers")
+            result = CliRunner().invoke(
+                main, ["flush", "--db", "5", "--confirm"], catch_exceptions=False
+            )
+
+        assert result.exit_code == 0, result.output
+        assert order.mock_calls[:3] == [
+            call.find([5], include_orphans=False),
+            call.writers([5], False),
+            call.workers([123], False),
+        ]
+
 
 class TestFlushDbValidation:
-    def test_db_out_of_range_errors(self):
-        """DB number > 15 shows error."""
-        runner = CliRunner()
-        result = runner.invoke(main, ["flush", "--db", "16"], catch_exceptions=False)
-        assert result.exit_code != 0
-        assert "out of range" in result.output.lower() or "16" in result.output
+    def test_db_above_redis_default_range_is_allowed(self):
+        """Configured Redis servers may expose DB numbers above 15."""
+        with (
+            patch("gigaevo.cli.flush.flush_db", return_value=True) as mock_flush,
+            patch("gigaevo.cli.flush.find_exec_runner_pids", return_value=[]),
+            patch("gigaevo.cli.flush.kill_workers"),
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[]),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                main, ["flush", "--db", "16"], catch_exceptions=False
+            )
+        assert result.exit_code == 0, result.output
+        mock_flush.assert_called_once_with(16, "localhost", 6379, True)
 
     def test_negative_db_errors(self):
         """Negative DB number shows error."""
         runner = CliRunner()
         result = runner.invoke(main, ["flush", "--db", "-1"], catch_exceptions=False)
         assert result.exit_code != 0
+
+    def test_kill_only_and_no_kill_workers_conflict(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["flush", "--db", "4", "--kill-only", "--no-kill-workers"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 2
+        assert "cannot be used together" in result.output
 
 
 class TestFlushNoKillWorkers:
@@ -123,7 +166,7 @@ class TestFlushFailure:
             patch("gigaevo.cli.flush.flush_db") as mock_flush,
             patch("gigaevo.cli.flush.find_exec_runner_pids", return_value=[]),
             patch("gigaevo.cli.flush.kill_workers"),
-            patch("gigaevo.cli.flush.kill_run_writers"),
+            patch("gigaevo.cli.flush.kill_run_writers", return_value=[]),
         ):
             mock_flush.return_value = False
             runner = CliRunner()

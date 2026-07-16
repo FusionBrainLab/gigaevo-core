@@ -49,7 +49,9 @@ class ExperimentMonitor:
         self._redis_port = redis_port
         self._redis_factory = redis_factory
 
-    def collect(self, runs: list[RunConfig]) -> list[RunSnapshot]:
+    def collect(
+        self, runs: list[RunConfig], *, event_window_minutes: int = 10
+    ) -> list[RunSnapshot]:
         """Collect snapshots for all runs.
 
         Each run is queried independently. If one fails, others still
@@ -63,11 +65,15 @@ class ExperimentMonitor:
         """
         snapshots: list[RunSnapshot] = []
         for run_cfg in runs:
-            snapshot = self._collect_one(run_cfg)
+            snapshot = self._collect_one(
+                run_cfg, event_window_minutes=event_window_minutes
+            )
             snapshots.append(snapshot)
         return snapshots
 
-    def _collect_one(self, run_cfg: RunConfig) -> RunSnapshot:
+    def _collect_one(
+        self, run_cfg: RunConfig, *, event_window_minutes: int
+    ) -> RunSnapshot:
         """Collect a single run's snapshot."""
         try:
             if self._redis_factory is not None:
@@ -86,6 +92,7 @@ class ExperimentMonitor:
                     run_cfg.run_spec,
                     metric_names=run_cfg.metric_names,
                     pid=run_cfg.pid,
+                    event_window_minutes=event_window_minutes,
                 )
             finally:
                 r.close()

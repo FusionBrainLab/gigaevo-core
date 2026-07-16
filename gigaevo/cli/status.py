@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
-import yaml
 
+from gigaevo.cli.log_paths import problem_metrics_path
 from gigaevo.cli.output_formatter import OutputFormatter
 from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
 
@@ -33,8 +32,10 @@ def _load_metric_specs(experiment: str | None) -> dict[str, dict]:
         for run in manifest.contract.runs:
             if run.problem_name not in seen:
                 seen.add(run.problem_name)
-                path = Path("problems") / run.problem_name / "metrics.yaml"
+                path = problem_metrics_path(run.problem_name)
                 if path.exists():
+                    import yaml
+
                     with open(path) as f:
                         data = yaml.safe_load(f)
                     if isinstance(data, dict):
@@ -185,7 +186,9 @@ def status(ctx: click.Context, format_name: str | None) -> None:
         redis_port=redis_port,
         redis_factory=redis_factory,
     )
-    snapshots: list[RunSnapshot] = monitor.collect(run_configs)
+    # Status does not display canonical event rates; skip that watchdog-only
+    # batch read in the interactive path.
+    snapshots: list[RunSnapshot] = monitor.collect(run_configs, event_window_minutes=0)
 
     rows = [_snapshot_to_row(s, metric_specs) for s in snapshots]
     columns = _build_columns(rows)

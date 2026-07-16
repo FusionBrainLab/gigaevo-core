@@ -74,6 +74,17 @@ class TestBasicCRUD:
         assert fetched.created_at == original_created
         assert fetched.metrics["score"] == 10.0
 
+    async def test_clear_only_removes_own_prefix(self, fakeredis_storage, make_program):
+        program = make_program()
+        await fakeredis_storage.add(program)
+        client = fakeredis_storage._conn._redis
+        await client.set("other:program:keep", "payload")
+
+        await fakeredis_storage.clear()
+
+        assert await fakeredis_storage.get(program.id) is None
+        assert await client.get("other:program:keep") == "payload"
+
 
 # ===================================================================
 # Category B: Batch Operations

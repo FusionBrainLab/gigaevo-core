@@ -123,7 +123,11 @@ class RedisMetricsBackend(LoggerBackend):
                         {
                             "s": step,
                             "t": wall_time,
-                            "v": entry.get("value") or entry.get("values"),
+                            "v": (
+                                entry["value"]
+                                if "value" in entry
+                                else entry.get("values")
+                            ),
                             "k": kind,
                         }
                     )
@@ -165,7 +169,7 @@ class RedisMetricsBackend(LoggerBackend):
                 val = client.hget(self._k_latest(), tag)
                 if val is None:
                     return {}
-                return {tag: float(str(val))}
+                return {tag: self._parse_value(str(val))}
             else:
                 data = client.hgetall(self._k_latest())
                 return {k: self._parse_value(str(v)) for k, v in data.items()}

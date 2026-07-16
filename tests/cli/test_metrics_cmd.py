@@ -8,6 +8,7 @@ from click.testing import CliRunner
 import fakeredis
 
 from gigaevo.cli import main
+from gigaevo.cli.metrics_cmd import _emit_tsv
 
 
 def _entry(
@@ -248,6 +249,22 @@ class TestMetricsKindFilter:
         lines = [line for line in result.output.strip().splitlines() if line]
         assert len(lines) == 2
 
+    def test_histories_are_discovered_without_latest_hash(self):
+        server = fakeredis.FakeServer()
+        _populate(server, 4, "p", "distribution", [(1, 0.5)], kind="hist")
+        r = fakeredis.FakeRedis(server=server, db=4, decode_responses=True)
+        r.hdel("p:metrics:latest", "distribution")
+
+        result = CliRunner().invoke(
+            main,
+            ["-r", "p@4:O", "metrics", "--kind", "hist"],
+            obj=_make_obj(server),
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "distribution" in result.output
+
 
 class TestMetricsMultipleRuns:
     def test_multiple_runs_include_label(self):
@@ -266,3 +283,66 @@ class TestMetricsMultipleRuns:
         assert result.exit_code == 0, result.output
         assert "label=A" in result.output
         assert "label=B" in result.output
+
+
+class TestMetricsValidation:
+    def test_since_after_until_is_rejected(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-r", "p@4:O", "metrics", "--since", "3", "--until", "2"],
+        )
+
+        assert result.exit_code == 2
+        assert "--since must be less than or equal to --until" in result.output
+
+    def test_non_positive_tail_is_rejected(self):
+        result = CliRunner().invoke(
+            main,
+            ["-r", "p@4:O", "metrics", "--tail", "0"],
+        )
+
+        assert result.exit_code == 2
+
+    def test_tsv_quotes_embedded_tabs(self):
+        output = _emit_tsv(
+            [
+                {
+                    "tag": "message",
+                    "step": 1,
+                    "wall": "now",
+                    "kind": "text",
+                    "value": "left\tright",
+                }
+            ],
+            include_label=False,
+        )
+
+        assert '"left\tright"' in output
+
+
+class TestMetricsDiskStorage:
+    def test_reads_jsonl_next_to_storage(self, seed_disk_run):
+        root, _ = seed_disk_run()
+        metrics_dir = root.parent / "metrics"
+        metrics_dir.mkdir()
+        (metrics_dir / "loss.jsonl").write_text(
+            _entry(1, 0.5) + "\n" + _entry(2, 0.25) + "\n"
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["-r", str(root), "metrics", "--format", "json"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert [row["value"] for row in json.loads(result.output)] == [0.5, 0.25]
+
+    def test_missing_metrics_directory_is_clear(self, seed_disk_run):
+        root, _ = seed_disk_run()
+
+        result = CliRunner().invoke(main, ["-r", str(root), "metrics"])
+
+        assert result.exit_code == 2
+        assert "metric history not found" in result.output

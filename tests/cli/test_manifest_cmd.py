@@ -241,6 +241,26 @@ class TestManifestUpdate:
             assert result.exit_code == 1
             assert "Invalid transition" in result.output
 
+    def test_update_canonical_status_path_uses_state_machine(self):
+        updated_manifest = _make_manifest(status="running")
+        with patch(
+            f"{_MANIFEST_MOD}.set_status", return_value=updated_manifest
+        ) as mock_set:
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "lifecycle.status",
+                    "running",
+                ],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        mock_set.assert_called_once_with("hover/test", "running")
+
     def test_set_subcommand_no_longer_exists(self):
         """manifest set is hard-removed — Click reports 'No such command'."""
         runner = CliRunner()
@@ -360,6 +380,74 @@ class TestManifestUpdate:
             assert (
                 captured_updater["raw"]["lifecycle"]["smoke_test"]["completed"] is True
             )
+
+    def test_update_bracket_index(self):
+        updated_manifest = _make_manifest()
+        captured: dict[str, Any] = {}
+
+        def capture_updater(experiment, updater):
+            raw = {"contract": {"runs": [{"label": "A", "pid": None}]}}
+            updater(raw)
+            captured["raw"] = raw
+            return updated_manifest
+
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "contract.runs[0].pid",
+                    "123",
+                ],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["raw"]["contract"]["runs"][0]["pid"] == 123
+
+    def test_update_json_array(self):
+        updated_manifest = _make_manifest()
+        captured: dict[str, Any] = {}
+
+        def capture_updater(experiment, updater):
+            raw = {"contract": {"servers": []}}
+            updater(raw)
+            captured["raw"] = raw
+            return updated_manifest
+
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_updater):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "update",
+                    "contract.servers",
+                    '["host-a", "host-b"]',
+                ],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["raw"]["contract"]["servers"] == ["host-a", "host-b"]
+
+    def test_invalid_json_value_is_clean_error(self):
+        result = CliRunner().invoke(
+            main,
+            [
+                "-e",
+                "hover/test",
+                "manifest",
+                "update",
+                "contract.servers",
+                '["unterminated"',
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 2
+        assert "invalid JSON" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +614,52 @@ class TestManifestRecordPids:
         assert result.exit_code == 1
         assert "expected" in result.output.lower()
 
+    def test_record_pids_rejects_unknown_label(self, tmp_path):
+        pids_file = tmp_path / "pids.txt"
+        pids_file.write_text("111\n")
+
+        def invoke_updater(experiment, updater):
+            raw = {"contract": {"runs": [{"label": "A", "pid": None}]}}
+            updater(raw)
+
+        with patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=invoke_updater):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "record-pids",
+                    "--pids-file",
+                    str(pids_file),
+                    "--labels",
+                    "BOGUS",
+                ],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 1
+        assert "Unknown run label" in result.output
+
+    def test_record_pids_rejects_non_positive_pid(self, tmp_path):
+        pids_file = tmp_path / "pids.txt"
+        pids_file.write_text("0\n")
+        result = CliRunner().invoke(
+            main,
+            [
+                "-e",
+                "hover/test",
+                "manifest",
+                "record-pids",
+                "--pids-file",
+                str(pids_file),
+                "--labels",
+                "A",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 1
+        assert "positive" in result.output
+
 
 class TestManifestResetStatus:
     def test_reset_noop_when_already_at_target(self):
@@ -636,6 +770,43 @@ class TestManifestResetStatus:
             assert result.exit_code == 0, result.output
             mock_set.assert_called_once_with("hover/test", "preregistered")
             mock_update.assert_not_called()
+
+    def test_reset_running_to_preregistered_clears_runtime_state(self):
+        manifest = _make_manifest(status="running")
+        captured: dict[str, Any] = {}
+
+        def capture_update(experiment, updater):
+            raw = {
+                "lifecycle": {"status": "running", "launch": {"time": "t"}},
+                "control_plane": {"watchdog_pid": 9999},
+                "contract": {"runs": [{"label": "A", "pid": 111}]},
+            }
+            updater(raw)
+            captured["raw"] = raw
+
+        with (
+            patch(f"{_MANIFEST_MOD}.load_manifest", return_value=manifest),
+            patch(f"{_MANIFEST_MOD}.release_db_claims") as release,
+            patch(f"{_MANIFEST_MOD}.update_manifest", side_effect=capture_update),
+        ):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "-e",
+                    "hover/test",
+                    "manifest",
+                    "reset-status",
+                    "preregistered",
+                    "--reason",
+                    "retry",
+                    "--force",
+                ],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["raw"]["lifecycle"]["status"] == "preregistered"
+        assert captured["raw"]["contract"]["runs"][0]["pid"] is None
+        release.assert_called_once_with("hover/test", [4, 5])
 
 
 class TestTraverseRawBrackets:

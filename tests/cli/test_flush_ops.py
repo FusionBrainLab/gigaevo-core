@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from gigaevo.cli.flush_ops import (
     _find_run_pids_for_dbs,
     _is_run_py_line,
+    find_exec_runner_pids,
     flush_db,
 )
 
@@ -26,6 +27,10 @@ class TestIsRunPyLine:
 
     def test_rejects_unrelated_process(self):
         line = "jovyan  12345 0.0 python server.py --port 8080"
+        assert _is_run_py_line(line) is False
+
+    def test_rejects_script_name_containing_run_py(self):
+        line = "jovyan  12345 0.0 python rerun.py redis.db=5"
         assert _is_run_py_line(line) is False
 
     def test_matches_worktree_run_py(self):
@@ -118,6 +123,35 @@ class TestFindRunPidsForDbs:
             mock_run.return_value = MagicMock(stdout=ps)
             pids = _find_run_pids_for_dbs([7])
         assert pids == {1000}
+
+
+class TestExecRunnerTargeting:
+    def test_orphans_are_excluded_by_default(self):
+        ps = "100 10 python exec_runner.py\n200 999 python exec_runner.py\n"
+        with (
+            patch("gigaevo.cli.flush_ops._find_run_pids_for_dbs", return_value={10}),
+            patch("gigaevo.cli.flush_ops._find_all_run_pids") as all_run_pids,
+            patch("gigaevo.cli.flush_ops.subprocess.run") as run,
+        ):
+            run.return_value = MagicMock(stdout=ps)
+
+            pids = find_exec_runner_pids([4])
+
+        assert pids == [100]
+        all_run_pids.assert_not_called()
+
+    def test_orphans_can_be_included_explicitly(self):
+        ps = "100 10 python exec_runner.py\n200 999 python exec_runner.py\n"
+        with (
+            patch("gigaevo.cli.flush_ops._find_run_pids_for_dbs", return_value={10}),
+            patch("gigaevo.cli.flush_ops._find_all_run_pids", return_value={10}),
+            patch("gigaevo.cli.flush_ops.subprocess.run") as run,
+        ):
+            run.return_value = MagicMock(stdout=ps)
+
+            pids = find_exec_runner_pids([4], include_orphans=True)
+
+        assert pids == [100, 200]
 
 
 class TestFlushDb:

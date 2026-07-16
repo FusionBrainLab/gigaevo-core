@@ -220,6 +220,21 @@ def get_status_counts(r: redis_lib.Redis, prefix: str) -> dict[str, int]:
     }
 
 
+def count_prefix_keys(r: redis_lib.Redis, prefix: str) -> int:
+    """Count keys owned by one run instead of reporting the whole Redis DB."""
+    namespace = f"{prefix}:"
+    count = 0
+    for raw_key in r.scan_iter(match=f"{prefix}:*", count=1000):
+        key = (
+            raw_key.decode("utf-8", errors="replace")
+            if isinstance(raw_key, bytes)
+            else str(raw_key)
+        )
+        if key.startswith(namespace):
+            count += 1
+    return count
+
+
 def collect_snapshot(
     r: redis_lib.Redis,
     run_spec: RunSpec,
@@ -263,7 +278,7 @@ def collect_snapshot(
         total, valid = get_program_counts(r, run_spec.prefix)
         val_mean, val_max = get_validator_duration(r, run_spec.prefix)
         status_counts = get_status_counts(r, run_spec.prefix)
-        total_keys = r.dbsize()
+        total_keys = count_prefix_keys(r, run_spec.prefix)
 
         # Track B4: single MGET across all registered canonical events.
         # ``None`` when disabled (window=0) or when the registry is empty,

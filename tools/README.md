@@ -15,13 +15,11 @@ export GIGAEVO_PYTHON=python3  # adjust for your environment
 
 | Flag | Description |
 |------|-------------|
-| `-e/--experiment TASK/NAME` | Experiment name — auto-discovers all runs, PIDs, watchdog from `experiment.yaml` |
+| `-e/--experiment TASK/NAME` | Redis-backed experiment — loads runs and PIDs from `experiment.yaml` |
 | `-r/--run SPEC` | Manual run spec (repeatable). See "Run spec formats" below. |
 | `-f/--format FORMAT` | Output format: `table` (default for terminal), `json`, `csv`, `markdown` |
-| `-q/--quiet` | Suppress output |
-| `-v/--verbose` | Verbose output |
-| `--redis-host HOST` | Redis hostname (default: localhost) |
-| `--redis-port PORT` | Redis port (default: 6379) |
+| `--redis-host HOST` | Redis hostname; defaults to `REDIS_HOST` or `localhost` |
+| `--redis-port PORT` | Redis port; defaults to `REDIS_PORT` or `6379` |
 
 #### Run spec formats (`-r`)
 
@@ -35,23 +33,30 @@ The `-r/--run` flag accepts several shorthand forms. When omitted, the prefix is
 | `@db` | `@4` | Same as bare `db` |
 | `db:label` | `4:O` | Bare DB with custom label |
 | `path/to/storage[:label]` | `outputs/run/storage:disk1` | Disk storage path (`storage=disk` runs); slash-containing relative paths are accepted |
+| `path/to/run[:label]` | `outputs/run:disk1` | Hydra output directory containing `storage/` |
 
 The auto-discover path fails if the DB is empty or contains multiple prefixes. Run `gigaevo inspect --db N` first to see what's there.
 
-**Disk-path specs** point at the storage root written by a `storage=disk` run (Hydra default: `<output_dir>/storage`). Absolute paths, `./`/`../` paths, and slash-containing relative paths are accepted. The root's single `<prefix>/programs/` subdirectory is auto-discovered; if there are zero or several, point directly at a prefix directory. The label defaults to the resolved prefix directory name and must be unique in a multi-run command. Disk specs are read-only and lock-free, so it is safe to inspect a live run. Supported by program-reading commands: `top`, `export csv/frontier`, `plot`. Redis-only commands (`status`, `trajectory`, `metrics`, `checkpoint`) reject disk specs with a usage error; their data (live PIDs and Redis metric history) is not part of disk program storage.
+**Disk-path specs** may point at the Hydra output directory, its `storage/`
+directory, or a concrete prefix directory. Absolute paths, `./`/`../` paths,
+and slash-containing relative paths are accepted. Disk specs are read-only and
+lock-free. They work with `top`, `export`, `plot`, `trajectory`, and `metrics`;
+the last two read the default sibling `<run-dir>/metrics` directory. `status`
+and `checkpoint` remain Redis-only because they require live process state.
 
 ### Commands
 
 #### Monitoring
 
 ```bash
-# Status — live run monitoring (gen, metrics, PIDs, watchdog)
+# Status — live Redis run monitoring (progress, metrics, PIDs)
 gigaevo -e hover/my-exp status
 gigaevo -r chains/hotpotqa/static@4:O status
 
-# Trajectory — gen-by-gen fitness table
+# Trajectory — iteration-by-iteration fitness table (Redis or disk)
 gigaevo -r chains/hotpotqa/static@4:O trajectory
 gigaevo -r chains/hotpotqa/static@4:O trajectory --tail 10 --metric fitness
+gigaevo -r outputs/run trajectory --tail 10 --metric fitness
 
 # Top programs — inspect best programs by fitness
 gigaevo -r chains/hotpotqa/static@4:O top
@@ -94,7 +99,7 @@ gigaevo -r chains/hotpotqa/static@4:O export csv -o data/evolution.csv
 gigaevo -r chains/hotpotqa/static@4:O export frontier -o data/frontier.csv --metric fitness
 ```
 
-#### Metrics — raw Redis metric dump
+#### Metrics — raw Redis or disk metric dump
 
 ```bash
 # Stream all metric records, one per line: <tag>\tstep=<n>\twall=<iso>\tvalue=<v>
@@ -107,11 +112,14 @@ gigaevo -r heilbron@0 metrics --tag "*tokens*" --tail 10
 # Bounded step window, TSV output
 gigaevo -r heilbron@0 metrics --since 50 --until 100 --format tsv
 
-# Inspect a known histogram by exact tag (not enumerable from the `latest` hash)
+# Disk metrics from the default <run-dir>/metrics directory
+gigaevo -r outputs/run metrics --tag "valid/frontier/*"
+
+# Inspect a known histogram by exact tag
 gigaevo -r heilbron@0 metrics --kind hist --tag valid/iter/duration_s
 ```
 
-Read-only. See "Redis Data Model" below for how metrics are keyed.
+Read-only. See "Redis Data Model" below for Redis key details.
 
 #### Events — canonical-event analytics
 
@@ -155,11 +163,8 @@ gigaevo inspect --db 1 --db 2 --db 3       # multiple DBs
 gigaevo flush --db 4 5 --confirm           # execute
 gigaevo flush --db 4 5                     # dry-run (default)
 
-# Checkpoint — status + notify (for experiment monitoring)
+# Checkpoint — read-only Redis status snapshot
 gigaevo -e hover/my-exp checkpoint
-
-# Watchdog — start watchdog engine
-gigaevo -e hover/my-exp watchdog
 ```
 
 #### Manifest (read/write experiment.yaml)
@@ -278,7 +283,7 @@ Shows iteration, all metrics from `metrics.yaml`, invalidity rate, validator tim
 Reads `metrics.yaml` from the problem directory to discover metric names and formatting (percentage vs raw value).
 
 ```bash
-# From experiment manifest (recommended — auto-discovers runs, PIDs, watchdog, metrics)
+# From experiment manifest (recommended — loads runs, PIDs, and metrics)
 gigaevo -e hover/prompt_coevolution status
 
 # Manual: one run
@@ -296,19 +301,12 @@ C1         9      3      76.2%              ?        0%       639/980     157   
 C2        10      4      75.8%              ?       20%      654/1223     158       49342  ALIVE
 P1        11      4      25.0%          299.0        0%             ?     169       49343  ALIVE
 P2        12      4      25.0%          299.0        0%             ?     169       49344  ALIVE
-
-Watchdog PID 50073: ALIVE
 ```
 
 Column notes:
 - **Metric columns** — auto-discovered from `problems/{problem_name}/metrics.yaml`. Fractional metrics (upper_bound=1.0) show as percentages; others show raw values. Decimal precision from `metrics.yaml`.
 - **Invalid%** — fraction of programs that failed validation; >75% at iteration 3+ = stage_timeout too short
 - **Val dur(s)** — validator stage mean/max duration in seconds (last 20 evaluations)
-
-**Watchdog**: started via `gigaevo -e <task>/<name> watchdog` at experiment launch.
-The watchdog posts hourly PR comments with status, plots, and stagnation alerts.
-
----
 
 ### `gigaevo trajectory` — Iteration-by-iteration trajectory (text mode)
 
@@ -918,7 +916,8 @@ Where `{metric}` = metric name from `problems/{problem_name}/metrics.yaml` (e.g.
 | Archive size | `hlen {prefix}:archive` | Number of occupied cells |
 | All latest metrics | `hgetall {prefix}:metrics:latest` | Quick snapshot, no history |
 
-Use `status.py --experiment` to auto-discover all metrics. **Never write ad-hoc Redis queries** — if a tool gives wrong results, fix the tool.
+Use `gigaevo -e TASK/NAME status` to auto-discover all metrics. Prefer the CLI
+over ad-hoc Redis queries so schema details remain encapsulated.
 
 ### Archive persistence
 

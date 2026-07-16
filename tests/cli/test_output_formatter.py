@@ -66,6 +66,12 @@ class TestFormatMarkdown:
         assert "---" in lines[1]
         assert len(lines) == 4
 
+    def test_escapes_cells_that_would_break_table(self):
+        fmt = OutputFormatter(format_name="markdown")
+        result = fmt.render([{"name": "a|b", "note": "line1\nline2"}])
+        assert "a\\|b" in result
+        assert "line1<br>line2" in result
+
 
 class TestPipeDetection:
     def test_auto_detect_pipe_to_json(self):
@@ -85,10 +91,3 @@ class TestPipeDetection:
             mock_stdout.isatty.return_value = False
             fmt = OutputFormatter(format_name="table")
             assert fmt.effective_format == "table"
-
-
-class TestQuietMode:
-    def test_echo_is_noop_when_quiet(self):
-        fmt = OutputFormatter(format_name="json", quiet=True)
-        result = fmt.echo(SAMPLE_ROWS)
-        assert result is None

@@ -18,7 +18,7 @@ This guide helps you understand GigaEvo's architecture from a bird's-eye view be
 │                    (run.py)                                      │
 │                                                                  │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
-│  │ Evolution    │───→│   Strategy   │───→│    Redis     │     │
+│  │ Evolution    │───→│   Strategy   │───→│   Program    │     │
 │  │   Engine     │    │ (Islands)    │    │   Storage    │     │
 │  └──────────────┘    └──────────────┘    └──────────────┘     │
 │         ↓                    ↓                    ↓             │
@@ -398,7 +398,7 @@ The config system uses Hydra with custom resolvers:
 # config/experiment/base.yaml
 defaults:
   - /constants: base        # Load constants/base.yaml
-  - /redis: default         # Load redis/default.yaml
+  - /storage: disk          # Default; override with storage=redis
   - /llm: single           # Load llm/single.yaml
   - /algorithm: single_island_no_distant_parents
   - /pipeline: guided
@@ -494,7 +494,13 @@ ${metrics_context}          # Resolves to metrics context
 
 Program data is accessed via `ProgramStorage` (abstract interface in `gigaevo/database/program_storage.py`). The ABC defines CRUD operations, status set management, `key_prefix`, and async context manager support; read-only and write flags guard mutation methods.
 
-Backends are selected via the `storage` Hydra group (`config/storage/redis.yaml` is the default; `storage=disk` switches to `DiskProgramStorage`, JSON files under the Hydra run dir). Each backend config defines the `program_storage` and `archive_storage_factory` nodes consumed by the evolution engine. Read-only CLI/analytics paths use `gigaevo/database/factory.py` — the single non-Hydra construction point — which exposes `build_readonly_redis_storage()` and `build_writable_redis_storage()` for analytics scripts and testing.
+Backends are selected via the `storage` Hydra group. Disk is the default
+(`config/storage/disk.yaml`); `storage=redis` selects Redis explicitly. Each
+backend config defines the `program_storage` and `archive_storage_factory`
+nodes consumed by the evolution engine. Read-only CLI and analytics paths use
+`gigaevo/database/factory.py`, the single non-Hydra construction point, which
+exposes read-only builders for both backends and a writable Redis builder for
+offline tools and tests.
 
 Archive storage (MAP-Elites elite cells) is accessed via `ArchiveStorageFactory` protocol, wired to Hydra and passed to strategies. Contract tests are backend-parametrized (`tests/database/storage_backends.py` registry) — every backend runs the same suite.
 

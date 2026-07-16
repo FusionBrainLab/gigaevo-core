@@ -90,6 +90,31 @@ class TestDiskTagSanitization:
         expected = tmp_path / "metrics" / "program_metrics:valid_frontier.jsonl"
         assert expected.exists()
 
+    def test_lists_persisted_metrics(self, tmp_path):
+        backend = make_backend(tmp_path)
+        backend.write_scalar("program_metrics/frontier", 1.0, 0, 100.0)
+        backend.write_text("diagnostics/message", "ok", 0, 100.0)
+        backend.flush()
+
+        assert backend.list_metrics() == [
+            "diagnostics/message",
+            "program_metrics/frontier",
+        ]
+
+
+class TestDiskLiveReads:
+    def test_malformed_trailing_line_does_not_hide_valid_history(self, tmp_path):
+        backend = make_backend(tmp_path)
+        backend.write_scalar("m", 1.0, 0, 100.0)
+        backend.flush()
+        path = tmp_path / "metrics" / "m.jsonl"
+        with path.open("a") as stream:
+            stream.write('{"s": 1')
+
+        assert backend.get_history("m") == [
+            {"s": 0, "t": 100.0, "v": 1.0, "k": "scalar"}
+        ]
+
 
 class TestDiskLrangeSlicing:
     def fill(self, tmp_path) -> DiskMetricsBackend:

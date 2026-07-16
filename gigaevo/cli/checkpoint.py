@@ -89,7 +89,7 @@ def checkpoint(ctx: click.Context, format_name: str | None) -> None:
         redis_port=redis_port,
         redis_factory=redis_factory,
     )
-    snapshots = monitor.collect(run_configs)
+    snapshots = monitor.collect(run_configs, event_window_minutes=0)
 
     # Display status
     rows = [_snapshot_to_row(s, metric_specs) for s in snapshots]

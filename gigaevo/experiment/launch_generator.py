@@ -214,6 +214,7 @@ def generate(experiment: str) -> str:
 # re-emitted by the generic shared_overrides sweep or they would appear twice.
 _BUILTIN_EMITTED = frozenset(
     {
+        "storage",
         "stage_timeout",
         "dag_timeout",
         "num_parents",
@@ -258,6 +259,10 @@ def _build_run_cmd(
         [
             f"problem.name={run.problem_name}",
             f"pipeline={run.pipeline}",
+            # The manifest contract identifies runs by Redis prefix + DB and
+            # has no durable disk output path. Make that ownership explicit
+            # instead of inheriting the framework's direct-run disk default.
+            "storage=redis",
             "prompts=default",
             f"redis.db={run.db}",
             f"stage_timeout={x.get('stage_timeout', 3000)}",

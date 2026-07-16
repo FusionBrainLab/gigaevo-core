@@ -12,7 +12,7 @@ Usage examples::
     gigaevo -e hover/foo manifest update control_plane.watchdog_pid 12345
     gigaevo -e hover/foo manifest gate implemented
     gigaevo -e hover/foo manifest pr-description --push
-    gigaevo -e hover/foo manifest record-pids --pids-file pids.txt --labels C1 C2 P1 P2
+    gigaevo -e hover/foo manifest record-pids --pids-file pids.txt --labels C1,C2,P1,P2
     gigaevo -e hover/foo manifest reset-status implemented --reason "launch failed"
 """
 
@@ -43,8 +43,16 @@ def _require_experiment(ctx: click.Context) -> str:
 def _coerce_value(raw_value: str) -> Any:
     """Auto-convert string value to appropriate Python type.
 
-    Conversion order: bool literals, null/None, int, float, string.
+    Conversion order: JSON objects/arrays, bool literals, null/None, int,
+    float, string.
     """
+    if raw_value.startswith(("[", "{")):
+        try:
+            return json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(
+                f"invalid JSON value: {exc.msg}", param_hint="VALUE"
+            ) from exc
     lower = raw_value.lower()
     if lower == "true":
         return True
@@ -96,14 +104,44 @@ def _traverse_raw(raw: dict[str, Any], dotted_path: str) -> Any:
 
 
 def _set_nested(raw: dict[str, Any], dotted_path: str, value: Any) -> None:
-    """Set a value at a dotted path, creating intermediate dicts as needed."""
+    """Set a dotted or bracket-indexed path.
+
+    Plain missing mappings are created for optional manifest sections. Lists
+    must already exist so an index typo cannot silently replace them with a
+    mapping.
+    """
+    bracket_re = re.compile(r"^([^\[]+)\[(-?\d+)\]$")
     parts = dotted_path.split(".")
-    current = raw
-    for part in parts[:-1]:
-        if part not in current or not isinstance(current[part], dict):
-            current[part] = {}
-        current = current[part]
-    current[parts[-1]] = value
+    current: Any = raw
+
+    for position, part in enumerate(parts):
+        is_last = position == len(parts) - 1
+        match = bracket_re.match(part)
+        if match:
+            key, index = match.group(1), int(match.group(2))
+            if not isinstance(current, dict) or key not in current:
+                raise KeyError(dotted_path)
+            sequence = current[key]
+            if not isinstance(sequence, list) or not (
+                -len(sequence) <= index < len(sequence)
+            ):
+                raise KeyError(dotted_path)
+            if is_last:
+                sequence[index] = value
+            else:
+                current = sequence[index]
+            continue
+
+        if not isinstance(current, dict):
+            raise KeyError(dotted_path)
+        if is_last:
+            current[part] = value
+        else:
+            if part not in current:
+                current[part] = {}
+            if not isinstance(current[part], dict):
+                raise KeyError(dotted_path)
+            current = current[part]
 
 
 # ---------------------------------------------------------------------------
@@ -213,13 +251,13 @@ def get(ctx: click.Context, field: str, format_name: str | None) -> None:
 def update(ctx: click.Context, path: str, value: str) -> None:
     """Write any field by dotted path.
 
-    Auto-converts values: integers, floats, booleans (true/false),
-    null/None, or keeps as string.
+    Auto-converts values: JSON objects/arrays, integers, floats, booleans
+    (true/false), null/None, or keeps as string.
 
     \b
     Special case: status
     --------------------
-    When `path` is `status`, the write routes through the lifecycle
+    When `path` is `status` or `lifecycle.status`, the write routes through the lifecycle
     state machine (`preregistered → implemented → running → complete`)
     and rejects invalid transitions. For every other path, the raw YAML
     is updated in place (Pydantic schema validation still runs).
@@ -235,7 +273,7 @@ def update(ctx: click.Context, path: str, value: str) -> None:
 
     coerced = _coerce_value(value)
 
-    if path == "status":
+    if path in {"status", "lifecycle.status"}:
         # Route status transitions through the state machine so invalid
         # transitions (e.g. preregistered → running) are blocked.
         from gigaevo.experiment.manifest import set_status
@@ -246,7 +284,7 @@ def update(ctx: click.Context, path: str, value: str) -> None:
             click.echo(f"Error: {exc}", err=True)
             ctx.exit(1)
             return
-        click.echo(f"Updated status = {updated.lifecycle.status!r}")
+        click.echo(f"Updated lifecycle.status = {updated.lifecycle.status!r}")
         return
 
     from gigaevo.experiment.manifest import update_manifest
@@ -254,7 +292,10 @@ def update(ctx: click.Context, path: str, value: str) -> None:
     def updater(raw: dict[str, Any]) -> None:
         _set_nested(raw, path, coerced)
 
-    update_manifest(experiment, updater)
+    try:
+        update_manifest(experiment, updater)
+    except (KeyError, ValueError) as exc:
+        raise click.ClickException(f"could not update {path!r}: {exc}") from exc
     click.echo(f"Updated {path} = {coerced!r}")
 
 
@@ -373,14 +414,29 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
     """Write run PIDs from pids.txt into experiment.yaml runs[].pid.
 
     Called by launch.sh after launching runs and verifying PIDs are alive.
-    Label count must match PID count; unknown labels are ignored.
+    Label count must match PID count; every label must exist in the manifest.
     """
     experiment = _require_experiment(ctx)
 
     pids_text = pids_file.read_text().strip()
-    pids = [int(p) for p in pids_text.split()]
+    try:
+        pids = [int(p) for p in pids_text.split()]
+    except ValueError as exc:
+        raise click.ClickException(
+            f"{pids_file} must contain whitespace-separated integer PIDs"
+        ) from exc
+    invalid_pids = [pid for pid in pids if pid <= 0]
+    if invalid_pids:
+        raise click.ClickException(f"PIDs must be positive integers: {invalid_pids}")
 
     label_list = [lbl for lbl in labels.replace(",", " ").split() if lbl]
+    duplicate_labels = sorted(
+        {label for label in label_list if label_list.count(label) > 1}
+    )
+    if duplicate_labels:
+        raise click.ClickException(
+            f"Duplicate run label(s): {', '.join(duplicate_labels)}"
+        )
     if len(pids) != len(label_list):
         click.echo(
             f"Error: Expected {len(label_list)} PIDs, got {len(pids)}: {pids}",
@@ -395,11 +451,21 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
 
     def set_pids(raw: dict[str, Any]) -> None:
         runs_target = (raw.get("contract") or {}).get("runs") or []
+        known = {run.get("label") for run in runs_target}
+        unknown = sorted(set(label_to_pid) - known)
+        if unknown:
+            raise ValueError(
+                f"Unknown run label(s): {', '.join(unknown)}. "
+                f"Known: {', '.join(sorted(str(label) for label in known))}"
+            )
         for run in runs_target:
             if run.get("label") in label_to_pid:
                 run["pid"] = label_to_pid[run["label"]]
 
-    update_manifest(experiment, set_pids)
+    try:
+        update_manifest(experiment, set_pids)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(f"PIDs recorded: {label_to_pid}")
 
 
@@ -413,7 +479,7 @@ def record_pids(ctx: click.Context, pids_file: Path, labels: str) -> None:
     "target_status",
     type=click.Choice(_status_choices(), case_sensitive=False),
 )
-@click.option("--reason", required=True, help="Why the reset is needed (for audit).")
+@click.option("--reason", required=True, help="Why the reset is needed.")
 @click.option(
     "--force/--no-force", default=False, help="Skip interactive confirmation prompt."
 )
@@ -440,7 +506,6 @@ def reset_status(
 
     from gigaevo.experiment.manifest import (
         load_manifest,
-        recover_status,
         release_db_claims,
         set_status,
         update_manifest,
@@ -462,12 +527,7 @@ def reset_status(
             ctx.exit(1)
             return
 
-    if current == "running" and target_status in ("implemented", "preregistered"):
-        dbs = [r.db for r in m.contract.runs]
-        click.echo(f"Releasing DB claims: {dbs}")
-        release_db_claims(experiment, dbs)
-
-    if current == "running" and target_status == "implemented":
+    if current == "running" and target_status in {"implemented", "preregistered"}:
 
         def clear_launch(raw: dict[str, Any]) -> None:
             raw.setdefault("lifecycle", {})["status"] = target_status
@@ -481,13 +541,13 @@ def reset_status(
                 run["pid"] = None
 
         update_manifest(experiment, clear_launch)
+        dbs = [r.db for r in m.contract.runs]
+        click.echo(f"Releasing DB claims: {dbs}")
+        release_db_claims(experiment, dbs)
         click.echo(f"Status reset to {target_status}. Launch info and PIDs cleared.")
     else:
         try:
-            if current == "running" and target_status == "implemented":
-                recover_status(experiment, target_status)
-            else:
-                set_status(experiment, target_status)
+            set_status(experiment, target_status)
             click.echo(f"Status reset to {target_status}.")
         except ValueError as exc:
             click.echo(f"ERROR: {exc}", err=True)
@@ -495,6 +555,6 @@ def reset_status(
             return
 
     timestamp = datetime.now(UTC).isoformat()
-    click.echo(f"\nReset logged at {timestamp}")
+    click.echo(f"\nReset completed at {timestamp}")
     click.echo(f"Reason: {reason}")
     click.echo("\nNext: fix the issue, then re-run the appropriate skill.")

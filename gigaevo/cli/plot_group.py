@@ -5,14 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
-import pandas as pd
 
 from gigaevo.cli.run_resolver import RunResolver
 
-SmoothingMethod = Literal["lowess", "ema", "savgol", "gaussian", "rolling", "none"]
+if TYPE_CHECKING:
+    import pandas as pd
+
+SmoothingMethod = Literal[
+    "lowess", "ema", "savgol", "gaussian", "rolling", "boxcar", "none"
+]
 
 
 def _parse_csv_spec(arg: str) -> tuple[Path, str]:
@@ -45,6 +49,8 @@ def _load_csv_data(
     missing required columns raise ``click.ClickException`` so the CLI reports
     a clear error instead of silently dropping the run.
     """
+    import pandas as pd
+
     from gigaevo.utils.dataframes import prepare_iteration_dataframe
 
     fitness_col = f"metric_{metric}"
@@ -52,7 +58,10 @@ def _load_csv_data(
     for path, label in csv_specs:
         if not path.exists():
             raise click.ClickException(f"CSV file not found: {path}")
-        raw_df = pd.read_csv(path)
+        try:
+            raw_df = pd.read_csv(path)
+        except Exception as exc:
+            raise click.ClickException(f"Failed to read CSV {path}: {exc}") from exc
         missing_cols = [
             c for c in ("iteration", fitness_col) if c not in raw_df.columns
         ]
@@ -71,6 +80,8 @@ def _load_csv_data(
             compute_frontier=not skip_frontier,
             sentinel_value=sentinel_value,
             minimize=minimize,
+            remove_outliers=False,
+            extreme_value_cutoff=float("inf") if minimize else float("-inf"),
         )
         if prepared.empty:
             continue
@@ -111,7 +122,14 @@ def _fetch_run_data(
             async with storage:
                 return await fetch_evolution_dataframe(storage, add_stage_results=False)
 
-        raw_df = asyncio.run(_fetch())
+        try:
+            raw_df = asyncio.run(_fetch())
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to read programs for {spec.label}: {exc}"
+            ) from exc
         if raw_df.empty:
             continue
         label = spec.label
@@ -122,6 +140,8 @@ def _fetch_run_data(
             compute_frontier=not skip_frontier,
             sentinel_value=sentinel_value,
             minimize=minimize,
+            remove_outliers=False,
+            extreme_value_cutoff=float("inf") if minimize else float("-inf"),
         )
         if prepared.empty:
             continue
@@ -132,6 +152,7 @@ def _fetch_run_data(
 def _smooth_series(series, window: int, method: SmoothingMethod):
     """Apply smoothing to a pandas Series. Lazy-imports scipy/statsmodels."""
     import numpy as np
+    import pandas as pd
 
     if method == "none" or window <= 1:
         return series
@@ -183,7 +204,7 @@ def _smooth_series(series, window: int, method: SmoothingMethod):
 
         sigma = window / 2.0
         smoothed = gaussian_filter1d(values_interp, sigma=sigma, mode="reflect")
-    elif method == "rolling":
+    elif method in {"rolling", "boxcar"}:
         kernel = np.ones(window) / window
         padded = np.pad(values_interp, (window // 2, window // 2), mode="reflect")
         smoothed = np.convolve(padded, kernel, mode="valid")
@@ -243,13 +264,18 @@ def plot() -> None:
 @click.option(
     "--smoothing",
     type=click.Choice(
-        ["lowess", "ema", "savgol", "gaussian", "rolling", "none"],
+        ["lowess", "ema", "savgol", "gaussian", "rolling", "boxcar", "none"],
         case_sensitive=False,
     ),
     default="lowess",
     help="Smoothing method.",
 )
-@click.option("--window", type=int, default=5, help="Smoothing window size.")
+@click.option(
+    "--window",
+    type=click.IntRange(min=1),
+    default=5,
+    help="Smoothing window size.",
+)
 @click.option("--show", is_flag=True, default=False, help="Show plot interactively.")
 @click.option("--metric", default="fitness", help="Metric to plot.")
 @click.option("--minimize", is_flag=True, default=False, help="Lower is better.")
@@ -273,7 +299,7 @@ def plot() -> None:
 )
 @click.option(
     "--max-annotations",
-    type=int,
+    type=click.IntRange(min=0),
     default=5,
     help="Max number of frontier annotations per run (default: 5).",
 )
@@ -325,13 +351,17 @@ def comparison(
     line. Metric auto-detected from the `--metric` flag.
 
     Data sources (mutually exclusive):
-      * Redis: pass `-r/--run` specs or `-e/--experiment` at the group level.
+      * Run storage: pass Redis or disk `-r/--run` specs, or `-e/--experiment`.
       * CSV: pass one or more `--from-csv PATH[:LABEL]` flags for fully offline
         plotting against previously exported CSVs.
+
+    All finite metric values are retained. Use `--sentinel VALUE` to exclude
+    a task-defined invalid score explicitly.
     """
     import matplotlib
 
-    matplotlib.use("Agg")
+    if not show:
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     from gigaevo.utils.plotting import annotate_frontier_points
@@ -361,6 +391,13 @@ def comparison(
                 "CSV labels must be unique; duplicate label(s): "
                 f"{', '.join(duplicates)}. Add distinct :LABEL suffixes."
             )
+        if no_frontier_labels and "__ALL__" not in no_frontier_labels:
+            unknown = sorted(no_frontier_labels - set(csv_labels))
+            if unknown:
+                raise click.BadParameter(
+                    f"unknown CSV label(s): {', '.join(unknown)}",
+                    param_hint="--no-frontier-for",
+                )
         actual_no_frontier: set[str] | None
         if no_frontier_labels and "__ALL__" in no_frontier_labels:
             actual_no_frontier = {label for _, label in csv_specs}
@@ -380,6 +417,15 @@ def comparison(
             ctx.obj["redis_host"],
             ctx.obj["redis_port"],
         )
+        if no_frontier_labels and "__ALL__" not in no_frontier_labels:
+            known_labels = {rc.run_spec.label for rc in run_configs}
+            unknown = sorted(no_frontier_labels - known_labels)
+            if unknown:
+                raise click.BadParameter(
+                    f"unknown run label(s): {', '.join(unknown)}. "
+                    f"Known: {', '.join(sorted(known_labels))}",
+                    param_hint="--no-frontier-for",
+                )
 
         # When --no-frontier applies to ALL runs, pass all labels; otherwise pass specific ones
         if no_frontier_labels and "__ALL__" in no_frontier_labels:
@@ -589,8 +635,14 @@ def trajectory(
 
     Produces `trajectory.png` (plus `trajectory.pdf` with `--pdf`). Unlike
     `plot comparison`, this is the plain unsmoothed trajectory — useful for
-    single-run inspection. Metric selected via `--metric`.
+    single-run inspection. Metric selected via `--metric`. All finite values
+    are retained unless `--sentinel VALUE` is supplied.
     """
+    if no_best and no_mean and no_std:
+        raise click.UsageError(
+            "--no-best, --no-mean, and --no-std would produce an empty plot"
+        )
+
     import matplotlib
 
     matplotlib.use("Agg")
@@ -704,7 +756,7 @@ def trajectory(
     "--show-max",
     is_flag=True,
     default=False,
-    help="Plot max(G, D) best-overall across each pair.",
+    help="Plot best(G, D): max for maximization, min with --minimize.",
 )
 @click.option(
     "--smoothing",
@@ -714,7 +766,7 @@ def trajectory(
 )
 @click.option(
     "--window",
-    type=int,
+    type=click.IntRange(min=1),
     default=10,
     help="Smoothing window size (default: 10).",
 )
@@ -731,7 +783,7 @@ def trajectory(
 )
 @click.option(
     "--max-annotations",
-    type=int,
+    type=click.IntRange(min=0),
     default=3,
     help="Max frontier annotations per constructor run (default: 3).",
 )
@@ -768,14 +820,15 @@ def arms_race(
     """Dual-panel arms race plot for adversarial co-evolution.
 
     Plots Constructor (G) and Improver (D) fitness on stacked panels with shared
-    X-axis. Optionally overlays max(G, D) — the best-overall across both populations.
+    X-axis. Optionally overlays the best value across both populations.
 
     Example:
         gigaevo plot arms-race -r ... --paired C1_A:C1_B --show-max -o plots/
     """
     import matplotlib
 
-    matplotlib.use("Agg")
+    if not show:
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -938,11 +991,16 @@ def arms_race(
             if len(common_iters) > 0:
                 g_vals = g_indexed.loc[common_iters, g_col]
                 d_vals = d_indexed.loc[common_iters, "running_mean_fitness"]
-                max_vals = np.maximum(g_vals.values, d_vals.values)
+                best_vals = (
+                    np.minimum(g_vals.values, d_vals.values)
+                    if minimize
+                    else np.maximum(g_vals.values, d_vals.values)
+                )
+                operation = "min" if minimize else "max"
                 ax_g.plot(
                     common_iters,
-                    max_vals,
-                    label=f"max({g_label},{d_label})",
+                    best_vals,
+                    label=f"{operation}({g_label},{d_label})",
                     color=color,
                     linewidth=2.5 if paper else 2.0,
                     linestyle=":",

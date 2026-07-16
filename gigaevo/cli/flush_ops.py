@@ -13,12 +13,14 @@ import time
 import redis as redis_lib
 
 _REDIS_DB_RE = re.compile(r"redis\.db=(\d+)")
+_RUN_SCRIPT_RE = re.compile(r"(?:^|\s)(?:\S*/)?run\.py(?:\s|$)")
+_EXEC_RUNNER_RE = re.compile(r"(?:^|\s)(?:\S*/)?exec_runner\.py(?:\s|$)")
 
 
 def _is_run_py_line(line: str) -> bool:
     if "grep" in line:
         return False
-    return "run.py" in line and "redis.db=" in line
+    return _RUN_SCRIPT_RE.search(line) is not None and "redis.db=" in line
 
 
 def _extract_db(line: str) -> int | None:
@@ -70,10 +72,17 @@ def _find_all_run_pids() -> set[int]:
         return set()
 
 
-def find_exec_runner_pids(target_dbs: list[int]) -> list[int]:
+def find_exec_runner_pids(
+    target_dbs: list[int], *, include_orphans: bool = False
+) -> list[int]:
+    """Find workers owned by writers for ``target_dbs``.
+
+    Orphan workers cannot be associated with a Redis DB after their parent has
+    exited, so they are excluded unless the caller explicitly opts in.
+    """
     try:
         run_pids_for_target = _find_run_pids_for_dbs(target_dbs)
-        all_run_pids = _find_all_run_pids()
+        all_run_pids = _find_all_run_pids() if include_orphans else set()
 
         result = subprocess.run(
             ["ps", "-e", "-o", "pid,ppid,cmd", "--no-headers"],
@@ -83,7 +92,7 @@ def find_exec_runner_pids(target_dbs: list[int]) -> list[int]:
         matched_pids = []
         orphan_pids = []
         for line in result.stdout.splitlines():
-            if "exec_runner.py" not in line or "grep" in line:
+            if _EXEC_RUNNER_RE.search(line) is None or "grep" in line:
                 continue
             parts = line.split()
             if len(parts) < 2:
@@ -96,7 +105,7 @@ def find_exec_runner_pids(target_dbs: list[int]) -> list[int]:
 
             if ppid in run_pids_for_target:
                 matched_pids.append(pid)
-            elif ppid not in all_run_pids:
+            elif include_orphans and ppid not in all_run_pids:
                 orphan_pids.append(pid)
 
         return matched_pids + orphan_pids
@@ -129,16 +138,17 @@ def kill_workers(pids: list[int], dry_run: bool) -> None:
         print(f"[workers] Failed to kill (already dead?): {failed}")
 
 
-def kill_run_writers(target_dbs: list[int], dry_run: bool) -> None:
+def kill_run_writers(target_dbs: list[int], dry_run: bool) -> list[int]:
+    """Signal matching writers and return the PIDs that were found."""
     pids = sorted(_find_run_pids_for_dbs(target_dbs))
     if not pids:
         print("[writers] No run.py writer processes found for target DBs.")
-        return
+        return []
 
     print(f"[writers] Found {len(pids)} run.py writer(s) for target DBs: {pids}")
     if dry_run:
         print(f"[writers] DRY-RUN — would kill: {pids}")
-        return
+        return pids
 
     killed, failed = [], []
     for pid in pids:
@@ -152,6 +162,7 @@ def kill_run_writers(target_dbs: list[int], dry_run: bool) -> None:
         print(f"[writers] Killed: {killed}")
     if failed:
         print(f"[writers] Failed to kill (already dead?): {failed}")
+    return pids
 
 
 def warn_if_not_archived(db: int, before: int) -> None:

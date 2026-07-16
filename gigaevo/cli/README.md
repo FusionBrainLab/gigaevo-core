@@ -34,7 +34,8 @@ gigaevo -e hover/my-experiment logs run-a -f
 The global target options are mutually exclusive:
 
 - `-e/--experiment TASK/NAME` loads Redis runs from
-  `experiments/TASK/NAME/experiment.yaml`.
+  `experiments/TASK/NAME/experiment.yaml`. The manifest launcher selects
+  `storage=redis` because its run identity is a Redis prefix and DB.
 - `-r/--run SPEC` targets a run directly. It is repeatable and can refer to
   Redis or disk storage.
 
@@ -59,8 +60,8 @@ then pass the full `prefix@db` form when a DB is ambiguous.
 
 ### Disk
 
-Disk specs point to the `storage` directory produced by a `storage=disk` run,
-or directly to its one prefix directory:
+Disk specs point to a Hydra output directory from a `storage=disk` run, its
+`storage` directory, or directly to its one prefix directory:
 
 ```text
 outputs/run/storage/
@@ -77,6 +78,7 @@ Accepted forms:
 | Relative path containing `/` | `outputs/run-a/storage` |
 | Explicit relative path | `./storage` or `../run-a/storage` |
 | Path with display label | `outputs/run-a/storage:run-a` |
+| Hydra output directory | `outputs/run-a` |
 | Direct prefix directory | `outputs/run-a/storage/chains_hover_full7` |
 
 When the storage root is given, it must contain exactly one directory with a
@@ -106,19 +108,21 @@ metadata.
 | `plot trajectory` | yes | yes | no | Reads stored programs |
 | `plot arms-race` | yes | yes | no | Requires unique paired labels |
 | `status` | yes | no | no | Uses Redis engine state and metrics |
-| `trajectory` | yes | no | no | Uses Redis metric histories |
-| `metrics` | yes | no | no | Uses Redis metric histories |
+| `trajectory` | yes | yes | no | Reads persisted metric histories |
+| `metrics` | yes | yes | no | Reads persisted metric histories |
 | `checkpoint` | yes | no | no | Read-only one-shot status snapshot |
 | `logs` | no | no | yes | Reads experiment log files |
 | `events` | no | no | yes | Audits and plots canonical log events |
 | `profiler` | no | no | yes | Profiles run logs |
-| `manifest`, `launch`, `watchdog` | yes | no | manifest/logs | Experiment control plane |
+| `manifest`, `launch` | yes | no | manifest/logs | Experiment control plane |
+| `watchdog` | yes | no | logs | Legacy scheduled monitoring |
 | `inspect`, `flush` | yes | no | no | Direct Redis operations |
 
-Redis-only monitoring commands reject disk paths with a usage error. Disk
-program storage does not contain the live PID state and Redis metric lists
-those commands query. Use `top`, `export`, or `plot` for disk runs, and inspect
-the run's `metrics/*.jsonl` or logs for disk telemetry.
+`status` and `checkpoint` reject disk paths because disk program storage does
+not contain their live PID and engine-state contract. `trajectory` and
+`metrics` read the standard `<run-dir>/metrics/*.jsonl` files next to
+`<run-dir>/storage`. If a run overrides either storage root independently,
+target Redis or inspect the custom metrics directory directly.
 
 ## Common Workflows
 
@@ -177,12 +181,14 @@ gigaevo plot comparison \
 schema produced by `gigaevo export csv`, including `iteration` and the selected
 `metric_<name>` column.
 
-### Monitor Redis Runs
+### Inspect Run Metrics
 
 ```bash
 gigaevo -e hover/my-experiment status
 gigaevo -r chains/hover/full7@4:run-a trajectory --tail 20
 gigaevo -r chains/hover/full7@4:run-a metrics --tag "valid/frontier/*"
+gigaevo -r outputs/run-a trajectory --tail 20
+gigaevo -r outputs/run-a metrics --tag "valid/frontier/*"
 gigaevo -r chains/hover/full7@4:run-a checkpoint
 ```
 
@@ -190,13 +196,8 @@ gigaevo -r chains/hover/full7@4:run-a checkpoint
 The frontier history is already canonical, so the command does not assume that
 the metric is maximized.
 
-`checkpoint` is a read-only detailed status snapshot. The watchdog is the
-component that generates scheduled plots, writes milestone markers, and sends
-notifications:
-
-```bash
-gigaevo -e hover/my-experiment watchdog
-```
+`checkpoint` is a read-only Redis status snapshot. Scheduled watchdog
+monitoring is legacy functionality and is not required for normal CLI use.
 
 ### Logs and Profiling
 

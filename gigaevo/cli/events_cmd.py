@@ -24,6 +24,7 @@ import click
 
 # Trigger registration.
 import gigaevo  # noqa: F401
+from gigaevo.cli.log_paths import run_log_path
 from gigaevo.experiment.log_audit import EVENT_LINE_RE, audit_log_text, render_report
 from gigaevo.monitoring.events import CANONICAL_EVENTS
 
@@ -317,6 +318,13 @@ def plot(
         events_filter = None
     else:
         events_filter = {n.strip() for n in events_csv.split(",") if n.strip()}
+        unknown_events = sorted(events_filter - set(CANONICAL_EVENTS))
+        if unknown_events:
+            raise click.BadParameter(
+                f"unknown event name(s): {', '.join(unknown_events)}. "
+                f"Known: {', '.join(sorted(CANONICAL_EVENTS))}",
+                param_hint="--events",
+            )
 
     runs_filter: set[str] | None
     if runs_csv.strip().lower() == "all":
@@ -344,7 +352,15 @@ def plot(
     groups: dict[str, list[dict]] | None = None
     ungrouped: list[str] = []
     if group_by:
-        pattern = re.compile(group_by)
+        try:
+            pattern = re.compile(group_by)
+        except re.error as exc:
+            raise click.BadParameter(str(exc), param_hint="--group-by") from exc
+        if not pattern.groupindex:
+            raise click.BadParameter(
+                "regex must contain at least one named capture group",
+                param_hint="--group-by",
+            )
         groups, ungrouped = _group_by_regex(rows, pattern)
         if not no_group and groups:
             _draw_group_totals(groups, out_dir / "role_totals.png", event_names)
@@ -393,12 +409,13 @@ def audit(ctx: click.Context, label: str | None, log_path: Path | None) -> None:
         from gigaevo.experiment.manifest import load_manifest
 
         manifest = load_manifest(experiment)
-        known = {run.label for run in manifest.contract.runs}
+        runs_by_label = {run.label: run for run in manifest.contract.runs}
+        known = set(runs_by_label)
         if label not in known:
             raise click.UsageError(
                 f"Unknown run label {label!r}. Known: {', '.join(sorted(known))}"
             )
-        candidate = Path("experiments") / experiment / f"run_{label}.log"
+        candidate = run_log_path(experiment, runs_by_label[label])
         if not candidate.exists():
             raise click.ClickException(f"Log file not found: {candidate}")
         log_path = candidate

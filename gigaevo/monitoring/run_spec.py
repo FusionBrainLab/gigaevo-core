@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePath
+from typing import TYPE_CHECKING
 
-from gigaevo.experiment.manifest import RunRole
+if TYPE_CHECKING:
+    from gigaevo.experiment.manifest import RunRole
 
 
 @dataclass(frozen=True)

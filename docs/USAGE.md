@@ -177,13 +177,16 @@ Inspect a disk run with the CLI by passing the storage path as the run
 spec (read-only, safe while the run is live):
 
 ```bash
-gigaevo -r 'outputs/<run dir>/storage' top -n 5
-gigaevo -r 'outputs/<run dir>/storage:mylabel' export csv -o out.csv
+gigaevo -r 'outputs/<run dir>' top -n 5
+gigaevo -r 'outputs/<run dir>:mylabel' export csv -o out.csv
+gigaevo -r 'outputs/<run dir>' trajectory --tail 20
+gigaevo -r 'outputs/<run dir>' metrics --tag 'program_metrics/*'
 ```
 
-Supported by `top`, `export`, and `plot`; Redis-only commands (`status`,
-`trajectory`, `metrics`, `checkpoint`) reject disk specs — see
-[tools/README.md](../tools/README.md) for the full run-spec reference.
+Supported by `top`, `export`, `plot`, `trajectory`, and `metrics`. `status`
+and `checkpoint` remain Redis-only because they require live process state.
+See [the CLI reference](../gigaevo/cli/README.md) for the full run-spec and
+backend matrix.
 
 ## Examples
 

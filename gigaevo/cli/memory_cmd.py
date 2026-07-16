@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 
-from gigaevo.evolution.mutation.base import MutationOperator
-from gigaevo.memory_v2.calibration import (
-    calibrate_safety_priors,
-    discover_ledger_paths,
-    load_calibration_trajectory,
-)
-from gigaevo.memory_v2.models import import_qualified_class
+if TYPE_CHECKING:
+    from gigaevo.evolution.mutation.base import MutationOperator
 
 
 def _float_list(
@@ -26,12 +22,35 @@ def _float_list(
         raise click.BadParameter("expected comma-separated numbers") from exc
     if not result:
         raise click.BadParameter("list cannot be empty")
+    if not all(math.isfinite(item) for item in result):
+        raise click.BadParameter("all values must be finite")
+    return result
+
+
+def _probability_list(
+    ctx: click.Context, param: click.Parameter, value: str
+) -> tuple[float, ...]:
+    result = _float_list(ctx, param, value)
+    if any(item <= 0.0 or item >= 1.0 for item in result):
+        raise click.BadParameter("all probabilities must be between 0 and 1")
+    return result
+
+
+def _positive_list(
+    ctx: click.Context, param: click.Parameter, value: str
+) -> tuple[float, ...]:
+    result = _float_list(ctx, param, value)
+    if any(item <= 0.0 for item in result):
+        raise click.BadParameter("all values must be positive")
     return result
 
 
 def _mutation_operator(value: str | None) -> type[MutationOperator] | None:
     if value is None:
         return None
+    from gigaevo.evolution.mutation.base import MutationOperator
+    from gigaevo.memory_v2.models import import_qualified_class
+
     try:
         symbol = import_qualified_class(value)
     except (ImportError, AttributeError, TypeError) as exc:
@@ -58,14 +77,14 @@ def memory() -> None:
 @click.option(
     "--prior-probabilities",
     default="0.025,0.05,0.10,0.15,0.20,0.30",
-    callback=_float_list,
+    callback=_probability_list,
     show_default=True,
     help="Candidate environment invalidity probabilities, comma-separated.",
 )
 @click.option(
     "--baseline-sds",
     default="0.15,0.30,0.75",
-    callback=_float_list,
+    callback=_positive_list,
     show_default=True,
     help="Candidate baseline/context log-odds coefficient prior SDs.",
 )
@@ -96,7 +115,7 @@ def memory() -> None:
 @click.option(
     "--offer-rates",
     default="0.50,0.70,0.75,0.80",
-    callback=_float_list,
+    callback=_probability_list,
     show_default=True,
     help="Delivery rates for the randomized-overlap cost table.",
 )
@@ -161,6 +180,12 @@ def calibrate_safety(
     fitted-observation set. Results from incompatible task/model/operator
     environments are never pooled.
     """
+
+    from gigaevo.memory_v2.calibration import (
+        calibrate_safety_priors,
+        discover_ledger_paths,
+        load_calibration_trajectory,
+    )
 
     legacy_operator = _mutation_operator(mutation_operator)
     try:

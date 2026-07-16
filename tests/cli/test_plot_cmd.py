@@ -426,8 +426,22 @@ class TestLoadCsvData:
             metric="loss",
             minimize=True,
         )
-        # The high-side outlier filter removes 5.0 for a minimization metric.
-        assert result[0][1]["frontier_fitness"].tolist() == [4.0, 4.0, 3.0]
+        assert result[0][1]["frontier_fitness"].tolist() == [5.0, 4.0, 4.0, 3.0]
+
+    def test_csv_plot_preserves_finite_outliers(self, tmp_path):
+        from gigaevo.cli.plot_group import _load_csv_data
+
+        csv_path = tmp_path / "scores.csv"
+        pd.DataFrame(
+            {
+                "iteration": [1, 2, 3],
+                "metric_fitness": [-10_000.0, 0.5, 1.0],
+            }
+        ).to_csv(csv_path, index=False)
+
+        result = _load_csv_data([(csv_path, "scores")], metric="fitness")
+
+        assert result[0][1]["metric_fitness"].tolist() == [-10_000.0, 0.5, 1.0]
 
     def test_missing_file_raises_click_exception(self, tmp_path):
         from gigaevo.cli.plot_group import _load_csv_data
@@ -597,6 +611,58 @@ class TestComparisonFromCsv:
 
         assert result.exit_code != 0
         assert "missing.csv" in result.output
+
+
+class TestPlotOptionValidation:
+    def test_comparison_rejects_zero_window(self, tmp_path):
+        from gigaevo.cli import main
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "-r",
+                "p@0:A",
+                "plot",
+                "comparison",
+                "-o",
+                str(tmp_path),
+                "--window",
+                "0",
+            ],
+        )
+
+        assert result.exit_code == 2
+
+    def test_trajectory_rejects_empty_plot(self, tmp_path):
+        from gigaevo.cli import main
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "-r",
+                "p@0:A",
+                "plot",
+                "trajectory",
+                "-o",
+                str(tmp_path),
+                "--no-best",
+                "--no-mean",
+                "--no-std",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "empty plot" in result.output
+
+    def test_boxcar_smoothing_changes_series(self):
+        from gigaevo.cli.plot_group import _smooth_series
+
+        series = pd.Series([0.0, 0.0, 9.0, 0.0, 0.0])
+
+        smoothed = _smooth_series(series, window=3, method="boxcar")
+
+        assert not smoothed.equals(series)
+        assert smoothed.iloc[2] < series.iloc[2]
 
 
 class TestPlotDiskStorage:

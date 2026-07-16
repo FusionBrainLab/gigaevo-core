@@ -13,6 +13,8 @@ import subprocess
 
 import click
 
+from gigaevo.cli.log_paths import experiment_dir, run_log_path
+
 
 def _load_manifest(experiment: str):
     """Lazy-load experiment manifest (avoid import at CLI startup)."""
@@ -22,29 +24,27 @@ def _load_manifest(experiment: str):
 
 
 def _experiment_dir(experiment: str) -> Path:
-    return Path("experiments") / experiment
-
-
-def _log_path_for_label(experiment: str, label: str) -> Path:
-    return _experiment_dir(experiment) / f"run_{label}.log"
+    return experiment_dir(experiment)
 
 
 def _list_run_logs(ctx: click.Context, experiment: str) -> int:
     """Render a table of run logs from the manifest with size/mtime/exists."""
     manifest = _load_manifest(experiment)
-    exp_dir = _experiment_dir(experiment)
     rows: list[dict] = []
     for run in manifest.contract.runs:
-        path = exp_dir / f"run_{run.label}.log"
-        exists = path.exists()
+        path = run_log_path(experiment, run)
+        try:
+            stat = path.stat()
+        except OSError:
+            stat = None
         rows.append(
             {
                 "label": run.label,
                 "db": run.db,
                 "log_file": str(path),
-                "exists": exists,
-                "size_bytes": path.stat().st_size if exists else 0,
-                "mtime": int(path.stat().st_mtime) if exists else 0,
+                "exists": stat is not None,
+                "size_bytes": stat.st_size if stat is not None else 0,
+                "mtime": int(stat.st_mtime) if stat is not None else 0,
             }
         )
     formatter = ctx.obj["formatter"]
@@ -61,15 +61,21 @@ def _tail(paths: list[Path], follow: bool, tail_n: int) -> int:
         cmd.append("-f")
     cmd.extend(["-n", str(tail_n)])
     cmd.extend(str(p) for p in paths)
-    if follow:
-        try:
-            subprocess.run(cmd, check=False)
-        except KeyboardInterrupt:
-            return 0
-        return 0
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    click.echo(result.stdout)
-    return result.returncode or 0
+    try:
+        if follow:
+            try:
+                completed = subprocess.run(cmd, check=False)
+            except KeyboardInterrupt:
+                return 0
+            return completed.returncode
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise click.ClickException("`tail` executable not found") from exc
+    if result.stdout:
+        click.echo(result.stdout, nl=False)
+    if result.stderr:
+        click.echo(result.stderr, err=True, nl=False)
+    return result.returncode
 
 
 @click.command()
@@ -92,9 +98,13 @@ def _tail(paths: list[Path], follow: bool, tail_n: int) -> int:
     "-n",
     "--tail",
     "tail_n",
-    type=int,
+    type=click.IntRange(min=0),
     default=50,
-    help="Number of lines to show (ignored with -f streaming past history).",
+    show_default=True,
+    help=(
+        "Lines to return, or initial lines before --follow streaming. "
+        "Use 0 with --follow to show only new lines."
+    ),
 )
 @click.pass_context
 def logs(
@@ -143,7 +153,8 @@ def logs(
 
     # 2. Positional labels.
     manifest = _load_manifest(experiment)
-    known = {run.label for run in manifest.contract.runs}
+    runs_by_label = {run.label: run for run in manifest.contract.runs}
+    known = set(runs_by_label)
     unknown = [label for label in labels if label not in known]
     if unknown:
         click.echo(
@@ -154,7 +165,7 @@ def logs(
         ctx.exit(1)
         return
 
-    paths = [_log_path_for_label(experiment, label) for label in labels]
+    paths = [run_log_path(experiment, runs_by_label[label]) for label in labels]
     missing = [p for p in paths if not p.exists()]
     if missing:
         click.echo(

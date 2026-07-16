@@ -159,6 +159,29 @@ class TestTrajectoryEmptyRedis:
         assert data == []
 
 
+class TestTrajectoryDiskStorage:
+    def test_reads_default_disk_metric_history(self, seed_disk_run):
+        root, _ = seed_disk_run()
+        metrics_dir = root.parent / "metrics"
+        metrics_dir.mkdir()
+        frontier = metrics_dir / "program_metrics:valid_frontier_fitness.jsonl"
+        mean = metrics_dir / "program_metrics:valid_iter_fitness_mean.jsonl"
+        frontier.write_text(_metric_entry(1, 0.5) + "\n" + _metric_entry(2, 0.8) + "\n")
+        mean.write_text(_metric_entry(1, 0.4) + "\n" + _metric_entry(2, 0.6) + "\n")
+
+        result = CliRunner().invoke(
+            main,
+            ["-r", str(root), "-f", "json", "trajectory"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == [
+            {"Iter": 1, "Best": 0.5, "Mean": 0.4},
+            {"Iter": 2, "Best": 0.8, "Mean": 0.6},
+        ]
+
+
 class TestTrajectoryMultipleRuns:
     def test_multiple_runs_labeled(self):
         """With multiple --run flags, rows include the run label."""

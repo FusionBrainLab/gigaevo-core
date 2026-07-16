@@ -79,6 +79,21 @@ class TestResolveFromExperiment:
         assert configs[1].run_spec.label == "B"
         assert configs[1].pid == 12346
 
+    def test_metric_schema_uses_project_root(self, tmp_path, monkeypatch):
+        from gigaevo.cli.run_resolver import _load_metric_names
+
+        metrics = tmp_path / "problems" / "toy" / "metrics.yaml"
+        metrics.parent.mkdir(parents=True)
+        metrics.write_text(
+            "specs:\n  score:\n    is_primary: true\n  cost:\n    is_primary: false\n"
+        )
+        monkeypatch.setattr("gigaevo.experiment.manifest.PROJ", tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        assert _load_metric_names("toy") == ["score", "cost"]
+
 
 class TestResolveErrors:
     def test_raises_if_neither(self):
@@ -141,6 +156,21 @@ class TestResolveDiskRuns:
         assert spec.is_disk
         assert spec.prefix == "toy"
         assert spec.path == str(root)
+
+    def test_hydra_output_directory_resolves_storage_child(self, tmp_path):
+        self._make_storage_dir(tmp_path, "toy")
+
+        configs = RunResolver.resolve(
+            experiment=None,
+            runs=[str(tmp_path)],
+            redis_host="localhost",
+            redis_port=6379,
+        )
+
+        spec = configs[0].run_spec
+        assert spec.is_disk
+        assert spec.prefix == "toy"
+        assert spec.path == str(tmp_path / "storage")
 
     def test_explicit_label_preserved(self, tmp_path):
         root = self._make_storage_dir(tmp_path, "toy")

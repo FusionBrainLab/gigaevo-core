@@ -21,6 +21,7 @@ from pathlib import Path
 
 import click
 
+from gigaevo.cli.log_paths import experiment_dir, run_log_path
 from gigaevo.monitoring.flow_profiler import (
     DEFAULT_LAST_N_ROWS,
     compute_saturation,
@@ -39,11 +40,7 @@ def _load_manifest(experiment: str):
 
 
 def _experiment_dir(experiment: str) -> Path:
-    return Path("experiments") / experiment
-
-
-def _log_path_for_label(experiment: str, label: str) -> Path:
-    return _experiment_dir(experiment) / f"run_{label}.log"
+    return experiment_dir(experiment)
 
 
 def _profile_one(
@@ -199,7 +196,8 @@ def profiler(
         return
 
     manifest = _load_manifest(experiment)
-    known = {run.label for run in manifest.contract.runs}
+    runs_by_label = {run.label: run for run in manifest.contract.runs}
+    known = set(runs_by_label)
     target_labels = list(labels) if labels else sorted(known)
     unknown = [label for label in target_labels if label not in known]
     if unknown:
@@ -211,7 +209,10 @@ def profiler(
         ctx.exit(1)
         return
 
-    paths = [(label, _log_path_for_label(experiment, label)) for label in target_labels]
+    paths = [
+        (label, run_log_path(experiment, runs_by_label[label]))
+        for label in target_labels
+    ]
     missing = [str(p) for _, p in paths if not p.exists()]
     if missing:
         click.echo(

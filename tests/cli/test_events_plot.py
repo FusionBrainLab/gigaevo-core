@@ -191,3 +191,43 @@ class TestEventsPlotFiltering:
         assert "LLM_CALL" in summary
         # Other events filtered out of the main breakdown.
         assert "STAGE_EXEC" not in summary
+
+    def test_unknown_event_name_is_rejected(self, tmp_path: Path) -> None:
+        log = tmp_path / "smoke.log"
+        log.write_text(_synthetic_log())
+
+        result = CliRunner().invoke(
+            events,
+            [
+                "plot",
+                "--log",
+                str(log),
+                "--out",
+                str(tmp_path / "out"),
+                "--events",
+                "NOT_A_CANONICAL_EVENT",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "unknown event" in result.output.lower()
+
+    def test_group_regex_requires_named_capture(self, tmp_path: Path) -> None:
+        log = tmp_path / "smoke.log"
+        log.write_text(_synthetic_log())
+
+        result = CliRunner().invoke(
+            events,
+            [
+                "plot",
+                "--log",
+                str(log),
+                "--out",
+                str(tmp_path / "out"),
+                "--group-by",
+                r".*_([GD])$",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "named capture group" in result.output.lower()

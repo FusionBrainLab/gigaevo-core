@@ -246,6 +246,17 @@ def test_collect_snapshot_complete() -> None:
     assert snap.error is None
 
 
+def test_collect_snapshot_counts_only_its_prefix_keys() -> None:
+    r = _make_redis()
+    spec = _make_spec()
+    r.set(f"{PREFIX}:owned", "1")
+    r.set("another/run:unrelated", "1")
+
+    snap = collect_snapshot(r, spec, event_window_minutes=0)
+
+    assert snap.total_keys == 1
+
+
 def test_collect_snapshot_redis_error() -> None:
     """Redis connection error returns empty snapshot with error."""
     spec = _make_spec()

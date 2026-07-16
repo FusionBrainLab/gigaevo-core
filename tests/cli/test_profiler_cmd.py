@@ -18,8 +18,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
+import pytest
 
 from gigaevo.cli import main
+
+
+@pytest.fixture(autouse=True)
+def _project_root(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("gigaevo.experiment.manifest.PROJ", tmp_path)
+
 
 LOG_FIXTURE = """\
 2026-05-13 00:00:00.000 INFO [mutation] Task 1: ['aaaaaaaa'] -> bbbbbbbb
@@ -43,6 +50,7 @@ def _mock_manifest(labels: list[str]):
         run.label = label
         run.db = 1
         run.prefix = f"pfx_{label}"
+        run.log_path = None
         manifest.contract.runs.append(run)
     return manifest
 
@@ -137,6 +145,24 @@ class TestProfilerExplicitFile:
 
 
 class TestProfilerByLabel:
+    def test_uses_manifest_log_path(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exp_dir = tmp_path / "experiments" / "task" / "exp1"
+        exp_dir.mkdir(parents=True)
+        (exp_dir / "custom-a.log").write_text(LOG_FIXTURE)
+        manifest = _mock_manifest(["A"])
+        manifest.contract.runs[0].log_path = "custom-a.log"
+
+        with patch("gigaevo.cli.profiler_cmd._load_manifest", return_value=manifest):
+            result = CliRunner().invoke(
+                main,
+                ["-e", "task/exp1", "profiler", "A", "--text-only"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert (exp_dir / "profiler" / "profile_A.txt").exists()
+
     def test_profiles_specific_label(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         exp_dir = tmp_path / "experiments" / "task" / "exp1"

@@ -809,10 +809,29 @@ class RedisProgramStorage(ProgramStorage):
     async def clear(self) -> None:
         self.require_writable("clear")
 
-        async def _flush(r: aioredis.Redis) -> None:
-            await r.flushdb()
+        async def _clear_prefix(r: aioredis.Redis) -> None:
+            namespace = f"{self._keys.prefix}:"
+            batch: list[str] = []
+            async for raw_key in r.scan_iter(
+                match=f"{self._keys.prefix}:*", count=SCAN_BATCH_SIZE
+            ):
+                key = (
+                    raw_key.decode("utf-8", errors="replace")
+                    if isinstance(raw_key, bytes)
+                    else str(raw_key)
+                )
+                # A prefix containing Redis glob characters can broaden MATCH.
+                # Keep deletion scoped to the literal namespace regardless.
+                if not key.startswith(namespace):
+                    continue
+                batch.append(key)
+                if len(batch) >= SCAN_BATCH_SIZE:
+                    await r.delete(*batch)
+                    batch.clear()
+            if batch:
+                await r.delete(*batch)
 
-        await self._conn.execute("clear", _flush)
+        await self._conn.execute("clear", _clear_prefix)
 
     # --------------------- Instance Locking (delegates) ---------------------
 

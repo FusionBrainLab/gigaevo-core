@@ -102,6 +102,7 @@ class TestGenerateProducesValidBash:
         result = generate(dummy_experiment)
         assert "problem.name=toy_kadane" in result
         assert "pipeline=guided" in result
+        assert "storage=redis" in result
         assert "redis.db=15" in result
         assert "model_name=test-model" in result
         # max_generations on the manifest maps to the engine's max_mutants

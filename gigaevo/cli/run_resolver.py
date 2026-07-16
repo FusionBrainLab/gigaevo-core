@@ -6,7 +6,6 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
 import click
-import yaml
 
 from gigaevo.monitoring.run_spec import RunSpec
 
@@ -79,9 +78,13 @@ def _load_metric_names(problem_name: str) -> list[str]:
 
     Returns primary metrics first, excluding is_valid. Falls back to ["fitness"].
     """
-    path = Path("problems") / problem_name / "metrics.yaml"
+    from gigaevo.cli.log_paths import problem_metrics_path
+
+    path = problem_metrics_path(problem_name)
     if not path.exists():
         return ["fitness"]
+    import yaml
+
     with open(path) as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):
@@ -160,12 +163,15 @@ class RunResolver:
         """Resolve a disk-path RunSpec by locating the storage prefix directory.
 
         Accepts either the storage root (containing one prefix directory)
-        or the prefix directory itself (containing ``programs/``).
+        or the prefix directory itself (containing ``programs/``). A Hydra
+        output directory containing ``storage/`` is accepted as a convenience.
         """
         assert spec.path is not None
         target = Path(spec.path).expanduser()
         if not target.is_dir():
             raise click.UsageError(f"Disk storage path is not a directory: {target}")
+        if (target / "storage").is_dir():
+            target = target / "storage"
         if (target / "programs").is_dir():
             base = target
         else:
@@ -197,9 +203,16 @@ class RunResolver:
         spec: RunSpec, redis_host: str, redis_port: int
     ) -> RunSpec:
         """Resolve a prefix-less RunSpec from recognized keys in Redis."""
+        from redis.exceptions import RedisError
+
         from gigaevo.cli.inspect_cmd import discover_prefixes
 
-        prefixes = discover_prefixes(redis_host, redis_port, spec.db)
+        try:
+            prefixes = discover_prefixes(redis_host, redis_port, spec.db)
+        except RedisError as exc:
+            raise click.ClickException(
+                f"Cannot inspect Redis DB {spec.db} at {redis_host}:{redis_port}: {exc}"
+            ) from exc
         if len(prefixes) == 0:
             raise click.UsageError(f"No experiment prefix found in Redis DB {spec.db}")
         if len(prefixes) > 1:

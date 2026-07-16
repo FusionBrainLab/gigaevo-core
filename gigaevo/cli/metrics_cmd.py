@@ -1,9 +1,7 @@
-"""`gigaevo metrics` command — dump metrics from Redis for grep-friendly inspection.
+"""`gigaevo metrics` command — dump persisted metrics for inspection.
 
-Reads the metrics that experiments write into Redis via
-:class:`gigaevo.utils.trackers.backends.redis.RedisMetricsBackend` and prints
-them one record per line. Default output is plain text suitable for `grep`,
-`awk`, and friends; TSV and JSON are also available.
+Reads Redis or disk JSONL metric history and prints it one record per line.
+Default output is suitable for `grep` and `awk`; TSV and JSON are available.
 
 Examples:
 
@@ -11,19 +9,22 @@ Examples:
     gigaevo -r heilbron@0 metrics --tag "valid/frontier/*" --tail 20
     gigaevo -r heilbron@0 metrics --tag "*tokens*" --format tsv
     gigaevo -r heilbron@0 metrics --since 100 --until 200
+    gigaevo -r outputs/run metrics --tag "valid/frontier/*"
 """
 
 from __future__ import annotations
 
+import csv
 from datetime import UTC, datetime
 import fnmatch
+from io import StringIO
 import json
 from typing import Any
 
 import click
-import redis as redis_lib
 
-from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
+from gigaevo.cli.metric_history import MetricHistorySource, build_metric_history_source
+from gigaevo.cli.run_resolver import RunResolver
 
 KIND_CHOICES = ("scalar", "hist", "text", "all")
 FORMAT_CHOICES = ("plain", "tsv", "json")
@@ -36,37 +37,6 @@ def _iso_wall(wall: Any) -> str:
     except (TypeError, ValueError):
         return str(wall)
     return datetime.fromtimestamp(ts, tz=UTC).isoformat()
-
-
-def _list_tags(r: redis_lib.Redis, key_prefix: str) -> list[str]:
-    """Enumerate metric tag names from the `latest` hash for this prefix.
-
-    Histograms aren't written to `latest`, so they aren't enumerable here.
-    That matches the issue's default `--kind scalar` and the documented
-    non-goal of histogram inspection.
-    """
-    raw = r.hkeys(f"{key_prefix}:latest")
-    return sorted(str(k) for k in raw)
-
-
-def _safe_tag(tag: str) -> str:
-    """Mirror RedisMetricsBackend._k_history sanitization."""
-    return tag.replace("/", ":").replace(" ", "_")
-
-
-def _fetch_history(
-    r: redis_lib.Redis, key_prefix: str, tag: str
-) -> list[dict[str, Any]]:
-    """Return the parsed history list for `tag` (oldest first)."""
-    history_key = f"{key_prefix}:history:{_safe_tag(tag)}"
-    raw_entries = r.lrange(history_key, 0, -1)
-    out: list[dict[str, Any]] = []
-    for raw in raw_entries:
-        try:
-            out.append(json.loads(raw))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-    return out
 
 
 def _record(tag: str, entry: dict[str, Any], label: str | None) -> dict[str, Any]:
@@ -133,11 +103,13 @@ def _emit_tsv(records: list[dict[str, Any]], include_label: bool) -> str:
     cols = ["tag", "step", "wall", "kind", "value"]
     if include_label:
         cols = ["label"] + cols
-    lines = ["\t".join(cols)]
+    output = StringIO()
+    writer = csv.writer(output, dialect="excel-tab", lineterminator="\n")
+    writer.writerow(cols)
     for rec in records:
         row = [_format_value(rec.get(c, "")) for c in cols]
-        lines.append("\t".join(row))
-    return "\n".join(lines)
+        writer.writerow(row)
+    return output.getvalue().rstrip("\n")
 
 
 def _emit_json(records: list[dict[str, Any]]) -> str:
@@ -153,13 +125,13 @@ def _emit_json(records: list[dict[str, Any]]) -> str:
 )
 @click.option(
     "--since",
-    type=int,
+    type=click.IntRange(min=0),
     default=None,
     help="Earliest step/iteration to include (inclusive).",
 )
 @click.option(
     "--until",
-    type=int,
+    type=click.IntRange(min=0),
     default=None,
     help="Latest step/iteration to include (inclusive).",
 )
@@ -180,7 +152,7 @@ def _emit_json(records: list[dict[str, Any]]) -> str:
 )
 @click.option(
     "--tail",
-    type=int,
+    type=click.IntRange(min=1),
     default=None,
     help="Show only the last N records per tag.",
 )
@@ -194,15 +166,14 @@ def metrics(
     format_name: str,
     tail: int | None,
 ) -> None:
-    """Dump metrics from Redis as plain text, one record per line.
+    """Dump Redis or disk metric history, one record per line.
 
     \b
     Plain output (default), one record per line:
         <tag>\\tstep=<n>\\twall=<iso>\\tvalue=<v>
 
-    Read-only — never writes to Redis. Histograms are not enumerable from
-    the `latest` hash; use `--kind hist` together with `--tag <exact-name>`
-    if you need to inspect a known histogram tag.
+    Read-only. Disk paths use the default `<run-dir>/metrics` directory next
+    to `<run-dir>/storage`.
 
     \b
     Examples:
@@ -210,11 +181,15 @@ def metrics(
         gigaevo -r heilbron@0 metrics --tag "valid/frontier/*"
         gigaevo -r heilbron@0 metrics --tag "*tokens*" --tail 10
         gigaevo -r heilbron@0 metrics --since 50 --until 100 --format tsv
+        gigaevo -r outputs/run metrics --tag "valid/frontier/*"
     """
     experiment = ctx.obj["experiment"]
     runs = ctx.obj["runs"]
     redis_host = ctx.obj["redis_host"]
     redis_port = ctx.obj["redis_port"]
+
+    if since is not None and until is not None and since > until:
+        raise click.UsageError("--since must be less than or equal to --until")
 
     run_configs = RunResolver.resolve(
         experiment=experiment,
@@ -222,43 +197,47 @@ def metrics(
         redis_host=redis_host,
         redis_port=redis_port,
     )
-    reject_disk_specs(run_configs, "metrics")
-
     redis_factory = ctx.obj.get("redis_factory")
     include_label = len(run_configs) > 1
     all_records: list[dict[str, Any]] = []
 
     for rc in run_configs:
         spec = rc.run_spec
-        if redis_factory:
-            r = redis_factory(spec.db)
-        else:
-            r = redis_lib.Redis(
-                host=redis_host, port=redis_port, db=spec.db, decode_responses=True
-            )
+        source: MetricHistorySource | None = None
         try:
-            key_prefix = f"{spec.prefix}:metrics"
-            tags = _list_tags(r, key_prefix)
+            source = build_metric_history_source(
+                spec,
+                redis_host,
+                redis_port,
+                redis_factory=redis_factory,
+            )
+            tags = source.list_tags()
             if tag_pattern:
-                # If the pattern is exact (no glob meta), allow it through
-                # even when the tag is absent from `latest` (e.g. histograms).
                 if any(ch in tag_pattern for ch in "*?["):
                     tags = [t for t in tags if fnmatch.fnmatchcase(t, tag_pattern)]
-                elif tag_pattern not in tags:
-                    tags = [tag_pattern]
                 else:
                     tags = [tag_pattern]
 
             for tag in tags:
-                entries = _fetch_history(r, key_prefix, tag)
+                entries = source.get_history(tag)
                 records = [_record(tag, e, spec.label) for e in entries]
                 records = _filter_kind(records, kind)
                 records = _filter_step(records, since, until)
-                if tail is not None and tail > 0:
+                if tail is not None:
                     records = records[-tail:]
                 all_records.extend(records)
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to read metrics for {spec.label}: {exc}"
+            ) from exc
         finally:
-            r.close()
+            if source is not None:
+                try:
+                    source.close()
+                except Exception:
+                    pass
 
     fmt = format_name.lower()
     if fmt == "json":

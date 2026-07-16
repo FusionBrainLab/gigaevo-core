@@ -64,3 +64,31 @@ class TestClearSeriesBufferRace:
         b = RedisMetricsBackend(cfg)
         assert b._client is None
         b.clear_series("foo")
+
+
+class TestHistoryValues:
+    def test_zero_scalar_is_not_serialized_as_null(
+        self, backend: RedisMetricsBackend
+    ) -> None:
+        backend.write_scalar("zero", 0.0, step=1, wall_time=2.0)
+
+        backend.flush()
+
+        assert backend.get_history("zero")[0]["v"] == 0.0
+
+    def test_empty_text_is_not_serialized_as_null(
+        self, backend: RedisMetricsBackend
+    ) -> None:
+        backend.write_text("empty", "", step=1, wall_time=2.0)
+
+        backend.flush()
+
+        assert backend.get_history("empty")[0]["v"] == ""
+
+    def test_text_latest_is_returned_as_text(
+        self, backend: RedisMetricsBackend
+    ) -> None:
+        backend.write_text("message", "ready", step=1, wall_time=2.0)
+        backend.flush()
+
+        assert backend.get_latest("message") == {"message": "ready"}

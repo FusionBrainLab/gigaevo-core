@@ -2,41 +2,33 @@
 
 from __future__ import annotations
 
-import json
-
 import click
-import redis as redis_lib
 
+from gigaevo.cli.metric_history import MetricHistorySource, build_metric_history_source
 from gigaevo.cli.output_formatter import OutputFormatter
-from gigaevo.cli.run_resolver import RunResolver, reject_disk_specs
+from gigaevo.cli.run_resolver import RunResolver
 
 
 def _fetch_trajectory(
-    r: redis_lib.Redis,
-    prefix: str,
+    source: MetricHistorySource,
     metric: str,
 ) -> list[dict]:
-    """Fetch per-iteration trajectory data from Redis. Returns list of row dicts."""
-    frontier_key = f"{prefix}:metrics:history:program_metrics:valid_frontier_{metric}"
-    mean_key = f"{prefix}:metrics:history:program_metrics:valid_iter_{metric}_mean"
-
-    frontier_raw = r.lrange(frontier_key, 0, -1)
-    mean_raw = r.lrange(mean_key, 0, -1)
+    """Fetch per-iteration trajectory data from a metric history source."""
+    frontier_entries = source.get_history(f"program_metrics/valid_frontier_{metric}")
+    mean_entries = source.get_history(f"program_metrics/valid_iter_{metric}_mean")
 
     frontier_by_iter: dict[int, float] = {}
-    for raw in frontier_raw:
+    for entry in frontier_entries:
         try:
-            entry = json.loads(raw)
             frontier_by_iter[int(entry["s"])] = float(entry["v"])
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        except (KeyError, ValueError, TypeError):
             pass
 
     mean_by_iter: dict[int, float] = {}
-    for raw in mean_raw:
+    for entry in mean_entries:
         try:
-            entry = json.loads(raw)
             mean_by_iter[int(entry["s"])] = float(entry["v"])
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        except (KeyError, ValueError, TypeError):
             pass
 
     all_iters = sorted(set(frontier_by_iter.keys()) | set(mean_by_iter.keys()))
@@ -91,11 +83,12 @@ def trajectory(
     metric: tuple[str, ...],
     format_name: str | None,
 ) -> None:
-    """Show iteration-by-iteration metric trajectory (running best + per-iter mean).
+    """Show iteration-by-iteration metric trajectory (running best + mean).
 
     Reads `valid_frontier_<metric>` (the canonical running frontier)
-    and `valid_iter_<metric>_mean` histories from Redis. Values are plain
-    (unsmoothed); use `gigaevo plot trajectory` for smoothed plots.
+    and `valid_iter_<metric>_mean` histories from Redis or disk JSONL.
+    Values are plain (unsmoothed); use `gigaevo plot trajectory` for plots.
+    Disk paths use the standard `<run-dir>/metrics` directory next to storage.
 
     Metric selection: if `--metric` is omitted, metrics are auto-discovered
     from the resolved runs' `metric_names` (populated from
@@ -117,8 +110,6 @@ def trajectory(
         redis_host=redis_host,
         redis_port=redis_port,
     )
-    reject_disk_specs(run_configs, "trajectory")
-
     # Auto-discover metrics from run_configs when none explicitly specified
     if not metric:
         seen: set[str] = set()
@@ -138,15 +129,16 @@ def trajectory(
 
     for rc in run_configs:
         spec = rc.run_spec
-        if redis_factory:
-            r = redis_factory(spec.db)
-        else:
-            r = redis_lib.Redis(
-                host=redis_host, port=redis_port, db=spec.db, decode_responses=True
-            )
+        source: MetricHistorySource | None = None
         try:
+            source = build_metric_history_source(
+                spec,
+                redis_host,
+                redis_port,
+                redis_factory=redis_factory,
+            )
             for m in metrics_to_show:
-                rows = _fetch_trajectory(r, spec.prefix, m)
+                rows = _fetch_trajectory(source, m)
                 rows_per_metric[m] += len(rows)
                 if tail is not None:
                     rows = rows[-tail:]
@@ -156,8 +148,18 @@ def trajectory(
                     if len(metrics_to_show) > 1:
                         row["Metric"] = m
                 all_rows.extend(rows)
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to read trajectory for {spec.label}: {exc}"
+            ) from exc
         finally:
-            r.close()
+            if source is not None:
+                try:
+                    source.close()
+                except Exception:
+                    pass
 
     # If user explicitly asked for metric(s) that returned zero rows across
     # all runs, warn on stderr — otherwise the empty [] output is confusing.

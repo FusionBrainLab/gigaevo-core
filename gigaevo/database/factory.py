@@ -1,6 +1,7 @@
 """Single non-Hydra construction point for ProgramStorage backends.
 
-Production engines get storage from Hydra (config/storage/redis.yaml).
+Production engines get storage from Hydra (disk by default; ``storage=redis``
+selects Redis).
 CLI tools and offline analytics that resolve runs dynamically
 (prefix@db) construct read-only instances HERE — nowhere else.
 """
@@ -82,7 +83,7 @@ def build_writable_redis_storage(
 ) -> ProgramStorage:
     """Writable storage for offline tools (profiler, benchmarks). Not for live engines.
 
-    Production engines always get storage from Hydra (config/storage/redis.yaml).
+    Production engines always get storage from Hydra.
     """
     return RedisProgramStorage(
         RedisProgramStorageConfig(

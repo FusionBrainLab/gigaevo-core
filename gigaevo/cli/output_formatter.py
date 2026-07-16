@@ -17,9 +17,8 @@ class OutputFormatter:
     (non-tty stdout) and switches to json unless an explicit format is given.
     """
 
-    def __init__(self, format_name: str | None = None, quiet: bool = False):
+    def __init__(self, format_name: str | None = None):
         self._format_name = format_name
-        self._quiet = quiet
 
     @property
     def effective_format(self) -> str:
@@ -50,8 +49,6 @@ class OutputFormatter:
         columns: list[str] | None = None,
         title: str | None = None,
     ) -> None:
-        if self._quiet:
-            return
         output = self.render(rows, columns=columns, title=title)
         click.echo(output)
 
@@ -74,10 +71,19 @@ class OutputFormatter:
             return ""
         cols = columns or list(rows[0].keys())
         lines = []
-        lines.append("| " + " | ".join(cols) + " |")
+
+        def escape(value: object) -> str:
+            return (
+                str(value)
+                .replace("\\", "\\\\")
+                .replace("|", "\\|")
+                .replace("\n", "<br>")
+            )
+
+        lines.append("| " + " | ".join(escape(col) for col in cols) + " |")
         lines.append("| " + " | ".join("---" for _ in cols) + " |")
         for row in rows:
-            vals = [str(row.get(c, "")) for c in cols]
+            vals = [escape(row.get(c, "")) for c in cols]
             lines.append("| " + " | ".join(vals) + " |")
         return "\n".join(lines)
 

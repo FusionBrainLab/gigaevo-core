@@ -98,15 +98,25 @@ class DiskMetricsBackend(LoggerBackend):
         path = self._path(tag)
         if not path.exists():
             return []
+        entries: list[dict[str, Any]] = []
         try:
-            entries = [
-                json.loads(line)
-                for line in path.read_text().splitlines()
-                if line.strip()
-            ]
+            lines = path.read_text().splitlines()
         except Exception as e:
             logger.warning("[DiskMetricsBackend] get_history failed for {}: {}", tag, e)
             return []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "[DiskMetricsBackend] skipping malformed history line for {}",
+                    tag,
+                )
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
         n = len(entries)
         if start < 0:
             start = max(n + start, 0)
@@ -115,3 +125,10 @@ class DiskMetricsBackend(LoggerBackend):
         if end < start:
             return []
         return entries[start : end + 1]
+
+    def list_metrics(self) -> list[str]:
+        """List persisted tags, reversing the backend's filename encoding."""
+        root = Path(self.cfg.root_dir)
+        if not root.is_dir():
+            return []
+        return sorted(path.stem.replace(":", "/") for path in root.glob("*.jsonl"))

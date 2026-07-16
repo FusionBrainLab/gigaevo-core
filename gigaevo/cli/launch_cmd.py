@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import click
 
-from gigaevo.experiment.launch import _generate_launch_script, run_launch
+
+def _generate_launch_script(experiment: str):
+    from gigaevo.experiment.launch import _generate_launch_script as generate
+
+    return generate(experiment)
+
+
+def run_launch(experiment: str, *, dry_run: bool, skip_preflight: bool):
+    from gigaevo.experiment.launch import run_launch as launch
+
+    return launch(experiment, dry_run=dry_run, skip_preflight=skip_preflight)
 
 
 @click.command("launch")
