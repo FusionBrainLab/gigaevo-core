@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "dataset": "california",
+  "raw_columns": [
+    "x0",
+    "x1",
+    "x2",
+    "x3",
+    "x4",
+    "x5",
+    "x6",
+    "x7"
+  ],
+  "nodes": [
+    {
+      "id": "income_per_age",
+      "input_cols": [
+        "x0",
+        "x1"
+      ],
+      "output_cols": [
+        "fe_income_per_age"
+      ],
+      "code": "df['fe_income_per_age'] = df['x0'] / (df['x1'].abs() + 1.0)\nreturn df",
+      "rationale": "Relate median income to the age of the housing stock.",
+      "dependencies": [],
+      "is_output": true
+    }
+  ]
+}

@@ -165,6 +165,9 @@ tmp/
 # Keep these config JSON files in-repo
 !pyrightconfig.json
 
+# Keep dag_tab seed programs required to start evolution
+!problems/dag_tab/initial_programs/*.json
+
 # Keep benchmark history (small, append-only) — rebuild with scripts if lost
 !tools/benchmark_history.jsonl
 

@@ -3,23 +3,18 @@
 llm:
   _target_: gigaevo.llm.models.MultiModelRouter
   _convert_: all
-  # Negotiate a working structured-output method per endpoint at call time
-  # rather than forwarding litellm's per-model default.
   structured_output_method: auto
   models:
     - _target_: langchain_openai.ChatOpenAI
-
       model: ${model_name}
       api_key: ${oc.env:OPENAI_API_KEY}
       temperature: ${temperature}
       max_tokens: ${max_tokens}
       base_url: ${llm_base_url}
-      # httpx/openai SDK does not detect peer-closed TCP sockets (CLOSE-WAIT
-      # dead-connection bug). Without an inactivity timeout the DAG stage
-      # hangs until stage_timeout (1800s). 600s is generous for 235B-Thinking
-      # generation while still capping worst-case stall.
       request_timeout: ${request_timeout}
       max_retries: 2
+      extra_body:
+        thinking_token_budget: ${thinking_token_budget}
   probabilities: [1.0]
   writer: ${ref:writer}
   max_concurrent: ${llm_max_concurrent}

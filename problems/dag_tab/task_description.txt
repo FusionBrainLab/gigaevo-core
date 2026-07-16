@@ -1,0 +1,50 @@
+TASK — EVOLVE A FEATURE DAG FOR AN EXISTING GIGAEVO TABULAR DATASET
+
+The candidate program is a JSON FeatureGraph. Its dataset field names one dataset from problems/tabular (for example california). The fixed downstream CatBoost estimator and the existing tabular cross-validation protocol are not evolved. Improve predictive fitness by evolving pandas feature transformations.
+
+GRAPH CONTRACT
+- nodes are listed in topological order
+- raw columns are x0, x1, ... in the exact order exposed by the selected dataset
+- dependencies refer to earlier node ids
+- input_cols may use raw columns or outputs of declared dependencies
+- output_cols must be globally unique and must not overwrite raw columns
+- is_output=true exports that node's output columns to the fixed estimator
+- at least one node must be exported
+
+NODE CODE ABI
+Each node.code is the body of a Python function receiving a pandas DataFrame named df. numpy is available as np and pandas as pd.
+- explicitly create every declared output with df['column'] = ...
+- preserve row count and index
+- create no undeclared columns
+- use only the declared input columns
+- finish with return df
+- do not import modules, access files/network/processes, inspect private attributes, or use eval/exec
+- never access the target; y is not available
+
+SPLIT-INVARIANT FEATURE PROTOCOL
+The same stateless graph is applied separately to train, validation, and query rows. Therefore node code must be row-wise: a row's output may depend only on that row's declared inputs and fixed numeric constants. Dataset/batch statistics and order-dependent operations are forbidden, including mean/median/std/min/max/sum/quantile/rank/qcut/cut with learned edges, groupby/value_counts, rolling/expanding, shift/diff/pct_change, and cumulative operations; row-wise reductions across columns with explicit axis=1 are allowed. Validation runs a batch-invariance probe, and graphs whose outputs change with batch composition are rejected. This prevents query-batch covariates from changing predictions. A future stateful fit/transform ABI may add train-fitted aggregate features, but the current ABI does not support them.
+
+COUNTERFACTUAL FEATURE REASONING
+Treat each node as an explicit, falsifiable feature hypothesis. The rationale must state:
+1. what latent signal or nuisance factor the new column exposes;
+2. why this exact operation is appropriate for the declared source columns;
+3. what predictive information, invariance, or numerical robustness is missing without it;
+4. why a simpler existing/raw feature does not already provide the same signal.
+Do not merely restate the formula. Prefer domain-interpretable names and compact hypotheses that can be compared with parent evidence.
+
+For the baseline california dataset, the Pydantic raw-column names have these meanings:
+- x0 MedInc: median household income in the block group, units of $10k
+- x1 HouseAge: median house age, years
+- x2 AveRooms: average rooms per household
+- x3 AveBedrms: average bedrooms per household
+- x4 Population: block-group population count
+- x5 AveOccup: average occupants per household
+- x6 Latitude: latitude in degrees
+- x7 Longitude: longitude in degrees
+
+Example code:
+df['fe_ratio'] = df['x2'] / (df['x3'].abs() + 1e-6)
+return df
+
+EVOLUTION
+The structured positional-slot mutation may retain, edit, omit, reorder, rewire, or add multiple nodes in one child graph. Use the parent's evaluation evidence to decide which components to keep. Prefer meaningful, numerically stable ratios, interactions, nonlinear transforms, clipping, binning, and domain-informed combinations. Keep the graph compact unless added depth improves validation fitness.

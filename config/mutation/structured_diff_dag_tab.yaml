@@ -1,0 +1,14 @@
+# @package _global_
+# Schema-constrained positional-slot mutation for FeatureGraph JSON genomes.
+# Launch with program_format=json_document and problem.name=dag_tab.
+
+mutation_operator:
+  _target_: gigaevo.evolution.mutation.structured_diff.StructuredDiffMutationOperator
+  llm_wrapper: ${ref:llm}
+  allowed_changes:
+    _target_: problems.dag_tab.allowed_changes.AllowedDagTabChanges
+    min_nodes: 1
+    max_nodes: 8
+  problem_context: ${problem_context}
+  prompts_dir: ${prompts.dir}
+  prompt_fetcher: ${prompt_fetcher}
