@@ -134,6 +134,34 @@ class EngineConfig(BaseModel):
             "ingestor."
         ),
     )
+    terminal_drain_timeout_s: float = Field(
+        default=7260.0,
+        gt=0,
+        description=(
+            "Maximum time after production stops to keep the ingestor alive "
+            "while registered child DAGs reach a durable terminal outcome. "
+            "Production Hydra config binds this to the DAG timeout; use a "
+            "small value only in tests."
+        ),
+    )
+    causal_outcome_max_consecutive_failures: int = Field(
+        default=3,
+        gt=0,
+        description=(
+            "Consecutive durable outcome-write failures for one child before "
+            "the ingestor fails the run. Each retry is idempotent; the bound "
+            "prevents a broken ledger from stalling for the full drain timeout."
+        ),
+    )
+    max_consecutive_mutation_failures: int = Field(
+        default=8,
+        gt=0,
+        description=(
+            "Consecutive producer attempts returning no persisted child before "
+            "the dispatcher fails. This bounds invalid/censored decision churn "
+            "when an LLM, refresh, or materializer fails persistently."
+        ),
+    )
     # ``extra="forbid"`` keeps typos loud (``max_inflight: 5`` etc.), while
     # the ``_strip_deprecated_keys`` validator below provides a soft landing
     # for keys that USED to exist and have been retired (see

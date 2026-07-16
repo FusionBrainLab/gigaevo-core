@@ -14,6 +14,7 @@ from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 from gigaevo.memory.context import GlobalMemoryContext, MemoryContextModel
 from gigaevo.memory.context.beta import BetaPrior, coerce_beta_prior
 from gigaevo.memory.context.evidence import event_weight, split_events_by_task
+from gigaevo.memory.events import MemoryPriorCohort, emit_memory_event
 from gigaevo.memory.prior_evidence import EvictedEvidenceSource
 from gigaevo.memory.storage.base import MemoryStore
 
@@ -256,6 +257,8 @@ class EmpiricalBayesMemoryPrior(BaseModel):
             bank = tuple(self.store.snapshot())
         except Exception:
             return best
+        live_card_count = len(bank)
+        evicted_card_count = 0
         if self.evicted_evidence is not None:
             try:
                 known_ids = {banked_card.id for banked_card in bank}
@@ -266,10 +269,23 @@ class EmpiricalBayesMemoryPrior(BaseModel):
                     evicted_cards.append(evicted_card)
                     known_ids.add(evicted_card.id)
                 bank = (*bank, *evicted_cards)
+                evicted_card_count = len(evicted_cards)
             except Exception as exc:
                 logger.warning(
                     "[Memory][Prior] failed to read evicted evidence: {}", exc
                 )
+        try:
+            emit_memory_event(
+                MemoryPriorCohort(
+                    live_card_count=live_card_count,
+                    evicted_card_count=evicted_card_count,
+                    cohort_card_count=len(bank),
+                )
+            )
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[Memory][Prior] cohort telemetry emit failed; continuing"
+            )
         # Per-card exposure outcomes are level-independent within the global /
         # local split, so one pass over one snapshot serves the whole ladder.
         counts_cache: dict[tuple[bool, bool], dict[str, tuple[float, float]]] = {}

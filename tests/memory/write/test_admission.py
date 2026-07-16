@@ -93,6 +93,47 @@ def test_admit_known_id_records_updated(store, make_card, tmp_path):
     assert read_rows(ledger.path)[-1].outcome is WriteOutcome.UPDATED
 
 
+def test_task_card_cap_rejects_only_new_cards_in_same_task(store, make_card, tmp_path):
+    first = make_card(id="first", task_key="task")
+    second = make_card(id="second", task_key="task")
+    foreign = make_card(id="foreign", task_key="other-task")
+    store.save(first)
+    store.save(foreign)
+    ledger = WriteLedger(tmp_path / "write_ledger.jsonl")
+    gate = CardAdmissionGate(
+        store=store,
+        evictor=NullEvictor(),
+        ledger=ledger,
+        task_key="task",
+        max_task_cards=1,
+    )
+
+    rejected = gate.admit(second)
+    updated = gate.admit(first.model_copy(update={"description": "updated"}))
+
+    assert rejected.outcome is WriteOutcome.REJECTED_CAPACITY
+    assert not rejected.landed
+    assert store.get(second.id) is None
+    assert updated.outcome is WriteOutcome.UPDATED
+    assert store.get(first.id).description == "updated"
+    row = read_rows(ledger.path)[0]
+    assert row.outcome is WriteOutcome.REJECTED_CAPACITY
+    assert row.reason == "active task card cap reached (1)"
+
+
+def test_task_card_cap_must_be_positive(store):
+    try:
+        CardAdmissionGate(
+            store=store,
+            evictor=NullEvictor(),
+            max_task_cards=0,
+        )
+    except ValueError as exc:
+        assert str(exc) == "max_task_cards must be positive when configured"
+    else:
+        raise AssertionError("expected invalid card cap to be rejected")
+
+
 def test_admit_harmful_known_card_revalidates_union_and_deletes(
     store, make_card, make_event, tmp_path
 ):

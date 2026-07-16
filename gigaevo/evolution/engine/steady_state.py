@@ -39,6 +39,7 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._ss_config: SteadyStateEngineConfig = cfg
 
         self._in_flight: set[str] = set()
+        self._outcome_failure_counts: dict[str, int] = {}
         # Parent-refresh tickets transferred from producer (mutant_task) to
         # ingestor. The ticket holds the per-parent-id locks that prevent
         # another producer from refreshing the same parents while THIS
@@ -88,10 +89,12 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             programs_processed=self.metrics.programs_processed,
         )
 
+        terminally_drained = False
         try:
             # Phase 0: drain initial seed population (already QUEUED by loader)
             await self._await_idle()
             await self._ingest_completed_programs()
+            await self._reconcile_memory_attempts()
             self.storage.snapshot.bump(incremental=True)
             await self._write_snapshot(
                 programs_processed=self.metrics.programs_processed
@@ -110,41 +113,46 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 backpressure_sampler_loop(self), name="ss-backpressure-sampler"
             )
 
-            done, pending = await asyncio.wait(
+            done, _ = await asyncio.wait(
                 [self._dispatcher_task, self._ingestor_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for t in pending:
-                t.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await t
+            if self._ingestor_task in done:
+                if self._ingestor_task.cancelled():
+                    raise RuntimeError("steady-state ingestor stopped unexpectedly")
+                ingestor_exc = self._ingestor_task.exception()
+                if ingestor_exc is not None:
+                    raise ingestor_exc
+                raise RuntimeError("steady-state ingestor exited before terminal drain")
 
-            loop_exc = None
-            for t in done:
-                if not t.cancelled():
-                    exc = t.exception()
-                    if exc and not isinstance(exc, asyncio.CancelledError):
-                        logger.error("[SteadyState] Loop failed: {}", exc)
-                        loop_exc = exc
-
-            if loop_exc is not None:
-                raise loop_exc
+            # Normal producer completion means the cap was reached and every
+            # already-dispatched producer finished its child handoff. Keep the
+            # ingestor alive until all registered child DAGs have terminal,
+            # durable outcomes.
+            await self._dispatcher_task
+            await self._await_terminal_drain()
+            terminally_drained = True
+            self._running = False
+            await self._ingestor_task
 
         except asyncio.CancelledError:
             logger.debug("[SteadyState] run() cancelled")
             raise
         finally:
-            self._running = False
             # asyncio.wait() does NOT cancel its waited tasks when the
             # outer coroutine is cancelled, so the dispatcher and ingestor
             # may still be running here. Cancel them explicitly; each task
             # cleans up its own spawned mutant tasks (releasing semaphore
             # slots) in its own finally block.
-            for loop_task in (
-                self._dispatcher_task,
-                self._ingestor_task,
-                self._sampler_task,
-            ):
+            # Stop/cancel producers first while the ingestor can still release
+            # buffer capacity required by a post-persist handoff.
+            if self._dispatcher_task is not None and not self._dispatcher_task.done():
+                self._dispatcher_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._dispatcher_task
+
+            self._running = False
+            for loop_task in (self._ingestor_task, self._sampler_task):
                 if loop_task is not None and not loop_task.done():
                     loop_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -155,10 +163,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # the inner task. The finalizer (post_run_hook) must still run
             # — cancellation is a shutdown signal, not a "skip cleanup" one.
             sweep_cancelled = False
-            try:
-                await self._final_ingestion_sweep(deadline_seconds=5.0)
-            except asyncio.CancelledError:
-                sweep_cancelled = True
+            if not terminally_drained:
+                try:
+                    await self._final_ingestion_sweep(deadline_seconds=5.0)
+                except asyncio.CancelledError:
+                    sweep_cancelled = True
 
             # Per-persist snapshot writes capture iteration at their call time;
             # in-flight reservations that never persisted (cancellation, LLM
@@ -182,6 +191,30 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 # `suppress(Exception)` in the sweep swallowed would
                 # otherwise dangle in __context__ and mislead the operator.
                 raise asyncio.CancelledError from None
+
+    async def _await_terminal_drain(self) -> None:
+        """Wait for every registered child to reach a durable terminal record."""
+
+        deadline = time.monotonic() + self._ss_config.terminal_drain_timeout_s
+        while True:
+            async with self._in_flight_lock:
+                pending = tuple(sorted(self._in_flight))
+            if not pending:
+                return
+            if self._ingestor_task is not None and self._ingestor_task.done():
+                if self._ingestor_task.cancelled():
+                    raise RuntimeError("ingestor cancelled during terminal drain")
+                exc = self._ingestor_task.exception()
+                if exc is not None:
+                    raise exc
+                raise RuntimeError("ingestor exited during terminal drain")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "terminal drain timed out with "
+                    f"{len(pending)} child(ren) pending: {list(pending[:10])}"
+                )
+            await asyncio.sleep(min(self._ss_config.loop_interval, remaining))
 
     async def _final_ingestion_sweep(self, *, deadline_seconds: float) -> None:
         """Drain DONE/DISCARDED out of ``_in_flight`` after the loops exit.

@@ -18,6 +18,9 @@ capabilities:
   read: false
   write: true
 
+outcome_sink:
+  _target_: gigaevo.memory.outcomes.NullMemoryOutcomeSink
+
 # Neutral point for baseline-adjusted card gain. Use-attributed gains are
 # child-parent deltas after subtracting the no-card baseline, so this value is
 # the no-card counterfactual origin, not a task-specific metric threshold.
@@ -39,6 +42,11 @@ evidence:
 eviction_safety:
   min_effective_events: ${memory.evidence.min_effective_events}
   skip_contextual_without_context: true
+
+evicted_evidence:
+  _target_: gigaevo.memory.prior_evidence.JsonlEvictedEvidence
+  path: ${checkpoint_dir}/evicted_evidence.jsonl
+  max_cards: 10000
 
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
@@ -84,4 +92,5 @@ writer:
     min_fitness_gap: 0.0
     store_code: false
   min_effective_events: ${memory.evidence.min_effective_events}
+  evicted_evidence: ${ref:memory.evicted_evidence}
   prompts_dir: ${prompts.dir}

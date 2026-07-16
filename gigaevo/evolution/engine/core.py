@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
 import time
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -28,8 +28,16 @@ from gigaevo.evolution.mutation.mutation_operator import (
     LLMMutationOperator,
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
+from gigaevo.exceptions import MemoryStorageError
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
+from gigaevo.memory.outcomes import (
+    MemoryAttemptLifecycleSink,
+    MemoryOutcomeSink,
+    record_memory_attempt_failure,
+    record_program_memory_outcome,
+)
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
+from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.utils.metrics_collector import start_metrics_collector
@@ -61,6 +69,8 @@ class EvolutionEngine:
         post_run_hook: PostRunHook | None = None,
         post_step_hook: Callable[[], Awaitable[None]] | None = None,
         selection_leases: InFlightSelectionRegistry | None = None,
+        memory_outcome_sink: MemoryOutcomeSink | None = None,
+        memory_metrics_context: MetricsContext | None = None,
     ):
         self.storage = storage
         self.strategy = strategy
@@ -85,6 +95,8 @@ class EvolutionEngine:
         self._post_step_hook = post_step_hook
         self._post_run_hook = post_run_hook or NullPostRunHook()
         self._selection_leases = selection_leases
+        self._memory_outcome_sink = memory_outcome_sink
+        self._memory_metrics_context = memory_metrics_context
 
         self._snapshot: EngineSnapshot = EngineSnapshot()
         # Serialises _write_snapshot so the version+Redis writes from
@@ -304,6 +316,18 @@ class EvolutionEngine:
 
         for prog in completed:
             try:
+                await self._record_memory_outcome(prog)
+            except Exception as exc:
+                logger.error(
+                    "[EvolutionEngine] durable memory outcome failed for {}: {} "
+                    "- aborting startup ingestion",
+                    prog.short_id,
+                    exc,
+                )
+                raise RuntimeError(
+                    f"startup causal outcome write failed for {prog.id}"
+                ) from exc
+            try:
                 if not self.config.program_acceptor.is_accepted(prog):
                     # rejected by basic checks
                     rej_valid += 1
@@ -418,6 +442,88 @@ class EvolutionEngine:
                 exc,
             )
 
+    async def _record_memory_outcome(self, prog: Program) -> None:
+        """Record assignment Y before archive acceptance can mutate child state."""
+        await record_program_memory_outcome(
+            prog,
+            storage=self.storage,
+            metrics_context=self._memory_metrics_context,
+            outcome_sink=self._memory_outcome_sink,
+        )
+
+    def _record_memory_attempt_failure(
+        self,
+        parents: list[Program],
+        *,
+        status: Literal["invalid", "censored"],
+        failure_stage: str,
+        completion_ordinal: int,
+        attempt_id: str | None = None,
+    ) -> int | None:
+        lifecycle_attempt = bool(
+            attempt_id
+            and isinstance(self._memory_outcome_sink, MemoryAttemptLifecycleSink)
+        )
+        closed = record_memory_attempt_failure(
+            parents,
+            outcome_sink=self._memory_outcome_sink,
+            metrics_context=self._memory_metrics_context,
+            status=status,
+            failure_stage=failure_stage,
+            completion_ordinal=completion_ordinal,
+            attempt_id=attempt_id,
+        )
+        return closed if lifecycle_attempt else None
+
+    def _link_memory_attempt_child(
+        self, *, attempt_id: str | None, child_id: str, completion_ordinal: int
+    ) -> None:
+        sink = self._memory_outcome_sink
+        if attempt_id and isinstance(sink, MemoryAttemptLifecycleSink):
+            linked = sink.link_attempt_child(
+                attempt_id=attempt_id,
+                child_id=child_id,
+                completion_ordinal=completion_ordinal,
+            )
+            if not linked:
+                raise MemoryStorageError(
+                    f"memory attempt {attempt_id!r} has no durable decision"
+                )
+
+    def _record_missing_memory_child(self, child_id: str) -> None:
+        sink = self._memory_outcome_sink
+        if isinstance(sink, MemoryAttemptLifecycleSink):
+            sink.record_missing_child(child_id, failure_stage="child_missing")
+
+    async def _reconcile_memory_attempts(self) -> None:
+        """Close prior-process attempt rows that cannot produce an outcome."""
+
+        sink = self._memory_outcome_sink
+        if not isinstance(sink, MemoryAttemptLifecycleSink):
+            return
+        pending_child_ids = sink.pending_child_ids()
+        if pending_child_ids:
+            programs = await self.storage.mget(
+                list(pending_child_ids), exclude=EXCLUDE_STAGE_RESULTS
+            )
+            by_id = {program.id: program for program in programs if program is not None}
+            for child_id in pending_child_ids:
+                program = by_id.get(child_id)
+                if program is None:
+                    sink.record_missing_child(
+                        child_id, failure_stage="startup_child_missing"
+                    )
+                elif program.state == ProgramState.DISCARDED:
+                    await self._record_memory_outcome(program)
+        closed = sink.reconcile_unlinked_attempts(
+            completion_ordinal=self.metrics.iteration
+        )
+        if closed:
+            logger.warning(
+                "[MemoryV2] reconciled {} unlinked decision(s) from a prior process",
+                closed,
+            )
+
     async def _write_snapshot(self, **updates: Any) -> None:
         """Merge fields into the snapshot, bump version, persist to Redis,
         and mirror into the process-wide sync cache.
@@ -494,3 +600,12 @@ class EvolutionEngine:
 
     def _reached_mutant_cap(self) -> bool:
         return self.stopper.should_stop(self.build_stop_context()).stop
+
+    def _can_dispatch_mutant(self, *, reserved: int) -> bool:
+        """Authorize one dispatch while accounting for concurrent reservations."""
+
+        context = self.build_stop_context()
+        if self.stopper.should_stop(context).stop:
+            return False
+        remaining = self.stopper.remaining_dispatches(context)
+        return remaining is None or reserved < remaining

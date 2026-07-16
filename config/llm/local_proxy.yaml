@@ -1,0 +1,9 @@
+# @package _global_
+
+# OpenAI-compatible model served by the shared local LiteLLM/vLLM proxy.
+# Override model_name for the model alias exposed by that proxy.
+defaults:
+  - single
+  - _self_
+
+llm_base_url: ${oc.env:LOCAL_LLM_PROXY}

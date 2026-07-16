@@ -6,6 +6,7 @@
 # parent prior.
 _target_: gigaevo.memory.read.prior.EmpiricalBayesMemoryPrior
 store: ${ref:memory.store}
+evicted_evidence: ${ref:memory.evicted_evidence}
 context_model: ${ref:memory.context_model}
 # Cohort refinement ladder below the implicit global top level; each entry is a
 # '+'-joined subset of {kind, category, context, task}. Global levels precede

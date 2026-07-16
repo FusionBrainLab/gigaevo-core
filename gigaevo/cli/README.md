@@ -236,6 +236,38 @@ Discover experiment prefix(es) in a Redis DB via `:__instance_lock__`.
 
 **Output**: Experiment name(s) in that DB.
 
+### Memory Commands
+
+#### Safety calibration (`gigaevo memory calibrate-safety`)
+
+Replay one or more memory-v2 causal ledgers without modifying them. Inputs may
+be ledger files, checkpoint directories, or run directories. Incompatible
+task/model/mutation-operator environments are reported separately.
+
+```bash
+gigaevo -f json memory calibrate-safety \
+  outputs/run-a outputs/run-b \
+  --output safety_calibration.json
+```
+
+The command scores outcome-independent safety-prior candidates prequentially,
+replays the chance-constrained admission gate over every frozen candidate set,
+and reports calibration, gate retention, and randomized-overlap cost. When an
+environment has enough observations it emits all five corresponding Hydra
+overrides. The base experiment uses memory v2 with 70% delivery / 30% matched
+control; balanced validation runs should override both offer settings to 0.50.
+
+Useful options:
+
+- `--prior-probabilities`: candidate control invalidity rates.
+- `--baseline-sds`: candidate contextual baseline prior scales.
+- `--shared-effect-means`: outcome-independent delivery-effect prior means.
+- `--min-observations`: minimum closed proposals required for recommendations.
+- `--min-gate-retention`: minimum cold/new-card candidate retention.
+- `--offer-rates`: delivery rates included in the overlap-cost table.
+- `--mutation-operator`: typed fallback only for legacy ledgers lacking Hydra metadata.
+- `--output`: complete machine-readable JSON report.
+
 ### Infrastructure Commands
 
 **Purpose**: Control experiment execution (watchdog, checkpoints, DB flushing).

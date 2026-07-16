@@ -27,9 +27,11 @@ class _FakeDispatcherEngine:
         self._max = max_in_flight
         self._spawn_count = 0
         self._reached = False
+        self.config = type("C", (), {"max_consecutive_mutation_failures": 8})()
 
-    def _reached_mutant_cap(self) -> bool:
-        return self._reached
+    def _can_dispatch_mutant(self, *, reserved: int) -> bool:
+        del reserved
+        return not self._reached
 
     async def _select_parents_for_mutation(self):  # never called in these tests
         return []

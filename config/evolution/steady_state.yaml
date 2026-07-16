@@ -14,12 +14,14 @@ engine_config:
   parent_selector: ${parent_selector}
   stopper: ${stopper}
   max_in_flight: 8
+  coalesce_refresh: ${oc.select:memory.coalesce_refresh,true}
+  terminal_drain_timeout_s: ${dag_timeout}
 
 # Override engine target
 evolution_engine:
   _target_: gigaevo.evolution.engine.SteadyStateEvolutionEngine
   storage: ${ref:program_storage}
-  strategy: ${evolution_strategy}
+  strategy: ${ref:evolution_strategy}
   mutation_operator: ${mutation_operator}
   config: ${engine_config}
   writer: ${ref:writer}
@@ -28,3 +30,5 @@ evolution_engine:
   post_run_hook: ${ref:memory.write.post_run_hook}
   post_step_hook: ${post_step_hook}
   selection_leases: ${ref:selection_leases}
+  memory_outcome_sink: ${ref:memory.outcome_sink}
+  memory_metrics_context: ${metrics_context}

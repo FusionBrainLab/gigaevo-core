@@ -26,14 +26,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+    MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_OUTPUT_METADATA_KEY,
 )
 from gigaevo.memory.cards import (
     Card,
+    CardAssignmentSource,
     CardKind,
     CausalStrength,
     ContextualGain,
@@ -49,7 +52,10 @@ from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.crediting import EffectEstimator, PointEffectEstimator
 from gigaevo.programs.metrics.context import MetricsContext
-from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
+from gigaevo.programs.metrics.paired import (
+    PER_SAMPLE_SCORES_KEY,
+    PER_SAMPLE_SIGNATURE_KEY,
+)
 from gigaevo.programs.program import Program
 
 
@@ -104,6 +110,16 @@ def child_scores(prog: Program) -> tuple[float, ...] | None:
     return _score_vector(prog.get_metadata(PER_SAMPLE_SCORES_KEY))
 
 
+def base_score_signature(prog: Program) -> str:
+    raw = prog.get_metadata(MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY)
+    return raw if isinstance(raw, str) else ""
+
+
+def child_score_signature(prog: Program) -> str:
+    raw = prog.get_metadata(PER_SAMPLE_SIGNATURE_KEY)
+    return raw if isinstance(raw, str) else ""
+
+
 def _score_vector(raw: object) -> tuple[float, ...] | None:
     """Tolerant scalar-sequence coercion; None on anything else. Finiteness and
     coherence are the effect estimator's checks — this only shields extraction
@@ -119,6 +135,27 @@ def _score_vector(raw: object) -> tuple[float, ...] | None:
 def no_card_control(prog: Program) -> bool:
     """Whether this child was born from a randomized memory-withheld control."""
     return bool(prog.get_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY))
+
+
+def card_assignment_sources(prog: Program) -> dict[str, CardAssignmentSource]:
+    """Per-card parent contexts frozen at child birth; empty for legacy rows."""
+    raw = prog.get_metadata(MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    sources: dict[str, CardAssignmentSource] = {}
+    for raw_card_id, value in raw.items():
+        card_id = str(raw_card_id).strip()
+        if not card_id or not isinstance(value, dict):
+            continue
+        try:
+            sources[card_id] = CardAssignmentSource.model_validate(value)
+        except Exception:
+            logger.warning(
+                "[Memory][Stats] ignoring malformed card provenance for {} on {}",
+                card_id,
+                prog.short_id,
+            )
+    return sources
 
 
 def founding_gain_event(
@@ -210,6 +247,8 @@ class InjectionOutcome(BaseModel):
         description="This child's own per-sample score vector, read live at the "
         "write seam so it coheres with the live fitness; None when absent.",
     )
+    base_score_signature: str = ""
+    child_score_signature: str = ""
     created_at: datetime | None = Field(
         default=None,
         description="This child's creation time (UTC) — the decision-outcome "
@@ -224,6 +263,39 @@ class InjectionOutcome(BaseModel):
         description="True when selected cards were deliberately withheld by the "
         "randomized no-card control arm.",
     )
+    card_sources: dict[str, CardAssignmentSource] = Field(default_factory=dict)
+    card_base_fitness: dict[str, float | None] = Field(default_factory=dict)
+
+
+def _card_source_outcome(
+    outcome: InjectionOutcome, card_id: str, *, task_key: str
+) -> tuple[InjectionOutcome, DecisionContext, tuple[str, str]]:
+    source = outcome.card_sources.get(card_id)
+    if source is None:
+        context = DecisionContext(
+            task_key=task_key,
+            parent_metrics=dict(outcome.base_metrics),
+            parent_id=outcome.base_id,
+            timestamp=outcome.created_at,
+        )
+        return outcome, context, (outcome.base_id, "")
+    source_context = source.source_context
+    context = source_context.model_copy(
+        update={
+            "task_key": source_context.task_key or task_key,
+            "timestamp": outcome.created_at,
+        }
+    )
+    sourced = outcome.model_copy(
+        update={
+            "base_metrics": dict(source.parent_metrics),
+            "base_id": source.parent_id,
+            "base_fitness": outcome.card_base_fitness.get(card_id),
+            "base_scores": source.parent_scores,
+            "base_score_signature": source.parent_score_signature,
+        }
+    )
+    return sourced, context, (source.parent_id, source.decision_id)
 
 
 @runtime_checkable
@@ -304,70 +376,90 @@ def compute_contextual_gains(
     )
     has_baseline_evidence = bool(baseline.has_evidence)
     for p in programs:
-        if p.base_fitness is None or not p.base_selected_ids:
+        if not p.base_selected_ids:
             continue
         selected = clean_ids(p.base_selected_ids)
         used = selected & clean_ids(p.card_ids_used)
         unused = selected - used
         if not selected:
             continue
-        context = DecisionContext(
-            task_key=task_key,
-            parent_metrics=dict(p.base_metrics),
-            parent_id=p.base_id,
-            timestamp=p.created_at,
-        )
+        gain_cache: dict[tuple[str, str], ContextualGain] = {}
         if used and p.invalid:
-            gain_event = ContextualGain(
-                context=context,
-                gain=0.0,
-                invalid=True,
-                attribution=EvidenceAttribution(
-                    source=EvidenceSource.INVALID,
-                    causal_strength=CausalStrength.INVALID,
-                    source_child_id=p.id,
-                    used_card_count=len(used),
-                    credit_weight=1.0 / len(used),
-                ),
-            )
             for card_id in used:
+                sourced, context, source_key = _card_source_outcome(
+                    p, card_id, task_key=task_key
+                )
+                if sourced.base_fitness is None:
+                    continue
+                gain_event = gain_cache.get(source_key)
+                if gain_event is None:
+                    gain_event = ContextualGain(
+                        context=context,
+                        gain=0.0,
+                        invalid=True,
+                        attribution=EvidenceAttribution(
+                            source=EvidenceSource.INVALID,
+                            causal_strength=CausalStrength.INVALID,
+                            source_child_id=p.id,
+                            used_card_count=len(used),
+                            credit_weight=1.0 / len(used),
+                        ),
+                    )
+                    gain_cache[source_key] = gain_event
                 events.setdefault(card_id, []).append(gain_event)
         elif used and p.fitness is not None and has_baseline_evidence:
-            measured = estimator.estimate(p, higher_is_better=higher_is_better)
-            delta = measured.value - baseline.baseline_for(p)
-            gain_se = _combined_se(measured.se, baseline.baseline_se_for(p))
-            gain_event = ContextualGain(
-                context=context,
-                gain=delta,
-                gain_se=gain_se,
-                attribution=EvidenceAttribution(
-                    source=EvidenceSource.DIRECT,
-                    causal_strength=(
-                        CausalStrength.DIRECT_ISOLATED
-                        if len(used) == 1
-                        else CausalStrength.DIRECT_BUNDLED
-                    ),
-                    source_child_id=p.id,
-                    used_card_count=len(used),
-                    credit_weight=1.0 / len(used),
-                ),
-            )
             for card_id in used:
+                sourced, context, source_key = _card_source_outcome(
+                    p, card_id, task_key=task_key
+                )
+                if sourced.base_fitness is None:
+                    continue
+                gain_event = gain_cache.get(source_key)
+                if gain_event is None:
+                    measured = estimator.estimate(
+                        sourced, higher_is_better=higher_is_better
+                    )
+                    delta = measured.value - baseline.baseline_for(sourced)
+                    gain_se = _combined_se(
+                        measured.se, baseline.baseline_se_for(sourced)
+                    )
+                    gain_event = ContextualGain(
+                        context=context,
+                        gain=delta,
+                        gain_se=gain_se,
+                        attribution=EvidenceAttribution(
+                            source=EvidenceSource.DIRECT,
+                            causal_strength=(
+                                CausalStrength.DIRECT_ISOLATED
+                                if len(used) == 1
+                                else CausalStrength.DIRECT_BUNDLED
+                            ),
+                            source_child_id=p.id,
+                            used_card_count=len(used),
+                            credit_weight=1.0 / len(used),
+                        ),
+                    )
+                    gain_cache[source_key] = gain_event
                 events.setdefault(card_id, []).append(gain_event)
         if unused and (has_baseline_evidence or p.invalid):
-            unused_event = ContextualGain(
-                context=context,
-                gain=0.0,
-                unused=True,
-                attribution=EvidenceAttribution(
-                    source=EvidenceSource.UNUSED,
-                    causal_strength=CausalStrength.EXPOSURE,
-                    source_child_id=p.id,
-                    used_card_count=len(used),
-                    credit_weight=1.0 / len(selected),
-                ),
-            )
             for card_id in unused:
+                sourced, context, _ = _card_source_outcome(
+                    p, card_id, task_key=task_key
+                )
+                if sourced.base_fitness is None:
+                    continue
+                unused_event = ContextualGain(
+                    context=context,
+                    gain=0.0,
+                    unused=True,
+                    attribution=EvidenceAttribution(
+                        source=EvidenceSource.UNUSED,
+                        causal_strength=CausalStrength.EXPOSURE,
+                        source_child_id=p.id,
+                        used_card_count=len(used),
+                        credit_weight=1.0 / len(selected),
+                    ),
+                )
                 events.setdefault(card_id, []).append(unused_event)
     return events
 
@@ -491,6 +583,7 @@ def injection_outcomes_from_programs(
     rows = []
     for prog in programs:
         bm = base_metrics(prog)
+        sources = card_assignment_sources(prog)
         rows.append(
             InjectionOutcome(
                 id=prog.id,
@@ -502,9 +595,18 @@ def injection_outcomes_from_programs(
                 base_fitness=metrics_context.strict_fitness(bm, fitness_key),
                 base_scores=base_scores(prog),
                 child_scores=child_scores(prog),
+                base_score_signature=base_score_signature(prog),
+                child_score_signature=child_score_signature(prog),
                 created_at=prog.created_at,
                 card_ids_used=tuple(card_ids_used(prog)),
                 no_card_control=no_card_control(prog),
+                card_sources=sources,
+                card_base_fitness={
+                    card_id: metrics_context.strict_fitness(
+                        source.parent_metrics, fitness_key
+                    )
+                    for card_id, source in sources.items()
+                },
             )
         )
     return rows

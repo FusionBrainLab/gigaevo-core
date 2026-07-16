@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 from gigaevo.evolution.strategies.base import EvolutionStrategy
 from gigaevo.evolution.strategies.map_elites import IslandConfig
 from gigaevo.evolution.strategies.models import (
+    BehaviorModelTransform,
     BehaviorSpace,
     DynamicBehaviorSpace,
     LinearBinning,
@@ -45,6 +46,7 @@ def build_behavior_space(
     bounds: list[tuple[float, float]],
     resolutions: list[int],
     binning_types: list[str],
+    model_transforms: list[str] | None = None,
     dynamic: bool = True,
     expansion_buffer_ratio: float = 0.1,
 ) -> Any:
@@ -56,6 +58,7 @@ def build_behavior_space(
                 For dynamic spaces, these act as hard limits (clamping bounds).
         resolutions: List of resolution integers (e.g., [150, 2])
         binning_types: List of binning type strings (e.g., ['linear', 'linear'])
+        model_transforms: Stable statistical transforms for the raw behavior values.
         dynamic: Whether to return a DynamicBehaviorSpace (default: True)
         expansion_buffer_ratio: Buffer ratio for dynamic space (default: 0.1)
 
@@ -72,10 +75,13 @@ def build_behavior_space(
         )
     """
 
+    if model_transforms is None:
+        model_transforms = ["linear"] * len(keys)
     if (
         len(keys) != len(bounds)
         or len(keys) != len(resolutions)
         or len(keys) != len(binning_types)
+        or len(keys) != len(model_transforms)
     ):
         raise ValueError("All parameter lists must have the same length")
 
@@ -84,15 +90,26 @@ def build_behavior_space(
         min_val, max_val = bounds[i]
         num_bins = resolutions[i]
         b_type = binning_types[i]
+        model_transform = BehaviorModelTransform(
+            lower_bound=float(min_val),
+            upper_bound=float(max_val),
+            transform=model_transforms[i],
+        )
 
         if b_type == "linear":
             strategy = LinearBinning(
-                min_val=float(min_val), max_val=float(max_val), num_bins=num_bins
+                min_val=float(min_val),
+                max_val=float(max_val),
+                num_bins=num_bins,
+                model_transform=model_transform,
             )
         else:
             # Fallback to linear
             strategy = LinearBinning(
-                min_val=float(min_val), max_val=float(max_val), num_bins=num_bins
+                min_val=float(min_val),
+                max_val=float(max_val),
+                num_bins=num_bins,
+                model_transform=model_transform,
             )
 
         bins[key] = strategy

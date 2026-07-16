@@ -1,0 +1,7 @@
+# @package memory.auction
+_target_: gigaevo.memory.read.auction.PendingDiscountedBootstrapAuctioneer
+baseline_prior: ${memory.baseline_prior}
+metrics_context: ${ref:problem_context::metrics_context}
+ev_reserve_mode: risk
+ev_risk_alpha: 0.2
+pending_power: 0.0

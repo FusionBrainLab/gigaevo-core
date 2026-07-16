@@ -19,6 +19,9 @@ echo "OPENAI_API_KEY=sk-or-v1-your-openrouter-or-proxy-key" > .env
 
 # Optional, needed by default memory/llm=gemini when memory writes are enabled.
 echo "OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key" >> .env
+
+# Shared endpoint for locally served models and chain evaluators.
+echo "LOCAL_LLM_PROXY=http://127.0.0.1:4000/v1" >> .env
 ```
 
 GigaEvo ships extras for opt-in stacks. If you intend to run chain problems
@@ -40,15 +43,13 @@ See the [README install table](../README.md#1-install) for the full mapping.
 python run.py problem.name=heilbron max_mutants=5
 ```
 
-For a local LiteLLM/vLLM-compatible proxy:
+For a local LiteLLM/vLLM-compatible proxy, set its URL once in `.env` as above:
 
 ```bash
-export OPENAI_API_KEY=sk-local
 export NO_PROXY=127.0.0.1,localhost
 
 python run.py problem.name=heilbron max_mutants=5 \
-    llm=single \
-    llm_base_url=http://127.0.0.1:4000/v1 \
+    llm=local_proxy \
     model_name=Qwen/Qwen3-235B-A22B-Thinking-2507
 ```
 

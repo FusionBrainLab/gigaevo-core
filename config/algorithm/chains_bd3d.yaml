@@ -33,6 +33,12 @@ behavior_space:
     - ${binning_type}
     - ${binning_type}
     - ${binning_type}
+  # Stable statistical coordinates owned by the behavior dimensions. Dynamic
+  # archive min/max updates do not mutate these transforms.
+  model_transforms:
+    - linear
+    - log1p
+    - log1p
   dynamic: true
   expansion_buffer_ratio: 0.1
 

@@ -163,9 +163,7 @@ class TestSlotReleaseOnCancelInAcquireWindow:
             await block.wait()
             return [parent]
 
-        engine._parent_refresher.refresh_with_ticket = AsyncMock(
-            side_effect=hang_refresh
-        )
+        engine._parent_refresher.refresh_if_stale = AsyncMock(side_effect=hang_refresh)
 
         task = asyncio.create_task(run_one_mutant(engine, task_id=1))
         for _ in range(5):
@@ -994,7 +992,7 @@ class TestNoRefreshWhileChildInFlight:
             return programs
 
         engine.storage.mget.side_effect = _mget
-        engine.storage.batch_transition_by_ids = AsyncMock()
+        engine.storage.batch_transition_by_ids = AsyncMock(return_value=1)
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = False
         # Acceptor rejects → ingestor moves child to DISCARDED quickly.
@@ -1049,7 +1047,7 @@ class TestNoRefreshWhileChildInFlight:
             return [parent for _ in ids]
 
         engine.storage.mget.side_effect = _mget
-        engine.storage.batch_transition_by_ids = AsyncMock()
+        engine.storage.batch_transition_by_ids = AsyncMock(return_value=1)
 
         # Acquire ticket via the public path; then drop it (simulating
         # mutant_task's failure-path `finally: ticket.release()`).
@@ -1098,7 +1096,7 @@ class TestNoRefreshWhileChildInFlight:
             return out
 
         engine.storage.mget.side_effect = _mget
-        engine.storage.batch_transition_by_ids = AsyncMock()
+        engine.storage.batch_transition_by_ids = AsyncMock(return_value=1)
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = False  # reject!
         engine.storage.save_run_state = AsyncMock()
@@ -1151,7 +1149,7 @@ class TestNoRefreshWhileChildInFlight:
             return []
 
         engine.storage.mget.side_effect = _mget
-        engine.storage.batch_transition_by_ids = AsyncMock()
+        engine.storage.batch_transition_by_ids = AsyncMock(return_value=1)
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = False
         engine.storage.save_run_state = AsyncMock()

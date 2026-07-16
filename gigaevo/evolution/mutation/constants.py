@@ -9,6 +9,29 @@ from typing import Literal
 MUTATION_CONTEXT_METADATA_KEY = "mutation_context"
 MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY = "memory_selected_idea_ids"
 MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY = "memory_no_card_control"
+MUTATION_MEMORY_DECISION_ID_METADATA_KEY = "memory_assignment_decision_id"
+MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY = "memory_assignment"
+
+#: Durable at-most-once claim for the production MEMORY_OUTCOME row. The first
+#: terminal evaluation owns Y; later evaluations are classified as duplicate or
+#: MEMORY_OUTCOME_UPDATE without creating a second terminal for the decision.
+MUTATION_MEMORY_OUTCOME_METADATA_KEY = "memory_outcome_terminal"
+
+#: Typed failure classification written atomically with a child transition to
+#: DISCARDED. Outcome attribution parses this record instead of inferring causal
+#: eligibility from the generic program state.
+MUTATION_TERMINAL_FAILURE_METADATA_KEY = "mutation_terminal_failure"
+
+#: Child-birth snapshot of every parent's durable read assignment, keyed by
+#: parent id. This is authoritative for crossover attribution.
+MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY = "memory_parent_assignments"
+
+#: Child-birth map from each delivered card id to its source parent decision and
+#: context. Original ids remain keys so later absorbed-id aliasing stays resolvable.
+MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY = "memory_card_provenance"
+
+#: Mutation-level audit assignment for the full delivered slate across parents.
+MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY = "memory_mutation_assignment"
 
 #: Frozen onto a child at birth: sorted union of the parents' prompt-time
 #: selected card ids. Posterior attribution reads this stamp — the parents'
@@ -58,6 +81,9 @@ MUTATION_MEMORY_BASE_ID_METADATA_KEY = "memory_base_id"
 #: paired crediting must read the child's stamp. Absent when the eval is
 #: scalar-only; crediting degrades to the exact point delta.
 MUTATION_MEMORY_BASE_SCORES_METADATA_KEY = "memory_base_scores"
+
+#: Ordered evaluation-cohort digest aligned with ``memory_base_scores``.
+MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY = "memory_base_score_signature"
 
 #: Frozen onto a child at birth: per parent, the cache id of every parent stage
 #: output that produced the child (outputs live content-addressed in the storage

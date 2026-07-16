@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
@@ -56,6 +56,107 @@ class DecisionContext(BaseModel):
     timestamp: datetime | None = Field(
         default=None, description="Crediting child's creation time (UTC)."
     )
+    search_phase: str = Field(
+        default="", description="Decision-time evolution iteration marker."
+    )
+    parent_quality_quantile: float | None = Field(
+        default=None,
+        description="Base parent's fitness quantile in the current pool/archive.",
+    )
+    local_opportunity_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Decision-time opportunity count for the local behavior cell.",
+    )
+    local_visit_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Decision-time visit count for the local behavior cell.",
+    )
+
+
+class AssignmentRecord(BaseModel):
+    """Durable record of one memory read-policy assignment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=2)
+    decision_id: str
+    policy_version: str
+    task_key: str
+    ordered_eligible_ids: tuple[str, ...] = Field(default=())
+    assigned_ids: tuple[str, ...] = Field(default=())
+    delivered_ids: tuple[str, ...] = Field(default=())
+    arm: Literal["injected", "none"]
+    probe_arm: Literal["none", "treated", "control"] = Field(default="none")
+    randomized: bool = Field(default=False)
+    propensity_kind: Literal["observational", "probe_bernoulli", "exact"] = Field(
+        default="observational"
+    )
+    propensities: dict[str, float] = Field(default_factory=dict)
+    ope_eligible: bool = Field(
+        default=False,
+        description="True only when this record belongs to an explicit randomized "
+        "probe arm with a known assignment propensity.",
+    )
+    q_hat_control: float | None = Field(
+        default=None,
+        description="Predicted terminal child-minus-base delta for the complete "
+        "control slate.",
+    )
+    q_hat_treated: float | None = Field(
+        default=None,
+        description="Predicted terminal child-minus-base delta for the complete "
+        "treated slate.",
+    )
+    predicted_help: dict[str, float] = Field(
+        default_factory=dict,
+        description="Decision-time posterior-mean P(help), keyed by card id.",
+    )
+    predicted_gain: dict[str, float] = Field(
+        default_factory=dict,
+        description="Untaxed decision-time outcome EV, keyed by card id: posterior-mean "
+        "P(help) x magnitude, except known bootstrap support whose magnitude is already "
+        "the raw-EV mean.",
+    )
+    predicted_no_card_gain: dict[str, float] = Field(
+        default_factory=dict,
+        description="Decision-time counterfactual gain without injection, keyed by card id.",
+    )
+    pending_by_card: dict[str, int] = Field(default_factory=dict)
+    pending_discount_by_card: dict[str, float] = Field(default_factory=dict)
+    context: DecisionContext
+    bd_cell: tuple[int, ...] | None = Field(default=None)
+    timestamp: datetime | None = Field(default=None)
+
+
+class CardAssignmentSource(BaseModel):
+    """Frozen source decision/context for one card delivered to a crossover."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_card_id: str
+    parent_id: str
+    decision_id: str = ""
+    source_context: DecisionContext
+    bd_cell: tuple[int, ...] | None = None
+    parent_metrics: dict[str, float] = Field(default_factory=dict)
+    parent_scores: tuple[float, ...] | None = None
+    parent_score_signature: str = ""
+
+
+class MutationAssignmentRecord(BaseModel):
+    """Full delivered mutation slate, separate from parent read assignments."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = 1
+    mutation_id: str
+    parent_ids: tuple[str, ...] = ()
+    delivered_ids: tuple[str, ...] = ()
+    source_decision_ids: tuple[str, ...] = ()
+    card_sources: dict[str, CardAssignmentSource] = Field(default_factory=dict)
+    ope_eligible: bool = False
 
 
 class EvidenceAttribution(BaseModel):

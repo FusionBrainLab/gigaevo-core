@@ -35,11 +35,12 @@ See ``docs/superpowers/specs/2026-05-13-mutation-throughput-two-sema-design.md``
 from __future__ import annotations
 
 import asyncio
+import inspect
 from uuid import uuid4
 
 from loguru import logger
 
-from gigaevo.evolution.engine.mutation import generate_one_mutation
+from gigaevo.evolution.engine.mutation import MutationFailure, generate_one_mutation
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
@@ -52,7 +53,14 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
     buffer_held = False
     ticket: ParentRefreshTicket | None = None
     selection_lease = None
+    attempt_id: str | None = None
     new_id: str | None = None
+    mutation_failure: MutationFailure | None = None
+
+    def capture_mutation_failure(failure: MutationFailure) -> None:
+        nonlocal mutation_failure
+        mutation_failure = failure
+
     try:
         parents = await engine._select_parents_for_mutation()
         if not parents:
@@ -71,13 +79,39 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
 
         if engine._ss_config.coalesce_refresh:
             try:
-                result = await engine._parent_refresher.refresh_if_stale(parents)
+                refresh_scope = (
+                    engine._selection_leases.activate_attempt(
+                        attempt_id, (parent.id for parent in parents)
+                    )
+                    if engine._selection_leases is not None and attempt_id is not None
+                    else None
+                )
+                refresh_method = engine._parent_refresher.refresh_if_stale
+                refresh_kwargs = (
+                    {"refresh_scope": refresh_scope}
+                    if "refresh_scope" in inspect.signature(refresh_method).parameters
+                    else {}
+                )
+                result = await refresh_method(parents, **refresh_kwargs)
             except (ValueError, TimeoutError) as exc:
                 logger.warning(
                     "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",
                     task_id,
                     exc,
                 )
+                closed = engine._record_memory_attempt_failure(
+                    parents,
+                    status="invalid",
+                    failure_stage=(
+                        "parent_refresh_timeout"
+                        if isinstance(exc, TimeoutError)
+                        else "parent_refresh"
+                    ),
+                    completion_ordinal=engine.metrics.iteration,
+                    attempt_id=attempt_id,
+                )
+                if closed == 0:
+                    raise
                 return None
             refreshed = result.refreshed
             engine.metrics.submitted_for_refresh += result.stale_count
@@ -100,13 +134,39 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                         )
         else:
             try:
-                ticket = await engine._parent_refresher.refresh_with_ticket(parents)
+                refresh_scope = (
+                    engine._selection_leases.activate_attempt(
+                        attempt_id, (parent.id for parent in parents)
+                    )
+                    if engine._selection_leases is not None and attempt_id is not None
+                    else None
+                )
+                refresh_method = engine._parent_refresher.refresh_with_ticket
+                refresh_kwargs = (
+                    {"refresh_scope": refresh_scope}
+                    if "refresh_scope" in inspect.signature(refresh_method).parameters
+                    else {}
+                )
+                ticket = await refresh_method(parents, **refresh_kwargs)
             except (ValueError, TimeoutError) as exc:
                 logger.warning(
                     "[mutant_task:{}] Parent refresh failed: {} — aborting mutant",
                     task_id,
                     exc,
                 )
+                closed = engine._record_memory_attempt_failure(
+                    parents,
+                    status="invalid",
+                    failure_stage=(
+                        "parent_refresh_timeout"
+                        if isinstance(exc, TimeoutError)
+                        else "parent_refresh"
+                    ),
+                    completion_ordinal=engine.metrics.iteration,
+                    attempt_id=attempt_id,
+                )
+                if closed == 0:
+                    raise
                 return None
             refreshed = ticket.refreshed
             if refreshed:
@@ -122,49 +182,104 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
 
         engine._llm_active += 1
         try:
-            new_id = await generate_one_mutation(
-                parents=refreshed,
-                mutator=engine.mutation_operator,
-                storage=engine.storage,
-                state_manager=engine.state,
-                iteration=my_iteration,
-                task_id=task_id,
-                selection_lease=selection_lease,
-            )
+            try:
+                new_id = await generate_one_mutation(
+                    parents=refreshed,
+                    mutator=engine.mutation_operator,
+                    storage=engine.storage,
+                    state_manager=engine.state,
+                    iteration=my_iteration,
+                    task_id=task_id,
+                    selection_lease=selection_lease,
+                    failure_observer=capture_mutation_failure,
+                    child_observer=lambda child_id: engine._link_memory_attempt_child(
+                        attempt_id=attempt_id,
+                        child_id=child_id,
+                        completion_ordinal=my_iteration,
+                    ),
+                )
+            except asyncio.CancelledError:
+                failure = mutation_failure or MutationFailure(
+                    status="censored", stage="mutation_cancelled"
+                )
+                closed = engine._record_memory_attempt_failure(
+                    refreshed,
+                    status=failure.status,
+                    failure_stage=failure.stage,
+                    completion_ordinal=my_iteration,
+                    attempt_id=attempt_id,
+                )
+                if closed == 0:
+                    raise RuntimeError(
+                        f"memory attempt {attempt_id!r} has no durable decision"
+                    )
+                raise
         finally:
             engine._llm_active -= 1
 
         if new_id is None:
+            failure = mutation_failure or MutationFailure(
+                status="censored", stage="mutation_unknown"
+            )
+            closed = engine._record_memory_attempt_failure(
+                refreshed,
+                status=failure.status,
+                failure_stage=failure.stage,
+                completion_ordinal=my_iteration,
+                attempt_id=attempt_id,
+            )
+            if closed == 0:
+                raise RuntimeError(
+                    f"memory attempt {attempt_id!r} has no durable decision"
+                )
             return None
 
-        # Buffer backpressure: block here when the DAG cannot keep up. The
-        # producer slot is still held during this wait — that is the design
-        # invariant. The producer pool's job is to keep N LLM calls (or
-        # ready-result-held producers) alive; the buffer pool gates
-        # registration in _in_flight. See spec § Architecture.
-        await engine._buffer_sema.acquire()
-        buffer_held = True
-
-        # Transfer both the buffer slot AND the parent-refresh ticket
-        # atomically under _in_flight_lock so the ingestor can later pair
-        # them by mutant id. Holding _in_flight_lock here is cheap — the
-        # critical section is two dict/set ops with no awaits.
-        async with engine._in_flight_lock:
-            engine._in_flight.add(new_id)
-            if ticket is not None:
-                engine._inflight_tickets[new_id] = ticket
-        slot_transferred = True
-        # Ticket ownership has transferred to the ingestor; null it locally
-        # so the `finally` block does not double-release the same locks.
-        ticket = None
-        engine.metrics.mutations_created += 1
-        # Persist both counters: total_mutants drives the stopper across
-        # resume; next_iteration is the next ordinal to hand out so the
-        # x-axis stays unique even after a crash.
-        await engine._write_snapshot(
-            total_mutants=engine.metrics.mutations_created,
-            next_iteration=engine.metrics.iteration,
+        engine._link_memory_attempt_child(
+            attempt_id=attempt_id,
+            child_id=new_id,
+            completion_ordinal=my_iteration,
         )
+
+        async def handoff_persisted_child() -> None:
+            """Finish the durable child-to-ingestor handoff despite cancellation."""
+
+            nonlocal buffer_held, slot_transferred, ticket
+            await engine._buffer_sema.acquire()
+            buffer_held = True
+            try:
+                # The slot and parent ticket move together under one lock.
+                async with engine._in_flight_lock:
+                    engine._in_flight.add(new_id)
+                    if ticket is not None:
+                        engine._inflight_tickets[new_id] = ticket
+                slot_transferred = True
+                ticket = None
+                engine.metrics.mutations_created += 1
+                await engine._write_snapshot(
+                    total_mutants=engine.metrics.mutations_created,
+                    next_iteration=engine.metrics.iteration,
+                )
+            except BaseException:
+                if not slot_transferred:
+                    engine._buffer_sema.release()
+                    buffer_held = False
+                raise
+
+        # After persistence, cancellation is deferred until the child is visible
+        # to the ingestor. The dispatcher waits its producer tasks while the
+        # ingestor is still alive, so buffer capacity can continue to drain.
+        handoff_task = asyncio.create_task(
+            handoff_persisted_child(), name=f"mutant-handoff-{task_id}"
+        )
+        cancellation: asyncio.CancelledError | None = None
+        while not handoff_task.done():
+            try:
+                await asyncio.shield(handoff_task)
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+        await handoff_task
+        if cancellation is not None:
+            raise cancellation
         return new_id
 
     finally:

@@ -10,5 +10,7 @@ capabilities:
 
 provider:
   _target_: gigaevo.memory.provider.NullMemoryProvider
+outcome_sink:
+  _target_: gigaevo.memory.outcomes.NullMemoryOutcomeSink
 writer:
   _target_: gigaevo.evolution.engine.hooks.NullPostRunHook

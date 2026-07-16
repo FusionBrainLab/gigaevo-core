@@ -17,3 +17,5 @@ defaults:
   - /runner: default
   - /loader: directory
   - /logging: tensorboard
+  # This preset is multi-parent and therefore outside memory-v2's causal scope.
+  - /memory: none

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import math
@@ -28,6 +29,10 @@ def _card_ids(card_ids: Iterable[str]) -> set[str]:
     return {card_id.strip() for card_id in card_ids if card_id.strip()}
 
 
+def _selection_token(counts: dict[str, int]) -> str:
+    return json.dumps(sorted(counts.items()), ensure_ascii=False, separators=(",", ":"))
+
+
 def _read_pid_start(pid: int) -> int | None:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
@@ -42,6 +47,18 @@ def _read_pid_start(pid: int) -> int | None:
     except (IndexError, ValueError):
         return None
     return pid_start if pid_start >= 0 else None
+
+
+@dataclass(frozen=True)
+class PendingSelectionSnapshot:
+    counts: dict[str, int]
+    version: str
+
+
+@dataclass(frozen=True)
+class SelectionReservation:
+    committed: bool
+    card_ids: tuple[str, ...] = ()
 
 
 class SelectionLease:
@@ -75,6 +92,8 @@ class InFlightSelectionRegistry:
         self._child_cards: dict[str, set[str]] = {}
         self._card_owner_count: dict[str, int] = {}
         self._card_lookup: Callable[[str], Card | None] | None = None
+        self._active_attempt_by_parent: dict[str, str] = {}
+        self._revision = 0
 
     @contextmanager
     def eviction_guard(self):
@@ -86,6 +105,61 @@ class InFlightSelectionRegistry:
         """Register the store used for guarded coalesced-fresh revalidation."""
         with self._lock:
             self._card_lookup = store.get
+
+    @contextmanager
+    def activate_attempt(self, attempt_id: str, parent_ids: Iterable[str]):
+        normalized = {
+            parent_id.strip() for parent_id in parent_ids if parent_id.strip()
+        }
+        with self._lock:
+            if attempt_id not in self._attempt_cards:
+                raise MemoryStorageError(f"unknown selection attempt {attempt_id!r}")
+            missing = normalized - self._attempt_parents.get(attempt_id, set())
+            if missing:
+                raise MemoryStorageError(
+                    f"selection attempt {attempt_id!r} does not own parents "
+                    f"{sorted(missing)}"
+                )
+            conflicts = {
+                parent_id: active
+                for parent_id in normalized
+                if (active := self._active_attempt_by_parent.get(parent_id))
+                not in (None, attempt_id)
+            }
+            if conflicts:
+                raise MemoryStorageError(
+                    f"selection attempt activation conflicts: {conflicts}"
+                )
+            for parent_id in normalized:
+                self._active_attempt_by_parent[parent_id] = attempt_id
+        try:
+            yield
+        finally:
+            with self._lock:
+                for parent_id in normalized:
+                    if self._active_attempt_by_parent.get(parent_id) == attempt_id:
+                        self._active_attempt_by_parent.pop(parent_id, None)
+
+    def attempt_for_parent(self, parent_id: str) -> str | None:
+        parent_id = parent_id.strip()
+        with self._lock:
+            active = self._active_attempt_by_parent.get(parent_id)
+            if active is not None:
+                return active
+            attempts = self._parent_attempts.get(parent_id, set())
+            if len(attempts) == 1:
+                return next(iter(attempts))
+            return None
+
+    def active_attempt_for_parent(self, parent_id: str) -> str | None:
+        """Return only an attempt currently scoped around a parent refresh."""
+
+        with self._lock:
+            return self._active_attempt_by_parent.get(parent_id.strip())
+
+    def attempts_for_parent(self, parent_id: str) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self._parent_attempts.get(parent_id.strip(), ())))
 
     def open_attempt(self, attempt_id: str, parent_id: str) -> SelectionLease:
         attempt_id = attempt_id.strip()
@@ -158,8 +232,42 @@ class InFlightSelectionRegistry:
 
     def pending_counts(self) -> dict[str, int]:
         """Snapshot uncredited in-flight exposure counts by card id."""
+        return self.selection_snapshot().counts
+
+    def selection_snapshot(self) -> PendingSelectionSnapshot:
         with self._lock:
-            return dict(self._card_owner_count)
+            return PendingSelectionSnapshot(
+                counts=dict(self._card_owner_count),
+                version=_selection_token(self._card_owner_count),
+            )
+
+    def reserve_selection(
+        self,
+        attempt_id: str,
+        card_ids: Iterable[str],
+        *,
+        expected_version: str | None,
+        card_lookup: Callable[[str], Card | None],
+    ) -> SelectionReservation:
+        ordered = tuple(dict.fromkeys(cid.strip() for cid in card_ids if cid.strip()))
+        with self._lock:
+            if (
+                expected_version is not None
+                and _selection_token(self._card_owner_count) != expected_version
+            ):
+                return SelectionReservation(committed=False)
+            if attempt_id not in self._attempt_cards:
+                raise MemoryStorageError(f"unknown selection attempt {attempt_id!r}")
+            attached = self._attach_locked(attempt_id, set(ordered))
+            try:
+                kept = tuple(cid for cid in ordered if card_lookup(cid) is not None)
+            except BaseException:
+                self._rollback_attach_locked(attempt_id, attached)
+                raise
+            vanished = attached - set(kept)
+            if vanished:
+                self._rollback_attach_locked(attempt_id, vanished)
+            return SelectionReservation(committed=True, card_ids=kept)
 
     def is_leased(self, card_id: str) -> bool:
         with self._lock:
@@ -196,6 +304,7 @@ class InFlightSelectionRegistry:
 
     def _increment_locked(self, card_id: str) -> None:
         self._card_owner_count[card_id] = self._card_owner_count.get(card_id, 0) + 1
+        self._revision += 1
 
     def _decrement_locked(self, card_id: str) -> None:
         remaining = self._card_owner_count[card_id] - 1
@@ -203,6 +312,7 @@ class InFlightSelectionRegistry:
             self._card_owner_count[card_id] = remaining
         else:
             self._card_owner_count.pop(card_id)
+        self._revision += 1
 
 
 class SharedSelectionRegistry(InFlightSelectionRegistry):
@@ -248,13 +358,23 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
         ordered = tuple(card_ids)
         normalized = _card_ids(ordered)
         with self._lock:
-            if self._card_lookup is None:
-                self._publish_acquisition_locked({})
-                return tuple(cid for cid in ordered if cid.strip() in normalized)
-            existing = {cid for cid in normalized if self._card_lookup(cid) is not None}
-            # WHY: a cross-process delete can still win between this check and sync.
-            attached = self._attach_locked(attempt_id, existing)
+            attached = self._attach_locked(attempt_id, normalized)
             self._publish_acquisition_locked({attempt_id: attached})
+            if self._card_lookup is None:
+                return tuple(cid for cid in ordered if cid.strip() in normalized)
+            try:
+                existing = {
+                    cid for cid in normalized if self._card_lookup(cid) is not None
+                }
+            except BaseException:
+                self._rollback_attach_locked(attempt_id, attached)
+                self._sync_best_effort_locked()
+                raise
+            vanished = normalized - existing
+            if vanished:
+                owned_vanished = vanished & self._attempt_cards.get(attempt_id, set())
+                self._rollback_attach_locked(attempt_id, owned_vanished)
+                self._sync_best_effort_locked()
         return tuple(cid for cid in ordered if cid.strip() in existing)
 
     def transfer_to_child(
@@ -312,6 +432,71 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
                 return True
             return own_lease or card_id in foreign_ids
 
+    def selection_snapshot(self) -> PendingSelectionSnapshot:
+        with self._lock:
+            try:
+                with CardBankFileLock(self._lock_path, exclusive=False):
+                    owners = self._live_owners_unlocked(datetime.now(UTC))
+            except Exception as exc:
+                self._warn_read_failure(exc)
+                raise MemoryStorageError(
+                    f"failed to snapshot selection lease sidecar at {self._path}"
+                ) from exc
+            counts = self._pending_counts_locked(owners)
+            return PendingSelectionSnapshot(
+                counts=counts, version=self._selection_token_locked(owners)
+            )
+
+    def reserve_selection(
+        self,
+        attempt_id: str,
+        card_ids: Iterable[str],
+        *,
+        expected_version: str | None,
+        card_lookup: Callable[[str], Card | None],
+    ) -> SelectionReservation:
+        ordered = tuple(dict.fromkeys(cid.strip() for cid in card_ids if cid.strip()))
+        with self._lock:
+            if attempt_id not in self._attempt_cards:
+                raise MemoryStorageError(f"unknown selection attempt {attempt_id!r}")
+            attached: set[str] = set()
+            try:
+                with CardBankFileLock(self._lock_path, exclusive=True):
+                    now = datetime.now(UTC)
+                    owners = self._live_owners_unlocked(now)
+                    if (
+                        expected_version is not None
+                        and self._selection_token_locked(owners) != expected_version
+                    ):
+                        return SelectionReservation(committed=False)
+                    attached = self._attach_locked(attempt_id, set(ordered))
+                    self._replace_own_owner_locked(owners, now)
+                    self._write_owners_unlocked(owners)
+            except BaseException as exc:
+                if attached:
+                    self._rollback_attach_locked(attempt_id, attached)
+                if not isinstance(exc, Exception):
+                    raise
+                logger.warning(
+                    "[Memory][Leases] failed to publish sidecar {}: {}",
+                    self._path,
+                    exc,
+                )
+                raise MemoryStorageError(
+                    f"failed to publish selection lease sidecar at {self._path}"
+                ) from exc
+            try:
+                kept = tuple(cid for cid in ordered if card_lookup(cid) is not None)
+            except BaseException:
+                self._rollback_attach_locked(attempt_id, attached)
+                self._sync_best_effort_locked()
+                raise
+            vanished = attached - set(kept)
+            if vanished:
+                self._rollback_attach_locked(attempt_id, vanished)
+                self._sync_best_effort_locked()
+            return SelectionReservation(committed=True, card_ids=kept)
+
     def _publish_acquisition_locked(
         self, attached_by_attempt: dict[str, set[str]]
     ) -> None:
@@ -340,24 +525,12 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
                     )
                     return False
                 now = datetime.now(UTC)
-                own_cards = sorted(self._card_owner_count)
-                if own_cards:
-                    # WHY: TTL only bounds foreign-host crash residue.
-                    deadline = now + timedelta(seconds=self._ttl_seconds)
-                    owners[self._owner_key] = {
-                        "pid": self._pid,
-                        "pid_start": self._pid_start,
-                        "host": self._host,
-                        "deadline_utc": deadline.isoformat(),
-                        "cards": own_cards,
-                    }
-                else:
-                    owners.pop(self._owner_key, None)
                 owners = {
                     owner_key: owner
                     for owner_key, owner in owners.items()
                     if owner_key == self._owner_key or self._owner_is_live(owner, now)
                 }
+                self._replace_own_owner_locked(owners, now)
                 self._write_owners_unlocked(owners)
         except Exception as exc:
             logger.warning(
@@ -365,6 +538,55 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
             )
             return False
         return True
+
+    def _expanded_own_cards_locked(self) -> list[str]:
+        return [
+            card_id
+            for card_id, count in sorted(self._card_owner_count.items())
+            for _ in range(count)
+        ]
+
+    def _pending_counts_locked(
+        self, owners: dict[str, dict[str, object]]
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for owner_key, owner in owners.items():
+            cards = (
+                self._expanded_own_cards_locked()
+                if owner_key == self._owner_key
+                else owner["cards"]
+            )
+            for card_id in cards:
+                value = str(card_id)
+                counts[value] = counts.get(value, 0) + 1
+        return counts
+
+    def _live_owners_unlocked(self, now: datetime) -> dict[str, dict[str, object]]:
+        return {
+            owner_key: owner
+            for owner_key, owner in self._read_owners_unlocked().items()
+            if owner_key == self._owner_key or self._owner_is_live(owner, now)
+        }
+
+    def _replace_own_owner_locked(
+        self, owners: dict[str, dict[str, object]], now: datetime
+    ) -> None:
+        own_cards = self._expanded_own_cards_locked()
+        if not own_cards:
+            owners.pop(self._owner_key, None)
+            return
+        # WHY: TTL only bounds foreign-host crash residue.
+        deadline = now + timedelta(seconds=self._ttl_seconds)
+        owners[self._owner_key] = {
+            "pid": self._pid,
+            "pid_start": self._pid_start,
+            "host": self._host,
+            "deadline_utc": deadline.isoformat(),
+            "cards": own_cards,
+        }
+
+    def _selection_token_locked(self, owners: dict[str, dict[str, object]]) -> str:
+        return _selection_token(self._pending_counts_locked(owners))
 
     def _read_live_foreign_ids_locked(self) -> frozenset[str]:
         with CardBankFileLock(self._lock_path, exclusive=False):

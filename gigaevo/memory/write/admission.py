@@ -32,7 +32,8 @@ from gigaevo.memory.write.merge import merge_cards, union_events, union_strings
 class WriteOutcome(StrEnum):
     """Verdict of one card-bank ingest.
 
-    ADDED / UPDATED / MERGED / REJECTED_HARM / REJECTED_NOVELTY / EVICTED are
+    ADDED / UPDATED / MERGED / REJECTED_HARM / REJECTED_NOVELTY /
+    REJECTED_CAPACITY / EVICTED are
     each recorded as a write-ledger row. DISCARDED is the no-op verdict: the
     gate did nothing (merge/bump target absent or ineligible, or the store
     merge failed) and recorded no row — the submitted card was neither admitted
@@ -48,6 +49,7 @@ class WriteOutcome(StrEnum):
     DISCARDED = "discarded"
     REJECTED_HARM = "rejected_harm"
     REJECTED_NOVELTY = "rejected_novelty"
+    REJECTED_CAPACITY = "rejected_capacity"
     EVICTED = "evicted"
 
 
@@ -55,8 +57,8 @@ class WriteResult(BaseModel):
     """What one gate ingest did, and the bank id the card landed under.
 
     Replaces the former bare-``str`` return whose ``""`` conflated two verdicts a
-    caller must tell apart: a benign no-op (``DISCARDED`` — retry as fresh) and a
-    harmful rejection (``REJECTED_HARM`` — drop, never re-admit).
+    caller must tell apart: a benign no-op (``DISCARDED`` — retry as fresh) and
+    terminal rejections such as harm, novelty, or bank capacity.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -79,10 +81,8 @@ class WriteResult(BaseModel):
     def benign_noop(self) -> bool:
         """The gate did nothing and judged nothing: safe to re-author as fresh.
 
-        The only verdict a caller may launder back into the bank as new. Every
-        other non-landed outcome is a harm-driven deletion (``REJECTED_HARM``
-        today; ``EVICTED`` if a sweep verdict is ever routed through a re-author
-        path) and must be dropped, not resurrected.
+        The only verdict a caller may route back into the bank as new. Every
+        explicit rejection must be dropped rather than retried under a new id.
         """
         return self.outcome is WriteOutcome.DISCARDED
 
@@ -192,7 +192,11 @@ class CardAdmissionGate:
         selection_leases: InFlightSelectionRegistry | None = None,
         task_key: str = "",
         min_effective_events: float = 0.0,
+        max_task_cards: int | None = None,
+        preserve_survivor_payload: bool = False,
     ) -> None:
+        if max_task_cards is not None and max_task_cards < 1:
+            raise ValueError("max_task_cards must be positive when configured")
         self._store = store
         self._evictor = evictor
         self._ledger = ledger
@@ -200,6 +204,8 @@ class CardAdmissionGate:
         self._selection_leases = selection_leases
         self._task_key = task_key
         self._min_effective_events = min_effective_events
+        self._max_task_cards = max_task_cards
+        self._preserve_survivor_payload = preserve_survivor_payload
         self._tombstoned: set[str] = set()
 
     def is_tombstoned(self, card_id: str) -> bool:
@@ -222,6 +228,13 @@ class CardAdmissionGate:
             known = bool(incoming_id) and self._store.get(incoming_id) is not None
 
             if not known:
+                if self._task_capacity_reached(card):
+                    return self._ledger_record(
+                        card,
+                        "",
+                        WriteOutcome.REJECTED_CAPACITY,
+                        f"active task card cap reached ({self._max_task_cards})",
+                    )
                 if self._evictor.should_evict(card):
                     reason = _eviction_reason(
                         self._evictor,
@@ -250,7 +263,8 @@ class CardAdmissionGate:
 
             def replace(fresh: Card) -> Card | None:
                 nonlocal harmful, leased, reason
-                merged = card.model_copy(
+                base = fresh if self._preserve_survivor_payload else card
+                merged = base.model_copy(
                     update={
                         "gain_events": union_events(
                             fresh.gain_events, card.gain_events
@@ -258,6 +272,7 @@ class CardAdmissionGate:
                         "absorbed_ids": union_strings(
                             fresh.absorbed_ids, card.absorbed_ids
                         ),
+                        "programs": union_strings(fresh.programs, card.programs),
                     }
                 )
                 if not self._evictor.should_evict(merged):
@@ -327,7 +342,11 @@ class CardAdmissionGate:
                             "programs": union_strings(partner.programs, card.programs),
                         }
                     )
-                merged = merge_cards(target, incoming, replace_description=True)
+                merged = merge_cards(
+                    target,
+                    incoming,
+                    replace_description=not self._preserve_survivor_payload,
+                )
                 if not self._evictor.should_evict(merged):
                     return merged
                 reason = _eviction_reason(
@@ -491,6 +510,17 @@ class CardAdmissionGate:
                 if self._is_leased(card.id):
                     leased = True
                     return card
+                # Persist evicted evidence BEFORE the card leaves the live bank so
+                # the empirical-Bayes cold prior never sees a survivorship-biased
+                # cohort during the delete window (evict only, not rescued/leased).
+                if self._evicted_evidence_sink is not None:
+                    try:
+                        self._evicted_evidence_sink.record(card)
+                    except Exception as exc:
+                        logger.warning(
+                            "[Memory][Admission] failed to record evicted evidence: {}",
+                            exc,
+                        )
                 return None
 
             with self._eviction_guard():
@@ -509,14 +539,6 @@ class CardAdmissionGate:
             evicted.append(cid)
             self._tombstoned.add(cid)
             if fresh_card is not None:
-                if self._evicted_evidence_sink is not None:
-                    try:
-                        self._evicted_evidence_sink.record(fresh_card)
-                    except Exception as exc:
-                        logger.warning(
-                            "[Memory][Admission] failed to record evicted evidence: {}",
-                            exc,
-                        )
                 self._ledger_record(fresh_card, "", WriteOutcome.EVICTED, reason)
         return evicted
 
@@ -536,6 +558,15 @@ class CardAdmissionGate:
             card,
             task_key=self._task_key,
             min_effective_events=self._min_effective_events,
+        )
+
+    def _task_capacity_reached(self, card: Card) -> bool:
+        if self._max_task_cards is None:
+            return False
+        task_key = card.task_key or self._task_key
+        return (
+            sum(existing.task_key == task_key for existing in self._store.snapshot())
+            >= self._max_task_cards
         )
 
     @staticmethod

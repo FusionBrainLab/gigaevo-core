@@ -103,6 +103,12 @@ def test_default_config_composes():
             f"Path '{path}' missing from default composed config — "
             f"possible wrong @package directive or missing defaults entry"
         )
+    assert cfg.memory.capabilities.causal_v2 is True
+    assert cfg.pipeline.id == "memory_guided_noise"
+    assert cfg.memory.policy_config.offer_probability == pytest.approx(0.70)
+    assert cfg.memory.posterior_config.reference_offer_probability == pytest.approx(
+        0.70
+    )
 
 
 def test_prompts_dir_not_at_root():
@@ -113,6 +119,32 @@ def test_prompts_dir_not_at_root():
         "Spurious top-level 'dir' key found — prompts/*.yaml likely uses "
         "@package _global_ instead of @package prompts"
     )
+
+
+def test_default_memory_can_be_disabled_explicitly():
+    cfg = _compose("memory=none", "pipeline=guided")
+
+    assert cfg.memory.capabilities.read is False
+    assert cfg.memory.capabilities.write is False
+    assert cfg.pipeline.id == "guided"
+
+
+def test_multi_parent_experiment_keeps_memory_v2_out_of_scope():
+    cfg = _compose("experiment=full_featured")
+
+    assert cfg.num_parents == 2
+    assert cfg.memory.capabilities.read is False
+    assert cfg.memory.capabilities.write is False
+
+
+def test_local_model_presets_share_one_proxy_environment_variable(monkeypatch):
+    proxy = "http://local-proxy.test/v1"
+    monkeypatch.setenv("LOCAL_LLM_PROXY", proxy)
+
+    cfg = _compose("llm=local_proxy", "memory/llm=qwen_instruct")
+
+    assert cfg.llm_base_url == proxy
+    assert cfg.memory.llm.models[0].base_url == proxy
 
 
 # ---------------------------------------------------------------------------
@@ -193,15 +225,14 @@ def test_evolution_constants_default_values():
     An accidental change here would silently alter experimental conditions without
     a config-review gate catching it.
 
-    Baseline: two-parent crossover mutation (num_parents=2) is the canonical
-    operator — the value every launched run uses; max_mutants=250 sizes a
+    The default causal memory run is singleton-parent. Crossover remains
+    available as an explicit experiment override; max_mutants=250 sizes a
     one-workday-at-parallelism-5 sweep.
     """
     cfg = _compose()
-    assert cfg.num_parents == 2, (
-        "num_parents changed from 2 — two-parent crossover mutation is the canonical "
-        "operator. If you intentionally change it, update this assertion and "
-        "the canonical-benchmark contract together."
+    assert cfg.num_parents == 1, (
+        "the default memory-v2 experiment requires one causal intervention per "
+        "single-parent mutation attempt"
     )
     assert cfg.loop_interval == pytest.approx(1.0), (
         "loop_interval changed from 1.0 — affects engine polling frequency"

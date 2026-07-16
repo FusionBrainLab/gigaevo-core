@@ -8,7 +8,7 @@ the producer transferred under _in_flight_lock.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import uuid
 
 import pytest
@@ -30,6 +30,7 @@ class _FakeIngestorEngine:
         self._selection_leases = None
 
         self.storage = AsyncMock()
+        self.storage.snapshot.bump = Mock()
         self.strategy = AsyncMock()
 
         # config surface
@@ -39,7 +40,9 @@ class _FakeIngestorEngine:
         cfg.program_acceptor.is_accepted = lambda _p: True
         cfg.post_step_hook_timeout_s = 1.0
         cfg.post_step_hook_cancel_grace_s = 0.5
+        cfg.causal_outcome_max_consecutive_failures = 3
         self.config = cfg
+        self._outcome_failure_counts: dict[str, int] = {}
 
         self._post_step_hook = None
 
@@ -56,6 +59,12 @@ class _FakeIngestorEngine:
             return None
 
         self._notify_hook = _notify
+
+        async def _record_memory_outcome(_program):
+            return None
+
+        self._record_memory_outcome = _record_memory_outcome
+        self._record_missing_memory_child = lambda _child_id: None
 
         async def _write_snapshot(**_k):
             return None

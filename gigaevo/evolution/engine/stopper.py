@@ -39,6 +39,12 @@ class EvolutionStopper:
     ) -> tuple[float, str] | None:
         return None
 
+    def remaining_dispatches(self, ctx: StopContext) -> int | None:
+        """Hard upper bound on new mutant dispatches, if one exists."""
+
+        del ctx
+        return None
+
 
 class MaxMutantsStopper(EvolutionStopper):
     def __init__(self, max_mutants: int) -> None:
@@ -59,6 +65,9 @@ class MaxMutantsStopper(EvolutionStopper):
             return None
         remaining = max(0, self.max_mutants - ctx.total_mutants)
         return (remaining / tp.mutants_per_second, "MaxMutantsStopper")
+
+    def remaining_dispatches(self, ctx: StopContext) -> int:
+        return max(0, self.max_mutants - ctx.total_mutants)
 
 
 class WallClockStopper(EvolutionStopper):
@@ -155,3 +164,12 @@ class CompositeStopper(EvolutionStopper):
         if self.mode == "all":
             return max(bounded, key=lambda e: e[0])
         return min(bounded, key=lambda e: e[0])
+
+    def remaining_dispatches(self, ctx: StopContext) -> int | None:
+        bounds = [child.remaining_dispatches(ctx) for child in self.children]
+        finite = [bound for bound in bounds if bound is not None]
+        if self.mode == "any":
+            return min(finite) if finite else None
+        if bounds and len(finite) == len(bounds):
+            return max(finite)
+        return None

@@ -19,6 +19,21 @@ from gigaevo.programs.program_state import ProgramState
 # ``post_step_hook_timeout_s`` and ``post_step_hook_cancel_grace_s``.
 
 
+def _note_outcome_failure(engine, child_id: str, exc: Exception) -> None:
+    count = engine._outcome_failure_counts.get(child_id, 0) + 1
+    engine._outcome_failure_counts[child_id] = count
+    maximum = engine.config.causal_outcome_max_consecutive_failures
+    if count >= maximum:
+        raise RuntimeError(
+            f"durable memory outcome failed {count} consecutive times for "
+            f"child {child_id}"
+        ) from exc
+
+
+def _clear_outcome_failures(engine, child_id: str) -> None:
+    engine._outcome_failure_counts.pop(child_id, None)
+
+
 async def ingestor_loop(engine) -> None:
     logger.info("[ingestor] start")
     try:
@@ -58,32 +73,50 @@ async def poll_and_ingest(engine) -> int:
         if prog.state == ProgramState.DONE:
             done_ids.append(prog.id)
         elif prog.state == ProgramState.DISCARDED:
-            leaked_ids.append(prog.id)
+            try:
+                await engine._record_memory_outcome(prog)
+            except Exception as exc:
+                logger.error(
+                    "[ingestor] durable discarded-child outcome failed for {}: {}",
+                    prog.id[:8],
+                    exc,
+                )
+                _note_outcome_failure(engine, prog.id, exc)
+            else:
+                _clear_outcome_failures(engine, prog.id)
+                leaked_ids.append(prog.id)
     for pid in candidates:
         if pid not in found_ids:
-            leaked_ids.append(pid)
+            try:
+                engine._record_missing_memory_child(pid)
+            except Exception as exc:
+                logger.error(
+                    "[ingestor] durable missing-child outcome failed for {}: {}",
+                    pid[:8],
+                    exc,
+                )
+                _note_outcome_failure(engine, pid, exc)
+            else:
+                _clear_outcome_failures(engine, pid)
+                leaked_ids.append(pid)
 
     added = 0
     handled_ids: list[str] = []
     if done_ids:
         added, handled_ids = await _ingest_batch(engine, done_ids)
 
-    # Invalidate the `_fresh` membership of every parent whose child
-    # just reached DONE or DISCARDED. Under `coalesce_refresh=True`
-    # this triggers a fresh flip the next time that parent is picked;
-    # under `coalesce_refresh=False` the call hits an empty `_fresh`
-    # set and is a no-op.
-    completed_parent_ids: set[str] = set()
-    for prog in programs:
-        if prog is None:
-            continue
-        if prog.state in (ProgramState.DONE, ProgramState.DISCARDED):
-            completed_parent_ids.update(prog.lineage.parents)
-    if completed_parent_ids:
-        engine._parent_refresher.mark_children_completed(completed_parent_ids)
-
     released = set(handled_ids) | set(leaked_ids)
     if released:
+        # A terminal child is complete for refresh purposes only after its
+        # causal outcome is durable. If the sink failed, retain the child and
+        # its ticket so the next poll retries the exact same terminal record.
+        completed_parent_ids: set[str] = set()
+        for prog in programs:
+            if prog is not None and prog.id in released:
+                completed_parent_ids.update(prog.lineage.parents)
+        if completed_parent_ids:
+            engine._parent_refresher.mark_children_completed(completed_parent_ids)
+
         if leaked_ids:
             if engine._selection_leases is not None:
                 engine._selection_leases.abandon(leaked_ids)
@@ -217,8 +250,25 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
     rej_valid = 0
     rej_strategy = 0
     reject_ids: list[str] = []
+    handled: list = []
 
     for prog in completed:
+        try:
+            await engine._record_memory_outcome(prog)
+        except Exception as exc:
+            # Outcome durability is the commit point for a causal decision.
+            # Leave the child DONE and registered in-flight so a later poll
+            # retries; archive acceptance must not race ahead of that write.
+            logger.error(
+                "[ingestor] {} durable memory outcome failed; retaining for retry: {}",
+                prog.short_id,
+                exc,
+            )
+            _note_outcome_failure(engine, prog.id, exc)
+            continue
+
+        _clear_outcome_failures(engine, prog.id)
+
         try:
             if not engine.config.program_acceptor.is_accepted(prog):
                 logger.info(
@@ -239,10 +289,11 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
         except Exception as exc:
             logger.error("[ingestor] {} ingestion failed: {}", prog.short_id, exc)
             reject_ids.append(prog.id)
+        handled.append(prog)
 
     if reject_ids:
         reject_set = set(reject_ids)
-        for prog in completed:
+        for prog in handled:
             if prog.id in reject_set:
                 prog.state = ProgramState.DISCARDED
         try:
@@ -258,9 +309,9 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
                 exc,
             )
 
-    engine.metrics.programs_processed += len(completed)
+    engine.metrics.programs_processed += len(handled)
     engine.metrics.record_ingestion_metrics(added, rej_valid, rej_strategy)
-    return added, [p.id for p in completed]
+    return added, [p.id for p in handled]
 
 
 __all__ = ["ingestor_loop", "poll_and_ingest"]

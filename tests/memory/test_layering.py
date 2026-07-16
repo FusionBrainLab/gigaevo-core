@@ -3,6 +3,10 @@
 Layer order: ``cards < {events | prior_evidence} < {context | storage} <
 selection_leases < {read | write} < provider``. ``prior_evidence`` (evicted-card
 evidence persistence) is a ``cards``-only leaf consumed by ``read`` and ``write``.
+``ope`` (off-policy evaluation reporter) is an ``events``-only leaf consumed by
+``write`` (the writer refreshes it after each increment). ``outcomes`` (terminal-
+outcome producer) is a ``{cards | events}`` leaf consumed by the evolution engine,
+not by any memory layer.
 ``read/`` and ``write/`` never import each other (eviction's ``CardScorer`` /
 ``CardValueScorer`` Protocols live in ``write/``; ``read/reputation`` implements
 them; config wires them). Chroma is confined to ``storage/index.py``; LLM handles (routers,
@@ -24,6 +28,8 @@ LAYER_ALLOWED = {
     "cards": frozenset(),
     "events": frozenset({"cards"}),
     "prior_evidence": frozenset({"cards"}),
+    "ope": frozenset({"events", "ope"}),
+    "outcomes": frozenset({"cards", "events"}),
     "context": frozenset({"cards", "context"}),
     "storage": frozenset({"cards", "events", "storage"}),
     "selection_leases": frozenset({"cards", "storage", "selection_leases"}),
@@ -35,6 +41,7 @@ LAYER_ALLOWED = {
             "cards",
             "context",
             "events",
+            "ope",
             "prior_evidence",
             "selection_leases",
             "storage",

@@ -45,6 +45,8 @@ class _FakeEngine:
         # state engine started sampling per-LLM occupancy for backpressure.
         self._llm_active: int = 0
         self._selection_leases = None
+        self.memory_failures: list[dict] = []
+        self.memory_child_links: list[dict] = []
 
         self.metrics = type("M", (), {})()
         self.metrics.iteration = 0
@@ -74,6 +76,13 @@ class _FakeEngine:
     async def _write_snapshot(self, **_kwargs) -> None:
         return None
 
+    def _record_memory_attempt_failure(self, _parents, **payload) -> int:
+        self.memory_failures.append(payload)
+        return 1
+
+    def _link_memory_attempt_child(self, **payload) -> None:
+        self.memory_child_links.append(payload)
+
 
 async def _hold_producer_slot(engine: _FakeEngine) -> None:
     """Mirror the dispatcher contract: caller holds one producer slot."""
@@ -102,6 +111,7 @@ async def test_success_path_transfers_buffer_and_ticket(monkeypatch) -> None:
     # in-flight & ticket: transferred
     assert "new-id-1" in engine._in_flight
     assert "new-id-1" in engine._inflight_tickets
+    assert engine.memory_child_links[0]["child_id"] == "new-id-1"
 
 
 @pytest.mark.asyncio
@@ -128,6 +138,52 @@ async def test_refresh_failure_releases_producer_no_buffer(monkeypatch) -> None:
     # buffer never acquired
     assert engine._buffer_sema._value == 3
     assert not engine._in_flight
+    assert engine.memory_failures[0]["status"] == "invalid"
+    assert engine.memory_failures[0]["failure_stage"] == "parent_refresh"
+
+
+@pytest.mark.asyncio
+async def test_pre_exposure_refresh_failure_propagates(monkeypatch) -> None:
+    engine = _FakeEngine(_make_parent(), max_in_flight=3)
+    await _hold_producer_slot(engine)
+
+    async def boom(_parents):
+        raise ValueError("provider configuration invalid")
+
+    engine._parent_refresher.refresh_with_ticket = boom
+    engine._record_memory_attempt_failure = lambda *_args, **_kwargs: 0
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation",
+        AsyncMock(side_effect=AssertionError("must not mutate")),
+    )
+
+    with pytest.raises(ValueError, match="provider configuration invalid"):
+        await run_one_mutant(engine, task_id=0)
+
+    assert engine._producer_sema._value == 3
+    assert engine._buffer_sema._value == 3
+    assert not engine._in_flight
+
+
+@pytest.mark.asyncio
+async def test_noncausal_refresh_failure_remains_attempt_local(monkeypatch) -> None:
+    engine = _FakeEngine(_make_parent(), max_in_flight=2)
+    await _hold_producer_slot(engine)
+
+    async def boom(_parents):
+        raise ValueError("parent became invalid")
+
+    engine._parent_refresher.refresh_with_ticket = boom
+    # None means the configured sink has no causal attempt-lifecycle API.
+    engine._record_memory_attempt_failure = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation",
+        AsyncMock(side_effect=AssertionError("must not mutate")),
+    )
+
+    assert await run_one_mutant(engine, task_id=0) is None
+    assert engine._producer_sema._value == 2
+    assert engine._buffer_sema._value == 2
 
 
 @pytest.mark.asyncio
@@ -182,10 +238,13 @@ async def test_cancel_mid_llm_releases_attempt_selection_lease(monkeypatch) -> N
         await task
 
     assert not registry.is_leased("card-a")
+    assert engine.memory_failures[0]["status"] == "censored"
 
 
 @pytest.mark.asyncio
-async def test_cancel_blocked_on_buffer_releases_producer(monkeypatch) -> None:
+async def test_cancel_blocked_on_buffer_completes_persisted_child_handoff(
+    monkeypatch,
+) -> None:
     """Cancel while producer is waiting on _buffer_sema.acquire().
 
     Sets up: buffer fully drained so the next acquire blocks. Cancel the
@@ -210,15 +269,18 @@ async def test_cancel_blocked_on_buffer_releases_producer(monkeypatch) -> None:
     task = asyncio.create_task(run_one_mutant(engine, task_id=0))
     await asyncio.sleep(0.05)  # let it park at _buffer_sema.acquire()
     task.cancel()
+    await asyncio.sleep(0)
+    # The ingestor releases capacity while the producer defers cancellation.
+    engine._buffer_sema.release()
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    # producer: released. buffer: still zero (we hold both externally).
+    # Producer is released; the freed buffer slot transferred to the ingestor.
     assert engine._producer_sema._value == 2
     assert engine._buffer_sema._value == 0
-    # _in_flight not populated; persist is the user-visible orphan we
-    # acknowledge in the spec's cancellation matrix.
-    assert "drift-id-1" not in engine._in_flight
+    assert "drift-id-1" in engine._in_flight
+    assert "drift-id-1" in engine._inflight_tickets
+    assert engine.metrics.mutations_created == 1
 
 
 @pytest.mark.asyncio

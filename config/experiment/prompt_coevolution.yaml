@@ -31,3 +31,5 @@ defaults:
   - /loader: directory
   - /logging: tensorboard
   - /metrics: default
+  # Prompt co-evolution has its own cross-run feedback path.
+  - /memory: none
