@@ -188,7 +188,7 @@ class AllowedDagTabChanges(AllowedChanges):
             "input columns must be outputs of those dependencies; raw xN columns need no "
             "dependency. Reordering slots and changing dependencies rewires the graph.\n"
             "- Set is_output=true on every node whose generated columns should be passed "
-            "to the fixed estimator. At least one output node is required.\n"
+            "to the fixed CatBoost estimator. At least one output node is required.\n"
             "- code is a pandas function body. Explicitly assign every output as "
             "df['name'] = ..., use only declared inputs, preserve rows/index, create no "
             "undeclared columns, and finish with return df. np and pd are available; "

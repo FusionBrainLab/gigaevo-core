@@ -27,7 +27,7 @@ No separate evolution runtime or LLM client lives in this problem.
 }
 ```
 
-Nodes are stored in topological order. `dependencies` name earlier nodes; generated inputs must come from those dependencies. Nodes with `is_output=true` export their generated columns to a fixed histogram-gradient-boosting estimator. Raw features are retained alongside generated outputs.
+Nodes are stored in topological order. `dependencies` name earlier nodes; generated inputs must come from those dependencies. Nodes with `is_output=true` export their generated columns to a fixed CatBoost estimator. Raw features are retained alongside generated outputs. The estimator uses early stopping on each protocol validation split, then refits on the combined train and validation data with the selected iteration count.
 
 Node code is a function body over a pandas DataFrame named `df`. `np` and `pd` are available. Every declared output must be assigned explicitly with `df['name'] = ...`, and the body must end with `return df`. Imports, target access, file/network/process operations, private attributes, `eval`, and `exec` are rejected. Execution must preserve rows and index and create no undeclared columns.
 
@@ -136,7 +136,7 @@ Score a selected JSON genome on the untouched test split:
 
 ```bash
 GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data \
-conda run -n documents python problems/dag_tab/test.py /path/to/program.json
+conda run -n documents python -m problems.dag_tab.test /path/to/program.json
 ```
 
 ## Tests

@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+from catboost import CatBoostClassifier, CatBoostRegressor
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
 _SOURCE_PATH = globals().get("__file__")
 _PROBLEM_DIR = (
@@ -55,29 +55,50 @@ class FeatureGraphModel:
         train = execute_graph(self.graph, _frame(X_train, self.graph.raw_columns))
         val = execute_graph(self.graph, _frame(X_val, self.graph.raw_columns))
         query = execute_graph(self.graph, _frame(X_query, self.graph.raw_columns))
-        fit_x = np.concatenate([train.to_numpy(dtype=float), val.to_numpy(dtype=float)])
-        fit_y = np.concatenate([np.asarray(y_train), np.asarray(y_val)])
+        train_x = train.to_numpy(dtype=float)
+        val_x = val.to_numpy(dtype=float)
+        query_x = query.to_numpy(dtype=float)
+        train_y = np.asarray(y_train)
+        val_y = np.asarray(y_val)
+        fit_x = np.concatenate([train_x, val_x])
+        fit_y = np.concatenate([train_y, val_y])
+        params = {
+            "learning_rate": 0.05,
+            "depth": 6,
+            "random_seed": 0,
+            "thread_count": 4,
+            "logging_level": "Silent",
+            "allow_writing_files": False,
+        }
 
         if self.task_type == tabular_data.REGRESSION:
-            model = HistGradientBoostingRegressor(
-                learning_rate=0.08,
-                max_iter=180,
-                max_leaf_nodes=31,
-                l2_regularization=0.1,
-                random_state=0,
+            search = CatBoostRegressor(
+                iterations=2000,
+                early_stopping_rounds=50,
+                **params,
             )
+            search.fit(train_x, train_y, eval_set=(val_x, val_y))
+            best_iterations = max(1, search.get_best_iteration() + 1)
+            model = CatBoostRegressor(iterations=best_iterations, **params)
             model.fit(fit_x, fit_y)
-            return model.predict(query.to_numpy(dtype=float))
+            return model.predict(query_x)
 
-        model = HistGradientBoostingClassifier(
-            learning_rate=0.08,
-            max_iter=180,
-            max_leaf_nodes=31,
-            l2_regularization=0.1,
-            random_state=0,
+        train_y = train_y.astype(int)
+        val_y = val_y.astype(int)
+        fit_y = fit_y.astype(int)
+        n_classes = int(max(train_y.max(), val_y.max())) + 1
+        search = CatBoostClassifier(
+            iterations=2000,
+            early_stopping_rounds=50,
+            **params,
         )
-        model.fit(fit_x, fit_y.astype(int))
-        return model.predict_proba(query.to_numpy(dtype=float))
+        search.fit(train_x, train_y, eval_set=(val_x, val_y))
+        best_iterations = max(1, search.get_best_iteration() + 1)
+        model = CatBoostClassifier(iterations=best_iterations, **params)
+        model.fit(fit_x, fit_y)
+        probabilities = np.zeros((query_x.shape[0], n_classes))
+        probabilities[:, model.classes_.astype(int)] = model.predict_proba(query_x)
+        return probabilities
 
 
 def _factory(graph: FeatureGraph):

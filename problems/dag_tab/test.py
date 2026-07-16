@@ -6,7 +6,10 @@ import argparse
 import json
 from pathlib import Path
 
-from validate import score_on_test
+try:
+    from .validate import score_on_test
+except ImportError:
+    from validate import score_on_test
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 TASK — EVOLVE A FEATURE DAG FOR AN EXISTING GIGAEVO TABULAR DATASET
 
-The candidate program is a JSON FeatureGraph. Its dataset field names one dataset from problems/tabular (for example california). The fixed downstream estimator and the existing tabular cross-validation protocol are not evolved. Improve predictive fitness by evolving pandas feature transformations.
+The candidate program is a JSON FeatureGraph. Its dataset field names one dataset from problems/tabular (for example california). The fixed downstream CatBoost estimator and the existing tabular cross-validation protocol are not evolved. Improve predictive fitness by evolving pandas feature transformations.
 
 GRAPH CONTRACT
 - nodes are listed in topological order

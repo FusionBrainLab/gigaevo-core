@@ -56,6 +56,94 @@ def test_validate_returns_invalid_metrics_for_bad_payload():
     assert "error" in artifact
 
 
+def test_regression_uses_catboost_early_stopping_then_refits(monkeypatch):
+    payload = json.loads(SEED.read_text())
+    graph = validator.FeatureGraph.model_validate(payload)
+    instances = []
+
+    class FakeRegressor:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.fit_calls = []
+            instances.append(self)
+
+        def fit(self, X, y, eval_set=None):
+            self.fit_calls.append((np.asarray(X), np.asarray(y), eval_set))
+            return self
+
+        def get_best_iteration(self):
+            return 6
+
+        def predict(self, X):
+            return np.full(len(X), 1.25)
+
+    monkeypatch.setattr(validator, "CatBoostRegressor", FakeRegressor)
+    monkeypatch.setattr(validator.tabular_data, "load_dataset", lambda name: _Dataset())
+    model = validator.FeatureGraphModel(graph)
+    X_train = np.arange(32, dtype=float).reshape(4, 8)
+    X_val = np.arange(16, dtype=float).reshape(2, 8)
+    X_query = np.arange(24, dtype=float).reshape(3, 8)
+
+    predictions = model.fit_predict(
+        X_train,
+        np.arange(4, dtype=float),
+        X_val,
+        np.arange(2, dtype=float),
+        X_query,
+    )
+
+    assert len(instances) == 2
+    assert instances[0].kwargs["iterations"] == 2000
+    assert instances[0].kwargs["early_stopping_rounds"] == 50
+    assert instances[0].fit_calls[0][2] is not None
+    assert instances[1].kwargs["iterations"] == 7
+    assert instances[1].kwargs["allow_writing_files"] is False
+    assert instances[1].fit_calls[0][0].shape == (6, 9)
+    np.testing.assert_array_equal(predictions, np.full(3, 1.25))
+
+
+def test_classifier_restores_full_probability_matrix(monkeypatch):
+    payload = json.loads(SEED.read_text())
+    graph = validator.FeatureGraph.model_validate(payload)
+
+    class ClassificationDataset(_Dataset):
+        task_type = "classification"
+
+    class FakeClassifier:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.classes_ = np.array([0, 2])
+
+        def fit(self, X, y, eval_set=None):
+            return self
+
+        def get_best_iteration(self):
+            return 2
+
+        def predict_proba(self, X):
+            return np.tile([0.25, 0.75], (len(X), 1))
+
+    monkeypatch.setattr(validator, "CatBoostClassifier", FakeClassifier)
+    monkeypatch.setattr(
+        validator.tabular_data,
+        "load_dataset",
+        lambda name: ClassificationDataset(),
+    )
+    model = validator.FeatureGraphModel(graph)
+    values = np.arange(48, dtype=float).reshape(6, 8)
+
+    probabilities = model.fit_predict(
+        values[:3],
+        np.array([0, 2, 2]),
+        values[3:5],
+        np.array([0, 2]),
+        values[5:],
+    )
+
+    assert probabilities.shape == (1, 3)
+    np.testing.assert_array_equal(probabilities, [[0.25, 0.0, 0.75]])
+
+
 def test_validator_source_loads_without_dunder_file(monkeypatch):
     problem_dir = ROOT / "problems/dag_tab"
     source = (problem_dir / "validate.py").read_text()
