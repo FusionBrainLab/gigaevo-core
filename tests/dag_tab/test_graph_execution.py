@@ -7,9 +7,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from problems.dag_tab.execution import FeatureExecutionError, execute_graph
+from problems.dag_tab.execution import (
+    FeatureExecutionError,
+    assert_split_invariant,
+    execute_graph,
+)
 from problems.dag_tab.graph import FeatureGraph, FeatureNode
-
 
 ROOT = Path(__file__).parents[2]
 SEED = ROOT / "problems/dag_tab/initial_programs/baseline.json"
@@ -105,3 +108,186 @@ def test_execution_rejects_non_finite_output():
     )
     with pytest.raises(FeatureExecutionError, match="NaN or inf"):
         execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_undeclared_assignment_target():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[
+            _node(
+                code=(
+                    "df['fe_first'] = df['x0'] * 2\ndf['extra'] = df['x0']\nreturn df"
+                )
+            )
+        ],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="assigns undeclared columns"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_undeclared_read():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0", "x1"],
+        nodes=[_node(code="df['fe_first'] = df['x1'] * 2\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="reads undeclared input columns"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0], "x1": [2.0]}))
+
+
+def test_execution_allows_reading_own_output():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[
+            _node(
+                output_cols=["fe_a", "fe_b"],
+                code=(
+                    "df['fe_a'] = df['x0'] + 1\ndf['fe_b'] = df['fe_a'] * 2\nreturn df"
+                ),
+            )
+        ],
+    )
+
+    result = execute_graph(graph, pd.DataFrame({"x0": [1.0, 2.0]}))
+
+    assert result.columns.tolist() == ["x0", "fe_a", "fe_b"]
+    assert result["fe_a"].tolist() == [2.0, 3.0]
+    assert result["fe_b"].tolist() == [4.0, 6.0]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "df['fe_first'] = df.x1 * 2\nreturn df",
+        "df['fe_first'] = df.loc[:, 'x1']\nreturn df",
+    ],
+)
+def test_execution_restricts_frame_to_declared_inputs(code):
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0", "x1"],
+        nodes=[_node(code=code)],
+    )
+
+    with pytest.raises(FeatureExecutionError):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0], "x1": [2.0]}))
+
+
+def test_execution_rejects_string_expression_api():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df.eval('x0 * 2')\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="string-expression API"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_overwriting_pre_existing_column():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[
+            _node(
+                code=("df.loc[:, 'x0'] = 0\ndf['fe_first'] = df['x0'] * 2\nreturn df")
+            )
+        ],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="modified pre-existing columns"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_split_dependent_statistics():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df['x0'].rank()\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent operation"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0, 2.0]}))
+
+
+def test_execution_allows_row_wise_reduction():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0", "x1"],
+        nodes=[
+            _node(
+                input_cols=["x0", "x1"],
+                code=("df['fe_first'] = df[['x0', 'x1']].sum(axis=1)\nreturn df"),
+            )
+        ],
+    )
+
+    result = execute_graph(
+        graph,
+        pd.DataFrame({"x0": [1.0, 2.0], "x1": [3.0, 4.0]}),
+    )
+
+    assert result["fe_first"].tolist() == [4.0, 6.0]
+
+
+def test_execution_rejects_reduction_without_axis():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0", "x1"],
+        nodes=[
+            _node(
+                input_cols=["x0", "x1"],
+                code="df['fe_first'] = df[['x0', 'x1']].sum()\nreturn df",
+            )
+        ],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent operation"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0], "x1": [2.0]}))
+
+
+def test_split_invariance_probe_rejects_position_dependent_output():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = np.arange(len(df)) * 1.0\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent behavior"):
+        assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))
+
+
+def test_split_invariance_probe_rejects_last_row_broadcast():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df['x0'].iloc[-1]\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent behavior"):
+        assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))
+
+
+def test_split_invariance_probe_rejects_first_row_broadcast():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df['x0'].iloc[0]\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent behavior"):
+        assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))
+
+
+def test_split_invariance_probe_allows_row_wise_output():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node()],
+    )
+
+    assert_split_invariant(graph, pd.DataFrame({"x0": [1.0, 2.0, 3.0, 4.0]}))

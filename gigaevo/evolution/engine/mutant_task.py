@@ -134,7 +134,6 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
         finally:
             engine._llm_active -= 1
 
-        engine.record_mutation_result(succeeded=new_id is not None)
         if new_id is None:
             return None
 

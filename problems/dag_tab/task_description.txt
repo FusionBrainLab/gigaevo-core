@@ -21,6 +21,27 @@ Each node.code is the body of a Python function receiving a pandas DataFrame nam
 - do not import modules, access files/network/processes, inspect private attributes, or use eval/exec
 - never access the target; y is not available
 
+SPLIT-INVARIANT FEATURE PROTOCOL
+The same stateless graph is applied separately to train, validation, and query rows. Therefore node code must be row-wise: a row's output may depend only on that row's declared inputs and fixed numeric constants. Dataset/batch statistics and order-dependent operations are forbidden, including mean/median/std/min/max/sum/quantile/rank/qcut/cut with learned edges, groupby/value_counts, rolling/expanding, shift/diff/pct_change, and cumulative operations; row-wise reductions across columns with explicit axis=1 are allowed. Validation runs a batch-invariance probe, and graphs whose outputs change with batch composition are rejected. This prevents query-batch covariates from changing predictions. A future stateful fit/transform ABI may add train-fitted aggregate features, but the current ABI does not support them.
+
+COUNTERFACTUAL FEATURE REASONING
+Treat each node as an explicit, falsifiable feature hypothesis. The rationale must state:
+1. what latent signal or nuisance factor the new column exposes;
+2. why this exact operation is appropriate for the declared source columns;
+3. what predictive information, invariance, or numerical robustness is missing without it;
+4. why a simpler existing/raw feature does not already provide the same signal.
+Do not merely restate the formula. Prefer domain-interpretable names and compact hypotheses that can be compared with parent evidence.
+
+For the baseline california dataset, the Pydantic raw-column names have these meanings:
+- x0 MedInc: median household income in the block group, units of $10k
+- x1 HouseAge: median house age, years
+- x2 AveRooms: average rooms per household
+- x3 AveBedrms: average bedrooms per household
+- x4 Population: block-group population count
+- x5 AveOccup: average occupants per household
+- x6 Latitude: latitude in degrees
+- x7 Longitude: longitude in degrees
+
 Example code:
 df['fe_ratio'] = df['x2'] / (df['x3'].abs() + 1e-6)
 return df

@@ -9,7 +9,6 @@ from gigaevo.llm.schema_compat import nonportable_keys
 from problems.dag_tab.allowed_changes import AllowedDagTabChanges
 from problems.dag_tab.graph import FeatureGraph
 
-
 ROOT = Path(__file__).parents[2]
 PARENT = (ROOT / "problems/dag_tab/initial_programs/baseline.json").read_text()
 
@@ -105,6 +104,54 @@ def test_schema_rejects_forward_dependency():
         schema.validate(payload)
 
 
+def test_schema_repairs_slot_gap_and_remaps_dependencies():
+    changes = AllowedDagTabChanges(max_nodes=3)
+    schema = changes.build_schema({"A": PARENT})
+    diff = schema.validate(
+        _evidence(
+            slot_1={"kind": "keep", "id": "a1", "edits": {"is_output": False}},
+            slot_2=None,
+            slot_3={
+                "kind": "new",
+                "id": "scaled_income",
+                "input_cols": ["fe_income_per_age"],
+                "output_cols": ["fe_scaled_income"],
+                "code": "df['fe_scaled_income'] = df['fe_income_per_age'] * 2\nreturn df",
+                "rationale": "Expose a rescaled form of the parent signal.",
+                "is_output": True,
+                "dependencies": ["slot_1"],
+            },
+        )
+    )
+
+    child = FeatureGraph.from_json(changes.apply(diff, {"A": PARENT}))
+
+    assert [node.id for node in child.nodes] == ["income_per_age", "scaled_income"]
+    assert child.nodes[1].dependencies == ["income_per_age"]
+
+
+def test_slot_gap_repair_rejects_dependency_on_empty_slot():
+    changes = AllowedDagTabChanges(max_nodes=3)
+    schema = changes.build_schema({"A": PARENT})
+    payload = _evidence(
+        slot_1={"kind": "keep", "id": "a1", "edits": {"is_output": False}},
+        slot_2=None,
+        slot_3={
+            "kind": "new",
+            "id": "broken_dependency",
+            "input_cols": ["x0"],
+            "output_cols": ["fe_broken_dependency"],
+            "code": "df['fe_broken_dependency'] = df['x0']\nreturn df",
+            "rationale": "Exercise safe gap repair rejection.",
+            "is_output": True,
+            "dependencies": ["slot_2"],
+        },
+    )
+
+    with pytest.raises(Exception):
+        schema.validate(payload)
+
+
 def test_apply_appends_missing_final_return_df():
     changes = AllowedDagTabChanges(max_nodes=1)
     schema = changes.build_schema({"A": PARENT})
@@ -145,6 +192,26 @@ def test_schema_keeps_code_string_unconstrained_by_regex():
     assert fields
     assert all("return" in field.get("description", "") for field in fields)
     assert all("pattern" not in field for field in fields)
+
+
+def test_dependencies_field_explains_feature_composition():
+    changes = AllowedDagTabChanges(max_nodes=3)
+    schema = changes.build_schema({"A": PARENT}).json_schema
+
+    def dependency_fields(value):
+        if isinstance(value, dict):
+            props = value.get("properties")
+            if isinstance(props, dict) and "dependencies" in props:
+                yield props["dependencies"]
+            for nested in value.values():
+                yield from dependency_fields(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from dependency_fields(nested)
+
+    fields = list(dependency_fields(schema))
+    assert fields
+    assert all("output_cols" in field.get("description", "") for field in fields)
 
 
 def test_apply_rejects_code_without_declared_output():

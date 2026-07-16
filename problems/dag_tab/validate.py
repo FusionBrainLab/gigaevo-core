@@ -20,7 +20,10 @@ if str(_TABULAR_COMMON) not in sys.path:
 import tabular_data  # noqa: E402
 from tabular_problem import build  # noqa: E402
 
-from problems.dag_tab.execution import execute_graph  # noqa: E402
+from problems.dag_tab.execution import (  # noqa: E402
+    assert_split_invariant,
+    execute_graph,
+)
 from problems.dag_tab.graph import FeatureGraph  # noqa: E402
 
 _INVALID = {
@@ -49,7 +52,9 @@ class FeatureGraphModel:
 
     def __init__(self, graph: FeatureGraph):
         self.graph = graph
-        self.task_type = tabular_data.load_dataset(graph.dataset).task_type
+        dataset = tabular_data.load_dataset(graph.dataset)
+        self.task_type = dataset.task_type
+        self.n_classes = dataset.n_classes
 
     def fit_predict(self, X_train, y_train, X_val, y_val, X_query):
         train = execute_graph(self.graph, _frame(X_train, self.graph.raw_columns))
@@ -86,15 +91,28 @@ class FeatureGraphModel:
         train_y = train_y.astype(int)
         val_y = val_y.astype(int)
         fit_y = fit_y.astype(int)
-        n_classes = int(max(train_y.max(), val_y.max())) + 1
+        if self.n_classes is None or self.n_classes < 2:
+            raise ValueError("classification dataset must declare n_classes >= 2")
+        n_classes = int(self.n_classes)
+        observed_classes = np.unique(fit_y)
+        if np.any(observed_classes < 0) or np.any(observed_classes >= n_classes):
+            raise ValueError(
+                f"classification labels {observed_classes.tolist()} fall outside "
+                f"declared class universe [0, {n_classes})"
+            )
+        classification_params = dict(params)
+        if n_classes > 2:
+            classification_params.update(
+                {"loss_function": "MultiClass", "classes_count": n_classes}
+            )
         search = CatBoostClassifier(
             iterations=2000,
             early_stopping_rounds=50,
-            **params,
+            **classification_params,
         )
         search.fit(train_x, train_y, eval_set=(val_x, val_y))
         best_iterations = max(1, search.get_best_iteration() + 1)
-        model = CatBoostClassifier(iterations=best_iterations, **params)
+        model = CatBoostClassifier(iterations=best_iterations, **classification_params)
         model.fit(fit_x, fit_y)
         probabilities = np.zeros((query_x.shape[0], n_classes))
         probabilities[:, model.classes_.astype(int)] = model.predict_proba(query_x)
@@ -116,6 +134,11 @@ def validate(payload):
                 f"raw_columns must exactly match dataset columns {expected}; "
                 f"got {graph.raw_columns}"
             )
+        sample_size = min(1024, len(dataset.X_train))
+        assert_split_invariant(
+            graph,
+            _frame(dataset.X_train[:sample_size], graph.raw_columns),
+        )
         metrics = build(graph.dataset).validate(_factory(graph))
         metrics.update(
             {

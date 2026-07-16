@@ -30,6 +30,39 @@ _BLOCKED_CALLS = {
     "vars",
     "__import__",
 }
+_SPLIT_DEPENDENT_CALLS = {
+    "agg",
+    "aggregate",
+    "corr",
+    "count",
+    "cov",
+    "cumcount",
+    "cummax",
+    "cummin",
+    "cumprod",
+    "cumsum",
+    "describe",
+    "diff",
+    "expanding",
+    "groupby",
+    "max",
+    "mean",
+    "median",
+    "min",
+    "mode",
+    "pct_change",
+    "prod",
+    "qcut",
+    "quantile",
+    "rank",
+    "rolling",
+    "shift",
+    "std",
+    "sum",
+    "transform",
+    "value_counts",
+    "var",
+}
 _BLOCKED_NODES = (
     ast.AsyncFunctionDef,
     ast.Await,
@@ -76,7 +109,15 @@ def _df_column(target: ast.expr) -> str | None:
     if not isinstance(target.value, ast.Name) or target.value.id != "df":
         return None
     key = target.slice
-    return key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else None
+    return (
+        key.value
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        else None
+    )
+
+
+def _df_accessed_column(node: ast.Subscript) -> str | None:
+    return _df_column(node)
 
 
 def normalize_node_code(code: str) -> str:
@@ -98,6 +139,7 @@ def validate_node_code(node: FeatureNode) -> None:
         raise ValueError(f"node {node.id}: invalid Python: {exc}") from exc
 
     assigned: set[str] = set()
+    accessed: set[str] = set()
     returns_df = False
     for item in ast.walk(tree):
         if isinstance(item, _BLOCKED_NODES):
@@ -106,15 +148,72 @@ def validate_node_code(node: FeatureNode) -> None:
             raise ValueError(f"node {node.id}: private attribute access is forbidden")
         if isinstance(item, ast.Name) and item.id.startswith("__"):
             raise ValueError(f"node {node.id}: dunder names are forbidden")
-        if isinstance(item, ast.Call) and isinstance(item.func, ast.Name):
-            if item.func.id in _BLOCKED_CALLS:
+        if isinstance(item, ast.Call):
+            if isinstance(item.func, ast.Name) and item.func.id in _BLOCKED_CALLS:
                 raise ValueError(f"node {node.id}: call to {item.func.id} is forbidden")
+            if isinstance(item.func, ast.Attribute) and item.func.attr in {
+                "eval",
+                "query",
+            }:
+                raise ValueError(
+                    f"node {node.id}: string-expression API {item.func.attr!r} "
+                    "is forbidden"
+                )
+            if isinstance(item.func, ast.Name) and item.func.id in {
+                "max",
+                "min",
+                "sum",
+            }:
+                raise ValueError(
+                    f"node {node.id}: split-dependent operation {item.func.id!r} "
+                    "is forbidden; use row-wise numpy operations instead"
+                )
+            if (
+                isinstance(item.func, ast.Attribute)
+                and item.func.attr in _SPLIT_DEPENDENT_CALLS
+                and not any(
+                    keyword.arg == "axis"
+                    and isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, int)
+                    and not isinstance(keyword.value.value, bool)
+                    and keyword.value.value == 1
+                    for keyword in item.keywords
+                )
+            ):
+                raise ValueError(
+                    f"node {node.id}: split-dependent operation {item.func.attr!r} "
+                    "is forbidden; node code must be row-wise"
+                )
+            if (
+                isinstance(item.func, ast.Attribute)
+                and isinstance(item.func.value, ast.Name)
+                and item.func.value.id == "pd"
+                and item.func.attr == "qcut"
+            ):
+                raise ValueError(
+                    f"node {node.id}: split-dependent operation 'qcut' is forbidden; "
+                    "node code must be row-wise"
+                )
+        if isinstance(item, ast.Subscript):
+            column = _df_accessed_column(item)
+            if column is not None and isinstance(item.ctx, ast.Load):
+                accessed.add(column)
         if isinstance(item, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = item.targets if isinstance(item, ast.Assign) else [item.target]
             assigned.update(filter(None, (_df_column(target) for target in targets)))
         if isinstance(item, ast.Return) and isinstance(item.value, ast.Name):
             returns_df = returns_df or item.value.id == "df"
 
+    extra_assignments = assigned - set(node.output_cols)
+    if extra_assignments:
+        raise ValueError(
+            f"node {node.id}: code assigns undeclared columns {sorted(extra_assignments)}"
+        )
+    undeclared_reads = accessed - set(node.input_cols) - assigned
+    if undeclared_reads:
+        raise ValueError(
+            f"node {node.id}: code reads undeclared input columns {sorted(undeclared_reads)}"
+        )
     missing = set(node.output_cols) - assigned
     if missing:
         raise ValueError(
@@ -150,24 +249,45 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
             raise FeatureExecutionError(
                 f"node {node.id}: missing inputs {sorted(missing)}"
             )
-        before_columns = set(result.columns)
+        node_input = result.loc[:, node.input_cols].copy()
+        node_input_before = node_input.copy()
         try:
-            transformed = _compile_transform(node)(result.copy())
+            transformed = _compile_transform(node)(node_input)
         except Exception as exc:
             raise FeatureExecutionError(f"node {node.id}: {exc}") from exc
         if not isinstance(transformed, pd.DataFrame):
-            raise FeatureExecutionError(f"node {node.id}: transform must return DataFrame")
-        if len(transformed) != len(result) or not transformed.index.equals(original_index):
+            raise FeatureExecutionError(
+                f"node {node.id}: transform must return DataFrame"
+            )
+        if len(transformed) != len(result) or not transformed.index.equals(
+            original_index
+        ):
             raise FeatureExecutionError(f"node {node.id}: row count/index changed")
         missing_outputs = set(node.output_cols) - set(transformed.columns)
         if missing_outputs:
             raise FeatureExecutionError(
                 f"node {node.id}: missing declared outputs {sorted(missing_outputs)}"
             )
-        undeclared = set(transformed.columns) - before_columns - set(node.output_cols)
+        undeclared = (
+            set(transformed.columns) - set(node.input_cols) - set(node.output_cols)
+        )
         if undeclared:
             raise FeatureExecutionError(
                 f"node {node.id}: created undeclared columns {sorted(undeclared)}"
+            )
+        missing_existing = set(node.input_cols) - set(transformed.columns)
+        if missing_existing:
+            raise FeatureExecutionError(
+                f"node {node.id}: removed pre-existing columns {sorted(missing_existing)}"
+            )
+        changed_existing = [
+            col
+            for col in node.input_cols
+            if not transformed[col].equals(node_input_before[col])
+        ]
+        if changed_existing:
+            raise FeatureExecutionError(
+                f"node {node.id}: modified pre-existing columns {changed_existing}"
             )
         for col in node.output_cols:
             values = transformed[col]
@@ -177,7 +297,33 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
                     raise FeatureExecutionError(
                         f"node {node.id}: output {col!r} contains NaN or inf"
                     )
-        result = transformed
+        result[node.output_cols] = transformed[node.output_cols]
 
     output_cols = [*graph.raw_columns, *graph.output_columns]
     return result.loc[:, list(dict.fromkeys(output_cols))]
+
+
+# Shares no positional landmark with the full frame: drops both endpoints so
+# first/last-row broadcasts differ, strides so neighbour ops (shift/diff) differ.
+_PROBE_SUBSET = slice(1, -1, 2)
+
+
+def assert_split_invariant(graph: FeatureGraph, frame: pd.DataFrame) -> None:
+    # Each eval split is built from a raw array and so carries a fresh
+    # RangeIndex; the probe must too, or index-derived features look invariant
+    # here and turn positional at eval.
+    if len(frame) < 4:
+        raise FeatureExecutionError(
+            f"split-invariance probe needs at least 4 rows; got {len(frame)}"
+        )
+    full = execute_graph(graph, frame.reset_index(drop=True))
+    subset = execute_graph(graph, frame.iloc[_PROBE_SUBSET].reset_index(drop=True))
+    full_subset = full.iloc[_PROBE_SUBSET].reset_index(drop=True)
+    diff_cols = [
+        col for col in full.columns if not full_subset[col].equals(subset[col])
+    ]
+    if diff_cols:
+        raise FeatureExecutionError(
+            f"split-dependent behavior: columns {sorted(diff_cols)} "
+            "change with batch composition"
+        )
