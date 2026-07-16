@@ -4,6 +4,7 @@ from dataclasses import replace
 import math
 
 import numpy as np
+from pydantic import ValidationError
 import pytest
 from scipy.stats import norm
 
@@ -13,12 +14,14 @@ from gigaevo.memory_v2.models import (
     CausalObservation,
     EvolutionContext,
     OutcomeMeasurement,
+    PolicySpecification,
 )
 from gigaevo.memory_v2.policy import (
     ChanceConstrainedProbabilityMatchingPolicy,
     ProbabilityMatchingConfig,
     SafetyConstraint,
     _mix_finite_policy_with_exploration,
+    safety_gate_admits,
 )
 from gigaevo.memory_v2.posterior import (
     BayesianResidualScaleGaussianRegressor,
@@ -42,6 +45,100 @@ class _InterceptOnlyFeatureSpace:
     @staticmethod
     def prior_variance(**kwargs: float) -> np.ndarray:
         return np.asarray([kwargs["baseline_sd"] ** 2])
+
+
+@pytest.mark.parametrize(
+    ("probability_acceptable", "expected"),
+    ((0.1000001, True), (0.10, False), (0.0999999, False)),
+)
+def test_incremental_harm_gate_uses_strict_rejection_boundary(
+    probability_acceptable: float,
+    expected: bool,
+) -> None:
+    assert (
+        safety_gate_admits(
+            gate_mode="exclude_confident_incremental_harm",
+            probability_acceptable=probability_acceptable,
+            alpha=0.10,
+        )
+        is expected
+    )
+
+
+def test_safety_constraint_rejects_ambiguous_absolute_limit_configuration() -> None:
+    with pytest.raises(ValidationError, match="absolute invalidity limit"):
+        SafetyConstraint(max_treated_invalid_probability=0.25)
+    with pytest.raises(ValidationError, match="requires an absolute invalidity limit"):
+        SafetyConstraint(gate_mode="credible_joint_safe")
+
+
+def test_policy_specification_requires_explicit_gate_mode() -> None:
+    policy = ChanceConstrainedProbabilityMatchingPolicy(
+        safety=SafetyConstraint(),
+        config=ProbabilityMatchingConfig(),
+    )
+    payload = policy.specification.model_dump(mode="python")
+
+    assert payload["safety_gate_mode"] == "exclude_confident_incremental_harm"
+    assert payload["max_treated_invalid_probability"] is None
+    payload.pop("safety_gate_mode")
+    with pytest.raises(ValidationError, match="safety_gate_mode"):
+        PolicySpecification.model_validate(payload)
+
+
+def test_incremental_gate_does_not_confuse_high_baseline_with_card_harm() -> None:
+    mean = np.asarray([math.log(0.45 / 0.55), math.log(0.47 / 0.53)])
+    covariance = np.asarray([[0.02, 0.01], [0.01, 0.02]])
+
+    incremental = _deterministic_safety_summary(
+        mean,
+        covariance,
+        max_treated_invalid_probability=None,
+        max_incremental_invalid_probability=0.10,
+        alpha=0.10,
+        integration_tolerance=1e-8,
+    )[2]
+    joint = _deterministic_safety_summary(
+        mean,
+        covariance,
+        max_treated_invalid_probability=0.25,
+        max_incremental_invalid_probability=0.10,
+        alpha=0.10,
+        integration_tolerance=1e-8,
+    )[2]
+
+    assert incremental > 0.90
+    assert joint < 0.10
+    assert safety_gate_admits(
+        gate_mode="exclude_confident_incremental_harm",
+        probability_acceptable=incremental,
+        alpha=0.10,
+    )
+    assert not safety_gate_admits(
+        gate_mode="credible_joint_safe",
+        probability_acceptable=joint,
+        alpha=0.10,
+    )
+
+
+def test_incremental_gate_excludes_confident_excess_harm() -> None:
+    mean = np.asarray([math.log(0.10 / 0.90), math.log(0.40 / 0.60)])
+    covariance = np.asarray([[0.005, 0.0], [0.0, 0.005]])
+    probability_acceptable = _deterministic_safety_summary(
+        mean,
+        covariance,
+        max_treated_invalid_probability=None,
+        max_incremental_invalid_probability=0.10,
+        alpha=0.10,
+        integration_tolerance=1e-8,
+    )[2]
+
+    assert probability_acceptable < 0.10
+    assert not safety_gate_admits(
+        gate_mode="exclude_confident_incremental_harm",
+        probability_acceptable=probability_acceptable,
+        alpha=0.10,
+    )
 
 
 @pytest.mark.parametrize(
@@ -224,6 +321,7 @@ def test_policy_logs_the_exact_finite_probability_matching_distribution(
     )
     policy = ChanceConstrainedProbabilityMatchingPolicy(
         safety=SafetyConstraint(
+            gate_mode="credible_joint_safe",
             max_treated_invalid_probability=0.25,
             max_incremental_invalid_probability=0.10,
             alpha=0.10,
@@ -674,6 +772,34 @@ def test_policy_excludes_card_when_safety_certification_fails(
     assert not decision.action_probabilities[0].safe
     assert decision.action_probabilities[0].prediction.probability_safe == 0.0
     assert decision.action_probabilities[0].prediction.safety_integration_error == 1.0
+
+
+def test_default_policy_gives_a_cold_card_nonzero_exploration_support(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    fitted = posterior_model.fit((), revisions[:1])
+    policy = ChanceConstrainedProbabilityMatchingPolicy(
+        safety=SafetyConstraint(),
+        config=ProbabilityMatchingConfig(
+            posterior_summary_samples=128,
+            proposal_worlds=64,
+            proposal_exploration_probability=0.05,
+        ),
+    )
+
+    decision = policy.choose(
+        posterior=fitted,
+        candidates=revisions[:1],
+        context=evolution_context,
+        rng=EventRNG("cold-card-support"),
+    )
+    action = decision.action_probabilities[0]
+
+    assert action.safe
+    assert action.proposal_probability >= 0.05
+    assert action.offer_probability == policy.config.offer_probability
 
 
 def test_adaptive_safety_quadrature_is_conservative_near_singular_boundary() -> None:

@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 import math
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.memory_v2.models import (
     CandidateActionProbability,
@@ -14,6 +14,7 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     PolicyDecision,
     PolicySpecification,
+    SafetyGateMode,
 )
 from gigaevo.memory_v2.posterior import FittedTerminalUtilityPosterior
 from gigaevo.memory_v2.rng import EventRNG
@@ -46,9 +47,37 @@ def _mix_finite_policy_with_exploration(
 class SafetyConstraint(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    max_treated_invalid_probability: float = Field(default=0.25, ge=0.0, le=1.0)
-    max_incremental_invalid_probability: float = Field(default=0.05, ge=-1.0, le=1.0)
+    gate_mode: SafetyGateMode = "exclude_confident_incremental_harm"
+    max_treated_invalid_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_incremental_invalid_probability: float = Field(default=0.10, ge=-1.0, le=1.0)
     alpha: float = Field(default=0.10, gt=0.0, lt=0.5)
+
+    @model_validator(mode="after")
+    def _validate_gate(self) -> SafetyConstraint:
+        if self.gate_mode == "exclude_confident_incremental_harm":
+            if self.max_treated_invalid_probability is not None:
+                raise ValueError(
+                    "incremental-harm mode requires the absolute invalidity limit "
+                    "to be disabled"
+                )
+        elif self.max_treated_invalid_probability is None:
+            raise ValueError(
+                "credible-joint-safe mode requires an absolute invalidity limit"
+            )
+        return self
+
+
+def safety_gate_admits(
+    *,
+    gate_mode: SafetyGateMode,
+    probability_acceptable: float,
+    alpha: float,
+) -> bool:
+    """Apply the logged posterior admission boundary."""
+
+    if gate_mode == "exclude_confident_incremental_harm":
+        return probability_acceptable > alpha
+    return probability_acceptable >= 1.0 - alpha
 
 
 class ProbabilityMatchingConfig(BaseModel):
@@ -63,7 +92,7 @@ class ProbabilityMatchingConfig(BaseModel):
 
 
 class ChanceConstrainedProbabilityMatchingPolicy:
-    """Finite probability matching inside a conservative credible-safe set.
+    """Finite probability matching inside the configured admissible set.
 
     The ``proposal_worlds`` posterior draws define the actual categorical policy,
     not merely a diagnostic approximation. Sampling from their empirical winner
@@ -80,6 +109,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         self.safety = safety
         self.config = config
         self.specification = PolicySpecification(
+            safety_gate_mode=safety.gate_mode,
             max_treated_invalid_probability=(safety.max_treated_invalid_probability),
             max_incremental_invalid_probability=(
                 safety.max_incremental_invalid_probability
@@ -169,8 +199,13 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         safe_cards = tuple(
             card
             for card in cards
-            if predictions[card.treatment_id].probability_safe
-            >= 1.0 - self.safety.alpha
+            if safety_gate_admits(
+                gate_mode=self.safety.gate_mode,
+                probability_acceptable=(
+                    predictions[card.treatment_id].probability_safe
+                ),
+                alpha=self.safety.alpha,
+            )
         )
 
         winners: Counter[str | None] = Counter()

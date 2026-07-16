@@ -58,6 +58,7 @@ class _AlwaysTreatPolicy:
             proposal_worlds=64,
         )
         self.specification = PolicySpecification(
+            safety_gate_mode="credible_joint_safe",
             max_treated_invalid_probability=0.25,
             max_incremental_invalid_probability=0.10,
             safety_alpha=0.10,

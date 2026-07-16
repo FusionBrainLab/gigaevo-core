@@ -23,11 +23,13 @@ from gigaevo.memory_v2.models import (
     EnvironmentFingerprint,
     EvolutionContext,
     PolicySpecification,
+    SafetyGateMode,
     TerminalOutcome,
     canonical_digest,
     import_qualified_class,
     qualified_class_name,
 )
+from gigaevo.memory_v2.policy import safety_gate_admits
 from gigaevo.memory_v2.posterior import (
     StableBayesianLogisticRegressor,
     TerminalUtilityPosteriorConfig,
@@ -159,7 +161,8 @@ class _ReplayUnit:
     treatment: bool | None
     invalid: bool | None
     logged_prediction: float | None
-    max_treated_invalid_probability: float
+    safety_gate_mode: SafetyGateMode
+    max_treated_invalid_probability: float | None
     max_incremental_invalid_probability: float
     safety_alpha: float
 
@@ -485,6 +488,7 @@ def _prepare_units(
                     ),
                     invalid=(observation.invalid if observation is not None else None),
                     logged_prediction=logged_prediction,
+                    safety_gate_mode=decision.policy.safety_gate_mode,
                     max_treated_invalid_probability=(
                         decision.policy.max_treated_invalid_probability
                     ),
@@ -508,7 +512,7 @@ def _gate_probability_quadrature(
     means: np.ndarray,
     covariances: np.ndarray,
     *,
-    max_treated_invalid_probability: float,
+    max_treated_invalid_probability: float | None,
     max_incremental_invalid_probability: float,
     alpha: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -554,12 +558,17 @@ def _gate_probability_quadrature(
     treated_upper[indices] = expit(
         selected_means[:, 1] + norm.ppf(1.0 - alpha) * selected_sd1
     )
+    absolute_limit = (
+        1.0
+        if max_treated_invalid_probability is None
+        else max_treated_invalid_probability
+    )
     treated_limit = (
         -math.inf
-        if max_treated_invalid_probability <= 0.0
+        if absolute_limit <= 0.0
         else math.inf
-        if max_treated_invalid_probability >= 1.0
-        else float(logit(max_treated_invalid_probability))
+        if absolute_limit >= 1.0
+        else float(logit(absolute_limit))
     )
 
     def estimate(nodes: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -654,13 +663,13 @@ def _score_candidate(
     actual: list[float] = []
     treated: list[bool] = []
     prediction_trajectories: list[str] = []
-    gate_certified: dict[str, list[bool]] = {
+    gate_admitted: dict[str, list[bool]] = {
         "all_candidates": [],
         "cold_start": [],
         "new_card_after_history": [],
         "seen_card": [],
     }
-    gate_decision_safe: dict[str, list[bool]] = {key: [] for key in gate_certified}
+    gate_decision_admitted: dict[str, list[bool]] = {key: [] for key in gate_admitted}
     safe_probabilities: list[float] = []
     treated_upper: list[float] = []
     gate_discrepancies: list[float] = []
@@ -697,9 +706,7 @@ def _score_candidate(
             treated.append(unit.treatment)
             prediction_trajectories.append(unit.trajectory)
 
-        certified_in_decision: dict[str, list[bool]] = {
-            key: [] for key in gate_certified
-        }
+        admitted_in_decision: dict[str, list[bool]] = {key: [] for key in gate_admitted}
         safety_designs = np.stack(
             [
                 np.stack((row.control_design, row.treated_design))
@@ -729,7 +736,11 @@ def _score_candidate(
             discrepancies,
             strict=True,
         ):
-            certified = probability_safe >= 1.0 - unit.safety_alpha
+            admitted = safety_gate_admits(
+                gate_mode=unit.safety_gate_mode,
+                probability_acceptable=float(probability_safe),
+                alpha=unit.safety_alpha,
+            )
             stratum = (
                 "cold_start"
                 if unit.history_count == 0
@@ -738,14 +749,14 @@ def _score_candidate(
                 else "seen_card"
             )
             for key in ("all_candidates", stratum):
-                gate_certified[key].append(certified)
-                certified_in_decision[key].append(certified)
+                gate_admitted[key].append(admitted)
+                admitted_in_decision[key].append(admitted)
             treated_upper.append(treated_bound)
             safe_probabilities.append(probability_safe)
             gate_discrepancies.append(discrepancy)
-        for key, values in certified_in_decision.items():
+        for key, values in admitted_in_decision.items():
             if values:
-                gate_decision_safe[key].append(any(values))
+                gate_decision_admitted[key].append(any(values))
     metrics = _prediction_metrics(
         np.asarray(predicted),
         np.asarray(actual),
@@ -754,30 +765,30 @@ def _score_candidate(
     )
 
     def gate_slice(key: str) -> dict[str, float | int]:
-        certified_array = np.asarray(gate_certified[key], dtype=bool)
-        decision_array = np.asarray(gate_decision_safe[key], dtype=bool)
-        if not len(certified_array):
+        admitted_array = np.asarray(gate_admitted[key], dtype=bool)
+        decision_array = np.asarray(gate_decision_admitted[key], dtype=bool)
+        if not len(admitted_array):
             return {
                 "candidates": 0,
-                "certified": 0,
-                "certified_fraction": 0.0,
+                "admitted": 0,
+                "admitted_fraction": 0.0,
                 "decisions": 0,
-                "decisions_with_safe_candidate": 0,
+                "decisions_with_admitted_candidate": 0,
                 "decision_retention": 0.0,
             }
         return {
-            "candidates": int(len(certified_array)),
-            "certified": int(certified_array.sum()),
-            "certified_fraction": float(certified_array.mean()),
+            "candidates": int(len(admitted_array)),
+            "admitted": int(admitted_array.sum()),
+            "admitted_fraction": float(admitted_array.mean()),
             "decisions": int(len(decision_array)),
-            "decisions_with_safe_candidate": int(decision_array.sum()),
+            "decisions_with_admitted_candidate": int(decision_array.sum()),
             "decision_retention": float(decision_array.mean()),
         }
 
     return {
         "prior": candidate.as_dict(),
         **metrics,
-        "gate_replay": {key: gate_slice(key) for key in gate_certified}
+        "gate_replay": {key: gate_slice(key) for key in gate_admitted}
         | {
             "method": "conservative_gauss_hermite_96_vs_48",
             "mean_probability_safe": float(np.mean(safe_probabilities)),
@@ -922,7 +933,7 @@ def calibrate_safety_priors(
         def retains(stratum: dict[str, float | int]) -> bool:
             return (
                 stratum["candidates"] == 0
-                or stratum["certified_fraction"] >= min_gate_retention
+                or stratum["admitted_fraction"] >= min_gate_retention
             )
 
         bootstrap_viable = [

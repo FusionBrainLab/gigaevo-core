@@ -62,6 +62,8 @@ def _closed_calibration_ledger(
             ordinal=ordinal,
             delivered=bool(ordinal % 2),
             attempt_id=f"attempt-{ordinal}",
+            safety_gate_mode="exclude_confident_incremental_harm",
+            max_treated_invalid_probability=None,
         ).model_copy(update={"fitted_observation_ids": fitted})
         ledger.record_decision(record)
         assert ledger.link_attempt_child(
@@ -96,6 +98,8 @@ def _closed_calibration_ledger(
         ordinal=3,
         delivered=False,
         attempt_id="attempt-abstain",
+        safety_gate_mode="exclude_confident_incremental_harm",
+        max_treated_invalid_probability=None,
     )
     unsafe_probability = CandidateActionProbability(
         treatment_id=card.treatment_id,

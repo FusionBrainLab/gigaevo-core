@@ -119,7 +119,8 @@ posterior:
 
 safety:
   _target_: gigaevo.memory_v2.policy.SafetyConstraint
-  max_treated_invalid_probability: 0.25
+  gate_mode: exclude_confident_incremental_harm
+  max_treated_invalid_probability: null
   max_incremental_invalid_probability: 0.10
   alpha: 0.10
 

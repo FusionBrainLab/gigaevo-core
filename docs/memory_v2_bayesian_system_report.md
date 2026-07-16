@@ -327,13 +327,15 @@ For each mutation attempt:
    decision and fit the reward and invalidity posteriors.
 7. **Predict every candidate.** Draw 1,024 shared posterior samples and record effect,
    gain, risk, and uncertainty summaries.
-8. **Certify safety.** A card must have at least 90% conservative posterior probability
-   that treated invalidity is at most 25% and incremental invalidity is at most 10%.
+8. **Exclude confident incremental harm.** The default admits a card unless the
+   posterior is at least 90% confident that delivery raises invalidity by more than
+   10 percentage points. It has no task-independent absolute invalidity ceiling.
    Deterministic quadrature tolerance is `1e-8`; numerical uncertainty excludes the
-   card.
-9. **Build the proposal distribution.** In 512 shared posterior worlds, each safe card
+   card. An explicit `credible_joint_safe` mode is available for applications that
+   require an absolute treated-invalidity ceiling.
+9. **Build the proposal distribution.** In 512 shared posterior worlds, each admitted card
    wins when it has the largest positive usable effect. Otherwise abstention wins.
-10. **Preserve exploration.** Mix 5% uniform mass over all safe cards:
+10. **Preserve exploration.** Mix 5% uniform mass over all admitted cards:
 
     ```text
     rho_j = 0.95 * winner_count_j / 512 + 0.05 / number_of_safe_cards
@@ -367,7 +369,7 @@ the delivered-minus-withheld hurdle utility for every card under the **current
 numeric evolutionary context**. A card is better for this parent when more posterior
 worlds say it has the largest positive safe effect.
 
-At cold start, identical prior structure means safe cards receive approximately
+At cold start, identical prior structure means admitted cards receive approximately
 uniform exploration. After evidence accumulates, card rankings can differ by parent
 fitness and stable behavior coordinates; progress changes the shared value of using
 memory. No claim about semantic code/card compatibility is made in this iteration.
@@ -470,10 +472,11 @@ card superior.
 | Quadrature | Careful numerical integration over one uncertain value by evaluating weighted points and checking convergence. Used for reward residual noise and safety probability. |
 | Posterior world | One coherent draw of all uncertain effects. Cards are compared inside the same world so shared uncertainty is preserved. |
 | Posterior probability positive | Fraction of plausible worlds in which delivering the card is better than withholding it for this context. |
-| Credible safety constraint | Admit a card only when at least 90% of posterior belief satisfies the configured invalidity limits. |
+| Confident-harm gate | The default admits a card unless at least 90% of posterior belief says it increases invalidity by more than the configured cap. This lets uncertain cards gather randomized evidence. |
+| Credible joint-safety gate | Optional conservative mode that admits only when at least 90% of posterior belief satisfies both absolute and incremental invalidity limits. |
 | Probability matching | Propose cards in proportion to how often they are the best safe positive action across posterior worlds. |
 | Exploration | The 5% uniform component that continues testing every safe eligible card instead of permanently locking onto an early winner. |
-| Abstention | The no-proposal action wins a posterior world when no safe card has positive usable effect. |
+| Abstention | The no-proposal action wins a posterior world when no admitted card has positive usable effect. |
 | Covariance / correlation | Uncertainties that move together. Shared posterior worlds preserve the fact that cards depend on common coefficients and evidence. |
 | Monte Carlo | Approximate a probability by counting outcomes across many reproducible posterior draws. The 512 proposal worlds define the finite behavior policy. |
 | Identifiability | Having enough randomized treated/control evidence to distinguish a card effect from background differences. |

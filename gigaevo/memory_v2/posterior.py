@@ -203,11 +203,15 @@ def _risk_difference_boundary(eta0: float, difference: float) -> float:
     return float(logit(target))
 
 
+def _effective_absolute_invalidity_limit(value: float | None) -> float:
+    return 1.0 if value is None else value
+
+
 def _deterministic_safety_summary(
     mean: np.ndarray,
     covariance: np.ndarray,
     *,
-    max_treated_invalid_probability: float,
+    max_treated_invalid_probability: float | None,
     max_incremental_invalid_probability: float,
     alpha: float,
     integration_tolerance: float,
@@ -252,19 +256,22 @@ def _deterministic_safety_gate(
     mean: np.ndarray,
     covariance: np.ndarray,
     *,
-    max_treated_invalid_probability: float,
+    max_treated_invalid_probability: float | None,
     max_incremental_invalid_probability: float,
     alpha: float,
     integration_tolerance: float,
 ) -> tuple[float, float, float]:
     """Return the exact quantities required to certify one safety gate."""
 
+    absolute_limit = _effective_absolute_invalidity_limit(
+        max_treated_invalid_probability
+    )
     treated_limit = (
         -math.inf
-        if max_treated_invalid_probability <= 0.0
+        if absolute_limit <= 0.0
         else math.inf
-        if max_treated_invalid_probability >= 1.0
-        else float(logit(max_treated_invalid_probability))
+        if absolute_limit >= 1.0
+        else float(logit(absolute_limit))
     )
 
     def safe_boundary(eta0: float) -> float:
@@ -1010,7 +1017,7 @@ class FittedTerminalUtilityPosterior:
         rng: np.random.Generator,
         *,
         samples: int,
-        max_treated_invalid_probability: float,
+        max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
     ) -> dict[str, PosteriorPrediction]:
@@ -1043,7 +1050,7 @@ class FittedTerminalUtilityPosterior:
         rng: np.random.Generator,
         *,
         samples: int,
-        max_treated_invalid_probability: float,
+        max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
     ) -> PosteriorPrediction:
@@ -1065,7 +1072,7 @@ class FittedTerminalUtilityPosterior:
         reward_residual_sds: np.ndarray,
         safety_draws: np.ndarray,
         *,
-        max_treated_invalid_probability: float,
+        max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
     ) -> PosteriorPrediction:
@@ -1082,7 +1089,10 @@ class FittedTerminalUtilityPosterior:
         q1 = (1.0 - p1) * valid1 + p1 * lower
         risk_delta = p1 - p0
         effects = q1 - q0
-        safe = (p1 <= max_treated_invalid_probability) & (
+        absolute_limit = _effective_absolute_invalidity_limit(
+            max_treated_invalid_probability
+        )
+        safe = (p1 <= absolute_limit) & (
             risk_delta <= max_incremental_invalid_probability
         )
         helpful = effects > 0.0

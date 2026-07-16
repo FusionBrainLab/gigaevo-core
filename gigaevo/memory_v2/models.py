@@ -24,6 +24,11 @@ from gigaevo.memory.cards import Card
 
 CARD_DELIVERY_TEMPLATE = "[card 1] id={bank_card_id}\n{payload}"
 
+SafetyGateMode = Literal[
+    "exclude_confident_incremental_harm",
+    "credible_joint_safe",
+]
+
 
 def canonical_digest(payload: Any) -> str:
     """Return a stable SHA-256 digest for JSON-native domain records."""
@@ -464,7 +469,8 @@ class PolicySpecification(StrictFrozenModel):
     name: Literal["chance_constrained_probability_matching"] = (
         "chance_constrained_probability_matching"
     )
-    max_treated_invalid_probability: float = Field(ge=0.0, le=1.0)
+    safety_gate_mode: SafetyGateMode
+    max_treated_invalid_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     max_incremental_invalid_probability: float = Field(ge=-1.0, le=1.0)
     safety_alpha: float = Field(gt=0.0, lt=0.5)
     offer_probability: float = Field(gt=0.0, lt=1.0)
@@ -473,6 +479,20 @@ class PolicySpecification(StrictFrozenModel):
     proposal_worlds: int = Field(ge=64)
     abstain_effect: float
     max_pending_per_card: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _validate_safety_gate(self) -> PolicySpecification:
+        if self.safety_gate_mode == "exclude_confident_incremental_harm":
+            if self.max_treated_invalid_probability is not None:
+                raise ValueError(
+                    "incremental-harm mode requires the absolute invalidity limit "
+                    "to be disabled"
+                )
+        elif self.max_treated_invalid_probability is None:
+            raise ValueError(
+                "credible-joint-safe mode requires an absolute invalidity limit"
+            )
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property

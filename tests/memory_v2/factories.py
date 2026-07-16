@@ -9,6 +9,7 @@ from gigaevo.memory_v2.models import (
     PolicySpecification,
     PosteriorFitDiagnostics,
     PosteriorPrediction,
+    SafetyGateMode,
     candidate_set_hash,
     canonical_digest,
 )
@@ -42,6 +43,8 @@ def decision_record(
     delivered: bool = True,
     run_seed: int = 17,
     attempt_id: str = "attempt-test",
+    safety_gate_mode: SafetyGateMode = "credible_joint_safe",
+    max_treated_invalid_probability: float | None = 0.25,
 ) -> DecisionRecord:
     offer = 0.6
     proposal = 1.0
@@ -59,7 +62,8 @@ def decision_record(
     candidates = (card,)
     candidate_hash = candidate_set_hash(candidates)
     policy = PolicySpecification(
-        max_treated_invalid_probability=0.25,
+        safety_gate_mode=safety_gate_mode,
+        max_treated_invalid_probability=max_treated_invalid_probability,
         max_incremental_invalid_probability=0.1,
         safety_alpha=0.1,
         offer_probability=0.6,

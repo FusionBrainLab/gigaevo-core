@@ -203,23 +203,28 @@ the reward likelihood uses the analytic paired-difference standard error. A
 scalar result or cohort mismatch records unknown measurement uncertainty; it is
 never mislabeled as exact.
 
-## Safe Probability Matching
+## Risk-Gated Probability Matching
 
 For each card, the Laplace safety posterior induces a bivariate Gaussian over
 control and treatment invalidity logits. Adaptive conditional-normal quadrature
-with an explicit absolute-error tolerance computes
+with an explicit absolute-error tolerance computes the conservative posterior
+probability of the configured acceptable event. The default event is
 
 ```text
-P(p_1 <= treated_cap and p_1 - p_0 <= incremental_cap | history).
+q = P(p_1 - p_0 <= incremental_cap | history).
 ```
 
-Only cards whose conservative probability lower bound is at least `1 - alpha`
-enter the feasible set. Treated-risk and incremental-risk upper bounds and the
+The default admits a card when `q > alpha`, equivalently excluding it only when
+the posterior is at least `1 - alpha` confident that incremental invalidity
+exceeds the cap. There is no task-independent absolute invalidity ceiling:
+task, model, and mutation-operator baselines can differ substantially. The
+optional `credible_joint_safe` mode instead requires at least `1 - alpha`
+probability that both an explicit treated-invalidity ceiling and the
+incremental cap hold. Treated-risk and incremental-risk upper bounds and the
 integration error are persisted. Numerical or tolerance failure excludes the
-card, so this gate has no Monte Carlo admission error and is independent of
-summary RNG.
+card, so admission has no Monte Carlo error and is independent of summary RNG.
 
-For feasible cards, an event-keyed finite set of shared posterior worlds votes
+For admitted cards, an event-keyed finite set of shared posterior worlds votes
 for the highest usable effect or abstention. Those configured winner counts are
 the behavior policy, so the sampled categorical probability is exact for that
 finite-world policy. Its binomial Monte Carlo standard error is logged as a

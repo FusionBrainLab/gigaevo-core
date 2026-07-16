@@ -241,7 +241,7 @@ def calibrate_safety(
                         f"{gate['cold_start']['candidates']}"
                     ),
                     "new_card_gate": (
-                        f"{gate['new_card_after_history']['certified_fraction']:.0%}"
+                        f"{gate['new_card_after_history']['admitted_fraction']:.0%}"
                     ),
                     "status": group["status"],
                 }

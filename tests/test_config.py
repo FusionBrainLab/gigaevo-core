@@ -105,7 +105,13 @@ def test_default_config_composes():
         )
     assert cfg.memory.capabilities.causal_v2 is True
     assert cfg.pipeline.id == "memory_guided_noise"
+    assert cfg.memory.safety.gate_mode == "exclude_confident_incremental_harm"
+    assert cfg.memory.safety.max_treated_invalid_probability is None
     assert cfg.memory.policy_config.offer_probability == pytest.approx(0.70)
+    assert cfg.memory.policy_config.proposal_exploration_probability == pytest.approx(
+        0.05
+    )
+    assert cfg.memory.policy_config.max_pending_per_card == 2
     assert cfg.memory.posterior_config.reference_offer_probability == pytest.approx(
         0.70
     )
