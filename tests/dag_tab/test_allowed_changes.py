@@ -9,7 +9,6 @@ from gigaevo.llm.schema_compat import nonportable_keys
 from problems.dag_tab.allowed_changes import AllowedDagTabChanges
 from problems.dag_tab.graph import FeatureGraph
 
-
 ROOT = Path(__file__).parents[2]
 PARENT = (ROOT / "problems/dag_tab/initial_programs/baseline.json").read_text()
 
@@ -193,6 +192,26 @@ def test_schema_keeps_code_string_unconstrained_by_regex():
     assert fields
     assert all("return" in field.get("description", "") for field in fields)
     assert all("pattern" not in field for field in fields)
+
+
+def test_dependencies_field_explains_feature_composition():
+    changes = AllowedDagTabChanges(max_nodes=3)
+    schema = changes.build_schema({"A": PARENT}).json_schema
+
+    def dependency_fields(value):
+        if isinstance(value, dict):
+            props = value.get("properties")
+            if isinstance(props, dict) and "dependencies" in props:
+                yield props["dependencies"]
+            for nested in value.values():
+                yield from dependency_fields(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from dependency_fields(nested)
+
+    fields = list(dependency_fields(schema))
+    assert fields
+    assert all("output_cols" in field.get("description", "") for field in fields)
 
 
 def test_apply_rejects_code_without_declared_output():

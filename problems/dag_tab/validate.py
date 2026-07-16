@@ -20,7 +20,10 @@ if str(_TABULAR_COMMON) not in sys.path:
 import tabular_data  # noqa: E402
 from tabular_problem import build  # noqa: E402
 
-from problems.dag_tab.execution import execute_graph  # noqa: E402
+from problems.dag_tab.execution import (  # noqa: E402
+    assert_split_invariant,
+    execute_graph,
+)
 from problems.dag_tab.graph import FeatureGraph  # noqa: E402
 
 _INVALID = {
@@ -131,6 +134,11 @@ def validate(payload):
                 f"raw_columns must exactly match dataset columns {expected}; "
                 f"got {graph.raw_columns}"
             )
+        sample_size = min(1024, len(dataset.X_train))
+        assert_split_invariant(
+            graph,
+            _frame(dataset.X_train[:sample_size], graph.raw_columns),
+        )
         metrics = build(graph.dataset).validate(_factory(graph))
         metrics.update(
             {

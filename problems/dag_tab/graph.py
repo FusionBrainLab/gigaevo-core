@@ -132,7 +132,9 @@ class FeatureGraph(BaseModel):
 
     @property
     def output_columns(self) -> list[str]:
-        return [col for node in self.nodes if node.is_output for col in node.output_cols]
+        return [
+            col for node in self.nodes if node.is_output for col in node.output_cols
+        ]
 
     @property
     def depth(self) -> int:

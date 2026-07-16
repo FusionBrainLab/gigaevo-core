@@ -62,7 +62,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         self._consecutive_mutation_failures: int = 0
         self._mutation_failure_limit_logged: bool = False
 
-        self._parent_refresher = ParentRefresher(storage=self.storage)
+        self._parent_refresher = ParentRefresher(
+            storage=self.storage,
+            timeout_seconds=self._ss_config.parent_refresh_timeout_s,
+        )
 
         self._dispatcher_task: asyncio.Task | None = None
         self._ingestor_task: asyncio.Task | None = None

@@ -129,6 +129,15 @@ class EngineConfig(BaseModel):
             "for expensive problems so max_mutants does not stop before final ingestion."
         ),
     )
+    parent_refresh_timeout_s: float = Field(
+        default=600.0,
+        gt=0,
+        description=(
+            "Wall-clock budget for one parent refresh. Raise to at least the problem's "
+            "dag_timeout for expensive validators so healthy refreshes are not killed; "
+            "a stranded parent holds a producer slot for this long."
+        ),
+    )
     post_step_hook_timeout_s: float = Field(
         default=300.0,
         gt=0,

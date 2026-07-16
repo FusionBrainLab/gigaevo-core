@@ -3,7 +3,6 @@ from pathlib import Path
 from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
 
-
 CONFIG_DIR = Path(__file__).parents[2] / "config"
 
 
@@ -75,8 +74,10 @@ def test_dag_tab_can_extend_final_ingestion_to_dag_timeout():
                 "mutation=structured_diff_dag_tab",
                 "dag_timeout=7200",
                 "final_ingestion_timeout_s=7200",
+                "parent_refresh_timeout_s=7920",
             ],
         )
 
     assert cfg.engine_config.final_ingestion_timeout_s == 7200
+    assert cfg.engine_config.parent_refresh_timeout_s == 7920
     assert cfg.runner_config.dag_timeout == 7200

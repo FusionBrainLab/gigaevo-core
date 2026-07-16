@@ -147,7 +147,7 @@ class ParentRefresher:
             :class:`DirectParentsSelector`.
         poll_interval: Seconds between storage polls while awaiting DONE.
         timeout_seconds: Overall wait budget per refresh, in seconds.
-            Defaults to 36000s (10 hours). The engine-level stopper does
+            Defaults to 600s (10 minutes). The engine-level stopper does
             NOT bound this individual wait — without a finite timeout, a
             DAG-runner crash that strands a parent in QUEUED would block
             the calling mutant task forever, leaking its in-flight slot.
@@ -161,7 +161,7 @@ class ParentRefresher:
         storage: ProgramStorage,
         selector: ParentRefreshSelector | None = None,
         poll_interval: float = _REFRESH_POLL_S,
-        timeout_seconds: float | None = 36000.0,
+        timeout_seconds: float | None = 600.0,
     ) -> None:
         self._storage = storage
         self._selector = selector or DirectParentsSelector()

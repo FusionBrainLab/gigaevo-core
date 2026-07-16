@@ -7,7 +7,6 @@ import numpy as np
 
 from problems.dag_tab import validate as validator
 
-
 ROOT = Path(__file__).parents[2]
 SEED = ROOT / "problems/dag_tab/initial_programs/baseline.json"
 
@@ -55,6 +54,19 @@ def test_validate_returns_invalid_metrics_for_bad_payload():
     assert metrics["is_valid"] == 0.0
     assert metrics["fitness"] == -1.0
     assert "error" in artifact
+
+
+def test_validate_rejects_split_dependent_graph(monkeypatch):
+    monkeypatch.setattr(validator.tabular_data, "load_dataset", lambda name: _Dataset())
+    payload = json.loads(SEED.read_text())
+    payload["nodes"][0]["code"] = (
+        "df['fe_income_per_age'] = np.arange(len(df)) * 1.0\nreturn df"
+    )
+
+    metrics, artifact = validator.validate(payload)
+
+    assert metrics["is_valid"] == 0.0
+    assert "split-dependent behavior" in artifact["error"]
 
 
 def test_regression_uses_catboost_early_stopping_then_refits(monkeypatch):
@@ -179,10 +191,38 @@ def test_tabular_problem_rejects_class_too_rare_for_stratification(monkeypatch):
 def test_validator_source_loads_without_dunder_file(monkeypatch):
     problem_dir = ROOT / "problems/dag_tab"
     source = (problem_dir / "validate.py").read_text()
-    monkeypatch.setattr("sys.path", [str(problem_dir), *list(__import__("sys").path)[1:]])
+    monkeypatch.setattr(
+        "sys.path", [str(problem_dir), *list(__import__("sys").path)[1:]]
+    )
     namespace = {"__name__": "dag_tab_exec_validator"}
 
     exec(compile(source, "user_code.py", "exec"), namespace)
 
     assert callable(namespace["validate"])
     assert callable(namespace["score_on_test"])
+
+
+def test_fixed_estimator_predictions_match_california_prog5(monkeypatch):
+    import importlib.util
+
+    rng = np.random.default_rng(0)
+    X_train = rng.normal(size=(160, 8))
+    y_train = X_train[:, 0] * 2.0 + rng.normal(scale=0.1, size=160)
+    X_val = rng.normal(size=(40, 8))
+    y_val = X_val[:, 0] * 2.0 + rng.normal(scale=0.1, size=40)
+    X_query = rng.normal(size=(30, 8))
+
+    monkeypatch.setattr(validator.tabular_data, "load_dataset", lambda name: _Dataset())
+    monkeypatch.setattr(validator, "execute_graph", lambda graph, frame: frame)
+    graph = validator.FeatureGraph.model_validate(json.loads(SEED.read_text()))
+    ours = validator.FeatureGraphModel(graph).fit_predict(
+        X_train, y_train, X_val, y_val, X_query
+    )
+
+    prog5_path = ROOT / "problems/tabular/california/initial_programs/prog5.py"
+    spec = importlib.util.spec_from_file_location("california_prog5", prog5_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    theirs = module.entrypoint()().fit_predict(X_train, y_train, X_val, y_val, X_query)
+
+    np.testing.assert_array_equal(ours, theirs)

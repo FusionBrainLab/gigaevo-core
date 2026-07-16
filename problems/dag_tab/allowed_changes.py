@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Literal
 
 from loguru import logger
@@ -97,7 +96,16 @@ def _slot_models(position: int, parent_ids: tuple[str, ...]) -> tuple[type, type
         dependency_field = {
             "dependencies": (
                 list[dependency_ref],  # type: ignore[valid-type]
-                Field(default_factory=list, max_length=position - 1),
+                Field(
+                    default_factory=list,
+                    max_length=position - 1,
+                    description=(
+                        "Earlier slots whose generated columns this node builds on: "
+                        "list slot_k here, then read its output_cols in input_cols "
+                        "and code to compose features from already-constructed "
+                        "features. Leave empty when reading only raw xN columns."
+                    ),
+                ),
             )
         }
 
@@ -120,7 +128,9 @@ def _slot_models(position: int, parent_ids: tuple[str, ...]) -> tuple[type, type
         ),
         output_cols=(
             list[str],
-            Field(..., min_length=1, description="Exact set of new columns code assigns."),
+            Field(
+                ..., min_length=1, description="Exact set of new columns code assigns."
+            ),
         ),
         code=(
             str,
@@ -230,9 +240,7 @@ class AllowedDagTabChanges(AllowedChanges):
                             or old_dependency not in remap
                         ):
                             return None
-                        remapped_dependencies.append(
-                            f"slot_{remap[old_dependency]}"
-                        )
+                        remapped_dependencies.append(f"slot_{remap[old_dependency]}")
                     body["dependencies"] = remapped_dependencies
                 rebuilt[f"slot_{new_index}"] = body
         except (TypeError, ValueError):

@@ -10,7 +10,6 @@ from gigaevo.programs.program import Program
 from problems.dag_tab.allowed_changes import AllowedDagTabChanges
 from problems.dag_tab.graph import FeatureGraph
 
-
 ROOT = Path(__file__).parents[2]
 PARENT = (ROOT / "problems/dag_tab/initial_programs/baseline.json").read_text()
 PAYLOAD = {
