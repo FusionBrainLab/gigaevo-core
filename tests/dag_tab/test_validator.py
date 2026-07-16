@@ -69,6 +69,19 @@ def test_validate_rejects_split_dependent_graph(monkeypatch):
     assert "split-dependent behavior" in artifact["error"]
 
 
+def test_validate_rejects_index_dependent_graph(monkeypatch):
+    monkeypatch.setattr(validator.tabular_data, "load_dataset", lambda name: _Dataset())
+    payload = json.loads(SEED.read_text())
+    payload["nodes"][0]["code"] = (
+        "df['fe_income_per_age'] = df.index.to_numpy() * 1.0\nreturn df"
+    )
+
+    metrics, artifact = validator.validate(payload)
+
+    assert metrics["is_valid"] == 0.0
+    assert "split-dependent behavior" in artifact["error"]
+
+
 def test_regression_uses_catboost_early_stopping_then_refits(monkeypatch):
     payload = json.loads(SEED.read_text())
     graph = validator.FeatureGraph.model_validate(payload)

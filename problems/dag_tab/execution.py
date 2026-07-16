@@ -304,9 +304,12 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def assert_split_invariant(graph: FeatureGraph, frame: pd.DataFrame) -> None:
-    full = execute_graph(graph, frame)
-    subset = execute_graph(graph, frame.iloc[1::2])
-    full_subset = full.iloc[1::2]
+    # Each eval split is built from a raw array and so carries a fresh
+    # RangeIndex; the probe must too, or index-derived features look invariant
+    # here and turn positional at eval.
+    full = execute_graph(graph, frame.reset_index(drop=True))
+    subset = execute_graph(graph, frame.iloc[1::2].reset_index(drop=True))
+    full_subset = full.iloc[1::2].reset_index(drop=True)
     diff_cols = [
         col for col in full.columns if not full_subset[col].equals(subset[col])
     ]
