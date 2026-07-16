@@ -84,7 +84,7 @@ def test_multi_island_fitness_island_binds_simplicity_stays_inline() -> None:
 
 
 def test_paired_selector_without_metadata_pipeline_is_rejected() -> None:
-    cfg = _compose("archive_selector=paired_bootstrap")
+    cfg = _compose("archive_selector=paired_bootstrap", "pipeline=guided")
 
     with pytest.raises(ValueError, match="routes_program_metadata"):
         validate_paired_selector_pipeline_compat(cfg)

@@ -54,7 +54,11 @@ def test_paired_override_reaches_the_group_node() -> None:
 
 
 def test_paired_without_metadata_pipeline_is_rejected() -> None:
-    cfg = _compose("memory=full", "memory/crediting=paired")
+    cfg = _compose(
+        "memory=full",
+        "memory/crediting=paired",
+        "pipeline=memory_guided",
+    )
 
     with pytest.raises(ValueError, match="routes_program_metadata"):
         validate_crediting_pipeline_compat(cfg)
@@ -73,7 +77,7 @@ def test_point_passes_under_any_pipeline() -> None:
 
 
 def test_no_memory_group_passes() -> None:
-    validate_crediting_pipeline_compat(_compose())
+    validate_crediting_pipeline_compat(_compose("memory=none", "pipeline=guided"))
 
 
 @pytest.mark.parametrize(
