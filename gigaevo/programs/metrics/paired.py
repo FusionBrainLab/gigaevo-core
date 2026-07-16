@@ -37,6 +37,7 @@ def sample_sequence_signature(samples: Any) -> str:
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
+
 # Float slack for mean(per_sample_scores) == metrics[key]; a larger gap means
 # the vector no longer describes the gated metric (silent contract drift).
 COHERENCE_TOL = 1e-4

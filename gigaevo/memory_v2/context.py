@@ -39,8 +39,12 @@ class ArchiveMembership(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    current_island: str | None = Field(default=None, alias=METADATA_KEY_CURRENT_ISLAND)
-    home_island: str | None = Field(default=None, alias=METADATA_KEY_HOME_ISLAND)
+    current_island: str | None = Field(  # type: ignore[literal-required]
+        default=None, alias=METADATA_KEY_CURRENT_ISLAND
+    )
+    home_island: str | None = Field(  # type: ignore[literal-required]
+        default=None, alias=METADATA_KEY_HOME_ISLAND
+    )
 
 
 @runtime_checkable

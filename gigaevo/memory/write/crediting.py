@@ -112,14 +112,17 @@ class PairedEffectEstimator:
         ):
             return self._degrade(outcome, "incoherent_vector")
         try:
-            se = float(self.comparison.estimate(child, base).se)
+            estimated_se = self.comparison.estimate(child, base).se
+            if estimated_se is None:
+                return self._degrade(outcome, "comparison_error")
+            se = float(estimated_se)
         except Exception:
             return self._degrade(outcome, "comparison_error")
         if not np.isfinite(se) or se < 0.0:
             return self._degrade(outcome, "degenerate_se")
         return se
 
-    def _degrade(self, outcome: InjectionOutcome, reason: str) -> None:
+    def _degrade(self, outcome: InjectionOutcome, reason: str) -> float | None:
         self.degraded[reason] += 1
         logger.debug(
             "[Memory][Crediting] paired se unknown for program {} ({})",

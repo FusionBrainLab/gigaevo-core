@@ -183,9 +183,9 @@ def freeze_base_parent_snapshot(parents, base_parent: int) -> dict:
     decision_id = base.get_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY)
     if isinstance(decision_id, str) and decision_id:
         snapshot[MUTATION_MEMORY_DECISION_ID_METADATA_KEY] = decision_id
-    assignment = base.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY)
-    if isinstance(assignment, dict):
-        snapshot[MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY] = dict(assignment)
+    base_assignment = base.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY)
+    if isinstance(base_assignment, dict):
+        snapshot[MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY] = dict(base_assignment)
     raw_scores = base.get_metadata(PER_SAMPLE_SCORES_KEY)
     if isinstance(raw_scores, list) and raw_scores:
         snapshot[MUTATION_MEMORY_BASE_SCORES_METADATA_KEY] = list(raw_scores)
@@ -337,7 +337,9 @@ async def generate_one_mutation(
                 if card_id
             }
         )
-        retained_probe_ids = sorted(set(injected_ids) | set(proposed_probe_ids(parents)))
+        retained_probe_ids = sorted(
+            set(injected_ids) | set(proposed_probe_ids(parents))
+        )
         mutation_output = mutation_spec.metadata.get(MutationSpec.META_OUTPUT)
         base_parent = 1
         if isinstance(mutation_output, dict):

@@ -140,7 +140,7 @@ class EnvironmentFingerprint(StrictFrozenModel):
     def _serialize_mutation_operator(self, value: type[MutationOperator]) -> str:
         return qualified_class_name(value)
 
-    @computed_field(
+    @computed_field(  # type: ignore[prop-decorator]
         description=(
             "Stable digest of the frozen environment, used to detect accidental "
             "mixing of incompatible decision records."
@@ -189,7 +189,7 @@ class RewardDefinition(StrictFrozenModel):
             raise ValueError("depth-one reward canonicalizes opportunity budget to 1")
         return self
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def scale(self) -> float:
         return self.metric_upper_bound - self.metric_lower_bound
@@ -383,14 +383,14 @@ class DecisionKey(StrictFrozenModel):
     candidate_set_hash: str = Field(min_length=64, max_length=64)
     lineage_registry_hash: str = Field(min_length=64, max_length=64)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def rng_key(self) -> str:
         return canonical_digest(
             self.model_dump(mode="json", exclude={"rng_key", "decision_id"})
         )
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def decision_id(self) -> str:
         return f"memv2-{self.rng_key[:24]}"
@@ -474,7 +474,7 @@ class PolicySpecification(StrictFrozenModel):
     abstain_effect: float
     max_pending_per_card: int = Field(ge=1)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def digest(self) -> str:
         return canonical_digest(self.model_dump(mode="json", exclude={"digest"}))
@@ -634,6 +634,13 @@ class DecisionRecord(StrictFrozenModel):
         )
         if any(value is None for value in required):
             raise ValueError("a proposal requires propensities and frozen q-hats")
+        assert self.offer_probability is not None
+        assert self.proposal_probability is not None
+        assert self.joint_action_probability is not None
+        assert self.reward_q_hat_control is not None
+        assert self.reward_q_hat_treated is not None
+        assert self.risk_q_hat_control is not None
+        assert self.risk_q_hat_treated is not None
         reward_scale = self.context.reward.scale
         if any(
             abs(float(value)) > reward_scale + 1e-12
@@ -647,6 +654,7 @@ class DecisionRecord(StrictFrozenModel):
         )
         if not action.safe:
             raise ValueError("the proposed treatment is unsafe")
+        assert action.offer_probability is not None
         if not math.isclose(
             action.proposal_probability,
             self.proposal_probability,
@@ -748,7 +756,7 @@ class CausalObservation(StrictFrozenModel):
     risk_q_hat_control: float = Field(ge=0.0, le=1.0)
     risk_q_hat_treated: float = Field(ge=0.0, le=1.0)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def invalid(self) -> bool:
         return self.status == "invalid"

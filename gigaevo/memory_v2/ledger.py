@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 from threading import RLock
+from typing import Literal
 import uuid
 
 from loguru import logger
@@ -309,7 +310,7 @@ class SqliteCausalLedger:
         self,
         *,
         attempt_id: str,
-        status: str,
+        status: Literal["invalid", "censored"],
         failure_stage: str,
         completion_ordinal: int,
     ) -> bool:
@@ -496,9 +497,7 @@ class SqliteCausalLedger:
                     gain_lower = parent_value - reward.metric_upper_bound
                     gain_upper = parent_value - reward.metric_lower_bound
                 if not (
-                    gain_lower - 1e-9
-                    <= terminal.measurement.value
-                    <= gain_upper + 1e-9
+                    gain_lower - 1e-9 <= terminal.measurement.value <= gain_upper + 1e-9
                 ):
                     raise CausalLedgerConflict(
                         "terminal gain exceeds parent-specific metric bounds for "
@@ -601,6 +600,14 @@ class SqliteCausalLedger:
                 raise CausalLedgerConflict(
                     f"proposal {record.decision_id!r} lacks frozen q-hats"
                 )
+            reward_q_hat_control = record.reward_q_hat_control
+            reward_q_hat_treated = record.reward_q_hat_treated
+            risk_q_hat_control = record.risk_q_hat_control
+            risk_q_hat_treated = record.risk_q_hat_treated
+            assert reward_q_hat_control is not None
+            assert reward_q_hat_treated is not None
+            assert risk_q_hat_control is not None
+            assert risk_q_hat_treated is not None
             observations.append(
                 CausalObservation(
                     decision_id=record.decision_id,
@@ -613,10 +620,10 @@ class SqliteCausalLedger:
                     joint_action_propensity=record.joint_action_probability,
                     status=terminal.status,
                     measurement=terminal.measurement,
-                    reward_q_hat_control=record.reward_q_hat_control,
-                    reward_q_hat_treated=record.reward_q_hat_treated,
-                    risk_q_hat_control=record.risk_q_hat_control,
-                    risk_q_hat_treated=record.risk_q_hat_treated,
+                    reward_q_hat_control=reward_q_hat_control,
+                    reward_q_hat_treated=reward_q_hat_treated,
+                    risk_q_hat_control=risk_q_hat_control,
+                    risk_q_hat_treated=risk_q_hat_treated,
                 )
             )
             model_version_parts.extend((record_hash, terminal_hash))
@@ -636,12 +643,8 @@ class SqliteCausalLedger:
             card = next(
                 row for row in record.candidates if row.treatment_id == treatment_id
             )
-            pending_treatment[treatment_id] = (
-                pending_treatment.get(treatment_id, 0) + 1
-            )
-            pending_bank[card.bank_card_id] = (
-                pending_bank.get(card.bank_card_id, 0) + 1
-            )
+            pending_treatment[treatment_id] = pending_treatment.get(treatment_id, 0) + 1
+            pending_bank[card.bank_card_id] = pending_bank.get(card.bank_card_id, 0) + 1
         version = canonical_digest(version_parts)
         return EvidenceSnapshot(
             version=version,

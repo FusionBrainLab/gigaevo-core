@@ -37,9 +37,9 @@ class LineageCreditResolver:
         ordered = tuple(sorted(decisions, key=lambda row: row.event_ordinal))
         observed_through = ordered[-1].event_ordinal
 
-        children_by_parent: dict[
-            str, list[tuple[DecisionRecord, TerminalOutcome]]
-        ] = defaultdict(list)
+        children_by_parent: dict[str, list[tuple[DecisionRecord, TerminalOutcome]]] = (
+            defaultdict(list)
+        )
         for record in ordered:
             terminal = terminals.get(record.decision_id)
             if terminal is not None:
@@ -125,14 +125,9 @@ class LineageCreditResolver:
                 if has_budget
                 else None
             )
-            opportunity_window_complete = (
-                has_budget
-                and all(
-                    record.decision_id in terminals
-                    for record in later_opportunities[
-                        : reward.lineage_opportunity_budget
-                    ]
-                )
+            opportunity_window_complete = has_budget and all(
+                record.decision_id in terminals
+                for record in later_opportunities[: reward.lineage_opportunity_budget]
             )
             if not opportunity_window_complete:
                 outcomes.append(

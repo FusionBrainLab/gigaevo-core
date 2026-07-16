@@ -188,7 +188,9 @@ def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
     matured = ledger.snapshot()
     assert revisions[0].treatment_id not in matured.pending_by_treatment
     assert revisions[0].bank_card_id not in matured.pending_by_bank_card
-    assert any(row.decision_id == root.decision_id for row in matured.reward_observations)
+    assert any(
+        row.decision_id == root.decision_id for row in matured.reward_observations
+    )
 
 
 @pytest.mark.parametrize(

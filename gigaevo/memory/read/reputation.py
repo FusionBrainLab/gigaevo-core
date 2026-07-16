@@ -388,7 +388,11 @@ def _block_from_partition(
             confident_threshold=confident_threshold,
             harm_model=harm_model,
         )
-    assert block.posterior_a is not None and block.posterior_b is not None
+    assert (
+        block.posterior_a is not None
+        and block.posterior_b is not None
+        and block.k_harm is not None
+    )
     # Fold foreign hard-sign counts into the NATIVE moment inputs, not onto the
     # variance-shrunk matched Beta. Under the mixture the matched total
     # S = a*+b* is below the true native sample total N, so adding hard counts

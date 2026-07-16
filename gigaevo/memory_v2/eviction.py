@@ -114,9 +114,9 @@ class CausalPosteriorEvictor:
             )
         reward_by_treatment: dict[str, list[CausalObservation]] = {}
         for observation in snapshot.posterior_reward_observations:
-            reward_by_treatment.setdefault(
-                observation.card.treatment_id, []
-            ).append(observation)
+            reward_by_treatment.setdefault(observation.card.treatment_id, []).append(
+                observation
+            )
         rng = EventRNG(snapshot.model_version)
         for revision in revisions:
             if any(

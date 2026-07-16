@@ -19,7 +19,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
-from typing import Any
+from typing import Any, TypedDict
 
 from loguru import logger
 
@@ -36,6 +36,14 @@ from gigaevo.memory.ope.reconcile import (
 from gigaevo.monitoring.emit import emit
 
 OPE_SUMMARY_FILENAME = "ope_summary.json"
+
+
+class _OpeHealth(TypedDict):
+    assignments: int
+    reconciled: int
+    orphans: int
+    dupes: int
+    duplicate_assignments: int
 
 
 def _finite(value: float | None) -> float | None:
@@ -136,7 +144,7 @@ class MemoryOpeReporter:
             return None
 
     @staticmethod
-    def _health(reconciliation: Reconciliation) -> dict[str, int]:
+    def _health(reconciliation: Reconciliation) -> _OpeHealth:
         return {
             "assignments": len(reconciliation.assignments),
             "reconciled": len(reconciliation.reconciled_ids),

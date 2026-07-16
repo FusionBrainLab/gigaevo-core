@@ -9,7 +9,7 @@ import json
 import math
 from pathlib import Path
 import sqlite3
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy.special import expit, logit, ndtr
@@ -334,10 +334,10 @@ def load_calibration_trajectory(
             raise ValueError(
                 f"terminal payload hash mismatch: {decision.decision_id!r}"
             )
-        terminal = TerminalOutcome.model_validate(raw_terminal)
-        if terminal.decision_id != decision.decision_id:
+        parsed_terminal = TerminalOutcome.model_validate(raw_terminal)
+        if parsed_terminal.decision_id != decision.decision_id:
             raise ValueError("terminal and decision ids differ")
-        terminals[terminal.decision_id] = terminal
+        terminals[parsed_terminal.decision_id] = parsed_terminal
 
     environment_keys = {
         SafetyEnvironmentKey.from_environment(row.context.environment)
@@ -368,6 +368,13 @@ def load_calibration_trajectory(
         )
         if any(value is None for value in required):
             raise ValueError(f"proposal {decision.decision_id!r} lacks frozen fields")
+        offer_probability = cast(float, decision.offer_probability)
+        proposal_probability = cast(float, decision.proposal_probability)
+        joint_action_probability = cast(float, decision.joint_action_probability)
+        reward_q_hat_control = cast(float, decision.reward_q_hat_control)
+        reward_q_hat_treated = cast(float, decision.reward_q_hat_treated)
+        risk_q_hat_control = cast(float, decision.risk_q_hat_control)
+        risk_q_hat_treated = cast(float, decision.risk_q_hat_treated)
         observations.append(
             CausalObservation(
                 decision_id=decision.decision_id,
@@ -375,15 +382,15 @@ def load_calibration_trajectory(
                 card=card,
                 context=decision.context,
                 treatment=decision.delivered,
-                offer_propensity=float(decision.offer_probability),
-                proposal_propensity=float(decision.proposal_probability),
-                joint_action_propensity=float(decision.joint_action_probability),
+                offer_propensity=offer_probability,
+                proposal_propensity=proposal_probability,
+                joint_action_propensity=joint_action_probability,
                 status=terminal.status,
                 measurement=terminal.measurement,
-                reward_q_hat_control=float(decision.reward_q_hat_control),
-                reward_q_hat_treated=float(decision.reward_q_hat_treated),
-                risk_q_hat_control=float(decision.risk_q_hat_control),
-                risk_q_hat_treated=float(decision.risk_q_hat_treated),
+                reward_q_hat_control=reward_q_hat_control,
+                reward_q_hat_treated=reward_q_hat_treated,
+                risk_q_hat_control=risk_q_hat_control,
+                risk_q_hat_treated=risk_q_hat_treated,
             )
         )
     return CalibrationTrajectory(
@@ -858,11 +865,13 @@ def calibrate_safety_priors(
             raise ValueError(
                 f"environment has no closed eligible proposals: {key.label}"
             )
-        actual = np.asarray([float(unit.invalid) for unit in outcome_units])
+        actual = np.asarray([float(cast(bool, unit.invalid)) for unit in outcome_units])
         treated = np.asarray(
             [bool(unit.treatment) for unit in outcome_units], dtype=bool
         )
-        logged = np.asarray([float(unit.logged_prediction) for unit in outcome_units])
+        logged = np.asarray(
+            [float(cast(float, unit.logged_prediction)) for unit in outcome_units]
+        )
         deployed = _prediction_metrics(
             logged,
             actual,

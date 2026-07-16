@@ -1,6 +1,6 @@
 """Tiny helper functions for Hydra config computations."""
 
-from typing import Any
+from typing import Any, Literal, cast
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -93,7 +93,7 @@ def build_behavior_space(
         model_transform = BehaviorModelTransform(
             lower_bound=float(min_val),
             upper_bound=float(max_val),
-            transform=model_transforms[i],
+            transform=cast(Literal["linear", "log1p"], model_transforms[i]),
         )
 
         if b_type == "linear":

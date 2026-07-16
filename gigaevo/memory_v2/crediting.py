@@ -79,7 +79,7 @@ class AnalyticPairedEffectEstimator:
             return self._degrade(outcome, "degenerate_se")
         return se
 
-    def _degrade(self, outcome: InjectionOutcome, reason: str) -> None:
+    def _degrade(self, outcome: InjectionOutcome, reason: str) -> float | None:
         self.degraded[reason] += 1
         logger.debug(
             "[MemoryV2][Crediting] paired se unknown for program {} ({})",

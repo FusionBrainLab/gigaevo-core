@@ -38,9 +38,7 @@ class FeatureSpace:
         for card in all_cards:
             previous = by_treatment.get(card.treatment_id)
             if previous is not None and previous.bank_card_id != card.bank_card_id:
-                raise ValueError(
-                    f"conflicting card lineage {card.treatment_id!r}"
-                )
+                raise ValueError(f"conflicting card lineage {card.treatment_id!r}")
             # Historical decisions retain their exact payload snapshots. The
             # latest snapshot is only a descriptor; model features depend on the
             # stable treatment lineage, not prose revisions.

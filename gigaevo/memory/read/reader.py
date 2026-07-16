@@ -16,7 +16,7 @@ import json
 import math
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 import numpy as np
@@ -151,12 +151,12 @@ def _canonical_policy_value(value: Any, seen: set[int] | None = None) -> Any:
     try:
         if isinstance(value, BaseModel):
             fields = type(value).model_fields
-            config = {
+            model_config = {
                 name: _canonical_policy_value(getattr(value, name), seen)
                 for name in sorted(fields)
                 if name not in {"path", "cache_dir"}
             }
-            return {"class": _policy_class(value), "config": config}
+            return {"class": _policy_class(value), "config": model_config}
 
         config: dict[str, Any] = {}
         for raw_name, item in sorted(vars(value).items()):
@@ -385,6 +385,7 @@ class MemoryReader:
             and offered.no_card_baseline is not None
             and math.isfinite(offered.no_card_baseline)
         ):
+            no_card_baseline = offered.no_card_baseline
 
             def action_level(*, treated: bool) -> float | None:
                 selected = [
@@ -400,7 +401,7 @@ class MemoryReader:
                 gains = [MemoryReader._incremental_gain(bid) for bid in selected]
                 if any(gain is None for gain in gains):
                     return None
-                return offered.no_card_baseline + sum(
+                return no_card_baseline + sum(
                     gain for gain in gains if gain is not None
                 )
 
@@ -428,7 +429,7 @@ class MemoryReader:
     ) -> AssignmentRecord:
         propensities = self._probe_propensities(slate)
         probe_offered_bids = [bid for bid in slate if bid.probe_offered]
-        probe_arm = (
+        probe_arm: Literal["none", "treated", "control"] = (
             "treated"
             if any(bid.probe_selected for bid in probe_offered_bids)
             else "control"

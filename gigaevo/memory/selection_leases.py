@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import socket
 from threading import RLock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from loguru import logger
@@ -554,7 +554,7 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
             cards = (
                 self._expanded_own_cards_locked()
                 if owner_key == self._owner_key
-                else owner["cards"]
+                else cast(list[str], owner["cards"])
             )
             for card_id in cards:
                 value = str(card_id)
@@ -596,7 +596,7 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
             card_id
             for owner_key, owner in owners.items()
             if owner_key != self._owner_key and self._owner_is_live(owner, now)
-            for card_id in owner["cards"]
+            for card_id in cast(list[str], owner["cards"])
         )
 
     def _read_owners_unlocked(self) -> dict[str, dict[str, object]]:
@@ -676,7 +676,7 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
 
     def _owner_is_live(self, owner: dict[str, object], now: datetime) -> bool:
         if owner["host"] == self._host:
-            pid = int(owner["pid"])
+            pid = cast(int, owner["pid"])
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
@@ -685,12 +685,12 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
                 pass
             except OSError:
                 pass
-            pid_start = int(owner["pid_start"])
+            pid_start = cast(int, owner["pid_start"])
             if pid_start == 0:
                 return True
             current_pid_start = _read_pid_start(pid)
             return current_pid_start is None or current_pid_start == pid_start
-        deadline = datetime.fromisoformat(owner["deadline_utc"])
+        deadline = datetime.fromisoformat(cast(str, owner["deadline_utc"]))
         return deadline.astimezone(UTC) > now
 
     def _write_owners_unlocked(self, owners: dict[str, dict[str, object]]) -> None:
