@@ -30,6 +30,39 @@ _BLOCKED_CALLS = {
     "vars",
     "__import__",
 }
+_SPLIT_DEPENDENT_CALLS = {
+    "agg",
+    "aggregate",
+    "corr",
+    "count",
+    "cov",
+    "cumcount",
+    "cummax",
+    "cummin",
+    "cumprod",
+    "cumsum",
+    "describe",
+    "diff",
+    "expanding",
+    "groupby",
+    "max",
+    "mean",
+    "median",
+    "min",
+    "mode",
+    "pct_change",
+    "prod",
+    "qcut",
+    "quantile",
+    "rank",
+    "rolling",
+    "shift",
+    "std",
+    "sum",
+    "transform",
+    "value_counts",
+    "var",
+}
 _BLOCKED_NODES = (
     ast.AsyncFunctionDef,
     ast.Await,
@@ -79,6 +112,10 @@ def _df_column(target: ast.expr) -> str | None:
     return key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else None
 
 
+def _df_accessed_column(node: ast.Subscript) -> str | None:
+    return _df_column(node)
+
+
 def normalize_node_code(code: str) -> str:
     stripped = code.strip()
     tree = ast.parse(stripped)
@@ -98,6 +135,7 @@ def validate_node_code(node: FeatureNode) -> None:
         raise ValueError(f"node {node.id}: invalid Python: {exc}") from exc
 
     assigned: set[str] = set()
+    accessed: set[str] = set()
     returns_df = False
     for item in ast.walk(tree):
         if isinstance(item, _BLOCKED_NODES):
@@ -106,15 +144,52 @@ def validate_node_code(node: FeatureNode) -> None:
             raise ValueError(f"node {node.id}: private attribute access is forbidden")
         if isinstance(item, ast.Name) and item.id.startswith("__"):
             raise ValueError(f"node {node.id}: dunder names are forbidden")
-        if isinstance(item, ast.Call) and isinstance(item.func, ast.Name):
-            if item.func.id in _BLOCKED_CALLS:
+        if isinstance(item, ast.Call):
+            if isinstance(item.func, ast.Name) and item.func.id in _BLOCKED_CALLS:
                 raise ValueError(f"node {node.id}: call to {item.func.id} is forbidden")
+            if isinstance(item.func, ast.Name) and item.func.id in {"max", "min", "sum"}:
+                raise ValueError(
+                    f"node {node.id}: split-dependent operation {item.func.id!r} "
+                    "is forbidden; use row-wise numpy operations instead"
+                )
+            if (
+                isinstance(item.func, ast.Attribute)
+                and item.func.attr in _SPLIT_DEPENDENT_CALLS
+            ):
+                raise ValueError(
+                    f"node {node.id}: split-dependent operation {item.func.attr!r} "
+                    "is forbidden; node code must be row-wise"
+                )
+            if (
+                isinstance(item.func, ast.Attribute)
+                and isinstance(item.func.value, ast.Name)
+                and item.func.value.id == "pd"
+                and item.func.attr == "qcut"
+            ):
+                raise ValueError(
+                    f"node {node.id}: split-dependent operation 'qcut' is forbidden; "
+                    "node code must be row-wise"
+                )
+        if isinstance(item, ast.Subscript):
+            column = _df_accessed_column(item)
+            if column is not None and isinstance(item.ctx, ast.Load):
+                accessed.add(column)
         if isinstance(item, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = item.targets if isinstance(item, ast.Assign) else [item.target]
             assigned.update(filter(None, (_df_column(target) for target in targets)))
         if isinstance(item, ast.Return) and isinstance(item.value, ast.Name):
             returns_df = returns_df or item.value.id == "df"
 
+    extra_assignments = assigned - set(node.output_cols)
+    if extra_assignments:
+        raise ValueError(
+            f"node {node.id}: code assigns undeclared columns {sorted(extra_assignments)}"
+        )
+    undeclared_reads = accessed - set(node.input_cols)
+    if undeclared_reads:
+        raise ValueError(
+            f"node {node.id}: code reads undeclared input columns {sorted(undeclared_reads)}"
+        )
     missing = set(node.output_cols) - assigned
     if missing:
         raise ValueError(
@@ -151,8 +226,9 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
                 f"node {node.id}: missing inputs {sorted(missing)}"
             )
         before_columns = set(result.columns)
+        before_frame = result.copy(deep=True)
         try:
-            transformed = _compile_transform(node)(result.copy())
+            transformed = _compile_transform(node)(result.copy(deep=True))
         except Exception as exc:
             raise FeatureExecutionError(f"node {node.id}: {exc}") from exc
         if not isinstance(transformed, pd.DataFrame):
@@ -168,6 +244,20 @@ def execute_graph(graph: FeatureGraph, frame: pd.DataFrame) -> pd.DataFrame:
         if undeclared:
             raise FeatureExecutionError(
                 f"node {node.id}: created undeclared columns {sorted(undeclared)}"
+            )
+        missing_existing = before_columns - set(transformed.columns)
+        if missing_existing:
+            raise FeatureExecutionError(
+                f"node {node.id}: removed pre-existing columns {sorted(missing_existing)}"
+            )
+        changed_existing = [
+            col
+            for col in before_frame.columns
+            if not transformed[col].equals(before_frame[col])
+        ]
+        if changed_existing:
+            raise FeatureExecutionError(
+                f"node {node.id}: modified pre-existing columns {changed_existing}"
             )
         for col in node.output_cols:
             values = transformed[col]

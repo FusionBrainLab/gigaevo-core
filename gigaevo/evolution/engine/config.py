@@ -120,6 +120,15 @@ class EngineConfig(BaseModel):
             "given parent can be in flight at a time."
         ),
     )
+    final_ingestion_timeout_s: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "Wall-clock budget for draining already-persisted in-flight mutants during "
+            "normal shutdown. Increase this to at least the expected validator runtime "
+            "for expensive problems so max_mutants does not stop before final ingestion."
+        ),
+    )
     post_step_hook_timeout_s: float = Field(
         default=300.0,
         gt=0,

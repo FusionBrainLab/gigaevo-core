@@ -177,7 +177,9 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
             # — cancellation is a shutdown signal, not a "skip cleanup" one.
             sweep_cancelled = False
             try:
-                await self._final_ingestion_sweep(deadline_seconds=5.0)
+                await self._final_ingestion_sweep(
+                    deadline_seconds=self._ss_config.final_ingestion_timeout_s
+                )
             except asyncio.CancelledError:
                 sweep_cancelled = True
 

@@ -24,6 +24,7 @@ engine_config:
   stopper: ${stopper}
   max_in_flight: ${max_in_flight}
   max_consecutive_mutation_failures: ${max_consecutive_mutation_failures}
+  final_ingestion_timeout_s: ${final_ingestion_timeout_s}
   post_step_hook_timeout_s: ${post_step_hook_timeout_s}
 
 metrics_tracker:

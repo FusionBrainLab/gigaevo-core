@@ -4,7 +4,7 @@ import os
 
 import numpy as np
 from sklearn.metrics import f1_score, r2_score, roc_auc_score
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
 import tabular_bd
 import tabular_data
 import tabular_metrics
@@ -72,13 +72,31 @@ class TabularProblem:
     def _dataset(self) -> tabular_data.Dataset:
         return tabular_data.load_dataset(self.name)
 
-    def _splits(self, n: int) -> list[tuple[np.ndarray, np.ndarray]]:
+    def _splits(self, ds: tabular_data.Dataset) -> list[tuple[np.ndarray, np.ndarray]]:
+        n = ds.X_train.shape[0]
         idx = np.arange(n)
-        if n <= _env_int(CV_MAX_ENV, _DEFAULT_CV_MAX):
-            kf = KFold(n_splits=_k_folds(), shuffle=True, random_state=_SEED)
-            return list(kf.split(idx))
-        kf = KFold(n_splits=_HOLDOUT_SPLITS, shuffle=True, random_state=_SEED)
-        return [next(iter(kf.split(idx)))]
+        is_classification = ds.task_type != tabular_data.REGRESSION
+        n_splits = (
+            _k_folds()
+            if n <= _env_int(CV_MAX_ENV, _DEFAULT_CV_MAX)
+            else _HOLDOUT_SPLITS
+        )
+        if is_classification:
+            labels = np.asarray(ds.y_train, dtype=int)
+            _, counts = np.unique(labels, return_counts=True)
+            if counts.size == 0 or int(counts.min()) < n_splits:
+                raise ValueError(
+                    "stratified cross-validation requires every observed class to have "
+                    f"at least {n_splits} samples; class counts={counts.tolist()}"
+                )
+            splitter = StratifiedKFold(
+                n_splits=n_splits, shuffle=True, random_state=_SEED
+            )
+            splits = list(splitter.split(idx, labels))
+        else:
+            splitter = KFold(n_splits=n_splits, shuffle=True, random_state=_SEED)
+            splits = list(splitter.split(idx))
+        return splits if n <= _env_int(CV_MAX_ENV, _DEFAULT_CV_MAX) else splits[:1]
 
     def _fold_metrics(self, ds, y_true, pred) -> dict[str, float]:
         if ds.task_type == tabular_data.REGRESSION:
@@ -112,7 +130,7 @@ class TabularProblem:
 
     def validate(self, model_factory) -> dict[str, float]:
         ds = self._dataset()
-        splits = self._splits(ds.X_train.shape[0])
+        splits = self._splits(ds)
         folds: list[dict[str, float]] = []
         for fit_idx, query_idx in splits:
             instance = tabular_metrics.instantiate(model_factory)

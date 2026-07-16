@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     TypeAdapter,
+    ValidationError,
     create_model,
     model_validator,
 )
@@ -40,15 +42,31 @@ class NodeEdits(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    input_cols: list[str] | None = Field(default=None, min_length=1)
-    output_cols: list[str] | None = Field(default=None, min_length=1)
+    input_cols: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description="Complete set of columns the edited code reads.",
+    )
+    output_cols: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description="Exact set of new feature columns the edited code assigns.",
+    )
     code: str | None = Field(
         default=None,
         min_length=1,
         max_length=2000,
         description=_NODE_CODE_DESCRIPTION,
     )
-    rationale: str | None = Field(default=None, min_length=1, max_length=1000)
+    rationale: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1000,
+        description=(
+            "Counterfactual hypothesis: signal exposed, why this operation is appropriate, "
+            "and what becomes worse or unavailable without the feature."
+        ),
+    )
     is_output: bool | None = None
 
 
@@ -96,8 +114,14 @@ def _slot_models(position: int, parent_ids: tuple[str, ...]) -> tuple[type, type
         __config__=ConfigDict(extra="forbid"),
         kind=(Literal["new"], ...),
         id=(str, Field(..., min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")),
-        input_cols=(list[str], Field(..., min_length=1)),
-        output_cols=(list[str], Field(..., min_length=1)),
+        input_cols=(
+            list[str],
+            Field(..., min_length=1, description="Complete set of columns code reads."),
+        ),
+        output_cols=(
+            list[str],
+            Field(..., min_length=1, description="Exact set of new columns code assigns."),
+        ),
         code=(
             str,
             Field(
@@ -107,7 +131,18 @@ def _slot_models(position: int, parent_ids: tuple[str, ...]) -> tuple[type, type
                 description=_NODE_CODE_DESCRIPTION,
             ),
         ),
-        rationale=(str, Field(..., min_length=1, max_length=1000)),
+        rationale=(
+            str,
+            Field(
+                ...,
+                min_length=1,
+                max_length=1000,
+                description=(
+                    "Counterfactual hypothesis: signal exposed, why the operation matches "
+                    "it, and what is lost without this feature."
+                ),
+            ),
+        ),
         is_output=(bool, False),
         **dependency_field,
     )
@@ -131,7 +166,82 @@ class AllowedDagTabChanges(AllowedChanges):
         schema = portable_json_schema(
             {**adapter.json_schema(), "title": "dag_tab_feature_graph_diff"}
         )
-        return DiffSchema(json_schema=schema, validate=adapter.validate_python)
+
+        def validate(payload: Any) -> Any:
+            try:
+                return adapter.validate_python(payload)
+            except ValidationError as original:
+                repaired = self._compact_payload(payload)
+                if repaired is None:
+                    raise
+                try:
+                    validated = adapter.validate_python(repaired)
+                except ValidationError:
+                    raise original
+                logger.warning(
+                    "dag_tab_feature_graph_diff: repaired non-contiguous slot payload"
+                )
+                return validated
+
+        return DiffSchema(json_schema=schema, validate=validate)
+
+    @staticmethod
+    def _compact_payload(payload: Any) -> dict | None:
+        if not isinstance(payload, dict):
+            return None
+        rebuilt: dict[str, Any] = {}
+        try:
+            indices: dict[str, int] = {}
+            for key in payload:
+                if not (isinstance(key, str) and key.startswith("slot_")):
+                    continue
+                index = int(key.removeprefix("slot_"))
+                if index < 1 or key != f"slot_{index}":
+                    return None
+                indices[key] = index
+            names = sorted(indices, key=indices.__getitem__)
+            filled = [
+                (indices[key], payload[key])
+                for key in names
+                if payload[key] is not None
+            ]
+            old_indices = [index for index, _ in filled]
+            if old_indices == list(range(1, len(old_indices) + 1)):
+                return None
+            remap = {
+                old_index: new_index
+                for new_index, (old_index, _) in enumerate(filled, start=1)
+            }
+            for new_index, (_, body) in enumerate(filled, start=1):
+                if not isinstance(body, dict):
+                    return None
+                body = dict(body)
+                dependencies = body.get("dependencies")
+                if dependencies is not None:
+                    if not isinstance(dependencies, list):
+                        return None
+                    remapped_dependencies: list[str] = []
+                    for reference in dependencies:
+                        if not isinstance(reference, str):
+                            return None
+                        old_dependency = int(reference.removeprefix("slot_"))
+                        if (
+                            reference != f"slot_{old_dependency}"
+                            or old_dependency not in remap
+                        ):
+                            return None
+                        remapped_dependencies.append(
+                            f"slot_{remap[old_dependency]}"
+                        )
+                    body["dependencies"] = remapped_dependencies
+                rebuilt[f"slot_{new_index}"] = body
+        except (TypeError, ValueError):
+            return None
+        result = {
+            key: value for key, value in payload.items() if not key.startswith("slot_")
+        }
+        result.update(rebuilt)
+        return result
 
     def render_parents(self, parents: dict[str, str]) -> str:
         graphs = self._parse(parents)

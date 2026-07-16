@@ -105,3 +105,63 @@ def test_execution_rejects_non_finite_output():
     )
     with pytest.raises(FeatureExecutionError, match="NaN or inf"):
         execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_undeclared_assignment_target():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[
+            _node(
+                code=(
+                    "df['fe_first'] = df['x0'] * 2\n"
+                    "df['extra'] = df['x0']\n"
+                    "return df"
+                )
+            )
+        ],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="assigns undeclared columns"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_undeclared_read():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0", "x1"],
+        nodes=[_node(code="df['fe_first'] = df['x1'] * 2\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="reads undeclared input columns"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0], "x1": [2.0]}))
+
+
+def test_execution_rejects_overwriting_pre_existing_column():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[
+            _node(
+                code=(
+                    "df.loc[:, 'x0'] = 0\n"
+                    "df['fe_first'] = df['x0'] * 2\n"
+                    "return df"
+                )
+            )
+        ],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="modified pre-existing columns"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0]}))
+
+
+def test_execution_rejects_split_dependent_statistics():
+    graph = FeatureGraph(
+        dataset="california",
+        raw_columns=["x0"],
+        nodes=[_node(code="df['fe_first'] = df['x0'].rank()\nreturn df")],
+    )
+
+    with pytest.raises(FeatureExecutionError, match="split-dependent operation"):
+        execute_graph(graph, pd.DataFrame({"x0": [1.0, 2.0]}))

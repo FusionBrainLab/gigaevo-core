@@ -119,14 +119,13 @@ async def test_refresh_timeout_when_dag_frozen(fakeredis_storage):
 
 @pytest.mark.asyncio
 async def test_refresh_default_timeout_absorbs_brief_pause(fakeredis_storage):
-    """Default ``timeout_seconds=600.0`` is far longer than any healthy
+    """Default ``timeout_seconds=36000.0`` is far longer than any healthy
     refresh, so a brief DAG pause is absorbed and the refresh still
     completes successfully without bumping into the bound."""
     refresher, parent, fake_dag = await build_test_refresher(fakeredis_storage)
-    # H3 mitigation: default is finite (10 min) so a DAG-runner crash
-    # cannot strand a mutant task forever. Healthy refreshes finish
-    # in milliseconds, well under this bound.
-    assert refresher._timeout_seconds == 600.0
+    # The default remains finite so a DAG-runner crash cannot strand a mutant
+    # task forever, while allowing slow tabular validation jobs to complete.
+    assert refresher._timeout_seconds == 36000.0
     try:
         # Hold the parent QUEUED for ~150ms — longer than the poll interval
         # but still short enough that the test runs fast. With no timeout

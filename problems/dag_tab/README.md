@@ -29,7 +29,9 @@ No separate evolution runtime or LLM client lives in this problem.
 
 Nodes are stored in topological order. `dependencies` name earlier nodes; generated inputs must come from those dependencies. Nodes with `is_output=true` export their generated columns to a fixed CatBoost estimator. Raw features are retained alongside generated outputs. The estimator uses early stopping on each protocol validation split, then refits on the combined train and validation data with the selected iteration count.
 
-Node code is a function body over a pandas DataFrame named `df`. `np` and `pd` are available. Every declared output must be assigned explicitly with `df['name'] = ...`, and the body must end with `return df`. Imports, target access, file/network/process operations, private attributes, `eval`, and `exec` are rejected. Execution must preserve rows and index and create no undeclared columns.
+Node code is a function body over a pandas DataFrame named `df`. `np` and `pd` are available. Every declared output must be assigned explicitly with `df['name'] = ...`, and the body must end with `return df`. Imports, target access, file/network/process operations, private attributes, `eval`, and `exec` are rejected. Execution must preserve rows and index, read only declared inputs, create only declared outputs, and leave every pre-existing column unchanged.
+
+The current node ABI is intentionally stateless and split-invariant. Code must be row-wise; aggregate and order-dependent operations such as mean/rank/quantile/groupby/rolling are rejected because running them independently on train, validation, and query would make predictions depend on query-batch composition. Supporting those features safely requires a future train-fitted `fit`/`transform` ABI whose learned statistics are reused on validation and query data.
 
 ## Mutation
 
@@ -114,10 +116,40 @@ python -u run.py \
   max_tokens=72000 \
   request_timeout=600 \
   stage_timeout=3600 \
-  dag_timeout=7200
+  dag_timeout=7200 \
+  final_ingestion_timeout_s=7200
 ```
 
 `python -u` keeps progress visible in `tmux`. `max_consecutive_mutation_failures` bounds failed LLM/schema attempts that do not increment `max_mutants`; every successfully persisted mutation resets the failure streak. Set it to `0` only when intentionally disabling this guard.
+
+## Gemini 3 Flash via OpenRouter
+
+`config/llm/gemini3_flash.yaml` uses `google/gemini-3-flash-preview`, OpenRouter, and `structured_output_method: function_calling`. Keep the API key only in the environment:
+
+```bash
+export OPENAI_API_KEY=<openrouter-api-key>
+export GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data
+
+python -u run.py \
+  problem.name=dag_tab \
+  program_format=json_document \
+  pipeline=guided \
+  memory=none \
+  mutation=structured_diff_dag_tab \
+  mutation_operator.allowed_changes.max_nodes=3 \
+  llm=gemini3_flash \
+  num_parents=1 \
+  max_mutants=1 \
+  max_in_flight=1 \
+  llm_max_concurrent=1 \
+  max_consecutive_mutation_failures=3 \
+  request_timeout=600 \
+  stage_timeout=3600 \
+  dag_timeout=7200 \
+  final_ingestion_timeout_s=7200
+```
+
+Start with `max_mutants=1` as an endpoint/schema smoke test, then increase it after confirming a valid persisted mutation.
 
 This command intentionally uses the Thinking model. On compatible endpoint versions, `thinking_token_budget=64000` caps reasoning, while total `max_tokens=72000` leaves up to 8000 tokens for the final structured diff. Keep `max_in_flight=1` and `llm_max_concurrent=1` for the first run; increase concurrency only after several valid mutations. For a quick smoke, set `max_mutants=1`. Node code remains a simple structured string so guided decoding can terminate reliably; Python deterministically appends a missing final `return df`, then the AST validator enforces safety and declared outputs.
 

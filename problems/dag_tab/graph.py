@@ -13,13 +13,48 @@ class FeatureNode(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
-    input_cols: list[str] = Field(min_length=1)
-    output_cols: list[str] = Field(min_length=1)
-    code: str = Field(min_length=1, max_length=6000)
-    rationale: str = Field(min_length=1, max_length=1000)
-    dependencies: list[str] = Field(default_factory=list)
-    is_output: bool = False
+    id: str = Field(
+        min_length=1,
+        pattern=r"^[A-Za-z][A-Za-z0-9_]*$",
+        description="Stable semantic name for the feature transformation.",
+    )
+    input_cols: list[str] = Field(
+        min_length=1,
+        description=(
+            "Complete set of raw or dependency-produced columns actually read by code."
+        ),
+    )
+    output_cols: list[str] = Field(
+        min_length=1,
+        description=(
+            "New columns invented by this node; code must assign exactly these columns."
+        ),
+    )
+    code: str = Field(
+        min_length=1,
+        max_length=6000,
+        description=(
+            "Split-invariant row-wise pandas transform using only input_cols and creating "
+            "only output_cols."
+        ),
+    )
+    rationale: str = Field(
+        min_length=1,
+        max_length=1000,
+        description=(
+            "Counterfactual feature hypothesis: what signal this field exposes, why the "
+            "chosen operation matches that mechanism, and what information or robustness "
+            "would be lost if the field were omitted."
+        ),
+    )
+    dependencies: list[str] = Field(
+        default_factory=list,
+        description="Earlier nodes whose generated output columns this node consumes.",
+    )
+    is_output: bool = Field(
+        default=False,
+        description="Whether this node's outputs are exported to the CatBoost estimator.",
+    )
 
     @model_validator(mode="after")
     def validate_local_uniqueness(self) -> Self:
