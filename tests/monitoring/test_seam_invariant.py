@@ -42,6 +42,9 @@ ALLOWED_SEAMS: dict[str, tuple[str, ...]] = {
     # Memory's shared emitter: stamps correlation fields, emits canonically,
     # and appends to the memory_events.jsonl sink.
     "memory/events.py": ("MEMORY_*",),
+    # The reporter is the single emission seam for the derived OPE summary.
+    # It deliberately does not append the summary back into its input ledger.
+    "memory/ope/reporter.py": ("MEMORY_OPE_SUMMARY",),
 }
 
 # Canonical event names the registry defines (used to scan for forged
@@ -72,6 +75,7 @@ CANONICAL_EVENT_NAMES = {
     "MEMORY_OUTCOME_UPDATE",
     "MEMORY_DELIVERY",
     "MEMORY_READ_SELECTION",
+    "MEMORY_OPE_SUMMARY",
 }
 
 # Shared emitter helpers that ARE a seam — callable from anywhere by design.

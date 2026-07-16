@@ -148,12 +148,14 @@ def _stats_updater(metrics: MetricsContext, task_key: str) -> CardStatsUpdater:
     )
 
 
-def _reputation(store: LocalMemoryStore) -> BootstrapReputation:
+def _reputation(
+    store: LocalMemoryStore, half_life_cycles: float = 1.0
+) -> BootstrapReputation:
     return BootstrapReputation(
         BetaBinomialReputation(),
         store,
         n_bootstrap=64,
-        half_life_cycles=1.0,
+        half_life_cycles=half_life_cycles,
     )
 
 
@@ -405,7 +407,9 @@ def test_2d_foreign_program_render_has_sign_rate_without_fitness(shared_bank):
 
 def test_2e_harm_eviction_is_scoped_to_the_evidence_task(shared_bank):
     card = shared_bank.store.get(shared_bank.insight_id)
-    reputation = _reputation(shared_bank.store)
+    # Retain the task-a harm events above the F1 aged-support floor (the shared
+    # half_life_cycles=1.0 decays them into the cold/probe lane); asserts scoping.
+    reputation = _reputation(shared_bank.store, half_life_cycles=8.0)
 
     assert HarmEvictor(reputation, task_key="task-b").should_evict(card) is False
     assert HarmEvictor(reputation, task_key="task-a").should_evict(card) is True
