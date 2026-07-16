@@ -14,12 +14,4 @@ post_step_hook: null
 # LiveMemoryRefreshHook (LLM enrichment) raises it via the memory recipe.
 # Override per run: post_step_hook_timeout_s=<seconds>.
 post_step_hook_timeout_s: 300.0
-# Shutdown budget for ingesting already-persisted mutants. Cheap problems keep the
-# historical 5s default; expensive validators can override it from the CLI.
-final_ingestion_timeout_s: 5.0
-# Parent-refresh budget; raise to at least dag_timeout for expensive validators.
-parent_refresh_timeout_s: 600.0
 max_in_flight: 8
-# Guard against structured-output/schema failures that do not increment max_mutants.
-# Zero preserves legacy behavior; set per run for bounded LLM experiments.
-max_consecutive_mutation_failures: 0

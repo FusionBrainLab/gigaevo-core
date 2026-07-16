@@ -112,19 +112,16 @@ python -u run.py \
   max_mutants=10 \
   max_in_flight=1 \
   llm_max_concurrent=1 \
-  max_consecutive_mutation_failures=3 \
   thinking_token_budget=64000 \
   max_tokens=72000 \
   request_timeout=600 \
   stage_timeout=3600 \
-  dag_timeout=7200 \
-  final_ingestion_timeout_s=7200 \
-  parent_refresh_timeout_s=7920
+  dag_timeout=7200
 ```
 
-`python -u` keeps progress visible in `tmux`. `max_consecutive_mutation_failures` bounds failed LLM/schema attempts that do not increment `max_mutants`; every successfully persisted mutation resets the failure streak. Set it to `0` only when intentionally disabling this guard.
+`python -u` keeps progress visible in `tmux`.
 
-Parent refresh must outlast `dag_timeout`, so the Qwen recipe sets `parent_refresh_timeout_s` above the validator budget.
+A Qwen thinking run is slow enough to expose two engine defaults that this problem does not tune: the parent-refresh budget (600 s) is well under the 7200 s `dag_timeout`, so a refresh of an expensive parent can be killed mid-flight, and the 5 s final-ingestion sweep drops metrics for mutants still in flight at shutdown. Both are engine-wide concerns, not dag_tab ones — raise them in the engine rather than working around them here.
 
 ## Gemini 3 Flash via OpenRouter
 
@@ -147,7 +144,7 @@ python -u run.py \
   max_mutants=100
 ```
 
-Engine defaults handle concurrency, timeouts, and the mutation-failure guard — no extra overrides needed. For a first endpoint/schema smoke test set `max_mutants=1`, then scale up. Verified 2026-07-16: 100/100 mutations schema-valid in under 9 minutes (~1.7M tokens). One caveat: the default 5 s final-ingestion sweep persists mutants still in flight at shutdown without metrics; raise `final_ingestion_timeout_s` if the last few mutants matter.
+Engine defaults handle concurrency and timeouts — no extra overrides needed. For a first endpoint/schema smoke test set `max_mutants=1`, then scale up. Verified 2026-07-16: 100/100 mutations schema-valid in under 9 minutes (~1.7M tokens).
 
 ## MAP-Elites archive
 

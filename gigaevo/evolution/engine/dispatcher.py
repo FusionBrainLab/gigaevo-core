@@ -20,17 +20,9 @@ async def dispatcher_loop(engine) -> None:
     active: set[asyncio.Task] = set()
     task_id = 0
     try:
-        while (
-            engine._running
-            and not engine._reached_mutant_cap()
-            and not engine.mutation_failure_limit_reached()
-        ):
+        while engine._running and not engine._reached_mutant_cap():
             await engine._producer_sema.acquire()
-            if (
-                not engine._running
-                or engine._reached_mutant_cap()
-                or engine.mutation_failure_limit_reached()
-            ):
+            if not engine._running or engine._reached_mutant_cap():
                 # Post-acquire early-stop: hand the slot back so a graceful
                 # restart finds _producer_sema at full capacity.
                 engine._producer_sema.release()

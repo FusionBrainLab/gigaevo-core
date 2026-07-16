@@ -84,15 +84,6 @@ class EngineConfig(BaseModel):
             "for 3-4 servers with 4 runs."
         ),
     )
-    max_consecutive_mutation_failures: int = Field(
-        default=0,
-        ge=0,
-        description=(
-            "Stop dispatch after this many consecutive mutation-generation failures. "
-            "Zero disables the guard. A successful persisted mutation resets the count. "
-            "Use this to bound LLM/schema failure loops that do not advance max_mutants."
-        ),
-    )
     parent_selector: ParentSelector = Field(
         default_factory=lambda: RandomParentSelector(num_parents=1)
     )
@@ -118,24 +109,6 @@ class EngineConfig(BaseModel):
             "restore the legacy behaviour, where the parent refresh lock "
             "is held across the entire child-DAG and only one child of a "
             "given parent can be in flight at a time."
-        ),
-    )
-    final_ingestion_timeout_s: float = Field(
-        default=5.0,
-        gt=0,
-        description=(
-            "Wall-clock budget for draining already-persisted in-flight mutants during "
-            "normal shutdown. Increase this to at least the expected validator runtime "
-            "for expensive problems so max_mutants does not stop before final ingestion."
-        ),
-    )
-    parent_refresh_timeout_s: float = Field(
-        default=600.0,
-        gt=0,
-        description=(
-            "Wall-clock budget for one parent refresh. Raise to at least the problem's "
-            "dag_timeout for expensive validators so healthy refreshes are not killed; "
-            "a stranded parent holds a producer slot for this long."
         ),
     )
     post_step_hook_timeout_s: float = Field(

@@ -83,16 +83,9 @@ class _FakeEngine:
 
         self.mutation_operator = AsyncMock()
         self.state = AsyncMock()
-        self._consecutive_mutation_failures = 0
 
     async def acquire_producer(self) -> None:
         await self._producer_sema.acquire()
-
-    def record_mutation_result(self, *, succeeded: bool) -> None:
-        if succeeded:
-            self._consecutive_mutation_failures = 0
-        else:
-            self._consecutive_mutation_failures += 1
 
 
 @pytest.fixture
