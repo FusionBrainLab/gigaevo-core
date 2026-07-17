@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from gigaevo.memory.cards import Card
+from gigaevo.memory.events import MemoryResearch
 from gigaevo.memory.storage.base import ResearchFailure, ResearchResult
 from gigaevo.memory_v2.candidates import (
     AgenticApplicabilityProvider,
@@ -180,7 +181,11 @@ async def test_agentic_assessment_labels_a_subset_without_gating_the_bank() -> N
 
 
 @pytest.mark.asyncio
-async def test_failed_agentic_assessment_is_a_neutral_full_bank_decision() -> None:
+async def test_failed_agentic_assessment_is_a_neutral_full_bank_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[MemoryResearch] = []
+    monkeypatch.setattr("gigaevo.memory_v2.candidates.emit_memory_event", events.append)
     cards = _cards(4)
     shortlister = _Shortlister(failure=RuntimeError("research unavailable"))
     source = WholeBankCandidateSource(
@@ -199,10 +204,17 @@ async def test_failed_agentic_assessment_is_a_neutral_full_bank_decision() -> No
     payload = slate.applicability.model_dump(mode="json")
     assert payload["status"] == ApplicabilityStatus.FAILED.value
     assert payload["failure"] == ResearchFailure.SHORTLISTER_EXCEPTION.value
+    assert len(events) == 1
+    assert events[0].outcome == "failed"
+    assert events[0].error == "research unavailable"
 
 
 @pytest.mark.asyncio
-async def test_agentic_timeout_is_a_neutral_full_bank_decision() -> None:
+async def test_agentic_timeout_is_a_neutral_full_bank_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[MemoryResearch] = []
+    monkeypatch.setattr("gigaevo.memory_v2.candidates.emit_memory_event", events.append)
     cards = _cards(2)
     shortlister = _BlockingShortlister()
     source = WholeBankCandidateSource(
@@ -219,6 +231,9 @@ async def test_agentic_timeout_is_a_neutral_full_bank_decision() -> None:
     assert slate.applicability.status == "failed"
     assert slate.applicability.failure is ResearchFailure.TIMEOUT
     assert shortlister.cancelled
+    assert len(events) == 1
+    assert events[0].outcome == "failed"
+    assert events[0].error
 
 
 @pytest.mark.asyncio

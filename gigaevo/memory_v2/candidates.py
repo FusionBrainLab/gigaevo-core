@@ -193,7 +193,15 @@ class AgenticApplicabilityProvider:
             return ResearchResult(
                 failure=ResearchFailure.TIMEOUT,
             )
-        except Exception:
+        except Exception as exc:
+            emit_memory_event(
+                MemoryResearch(
+                    outcome="failed",
+                    exclude_count=len(exclude_ids),
+                    duration_ms=(perf_counter() - started) * 1000.0,
+                    error=str(exc),
+                )
+            )
             logger.opt(exception=True).warning(
                 "[MemoryV2][Applicability] research failed; continuing with a "
                 "neutral RAG signal"
