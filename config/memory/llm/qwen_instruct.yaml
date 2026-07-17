@@ -7,10 +7,9 @@ name: memory
 models:
   - _target_: langchain_openai.ChatOpenAI
     model: Qwen/Qwen3-235B-A22B-Instruct-2507
-    # This is a local LiteLLM route, not OpenRouter. Deployments may override
-    # its key, while the local proxy's documented development key remains the
-    # safe fallback.
-    api_key: ${oc.env:LITELLM_MASTER_KEY,sk-gigaevo}
+    # This is a local LiteLLM route, not OpenRouter. Its key must be supplied
+    # explicitly by the launch environment.
+    api_key: ${oc.env:LITELLM_MASTER_KEY}
     base_url: ${oc.env:LOCAL_LLM_PROXY}
     temperature: 0.0
     max_tokens: null

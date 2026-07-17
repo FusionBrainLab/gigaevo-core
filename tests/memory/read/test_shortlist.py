@@ -13,7 +13,7 @@ from gigaevo.memory.read.shortlist import (
     _bank_digest,
     build_research_query,
 )
-from gigaevo.memory.storage.base import ResearchRequest, ResearchResult
+from gigaevo.memory.storage.base import ResearchFailure, ResearchRequest, ResearchResult
 
 
 def _stamped(ts: datetime | None) -> ContextualGain:
@@ -121,7 +121,7 @@ class TestResearchShortlister:
         assert "MUTATION INPUTS" in request.query
 
     @pytest.mark.asyncio
-    async def test_store_failure_degrades_to_empty(self):
+    async def test_store_failure_preserves_a_neutral_failure_result(self):
         shortlister = ResearchShortlister(_ExplodingStore())
         result = await shortlister.shortlist(
             parents=[_Parent("code")],
@@ -129,7 +129,7 @@ class TestResearchShortlister:
             task_description="task",
             metrics_description="metrics",
         )
-        assert result == ResearchResult()
+        assert result.failure is ResearchFailure.STORE_EXCEPTION
 
     @pytest.mark.asyncio
     async def test_planning_context_carries_bank_digest(self, make_card):

@@ -365,6 +365,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
             context_hash=key.context_hash,
             model_config_hash=key.model_config_hash,
             posterior_config_hash=self.posterior.model_config_hash,
+            card_kind_contrast=self.posterior.feature_map.config.card_kind_contrast,
             policy=self.policy.specification,
             candidate_universe=candidate_universe,
             applicability=applicability,

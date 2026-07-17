@@ -31,6 +31,7 @@ from gigaevo.memory.storage.bank import CardBank, CardBankFileLock, new_card_id
 from gigaevo.memory.storage.base import (
     MemoryStore,
     MergeRetireResult,
+    ResearchFailure,
     ResearchRequest,
     ResearchResult,
     ScoredCard,
@@ -105,6 +106,10 @@ class LocalMemoryStore(MemoryStore):
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()
+
+    @property
+    def policy_digest(self) -> str:
+        return self.retrieval_policy_digest
 
     def save(self, card: Card) -> str:
         with self._lock:
@@ -374,9 +379,18 @@ class LocalMemoryStore(MemoryStore):
         error: Exception | None = None,
     ) -> ResearchResult:
         if error is not None:
-            outcome = "failed"
-        else:
-            outcome = "ok" if result.cards else "empty"
+            result = result.model_copy(
+                update={
+                    "failure": ResearchFailure.STORE_EXCEPTION,
+                }
+            )
+        outcome = (
+            "failed"
+            if result.failure is not None
+            else "ok"
+            if result.cards
+            else "empty"
+        )
         emit_memory_event(
             MemoryResearch(
                 outcome=outcome,

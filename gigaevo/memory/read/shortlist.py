@@ -20,7 +20,13 @@ from loguru import logger
 from gigaevo.evolution.mutation.constants import MUTATION_CONTEXT_METADATA_KEY
 from gigaevo.memory.cards import Card
 from gigaevo.memory.read.exclusion import expand_exclude_ids, is_card_excluded
-from gigaevo.memory.storage.base import MemoryStore, ResearchRequest, ResearchResult
+from gigaevo.memory.read.interfaces import policy_digest
+from gigaevo.memory.storage.base import (
+    MemoryStore,
+    ResearchFailure,
+    ResearchRequest,
+    ResearchResult,
+)
 
 _DIGEST_MAX_CARDS = 50
 _DIGEST_LINE_CHARS = 200
@@ -125,8 +131,9 @@ def build_research_query(
 class ResearchShortlister:
     """Runs the store's research pass over the mutation-grounded query.
 
-    Fail-to-empty: any store failure degrades to an empty result so a memory
-    outage can never sink a mutation.
+    Fail-open: any store failure yields no cards so a memory outage can never
+    sink a mutation, while retaining a typed failure marker for callers that
+    need to distinguish it from an assessed empty result.
     """
 
     def __init__(
@@ -143,15 +150,10 @@ class ResearchShortlister:
     def policy_digest(self) -> str:
         """Fingerprint request construction plus the store's retrieval policy."""
 
-        store_digest = getattr(self._store, "retrieval_policy_digest", None)
-        if not isinstance(store_digest, str) or len(store_digest) != 64:
-            store_digest = (
-                f"{type(self._store).__module__}.{type(self._store).__qualname__}"
-            )
         payload = {
             "shortlister": f"{type(self).__module__}.{type(self).__qualname__}",
             "digest_max_cards": self._digest_max_cards,
-            "store_retrieval_policy": store_digest,
+            "store_retrieval_policy": policy_digest(self._store),
         }
         return hashlib.sha256(
             json.dumps(
@@ -200,6 +202,8 @@ class ResearchShortlister:
             )
         except Exception:
             logger.opt(exception=True).warning(
-                "[Memory][Shortlist] research failed; empty shortlist"
+                "[Memory][Shortlist] research failed; neutral shortlist"
             )
-            return ResearchResult()
+            return ResearchResult(
+                failure=ResearchFailure.STORE_EXCEPTION,
+            )

@@ -19,11 +19,12 @@ from gigaevo.memory.read.exclusion import (
     expand_exclude_ids,
     is_card_excluded,
 )
-from gigaevo.memory.read.interfaces import Shortlister
-from gigaevo.memory.storage.base import MemoryStore, ResearchResult
+from gigaevo.memory.read.interfaces import Shortlister, policy_digest
+from gigaevo.memory.storage.base import MemoryStore, ResearchFailure, ResearchResult
 from gigaevo.memory_v2.models import (
     ApplicabilityRecord,
     ApplicabilitySpecification,
+    ApplicabilityStatus,
     CandidateUniverseRecord,
     CandidateUniverseSpecification,
     CandidateUniverseStatus,
@@ -58,15 +59,6 @@ class ApplicabilityProvider(Protocol):
         parent_context: str | None,
         exclude_ids: frozenset[str],
     ) -> ResearchResult: ...
-
-
-def _component_policy_digest(component: object) -> str:
-    explicit = getattr(component, "policy_digest", None)
-    if isinstance(explicit, str) and len(explicit) == 64:
-        return explicit
-    return canonical_digest(
-        {"class": f"{type(component).__module__}.{type(component).__qualname__}"}
-    )
 
 
 class NullApplicabilityProvider:
@@ -147,7 +139,7 @@ class AgenticApplicabilityProvider:
             policy_digest=canonical_digest(
                 {
                     "provider": f"{type(self).__module__}.{type(self).__qualname__}",
-                    "shortlister": _component_policy_digest(shortlister),
+                    "shortlister": policy_digest(shortlister),
                     "mutation_mode": mutation_mode,
                     "research_timeout_seconds": research_timeout_seconds,
                     "retrieval_applicability_contrast": (
@@ -198,13 +190,17 @@ class AgenticApplicabilityProvider:
                 "continuing with a neutral RAG signal",
                 self.research_timeout_seconds,
             )
-            return ResearchResult()
+            return ResearchResult(
+                failure=ResearchFailure.TIMEOUT,
+            )
         except Exception:
             logger.opt(exception=True).warning(
                 "[MemoryV2][Applicability] research failed; continuing with a "
                 "neutral RAG signal"
             )
-            return ResearchResult()
+            return ResearchResult(
+                failure=ResearchFailure.SHORTLISTER_EXCEPTION,
+            )
 
 
 @runtime_checkable
@@ -330,7 +326,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
             policy_digest=canonical_digest(
                 {
                     "source": f"{type(self).__module__}.{type(self).__qualname__}",
-                    "excluder": _component_policy_digest(self.excluder),
+                    "excluder": policy_digest(self.excluder),
                     "allow_cross_task": allow_cross_task,
                     "allowed_kinds": tuple(sorted(self.allowed_kinds)),
                 }
@@ -413,12 +409,23 @@ class WholeBankCandidateSource(_BankCandidateSource):
         if self.applicability_specification.name == "none":
             applicability = ApplicabilityRecord(
                 specification=self.applicability_specification,
-                status="disabled",
+                status=ApplicabilityStatus.DISABLED,
+            )
+        elif research.failure is not None:
+            applicability = ApplicabilityRecord(
+                specification=self.applicability_specification,
+                status=ApplicabilityStatus.FAILED,
+                research_iterations=research.iterations,
+                failure=research.failure,
             )
         else:
             applicability = ApplicabilityRecord(
                 specification=self.applicability_specification,
-                status="assessed" if applicable_ids else "empty",
+                status=(
+                    ApplicabilityStatus.ASSESSED
+                    if applicable_ids
+                    else ApplicabilityStatus.EMPTY
+                ),
                 applicable_bank_card_ids=applicable_ids,
                 research_iterations=research.iterations,
                 summary=research.summary,

@@ -5,12 +5,12 @@ import asyncio
 import pytest
 
 from gigaevo.memory.cards import Card
-from gigaevo.memory.storage.base import ResearchResult
+from gigaevo.memory.storage.base import ResearchFailure, ResearchResult
 from gigaevo.memory_v2.candidates import (
     AgenticApplicabilityProvider,
     WholeBankCandidateSource,
 )
-from gigaevo.memory_v2.models import CandidateUniverseRecord
+from gigaevo.memory_v2.models import ApplicabilityStatus, CandidateUniverseRecord
 from gigaevo.programs.program import Program
 
 _PARENT_ID = "00000000-0000-4000-8000-000000000001"
@@ -193,8 +193,12 @@ async def test_failed_agentic_assessment_is_a_neutral_full_bank_decision() -> No
     assert tuple(card.id for card in slate.candidates) == tuple(
         card.id for card in cards
     )
-    assert slate.applicability.status == "empty"
+    assert slate.applicability.status == "failed"
     assert slate.applicability.applicable_bank_card_ids == ()
+    assert slate.applicability.failure is ResearchFailure.SHORTLISTER_EXCEPTION
+    payload = slate.applicability.model_dump(mode="json")
+    assert payload["status"] == ApplicabilityStatus.FAILED.value
+    assert payload["failure"] == ResearchFailure.SHORTLISTER_EXCEPTION.value
 
 
 @pytest.mark.asyncio
@@ -212,7 +216,8 @@ async def test_agentic_timeout_is_a_neutral_full_bank_decision() -> None:
     slate = await _snapshot(source)
 
     assert slate.candidate_universe.status == "eligible_bank"
-    assert slate.applicability.status == "empty"
+    assert slate.applicability.status == "failed"
+    assert slate.applicability.failure is ResearchFailure.TIMEOUT
     assert shortlister.cancelled
 
 

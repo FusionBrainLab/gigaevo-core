@@ -47,6 +47,7 @@ def decision_record(
     delivered: bool = True,
     run_seed: int = 17,
     attempt_id: str = "attempt-test",
+    card_kind_contrast: bool = False,
     safety_gate_mode: SafetyGateMode = "credible_joint_safe",
     max_treated_invalid_probability: float | None = 0.25,
 ) -> DecisionRecord:
@@ -137,6 +138,7 @@ def decision_record(
         context_hash=key.context_hash,
         model_config_hash=key.model_config_hash,
         posterior_config_hash=posterior_config_hash,
+        card_kind_contrast=card_kind_contrast,
         policy=policy,
         candidate_universe=candidate_universe,
         applicability=applicability,

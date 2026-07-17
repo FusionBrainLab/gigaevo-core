@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 import hashlib
 import importlib
 import inspect
@@ -21,6 +22,7 @@ from pydantic import (
 
 from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.memory.cards import Card
+from gigaevo.memory.storage.base import ResearchFailure
 
 CARD_DELIVERY_TEMPLATE = "[card 1] id={bank_card_id}\n{payload}"
 
@@ -29,7 +31,13 @@ SafetyGateMode = Literal[
     "credible_joint_safe",
 ]
 CandidateUniverseStatus = Literal["eligible_bank", "empty"]
-ApplicabilityStatus = Literal["disabled", "assessed", "empty"]
+
+
+class ApplicabilityStatus(StrEnum):
+    DISABLED = "disabled"
+    ASSESSED = "assessed"
+    EMPTY = "empty"
+    FAILED = "failed"
 
 
 def canonical_digest(payload: Any) -> str:
@@ -354,6 +362,7 @@ class ApplicabilityRecord(StrictFrozenModel):
     applicable_bank_card_ids: tuple[str, ...] = ()
     research_iterations: int = Field(default=0, ge=0)
     summary: str = ""
+    failure: ResearchFailure | None = None
 
     @model_validator(mode="after")
     def _coherent_assessment(self) -> ApplicabilityRecord:
@@ -363,19 +372,32 @@ class ApplicabilityRecord(StrictFrozenModel):
             raise ValueError("applicable card ids must be unique")
         if self.specification.name == "none":
             if (
-                self.status != "disabled"
+                self.status is not ApplicabilityStatus.DISABLED
                 or self.applicable_bank_card_ids
                 or self.research_iterations
                 or self.summary
+                or self.failure is not None
             ):
                 raise ValueError("disabled applicability cannot carry RAG output")
             return self
-        if self.status == "disabled":
+        if self.status is ApplicabilityStatus.DISABLED:
             raise ValueError("agentic applicability cannot be disabled")
-        if self.status == "assessed" and not self.applicable_bank_card_ids:
+        if (
+            self.status is ApplicabilityStatus.ASSESSED
+            and not self.applicable_bank_card_ids
+        ):
             raise ValueError("assessed applicability requires at least one card")
-        if self.status == "empty" and self.applicable_bank_card_ids:
+        if self.status is ApplicabilityStatus.EMPTY and self.applicable_bank_card_ids:
             raise ValueError("empty applicability cannot carry cards")
+        if self.status is ApplicabilityStatus.FAILED:
+            if self.applicable_bank_card_ids or self.failure is None:
+                raise ValueError(
+                    "failed applicability requires a failure marker and no cards"
+                )
+            if self.summary:
+                raise ValueError("failed applicability cannot carry a RAG summary")
+        elif self.failure is not None:
+            raise ValueError("only failed applicability can carry a failure marker")
         return self
 
 
@@ -633,6 +655,7 @@ class DecisionRecord(StrictFrozenModel):
     context_hash: str = Field(min_length=64, max_length=64)
     model_config_hash: str = Field(min_length=64, max_length=64)
     posterior_config_hash: str = Field(min_length=64, max_length=64)
+    card_kind_contrast: bool
     policy: PolicySpecification
     candidate_universe: CandidateUniverseRecord
     applicability: ApplicabilityRecord

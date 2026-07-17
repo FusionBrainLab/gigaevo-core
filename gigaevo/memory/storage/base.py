@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from enum import StrEnum
 from types import TracebackType
 from typing import Literal
 
@@ -39,6 +40,12 @@ class ResearchRequest(BaseModel):
     )
 
 
+class ResearchFailure(StrEnum):
+    TIMEOUT = "timeout"
+    SHORTLISTER_EXCEPTION = "shortlister_exception"
+    STORE_EXCEPTION = "store_exception"
+
+
 class ResearchResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -47,6 +54,7 @@ class ResearchResult(BaseModel):
         default="", description="The agent's synthesis of why these cards."
     )
     iterations: int = 0
+    failure: ResearchFailure | None = None
 
 
 class MergeRetireResult(BaseModel):
@@ -60,7 +68,7 @@ class MemoryStore(ABC):
 
     Cards in, cards out — no dict unions, no conversion layer; bad data
     raises. Retrieval failures degrade to empty results, never to exceptions
-    crossing this boundary.
+    crossing this boundary; their neutral result retains a typed failure marker.
     """
 
     @property

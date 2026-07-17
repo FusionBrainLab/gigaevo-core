@@ -99,6 +99,7 @@ class CalibrationDecision:
     risk_q_hat_treated: float | None
     policy: PolicySpecification
     applicability: ApplicabilityRecord
+    card_kind_contrast: bool
 
     @property
     def proposed_card(self) -> CardSnapshot | None:
@@ -272,6 +273,7 @@ def _parse_decision(
         risk_q_hat_treated=payload.get("risk_q_hat_treated"),
         policy=PolicySpecification.model_validate(payload["policy"]),
         applicability=ApplicabilityRecord.model_validate(payload["applicability"]),
+        card_kind_contrast=bool(payload["card_kind_contrast"]),
     )
 
 
@@ -440,21 +442,21 @@ def _prepare_units(
                 history.append(row)
             if any(row.event_ordinal >= decision.event_ordinal for row in history):
                 raise ValueError("prequential history contains a future decision")
-            behavior_keys = tuple(
-                coordinate.key for coordinate in decision.context.map_elites.coordinates
-            )
             cards = tuple(
                 [row.card for row in history]
                 + list(decision.lineage_registry)
                 + list(decision.candidates)
             )
-            rag_feature_enabled = (
-                decision.applicability.specification.retrieval_applicability_contrast
-            )
             space = FeatureSpace(
                 FeatureConfig(
-                    behavior_keys=behavior_keys,
-                    retrieval_applicability_contrast=rag_feature_enabled,
+                    behavior_keys=tuple(
+                        coordinate.key
+                        for coordinate in decision.context.map_elites.coordinates
+                    ),
+                    card_kind_contrast=decision.card_kind_contrast,
+                    retrieval_applicability_contrast=(
+                        decision.applicability.specification.retrieval_applicability_contrast
+                    ),
                 ),
                 cards,
             )
