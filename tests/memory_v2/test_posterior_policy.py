@@ -9,6 +9,7 @@ import pytest
 from scipy.stats import norm
 
 from gigaevo.memory.cards import Card
+from gigaevo.memory_v2.features import FeatureConfig, HierarchicalFeatureMap
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -20,6 +21,7 @@ from gigaevo.memory_v2.policy import (
     ChanceConstrainedProbabilityMatchingPolicy,
     ProbabilityMatchingConfig,
     SafetyConstraint,
+    _finite_probability_matching,
     _mix_finite_policy_with_exploration,
     safety_gate_admits,
 )
@@ -240,6 +242,70 @@ def test_card_consolidation_rejects_ambiguous_survivors(
 
     with pytest.raises(ValueError, match="exactly one survivor"):
         posterior_model.feature_map.space((left, right))
+
+
+def test_card_kind_contrast_shares_a_clean_program_vs_insight_signal(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+) -> None:
+    feature_map = HierarchicalFeatureMap(
+        config=FeatureConfig(
+            behavior_keys=posterior_model.feature_map.config.behavior_keys,
+            card_kind_contrast=True,
+        )
+    )
+    model = HierarchicalTerminalUtilityPosterior(
+        feature_map=feature_map,
+        config=posterior_model.config,
+    )
+    insight = CardSnapshot.from_card(
+        Card(id="insight", kind="insight", description="bounded insight")
+    )
+    program = CardSnapshot.from_card(
+        Card(
+            id="program",
+            kind="program",
+            program_id="source-program",
+            description="bounded program exemplar",
+        )
+    )
+    space = feature_map.space((insight, program))
+
+    assert space.effect(insight, evolution_context)[space.kind_effect_index] == -0.5
+    assert space.effect(program, evolution_context)[space.kind_effect_index] == 0.5
+    assert model.model_config_hash != posterior_model.model_config_hash
+
+
+def test_retrieval_priority_probability_matches_within_each_source() -> None:
+    cards = tuple(
+        CardSnapshot.from_card(Card(id=card_id, description=card_id))
+        for card_id in ("core-a", "core-b", "tail-a", "tail-b")
+    )
+    worlds = np.asarray(
+        [
+            [4.0, 1.0, 3.0, 2.0],
+            [1.0, 4.0, 2.0, 3.0],
+        ]
+    )
+
+    probabilities, abstain, variances, _ = _finite_probability_matching(
+        cards,
+        worlds,
+        abstain_effect=0.0,
+        preferred_ids=frozenset({"core-a", "core-b"}),
+        preferred_probability=0.75,
+    )
+
+    assert probabilities == pytest.approx(
+        {
+            "core-a": 0.375,
+            "core-b": 0.375,
+            "tail-a": 0.125,
+            "tail-b": 0.125,
+        }
+    )
+    assert abstain == 0.0
+    assert sum(variances.values()) > 0.0
 
 
 def test_terminal_utility_posterior_detects_treatment_dependent_invalidity(

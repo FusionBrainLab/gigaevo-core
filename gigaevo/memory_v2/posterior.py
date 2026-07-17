@@ -1167,10 +1167,17 @@ class HierarchicalTerminalUtilityPosterior:
         self.config = config
         self.reward_regressor = BayesianResidualScaleGaussianRegressor(config)
         self.safety_regressor = StableBayesianLogisticRegressor(config)
+        feature_payload = feature_map.config.model_dump(
+            mode="json", exclude={"card_kind_contrast"}
+        )
+        if feature_map.config.card_kind_contrast:
+            # Preserve hashes for historical configs where the feature did not
+            # exist while making the new action representation explicit.
+            feature_payload["card_kind_contrast"] = True
         self.model_config_hash = canonical_digest(
             {
                 "model": self.MODEL_NAME,
-                "features": feature_map.config.model_dump(mode="json"),
+                "features": feature_payload,
                 "posterior": config.model_dump(mode="json"),
             }
         )

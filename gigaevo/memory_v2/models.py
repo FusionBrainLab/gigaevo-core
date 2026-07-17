@@ -297,7 +297,11 @@ class CardSnapshot(StrictFrozenModel):
 class RetrievalSpecification(StrictFrozenModel):
     """Fixed candidate-generation policy applied before Bayesian selection."""
 
-    name: Literal["whole_bank", "agentic_research"]
+    name: Literal[
+        "whole_bank",
+        "agentic_research",
+        "agentic_research_core_priority",
+    ]
     max_candidates: int = Field(ge=0)
     exploration_candidates: int = Field(ge=0)
     mutation_mode: str = Field(default="rewrite", min_length=1)
@@ -376,10 +380,10 @@ class RetrievalRecord(StrictFrozenModel):
                 or self.random_slate_probability != 1.0
             ):
                 raise ValueError("empty retrieval cannot carry cards or random mass")
-            if (
-                self.research_iterations
-                and self.specification.name != "agentic_research"
-            ):
+            if self.research_iterations and self.specification.name not in {
+                "agentic_research",
+                "agentic_research_core_priority",
+            }:
                 raise ValueError(
                     "whole-bank empty retrieval cannot carry research steps"
                 )
@@ -396,7 +400,10 @@ class RetrievalRecord(StrictFrozenModel):
                 raise ValueError("whole-bank retrieval must have probability one")
             return self
         else:
-            if self.specification.name != "agentic_research":
+            if self.specification.name not in {
+                "agentic_research",
+                "agentic_research_core_priority",
+            }:
                 raise ValueError(
                     "agentic retrieval status requires agentic specification"
                 )
@@ -414,9 +421,16 @@ class RetrievalRecord(StrictFrozenModel):
                 raise ValueError("uniform fallback cannot carry a research core")
 
         tail = eligible - core
-        expected_draw_count = min(
-            len(tail), self.specification.max_candidates - len(core)
-        )
+        if self.specification.name == "agentic_research_core_priority":
+            expected_draw_count = min(
+                len(tail), self.specification.exploration_candidates
+            )
+        else:
+            # Historical agentic ledgers filled every unused research slot with
+            # a random card. Keep that contract loadable and replayable.
+            expected_draw_count = min(
+                len(tail), self.specification.max_candidates - len(core)
+            )
         if len(exploration) != expected_draw_count:
             raise ValueError("retrieval did not fill its randomized discovery draw")
         ordered_tail = tuple(

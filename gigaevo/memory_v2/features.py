@@ -17,6 +17,7 @@ class FeatureConfig(BaseModel):
 
     behavior_keys: tuple[str, ...]
     progress_log_scale: float = Field(default=100.0, gt=1.0)
+    card_kind_contrast: bool = False
 
 
 class HierarchicalFeatureMap:
@@ -121,13 +122,23 @@ class FeatureSpace:
         return self.context_dim
 
     @property
+    def kind_effect_dim(self) -> int:
+        return int(self.config.card_kind_contrast)
+
+    @property
+    def kind_effect_index(self) -> int:
+        if not self.config.card_kind_contrast:
+            raise ValueError("card-kind contrast is disabled")
+        return self.shared_effect_dim
+
+    @property
     def card_context_dim(self) -> int:
         # Card rankings vary only by intercept, parent fitness, and MAP position.
         return 2 + len(self.config.behavior_keys)
 
     @property
     def card_effect_slice(self) -> slice:
-        start = self.shared_effect_dim
+        start = self.shared_effect_dim + self.kind_effect_dim
         return slice(start, start + len(self._bank_index) * self.card_context_dim)
 
     @property
@@ -192,6 +203,13 @@ class FeatureSpace:
         result = np.zeros(self.effect_dim, dtype=float)
         context_features = self.context_features(context)
         result[: self.context_dim] = context_features
+        if self.config.card_kind_contrast:
+            # Effect coding makes this coefficient the program-minus-insight
+            # contrast while the shared intercept remains their midpoint.
+            result[self.kind_effect_index] = {
+                "insight": -0.5,
+                "program": 0.5,
+            }.get(card.kind, 0.0)
         result[self.card_effect_slice] = self._card_deviation(card, context)
         return result
 

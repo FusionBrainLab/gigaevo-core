@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
 from time import perf_counter
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from loguru import logger
 
@@ -150,6 +150,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
         exploration_candidates: int | None = None,
         mutation_mode: str | None = None,
         research_timeout_seconds: float | None = None,
+        selection_logic: str | None = None,
     ) -> None:
         # Keep the target swappable in Hydra without a second near-duplicate
         # memory preset. These agentic-only dependencies are intentionally unused.
@@ -159,6 +160,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
             exploration_candidates,
             mutation_mode,
             research_timeout_seconds,
+            selection_logic,
         )
         super().__init__(
             store=store,
@@ -252,6 +254,7 @@ class AgenticCandidateSource(_BankCandidateSource):
         exploration_candidates: int = 4,
         mutation_mode: str = "rewrite",
         research_timeout_seconds: float = 240.0,
+        selection_logic: Literal["legacy_fill", "core_priority"] = "legacy_fill",
     ) -> None:
         if not math.isfinite(research_timeout_seconds) or research_timeout_seconds <= 0:
             raise ValueError("research_timeout_seconds must be finite and positive")
@@ -264,7 +267,11 @@ class AgenticCandidateSource(_BankCandidateSource):
         self.shortlister = shortlister
         self.research_timeout_seconds = research_timeout_seconds
         self._specification = RetrievalSpecification(
-            name="agentic_research",
+            name=(
+                "agentic_research_core_priority"
+                if selection_logic == "core_priority"
+                else "agentic_research"
+            ),
             max_candidates=max_candidates,
             exploration_candidates=exploration_candidates,
             mutation_mode=mutation_mode,
@@ -364,10 +371,12 @@ class AgenticCandidateSource(_BankCandidateSource):
         remaining_ids = tuple(
             card.id for card in eligible if card.id not in set(core_ids)
         )
-        draw_count = min(
-            len(remaining_ids),
-            self.specification.max_candidates - len(core_ids),
+        draw_budget = (
+            self.specification.exploration_candidates
+            if self.specification.name == "agentic_research_core_priority"
+            else self.specification.max_candidates - len(core_ids)
         )
+        draw_count = min(len(remaining_ids), draw_budget)
         if draw_count:
             permutation = (
                 EventRNG(rng_key)

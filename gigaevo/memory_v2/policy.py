@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 import math
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gigaevo.memory_v2.models import (
@@ -14,6 +15,7 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     PolicyDecision,
     PolicySpecification,
+    RetrievalRecord,
     SafetyGateMode,
 )
 from gigaevo.memory_v2.posterior import FittedTerminalUtilityPosterior
@@ -42,6 +44,88 @@ def _mix_finite_policy_with_exploration(
     }
     abstain = (1.0 - exploration_probability) * finite_abstain_probability
     return proposal, abstain
+
+
+def _finite_probability_matching(
+    cards: tuple[CardSnapshot, ...],
+    effect_worlds: Sequence[Sequence[float]] | np.ndarray,
+    *,
+    abstain_effect: float,
+    preferred_ids: frozenset[str] = frozenset(),
+    preferred_probability: float | None = None,
+) -> tuple[dict[str, float], float, dict[str, float], dict[str, float]]:
+    """Return exact winner frequencies, abstention, MC SEs, and the last world.
+
+    ``preferred_probability`` creates two transparent policy branches: one over
+    the researched core and one over the uniformly discovered tail. Each branch
+    independently probability-matches its best action or abstains. When either
+    branch has no admissible cards, the surviving branch receives probability
+    one rather than forcing an empty choice.
+    """
+
+    treatment_ids = tuple(card.treatment_id for card in cards)
+    finite_probability = {treatment_id: 0.0 for treatment_id in treatment_ids}
+    finite_mc_variance = {treatment_id: 0.0 for treatment_id in treatment_ids}
+    if not cards:
+        return finite_probability, 1.0, finite_mc_variance, {}
+    worlds = tuple(effect_worlds)
+    if not worlds:
+        raise ValueError("probability matching requires posterior worlds")
+    if preferred_probability is not None and not 0.0 < preferred_probability < 1.0:
+        raise ValueError("preferred probability must be strictly between zero and one")
+
+    all_indices = tuple(range(len(cards)))
+    preferred_indices = tuple(
+        index for index, card in enumerate(cards) if card.treatment_id in preferred_ids
+    )
+    discovery_indices = tuple(
+        index
+        for index, card in enumerate(cards)
+        if card.treatment_id not in preferred_ids
+    )
+    pools: tuple[tuple[float, tuple[int, ...]], ...]
+    if preferred_probability is not None and preferred_indices and discovery_indices:
+        pools = (
+            (preferred_probability, preferred_indices),
+            (1.0 - preferred_probability, discovery_indices),
+        )
+    else:
+        pools = ((1.0, all_indices),)
+
+    denominator = float(len(worlds))
+    abstain_probability = 0.0
+    for pool_weight, indices in pools:
+        winners: Counter[str | None] = Counter()
+        for effects in worlds:
+            winner_index = max(
+                indices,
+                key=lambda index: (
+                    effects[index],
+                    cards[index].treatment_id,
+                ),
+            )
+            if effects[winner_index] <= abstain_effect:
+                winners[None] += 1
+            else:
+                winners[cards[winner_index].treatment_id] += 1
+        abstain_probability += pool_weight * winners[None] / denominator
+        for index in indices:
+            treatment_id = cards[index].treatment_id
+            conditional = winners[treatment_id] / denominator
+            finite_probability[treatment_id] = pool_weight * conditional
+            finite_mc_variance[treatment_id] = (
+                pool_weight**2 * conditional * (1.0 - conditional) / denominator
+            )
+
+    last_effects = {
+        card.treatment_id: float(worlds[-1][index]) for index, card in enumerate(cards)
+    }
+    return (
+        finite_probability,
+        abstain_probability,
+        finite_mc_variance,
+        last_effects,
+    )
 
 
 class SafetyConstraint(BaseModel):
@@ -151,10 +235,15 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         candidates: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: EventRNG,
+        retrieval: RetrievalRecord | None = None,
     ) -> PolicyDecision:
         cards = tuple(sorted(candidates, key=lambda row: row.treatment_id))
         if not cards:
             return PolicyDecision(abstain_probability=1.0)
+        if retrieval is not None and {card.bank_card_id for card in cards} != set(
+            retrieval.candidate_bank_card_ids
+        ):
+            raise ValueError("retrieval record and policy candidates differ")
         if not math.isclose(
             posterior.reference_offer_probability,
             self.config.offer_probability,
@@ -208,7 +297,6 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             )
         )
 
-        winners: Counter[str | None] = Counter()
         proposal_rng = rng.generator("proposal-worlds")
         effect_worlds = posterior.sample_usable_effects(
             safe_cards,
@@ -216,31 +304,32 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             proposal_rng,
             samples=self.config.proposal_worlds,
         )
-        last_effects: dict[str, float] = {}
-        for effects in effect_worlds:
-            if not safe_cards:
-                winners[None] += 1
-                continue
-            winner_index = max(
-                range(len(safe_cards)),
-                key=lambda index: (
-                    effects[index],
-                    safe_cards[index].treatment_id,
-                ),
-            )
-            last_effects = {
-                card.treatment_id: float(effects[index])
-                for index, card in enumerate(safe_cards)
-            }
-            winner = safe_cards[winner_index]
-            if effects[winner_index] <= self.config.abstain_effect:
-                winners[None] += 1
-            else:
-                winners[winner.treatment_id] += 1
-
-        denominator = float(self.config.proposal_worlds)
+        preferred_ids: frozenset[str] = frozenset()
+        preferred_probability: float | None = None
+        if (
+            retrieval is not None
+            and retrieval.specification.name == "agentic_research_core_priority"
+            and retrieval.core_bank_card_ids
+        ):
+            preferred_ids = frozenset(retrieval.core_bank_card_ids)
+            preferred_probability = (
+                retrieval.specification.max_candidates
+                - retrieval.specification.exploration_candidates
+            ) / retrieval.specification.max_candidates
+        (
+            finite_safe_probability,
+            finite_abstain_probability,
+            finite_mc_variance,
+            last_effects,
+        ) = _finite_probability_matching(
+            safe_cards,
+            effect_worlds,
+            abstain_effect=self.config.abstain_effect,
+            preferred_ids=preferred_ids,
+            preferred_probability=preferred_probability,
+        )
         finite_probability = {
-            card.treatment_id: winners[card.treatment_id] / denominator
+            card.treatment_id: finite_safe_probability.get(card.treatment_id, 0.0)
             for card in cards
         }
         exploration = self.config.proposal_exploration_probability
@@ -249,7 +338,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             tuple(card.treatment_id for card in cards),
             safe_ids,
             finite_probability,
-            winners[None] / denominator,
+            finite_abstain_probability,
             exploration,
         )
         actions: list[CandidateActionProbability] = []
@@ -268,14 +357,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
                     bank_card_id=card.bank_card_id,
                     proposal_probability=rho,
                     proposal_mc_se=(1.0 - exploration)
-                    * math.sqrt(
-                        max(
-                            finite_probability[treatment_id]
-                            * (1.0 - finite_probability[treatment_id])
-                            / denominator,
-                            0.0,
-                        )
-                    ),
+                    * math.sqrt(max(finite_mc_variance.get(treatment_id, 0.0), 0.0)),
                     offer_probability=offer,
                     joint_treated_probability=(0.0 if offer is None else rho * offer),
                     joint_control_probability=(

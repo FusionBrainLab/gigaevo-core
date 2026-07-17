@@ -290,7 +290,9 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.post_step_hook.refresh_every == 5
         assert cfg.memory.candidate_source.max_candidates == 12
         assert cfg.memory.candidate_source.exploration_candidates == 4
+        assert cfg.memory.candidate_source.selection_logic == "core_priority"
         assert cfg.memory.candidate_source.mutation_mode == "rewrite"
+        assert cfg.memory.feature_config.card_kind_contrast is True
         assert cfg.memory.store.config.research.max_iters == 1
         assert cfg.memory.store.config.research.max_cards == 8
         assert cfg.memory.credit.lineage_depth == 1

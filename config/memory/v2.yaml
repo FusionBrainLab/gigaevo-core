@@ -88,6 +88,9 @@ feature_config:
   # The live BehaviorSpace owns the ordered statistical axes and transforms.
   behavior_keys: ${ref:memory.context_source::behavior_keys}
   progress_log_scale: 100.0
+  # Card kind is durable action metadata, unlike free-form tags. A single
+  # program-minus-insight contrast shares evidence across exact card lineages.
+  card_kind_contrast: true
 
 feature_map:
   _target_: gigaevo.memory_v2.features.HierarchicalFeatureMap
@@ -172,6 +175,10 @@ candidate_source:
   # card reachable without making the Bayesian selector compare the whole bank.
   max_candidates: 12
   exploration_candidates: 4
+  # Keep the random tail at the declared budget and reserve most proposal
+  # probability for the researched core. Historical ledgers omit this key and
+  # retain the original fill-all-unused-slots behavior.
+  selection_logic: core_priority
   mutation_mode: ${mutation_mode}
   # Fail open before the parent-refresh deadline if the retrieval LLM stalls.
   research_timeout_seconds: 240.0

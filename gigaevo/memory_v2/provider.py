@@ -239,6 +239,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 candidates=eligible,
                 context=context,
                 rng=EventRNG(key.rng_key),
+                retrieval=slate.retrieval,
             )
             if self._reserve_candidate_slate(
                 program,

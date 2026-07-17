@@ -167,8 +167,9 @@ class _AlwaysTreatPolicy:
         candidates: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: EventRNG,
+        retrieval=None,
     ) -> PolicyDecision:
-        del posterior, context, rng
+        del posterior, context, rng, retrieval
         card = candidates[0]
         rows = tuple(
             CandidateActionProbability(

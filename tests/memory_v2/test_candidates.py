@@ -189,6 +189,37 @@ async def test_agentic_core_has_uniform_discovery_support() -> None:
 
 
 @pytest.mark.asyncio
+async def test_core_priority_caps_random_tail_without_backfilling() -> None:
+    cards = _cards(10)
+    source = AgenticCandidateSource(
+        store=_Store(cards),  # type: ignore[arg-type]
+        shortlister=_Shortlister(ResearchResult(cards=cards[:1], iterations=1)),
+        max_candidates=6,
+        exploration_candidates=2,
+        selection_logic="core_priority",
+    )
+
+    slate = await source.candidate_snapshot(
+        Program(id=_PARENT_ID, code="pass"),
+        task_key="task",
+        task_description="task",
+        metrics_description="score",
+        parent_context=None,
+        pending_by_bank_card={},
+        max_pending_per_card=2,
+        rng_key="7" * 64,
+    )
+
+    record = slate.retrieval
+    assert record.specification.name == "agentic_research_core_priority"
+    assert record.core_bank_card_ids == (cards[0].id,)
+    assert len(record.exploration_bank_card_ids) == 2
+    assert len(record.candidate_bank_card_ids) == 3
+    assert record.conditional_tail_inclusion_probability == pytest.approx(2 / 9)
+    assert record.random_slate_probability == pytest.approx(1 / math.comb(9, 2))
+
+
+@pytest.mark.asyncio
 async def test_prepared_research_is_reused_without_a_second_llm_call() -> None:
     cards = _cards(4)
     shortlister = _Shortlister(ResearchResult(cards=cards[:2], iterations=1))
@@ -369,6 +400,36 @@ async def test_agentic_failure_uses_a_replayable_uniform_slate() -> None:
     assert len(record.candidate_bank_card_ids) == 5
     assert record.conditional_tail_inclusion_probability == pytest.approx(5 / 8)
     assert record.random_slate_probability == pytest.approx(1 / math.comb(8, 5))
+
+
+@pytest.mark.asyncio
+async def test_core_priority_failure_keeps_only_declared_random_budget() -> None:
+    cards = _cards(8)
+    source = AgenticCandidateSource(
+        store=_Store(cards),  # type: ignore[arg-type]
+        shortlister=_Shortlister(failure=RuntimeError("research unavailable")),
+        max_candidates=5,
+        exploration_candidates=2,
+        selection_logic="core_priority",
+    )
+
+    slate = await source.candidate_snapshot(
+        Program(id=_PARENT_ID, code="pass"),
+        task_key="task",
+        task_description="task",
+        metrics_description="score",
+        parent_context=None,
+        pending_by_bank_card={},
+        max_pending_per_card=2,
+        rng_key="d" * 64,
+    )
+
+    record = slate.retrieval
+    assert record.status == "uniform_fallback"
+    assert len(record.exploration_bank_card_ids) == 2
+    assert len(record.candidate_bank_card_ids) == 2
+    assert record.conditional_tail_inclusion_probability == pytest.approx(2 / 8)
+    assert record.random_slate_probability == pytest.approx(1 / math.comb(8, 2))
 
 
 @pytest.mark.asyncio
