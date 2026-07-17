@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.12.1 (2026-07-17)
+
+### Bug Fixes
+
+- **memory-v2**: Allow mutations without a decision
+  ([#303](https://github.com/KhrulkovV/gigaevo-core-internal/pull/303),
+  [`aa9a64c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/aa9a64c966ab526a081f9e10dfa9cf2ae6805f6f))
+
+- **memory-v2**: Resolve issue #301 audit findings
+  ([#302](https://github.com/KhrulkovV/gigaevo-core-internal/pull/302),
+  [`0282cf9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0282cf953e9f2536bf2fc04ae1dd553361c164e2))
+
+
 ## v2.12.0 (2026-07-17)
 
 ### Bug Fixes
