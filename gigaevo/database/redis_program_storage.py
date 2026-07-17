@@ -190,6 +190,8 @@ class RedisProgramStorage(ProgramStorage):
                         )
                         counter = await r.incr(self._keys.timestamp())
                         merged = self._merge(existing, program)
+                        if existing is not None:
+                            merged = merged.model_copy(update={"state": existing.state})
                         data = merged.to_dict()
                         data["atomic_counter"] = int(counter)
                         pipe.multi()

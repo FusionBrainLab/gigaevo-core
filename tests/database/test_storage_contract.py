@@ -122,6 +122,39 @@ async def test_atomic_state_transition_persisted_and_refetched(backend):
         assert not any(p.id == prog.id for p in queued_progs)
 
 
+async def test_data_update_preserves_live_state_and_status_index(backend):
+    """A stale data writer cannot undo a concurrent lifecycle transition."""
+    async with backend.make() as storage:
+        parent = _program()
+        parent.state = ProgramState.DONE
+        await storage.add(parent)
+        stale_parent = await storage.get(parent.id)
+        assert stale_parent is not None
+
+        parent_ids = [parent.id]
+        assert await storage.batch_transition_by_ids(
+            parent_ids,
+            ProgramState.DONE.value,
+            ProgramState.QUEUED.value,
+        ) == len(parent_ids)
+        assert await storage.batch_transition_by_ids(
+            parent_ids,
+            ProgramState.QUEUED.value,
+            ProgramState.RUNNING.value,
+        ) == len(parent_ids)
+
+        child = _program()
+        stale_parent.lineage.add_child(child.id)
+        await storage.update(stale_parent)
+
+        fetched = await storage.get(parent.id)
+        assert fetched is not None
+        assert fetched.state == ProgramState.RUNNING
+        assert child.id in fetched.lineage.children
+        assert parent.id in await storage.get_ids_by_status(ProgramState.RUNNING.value)
+        assert parent.id not in await storage.get_ids_by_status(ProgramState.DONE.value)
+
+
 async def test_count_by_status(backend):
     """count_by_status returns correct count."""
     async with backend.make() as storage:

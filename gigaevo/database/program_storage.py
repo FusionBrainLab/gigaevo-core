@@ -150,7 +150,13 @@ class ProgramStorage(ABC):
     async def add(self, program: Program) -> None: ...
 
     @abstractmethod
-    async def update(self, program: Program) -> None: ...
+    async def update(self, program: Program) -> None:
+        """Merge data fields into an existing program without changing its state.
+
+        Lifecycle changes must use one of the explicit state-transition methods so
+        the stored state and status index remain atomic and consistent.
+        """
+        ...
 
     async def write_exclusive(self, program: Program) -> None:
         """Fast write without WATCH/MERGE. Default falls back to update().

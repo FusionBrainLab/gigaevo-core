@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from gigaevo.database.merge_strategies import merge_programs
 from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.exceptions import StorageError
 from gigaevo.programs.program import Program
@@ -167,7 +168,14 @@ class DiskProgramStorage(ProgramStorage):
         self.require_writable("update")
         async with self._lock:
             self._ensure_loaded()
-            self._store(program)
+            existing = self._programs.get(program.id)
+            if existing is None:
+                self._store(program)
+                return
+            merged = merge_programs(existing, program).model_copy(
+                update={"state": existing.state}
+            )
+            self._store(merged)
 
     async def get(self, program_id: str) -> Program | None:
         async with self._lock:
