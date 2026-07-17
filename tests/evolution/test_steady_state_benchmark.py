@@ -384,7 +384,9 @@ class TestRealisticE2E:
         engine.storage.get_ids_by_status.side_effect = get_ids_side_effect
         engine.storage.count_by_status.side_effect = count_by_status_side_effect
         engine.storage.mget.side_effect = mget_side_effect
-        engine.storage.batch_transition_by_ids.return_value = 0
+        engine.storage.batch_transition_by_ids.side_effect = (
+            lambda ids, _from_state, _to_state: len(ids)
+        )
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = True
         engine.strategy.add.return_value = True

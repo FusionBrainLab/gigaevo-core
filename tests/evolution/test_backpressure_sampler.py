@@ -249,17 +249,21 @@ async def test_run_starts_and_cancels_the_sampler_task(
     """``run()`` registers ``_sampler_task`` and cancels it in ``finally``."""
     engine = _make_engine(max_in_flight=2, loop_interval=0.01)
 
-    # Replace dispatcher + ingestor with sleepers so run() doesn't pull on
-    # the AsyncMock storage stack — we only want to check the sampler is
-    # wired into the lifecycle.
-    async def _sleeper(_e):
+    # Keep the ingestor alive until the dispatcher completes and run() reaches
+    # terminal drain, matching the production lifecycle contract.
+    async def _dispatcher(_e):
         await asyncio.sleep(0.05)
-        return None
+
+    async def _ingestor(active_engine):
+        while active_engine._running:
+            await asyncio.sleep(0.005)
 
     monkeypatch.setattr(
-        "gigaevo.evolution.engine.steady_state.dispatcher_loop", _sleeper
+        "gigaevo.evolution.engine.steady_state.dispatcher_loop", _dispatcher
     )
-    monkeypatch.setattr("gigaevo.evolution.engine.steady_state.ingestor_loop", _sleeper)
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.steady_state.ingestor_loop", _ingestor
+    )
     # Skip Phase 0 — its helpers call storage methods we haven't mocked.
     monkeypatch.setattr(engine, "_await_idle", AsyncMock(return_value=None))
     monkeypatch.setattr(

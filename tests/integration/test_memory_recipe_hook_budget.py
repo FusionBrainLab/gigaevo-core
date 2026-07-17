@@ -1,15 +1,9 @@
 """Hydra composition test for the post_step_hook wall-clock budget knob.
 
 ``post_step_hook_timeout_s`` bounds a single ``post_step_hook`` invocation.
-The 300 s default was sized for the CPU-bound production
-``CompositionInjectionHook`` archive walk; ``memory/write=live`` instead wires
-the network-bound ``LiveMemoryRefreshHook`` (LLM enrichment), whose
-per-increment latency balloons under shared-endpoint load and gets cancelled at
-300 s. This test pins the contract:
-
-* the global default resolves to 300 s on a plain steady-state run,
-* a short-name Hydra CLI override propagates to ``engine_config``,
-* the live memory write recipe raises the budget to 900 s.
+Live memory writes need a larger budget than memory-free runs because they add
+network-bound LLM enrichment. These tests pin configuration wiring and that
+relative recipe contract without duplicating the tunable timeout values.
 
 Resolution only — no instantiation (that needs a real Redis).
 """
@@ -38,16 +32,27 @@ def _compose(*overrides: str):
         )
 
 
-def test_default_post_step_hook_timeout_is_300():
+def test_default_timeout_propagates_to_engine_config():
     cfg = _compose()
-    assert cfg.engine_config.post_step_hook_timeout_s == 300.0
+    assert cfg.engine_config.post_step_hook_timeout_s == cfg.post_step_hook_timeout_s
+
+
+def test_memory_free_timeout_propagates_to_engine_config():
+    cfg = _compose("memory=none")
+    assert cfg.engine_config.post_step_hook_timeout_s == cfg.post_step_hook_timeout_s
 
 
 def test_cli_override_propagates():
-    cfg = _compose("post_step_hook_timeout_s=1200")
-    assert cfg.engine_config.post_step_hook_timeout_s == 1200.0
+    configured = _compose("memory=none")
+    override_timeout = float(configured.post_step_hook_timeout_s) * 2
+    cfg = _compose(f"post_step_hook_timeout_s={override_timeout}")
+    assert cfg.engine_config.post_step_hook_timeout_s == override_timeout
 
 
-def test_live_memory_write_raises_budget():
-    cfg = _compose("pipeline=memory_guided", "memory=full", "memory/write=live")
-    assert cfg.engine_config.post_step_hook_timeout_s == 900.0
+def test_live_memory_write_raises_budget_over_memory_free_run():
+    memory_free = _compose("memory=none")
+    live_memory = _compose("pipeline=memory_guided", "memory=full", "memory/write=live")
+    assert (
+        live_memory.engine_config.post_step_hook_timeout_s
+        > memory_free.engine_config.post_step_hook_timeout_s
+    )

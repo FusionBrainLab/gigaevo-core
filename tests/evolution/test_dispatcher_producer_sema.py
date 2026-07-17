@@ -2,10 +2,11 @@
 
 These tests use a fake engine surface so dispatcher_loop's semaphore
 interaction can be observed without spinning up Redis / strategies /
-hooks. We pin three properties:
+hooks. We pin four properties:
   1. Each iteration acquires _producer_sema BEFORE create_task.
   2. _buffer_sema is NOT touched by the dispatcher.
   3. Early-stop (engine._running=False after acquire) releases _producer_sema.
+  4. Failed reservations near a hard cap are replaced without overshoot.
 """
 
 from __future__ import annotations
@@ -96,3 +97,30 @@ async def test_dispatcher_early_stop_releases_producer_sema(monkeypatch) -> None
         await task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_refills_failed_reservation_at_cap(monkeypatch) -> None:
+    engine = _FakeDispatcherEngine()
+    limit = engine._max
+    engine.created = 0
+    engine._can_dispatch_mutant = lambda *, reserved: engine.created + reserved < limit
+    spawned: list[int] = []
+
+    async def fake_run_one_mutant(eng, task_id: int) -> str | None:
+        spawned.append(task_id)
+        await asyncio.sleep(0)
+        eng._producer_sema.release()
+        if task_id == 0:
+            return None
+        eng.created += 1
+        return f"child-{task_id}"
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.dispatcher.run_one_mutant", fake_run_one_mutant
+    )
+
+    await asyncio.wait_for(dispatcher_loop(engine), timeout=1.0)
+
+    assert engine.created == limit
+    assert spawned == list(range(limit + 1))
