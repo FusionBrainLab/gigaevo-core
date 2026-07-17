@@ -146,11 +146,13 @@ def test_multi_parent_experiment_keeps_memory_v2_out_of_scope():
 def test_local_model_presets_share_one_proxy_environment_variable(monkeypatch):
     proxy = "http://local-proxy.test/v1"
     monkeypatch.setenv("LOCAL_LLM_PROXY", proxy)
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "litellm-test-key")
 
     cfg = _compose("llm=local_proxy", "memory/llm=qwen_instruct")
 
     assert cfg.llm_base_url == proxy
     assert cfg.memory.llm.models[0].base_url == proxy
+    assert cfg.memory.llm.models[0].api_key == "litellm-test-key"
 
 
 # ---------------------------------------------------------------------------

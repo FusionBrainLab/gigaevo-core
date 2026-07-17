@@ -9,17 +9,20 @@ import pytest
 from scipy.stats import norm
 
 from gigaevo.memory.cards import Card
+from gigaevo.memory_v2.features import FeatureConfig, HierarchicalFeatureMap
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
     EvolutionContext,
     OutcomeMeasurement,
     PolicySpecification,
+    canonical_digest,
 )
 from gigaevo.memory_v2.policy import (
     ChanceConstrainedProbabilityMatchingPolicy,
     ProbabilityMatchingConfig,
     SafetyConstraint,
+    _finite_probability_matching,
     _mix_finite_policy_with_exploration,
     safety_gate_admits,
 )
@@ -240,6 +243,106 @@ def test_card_consolidation_rejects_ambiguous_survivors(
 
     with pytest.raises(ValueError, match="exactly one survivor"):
         posterior_model.feature_map.space((left, right))
+
+
+def test_card_kind_contrast_shares_a_clean_program_vs_insight_signal(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+) -> None:
+    feature_map = HierarchicalFeatureMap(
+        config=FeatureConfig(
+            behavior_keys=posterior_model.feature_map.config.behavior_keys,
+            card_kind_contrast=True,
+        )
+    )
+    model = HierarchicalTerminalUtilityPosterior(
+        feature_map=feature_map,
+        config=posterior_model.config,
+    )
+    insight = CardSnapshot.from_card(
+        Card(id="insight", kind="insight", description="bounded insight")
+    )
+    program = CardSnapshot.from_card(
+        Card(
+            id="program",
+            kind="program",
+            program_id="source-program",
+            description="bounded program exemplar",
+        )
+    )
+    space = feature_map.space((insight, program))
+
+    assert space.effect(insight, evolution_context)[space.kind_effect_index] == -0.5
+    assert space.effect(program, evolution_context)[space.kind_effect_index] == 0.5
+    assert model.model_config_hash != posterior_model.model_config_hash
+
+
+def test_model_config_hash_uses_the_complete_feature_config(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+) -> None:
+    assert posterior_model.model_config_hash == canonical_digest(
+        {
+            "model": posterior_model.MODEL_NAME,
+            "features": posterior_model.feature_map.config.model_dump(mode="json"),
+            "posterior": posterior_model.config.model_dump(mode="json"),
+        }
+    )
+
+
+def test_probability_matching_compares_every_eligible_card_in_one_pool() -> None:
+    cards = tuple(
+        CardSnapshot.from_card(Card(id=card_id, description=card_id)).model_copy(
+            update={"treatment_id": f"{card_id}-revision"}
+        )
+        for card_id in ("core-a", "core-b", "tail-a", "tail-b")
+    )
+    worlds = np.asarray(
+        [
+            [1.0, 2.0, 4.0, 3.0],
+            [2.0, 1.0, 3.0, 4.0],
+        ]
+    )
+
+    probabilities, abstain, variances, _ = _finite_probability_matching(
+        cards,
+        worlds,
+        abstain_effect=0.0,
+    )
+
+    assert probabilities == pytest.approx(
+        {
+            "core-a-revision": 0.0,
+            "core-b-revision": 0.0,
+            "tail-a-revision": 0.5,
+            "tail-b-revision": 0.5,
+        }
+    )
+    assert abstain == 0.0
+    assert sum(variances.values()) > 0.0
+
+
+def test_rag_applicability_changes_only_the_treated_effect_design(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    feature_map = HierarchicalFeatureMap(
+        config=FeatureConfig(
+            behavior_keys=posterior_model.feature_map.config.behavior_keys,
+            retrieval_applicability_contrast=True,
+        )
+    )
+    space = feature_map.space(revisions)
+    card = revisions[0]
+
+    control_without_rag = space.design(card, evolution_context, False)
+    control_with_rag = space.design(card, evolution_context, False, rag_applicable=True)
+    treated_without_rag = space.design(card, evolution_context, True)
+    treated_with_rag = space.design(card, evolution_context, True, rag_applicable=True)
+
+    assert np.array_equal(control_without_rag, control_with_rag)
+    assert treated_with_rag[space.baseline_dim + space.retrieval_effect_index] == 1.0
+    assert treated_without_rag[space.baseline_dim + space.retrieval_effect_index] == 0.0
 
 
 def test_terminal_utility_posterior_detects_treatment_dependent_invalidity(

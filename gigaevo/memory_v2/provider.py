@@ -26,6 +26,8 @@ from gigaevo.memory_v2.context import DecisionContextSource
 from gigaevo.memory_v2.events import MemoryV2Decision
 from gigaevo.memory_v2.ledger import SqliteCausalLedger
 from gigaevo.memory_v2.models import (
+    ApplicabilityRecord,
+    CandidateUniverseRecord,
     CardSnapshot,
     CausalObservation,
     DecisionKey,
@@ -34,7 +36,6 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     PolicyDecision,
     PosteriorFitDiagnostics,
-    RetrievalRecord,
     candidate_set_hash,
     canonical_digest,
 )
@@ -91,7 +92,10 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 "policy": policy.specification.model_dump(
                     mode="json", exclude={"digest"}
                 ),
-                "retrieval": candidate_source.specification.model_dump(
+                "candidate_universe": candidate_source.specification.model_dump(
+                    mode="json", exclude={"digest"}
+                ),
+                "applicability": candidate_source.applicability_specification.model_dump(
                     mode="json", exclude={"digest"}
                 ),
             }
@@ -171,20 +175,6 @@ class CausalBanditMemoryProvider(MemoryProvider):
         for _ in range(3):
             lease_snapshot = self.selection_leases.selection_snapshot()
             evidence = self.ledger.snapshot()
-            retrieval_rng_key = canonical_digest(
-                {
-                    "run_id": context.run_id,
-                    "run_seed": self.run_seed,
-                    "attempt_id": attempt_id,
-                    "event_ordinal": ordinal,
-                    "context_hash": context_hash,
-                    "evidence_hash": evidence.version,
-                    "lease_version": lease_snapshot.version,
-                    "retrieval": self.candidate_source.specification.model_dump(
-                        mode="json", exclude={"digest"}
-                    ),
-                }
-            )
             slate = await self.candidate_source.candidate_snapshot(
                 program,
                 task_key=self.task_key,
@@ -193,7 +183,6 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 parent_context=parent_context,
                 pending_by_bank_card=evidence.pending_by_bank_card,
                 max_pending_per_card=self.policy.config.max_pending_per_card,
-                rng_key=retrieval_rng_key,
                 research=research,
             )
             lineage_registry = tuple(
@@ -205,10 +194,11 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 pending_by_bank_card=evidence.pending_by_bank_card,
             )
             if {row.bank_card_id for row in eligible} != set(
-                slate.retrieval.candidate_bank_card_ids
+                slate.candidate_universe.eligible_bank_card_ids
             ):
                 raise MemoryStorageError(
-                    "retrieval and posterior pending filters produced different slates"
+                    "candidate universe and posterior pending filters produced "
+                    "different slates"
                 )
             candidate_hash = candidate_set_hash(eligible)
             lineage_registry_hash = candidate_set_hash(lineage_registry)
@@ -239,6 +229,9 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 candidates=eligible,
                 context=context,
                 rng=EventRNG(key.rng_key),
+                applicable_bank_card_ids=frozenset(
+                    slate.applicability.applicable_bank_card_ids
+                ),
             )
             if self._reserve_candidate_slate(
                 program,
@@ -258,7 +251,8 @@ class CausalBanditMemoryProvider(MemoryProvider):
                         context=context,
                         lineage_registry=lineage_registry,
                         candidates=eligible,
-                        retrieval=slate.retrieval,
+                        candidate_universe=slate.candidate_universe,
+                        applicability=slate.applicability,
                         decision=decision,
                         evidence=evidence,
                         fitted=fitted,
@@ -343,7 +337,8 @@ class CausalBanditMemoryProvider(MemoryProvider):
         context: EvolutionContext,
         lineage_registry: tuple[CardSnapshot, ...],
         candidates: tuple[CardSnapshot, ...],
-        retrieval: RetrievalRecord,
+        candidate_universe: CandidateUniverseRecord,
+        applicability: ApplicabilityRecord,
         decision: PolicyDecision,
         evidence: EvidenceSnapshot,
         fitted: FittedTerminalUtilityPosterior,
@@ -370,8 +365,10 @@ class CausalBanditMemoryProvider(MemoryProvider):
             context_hash=key.context_hash,
             model_config_hash=key.model_config_hash,
             posterior_config_hash=self.posterior.model_config_hash,
+            card_kind_contrast=self.posterior.feature_map.config.card_kind_contrast,
             policy=self.policy.specification,
-            retrieval=retrieval,
+            candidate_universe=candidate_universe,
+            applicability=applicability,
             fit_diagnostics=PosteriorFitDiagnostics(
                 evidence_count=fitted.evidence_count,
                 reward_observations=fitted.reward.observations,
@@ -503,9 +500,9 @@ class CausalBanditMemoryProvider(MemoryProvider):
         )
         read_event = MemoryReadSelection(
             decision_id=key.decision_id,
-            mutation_mode=retrieval.specification.mutation_mode,
+            mutation_mode=applicability.specification.mutation_mode,
             max_cards=1,
-            research_iterations=retrieval.research_iterations,
+            research_iterations=applicability.research_iterations,
             candidate_ids=tuple(card.bank_card_id for card in candidates),
             auction_winner_ids=(
                 (proposed.bank_card_id,) if proposed is not None else ()

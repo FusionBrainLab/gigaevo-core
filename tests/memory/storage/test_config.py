@@ -18,6 +18,20 @@ def test_default_embed_config_is_consistent():
     assert "task_description" not in embed.embed_scopes[embed.nearest_scope]
 
 
+def test_default_embed_scopes_use_only_semantic_card_content():
+    embed = EmbedConfig()
+
+    fields = {field for scope in embed.embed_scopes.values() for field in scope}
+
+    assert fields <= {
+        "description",
+        "explanation_summary",
+        "task_description_summary",
+    }
+    assert "description" in fields
+    assert not {"keywords", "category", "fitness", "task_key"}.intersection(fields)
+
+
 def test_embed_scopes_must_exist():
     with pytest.raises(ValueError, match="at least one scope"):
         EmbedConfig(embed_scopes={})

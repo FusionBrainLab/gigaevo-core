@@ -12,7 +12,6 @@ import json
 
 import pytest
 
-from gigaevo.memory.cards import CardKind
 from gigaevo.memory.events import memory_event_context
 from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest
@@ -309,12 +308,13 @@ async def test_absorbed_alias_exclude_suppresses_survivor(make_agent, make_card)
     assert [card.id for card in result.cards] == [allowed.id]
 
 
-def test_candidate_brief_clips_fields_single_spaced(make_card):
+def test_candidate_brief_contains_only_semantic_applicability_evidence(make_card):
     card = make_card(
         description="line one\n  line two " + "x " * 300,
         explanation_summary="e " * 300,
         task_description_summary="t " * 300,
         keywords=tuple(f"kw{i}" for i in range(10)),
+        task_key="origin-task",
     )
 
     brief = candidate_brief(card)
@@ -323,22 +323,14 @@ def test_candidate_brief_clips_fields_single_spaced(make_card):
     assert len(brief["description"]) <= 300
     assert len(brief["evidence_summary"]) <= 160
     assert len(brief["task_description_summary"]) <= 100
-    assert brief["keywords"] == [f"kw{i}" for i in range(6)]
-    assert "fitness" not in brief
-
-
-def test_candidate_brief_keeps_program_fitness(make_card):
-    card = make_card(kind=CardKind.PROGRAM, program_id="prog-1", fitness=0.42)
-
-    assert candidate_brief(card)["fitness"] == 0.42
-
-
-def test_candidate_brief_includes_only_nonempty_origin_task(make_card):
-    stamped = candidate_brief(make_card(task_key="origin-task"))
-    legacy = candidate_brief(make_card(task_key=""))
-
-    assert stamped["origin_task"] == "origin-task"
-    assert "origin_task" not in legacy
+    assert set(brief) == {
+        "card_id",
+        "kind",
+        "description",
+        "evidence_summary",
+        "task_description_summary",
+    }
+    assert not {"keywords", "category", "fitness", "origin_task"}.intersection(brief)
 
 
 def test_render_briefs_under_budget_keeps_all_cards(make_card):
@@ -399,7 +391,7 @@ async def test_reflect_filters_ids_not_visible_in_payload(make_agent, make_card)
 
     decision = await agent._reflect(
         "anything",
-        {shown.id: (shown, 0.0), omitted.id: (omitted, 1.0)},
+        {shown.id: (shown, 1.0), omitted.id: (omitted, 0.0)},
         step=1,
         observations="",
     )
@@ -407,36 +399,20 @@ async def test_reflect_filters_ids_not_visible_in_payload(make_agent, make_card)
     assert decision.selected_ids == [shown.id]
 
 
-async def test_reflect_briefs_ordered_by_best_hit_distance(make_agent, make_card):
+async def test_reflect_briefs_order_by_reciprocal_rank_fusion(make_agent, make_card):
     far = make_card(description="quantum annealing")
     near = make_card(description="zebra lattice")
-    router = scripted_router(
-        plans=[
-            plan(
-                (
-                    "description",
-                    "quantum annealing amid many wholly unrelated filler words "
-                    "about cooking sailing gardening painting chess poetry "
-                    "weather geology astronomy pottery dancing",
-                )
-            ),
-            plan(("description", "zebra lattice")),
-        ],
-        decisions=[
-            ShortlistDecision(mode="continue"),
-            ShortlistDecision(mode="final", selected_ids=[]),
-        ],
-    )
-    agent = make_agent(
-        [far, near], router, research=ResearchConfig(default_top_k=1, max_iters=2)
+    agent = make_agent([far, near], scripted_router())
+
+    ordered = agent._ordered_candidates(
+        "anything",
+        {
+            far.id: (far, 1.0 / 61.0),
+            near.id: (near, 2.0 / 61.0),
+        },
     )
 
-    await agent.research(ResearchRequest(query="anything"))
-
-    second_reflect = calls_for(router, ShortlistDecision)[1][1].content
-    assert second_reflect.index(near.id) < second_reflect.index(far.id)
-    assert "NO NEW CARDS" not in second_reflect
-    assert "ALREADY HELD" not in second_reflect
+    assert [card.id for card in ordered] == [near.id, far.id]
 
 
 async def test_final_step_notice_forces_final_mode_instruction(make_agent, make_card):

@@ -98,8 +98,7 @@ class ResearchConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description="MMR relevance-diversity trade-off for candidate ordering "
-        "(VectorIndex.mmr_order); 1.0 = pure relevance (off). Not yet consumed "
-        "by the research loop.",
+        "after reciprocal-rank fusion; 1.0 = pure relevance.",
     )
 
     def top_k(self, scope: str) -> int:

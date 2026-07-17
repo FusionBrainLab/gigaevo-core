@@ -9,6 +9,7 @@ import pytest
 from gigaevo.cli import main
 from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
 from gigaevo.memory_v2.calibration import (
+    _prepare_units,
     calibrate_safety_priors,
     load_calibration_trajectory,
 )
@@ -139,7 +140,7 @@ def test_calibrator_uses_frozen_histories_and_emits_cli_report(
     evolution_context: EvolutionContext,
     revisions: tuple[CardSnapshot, CardSnapshot],
 ) -> None:
-    ledger_path = tmp_path / "memory_v2_evidence.sqlite3"
+    ledger_path = tmp_path / "memory_v2_selection_evidence.sqlite3"
     _closed_calibration_ledger(
         ledger_path, environment, evolution_context, revisions[0]
     )
@@ -199,6 +200,30 @@ def test_calibrator_uses_frozen_histories_and_emits_cli_report(
         row["prior"]["safety_shared_effect_prior_mean"]
         for row in cli_report["groups"][0]["grid_ranking"]
     } == {-0.693147, 0.0, 0.693147}
+
+
+def test_calibrator_replays_the_recorded_card_kind_contrast(
+    tmp_path,
+    environment: EnvironmentFingerprint,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    ledger_path = tmp_path / "kind-contrast.sqlite3"
+    ledger = SqliteCausalLedger(path=ledger_path, environment=environment)
+    ledger.activate()
+    ledger.record_decision(
+        decision_record(
+            evolution_context,
+            revisions[0],
+            card_kind_contrast=True,
+        )
+    )
+    ledger.close()
+
+    (unit,) = _prepare_units((load_calibration_trajectory(ledger_path),))
+
+    assert unit.space.config.card_kind_contrast is True
+    assert unit.space.kind_effect_dim == 1
 
 
 def test_calibrator_does_not_pool_distinct_typed_environments(

@@ -9,7 +9,9 @@ node fails to empty so retrieval can never crash the caller.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import hashlib
 import json
+import math
 from time import perf_counter
 from typing import Any, Literal, TypedDict
 
@@ -18,7 +20,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from gigaevo.llm.agents.base import LangGraphAgent
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card
 from gigaevo.memory.events import MemoryResearchStep, emit_memory_event
 from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest, ResearchResult
@@ -30,8 +32,9 @@ from gigaevo.prompts import load_prompt
 _BRIEF_DESCRIPTION_CHARS = 300
 _BRIEF_EVIDENCE_CHARS = 160
 _BRIEF_TASK_CHARS = 100
-_BRIEF_KEYWORD_LIMIT = 6
 _MAX_FOLLOWUP_QUERIES = 5
+_MAX_PLAN_QUERIES = 5
+_RRF_K = 60
 
 
 class ScopedQuery(BaseModel):
@@ -193,26 +196,20 @@ def _brief_text(text: str, max_chars: int) -> str:
 
 
 def candidate_brief(card: Card) -> dict[str, Any]:
+    """Render only semantic evidence the reflector may use for applicability."""
+
     brief: dict[str, Any] = {
         "card_id": card.id,
         "kind": card.kind.value,
     }
-    if card.task_key:
-        brief["origin_task"] = card.task_key
     brief["description"] = _brief_text(card.description, _BRIEF_DESCRIPTION_CHARS)
     brief["evidence_summary"] = _brief_text(
         card.explanation_summary, _BRIEF_EVIDENCE_CHARS
     )
-    if card.category:
-        brief["category"] = card.category
     if card.task_description_summary:
         brief["task_description_summary"] = _brief_text(
             card.task_description_summary, _BRIEF_TASK_CHARS
         )
-    if card.keywords:
-        brief["keywords"] = list(card.keywords[:_BRIEF_KEYWORD_LIMIT])
-    if card.kind is CardKind.PROGRAM and card.fitness is not None:
-        brief["fitness"] = card.fitness
     return brief
 
 
@@ -267,6 +264,7 @@ class ResearchAgent:
     ) -> None:
         self._bank = bank
         self._index = index
+        self._embed = embed
         self._config = config
         self._scopes = query_scopes
         self._scopes_section = "\n".join(
@@ -287,6 +285,31 @@ class ResearchAgent:
         self._no_new_cards_line = load_prompt(
             "retrieval_reflection", "no_new_cards", prompts_dir
         )
+        self._policy_digest = _stable_digest(
+            {
+                "agent": f"{type(self).__module__}.{type(self).__qualname__}",
+                "embed": embed.model_dump(mode="json"),
+                "research": config.model_dump(mode="json"),
+                "query_scopes": query_scopes,
+                "planner_system": self._planner.system_prompt,
+                "planner_user": self._planner.user_prompt_template,
+                "reflector_system": self._reflector.system_prompt,
+                "reflector_user": self._reflector.user_prompt_template,
+                "reflection_auxiliary_prompts": {
+                    "step_status": self._step_status_template,
+                    "final_step": self._final_step_snippet,
+                    "already_held": self._already_held_template,
+                    "no_new_cards": self._no_new_cards_line,
+                },
+                "models": tuple(getattr(llm, "model_names", ()) or ()),
+            }
+        )
+
+    @property
+    def policy_digest(self) -> str:
+        """Fingerprint the semantic retrieval policy frozen in a decision."""
+
+        return self._policy_digest
 
     async def research(self, request: ResearchRequest) -> ResearchResult:
         candidates: dict[str, tuple[Card, float]] = {}
@@ -296,9 +319,7 @@ class ResearchAgent:
         for step in range(1, self._config.max_iters + 1):
             started = perf_counter()
             plan = await self._plan(planner_request, request.planning_context)
-            queries = [
-                q for q in plan.queries if q.scope in self._scopes and q.query.strip()
-            ]
+            queries = self._usable_plan_queries(plan)
             new_ids = self._retrieve(queries, exclude_ids, candidates)
             decision = await self._reflect(
                 request.query,
@@ -307,7 +328,9 @@ class ResearchAgent:
                 self._observations(step, held_ids, new_ids),
             )
             if decision.mode != "final" and step == self._config.max_iters:
-                decision = self._final_step_fallback(candidates, decision)
+                decision = self._final_step_fallback(
+                    request.query, candidates, decision
+                )
             emit_memory_event(
                 MemoryResearchStep(
                     step=step,
@@ -342,12 +365,11 @@ class ResearchAgent:
 
     def _final_step_fallback(
         self,
+        request: str,
         candidates: dict[str, tuple[Card, float]],
         decision: ShortlistDecision,
     ) -> ShortlistDecision:
-        ordered = [
-            card for card, _ in sorted(candidates.values(), key=lambda entry: entry[1])
-        ]
+        ordered = self._ordered_candidates(request, candidates)
         _, visible_ids = render_candidate_briefs_with_visible_ids(
             ordered, self._config.reflect_payload_chars
         )
@@ -400,6 +422,22 @@ class ResearchAgent:
             )
             return SearchPlan()
 
+    def _usable_plan_queries(self, plan: SearchPlan) -> list[ScopedQuery]:
+        """Bound and deduplicate planner output before it reaches the index."""
+
+        queries: list[ScopedQuery] = []
+        seen: set[tuple[str, str]] = set()
+        for scoped in plan.queries:
+            normalized = " ".join(scoped.query.split())
+            key = (scoped.scope, normalized.casefold())
+            if scoped.scope not in self._scopes or not normalized or key in seen:
+                continue
+            seen.add(key)
+            queries.append(scoped.model_copy(update={"query": normalized}))
+            if len(queries) == _MAX_PLAN_QUERIES:
+                break
+        return queries
+
     def _retrieve(
         self,
         queries: list[ScopedQuery],
@@ -420,17 +458,60 @@ class ResearchAgent:
                     "[Memory][Research] index query failed on scope {}", scoped.scope
                 )
                 continue
-            for hit in hits:
+            for rank, hit in enumerate(hits, start=1):
+                # Ranks are comparable across scopes and query formulations;
+                # raw embedding distances are not. Reciprocal-rank fusion also
+                # rewards cards independently retrieved by several signals.
+                score = 1.0 / (_RRF_K + rank)
                 held = candidates.get(hit.card_id)
                 if held is not None:
-                    candidates[hit.card_id] = (held[0], min(held[1], hit.distance))
+                    candidates[hit.card_id] = (held[0], held[1] + score)
                     continue
                 card = self._bank.get(hit.card_id)
                 if card is None or is_card_excluded(card, exclude_ids):
                     continue
-                candidates[card.id] = (card, hit.distance)
+                candidates[card.id] = (card, score)
                 new_ids.append(card.id)
         return new_ids
+
+    def _ordered_candidates(
+        self,
+        request: str,
+        candidates: dict[str, tuple[Card, float]],
+    ) -> list[Card]:
+        """Apply RRF relevance, then optional MMR diversity, deterministically."""
+
+        ranked_ids = [
+            card_id
+            for card_id, _ in sorted(
+                candidates.items(), key=lambda item: (-item[1][1], item[0])
+            )
+        ]
+        if not ranked_ids:
+            return []
+        scores = {card_id: candidates[card_id][1] for card_id in ranked_ids}
+        lower, upper = min(scores.values()), max(scores.values())
+        relevance = (
+            {card_id: 1.0 for card_id in ranked_ids}
+            if math.isclose(lower, upper)
+            else {
+                card_id: (score - lower) / (upper - lower)
+                for card_id, score in scores.items()
+            }
+        )
+        try:
+            ranked_ids = self._index.mmr_order(
+                self._embed.nearest_scope,
+                request,
+                ranked_ids,
+                lambda_=self._config.mmr_lambda,
+                relevance=relevance,
+            )
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[Memory][Research] MMR ordering failed; using RRF relevance order"
+            )
+        return [candidates[card_id][0] for card_id in ranked_ids]
 
     async def _reflect(
         self,
@@ -439,9 +520,7 @@ class ResearchAgent:
         step: int,
         observations: str,
     ) -> ShortlistDecision:
-        ordered = [
-            card for card, _ in sorted(candidates.values(), key=lambda entry: entry[1])
-        ]
+        ordered = self._ordered_candidates(request, candidates)
         payload, visible_ids = render_candidate_briefs_with_visible_ids(
             ordered, self._config.reflect_payload_chars
         )
@@ -455,8 +534,10 @@ class ResearchAgent:
             )
             if decision.mode == "final":
                 selected_ids = [
-                    cid for cid in decision.selected_ids if cid in visible_ids
-                ]
+                    cid
+                    for cid in dict.fromkeys(decision.selected_ids)
+                    if cid in visible_ids
+                ][: self._config.max_cards]
                 if selected_ids != decision.selected_ids:
                     return decision.model_copy(update={"selected_ids": selected_ids})
             return decision
@@ -470,3 +551,11 @@ class ResearchAgent:
                     reasoning="Reflection failed on the final retrieval step.",
                 )
             return ShortlistDecision(mode="continue")
+
+
+def _stable_digest(payload: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+    ).hexdigest()

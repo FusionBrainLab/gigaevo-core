@@ -90,13 +90,14 @@ def test_consolidate_prompt_is_unchanged_for_empty_task_keys(make_card):
     assert "origin task:" not in state["messages"][1].content
 
 
-def test_retrieval_prompts_enable_cross_task_mechanism_transfer():
+def test_retrieval_prompts_use_semantic_context_without_metadata_ranking():
     reflection = (_PROMPTS_DIR / "retrieval_reflection" / "system.txt").read_text()
     planner = (_PROMPTS_DIR / "retrieval_planner" / "system.txt").read_text()
 
-    assert "Rank by task fit first" not in reflection
-    assert "origin_task" in reflection
-    assert "task-agnostic mechanism query" in planner
+    assert "task_description_summary" in reflection
+    assert "origin_task" not in reflection
+    assert "keywords" not in reflection
+    assert "Match the caller's task-scope constraints" in planner
 
 
 def test_arbiter_system_prompts_explain_cross_task_origin_lines():

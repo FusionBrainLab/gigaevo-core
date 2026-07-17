@@ -1,5 +1,6 @@
 from gigaevo.memory.storage.base import (
     MemoryStore,
+    ResearchFailure,
     ResearchRequest,
     ResearchResult,
     ScoredCard,
@@ -10,6 +11,7 @@ __all__ = [
     "EmbedConfig",
     "MemoryStore",
     "ResearchConfig",
+    "ResearchFailure",
     "ResearchRequest",
     "ResearchResult",
     "ScoredCard",

@@ -7,9 +7,9 @@ name: memory
 models:
   - _target_: langchain_openai.ChatOpenAI
     model: Qwen/Qwen3-235B-A22B-Instruct-2507
-    # Memory models use the shared memory-router credential, including when
-    # routed through the in-cluster LiteLLM proxy.
-    api_key: ${oc.env:OPENROUTER_API_KEY}
+    # This is a local LiteLLM route, not OpenRouter. Its key must be supplied
+    # explicitly by the launch environment.
+    api_key: ${oc.env:LITELLM_MASTER_KEY}
     base_url: ${oc.env:LOCAL_LLM_PROXY}
     temperature: 0.0
     max_tokens: null

@@ -10,7 +10,7 @@ glossary are in [the Bayesian system report](memory_v2_bayesian_system_report.md
 
 This first iteration is intentionally narrow. It supports one proposed card per
 mutation and `num_parents=1` on bounded MAP-Elites tasks. It does not claim
-multi-card attribution, crossover identification, or full retrieval-policy OPE.
+multi-card attribution, crossover identification, or full RAG-policy OPE.
 
 ## Run Surface
 
@@ -98,9 +98,9 @@ At each mutation attempt, v2 freezes and durably records:
 
 - the typed parent identity, metrics, generation, and reward bounds;
 - the complete MAP-Elites snapshot described below;
-- the complete eligible bank registry and the retrieved immutable card slate;
-- the agentic core, randomized discovery draw, conditional inclusion
-  probabilities, and retrieval fallback state;
+- the complete eligible-bank action universe and its immutable card snapshots;
+- the optional agentic RAG applicability assessment, including its frozen policy
+  fingerprint, selected card ids, summary, and neutral/failure state;
 - pending counts for stable treatments and bank lineages;
 - the evidence, context, candidate, posterior, and policy hashes;
 - posterior fit diagnostics and every candidate posterior summary;
@@ -178,9 +178,12 @@ effect(x,j) = q_1 - q_0
 
 The design is `baseline(x) + A * card_effect(x)`: proposed-but-withheld controls
 all use the same contextual baseline, while delivered cards add their lineage and
-stable card effect. A fixed conditional offer probability `e` supplies randomized
-overlap (`0.7` by default for normal runs); mixed offer propensities inside one
-fitted ledger are rejected by this first implementation.
+stable card effect. When enabled, a frozen RAG-applicability indicator is one
+additional shared treatment-effect contrast. It is learned from the same randomized
+outcomes; it is not a hand-written reward or a candidate gate. A fixed conditional
+offer probability `e` supplies randomized overlap (`0.7` by default for normal
+runs); mixed offer propensities inside one fitted ledger are rejected by this first
+implementation.
 Invalidity learns from every randomized terminal; valid gain learns only where a
 gain exists. The composite value still assigns invalidity its parent-specific
 pessimistic consequence instead of treating it as missing or zero.
@@ -231,15 +234,13 @@ for the highest usable effect or abstention. Those configured winner counts are
 the behavior policy, so the sampled categorical probability is exact for that
 finite-world policy. Its binomial Monte Carlo standard error is logged as a
 diagnostic. A configured uniform-exploration mixture gives every feasible card
-in the realized slate nonzero proposal support. Before this policy, one agentic
-plan/retrieve/reflect pass selects up to eight context-relevant cards. Uniform
-sampling without replacement fills the 12-card slate, normally contributing
-four discovery cards and filling all 12 positions if research returns nothing.
-Thus every eligible non-core card has exact conditional inclusion probability
-`r / M`, where `r` cards are drawn from a remaining pool of size `M`. Research
-rank is never treated as causal reward evidence. The exact conditional
-unordered-subset probability is `1 / C(M, r)`. A research episode that exceeds
-its configured deadline fails open to the same replayable uniform slate.
+in the full eligible bank nonzero proposal support. Before this policy, an
+agentic plan/retrieve/reflect pass may label a small semantic subset as
+applicable to the current parent. It never removes a card from the action
+universe: the posterior compares every eligible card in one shared-world pool.
+The label enters only through the learned treatment-effect contrast above, so a
+retrieval failure yields an empty, neutral label rather than a different
+candidate policy. Retrieval rank is never treated as causal reward evidence.
 
 After proposing card `j`, v2 randomizes actual delivery:
 
@@ -277,11 +278,13 @@ gate rechecks the verdict under the selection-lease lock before deletion.
 The causal source of truth is:
 
 ```text
-<checkpoint_dir>/memory_v2_evidence.sqlite3
+<checkpoint_dir>/memory_v2_selection_evidence.sqlite3
 ```
 
 Decisions, child links, terminals, and event ordinals share one transactionally
-consistent ledger. Payload hashes are verified on every read, and writes use
+consistent ledger. This separate filename deliberately starts the new
+candidate-universe/applicability schema without migrating, restamping, or
+rewriting earlier ledgers. Payload hashes are verified on every read, and writes use
 full synchronization. SQLite locking on the project NFS mount is not trusted:
 v2 detects network filesystems, runs the live database on node-local scratch,
 then fsyncs and atomically replaces a checkpoint mirror after every causal
@@ -297,16 +300,16 @@ decision-time reward/risk regressions and reports overlap, effective sample
 size, and maximum importance weight. Standard error is clustered by independent
 run when at least two runs exist; a single run reports `se=None`.
 
-This is not full retrieval/proposal-policy OPE. Agentic core-inclusion
-probabilities are not observable; the ledger records exact probabilities only
-for the uniform discovery draw conditional on the realized core. Comparing
-retrievers requires prospective independent runs.
+This is not full proposal-policy OPE or a causal estimate of the RAG assessor.
+RAG applicability is an adaptive, non-randomized pre-treatment covariate, while
+the complete eligible bank remains the logged action universe. Comparing
+agentic and null applicability requires prospective independent runs.
 
 ## Smoke Analytics
 
 ```bash
 python experiments/hover/memory_v2_smoke/analyze.py \
-  --ledger <checkpoint_dir>/memory_v2_evidence.sqlite3 \
+  --ledger <checkpoint_dir>/memory_v2_selection_evidence.sqlite3 \
   --output-dir <run_dir>/memory_v2_analytics
 ```
 
@@ -370,7 +373,7 @@ changing admission.
 ## Deliberately Deferred
 
 - mutation-level crossover and multi-card slate randomization;
-- full-policy evaluation or optimization of the agentic retriever;
+- full-policy evaluation or optimization of the agentic RAG assessor;
 - sparse or low-rank posterior updates for long histories with many retired
   treatments;
 - full proposal-policy OPE and adaptive confidence sequences;

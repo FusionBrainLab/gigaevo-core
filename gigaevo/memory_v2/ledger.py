@@ -614,6 +614,7 @@ class SqliteCausalLedger:
                     event_ordinal=record.event_ordinal,
                     card=card,
                     context=record.context,
+                    rag_applicable=record.is_rag_applicable(card.bank_card_id),
                     treatment=record.delivered,
                     offer_propensity=record.offer_probability,
                     proposal_propensity=record.proposal_probability,

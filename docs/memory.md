@@ -320,8 +320,8 @@ the identical RNG stream.
 
 `memory/llm` is independent of the main mutation `llm`. The default
 `memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
-`memory/llm=qwen_instruct` reads `OPENROUTER_API_KEY` and targets
-`LOCAL_LLM_PROXY`; pair it with a larger thinking model on the main
+`memory/llm=qwen_instruct` targets `LOCAL_LLM_PROXY` and uses
+`LITELLM_MASTER_KEY` when the proxy has a non-default key; pair it with a larger thinking model on the main
 `llm=local_proxy` route when mutation and card work should use different models.
 
 ### The read funnel — three distinct widths

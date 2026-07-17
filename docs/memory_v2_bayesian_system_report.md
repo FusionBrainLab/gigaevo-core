@@ -13,13 +13,14 @@ Memory v2 achieves the intended first-iteration replacement:
   and harm retirement;
 - every delivered card has a randomized withheld-card control and an exact logged
   conditional probability;
-- an agentic research pass narrows the eligible same-task bank to a 12-card slate:
-  up to eight researched cards plus uniformly randomized discovery positions.
+- every eligible same-task card enters one posterior action universe; an agentic
+  research pass can add a frozen pre-treatment applicability label but cannot
+  remove a card from that universe.
 
 This is a solid causal core without an arbitrary task-wide admission cap. Agentic
-retrieval improves contextual relevance while randomized discovery prevents an
-incorrect shortlist from permanently hiding cards. It is not a multi-card
-attribution model or a full archive-contribution model.
+retrieval supplies semantic context through a learned, outcome-checked feature
+instead of an unlogged hard shortlist. It is not a multi-card attribution model or
+a full archive-contribution model.
 
 At cold start, cards with no v2 randomized evidence are deliberately close to
 exchangeable. The policy explores them instead of pretending that v1 observational
@@ -45,8 +46,8 @@ The content plane keeps the useful and already tested memory machinery:
 6. Selection leases protect in-flight assignments and consolidation aliases.
 
 The memory LLM writes cards and performs the pre-selection research pass. Its
-ranking only forms the comparison slate; the causal posterior still decides which
-card is better and receives no synthetic evidence from retrieval rank.
+output is a bounded applicability annotation; the causal posterior compares the
+complete eligible bank and receives no synthetic evidence from retrieval rank.
 
 ### What is replaced from v1
 
@@ -172,17 +173,19 @@ Censored outcomes remain auditable but do not train either outcome likelihood.
 
 ![Hierarchical reward and invalidity posterior](diagrams/memory_v2_posterior_hierarchy.png)
 
-For card revision `j`, context `x`, and delivered-card indicator `A`, the design
-vector is:
+For card revision `j`, context `x`, delivered-card indicator `A`, and frozen RAG
+applicability label `r`, the design vector is:
 
 ```text
-z_j(A, x) = [ baseline(x), A * effect_j(x) ]
+z_j(A, x, r) = [ baseline(x), A * effect_j(x, r) ]
 ```
 
 The effect weight is `0` for withheld control and `1` for delivered treatment.
 All proposed-but-withheld cards therefore share the same contextual control arm;
-only delivered cards add a stable card effect. Normal post-validation runs use
-fixed probability `e = 0.7`; balanced validation runs use `e = 0.5` to collect
+only delivered cards add a stable card effect. When enabled, `r` adds one shared
+treatment-effect contrast that is learned from randomized outcomes. It is neither
+a manual reward nor a candidate filter. Normal post-validation runs use fixed
+probability `e = 0.7`; balanced validation runs use `e = 0.5` to collect
 information faster.
 
 ### Valid-gain model
@@ -265,7 +268,10 @@ The baseline and shared treatment effect each use that six-value vector. Every c
 lineage has one shrunk five-value deviation: intercept, parent fitness, and the three
 MAP coordinates. Each stable card adds one contextual deviation. Card rankings
 can therefore vary with parent fitness and MAP position without unrelated feature
-families.
+families. When RAG applicability is enabled, one additional shared treatment
+contrast records whether the assessor labelled the card relevant for that frozen
+parent context; it remains strongly shrunk until randomized outcomes establish a
+signal.
 
 The coefficient count is:
 
@@ -318,43 +324,45 @@ For each mutation attempt:
 2. **Snapshot eligibility.** Keep nonempty insight/program cards from the same task,
    apply lineage exclusions, and remove lineages at the pending cap. V2 does not
    impose a task-wide bank cap.
-3. **Research a core.** One agentic plan/retrieve/reflect pass selects up to eight
-   cards using the task, metrics, parent code, and live evolutionary context. A
-   timed-out research pass fails open to uniform discovery.
-4. **Add discovery.** Uniformly sample from the remaining eligible bank to fill a
-   12-card slate. If research is empty or fails, use a uniform 12-card slate.
-5. **Resolve card snapshots.** Render and hash the exact singleton card text while
-   retaining the stable card id as the treatment identity.
-6. **Fit only prior evidence.** Load eligible closed terminals committed before this
+3. **Assess applicability.** One agentic plan/retrieve/reflect pass may label a
+   small semantic subset using the task, metrics, parent code, and live
+   evolutionary context. A timeout or failure produces an empty, neutral label.
+4. **Resolve the complete universe.** Refresh eligibility after research, render
+   and hash every eligible singleton card text, and retain the stable card id as
+   the treatment identity. The assessment cannot gate this universe.
+5. **Fit only prior evidence.** Load eligible closed terminals committed before this
    decision and fit the reward and invalidity posteriors.
-7. **Predict every candidate.** Draw 1,024 shared posterior samples and record effect,
-   gain, risk, and uncertainty summaries.
-8. **Exclude confident incremental harm.** The default admits a card unless the
+6. **Predict every candidate.** Draw 1,024 shared posterior samples and record effect,
+   gain, risk, and uncertainty summaries. The RAG label contributes only its learned
+   treatment-effect contrast.
+7. **Exclude confident incremental harm.** The default admits a card unless the
    posterior is at least 90% confident that delivery raises invalidity by more than
    10 percentage points. It has no task-independent absolute invalidity ceiling.
    Deterministic quadrature tolerance is `1e-8`; numerical uncertainty excludes the
    card. An explicit `credible_joint_safe` mode is available for applications that
    require an absolute treated-invalidity ceiling.
-9. **Build the proposal distribution.** In 512 shared posterior worlds, each admitted card
-   wins when it has the largest positive usable effect. Otherwise abstention wins.
-10. **Preserve within-slate exploration.** Mix 5% uniform mass over all admitted cards:
+8. **Build the proposal distribution.** In 512 shared posterior worlds, each admitted card
+   in the complete eligible bank wins when it has the largest positive usable effect.
+   Otherwise abstention wins.
+9. **Preserve full-bank exploration.** Mix 5% uniform mass over all admitted cards:
 
     ```text
     rho_j = 0.95 * winner_count_j / 512 + 0.05 / number_of_safe_cards
     rho_0 = 0.95 * abstention_count / 512
     ```
 
-11. **Draw one proposal.** Sample either one card or abstention from that exact finite
+10. **Draw one proposal.** Sample either one card or abstention from that exact finite
     distribution.
-12. **Randomize delivery.** If card `j` was proposed, deliver it with probability
+11. **Randomize delivery.** If card `j` was proposed, deliver it with probability
     `e=0.7` in a normal run; otherwise withhold it as the matched control. Use
     `e=0.5` for balanced validation.
-13. **Commit before exposure.** Persist retrieval eligibility, core, discovery draw,
-    exact conditional discovery probabilities, candidate set, posterior diagnostics,
-    action probabilities, sampled action, and frozen predictions before exposure.
-14. **Inject at most one card.** Only the delivered branch enters the mutator. The
+12. **Commit before exposure.** Persist the complete eligible action universe, RAG
+    applicability label, candidate set, posterior diagnostics, action probabilities,
+    sampled action, and frozen predictions before exposure.
+13. **Inject at most one card.** Only the delivered branch enters the mutator. The
     withheld branch still records the proposed revision and consumes a lease until its
     terminal closes.
+
 
 The logged leaf probabilities are:
 
@@ -374,7 +382,8 @@ worlds say it has the largest positive safe effect.
 At cold start, identical prior structure means admitted cards receive approximately
 uniform exploration. After evidence accumulates, card rankings can differ by parent
 fitness and stable behavior coordinates; progress changes the shared value of using
-memory. No claim about semantic code/card compatibility is made in this iteration.
+memory. RAG can contribute only through its learned applicability contrast; it does
+not assert semantic compatibility as a reward or hide unlabelled cards.
 
 ## Decision and evidence lifecycle
 
@@ -429,8 +438,8 @@ The first real experiment is a machinery and calibration gate, not a performance
 claim. The analytics must inspect:
 
 - number of decisions, proposals, abstentions, deliveries, controls, and terminals;
-- eligible-bank, agentic-core, and final-slate sizes; research-empty/fallback rate;
-- per-card retrieval opportunity and randomized-discovery coverage;
+- eligible-bank, RAG-applicable, and final-slate sizes; research-empty rate;
+- full-bank coverage and RAG-label turnover;
 - complete probability mass and exact joint treatment/control propensities;
 - exposure counts per bank lineage and stable card;
 - posterior effect mean, spread, and probability positive for every candidate;
@@ -479,8 +488,8 @@ card superior.
 | Confident-harm gate | The default admits a card unless at least 90% of posterior belief says it increases invalidity by more than the configured cap. This lets uncertain cards gather randomized evidence. |
 | Credible joint-safety gate | Optional conservative mode that admits only when at least 90% of posterior belief satisfies both absolute and incremental invalidity limits. |
 | Probability matching | Propose cards in proportion to how often they are the best safe positive action across posterior worlds. |
-| Retrieval discovery | Uniform cards added outside the agentic core so every eligible card retains a known chance of reaching the Bayesian selector. |
-| Exploration | The 5% uniform component that continues testing every safe card inside the retrieved slate instead of permanently locking onto an early winner. |
+| RAG applicability | A frozen semantic label produced before the policy draw. It can shift a learned shared treatment effect, but never removes a card from the action universe. |
+| Exploration | The 5% uniform component that continues testing every safe card in the complete eligible bank instead of permanently locking onto an early winner. |
 | Abstention | The no-proposal action wins a posterior world when no admitted card has positive usable effect. |
 | Covariance / correlation | Uncertainties that move together. Shared posterior worlds preserve the fact that cards depend on common coefficients and evidence. |
 | Monte Carlo | Approximate a probability by counting outcomes across many reproducible posterior draws. The 512 proposal worlds define the finite behavior policy. |
@@ -497,7 +506,7 @@ The current implementation is intentionally precise about what it does not claim
 - no semantic program representation in the posterior;
 - no multi-card slate or crossover attribution;
 - no direct archive-contribution credit;
-- no full retrieval/proposal-policy OPE;
+- no full RAG/proposal-policy OPE;
 - no learned hierarchy-scale hyperpriors;
 - no exact full-Bayes claim: reward coefficients are conditionally conjugate with
   checked scale integration; invalidity uses MAP/Laplace;
@@ -505,8 +514,8 @@ The current implementation is intentionally precise about what it does not claim
 - no explicit change-point/state-space model for nonstationarity.
 
 These omissions keep the core auditable and extensible. Retrieval remains a
-candidate-proposal stage followed by the same Bayesian selector within its realized
-support; its rank never becomes posterior evidence.
+pre-treatment applicability assessor over the complete Bayesian action universe;
+its rank never becomes posterior evidence.
 
 ## Implementation map
 

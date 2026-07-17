@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import math
 
 import pytest
 
 from gigaevo.memory.cards import Card
-from gigaevo.memory.events import memory_event_context
-from gigaevo.memory.storage.base import ResearchResult
+from gigaevo.memory.events import MemoryResearch
+from gigaevo.memory.storage.base import ResearchFailure, ResearchResult
 from gigaevo.memory_v2.candidates import (
-    AgenticCandidateSource,
+    AgenticApplicabilityProvider,
     WholeBankCandidateSource,
 )
-from gigaevo.memory_v2.models import RetrievalRecord
+from gigaevo.memory_v2.models import ApplicabilityStatus, CandidateUniverseRecord
 from gigaevo.programs.program import Program
 
 _PARENT_ID = "00000000-0000-4000-8000-000000000001"
@@ -45,7 +43,7 @@ class _Shortlister:
         self.failure = failure
         self.calls: list[dict[str, object]] = []
 
-    async def shortlist(self, **kwargs) -> ResearchResult:
+    async def shortlist(self, **kwargs: object) -> ResearchResult:
         self.calls.append(kwargs)
         if self.failure is not None:
             raise self.failure
@@ -57,7 +55,7 @@ class _MutatingShortlister(_Shortlister):
         super().__init__(result)
         self.store = store
 
-    async def shortlist(self, **kwargs) -> ResearchResult:
+    async def shortlist(self, **kwargs: object) -> ResearchResult:
         result = await super().shortlist(**kwargs)
         self.store.cards = self.store.cards[1:]
         return result
@@ -69,7 +67,7 @@ class _BlockingShortlister(_Shortlister):
         self.started = asyncio.Event()
         self.cancelled = False
 
-    async def shortlist(self, **kwargs) -> ResearchResult:
+    async def shortlist(self, **kwargs: object) -> ResearchResult:
         self.calls.append(kwargs)
         self.started.set()
         try:
@@ -87,406 +85,217 @@ class _Excluder:
         return self.card_ids
 
 
-@pytest.mark.asyncio
-async def test_empty_bank_skips_agentic_research() -> None:
-    shortlister = _Shortlister()
-    source = AgenticCandidateSource(
-        store=_Store(()),  # type: ignore[arg-type]
-        shortlister=shortlister,
-    )
-
-    slate = await source.candidate_snapshot(
+async def _snapshot(
+    source: WholeBankCandidateSource,
+    *,
+    research: ResearchResult | None = None,
+    pending_by_bank_card: dict[str, int] | None = None,
+):
+    return await source.candidate_snapshot(
         Program(id=_PARENT_ID, code="pass"),
         task_key="task",
         task_description="task",
         metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="0" * 64,
+        parent_context="live state",
+        pending_by_bank_card=pending_by_bank_card or {},
+        max_pending_per_card=1,
+        research=research,
     )
 
+
+@pytest.mark.asyncio
+async def test_empty_bank_skips_agentic_assessment() -> None:
+    shortlister = _Shortlister()
+    source = WholeBankCandidateSource(
+        store=_Store(()),  # type: ignore[arg-type]
+        applicability=AgenticApplicabilityProvider(shortlister=shortlister),
+    )
+
+    slate = await _snapshot(source)
+
     assert slate.candidates == ()
-    assert slate.retrieval.status == "empty"
+    assert slate.candidate_universe.status == "empty"
+    assert slate.applicability.status == "empty"
     assert shortlister.calls == []
 
 
 @pytest.mark.asyncio
-async def test_whole_bank_record_requires_probability_one() -> None:
-    cards = _cards(2)
+async def test_null_applicability_exposes_the_complete_eligible_bank() -> None:
+    cards = _cards(3)
     source = WholeBankCandidateSource(store=_Store(cards))  # type: ignore[arg-type]
-    slate = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="1" * 64,
-    )
 
-    payload = slate.retrieval.model_dump(mode="python", exclude_computed_fields=True)
-    payload["random_slate_probability"] = 0.5
-    with pytest.raises(ValueError, match="probability one"):
-        RetrievalRecord.model_validate(payload)
+    slate = await _snapshot(source)
+
+    assert tuple(card.id for card in slate.candidates) == tuple(
+        card.id for card in cards
+    )
+    assert slate.candidate_universe.eligible_bank_card_ids == tuple(
+        card.id for card in cards
+    )
+    assert slate.applicability.status == "disabled"
+    payload = slate.candidate_universe.model_dump(
+        mode="python", exclude_computed_fields=True
+    )
+    payload["eligible_bank_card_ids"] = tuple(card.id for card in reversed(cards))
+    with pytest.raises(ValueError, match="sorted"):
+        CandidateUniverseRecord.model_validate(payload)
 
 
 @pytest.mark.asyncio
-async def test_agentic_core_has_uniform_discovery_support() -> None:
-    cards = _cards(10)
+async def test_agentic_assessment_labels_a_subset_without_gating_the_bank() -> None:
+    cards = _cards(5)
     shortlister = _Shortlister(
-        ResearchResult(cards=cards[:4], summary="relevant", iterations=1)
+        ResearchResult(cards=cards[:2], summary="mechanism fit", iterations=1)
     )
-    source = AgenticCandidateSource(
+    source = WholeBankCandidateSource(
         store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        max_candidates=6,
-        exploration_candidates=2,
-        mutation_mode="diff",
-    )
-    kwargs = dict(
-        task_key="task",
-        task_description="packing task",
-        metrics_description="maximize score",
-        parent_context="live MAP-Elites state",
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="a" * 64,
-    )
-
-    first = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="def solve(): pass", iteration=3), **kwargs
-    )
-    second = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="def solve(): pass", iteration=3), **kwargs
-    )
-
-    record = first.retrieval
-    assert record.status == "agentic"
-    assert record.core_bank_card_ids == tuple(card.id for card in cards[:4])
-    assert len(record.exploration_bank_card_ids) == 2
-    assert record.candidate_bank_card_ids == (
-        record.core_bank_card_ids + record.exploration_bank_card_ids
-    )
-    assert record == second.retrieval
-    assert record.conditional_tail_inclusion_probability == pytest.approx(2 / 6)
-    assert record.random_slate_probability == pytest.approx(1 / math.comb(6, 2))
-    payload = record.model_dump(mode="python", exclude_computed_fields=True)
-    payload["exploration_bank_card_ids"] = tuple(
-        reversed(record.exploration_bank_card_ids)
-    )
-    payload["candidate_bank_card_ids"] = (
-        record.core_bank_card_ids + payload["exploration_bank_card_ids"]
-    )
-    with pytest.raises(ValueError, match="RNG key"):
-        RetrievalRecord.model_validate(payload)
-    call = shortlister.calls[0]
-    assert call["task_description"] == "packing task"
-    assert call["metrics_description"] == "maximize score"
-    assert call["parent_contexts"] == ["live MAP-Elites state"]
-    assert call["mutation_mode"] == "diff"
-
-
-@pytest.mark.asyncio
-async def test_prepared_research_is_reused_without_a_second_llm_call() -> None:
-    cards = _cards(4)
-    shortlister = _Shortlister(ResearchResult(cards=cards[:2], iterations=1))
-    source = AgenticCandidateSource(
-        store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        max_candidates=3,
-        exploration_candidates=1,
+        applicability=AgenticApplicabilityProvider(
+            shortlister=shortlister,
+            mutation_mode="diff",
+        ),
     )
     program = Program(id=_PARENT_ID, code="pass")
-    common = dict(
+    research = await source.prepare(
+        program,
         task_key="task",
         task_description="task",
         metrics_description="score",
-        parent_context=None,
+        parent_context="live state",
         pending_by_bank_card={},
-        max_pending_per_card=2,
+        max_pending_per_card=1,
     )
-
-    research = await source.prepare(program, **common)
-    slate = await source.candidate_snapshot(
-        program,
-        **common,
-        rng_key="9" * 64,
-        research=research,
-    )
+    slate = await _snapshot(source, research=research)
 
     assert len(shortlister.calls) == 1
-    assert slate.retrieval.core_bank_card_ids == tuple(card.id for card in cards[:2])
+    assert tuple(card.id for card in slate.candidates) == tuple(
+        card.id for card in cards
+    )
+    assert slate.candidate_universe.eligible_bank_card_ids == tuple(
+        card.id for card in cards
+    )
+    assert slate.applicability.status == "assessed"
+    assert slate.applicability.applicable_bank_card_ids == tuple(
+        card.id for card in cards[:2]
+    )
+    assert slate.applicability.specification.mutation_mode == "diff"
 
 
 @pytest.mark.asyncio
-async def test_agentic_research_timeout_fails_open_to_uniform_slate() -> None:
+async def test_failed_agentic_assessment_is_a_neutral_full_bank_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[MemoryResearch] = []
+    monkeypatch.setattr("gigaevo.memory_v2.candidates.emit_memory_event", events.append)
     cards = _cards(4)
-    shortlister = _BlockingShortlister()
-    source = AgenticCandidateSource(
+    shortlister = _Shortlister(failure=RuntimeError("research unavailable"))
+    source = WholeBankCandidateSource(
         store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        max_candidates=3,
-        exploration_candidates=1,
-        research_timeout_seconds=0.05,
+        applicability=AgenticApplicabilityProvider(shortlister=shortlister),
     )
 
-    slate = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="8" * 64,
-    )
+    slate = await _snapshot(source)
 
-    assert shortlister.cancelled
-    assert slate.retrieval.status == "uniform_fallback"
-    assert len(slate.candidates) == 3
+    assert tuple(card.id for card in slate.candidates) == tuple(
+        card.id for card in cards
+    )
+    assert slate.applicability.status == "failed"
+    assert slate.applicability.applicable_bank_card_ids == ()
+    assert slate.applicability.failure is ResearchFailure.SHORTLISTER_EXCEPTION
+    payload = slate.applicability.model_dump(mode="json")
+    assert payload["status"] == ApplicabilityStatus.FAILED.value
+    assert payload["failure"] == ResearchFailure.SHORTLISTER_EXCEPTION.value
+    assert len(events) == 1
+    assert events[0].outcome == "failed"
+    assert events[0].error == "research unavailable"
 
 
 @pytest.mark.asyncio
-async def test_agentic_research_timeout_emits_completion_event(tmp_path) -> None:
+async def test_agentic_timeout_is_a_neutral_full_bank_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[MemoryResearch] = []
+    monkeypatch.setattr("gigaevo.memory_v2.candidates.emit_memory_event", events.append)
     cards = _cards(2)
-    source = AgenticCandidateSource(
+    shortlister = _BlockingShortlister()
+    source = WholeBankCandidateSource(
         store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=_BlockingShortlister(),
-        research_timeout_seconds=0.01,
+        applicability=AgenticApplicabilityProvider(
+            shortlister=shortlister,
+            research_timeout_seconds=0.01,
+        ),
     )
-    events_file = tmp_path / "events.jsonl"
 
-    with memory_event_context(
-        event_path=events_file,
-        program_id=_PARENT_ID,
-        parent_ids=(_PARENT_ID,),
-    ):
-        result = await source.prepare(
-            Program(id=_PARENT_ID, code="pass"),
-            task_key="task",
-            task_description="task",
-            metrics_description="score",
-            parent_context=None,
-            pending_by_bank_card={},
-            max_pending_per_card=2,
-        )
+    slate = await _snapshot(source)
 
-    assert result == ResearchResult()
-    rows = [json.loads(line) for line in events_file.read_text().splitlines()]
-    assert [row["event"] for row in rows] == ["MEMORY_RESEARCH"]
-    assert rows[0]["outcome"] == "failed"
-    assert rows[0]["program_id"] == _PARENT_ID
-    assert "exceeded" in rows[0]["error"]
+    assert slate.candidate_universe.status == "eligible_bank"
+    assert slate.applicability.status == "failed"
+    assert slate.applicability.failure is ResearchFailure.TIMEOUT
+    assert shortlister.cancelled
+    assert len(events) == 1
+    assert events[0].outcome == "failed"
+    assert events[0].error
 
 
 @pytest.mark.asyncio
-async def test_external_cancellation_still_propagates() -> None:
-    shortlister = _BlockingShortlister()
-    source = AgenticCandidateSource(
-        store=_Store(_cards(2)),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        research_timeout_seconds=10.0,
+async def test_refresh_drops_stale_labels_but_keeps_all_live_eligible_cards() -> None:
+    cards = _cards(4)
+    store = _Store(cards)
+    source = WholeBankCandidateSource(
+        store=store,  # type: ignore[arg-type]
+        applicability=AgenticApplicabilityProvider(
+            shortlister=_MutatingShortlister(
+                store,
+                ResearchResult(cards=cards[:3], iterations=1),
+            )
+        ),
     )
-    task = asyncio.create_task(
-        source.prepare(
-            Program(id=_PARENT_ID, code="pass"),
-            task_key="task",
-            task_description="task",
-            metrics_description="score",
-            parent_context=None,
-            pending_by_bank_card={},
-            max_pending_per_card=2,
-        )
-    )
-    await shortlister.started.wait()
-    task.cancel()
 
+    slate = await _snapshot(source)
+
+    assert tuple(card.id for card in slate.candidates) == tuple(
+        card.id for card in cards[1:]
+    )
+    assert slate.applicability.applicable_bank_card_ids == tuple(
+        card.id for card in cards[1:3]
+    )
+
+
+@pytest.mark.asyncio
+async def test_eligibility_filters_before_assessment_and_posterior_selection() -> None:
+    cards = _cards(4)
+    shortlister = _Shortlister(ResearchResult(cards=cards, iterations=1))
+    source = WholeBankCandidateSource(
+        store=_Store(cards),  # type: ignore[arg-type]
+        applicability=AgenticApplicabilityProvider(shortlister=shortlister),
+        excluder=_Excluder(cards[0].id),
+    )
+
+    slate = await _snapshot(source, pending_by_bank_card={cards[1].id: 1})
+
+    assert tuple(card.id for card in slate.candidates) == tuple(
+        card.id for card in cards[2:]
+    )
+    assert slate.applicability.applicable_bank_card_ids == tuple(
+        card.id for card in cards[2:]
+    )
+    assert shortlister.calls[0]["exclude_ids"] >= {cards[0].id, cards[1].id}
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_propagates() -> None:
+    shortlister = _BlockingShortlister()
+    source = WholeBankCandidateSource(
+        store=_Store(_cards(2)),  # type: ignore[arg-type]
+        applicability=AgenticApplicabilityProvider(
+            shortlister=shortlister,
+            research_timeout_seconds=10.0,
+        ),
+    )
+    task = asyncio.create_task(_snapshot(source))
+    await shortlister.started.wait()
+
+    task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
     assert shortlister.cancelled
-
-
-@pytest.mark.asyncio
-async def test_agentic_research_refreshes_a_changed_live_bank() -> None:
-    cards = _cards(5)
-    store = _Store(cards)
-    source = AgenticCandidateSource(
-        store=store,  # type: ignore[arg-type]
-        shortlister=_MutatingShortlister(
-            store, ResearchResult(cards=cards[:3], iterations=1)
-        ),
-        max_candidates=4,
-        exploration_candidates=1,
-    )
-
-    slate = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="2" * 64,
-    )
-
-    assert slate.retrieval.eligible_bank_card_ids == tuple(
-        card.id for card in cards[1:]
-    )
-    assert cards[0].id not in slate.retrieval.candidate_bank_card_ids
-    assert tuple(card.id for card in slate.lineage_registry) == tuple(
-        card.id for card in cards[1:]
-    )
-
-
-@pytest.mark.asyncio
-async def test_agentic_failure_uses_a_replayable_uniform_slate() -> None:
-    cards = _cards(8)
-    source = AgenticCandidateSource(
-        store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=_Shortlister(failure=RuntimeError("research unavailable")),
-        max_candidates=5,
-        exploration_candidates=2,
-    )
-
-    slate = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="b" * 64,
-    )
-
-    record = slate.retrieval
-    assert record.status == "uniform_fallback"
-    assert record.core_bank_card_ids == ()
-    assert len(record.exploration_bank_card_ids) == 5
-    assert len(record.candidate_bank_card_ids) == 5
-    assert record.conditional_tail_inclusion_probability == pytest.approx(5 / 8)
-    assert record.random_slate_probability == pytest.approx(1 / math.comb(8, 5))
-
-
-@pytest.mark.asyncio
-async def test_exclusion_and_pending_filter_before_agentic_research() -> None:
-    cards = _cards(6)
-    shortlister = _Shortlister(ResearchResult(cards=cards, iterations=1))
-    source = AgenticCandidateSource(
-        store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        excluder=_Excluder("card-0"),
-        max_candidates=4,
-        exploration_candidates=1,
-    )
-
-    slate = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context="state",
-        pending_by_bank_card={"card-1": 2},
-        max_pending_per_card=2,
-        rng_key="c" * 64,
-    )
-
-    assert slate.retrieval.eligible_bank_card_ids == (
-        "card-2",
-        "card-3",
-        "card-4",
-        "card-5",
-    )
-    assert set(slate.retrieval.candidate_bank_card_ids) <= {
-        "card-2",
-        "card-3",
-        "card-4",
-        "card-5",
-    }
-    assert shortlister.calls[0]["exclude_ids"] >= {"card-0", "card-1"}
-
-
-@pytest.mark.asyncio
-async def test_task_and_kind_filters_apply_before_agentic_research() -> None:
-    eligible = Card(id="eligible", task_key="task", description="usable idea")
-    cross_task = Card(id="cross-task", task_key="other", description="other task")
-    disallowed_kind = Card(
-        id="program-card",
-        kind="program",
-        program_id="program-1",
-        task_key="task",
-        description="program exemplar",
-    )
-    cards = (eligible, cross_task, disallowed_kind)
-    shortlister = _Shortlister(ResearchResult(cards=cards, iterations=1))
-    source = AgenticCandidateSource(
-        store=_Store(cards),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        allow_cross_task=False,
-        allowed_kinds=("insight",),
-        max_candidates=2,
-        exploration_candidates=1,
-    )
-
-    slate = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="f" * 64,
-    )
-
-    assert slate.retrieval.eligible_bank_card_ids == (eligible.id,)
-    assert slate.retrieval.core_bank_card_ids == (eligible.id,)
-    assert shortlister.calls[0]["exclude_ids"] >= {
-        cross_task.id,
-        disallowed_kind.id,
-    }
-
-
-@pytest.mark.asyncio
-async def test_pending_counts_follow_merged_card_lineage() -> None:
-    survivor = Card(
-        id="card-survivor",
-        absorbed_ids=["card-absorbed"],
-        task_key="task",
-        description="merged idea",
-    )
-    shortlister = _Shortlister(ResearchResult(cards=(survivor,), iterations=1))
-    source = AgenticCandidateSource(
-        store=_Store((survivor,)),  # type: ignore[arg-type]
-        shortlister=shortlister,
-        max_candidates=2,
-        exploration_candidates=1,
-    )
-
-    blocked = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={"card-absorbed": 2},
-        max_pending_per_card=2,
-        rng_key="d" * 64,
-    )
-    released = await source.candidate_snapshot(
-        Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
-        task_description="task",
-        metrics_description="score",
-        parent_context=None,
-        pending_by_bank_card={},
-        max_pending_per_card=2,
-        rng_key="e" * 64,
-    )
-
-    assert blocked.retrieval.status == "empty"
-    assert released.retrieval.eligible_bank_card_ids == (survivor.id,)
-    assert released.retrieval.status == "agentic"

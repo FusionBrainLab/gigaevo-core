@@ -17,6 +17,8 @@ class FeatureConfig(BaseModel):
 
     behavior_keys: tuple[str, ...]
     progress_log_scale: float = Field(default=100.0, gt=1.0)
+    card_kind_contrast: bool = False
+    retrieval_applicability_contrast: bool = False
 
 
 class HierarchicalFeatureMap:
@@ -121,13 +123,35 @@ class FeatureSpace:
         return self.context_dim
 
     @property
+    def kind_effect_dim(self) -> int:
+        return int(self.config.card_kind_contrast)
+
+    @property
+    def kind_effect_index(self) -> int:
+        if not self.config.card_kind_contrast:
+            raise ValueError("card-kind contrast is disabled")
+        return self.shared_effect_dim
+
+    @property
+    def retrieval_effect_dim(self) -> int:
+        return int(self.config.retrieval_applicability_contrast)
+
+    @property
+    def retrieval_effect_index(self) -> int:
+        if not self.config.retrieval_applicability_contrast:
+            raise ValueError("retrieval-applicability contrast is disabled")
+        return self.shared_effect_dim + self.kind_effect_dim
+
+    @property
     def card_context_dim(self) -> int:
         # Card rankings vary only by intercept, parent fitness, and MAP position.
         return 2 + len(self.config.behavior_keys)
 
     @property
     def card_effect_slice(self) -> slice:
-        start = self.shared_effect_dim
+        start = (
+            self.shared_effect_dim + self.kind_effect_dim + self.retrieval_effect_dim
+        )
         return slice(start, start + len(self._bank_index) * self.card_context_dim)
 
     @property
@@ -188,10 +212,25 @@ class FeatureSpace:
         result[start : start + self.card_context_dim] = card_context
         return result / math.sqrt(self.card_context_dim)
 
-    def effect(self, card: CardSnapshot, context: EvolutionContext) -> np.ndarray:
+    def effect(
+        self,
+        card: CardSnapshot,
+        context: EvolutionContext,
+        *,
+        rag_applicable: bool = False,
+    ) -> np.ndarray:
         result = np.zeros(self.effect_dim, dtype=float)
         context_features = self.context_features(context)
         result[: self.context_dim] = context_features
+        if self.config.card_kind_contrast:
+            # Effect coding makes this coefficient the program-minus-insight
+            # contrast while the shared intercept remains their midpoint.
+            result[self.kind_effect_index] = {
+                "insight": -0.5,
+                "program": 0.5,
+            }.get(card.kind, 0.0)
+        if self.config.retrieval_applicability_contrast:
+            result[self.retrieval_effect_index] = float(rag_applicable)
         result[self.card_effect_slice] = self._card_deviation(card, context)
         return result
 
@@ -200,9 +239,15 @@ class FeatureSpace:
         card: CardSnapshot,
         context: EvolutionContext,
         treatment: bool | float,
+        *,
+        rag_applicable: bool = False,
     ) -> np.ndarray:
         action_weight = float(treatment)
-        effect = action_weight * self.effect(card, context)
+        effect = action_weight * self.effect(
+            card,
+            context,
+            rag_applicable=rag_applicable,
+        )
         return np.concatenate((self.baseline(card, context), effect))
 
     def baseline_design(
@@ -211,9 +256,13 @@ class FeatureSpace:
         return self.design(card, context, False)
 
     def effect_design(
-        self, card: CardSnapshot, context: EvolutionContext
+        self,
+        card: CardSnapshot,
+        context: EvolutionContext,
+        *,
+        rag_applicable: bool = False,
     ) -> np.ndarray:
-        return self.effect(card, context)
+        return self.effect(card, context, rag_applicable=rag_applicable)
 
     def prior_variance(
         self,
@@ -233,12 +282,3 @@ class FeatureSpace:
 
     def effect_coefficients(self, coefficients: np.ndarray) -> np.ndarray:
         return coefficients[self.baseline_dim :]
-
-    def linear_predictor(
-        self,
-        coefficients: np.ndarray,
-        card: CardSnapshot,
-        context: EvolutionContext,
-        treatment: bool,
-    ) -> float:
-        return float(self.design(card, context, treatment) @ coefficients)

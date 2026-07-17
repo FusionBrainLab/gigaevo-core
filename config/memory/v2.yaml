@@ -6,6 +6,7 @@ defaults:
   - context: global
   - no_card_evidence: none
   - excluder: lineage
+  - applicability: agentic
   - write: live
   - _self_
 
@@ -64,7 +65,7 @@ credit:
   # Depth 1 is the original immediate-child endpoint. Larger depths use one
   # best-descendant outcome per randomized decision after a fixed number of
   # mutation opportunities in the root's pre-treatment MAP-Elites island.
-  lineage_depth: 1
+  lineage_depth: 3
   opportunity_budget: 32
 
 context_source:
@@ -78,7 +79,9 @@ context_source:
 
 ledger:
   _target_: gigaevo.memory_v2.ledger.SqliteCausalLedger
-  path: ${checkpoint_dir}/memory_v2_evidence.sqlite3
+  # The full-bank applicability schema uses its own file. Keep prior evidence
+  # immutable; no ledger migration or restamping is performed.
+  path: ${checkpoint_dir}/memory_v2_selection_evidence.sqlite3
   environment: ${ref:memory.environment}
 
 outcome_sink: ${ref:memory.ledger}
@@ -88,6 +91,13 @@ feature_config:
   # The live BehaviorSpace owns the ordered statistical axes and transforms.
   behavior_keys: ${ref:memory.context_source::behavior_keys}
   progress_log_scale: 100.0
+  # Card kind is durable action metadata, unlike free-form tags. A single
+  # program-minus-insight contrast shares evidence across exact card lineages.
+  card_kind_contrast: true
+  # Agentic retrieval supplies a frozen, pre-treatment applicability label. Its
+  # shared effect is learned from randomized terminal outcomes, never asserted
+  # by the retriever itself. The no-RAG arm removes this coordinate entirely.
+  retrieval_applicability_contrast: ${memory.applicability.retrieval_applicability_contrast}
 
 feature_map:
   _target_: gigaevo.memory_v2.features.HierarchicalFeatureMap
@@ -152,7 +162,7 @@ store:
       _target_: gigaevo.memory.storage.config.ResearchConfig
       default_top_k: 8
       max_iters: 1
-      max_cards: 8
+      max_cards: 3
   llm: ${ref:memory.llm}
   prompts_dir: ${prompts.dir}
 
@@ -162,19 +172,12 @@ shortlister:
   digest_max_cards: 50
 
 candidate_source:
-  _target_: gigaevo.memory_v2.candidates.AgenticCandidateSource
+  _target_: gigaevo.memory_v2.candidates.WholeBankCandidateSource
   store: ${ref:memory.store}
-  shortlister: ${ref:memory.shortlister}
+  applicability: ${ref:memory.applicability}
   excluder: ${ref:memory.excluder}
   allow_cross_task: false
   allowed_kinds: [insight, program]
-  # One agentically researched core plus uniform discovery keeps every eligible
-  # card reachable without making the Bayesian selector compare the whole bank.
-  max_candidates: 12
-  exploration_candidates: 4
-  mutation_mode: ${mutation_mode}
-  # Fail open before the parent-refresh deadline if the retrieval LLM stalls.
-  research_timeout_seconds: 240.0
 
 renderer:
   _target_: gigaevo.memory_v2.render.ImmutableCardRenderer
