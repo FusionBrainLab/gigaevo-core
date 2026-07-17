@@ -226,9 +226,6 @@ class CardSnapshot(StrictFrozenModel):
     absorbed_bank_card_ids: tuple[str, ...] = ()
     treatment_id: str = Field(min_length=1)
     payload_sha256: str = Field(min_length=64, max_length=64)
-    render_template: str = Field(
-        default="memory_context/single_numbered_card/v1", min_length=1
-    )
     payload: str = Field(min_length=1)
     delivered_text: str = Field(min_length=1)
     source_task_key: str = ""
@@ -237,12 +234,7 @@ class CardSnapshot(StrictFrozenModel):
     keywords: tuple[str, ...] = ()
 
     @classmethod
-    def from_card(
-        cls,
-        card: Card,
-        *,
-        render_template: str = "memory_context/single_numbered_card/v1",
-    ) -> CardSnapshot:
+    def from_card(cls, card: Card) -> CardSnapshot:
         payload = card.description.strip()
         if not payload:
             raise ValueError(f"card {card.id!r} has an empty delivered payload")
@@ -250,7 +242,6 @@ class CardSnapshot(StrictFrozenModel):
             "delivered_text": CARD_DELIVERY_TEMPLATE.format(
                 bank_card_id=card.id, payload=payload
             ),
-            "render_template": render_template,
         }
         payload_sha256 = canonical_digest(identity)
         return cls(
@@ -258,7 +249,6 @@ class CardSnapshot(StrictFrozenModel):
             absorbed_bank_card_ids=tuple(sorted(set(card.absorbed_ids))),
             treatment_id=card.id,
             payload_sha256=payload_sha256,
-            render_template=render_template,
             payload=payload,
             delivered_text=identity["delivered_text"],
             source_task_key=card.task_key,
@@ -280,7 +270,6 @@ class CardSnapshot(StrictFrozenModel):
         expected = canonical_digest(
             {
                 "delivered_text": self.delivered_text,
-                "render_template": self.render_template,
             }
         )
         expected_text = CARD_DELIVERY_TEMPLATE.format(
@@ -1086,6 +1075,12 @@ class EvidenceSnapshot(StrictFrozenModel):
         return ()
 
 
+def _propensity_mismatch(actual: float | None, expected: float | None) -> bool:
+    if actual is None or expected is None:
+        return actual is not expected
+    return not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-12)
+
+
 class PolicyDecision(StrictFrozenModel):
     proposed_card: CardSnapshot | None = None
     delivered: bool = False
@@ -1130,9 +1125,11 @@ class PolicyDecision(StrictFrozenModel):
             else action.joint_control_probability
         )
         if (
-            self.offer_probability != action.offer_probability
-            or self.proposal_probability != action.proposal_probability
-            or self.joint_action_probability != expected_joint
+            _propensity_mismatch(self.offer_probability, action.offer_probability)
+            or _propensity_mismatch(
+                self.proposal_probability, action.proposal_probability
+            )
+            or _propensity_mismatch(self.joint_action_probability, expected_joint)
         ):
             raise ValueError("selected policy fields differ from the action row")
         return self

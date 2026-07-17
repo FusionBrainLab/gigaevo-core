@@ -389,9 +389,6 @@ class GaussianPosterior:
     residual_upper_boundary_probability: float
     components: tuple[GaussianPosteriorComponent, ...]
 
-    def sample(self, rng: np.random.Generator) -> np.ndarray:
-        return self.sample_many(rng, 1)[0][0]
-
     def sample_many(
         self, rng: np.random.Generator, samples: int
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -425,16 +422,6 @@ class LogisticPosterior:
     hessian_condition: float
     optimizer_method: str
     optimizer_iterations: int
-
-    def sample(self, rng: np.random.Generator) -> np.ndarray:
-        return rng.multivariate_normal(self.mean, self.covariance, check_valid="raise")
-
-
-@dataclass(frozen=True)
-class PosteriorWorld:
-    usable_effects: dict[str, float]
-    control_invalid_risks: dict[str, float]
-    treated_invalid_risks: dict[str, float]
 
 
 class BayesianResidualScaleGaussianRegressor:
@@ -964,48 +951,6 @@ class FittedTerminalUtilityPosterior:
     ) -> np.ndarray:
         return mean + rng.standard_normal((samples, len(mean))) @ factor.T
 
-    def sample_world(
-        self,
-        cards: Sequence[CardSnapshot],
-        context: EvolutionContext,
-        rng: np.random.Generator,
-        *,
-        applicable_bank_card_ids: frozenset[str] = frozenset(),
-    ) -> PosteriorWorld:
-        reward_coefficients = self.reward.sample(rng)
-        safety_coefficients = self._draws(
-            self.safety.mean, self._safety_factor, rng, 1
-        )[0]
-        effects: dict[str, float] = {}
-        risk_control: dict[str, float] = {}
-        risk_treated: dict[str, float] = {}
-        for card in cards:
-            reward_x0, reward_x1 = self._arm_designs(
-                card,
-                context,
-                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
-            )
-            valid0 = float(_latent_to_gain(reward_x0 @ reward_coefficients, context))
-            valid1 = float(_latent_to_gain(reward_x1 @ reward_coefficients, context))
-            safety_x0, safety_x1 = self._arm_designs(
-                card,
-                context,
-                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
-            )
-            p0 = float(expit(safety_x0 @ safety_coefficients))
-            p1 = float(expit(safety_x1 @ safety_coefficients))
-            lower, _ = _normalized_gain_bounds(context)
-            q0 = (1.0 - p0) * valid0 + p0 * lower
-            q1 = (1.0 - p1) * valid1 + p1 * lower
-            effects[card.treatment_id] = q1 - q0
-            risk_control[card.treatment_id] = p0
-            risk_treated[card.treatment_id] = p1
-        return PosteriorWorld(
-            usable_effects=effects,
-            control_invalid_risks=risk_control,
-            treated_invalid_risks=risk_treated,
-        )
-
     def sample_usable_effects(
         self,
         cards: Sequence[CardSnapshot],
@@ -1115,22 +1060,17 @@ class FittedTerminalUtilityPosterior:
         max_incremental_invalid_probability: float,
         safety_alpha: float,
     ) -> PosteriorPrediction:
-        reward_x0, reward_x1 = self._arm_designs(
+        x0, x1 = self._arm_designs(
             card,
             context,
             rag_applicable=rag_applicable,
         )
-        safety_x0, safety_x1 = self._arm_designs(
-            card,
-            context,
-            rag_applicable=rag_applicable,
-        )
-        latent0 = reward_draws @ reward_x0
-        latent1 = reward_draws @ reward_x1
+        latent0 = reward_draws @ x0
+        latent1 = reward_draws @ x1
         valid0 = _latent_to_gain(latent0, context)
         valid1 = _latent_to_gain(latent1, context)
-        p0 = expit(safety_draws @ safety_x0)
-        p1 = expit(safety_draws @ safety_x1)
+        p0 = expit(safety_draws @ x0)
+        p1 = expit(safety_draws @ x1)
         lower, _ = _normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
@@ -1144,10 +1084,10 @@ class FittedTerminalUtilityPosterior:
         )
         helpful = effects > 0.0
         safety_mean = np.asarray(
-            [safety_x0 @ self.safety.mean, safety_x1 @ self.safety.mean],
+            [x0 @ self.safety.mean, x1 @ self.safety.mean],
             dtype=float,
         )
-        safety_matrix = np.stack((safety_x0, safety_x1))
+        safety_matrix = np.stack((x0, x1))
         safety_covariance = safety_matrix @ self.safety.covariance @ safety_matrix.T
         try:
             (
@@ -1298,9 +1238,6 @@ class HierarchicalTerminalUtilityPosterior:
             shared_effect_sd=self.config.safety_shared_effect_prior_sd,
             card_effect_sd=self.config.safety_card_effect_prior_sd,
         )
-        # The intercept is separately calibrated; retain uncertainty only on
-        # deviations so prior predictive risk does not depend on feature count.
-        safety_prior_variance[0] = self.config.safety_baseline_prior_sd**2
         safety = self.safety_regressor.fit(
             safety_design,
             invalid,

@@ -49,16 +49,14 @@ class FeatureSpace:
         self.cards = tuple(
             sorted(by_treatment.values(), key=lambda row: row.treatment_id)
         )
-        self._canonical_bank_id, self._bank_lineage_members = (
-            self._resolve_bank_lineages(all_cards)
-        )
+        self._canonical_bank_id = self._resolve_bank_lineages(all_cards)
         bank_ids = sorted(set(self._canonical_bank_id.values()))
         self._bank_index = {card_id: index for index, card_id in enumerate(bank_ids)}
 
     @staticmethod
     def _resolve_bank_lineages(
         cards: tuple[CardSnapshot, ...],
-    ) -> tuple[dict[str, str], dict[str, frozenset[str]]]:
+    ) -> dict[str, str]:
         """Resolve transitive consolidation aliases to one unambiguous survivor."""
 
         adjacency: dict[str, set[str]] = {}
@@ -73,7 +71,6 @@ class FeatureSpace:
                 adjacency[card.bank_card_id].add(alias)
 
         canonical: dict[str, str] = {}
-        members_by_canonical: dict[str, frozenset[str]] = {}
         unseen = set(adjacency)
         while unseen:
             seed = min(unseen)
@@ -93,10 +90,8 @@ class FeatureSpace:
                     f"component={sorted(component)!r}, survivors={roots!r}"
                 )
             survivor = roots[0]
-            frozen_members = frozenset(component)
-            members_by_canonical[survivor] = frozen_members
             canonical.update({member: survivor for member in component})
-        return canonical, members_by_canonical
+        return canonical
 
     def bank_lineage_id(self, card: CardSnapshot) -> str:
         try:
@@ -105,9 +100,6 @@ class FeatureSpace:
             raise ValueError(
                 f"card bank id {card.bank_card_id!r} is outside this feature space"
             ) from exc
-
-    def bank_lineage_members(self, card: CardSnapshot) -> frozenset[str]:
-        return self._bank_lineage_members[self.bank_lineage_id(card)]
 
     @property
     def context_dim(self) -> int:

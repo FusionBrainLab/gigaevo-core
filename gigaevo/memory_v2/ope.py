@@ -50,7 +50,6 @@ class ConditionalOfferOpeReport(BaseModel):
     effective_sample_size: float = Field(gt=0.0)
     maximum_importance_weight: float = Field(ge=0.0)
     minimum_behavior_probability: float = Field(gt=0.0, lt=1.0)
-    overlap_violations: int = Field(ge=0)
 
 
 class ConditionalOfferDREvaluator:
@@ -106,7 +105,6 @@ class ConditionalOfferDREvaluator:
         scores: list[float] = []
         weights: list[float] = []
         by_run: dict[str, list[float]] = defaultdict(list)
-        overlap_violations = 0
         minimum_behavior = 1.0
         for row in observations:
             if not row.invalid and row.measurement is None:
@@ -122,8 +120,6 @@ class ConditionalOfferDREvaluator:
                 raise ValueError("target offer probability must lie in [0, 1]")
             behavior = row.offer_propensity
             minimum_behavior = min(minimum_behavior, behavior, 1.0 - behavior)
-            if (target > 0.0 and behavior <= 0.0) or (target < 1.0 and behavior >= 1.0):
-                overlap_violations += 1
             target_action = target if row.treatment else 1.0 - target
             behavior_action = behavior if row.treatment else 1.0 - behavior
             weight = target_action / behavior_action
@@ -167,5 +163,4 @@ class ConditionalOfferDREvaluator:
             effective_sample_size=ess,
             maximum_importance_weight=float(weight_array.max()),
             minimum_behavior_probability=minimum_behavior,
-            overlap_violations=overlap_violations,
         )

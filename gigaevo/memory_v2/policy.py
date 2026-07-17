@@ -369,5 +369,9 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             cumulative += probabilities[card.treatment_id]
             if draw < cumulative:
                 return card.treatment_id
-        # Floating point closure: the validated probabilities sum to one.
-        return cards[-1].treatment_id if cards else None
+        # Floating-point closure: return the last card that carries proposal mass,
+        # never a zero-mass (unsafe) tail card.
+        for card in reversed(cards):
+            if probabilities[card.treatment_id] > 0.0:
+                return card.treatment_id
+        return None

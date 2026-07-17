@@ -27,7 +27,6 @@ from gigaevo.memory_v2.models import (
     SafetyGateMode,
     TerminalOutcome,
     canonical_digest,
-    import_qualified_class,
     qualified_class_name,
 )
 from gigaevo.memory_v2.policy import safety_gate_admits
@@ -203,51 +202,14 @@ def discover_ledger_paths(inputs: Iterable[str | Path]) -> tuple[Path, ...]:
     return tuple(sorted(found))
 
 
-def _read_hydra_mutation_operator(ledger_path: Path) -> type[MutationOperator] | None:
-    for directory in ledger_path.parents:
-        config_path = directory / ".hydra" / "config.yaml"
-        if not config_path.is_file():
-            continue
-        try:
-            import yaml
-
-            config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            target = config["mutation_operator"]["_target_"]
-            symbol = import_qualified_class(str(target))
-        except (KeyError, OSError, TypeError, ValueError, ImportError, AttributeError):
-            continue
-        if issubclass(symbol, MutationOperator):
-            return symbol
-    return None
+def _environment_from_payload(payload: dict[str, Any]) -> EnvironmentFingerprint:
+    return EnvironmentFingerprint.model_validate(payload)
 
 
-def _environment_from_payload(
-    payload: dict[str, Any],
-    *,
-    legacy_operator: type[MutationOperator] | None,
-) -> EnvironmentFingerprint:
-    environment = dict(payload)
-    if "mutation_operator" not in environment:
-        if "mutation" not in environment:
-            raise ValueError("ledger environment omits its mutation operator")
-        if legacy_operator is None:
-            raise ValueError(
-                "legacy ledger stores only a Hydra mutation label; pass "
-                "--mutation-operator or provide the run's adjacent .hydra/config.yaml"
-            )
-        environment.pop("mutation")
-        environment["mutation_operator"] = legacy_operator
-    return EnvironmentFingerprint.model_validate(environment)
-
-
-def _parse_decision(
-    payload: dict[str, Any],
-    *,
-    legacy_operator: type[MutationOperator] | None,
-) -> CalibrationDecision:
+def _parse_decision(payload: dict[str, Any]) -> CalibrationDecision:
     context_payload = dict(payload["context"])
     context_payload["environment"] = _environment_from_payload(
-        dict(context_payload["environment"]), legacy_operator=legacy_operator
+        dict(context_payload["environment"])
     )
     context = EvolutionContext.model_validate(context_payload)
     return CalibrationDecision(
@@ -277,17 +239,10 @@ def _parse_decision(
     )
 
 
-def load_calibration_trajectory(
-    path: str | Path,
-    *,
-    legacy_mutation_operator: type[MutationOperator] | None = None,
-) -> CalibrationTrajectory:
+def load_calibration_trajectory(path: str | Path) -> CalibrationTrajectory:
     """Load and hash-verify one ledger without acquiring its writer lock."""
 
     ledger_path = Path(path).expanduser().resolve()
-    inferred_operator = legacy_mutation_operator or _read_hydra_mutation_operator(
-        ledger_path
-    )
     uri = f"file:{ledger_path}?mode=ro"
     with sqlite3.connect(uri, uri=True) as connection:
         rows = connection.execute(
@@ -319,15 +274,8 @@ def load_calibration_trajectory(
             raise ValueError(
                 f"decision payload hash mismatch: {raw_record.get('decision_id')!r}"
             )
-        raw_environment = dict(raw_record["context"]["environment"])
-        raw_environment.pop("digest", None)
-        is_legacy_environment = "mutation_operator" not in raw_environment
-        decision = _parse_decision(raw_record, legacy_operator=inferred_operator)
-        expected_environment_hash = (
-            canonical_digest(raw_environment)
-            if is_legacy_environment
-            else decision.context.environment.digest
-        )
+        decision = _parse_decision(raw_record)
+        expected_environment_hash = decision.context.environment.digest
         if expected_environment_hash != environment_hash:
             raise ValueError(
                 f"decision environment hash mismatch: {decision.decision_id!r}"
@@ -726,7 +674,6 @@ def _score_candidate(
             shared_effect_sd=candidate.shared_effect_sd,
             card_effect_sd=candidate.card_effect_sd,
         )
-        prior_variance[0] = candidate.baseline_sd**2
         posterior = regressor.fit(
             unit.history_design,
             unit.history_invalid,

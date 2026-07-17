@@ -215,7 +215,6 @@ def test_card_consolidation_aliases_pool_bank_effects_and_pending_budget(
     historical_effect = space.effect(historical, evolution_context)
     survivor_effect = space.effect(survivor, evolution_context)
     assert space.bank_lineage_id(historical) == "survivor"
-    assert space.bank_lineage_members(survivor) == {"historical", "survivor"}
     assert np.array_equal(
         historical_effect[space.card_effect_slice],
         survivor_effect[space.card_effect_slice],
@@ -979,3 +978,16 @@ def test_exploration_mixture_gives_every_safe_card_policy_support() -> None:
 
     assert all(probability >= 0.001 for probability in proposal.values())
     assert sum(proposal.values()) + abstain == pytest.approx(1.0)
+
+
+def test_sample_proposal_closure_never_returns_a_zero_mass_card() -> None:
+    safe = CardSnapshot.from_card(Card(id="aaa", description="safe card"))
+    unsafe = CardSnapshot.from_card(Card(id="zzz", description="unsafe card"))
+    proposed = ChanceConstrainedProbabilityMatchingPolicy._sample_proposal(
+        (safe, unsafe),
+        {"aaa": 0.90, "zzz": 0.0},
+        0.05,
+        0.97,
+    )
+
+    assert proposed == "aaa"

@@ -5,12 +5,9 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import click
-
-if TYPE_CHECKING:
-    from gigaevo.evolution.mutation.base import MutationOperator
 
 
 def _float_list(
@@ -43,23 +40,6 @@ def _positive_list(
     if any(item <= 0.0 for item in result):
         raise click.BadParameter("all values must be positive")
     return result
-
-
-def _mutation_operator(value: str | None) -> type[MutationOperator] | None:
-    if value is None:
-        return None
-    from gigaevo.evolution.mutation.base import MutationOperator
-    from gigaevo.memory_v2.models import import_qualified_class
-
-    try:
-        symbol = import_qualified_class(value)
-    except (ImportError, AttributeError, TypeError) as exc:
-        raise click.BadParameter(str(exc), param_hint="--mutation-operator") from exc
-    if not issubclass(symbol, MutationOperator):
-        raise click.BadParameter(
-            "class must extend MutationOperator", param_hint="--mutation-operator"
-        )
-    return symbol
 
 
 @click.group("memory")
@@ -137,14 +117,6 @@ def memory() -> None:
     ),
 )
 @click.option(
-    "--mutation-operator",
-    default=None,
-    help=(
-        "Concrete MutationOperator class for a legacy ledger that lacks an adjacent "
-        ".hydra/config.yaml. New ledgers do not need this option."
-    ),
-)
-@click.option(
     "--output",
     type=click.Path(path_type=Path, dir_okay=False),
     default=None,
@@ -169,7 +141,6 @@ def calibrate_safety(
     offer_rates: tuple[float, ...],
     min_observations: int,
     min_gate_retention: float,
-    mutation_operator: str | None,
     output: Path | None,
     top: int,
 ) -> None:
@@ -187,13 +158,9 @@ def calibrate_safety(
         load_calibration_trajectory,
     )
 
-    legacy_operator = _mutation_operator(mutation_operator)
     try:
         paths = discover_ledger_paths(inputs)
-        trajectories = tuple(
-            load_calibration_trajectory(path, legacy_mutation_operator=legacy_operator)
-            for path in paths
-        )
+        trajectories = tuple(load_calibration_trajectory(path) for path in paths)
         report = calibrate_safety_priors(
             trajectories,
             prior_probabilities=prior_probabilities,
