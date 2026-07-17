@@ -30,7 +30,11 @@ SafetyGateMode = Literal[
     "exclude_confident_incremental_harm",
     "credible_joint_safe",
 ]
-CandidateUniverseStatus = Literal["eligible_bank", "empty"]
+
+
+class CandidateUniverseStatus(StrEnum):
+    ELIGIBLE_BANK = "eligible_bank"
+    EMPTY = "empty"
 
 
 class ApplicabilityStatus(StrEnum):
@@ -323,9 +327,9 @@ class CandidateUniverseRecord(StrictFrozenModel):
             raise ValueError("candidate-universe card ids must be unique")
         if ids != tuple(sorted(ids)):
             raise ValueError("candidate-universe card ids must be sorted")
-        if self.status == "empty" and ids:
+        if self.status is CandidateUniverseStatus.EMPTY and ids:
             raise ValueError("an empty candidate universe cannot carry cards")
-        if self.status == "eligible_bank" and not ids:
+        if self.status is CandidateUniverseStatus.ELIGIBLE_BANK and not ids:
             raise ValueError("an eligible-bank universe requires at least one card")
         return self
 

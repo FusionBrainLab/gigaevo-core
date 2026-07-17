@@ -430,7 +430,11 @@ class WholeBankCandidateSource(_BankCandidateSource):
                 research_iterations=research.iterations,
                 summary=research.summary,
             )
-        status: CandidateUniverseStatus = "eligible_bank" if eligible_ids else "empty"
+        status = (
+            CandidateUniverseStatus.ELIGIBLE_BANK
+            if eligible_ids
+            else CandidateUniverseStatus.EMPTY
+        )
         return CandidateSlate(
             lineage_registry=registry,
             candidates=eligible,

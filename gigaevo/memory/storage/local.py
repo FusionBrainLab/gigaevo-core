@@ -88,7 +88,7 @@ class LocalMemoryStore(MemoryStore):
         return self._state
 
     @property
-    def retrieval_policy_digest(self) -> str:
+    def policy_digest(self) -> str:
         """Stable fingerprint of the vector/research policy used by this store."""
 
         if self._agent is not None:
@@ -106,10 +106,6 @@ class LocalMemoryStore(MemoryStore):
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()
-
-    @property
-    def policy_digest(self) -> str:
-        return self.retrieval_policy_digest
 
     def save(self, card: Card) -> str:
         with self._lock:

@@ -282,12 +282,3 @@ class FeatureSpace:
 
     def effect_coefficients(self, coefficients: np.ndarray) -> np.ndarray:
         return coefficients[self.baseline_dim :]
-
-    def linear_predictor(
-        self,
-        coefficients: np.ndarray,
-        card: CardSnapshot,
-        context: EvolutionContext,
-        treatment: bool,
-    ) -> float:
-        return float(self.design(card, context, treatment) @ coefficients)
