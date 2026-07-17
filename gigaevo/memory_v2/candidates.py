@@ -1,4 +1,4 @@
-"""Candidate retrieval for the memory-v2 posterior policy."""
+"""Full-bank candidate eligibility plus optional pre-treatment RAG assessment."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
 from time import perf_counter
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from loguru import logger
 
@@ -22,27 +22,198 @@ from gigaevo.memory.read.exclusion import (
 from gigaevo.memory.read.interfaces import Shortlister
 from gigaevo.memory.storage.base import MemoryStore, ResearchResult
 from gigaevo.memory_v2.models import (
-    RetrievalRecord,
-    RetrievalSpecification,
-    RetrievalStatus,
+    ApplicabilityRecord,
+    ApplicabilitySpecification,
+    CandidateUniverseRecord,
+    CandidateUniverseSpecification,
+    CandidateUniverseStatus,
+    canonical_digest,
 )
-from gigaevo.memory_v2.rng import EventRNG
 from gigaevo.programs.program import Program
 
 
 @dataclass(frozen=True)
 class CandidateSlate:
-    """One store snapshot and its context-specific retrieved subset."""
+    """One eligible-bank snapshot and its optional contextual RAG annotation."""
 
     lineage_registry: tuple[Card, ...]
     candidates: tuple[Card, ...]
-    retrieval: RetrievalRecord
+    candidate_universe: CandidateUniverseRecord
+    applicability: ApplicabilityRecord
+
+
+@runtime_checkable
+class ApplicabilityProvider(Protocol):
+    """Produces semantic applicability before the posterior action draw."""
+
+    @property
+    def specification(self) -> ApplicabilitySpecification: ...
+
+    async def assess(
+        self,
+        program: Program,
+        *,
+        task_description: str,
+        metrics_description: str,
+        parent_context: str | None,
+        exclude_ids: frozenset[str],
+    ) -> ResearchResult: ...
+
+
+def _component_policy_digest(component: object) -> str:
+    explicit = getattr(component, "policy_digest", None)
+    if isinstance(explicit, str) and len(explicit) == 64:
+        return explicit
+    return canonical_digest(
+        {"class": f"{type(component).__module__}.{type(component).__qualname__}"}
+    )
+
+
+class NullApplicabilityProvider:
+    """Whole-bank baseline: no RAG signal and no LLM call."""
+
+    def __init__(
+        self,
+        *,
+        mutation_mode: str = "rewrite",
+        retrieval_applicability_contrast: bool = False,
+    ) -> None:
+        if retrieval_applicability_contrast:
+            raise ValueError(
+                "null applicability cannot enable retrieval-applicability contrast"
+            )
+        self._specification = ApplicabilitySpecification(
+            name="none",
+            mutation_mode=mutation_mode,
+            retrieval_applicability_contrast=retrieval_applicability_contrast,
+            policy_digest=canonical_digest(
+                {
+                    "class": f"{type(self).__module__}.{type(self).__qualname__}",
+                    "mutation_mode": mutation_mode,
+                    "retrieval_applicability_contrast": (
+                        retrieval_applicability_contrast
+                    ),
+                }
+            ),
+        )
+
+    @property
+    def specification(self) -> ApplicabilitySpecification:
+        return self._specification
+
+    async def assess(
+        self,
+        program: Program,
+        *,
+        task_description: str,
+        metrics_description: str,
+        parent_context: str | None,
+        exclude_ids: frozenset[str],
+    ) -> ResearchResult:
+        del (
+            program,
+            task_description,
+            metrics_description,
+            parent_context,
+            exclude_ids,
+        )
+        return ResearchResult()
+
+
+class AgenticApplicabilityProvider:
+    """Runs semantic research but never controls the Bayesian candidate universe."""
+
+    def __init__(
+        self,
+        *,
+        shortlister: Shortlister,
+        mutation_mode: str = "rewrite",
+        research_timeout_seconds: float = 240.0,
+        retrieval_applicability_contrast: bool = True,
+    ) -> None:
+        if not math.isfinite(research_timeout_seconds) or research_timeout_seconds <= 0:
+            raise ValueError("research_timeout_seconds must be finite and positive")
+        if not retrieval_applicability_contrast:
+            raise ValueError(
+                "agentic applicability requires retrieval-applicability contrast"
+            )
+        self.shortlister = shortlister
+        self.mutation_mode = mutation_mode
+        self.research_timeout_seconds = research_timeout_seconds
+        self._specification = ApplicabilitySpecification(
+            name="agentic_research",
+            mutation_mode=mutation_mode,
+            retrieval_applicability_contrast=retrieval_applicability_contrast,
+            policy_digest=canonical_digest(
+                {
+                    "provider": f"{type(self).__module__}.{type(self).__qualname__}",
+                    "shortlister": _component_policy_digest(shortlister),
+                    "mutation_mode": mutation_mode,
+                    "research_timeout_seconds": research_timeout_seconds,
+                    "retrieval_applicability_contrast": (
+                        retrieval_applicability_contrast
+                    ),
+                }
+            ),
+        )
+
+    @property
+    def specification(self) -> ApplicabilitySpecification:
+        return self._specification
+
+    async def assess(
+        self,
+        program: Program,
+        *,
+        task_description: str,
+        metrics_description: str,
+        parent_context: str | None,
+        exclude_ids: frozenset[str],
+    ) -> ResearchResult:
+        started = perf_counter()
+        try:
+            async with asyncio.timeout(self.research_timeout_seconds):
+                return await self.shortlister.shortlist(
+                    parents=[program],
+                    mutation_mode=self.mutation_mode,
+                    task_description=task_description,
+                    metrics_description=metrics_description,
+                    exclude_ids=exclude_ids,
+                    parent_contexts=[parent_context or ""],
+                )
+        except TimeoutError:
+            emit_memory_event(
+                MemoryResearch(
+                    outcome="failed",
+                    exclude_count=len(exclude_ids),
+                    duration_ms=(perf_counter() - started) * 1000.0,
+                    error=(
+                        "agentic applicability exceeded "
+                        f"{self.research_timeout_seconds:.1f}s"
+                    ),
+                )
+            )
+            logger.warning(
+                "[MemoryV2][Applicability] research exceeded {:.1f}s; "
+                "continuing with a neutral RAG signal",
+                self.research_timeout_seconds,
+            )
+            return ResearchResult()
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[MemoryV2][Applicability] research failed; continuing with a "
+                "neutral RAG signal"
+            )
+            return ResearchResult()
 
 
 @runtime_checkable
 class CandidateSource(Protocol):
     @property
-    def specification(self) -> RetrievalSpecification: ...
+    def specification(self) -> CandidateUniverseSpecification: ...
+
+    @property
+    def applicability_specification(self) -> ApplicabilitySpecification: ...
 
     async def prepare(
         self,
@@ -66,7 +237,6 @@ class CandidateSource(Protocol):
         parent_context: str | None,
         pending_by_bank_card: Mapping[str, int],
         max_pending_per_card: int,
-        rng_key: str,
         research: ResearchResult | None = None,
     ) -> CandidateSlate: ...
 
@@ -136,150 +306,44 @@ class _BankCandidateSource:
 
 
 class WholeBankCandidateSource(_BankCandidateSource):
-    """Explicit control source that sends the complete eligible bank downstream."""
+    """Always send the eligible bank to the posterior, with optional RAG labels."""
 
     def __init__(
         self,
         *,
         store: MemoryStore,
-        shortlister: Shortlister | None = None,
+        applicability: ApplicabilityProvider | None = None,
         excluder: CardExcluder | None = None,
         allow_cross_task: bool = True,
         allowed_kinds: Sequence[str] = ("insight", "program"),
-        max_candidates: int | None = None,
-        exploration_candidates: int | None = None,
-        mutation_mode: str | None = None,
-        research_timeout_seconds: float | None = None,
-        selection_logic: str | None = None,
     ) -> None:
-        # Keep the target swappable in Hydra without a second near-duplicate
-        # memory preset. These agentic-only dependencies are intentionally unused.
-        del (
-            shortlister,
-            max_candidates,
-            exploration_candidates,
-            mutation_mode,
-            research_timeout_seconds,
-            selection_logic,
-        )
         super().__init__(
             store=store,
             excluder=excluder,
             allow_cross_task=allow_cross_task,
             allowed_kinds=allowed_kinds,
         )
-        self._specification = RetrievalSpecification(
-            name="whole_bank",
-            max_candidates=0,
-            exploration_candidates=0,
+        self.applicability = (
+            applicability if applicability is not None else NullApplicabilityProvider()
+        )
+        self._specification = CandidateUniverseSpecification(
+            policy_digest=canonical_digest(
+                {
+                    "source": f"{type(self).__module__}.{type(self).__qualname__}",
+                    "excluder": _component_policy_digest(self.excluder),
+                    "allow_cross_task": allow_cross_task,
+                    "allowed_kinds": tuple(sorted(self.allowed_kinds)),
+                }
+            )
         )
 
     @property
-    def specification(self) -> RetrievalSpecification:
+    def specification(self) -> CandidateUniverseSpecification:
         return self._specification
-
-    async def prepare(
-        self,
-        program: Program,
-        *,
-        task_key: str,
-        task_description: str,
-        metrics_description: str,
-        parent_context: str | None,
-        pending_by_bank_card: Mapping[str, int],
-        max_pending_per_card: int,
-    ) -> ResearchResult:
-        del (
-            program,
-            task_key,
-            task_description,
-            metrics_description,
-            parent_context,
-            pending_by_bank_card,
-            max_pending_per_card,
-        )
-        return ResearchResult()
-
-    async def candidate_snapshot(
-        self,
-        program: Program,
-        *,
-        task_key: str,
-        task_description: str,
-        metrics_description: str,
-        parent_context: str | None,
-        pending_by_bank_card: Mapping[str, int],
-        max_pending_per_card: int,
-        rng_key: str,
-        research: ResearchResult | None = None,
-    ) -> CandidateSlate:
-        del task_description, metrics_description, parent_context, research
-        registry, eligible, _ = self._snapshot(
-            program,
-            task_key=task_key,
-            pending_by_bank_card=pending_by_bank_card,
-            max_pending_per_card=max_pending_per_card,
-        )
-        ids = tuple(card.id for card in eligible)
-        status: RetrievalStatus = "whole_bank" if ids else "empty"
-        return CandidateSlate(
-            lineage_registry=registry,
-            candidates=eligible,
-            retrieval=RetrievalRecord(
-                specification=self.specification,
-                status=status,
-                rng_key=rng_key,
-                eligible_bank_card_ids=ids,
-                core_bank_card_ids=ids,
-                exploration_bank_card_ids=(),
-                candidate_bank_card_ids=ids,
-                conditional_tail_inclusion_probability=0.0,
-                random_slate_probability=1.0,
-            ),
-        )
-
-
-class AgenticCandidateSource(_BankCandidateSource):
-    """Research a relevant core, then retain uniform discovery support."""
-
-    def __init__(
-        self,
-        *,
-        store: MemoryStore,
-        shortlister: Shortlister,
-        excluder: CardExcluder | None = None,
-        allow_cross_task: bool = False,
-        allowed_kinds: Sequence[str] = ("insight", "program"),
-        max_candidates: int = 12,
-        exploration_candidates: int = 4,
-        mutation_mode: str = "rewrite",
-        research_timeout_seconds: float = 240.0,
-        selection_logic: Literal["legacy_fill", "core_priority"] = "legacy_fill",
-    ) -> None:
-        if not math.isfinite(research_timeout_seconds) or research_timeout_seconds <= 0:
-            raise ValueError("research_timeout_seconds must be finite and positive")
-        super().__init__(
-            store=store,
-            excluder=excluder,
-            allow_cross_task=allow_cross_task,
-            allowed_kinds=allowed_kinds,
-        )
-        self.shortlister = shortlister
-        self.research_timeout_seconds = research_timeout_seconds
-        self._specification = RetrievalSpecification(
-            name=(
-                "agentic_research_core_priority"
-                if selection_logic == "core_priority"
-                else "agentic_research"
-            ),
-            max_candidates=max_candidates,
-            exploration_candidates=exploration_candidates,
-            mutation_mode=mutation_mode,
-        )
 
     @property
-    def specification(self) -> RetrievalSpecification:
-        return self._specification
+    def applicability_specification(self) -> ApplicabilitySpecification:
+        return self.applicability.specification
 
     async def prepare(
         self,
@@ -300,7 +364,7 @@ class AgenticCandidateSource(_BankCandidateSource):
         )
         if not eligible:
             return ResearchResult()
-        return await self._research(
+        return await self.applicability.assess(
             program,
             task_description=task_description,
             metrics_description=metrics_description,
@@ -318,7 +382,6 @@ class AgenticCandidateSource(_BankCandidateSource):
         parent_context: str | None,
         pending_by_bank_card: Mapping[str, int],
         max_pending_per_card: int,
-        rng_key: str,
         research: ResearchResult | None = None,
     ) -> CandidateSlate:
         if research is None:
@@ -331,126 +394,43 @@ class AgenticCandidateSource(_BankCandidateSource):
                 pending_by_bank_card=pending_by_bank_card,
                 max_pending_per_card=max_pending_per_card,
             )
-        # The writer may merge or retire cards while research awaits the LLM.
-        # Freeze the actionable slate from a fresh bank view; research hits that
-        # disappeared are ignored and newly eligible cards enter uniform discovery.
+        # The writer may merge or retire cards while the LLM assesses
+        # applicability. Refresh eligibility, retain every current candidate,
+        # and drop only stale assessment ids.
         registry, eligible, _ = self._snapshot(
             program,
             task_key=task_key,
             pending_by_bank_card=pending_by_bank_card,
             max_pending_per_card=max_pending_per_card,
         )
-        if not eligible:
-            return CandidateSlate(
-                lineage_registry=registry,
-                candidates=(),
-                retrieval=RetrievalRecord(
-                    specification=self.specification,
-                    status="empty",
-                    rng_key=rng_key,
-                    eligible_bank_card_ids=(),
-                    core_bank_card_ids=(),
-                    exploration_bank_card_ids=(),
-                    candidate_bank_card_ids=(),
-                    conditional_tail_inclusion_probability=0.0,
-                    random_slate_probability=1.0,
-                    research_iterations=research.iterations,
-                ),
+        eligible_ids = tuple(card.id for card in eligible)
+        eligible_id_set = frozenset(eligible_ids)
+        applicable_ids = tuple(
+            dict.fromkeys(
+                card.id for card in research.cards if card.id in eligible_id_set
             )
-        eligible_by_id = {card.id: card for card in eligible}
-        core_limit = self.specification.max_candidates - (
-            self.specification.exploration_candidates
         )
-        core_ids = tuple(
-            list(
-                dict.fromkeys(
-                    card.id for card in research.cards if card.id in eligible_by_id
-                )
-            )[:core_limit]
-        )
-        remaining_ids = tuple(
-            card.id for card in eligible if card.id not in set(core_ids)
-        )
-        draw_budget = (
-            self.specification.exploration_candidates
-            if self.specification.name == "agentic_research_core_priority"
-            else self.specification.max_candidates - len(core_ids)
-        )
-        draw_count = min(len(remaining_ids), draw_budget)
-        if draw_count:
-            permutation = (
-                EventRNG(rng_key)
-                .generator("retrieval-exploration")
-                .permutation(len(remaining_ids))
-            )
-            exploration_ids = tuple(
-                remaining_ids[int(index)] for index in permutation[:draw_count]
+        if self.applicability_specification.name == "none":
+            applicability = ApplicabilityRecord(
+                specification=self.applicability_specification,
+                status="disabled",
             )
         else:
-            exploration_ids = ()
-        candidate_ids = core_ids + exploration_ids
-        tail_probability = draw_count / len(remaining_ids) if remaining_ids else 0.0
-        random_slate_probability = (
-            1.0 / math.comb(len(remaining_ids), draw_count) if draw_count else 1.0
-        )
-        status: RetrievalStatus = "agentic" if core_ids else "uniform_fallback"
+            applicability = ApplicabilityRecord(
+                specification=self.applicability_specification,
+                status="assessed" if applicable_ids else "empty",
+                applicable_bank_card_ids=applicable_ids,
+                research_iterations=research.iterations,
+                summary=research.summary,
+            )
+        status: CandidateUniverseStatus = "eligible_bank" if eligible_ids else "empty"
         return CandidateSlate(
             lineage_registry=registry,
-            candidates=tuple(eligible_by_id[card_id] for card_id in candidate_ids),
-            retrieval=RetrievalRecord(
+            candidates=eligible,
+            candidate_universe=CandidateUniverseRecord(
                 specification=self.specification,
                 status=status,
-                rng_key=rng_key,
-                eligible_bank_card_ids=tuple(card.id for card in eligible),
-                core_bank_card_ids=core_ids,
-                exploration_bank_card_ids=exploration_ids,
-                candidate_bank_card_ids=candidate_ids,
-                conditional_tail_inclusion_probability=tail_probability,
-                random_slate_probability=random_slate_probability,
-                research_iterations=research.iterations,
+                eligible_bank_card_ids=eligible_ids,
             ),
+            applicability=applicability,
         )
-
-    async def _research(
-        self,
-        program: Program,
-        *,
-        task_description: str,
-        metrics_description: str,
-        parent_context: str | None,
-        exclude_ids: frozenset[str],
-    ) -> ResearchResult:
-        started = perf_counter()
-        try:
-            async with asyncio.timeout(self.research_timeout_seconds):
-                return await self.shortlister.shortlist(
-                    parents=[program],
-                    mutation_mode=self.specification.mutation_mode,
-                    task_description=task_description,
-                    metrics_description=metrics_description,
-                    exclude_ids=exclude_ids,
-                    parent_contexts=[parent_context or ""],
-                )
-        except TimeoutError:
-            emit_memory_event(
-                MemoryResearch(
-                    outcome="failed",
-                    exclude_count=len(exclude_ids),
-                    duration_ms=(perf_counter() - started) * 1000.0,
-                    error=(
-                        "agentic retrieval exceeded "
-                        f"{self.research_timeout_seconds:.1f}s"
-                    ),
-                )
-            )
-            logger.warning(
-                "[MemoryV2][Retrieval] research exceeded {:.1f}s; using a uniform "
-                "slate",
-                self.research_timeout_seconds,
-            )
-            return ResearchResult()
-        except Exception:
-            logger.opt(exception=True).warning(
-                "[MemoryV2][Retrieval] research failed; using a uniform slate"
-            )
-            return ResearchResult()

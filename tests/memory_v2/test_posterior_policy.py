@@ -276,7 +276,7 @@ def test_card_kind_contrast_shares_a_clean_program_vs_insight_signal(
     assert model.model_config_hash != posterior_model.model_config_hash
 
 
-def test_retrieval_priority_probability_matches_within_each_source() -> None:
+def test_probability_matching_compares_every_eligible_card_in_one_pool() -> None:
     cards = tuple(
         CardSnapshot.from_card(Card(id=card_id, description=card_id)).model_copy(
             update={"treatment_id": f"{card_id}-revision"}
@@ -285,8 +285,8 @@ def test_retrieval_priority_probability_matches_within_each_source() -> None:
     )
     worlds = np.asarray(
         [
-            [4.0, 1.0, 3.0, 2.0],
-            [1.0, 4.0, 2.0, 3.0],
+            [1.0, 2.0, 4.0, 3.0],
+            [2.0, 1.0, 3.0, 4.0],
         ]
     )
 
@@ -294,20 +294,42 @@ def test_retrieval_priority_probability_matches_within_each_source() -> None:
         cards,
         worlds,
         abstain_effect=0.0,
-        preferred_bank_card_ids=frozenset({"core-a", "core-b"}),
-        preferred_probability=0.75,
     )
 
     assert probabilities == pytest.approx(
         {
-            "core-a-revision": 0.375,
-            "core-b-revision": 0.375,
-            "tail-a-revision": 0.125,
-            "tail-b-revision": 0.125,
+            "core-a-revision": 0.0,
+            "core-b-revision": 0.0,
+            "tail-a-revision": 0.5,
+            "tail-b-revision": 0.5,
         }
     )
     assert abstain == 0.0
     assert sum(variances.values()) > 0.0
+
+
+def test_rag_applicability_changes_only_the_treated_effect_design(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    feature_map = HierarchicalFeatureMap(
+        config=FeatureConfig(
+            behavior_keys=posterior_model.feature_map.config.behavior_keys,
+            retrieval_applicability_contrast=True,
+        )
+    )
+    space = feature_map.space(revisions)
+    card = revisions[0]
+
+    control_without_rag = space.design(card, evolution_context, False)
+    control_with_rag = space.design(card, evolution_context, False, rag_applicable=True)
+    treated_without_rag = space.design(card, evolution_context, True)
+    treated_with_rag = space.design(card, evolution_context, True, rag_applicable=True)
+
+    assert np.array_equal(control_without_rag, control_with_rag)
+    assert treated_with_rag[space.baseline_dim + space.retrieval_effect_index] == 1.0
+    assert treated_without_rag[space.baseline_dim + space.retrieval_effect_index] == 0.0
 
 
 def test_terminal_utility_posterior_detects_treatment_dependent_invalidity(

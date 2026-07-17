@@ -322,19 +322,26 @@ async def test_1_task_a_writer_admits_and_restamps_direction_normalized(shared_b
     } == {"task-a"}
 
 
-async def test_2a_task_b_research_reaches_task_a_card_and_sees_origin(shared_bank):
+async def test_2a_task_b_research_reaches_task_a_card_with_semantic_context(
+    shared_bank,
+):
     result = await shared_bank.store.research(
         ResearchRequest(query="find a descent schedule for task-b")
     )
 
     assert [card.id for card in result.cards] == [shared_bank.insight_id]
-    assert candidate_brief(result.cards[0])["origin_task"] == "task-a"
+    brief = candidate_brief(result.cards[0])
+    assert brief["task_description_summary"] == "minimize deterministic loss"
+    assert "origin_task" not in brief
     reflection = next(
         messages
         for _, schema, messages in shared_bank.router.calls
         if schema is ShortlistDecision
     )
-    assert '"origin_task": "task-a"' in reflection[1].content
+    assert (
+        '"task_description_summary": "minimize deterministic loss"'
+        in reflection[1].content
+    )
 
 
 def test_2b_foreign_stats_fold_signs_without_leaking_magnitudes(shared_bank):

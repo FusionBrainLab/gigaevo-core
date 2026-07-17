@@ -922,7 +922,11 @@ class FittedTerminalUtilityPosterior:
         self._safety_factor = _cholesky_spd(safety.covariance, jitter=1e-12)
 
     def _arm_designs(
-        self, card: CardSnapshot, context: EvolutionContext
+        self,
+        card: CardSnapshot,
+        context: EvolutionContext,
+        *,
+        rag_applicable: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         if (
             self.reward_definition is not None
@@ -937,8 +941,18 @@ class FittedTerminalUtilityPosterior:
         ):
             raise ValueError("prediction semantic schema differs from fitted evidence")
         return (
-            self.space.design(card, context, False),
-            self.space.design(card, context, True),
+            self.space.design(
+                card,
+                context,
+                False,
+                rag_applicable=rag_applicable,
+            ),
+            self.space.design(
+                card,
+                context,
+                True,
+                rag_applicable=rag_applicable,
+            ),
         )
 
     @staticmethod
@@ -955,6 +969,8 @@ class FittedTerminalUtilityPosterior:
         cards: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: np.random.Generator,
+        *,
+        applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> PosteriorWorld:
         reward_coefficients = self.reward.sample(rng)
         safety_coefficients = self._draws(
@@ -964,10 +980,18 @@ class FittedTerminalUtilityPosterior:
         risk_control: dict[str, float] = {}
         risk_treated: dict[str, float] = {}
         for card in cards:
-            reward_x0, reward_x1 = self._arm_designs(card, context)
+            reward_x0, reward_x1 = self._arm_designs(
+                card,
+                context,
+                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
+            )
             valid0 = float(_latent_to_gain(reward_x0 @ reward_coefficients, context))
             valid1 = float(_latent_to_gain(reward_x1 @ reward_coefficients, context))
-            safety_x0, safety_x1 = self._arm_designs(card, context)
+            safety_x0, safety_x1 = self._arm_designs(
+                card,
+                context,
+                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
+            )
             p0 = float(expit(safety_x0 @ safety_coefficients))
             p1 = float(expit(safety_x1 @ safety_coefficients))
             lower, _ = _normalized_gain_bounds(context)
@@ -989,6 +1013,7 @@ class FittedTerminalUtilityPosterior:
         rng: np.random.Generator,
         *,
         samples: int,
+        applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> np.ndarray:
         """Draw shared posterior worlds as a samples-by-cards effect matrix."""
 
@@ -998,7 +1023,14 @@ class FittedTerminalUtilityPosterior:
             return np.empty((samples, 0), dtype=float)
         reward_draws, _ = self.reward.sample_many(rng, samples)
         safety_draws = self._draws(self.safety.mean, self._safety_factor, rng, samples)
-        reward_designs = [self._arm_designs(card, context) for card in cards]
+        reward_designs = [
+            self._arm_designs(
+                card,
+                context,
+                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
+            )
+            for card in cards
+        ]
         reward_design0 = np.stack([row[0] for row in reward_designs])
         reward_design1 = np.stack([row[1] for row in reward_designs])
         valid0 = _latent_to_gain(reward_draws @ reward_design0.T, context)
@@ -1020,6 +1052,7 @@ class FittedTerminalUtilityPosterior:
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
+        applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> dict[str, PosteriorPrediction]:
         """Summarize every candidate using one coherent set of posterior worlds."""
 
@@ -1034,6 +1067,7 @@ class FittedTerminalUtilityPosterior:
                 reward_draws,
                 reward_residual_sds,
                 safety_draws,
+                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
                 max_treated_invalid_probability=max_treated_invalid_probability,
                 max_incremental_invalid_probability=(
                     max_incremental_invalid_probability
@@ -1053,6 +1087,7 @@ class FittedTerminalUtilityPosterior:
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
+        rag_applicable: bool = False,
     ) -> PosteriorPrediction:
         return self.predictions(
             (card,),
@@ -1062,6 +1097,9 @@ class FittedTerminalUtilityPosterior:
             max_treated_invalid_probability=max_treated_invalid_probability,
             max_incremental_invalid_probability=max_incremental_invalid_probability,
             safety_alpha=safety_alpha,
+            applicable_bank_card_ids=(
+                frozenset({card.bank_card_id}) if rag_applicable else frozenset()
+            ),
         )[card.treatment_id]
 
     def _prediction_from_draws(
@@ -1072,12 +1110,21 @@ class FittedTerminalUtilityPosterior:
         reward_residual_sds: np.ndarray,
         safety_draws: np.ndarray,
         *,
+        rag_applicable: bool,
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
     ) -> PosteriorPrediction:
-        reward_x0, reward_x1 = self._arm_designs(card, context)
-        safety_x0, safety_x1 = self._arm_designs(card, context)
+        reward_x0, reward_x1 = self._arm_designs(
+            card,
+            context,
+            rag_applicable=rag_applicable,
+        )
+        safety_x0, safety_x1 = self._arm_designs(
+            card,
+            context,
+            rag_applicable=rag_applicable,
+        )
         latent0 = reward_draws @ reward_x0
         latent1 = reward_draws @ reward_x1
         valid0 = _latent_to_gain(latent0, context)
@@ -1168,12 +1215,18 @@ class HierarchicalTerminalUtilityPosterior:
         self.reward_regressor = BayesianResidualScaleGaussianRegressor(config)
         self.safety_regressor = StableBayesianLogisticRegressor(config)
         feature_payload = feature_map.config.model_dump(
-            mode="json", exclude={"card_kind_contrast"}
+            mode="json",
+            exclude={
+                "card_kind_contrast",
+                "retrieval_applicability_contrast",
+            },
         )
         if feature_map.config.card_kind_contrast:
             # Preserve hashes for historical configs where the feature did not
             # exist while making the new action representation explicit.
             feature_payload["card_kind_contrast"] = True
+        if feature_map.config.retrieval_applicability_contrast:
+            feature_payload["retrieval_applicability_contrast"] = True
         self.model_config_hash = canonical_digest(
             {
                 "model": self.MODEL_NAME,
@@ -1240,6 +1293,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.card,
                     row.context,
                     row.treatment,
+                    rag_applicable=row.rag_applicable,
                 )
                 for row in rows
             ],
@@ -1273,6 +1327,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.card,
                     row.context,
                     row.treatment,
+                    rag_applicable=row.rag_applicable,
                 )
                 for row in valid_rows
             ],

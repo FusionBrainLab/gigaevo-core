@@ -21,7 +21,6 @@ from pydantic import (
 
 from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.memory.cards import Card
-from gigaevo.memory_v2.rng import EventRNG
 
 CARD_DELIVERY_TEMPLATE = "[card 1] id={bank_card_id}\n{payload}"
 
@@ -29,12 +28,8 @@ SafetyGateMode = Literal[
     "exclude_confident_incremental_harm",
     "credible_joint_safe",
 ]
-RetrievalStatus = Literal[
-    "whole_bank",
-    "agentic",
-    "uniform_fallback",
-    "empty",
-]
+CandidateUniverseStatus = Literal["eligible_bank", "empty"]
+ApplicabilityStatus = Literal["disabled", "assessed", "empty"]
 
 
 def canonical_digest(payload: Any) -> str:
@@ -294,30 +289,55 @@ class CardSnapshot(StrictFrozenModel):
         return (self.bank_card_id, *self.absorbed_bank_card_ids)
 
 
-class RetrievalSpecification(StrictFrozenModel):
-    """Fixed candidate-generation policy applied before Bayesian selection."""
+class CandidateUniverseSpecification(StrictFrozenModel):
+    """Fixed eligibility policy defining the posterior's complete action set."""
 
-    name: Literal[
-        "whole_bank",
-        "agentic_research",
-        "agentic_research_core_priority",
-    ]
-    max_candidates: int = Field(ge=0)
-    exploration_candidates: int = Field(ge=0)
-    mutation_mode: str = Field(default="rewrite", min_length=1)
+    name: Literal["eligible_bank"] = "eligible_bank"
+    policy_digest: str = Field(min_length=64, max_length=64)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.model_dump(mode="json", exclude={"digest"}))
+
+
+class CandidateUniverseRecord(StrictFrozenModel):
+    """Frozen complete Bayesian action universe for one decision."""
+
+    specification: CandidateUniverseSpecification
+    status: CandidateUniverseStatus
+    eligible_bank_card_ids: tuple[str, ...]
 
     @model_validator(mode="after")
-    def _valid_budget(self) -> RetrievalSpecification:
-        if self.name == "whole_bank":
-            if self.max_candidates or self.exploration_candidates:
-                raise ValueError("whole-bank retrieval cannot carry slate budgets")
-            return self
-        if self.max_candidates <= 0:
-            raise ValueError("agentic retrieval requires a positive slate budget")
-        if self.exploration_candidates <= 0:
-            raise ValueError("agentic retrieval requires randomized discovery slots")
-        if self.exploration_candidates >= self.max_candidates:
-            raise ValueError("agentic retrieval must retain at least one research slot")
+    def _coherent_universe(self) -> CandidateUniverseRecord:
+        ids = self.eligible_bank_card_ids
+        if len(ids) != len(set(ids)):
+            raise ValueError("candidate-universe card ids must be unique")
+        if ids != tuple(sorted(ids)):
+            raise ValueError("candidate-universe card ids must be sorted")
+        if self.status == "empty" and ids:
+            raise ValueError("an empty candidate universe cannot carry cards")
+        if self.status == "eligible_bank" and not ids:
+            raise ValueError("an eligible-bank universe requires at least one card")
+        return self
+
+
+class ApplicabilitySpecification(StrictFrozenModel):
+    """Fixed, pre-treatment source of contextual RAG applicability."""
+
+    name: Literal["none", "agentic_research"]
+    mutation_mode: str = Field(default="rewrite", min_length=1)
+    retrieval_applicability_contrast: bool
+    policy_digest: str = Field(min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def _coherent_feature_schema(self) -> ApplicabilitySpecification:
+        expected = self.name == "agentic_research"
+        if self.retrieval_applicability_contrast != expected:
+            raise ValueError(
+                "retrieval-applicability contrast must be enabled exactly for "
+                "agentic applicability"
+            )
         return self
 
     @computed_field  # type: ignore[prop-decorator]
@@ -326,144 +346,36 @@ class RetrievalSpecification(StrictFrozenModel):
         return canonical_digest(self.model_dump(mode="json", exclude={"digest"}))
 
 
-class RetrievalRecord(StrictFrozenModel):
-    """Frozen realized slate from research plus randomized discovery.
+class ApplicabilityRecord(StrictFrozenModel):
+    """Frozen RAG assessment; it annotates but never removes candidate cards."""
 
-    Agentic inclusion probabilities are not observable. The stored probabilities
-    are exact conditional on the realized agentic core and cover only the uniform
-    discovery draw. Bayesian proposal probabilities remain conditional on the
-    final slate.
-    """
-
-    specification: RetrievalSpecification
-    status: RetrievalStatus
-    rng_key: str = Field(min_length=64, max_length=64)
-    eligible_bank_card_ids: tuple[str, ...]
-    core_bank_card_ids: tuple[str, ...]
-    exploration_bank_card_ids: tuple[str, ...]
-    candidate_bank_card_ids: tuple[str, ...]
-    conditional_tail_inclusion_probability: float = Field(ge=0.0, le=1.0)
-    random_slate_probability: float = Field(gt=0.0, le=1.0)
+    specification: ApplicabilitySpecification
+    status: ApplicabilityStatus
+    applicable_bank_card_ids: tuple[str, ...] = ()
     research_iterations: int = Field(default=0, ge=0)
+    summary: str = ""
 
     @model_validator(mode="after")
-    def _coherent_slate(self) -> RetrievalRecord:
-        eligible = set(self.eligible_bank_card_ids)
-        core = set(self.core_bank_card_ids)
-        exploration = set(self.exploration_bank_card_ids)
-        candidates = set(self.candidate_bank_card_ids)
-        sequences = (
-            self.eligible_bank_card_ids,
-            self.core_bank_card_ids,
-            self.exploration_bank_card_ids,
-            self.candidate_bank_card_ids,
-        )
-        if any(len(values) != len(set(values)) for values in sequences):
-            raise ValueError("retrieval card ids must be unique within each field")
-        if self.eligible_bank_card_ids != tuple(sorted(self.eligible_bank_card_ids)):
-            raise ValueError("eligible retrieval ids must be sorted")
-        if not core <= eligible or not exploration <= eligible:
-            raise ValueError("retrieval slate contains an ineligible card")
-        if core & exploration:
-            raise ValueError("research and exploration slates overlap")
-        if candidates != core | exploration:
-            raise ValueError("final candidate slate differs from core plus exploration")
-        if self.candidate_bank_card_ids != (
-            self.core_bank_card_ids + self.exploration_bank_card_ids
+    def _coherent_assessment(self) -> ApplicabilityRecord:
+        if len(self.applicable_bank_card_ids) != len(
+            set(self.applicable_bank_card_ids)
         ):
-            raise ValueError("candidate order must be research then exploration")
-        if self.status == "empty":
+            raise ValueError("applicable card ids must be unique")
+        if self.specification.name == "none":
             if (
-                eligible
-                or candidates
-                or self.conditional_tail_inclusion_probability
-                or self.random_slate_probability != 1.0
+                self.status != "disabled"
+                or self.applicable_bank_card_ids
+                or self.research_iterations
+                or self.summary
             ):
-                raise ValueError("empty retrieval cannot carry cards or random mass")
-            if self.research_iterations and self.specification.name not in {
-                "agentic_research",
-                "agentic_research_core_priority",
-            }:
-                raise ValueError(
-                    "whole-bank empty retrieval cannot carry research steps"
-                )
+                raise ValueError("disabled applicability cannot carry RAG output")
             return self
-        if self.status == "whole_bank":
-            if self.specification.name != "whole_bank" or candidates != eligible:
-                raise ValueError("whole-bank retrieval must select the eligible bank")
-            if exploration or self.research_iterations:
-                raise ValueError("whole-bank retrieval cannot carry research draws")
-            if (
-                self.conditional_tail_inclusion_probability != 0.0
-                or self.random_slate_probability != 1.0
-            ):
-                raise ValueError("whole-bank retrieval must have probability one")
-            return self
-        else:
-            if self.specification.name not in {
-                "agentic_research",
-                "agentic_research_core_priority",
-            }:
-                raise ValueError(
-                    "agentic retrieval status requires agentic specification"
-                )
-            if len(candidates) > self.specification.max_candidates:
-                raise ValueError("retrieval exceeded its candidate budget")
-            core_limit = (
-                self.specification.max_candidates
-                - self.specification.exploration_candidates
-            )
-            if len(core) > core_limit:
-                raise ValueError("retrieval consumed reserved discovery capacity")
-            if self.status == "agentic" and not core:
-                raise ValueError("agentic status requires a non-empty research core")
-            if self.status == "uniform_fallback" and core:
-                raise ValueError("uniform fallback cannot carry a research core")
-
-        tail = eligible - core
-        if self.specification.name == "agentic_research_core_priority":
-            expected_draw_count = min(
-                len(tail), self.specification.exploration_candidates
-            )
-        else:
-            # Historical agentic ledgers filled every unused research slot with
-            # a random card. Keep that contract loadable and replayable.
-            expected_draw_count = min(
-                len(tail), self.specification.max_candidates - len(core)
-            )
-        if len(exploration) != expected_draw_count:
-            raise ValueError("retrieval did not fill its randomized discovery draw")
-        ordered_tail = tuple(
-            card_id for card_id in self.eligible_bank_card_ids if card_id not in core
-        )
-        permutation = (
-            EventRNG(self.rng_key)
-            .generator("retrieval-exploration")
-            .permutation(len(ordered_tail))
-        )
-        expected_exploration = tuple(
-            ordered_tail[int(index)] for index in permutation[:expected_draw_count]
-        )
-        if self.exploration_bank_card_ids != expected_exploration:
-            raise ValueError("retrieval exploration draw does not match its RNG key")
-        expected_tail_probability = len(exploration) / len(tail) if tail else 0.0
-        if not math.isclose(
-            self.conditional_tail_inclusion_probability,
-            expected_tail_probability,
-            rel_tol=0.0,
-            abs_tol=1e-12,
-        ):
-            raise ValueError("conditional retrieval inclusion probability is wrong")
-        expected_slate_probability = (
-            1.0 / math.comb(len(tail), len(exploration)) if exploration else 1.0
-        )
-        if not math.isclose(
-            self.random_slate_probability,
-            expected_slate_probability,
-            rel_tol=1e-12,
-            abs_tol=0.0,
-        ):
-            raise ValueError("random retrieval-slate probability is wrong")
+        if self.status == "disabled":
+            raise ValueError("agentic applicability cannot be disabled")
+        if self.status == "assessed" and not self.applicable_bank_card_ids:
+            raise ValueError("assessed applicability requires at least one card")
+        if self.status == "empty" and self.applicable_bank_card_ids:
+            raise ValueError("empty applicability cannot carry cards")
         return self
 
 
@@ -722,7 +634,8 @@ class DecisionRecord(StrictFrozenModel):
     model_config_hash: str = Field(min_length=64, max_length=64)
     posterior_config_hash: str = Field(min_length=64, max_length=64)
     policy: PolicySpecification
-    retrieval: RetrievalRecord
+    candidate_universe: CandidateUniverseRecord
+    applicability: ApplicabilityRecord
     fit_diagnostics: PosteriorFitDiagnostics
     context: EvolutionContext
     lineage_registry: tuple[CardSnapshot, ...]
@@ -770,17 +683,22 @@ class DecisionRecord(StrictFrozenModel):
         )
         if self.context_hash != expected_context_hash:
             raise ValueError("context_hash does not match the frozen decision context")
-        expected_config_hash = canonical_digest(
-            {
-                "posterior": self.posterior_config_hash,
-                "policy": self.policy.model_dump(mode="json", exclude={"digest"}),
-                "retrieval": self.retrieval.specification.model_dump(
-                    mode="json", exclude={"digest"}
-                ),
-            }
-        )
+        config_payload = {
+            "posterior": self.posterior_config_hash,
+            "policy": self.policy.model_dump(mode="json", exclude={"digest"}),
+            "candidate_universe": self.candidate_universe.specification.model_dump(
+                mode="json", exclude={"digest"}
+            ),
+            "applicability": self.applicability.specification.model_dump(
+                mode="json", exclude={"digest"}
+            ),
+        }
+        expected_config_hash = canonical_digest(config_payload)
         if expected_config_hash != self.model_config_hash:
-            raise ValueError("model_config_hash omits posterior or policy settings")
+            raise ValueError(
+                "model_config_hash omits posterior, policy, candidate-universe, or "
+                "applicability settings"
+            )
         candidate_banks = {
             row.treatment_id: row.bank_card_id for row in self.candidates
         }
@@ -789,14 +707,20 @@ class DecisionRecord(StrictFrozenModel):
             for row in self.action_probabilities
         ):
             raise ValueError("candidate and probability bank lineages differ")
-        if set(self.retrieval.candidate_bank_card_ids) != {
+        if set(self.candidate_universe.eligible_bank_card_ids) != {
             row.bank_card_id for row in self.candidates
         }:
-            raise ValueError("retrieval record and Bayesian candidate slate differ")
-        if set(self.retrieval.eligible_bank_card_ids) - {
+            raise ValueError("candidate universe and Bayesian candidate slate differ")
+        if set(self.candidate_universe.eligible_bank_card_ids) - {
             row.bank_card_id for row in self.lineage_registry
         }:
-            raise ValueError("retrieval eligibility is outside the lineage registry")
+            raise ValueError(
+                "candidate-universe eligibility is outside the lineage registry"
+            )
+        if set(self.applicability.applicable_bank_card_ids) - {
+            row.bank_card_id for row in self.candidates
+        }:
+            raise ValueError("RAG applicability is outside the Bayesian candidate set")
         key = DecisionKey(
             run_id=self.context.run_id,
             run_seed=self.run_seed,
@@ -893,6 +817,9 @@ class DecisionRecord(StrictFrozenModel):
             raise ValueError("selected joint propensity differs from the policy row")
         return self
 
+    def is_rag_applicable(self, bank_card_id: str) -> bool:
+        return bank_card_id in self.applicability.applicable_bank_card_ids
+
 
 class OutcomeMeasurement(StrictFrozenModel):
     """Terminal proximal gain with honest evaluation uncertainty."""
@@ -957,6 +884,7 @@ class CausalObservation(StrictFrozenModel):
     event_ordinal: int = Field(ge=0)
     card: CardSnapshot
     context: EvolutionContext
+    rag_applicable: bool = False
     treatment: bool
     offer_propensity: float = Field(gt=0.0, lt=1.0)
     proposal_propensity: float = Field(gt=0.0, le=1.0)

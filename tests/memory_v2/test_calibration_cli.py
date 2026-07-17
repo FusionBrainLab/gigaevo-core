@@ -139,7 +139,7 @@ def test_calibrator_uses_frozen_histories_and_emits_cli_report(
     evolution_context: EvolutionContext,
     revisions: tuple[CardSnapshot, CardSnapshot],
 ) -> None:
-    ledger_path = tmp_path / "memory_v2_evidence.sqlite3"
+    ledger_path = tmp_path / "memory_v2_selection_evidence.sqlite3"
     _closed_calibration_ledger(
         ledger_path, environment, evolution_context, revisions[0]
     )

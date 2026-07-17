@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+import hashlib
+import json
 from pathlib import Path
 import threading
 from time import perf_counter
@@ -83,6 +85,26 @@ class LocalMemoryStore(MemoryStore):
     @property
     def state(self) -> StoreState:
         return self._state
+
+    @property
+    def retrieval_policy_digest(self) -> str:
+        """Stable fingerprint of the vector/research policy used by this store."""
+
+        if self._agent is not None:
+            return self._agent.policy_digest
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "store": f"{type(self).__module__}.{type(self).__qualname__}",
+                    "embed": self._config.embed.model_dump(mode="json"),
+                    "research": self._config.research.model_dump(mode="json"),
+                    "models": self._policy_identifiers["retrieval_models"],
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
 
     def save(self, card: Card) -> str:
         with self._lock:

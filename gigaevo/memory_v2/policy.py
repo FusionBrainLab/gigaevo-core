@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 import math
 
@@ -15,7 +14,6 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     PolicyDecision,
     PolicySpecification,
-    RetrievalRecord,
     SafetyGateMode,
 )
 from gigaevo.memory_v2.posterior import FittedTerminalUtilityPosterior
@@ -51,17 +49,8 @@ def _finite_probability_matching(
     effect_worlds: Sequence[Sequence[float]] | np.ndarray,
     *,
     abstain_effect: float,
-    preferred_bank_card_ids: frozenset[str] = frozenset(),
-    preferred_probability: float | None = None,
 ) -> tuple[dict[str, float], float, dict[str, float], dict[str, float]]:
-    """Return exact winner frequencies, abstention, MC SEs, and the last world.
-
-    ``preferred_probability`` creates two transparent policy branches: one over
-    the researched core and one over the uniformly discovered tail. Each branch
-    independently probability-matches its best action or abstains. When either
-    branch has no admissible cards, the surviving branch receives probability
-    one rather than forcing an empty choice.
-    """
+    """Return one-pool winner frequencies, abstention, MC SEs, and last world."""
 
     treatment_ids = tuple(card.treatment_id for card in cards)
     finite_probability = {treatment_id: 0.0 for treatment_id in treatment_ids}
@@ -71,53 +60,32 @@ def _finite_probability_matching(
     worlds = tuple(effect_worlds)
     if not worlds:
         raise ValueError("probability matching requires posterior worlds")
-    if preferred_probability is not None and not 0.0 < preferred_probability < 1.0:
-        raise ValueError("preferred probability must be strictly between zero and one")
-
-    all_indices = tuple(range(len(cards)))
-    preferred_indices = tuple(
-        index
-        for index, card in enumerate(cards)
-        if card.bank_card_id in preferred_bank_card_ids
-    )
-    discovery_indices = tuple(
-        index
-        for index, card in enumerate(cards)
-        if card.bank_card_id not in preferred_bank_card_ids
-    )
-    pools: tuple[tuple[float, tuple[int, ...]], ...]
-    if preferred_probability is not None and preferred_indices and discovery_indices:
-        pools = (
-            (preferred_probability, preferred_indices),
-            (1.0 - preferred_probability, discovery_indices),
-        )
-    else:
-        pools = ((1.0, all_indices),)
-
     denominator = float(len(worlds))
-    abstain_probability = 0.0
-    for pool_weight, indices in pools:
-        winners: Counter[str | None] = Counter()
-        for effects in worlds:
-            winner_index = max(
-                indices,
-                key=lambda index: (
-                    effects[index],
-                    cards[index].treatment_id,
-                ),
-            )
-            if effects[winner_index] <= abstain_effect:
-                winners[None] += 1
-            else:
-                winners[cards[winner_index].treatment_id] += 1
-        abstain_probability += pool_weight * winners[None] / denominator
-        for index in indices:
-            treatment_id = cards[index].treatment_id
-            conditional = winners[treatment_id] / denominator
-            finite_probability[treatment_id] = pool_weight * conditional
-            finite_mc_variance[treatment_id] = (
-                pool_weight**2 * conditional * (1.0 - conditional) / denominator
-            )
+    winners: dict[str | None, int] = {None: 0}
+    for card in cards:
+        winners[card.treatment_id] = 0
+    for effects in worlds:
+        winner_index = max(
+            range(len(cards)),
+            key=lambda index: (
+                effects[index],
+                cards[index].treatment_id,
+            ),
+        )
+        treatment_id = (
+            None
+            if effects[winner_index] <= abstain_effect
+            else cards[winner_index].treatment_id
+        )
+        winners[treatment_id] += 1
+    abstain_probability = winners[None] / denominator
+    for card in cards:
+        treatment_id = card.treatment_id
+        probability = winners[treatment_id] / denominator
+        finite_probability[treatment_id] = probability
+        finite_mc_variance[treatment_id] = (
+            probability * (1.0 - probability) / denominator
+        )
 
     last_effects = {
         card.treatment_id: float(worlds[-1][index]) for index, card in enumerate(cards)
@@ -237,15 +205,14 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         candidates: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: EventRNG,
-        retrieval: RetrievalRecord | None = None,
+        applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> PolicyDecision:
         cards = tuple(sorted(candidates, key=lambda row: row.treatment_id))
         if not cards:
             return PolicyDecision(abstain_probability=1.0)
-        if retrieval is not None and {card.bank_card_id for card in cards} != set(
-            retrieval.candidate_bank_card_ids
-        ):
-            raise ValueError("retrieval record and policy candidates differ")
+        candidate_bank_ids = {card.bank_card_id for card in cards}
+        if not applicable_bank_card_ids <= candidate_bank_ids:
+            raise ValueError("RAG applicability contains a non-candidate card")
         if not math.isclose(
             posterior.reference_offer_probability,
             self.config.offer_probability,
@@ -265,6 +232,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
                 self.safety.max_incremental_invalid_probability
             ),
             safety_alpha=self.safety.alpha,
+            applicable_bank_card_ids=applicable_bank_card_ids,
         )
         if (
             not posterior.reward.optimizer_success
@@ -305,19 +273,8 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             context,
             proposal_rng,
             samples=self.config.proposal_worlds,
+            applicable_bank_card_ids=applicable_bank_card_ids,
         )
-        preferred_bank_card_ids: frozenset[str] = frozenset()
-        preferred_probability: float | None = None
-        if (
-            retrieval is not None
-            and retrieval.specification.name == "agentic_research_core_priority"
-            and retrieval.core_bank_card_ids
-        ):
-            preferred_bank_card_ids = frozenset(retrieval.core_bank_card_ids)
-            preferred_probability = (
-                retrieval.specification.max_candidates
-                - retrieval.specification.exploration_candidates
-            ) / retrieval.specification.max_candidates
         (
             finite_safe_probability,
             finite_abstain_probability,
@@ -327,8 +284,6 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             safe_cards,
             effect_worlds,
             abstain_effect=self.config.abstain_effect,
-            preferred_bank_card_ids=preferred_bank_card_ids,
-            preferred_probability=preferred_probability,
         )
         finite_probability = {
             card.treatment_id: finite_safe_probability.get(card.treatment_id, 0.0)

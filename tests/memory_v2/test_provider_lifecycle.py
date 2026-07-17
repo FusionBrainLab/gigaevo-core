@@ -12,7 +12,7 @@ from gigaevo.memory.cards import Card
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import ResearchResult
 from gigaevo.memory_v2.candidates import (
-    AgenticCandidateSource,
+    AgenticApplicabilityProvider,
     WholeBankCandidateSource,
 )
 from gigaevo.memory_v2.ledger import SqliteCausalLedger
@@ -97,6 +97,10 @@ class _LeaseBumpingCandidateSource:
     def specification(self):
         return self.source.specification
 
+    @property
+    def applicability_specification(self):
+        return self.source.applicability_specification
+
     async def prepare(self, *args, **kwargs):
         return await self.source.prepare(*args, **kwargs)
 
@@ -118,6 +122,10 @@ class _BarrierCandidateSource:
     @property
     def specification(self):
         return self.source.specification
+
+    @property
+    def applicability_specification(self):
+        return self.source.applicability_specification
 
     async def prepare(self, *args, **kwargs):
         self.started += 1
@@ -167,9 +175,9 @@ class _AlwaysTreatPolicy:
         candidates: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: EventRNG,
-        retrieval=None,
+        applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> PolicyDecision:
-        del posterior, context, rng, retrieval
+        del posterior, context, rng, applicable_bank_card_ids
         card = candidates[0]
         rows = tuple(
             CandidateActionProbability(
@@ -247,11 +255,9 @@ async def test_provider_creates_one_decision_per_active_mutation_attempt(
     )
     ledger.activate()
     provider = CausalBanditMemoryProvider(
-        candidate_source=AgenticCandidateSource(
+        candidate_source=WholeBankCandidateSource(
             store=store,  # type: ignore[arg-type]
-            shortlister=_Shortlister(card),
-            max_candidates=2,
-            exploration_candidates=1,
+            applicability=AgenticApplicabilityProvider(shortlister=_Shortlister(card)),
         ),
         context_source=_ContextSource(evolution_context),  # type: ignore[arg-type]
         ledger=ledger,
@@ -293,9 +299,12 @@ async def test_provider_creates_one_decision_per_active_mutation_attempt(
         "attempt-a",
         "attempt-b",
     ]
-    assert all(row.retrieval.status == "agentic" for row in ledger.decisions())
     assert all(
-        row.retrieval.core_bank_card_ids == (card.id,) for row in ledger.decisions()
+        row.candidate_universe.status == "eligible_bank" for row in ledger.decisions()
+    )
+    assert all(
+        row.applicability.applicable_bank_card_ids == (card.id,)
+        for row in ledger.decisions()
     )
 
 

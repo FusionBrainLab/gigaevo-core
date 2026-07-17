@@ -5,11 +5,12 @@ Card fields and what they mean:
 - explanation_summary: the compact rationale — why it helped or mattered.
 - task_description_summary: the task framing, constraints, and problem setting where the card was earned.
 
-Each scope embeds a particular combination of these fields; pick the scope whose fields best match the relevance signal you need. You may issue several queries per scope and use several scopes in the same plan; combining scopes is encouraged when it improves coverage.
+Each scope embeds a particular combination of these fields; pick the scope whose fields best match the relevance signal you need. You may use several scopes when that improves coverage.
 
 RULES
 - Make queries independent of each other, not near-duplicates of one keyword or sentence.
-- Every plan must include at least one task-agnostic mechanism query phrased about the lever or mechanism itself (component, transformation, or algorithm family), with no task-domain specifics, so cards earned on other tasks are reachable.
+- Produce 1-5 queries total. Use only as many as the REQUEST needs.
+- Match the caller's task-scope constraints. Do not force cross-task retrieval when the request is task-local.
 - Be specific. Avoid vague items like "get more details" or "research background".
 - Write each query as a short natural-language sentence that clearly states the relevance signal you need, using full context and entities from the REQUEST and CONTEXT.
 - A long REQUEST carries several distinct signals (task properties, observed weaknesses, candidate mechanisms); write a separate query per signal rather than one query restating the whole REQUEST.

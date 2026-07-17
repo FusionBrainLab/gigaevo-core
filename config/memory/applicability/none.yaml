@@ -1,0 +1,4 @@
+# Full-bank ablation: retain the identical selection path without an RAG label.
+_target_: gigaevo.memory_v2.candidates.NullApplicabilityProvider
+mutation_mode: ${mutation_mode}
+retrieval_applicability_contrast: false

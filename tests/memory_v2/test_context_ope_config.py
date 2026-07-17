@@ -18,7 +18,11 @@ from gigaevo.evolution.strategies.models import (
     BehaviorSpace,
     LinearBinning,
 )
-from gigaevo.memory_v2.candidates import WholeBankCandidateSource
+from gigaevo.memory_v2.candidates import (
+    AgenticApplicabilityProvider,
+    NullApplicabilityProvider,
+    WholeBankCandidateSource,
+)
 from gigaevo.memory_v2.context import MapContextConfig, MapElitesContextSource
 from gigaevo.memory_v2.models import (
     CardSnapshot,
@@ -288,13 +292,26 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.memory.coalesce_refresh is False
         assert cfg.engine_config.terminal_drain_timeout_s == cfg.dag_timeout
         assert cfg.post_step_hook.refresh_every == 5
-        assert cfg.memory.candidate_source.max_candidates == 12
-        assert cfg.memory.candidate_source.exploration_candidates == 4
-        assert cfg.memory.candidate_source.selection_logic == "core_priority"
-        assert cfg.memory.candidate_source.mutation_mode == "rewrite"
+        assert cfg.memory.candidate_source._target_ == (
+            f"{WholeBankCandidateSource.__module__}."
+            f"{WholeBankCandidateSource.__qualname__}"
+        )
+        raw_candidate_source = OmegaConf.to_container(
+            cfg.memory.candidate_source, resolve=False
+        )
+        assert isinstance(raw_candidate_source, dict)
+        assert raw_candidate_source["applicability"] == "${ref:memory.applicability}"
+        assert cfg.memory.applicability._target_ == (
+            f"{AgenticApplicabilityProvider.__module__}."
+            f"{AgenticApplicabilityProvider.__qualname__}"
+        )
+        assert not {
+            "max_candidates",
+            "exploration_candidates",
+            "selection_logic",
+        }.intersection(cfg.memory.candidate_source)
         assert cfg.memory.feature_config.card_kind_contrast is True
-        assert cfg.memory.store.config.research.max_iters == 1
-        assert cfg.memory.store.config.research.max_cards == 8
+        assert cfg.memory.feature_config.retrieval_applicability_contrast is True
         assert cfg.memory.safety.gate_mode == "exclude_confident_incremental_harm"
         assert cfg.memory.safety.max_treated_invalid_probability is None
         assert cfg.memory.safety.max_incremental_invalid_probability == pytest.approx(
@@ -334,8 +351,15 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
             validate_memory_v2_scope(cfg)
         cfg.memory.policy_config.offer_probability = 0.7
 
-        cfg.memory.candidate_source.exploration_candidates = 0
-        with pytest.raises(ValueError, match="exploration_candidates"):
+        cfg.memory.candidate_source._target_ = "not.the.full.bank"
+        with pytest.raises(ValueError, match="WholeBankCandidateSource"):
+            validate_memory_v2_scope(cfg)
+        cfg.memory.candidate_source._target_ = (
+            f"{WholeBankCandidateSource.__module__}."
+            f"{WholeBankCandidateSource.__qualname__}"
+        )
+        cfg.memory.feature_config.retrieval_applicability_contrast = False
+        with pytest.raises(ValueError, match="retrieval_applicability_contrast"):
             validate_memory_v2_scope(cfg)
     finally:
         GlobalHydra.instance().clear()
@@ -351,14 +375,15 @@ def test_memory_v2_whole_bank_control_composes_with_hydra() -> None:
                 overrides=[
                     "problem.name=heilbron",
                     "memory=v2",
-                    (
-                        "memory.candidate_source._target_="
-                        f"{WholeBankCandidateSource.__module__}."
-                        f"{WholeBankCandidateSource.__qualname__}"
-                    ),
+                    "memory/applicability=none",
                 ],
             )
         validate_memory_v2_scope(cfg)
         assert cfg.memory.candidate_source._target_.endswith("WholeBankCandidateSource")
+        assert cfg.memory.applicability._target_ == (
+            f"{NullApplicabilityProvider.__module__}."
+            f"{NullApplicabilityProvider.__qualname__}"
+        )
+        assert cfg.memory.feature_config.retrieval_applicability_contrast is False
     finally:
         GlobalHydra.instance().clear()

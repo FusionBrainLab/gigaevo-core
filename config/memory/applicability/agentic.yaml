@@ -1,0 +1,6 @@
+# Semantic RAG is an immutable pre-treatment annotation, not a candidate gate.
+_target_: gigaevo.memory_v2.candidates.AgenticApplicabilityProvider
+shortlister: ${ref:memory.shortlister}
+mutation_mode: ${mutation_mode}
+research_timeout_seconds: 240.0
+retrieval_applicability_contrast: true

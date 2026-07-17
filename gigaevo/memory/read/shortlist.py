@@ -11,6 +11,8 @@ before any ranker runs.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
+import json
 from typing import Any
 
 from loguru import logger
@@ -136,6 +138,26 @@ class ResearchShortlister:
             )
         self._store = store
         self._digest_max_cards = digest_max_cards
+
+    @property
+    def policy_digest(self) -> str:
+        """Fingerprint request construction plus the store's retrieval policy."""
+
+        store_digest = getattr(self._store, "retrieval_policy_digest", None)
+        if not isinstance(store_digest, str) or len(store_digest) != 64:
+            store_digest = (
+                f"{type(self._store).__module__}.{type(self._store).__qualname__}"
+            )
+        payload = {
+            "shortlister": f"{type(self).__module__}.{type(self).__qualname__}",
+            "digest_max_cards": self._digest_max_cards,
+            "store_retrieval_policy": store_digest,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")
+        ).hexdigest()
 
     async def shortlist(
         self,

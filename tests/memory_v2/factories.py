@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from gigaevo.memory_v2.models import (
+    ApplicabilityRecord,
+    ApplicabilitySpecification,
     CandidateActionProbability,
+    CandidateUniverseRecord,
+    CandidateUniverseSpecification,
     CardSnapshot,
     DecisionKey,
     DecisionRecord,
@@ -9,8 +13,6 @@ from gigaevo.memory_v2.models import (
     PolicySpecification,
     PosteriorFitDiagnostics,
     PosteriorPrediction,
-    RetrievalRecord,
-    RetrievalSpecification,
     SafetyGateMode,
     candidate_set_hash,
     canonical_digest,
@@ -75,28 +77,31 @@ def decision_record(
         abstain_effect=0.0,
         max_pending_per_card=2,
     )
-    retrieval_specification = RetrievalSpecification(
-        name="whole_bank",
-        max_candidates=0,
-        exploration_candidates=0,
+    candidate_universe_specification = CandidateUniverseSpecification(
+        policy_digest="u" * 64,
     )
-    retrieval = RetrievalRecord(
-        specification=retrieval_specification,
-        status="whole_bank",
-        rng_key="r" * 64,
+    candidate_universe = CandidateUniverseRecord(
+        specification=candidate_universe_specification,
+        status="eligible_bank",
         eligible_bank_card_ids=(card.bank_card_id,),
-        core_bank_card_ids=(card.bank_card_id,),
-        exploration_bank_card_ids=(),
-        candidate_bank_card_ids=(card.bank_card_id,),
-        conditional_tail_inclusion_probability=0.0,
-        random_slate_probability=1.0,
+    )
+    applicability = ApplicabilityRecord(
+        specification=ApplicabilitySpecification(
+            name="none",
+            retrieval_applicability_contrast=False,
+            policy_digest="a" * 64,
+        ),
+        status="disabled",
     )
     posterior_config_hash = "c" * 64
     model_config_hash = canonical_digest(
         {
             "posterior": posterior_config_hash,
             "policy": policy.model_dump(mode="json", exclude={"digest"}),
-            "retrieval": retrieval_specification.model_dump(
+            "candidate_universe": candidate_universe_specification.model_dump(
+                mode="json", exclude={"digest"}
+            ),
+            "applicability": applicability.specification.model_dump(
                 mode="json", exclude={"digest"}
             ),
         }
@@ -133,7 +138,8 @@ def decision_record(
         model_config_hash=key.model_config_hash,
         posterior_config_hash=posterior_config_hash,
         policy=policy,
-        retrieval=retrieval,
+        candidate_universe=candidate_universe,
+        applicability=applicability,
         fit_diagnostics=PosteriorFitDiagnostics(
             evidence_count=0,
             reward_observations=0,

@@ -18,6 +18,7 @@ from scipy.stats import norm
 from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.memory_v2.features import FeatureConfig, FeatureSpace
 from gigaevo.memory_v2.models import (
+    ApplicabilityRecord,
     CardSnapshot,
     CausalObservation,
     EnvironmentFingerprint,
@@ -97,6 +98,7 @@ class CalibrationDecision:
     risk_q_hat_control: float | None
     risk_q_hat_treated: float | None
     policy: PolicySpecification
+    applicability: ApplicabilityRecord
 
     @property
     def proposed_card(self) -> CardSnapshot | None:
@@ -110,6 +112,9 @@ class CalibrationDecision:
             ),
             None,
         )
+
+    def is_rag_applicable(self, bank_card_id: str) -> bool:
+        return bank_card_id in self.applicability.applicable_bank_card_ids
 
 
 @dataclass(frozen=True)
@@ -179,16 +184,18 @@ def discover_ledger_paths(inputs: Iterable[str | Path]) -> tuple[Path, ...]:
         if not path.is_dir():
             raise FileNotFoundError(path)
         candidates = (
-            path / "memory_v2_evidence.sqlite3",
-            path / "memory" / "memory_v2_evidence.sqlite3",
+            path / "memory_v2_selection_evidence.sqlite3",
+            path / "memory" / "memory_v2_selection_evidence.sqlite3",
         )
         direct = [candidate for candidate in candidates if candidate.is_file()]
         if direct:
             found.update(candidate.resolve() for candidate in direct)
             continue
-        recursive = tuple(path.glob("**/memory_v2_evidence.sqlite3"))
+        recursive = tuple(path.glob("**/memory_v2_selection_evidence.sqlite3"))
         if not recursive:
-            raise FileNotFoundError(f"no memory_v2_evidence.sqlite3 under {path}")
+            raise FileNotFoundError(
+                f"no memory_v2_selection_evidence.sqlite3 under {path}"
+            )
         found.update(candidate.resolve() for candidate in recursive)
     if not found:
         raise ValueError("at least one causal ledger is required")
@@ -264,6 +271,7 @@ def _parse_decision(
         risk_q_hat_control=payload.get("risk_q_hat_control"),
         risk_q_hat_treated=payload.get("risk_q_hat_treated"),
         policy=PolicySpecification.model_validate(payload["policy"]),
+        applicability=ApplicabilityRecord.model_validate(payload["applicability"]),
     )
 
 
@@ -384,6 +392,7 @@ def load_calibration_trajectory(
                 event_ordinal=decision.event_ordinal,
                 card=card,
                 context=decision.context,
+                rag_applicable=decision.is_rag_applicable(card.bank_card_id),
                 treatment=decision.delivered,
                 offer_propensity=offer_probability,
                 proposal_propensity=proposal_probability,
@@ -439,9 +448,26 @@ def _prepare_units(
                 + list(decision.lineage_registry)
                 + list(decision.candidates)
             )
-            space = FeatureSpace(FeatureConfig(behavior_keys=behavior_keys), cards)
+            rag_feature_enabled = (
+                decision.applicability.specification.retrieval_applicability_contrast
+            )
+            space = FeatureSpace(
+                FeatureConfig(
+                    behavior_keys=behavior_keys,
+                    retrieval_applicability_contrast=rag_feature_enabled,
+                ),
+                cards,
+            )
             history_design = _stack(
-                [space.design(row.card, row.context, row.treatment) for row in history],
+                [
+                    space.design(
+                        row.card,
+                        row.context,
+                        row.treatment,
+                        rag_applicable=row.rag_applicable,
+                    )
+                    for row in history
+                ],
                 space.outcome_dim,
             )
             replay_candidates: list[_ReplayCandidate] = []
@@ -454,8 +480,24 @@ def _prepare_units(
                             space.bank_lineage_id(row.card) == current_bank_id
                             for row in history
                         ),
-                        control_design=space.design(card, decision.context, False),
-                        treated_design=space.design(card, decision.context, True),
+                        control_design=space.design(
+                            card,
+                            decision.context,
+                            False,
+                            rag_applicable=(
+                                card.bank_card_id
+                                in decision.applicability.applicable_bank_card_ids
+                            ),
+                        ),
+                        treated_design=space.design(
+                            card,
+                            decision.context,
+                            True,
+                            rag_applicable=(
+                                card.bank_card_id
+                                in decision.applicability.applicable_bank_card_ids
+                            ),
+                        ),
                     )
                 )
             observation = observations.get(decision.decision_id)
