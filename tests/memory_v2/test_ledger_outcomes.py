@@ -17,8 +17,13 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
+    MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
 )
-from gigaevo.memory.cards import AssignmentRecord, DecisionContext
+from gigaevo.memory.cards import (
+    AssignmentRecord,
+    DecisionContext,
+    MutationAssignmentRecord,
+)
 from gigaevo.memory.events import MemoryOutcome
 from gigaevo.memory.outcomes import (
     record_memory_attempt_failure,
@@ -439,6 +444,10 @@ async def test_paired_outcome_requires_matching_ordered_cohort_signature(
     child = Program(code="def child(): return 1", iteration=9)
     child.metrics = {"is_valid": 1.0, "fitness": float(np.mean(child_scores))}
     child.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "decision-paired")
+    child.set_metadata(
+        MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+        MutationAssignmentRecord(mutation_id=child.id).model_dump(mode="json"),
+    )
     child.set_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY, "base")
     child.set_metadata(
         MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,

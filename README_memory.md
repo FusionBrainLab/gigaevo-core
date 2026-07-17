@@ -31,7 +31,7 @@ does.
 
 The memory subsystem has its own LLM route. The default `memory/llm=gemini`
 uses OpenRouter and reads `OPENROUTER_API_KEY`; in-cluster/local setups can use
-`memory/llm=qwen_instruct`, which reads `OPENAI_API_KEY` and targets the
+`memory/llm=qwen_instruct`, which reads `OPENROUTER_API_KEY` and targets the
 configured LiteLLM-compatible proxy.
 
 ## Hydra groups

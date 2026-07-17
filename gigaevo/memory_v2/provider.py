@@ -20,7 +20,7 @@ from gigaevo.memory.events import (
 from gigaevo.memory.provider import MemoryProvider
 from gigaevo.memory.read.reader import MemorySelection
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
-from gigaevo.memory.storage.base import MemoryStore
+from gigaevo.memory.storage.base import MemoryStore, ResearchResult
 from gigaevo.memory_v2.candidates import CandidateSource
 from gigaevo.memory_v2.context import DecisionContextSource
 from gigaevo.memory_v2.events import MemoryV2Decision
@@ -34,6 +34,7 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     PolicyDecision,
     PosteriorFitDiagnostics,
+    RetrievalRecord,
     candidate_set_hash,
     canonical_digest,
 )
@@ -90,6 +91,9 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 "policy": policy.specification.model_dump(
                     mode="json", exclude={"digest"}
                 ),
+                "retrieval": candidate_source.specification.model_dump(
+                    mode="json", exclude={"digest"}
+                ),
             }
         )
         self._lock = asyncio.Lock()
@@ -105,33 +109,54 @@ class CausalBanditMemoryProvider(MemoryProvider):
         parent_context: str | None = None,
         pending_counts: Mapping[str, int] | None = None,
     ) -> MemorySelection:
-        del metrics_description, pending_counts
+        del pending_counts
         attempt_id = self.selection_leases.active_attempt_for_parent(program.id)
         if attempt_id is None:
             # MemoryContextStage also runs while evaluating newly created children.
             # Those DAGs are not treatment-assignment points and must not consume a
             # behavior-policy draw or create an indefinitely pending ledger row.
             return MemorySelection()
-        async with self._lock:
-            try:
+        try:
+            context = await self.context_source.snapshot(program)
+            preparation_evidence = self.ledger.snapshot()
+            with memory_event_context(
+                program_id=program.id,
+                parent_ids=(program.id,),
+            ):
+                research = await self.candidate_source.prepare(
+                    program,
+                    task_key=self.task_key,
+                    task_description=task_description,
+                    metrics_description=metrics_description,
+                    parent_context=parent_context,
+                    pending_by_bank_card=preparation_evidence.pending_by_bank_card,
+                    max_pending_per_card=self.policy.config.max_pending_per_card,
+                )
+            async with self._lock:
                 return await self._select_locked(
                     program,
                     attempt_id=attempt_id,
+                    context=context,
+                    research=research,
                     task_description=task_description,
+                    metrics_description=metrics_description,
                     parent_context=parent_context,
                 )
-            except Exception as exc:
-                logger.opt(exception=True).error(
-                    "[MemoryV2][Provider] decision failed before treatment: {}", exc
-                )
-                raise
+        except Exception as exc:
+            logger.opt(exception=True).error(
+                "[MemoryV2][Provider] decision failed before treatment: {}", exc
+            )
+            raise
 
     async def _select_locked(
         self,
         program: Program,
         *,
         attempt_id: str,
+        context: EvolutionContext,
+        research: ResearchResult,
         task_description: str,
+        metrics_description: str,
         parent_context: str | None,
     ) -> MemorySelection:
         if self.selection_leases.active_attempt_for_parent(program.id) != attempt_id:
@@ -140,26 +165,51 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 f"parent {program.id!r}"
             )
         ordinal = self.ledger.next_event_ordinal(self.task_key)
-        context = await self.context_source.snapshot(program)
-        combined_description = "\n".join(
-            text for text in (task_description, parent_context or "") if text.strip()
+        context_hash = canonical_digest(
+            context.model_dump(mode="json", exclude_computed_fields=True)
         )
         for _ in range(3):
             lease_snapshot = self.selection_leases.selection_snapshot()
-            registry_cards, cards = self.candidate_source.candidate_snapshot(
+            evidence = self.ledger.snapshot()
+            retrieval_rng_key = canonical_digest(
+                {
+                    "run_id": context.run_id,
+                    "run_seed": self.run_seed,
+                    "attempt_id": attempt_id,
+                    "event_ordinal": ordinal,
+                    "context_hash": context_hash,
+                    "evidence_hash": evidence.version,
+                    "lease_version": lease_snapshot.version,
+                    "retrieval": self.candidate_source.specification.model_dump(
+                        mode="json", exclude={"digest"}
+                    ),
+                }
+            )
+            slate = await self.candidate_source.candidate_snapshot(
                 program,
                 task_key=self.task_key,
-                task_description=combined_description,
+                task_description=task_description,
+                metrics_description=metrics_description,
+                parent_context=parent_context,
+                pending_by_bank_card=evidence.pending_by_bank_card,
+                max_pending_per_card=self.policy.config.max_pending_per_card,
+                rng_key=retrieval_rng_key,
+                research=research,
             )
             lineage_registry = tuple(
-                CardSnapshot.from_card(card) for card in registry_cards
+                CardSnapshot.from_card(card) for card in slate.lineage_registry
             )
-            revisions = tuple(CardSnapshot.from_card(card) for card in cards)
-            evidence = self.ledger.snapshot()
+            revisions = tuple(CardSnapshot.from_card(card) for card in slate.candidates)
             eligible = self.policy.eligible_candidates(
                 revisions,
                 pending_by_bank_card=evidence.pending_by_bank_card,
             )
+            if {row.bank_card_id for row in eligible} != set(
+                slate.retrieval.candidate_bank_card_ids
+            ):
+                raise MemoryStorageError(
+                    "retrieval and posterior pending filters produced different slates"
+                )
             candidate_hash = candidate_set_hash(eligible)
             lineage_registry_hash = candidate_set_hash(lineage_registry)
             key = DecisionKey(
@@ -171,9 +221,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 parent_iteration=program.iteration,
                 event_ordinal=ordinal,
                 environment_hash=context.environment.digest,
-                context_hash=canonical_digest(
-                    context.model_dump(mode="json", exclude_computed_fields=True)
-                ),
+                context_hash=context_hash,
                 model_config_hash=self.decision_config_hash,
                 evidence_hash=evidence.version,
                 model_evidence_hash=evidence.model_version,
@@ -192,23 +240,79 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 context=context,
                 rng=EventRNG(key.rng_key),
             )
-            if self._reserve_proposed_card(
+            if self._reserve_candidate_slate(
                 program,
                 attempt_id=attempt_id,
                 expected_lease_version=lease_snapshot.version,
-                decision=decision,
+                candidates=eligible,
             ):
-                return self._commit(
-                    key=key,
-                    attempt_id=attempt_id,
-                    context=context,
-                    lineage_registry=lineage_registry,
-                    candidates=eligible,
-                    decision=decision,
-                    evidence=evidence,
-                    fitted=fitted,
+                retained_ids = (
+                    (decision.proposed_card.bank_card_id,)
+                    if decision.proposed_card is not None
+                    else ()
                 )
-        raise MemoryStorageError("selected card vanished during three lease retries")
+                try:
+                    return self._commit(
+                        key=key,
+                        attempt_id=attempt_id,
+                        context=context,
+                        lineage_registry=lineage_registry,
+                        candidates=eligible,
+                        retrieval=slate.retrieval,
+                        decision=decision,
+                        evidence=evidence,
+                        fitted=fitted,
+                    )
+                finally:
+                    self._retain_selected_lease(attempt_id, retained_ids)
+        raise MemoryStorageError("candidate slate changed during three lease retries")
+
+    def _reserve_candidate_slate(
+        self,
+        program: Program,
+        *,
+        attempt_id: str,
+        expected_lease_version: str,
+        candidates: Sequence[CardSnapshot],
+    ) -> bool:
+        active_attempt = self.selection_leases.active_attempt_for_parent(program.id)
+        attempts = self.selection_leases.attempts_for_parent(program.id)
+        if active_attempt != attempt_id or attempt_id not in attempts:
+            raise MemoryStorageError(
+                f"selection attempt {attempt_id!r} is not active for parent "
+                f"{program.id!r}"
+            )
+        expected = {candidate.bank_card_id: candidate for candidate in candidates}
+
+        def exact_card(card_id: str):
+            current = self.store.get(card_id)
+            if current is None or CardSnapshot.from_card(current) != expected[card_id]:
+                return None
+            return current
+
+        card_ids = tuple(expected)
+        reservation = self.selection_leases.reserve_selection(
+            attempt_id,
+            card_ids,
+            expected_version=expected_lease_version,
+            card_lookup=exact_card,
+        )
+        if reservation.committed and reservation.card_ids == card_ids:
+            return True
+        self.selection_leases.retain_attempt_cards(attempt_id, ())
+        return False
+
+    def _retain_selected_lease(
+        self, attempt_id: str, retained_ids: Sequence[str]
+    ) -> None:
+        try:
+            self.selection_leases.retain_attempt_cards(attempt_id, retained_ids)
+        except Exception:
+            # Keeping the temporary slate leased is conservative. The attempt
+            # cleanup still releases it, while the causal row remains usable.
+            logger.opt(exception=True).warning(
+                "[MemoryV2][Provider] failed to release temporary slate leases"
+            )
 
     def _fit(
         self,
@@ -231,34 +335,6 @@ class CausalBanditMemoryProvider(MemoryProvider):
             self._posterior_cache_key = cache_key
         return self._posterior_cache
 
-    def _reserve_proposed_card(
-        self,
-        program: Program,
-        *,
-        attempt_id: str,
-        expected_lease_version: str,
-        decision: PolicyDecision,
-    ) -> bool:
-        proposed = decision.proposed_card
-        if proposed is None:
-            return True
-        active_attempt = self.selection_leases.active_attempt_for_parent(program.id)
-        attempts = self.selection_leases.attempts_for_parent(program.id)
-        if active_attempt != attempt_id or attempt_id not in attempts:
-            raise MemoryStorageError(
-                f"selection attempt {attempt_id!r} is not active for parent "
-                f"{program.id!r}"
-            )
-        reservation = self.selection_leases.reserve_selection(
-            attempt_id,
-            (proposed.bank_card_id,),
-            expected_version=expected_lease_version,
-            card_lookup=self.store.get,
-        )
-        return reservation.committed and reservation.card_ids == (
-            proposed.bank_card_id,
-        )
-
     def _commit(
         self,
         *,
@@ -267,6 +343,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
         context: EvolutionContext,
         lineage_registry: tuple[CardSnapshot, ...],
         candidates: tuple[CardSnapshot, ...],
+        retrieval: RetrievalRecord,
         decision: PolicyDecision,
         evidence: EvidenceSnapshot,
         fitted: FittedTerminalUtilityPosterior,
@@ -294,6 +371,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
             model_config_hash=key.model_config_hash,
             posterior_config_hash=self.posterior.model_config_hash,
             policy=self.policy.specification,
+            retrieval=retrieval,
             fit_diagnostics=PosteriorFitDiagnostics(
                 evidence_count=fitted.evidence_count,
                 reward_observations=fitted.reward.observations,
@@ -425,8 +503,9 @@ class CausalBanditMemoryProvider(MemoryProvider):
         )
         read_event = MemoryReadSelection(
             decision_id=key.decision_id,
-            mutation_mode="rewrite",
+            mutation_mode=retrieval.specification.mutation_mode,
             max_cards=1,
+            research_iterations=retrieval.research_iterations,
             candidate_ids=tuple(card.bank_card_id for card in candidates),
             auction_winner_ids=(
                 (proposed.bank_card_id,) if proposed is not None else ()

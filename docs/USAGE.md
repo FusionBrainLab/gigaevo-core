@@ -69,7 +69,7 @@ The main mutation LLM and the memory subsystem LLM are configured separately.
 | Route | Config | Typical key |
 |---|---|---|
 | Main mutation | `llm=...`, `llm_base_url=...`, `model_name=...` | `OPENAI_API_KEY` for `llm=single` or `llm=local_proxy` |
-| Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for `memory/llm=gemini`, `OPENAI_API_KEY` for `memory/llm=qwen_instruct` |
+| Memory research/writer | `memory/llm=...` | `OPENROUTER_API_KEY` for `memory/llm=gemini` and `memory/llm=qwen_instruct` |
 
 Hosted/OpenRouter style:
 

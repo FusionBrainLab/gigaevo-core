@@ -79,6 +79,7 @@ class EvolutionEngine:
         self._writer = writer.bind(path=["evolution_engine"])
 
         self._running = False
+        self._resumed = False
         self._last_pending_dags_counts: tuple[int, int] | None = None
 
         self._task: asyncio.Task | None = None
@@ -288,8 +289,19 @@ class EvolutionEngine:
         # metrics, state, metadata, and lineage.  The merge strategy in
         # storage.update() preserves existing stage_results from Redis.
         completed = await self.storage.mget(new_ids, exclude=EXCLUDE_STAGE_RESULTS)
+        # Once mutation has started, DONE seed rows are historical inputs whose
+        # archive cells may since have been replaced. Before the first mutation,
+        # however, a resumed run may still be completing phase-0 seed ingestion.
+        skip_historical_seeds = self._resumed and self._snapshot.total_mutants > 0
         # Filter to actual DONE state (mget may return stale status)
-        completed = [p for p in completed if p.state == ProgramState.DONE]
+        completed = [
+            p
+            for p in completed
+            if p.state == ProgramState.DONE
+            and not (
+                skip_historical_seeds and p.get_metadata("source") == "initial_program"
+            )
+        ]
 
         if not completed:
             return
@@ -571,6 +583,7 @@ class EvolutionEngine:
     async def restore_state(self) -> None:
         """Restore ordinal/mutant counters and programs_processed from storage."""
         await self._load_snapshot_on_resume()
+        self._resumed = True
         self.metrics.iteration = self._snapshot.next_iteration
         self.metrics.mutations_created = self._snapshot.total_mutants
         self.metrics.programs_processed = self._snapshot.programs_processed

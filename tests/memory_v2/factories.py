@@ -9,6 +9,8 @@ from gigaevo.memory_v2.models import (
     PolicySpecification,
     PosteriorFitDiagnostics,
     PosteriorPrediction,
+    RetrievalRecord,
+    RetrievalSpecification,
     SafetyGateMode,
     candidate_set_hash,
     canonical_digest,
@@ -73,11 +75,30 @@ def decision_record(
         abstain_effect=0.0,
         max_pending_per_card=2,
     )
+    retrieval_specification = RetrievalSpecification(
+        name="whole_bank",
+        max_candidates=0,
+        exploration_candidates=0,
+    )
+    retrieval = RetrievalRecord(
+        specification=retrieval_specification,
+        status="whole_bank",
+        rng_key="r" * 64,
+        eligible_bank_card_ids=(card.bank_card_id,),
+        core_bank_card_ids=(card.bank_card_id,),
+        exploration_bank_card_ids=(),
+        candidate_bank_card_ids=(card.bank_card_id,),
+        conditional_tail_inclusion_probability=0.0,
+        random_slate_probability=1.0,
+    )
     posterior_config_hash = "c" * 64
     model_config_hash = canonical_digest(
         {
             "posterior": posterior_config_hash,
             "policy": policy.model_dump(mode="json", exclude={"digest"}),
+            "retrieval": retrieval_specification.model_dump(
+                mode="json", exclude={"digest"}
+            ),
         }
     )
     key = DecisionKey(
@@ -112,6 +133,7 @@ def decision_record(
         model_config_hash=key.model_config_hash,
         posterior_config_hash=posterior_config_hash,
         policy=policy,
+        retrieval=retrieval,
         fit_diagnostics=PosteriorFitDiagnostics(
             evidence_count=0,
             reward_observations=0,

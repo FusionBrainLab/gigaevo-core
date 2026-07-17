@@ -12,15 +12,14 @@ Memory v2 achieves the intended first-iteration replacement:
   contextual card comparison, conservative safety admission, probability matching,
   and harm retirement;
 - every delivered card has a randomized withheld-card control and an exact logged
-  probability;
-- the first iteration deliberately evaluates the complete eligible same-task bank.
-  It does not use LLM, lexical, keyword, category, embedding, or code-similarity
-  retrieval for selection.
+  conditional probability;
+- an agentic research pass narrows the eligible same-task bank to a 12-card slate:
+  up to eight researched cards plus uniformly randomized discovery positions.
 
-This is a solid causal core for an empty-bank smoke without an arbitrary task-wide
-admission cap. The smoke first validates authoring and admission, then selection and
-causal credit after cards exist. It is not yet a large-bank retrieval system, a
-multi-card attribution model, or a full archive-contribution model.
+This is a solid causal core without an arbitrary task-wide admission cap. Agentic
+retrieval improves contextual relevance while randomized discovery prevents an
+incorrect shortlist from permanently hiding cards. It is not a multi-card
+attribution model or a full archive-contribution model.
 
 At cold start, cards with no v2 randomized evidence are deliberately close to
 exchangeable. The policy explores them instead of pretending that v1 observational
@@ -45,8 +44,9 @@ The content plane keeps the useful and already tested memory machinery:
    cards again.
 6. Selection leases protect in-flight assignments and consolidation aliases.
 
-The LLM is therefore still important for **writing good cards**. It is not used to
-retrieve or rank cards for the mutator in this first v2 policy.
+The memory LLM writes cards and performs the pre-selection research pass. Its
+ranking only forms the comparison slate; the causal posterior still decides which
+card is better and receives no synthetic evidence from retrieval rank.
 
 ### What is replaced from v1
 
@@ -60,7 +60,7 @@ not use them for inference or selection:
 - the Thompson/bootstrap auction;
 - no-card evidence and legacy budget gates;
 - efficacy text derived from the old posterior;
-- LLM research retrieval as a selection shortlist.
+- reputation-weighted or outcome-derived retrieval scores.
 
 The v2 causal ledger is the only training source for the new posterior. Historical
 v1 events are descriptive shadow-analysis data and are explicitly marked
@@ -315,14 +315,16 @@ For each mutation attempt:
 
 1. **Freeze context.** Read the typed parent, fitness, progress, and current
    MAP-Elites snapshot before treatment.
-2. **Snapshot the bank.** Keep nonempty insight/program cards from the same task and
-   apply lineage exclusions. V2 does not impose a task-wide admission cap.
-3. **Do not semantically prefilter.** No lexical or LLM feature influences inclusion
-   or ordering. Every eligible card has a policy path.
-4. **Resolve card snapshots.** Render and hash the exact singleton card text while
+2. **Snapshot eligibility.** Keep nonempty insight/program cards from the same task,
+   apply lineage exclusions, and remove lineages at the pending cap. V2 does not
+   impose a task-wide bank cap.
+3. **Research a core.** One agentic plan/retrieve/reflect pass selects up to eight
+   cards using the task, metrics, parent code, and live evolutionary context. A
+   timed-out research pass fails open to uniform discovery.
+4. **Add discovery.** Uniformly sample from the remaining eligible bank to fill a
+   12-card slate. If research is empty or fails, use a uniform 12-card slate.
+5. **Resolve card snapshots.** Render and hash the exact singleton card text while
    retaining the stable card id as the treatment identity.
-5. **Apply pending budget.** Exclude a lineage when it already has two in-flight
-   proposed assignments, including withheld controls and absorbed aliases.
 6. **Fit only prior evidence.** Load eligible closed terminals committed before this
    decision and fit the reward and invalidity posteriors.
 7. **Predict every candidate.** Draw 1,024 shared posterior samples and record effect,
@@ -335,7 +337,7 @@ For each mutation attempt:
    require an absolute treated-invalidity ceiling.
 9. **Build the proposal distribution.** In 512 shared posterior worlds, each admitted card
    wins when it has the largest positive usable effect. Otherwise abstention wins.
-10. **Preserve exploration.** Mix 5% uniform mass over all admitted cards:
+10. **Preserve within-slate exploration.** Mix 5% uniform mass over all admitted cards:
 
     ```text
     rho_j = 0.95 * winner_count_j / 512 + 0.05 / number_of_safe_cards
@@ -347,9 +349,9 @@ For each mutation attempt:
 12. **Randomize delivery.** If card `j` was proposed, deliver it with probability
     `e=0.7` in a normal run; otherwise withhold it as the matched control. Use
     `e=0.5` for balanced validation.
-13. **Commit before exposure.** Persist the candidate set, posterior diagnostics,
-    every probability, sampled action, and frozen predictions before the prompt can
-    see a card.
+13. **Commit before exposure.** Persist retrieval eligibility, core, discovery draw,
+    exact conditional discovery probabilities, candidate set, posterior diagnostics,
+    action probabilities, sampled action, and frozen predictions before exposure.
 14. **Inject at most one card.** Only the delivered branch enters the mutator. The
     withheld branch still records the proposed revision and consumes a lease until its
     terminal closes.
@@ -427,6 +429,8 @@ The first real experiment is a machinery and calibration gate, not a performance
 claim. The analytics must inspect:
 
 - number of decisions, proposals, abstentions, deliveries, controls, and terminals;
+- eligible-bank, agentic-core, and final-slate sizes; research-empty/fallback rate;
+- per-card retrieval opportunity and randomized-discovery coverage;
 - complete probability mass and exact joint treatment/control propensities;
 - exposure counts per bank lineage and stable card;
 - posterior effect mean, spread, and probability positive for every candidate;
@@ -475,7 +479,8 @@ card superior.
 | Confident-harm gate | The default admits a card unless at least 90% of posterior belief says it increases invalidity by more than the configured cap. This lets uncertain cards gather randomized evidence. |
 | Credible joint-safety gate | Optional conservative mode that admits only when at least 90% of posterior belief satisfies both absolute and incremental invalidity limits. |
 | Probability matching | Propose cards in proportion to how often they are the best safe positive action across posterior worlds. |
-| Exploration | The 5% uniform component that continues testing every safe eligible card instead of permanently locking onto an early winner. |
+| Retrieval discovery | Uniform cards added outside the agentic core so every eligible card retains a known chance of reaching the Bayesian selector. |
+| Exploration | The 5% uniform component that continues testing every safe card inside the retrieved slate instead of permanently locking onto an early winner. |
 | Abstention | The no-proposal action wins a posterior world when no admitted card has positive usable effect. |
 | Covariance / correlation | Uncertainties that move together. Shared posterior worlds preserve the fact that cards depend on common coefficients and evidence. |
 | Monte Carlo | Approximate a probability by counting outcomes across many reproducible posterior draws. The 512 proposal worlds define the finite behavior policy. |
@@ -489,7 +494,6 @@ card superior.
 
 The current implementation is intentionally precise about what it does not claim:
 
-- no LLM or semantic retrieval during card selection;
 - no semantic program representation in the posterior;
 - no multi-card slate or crossover attribution;
 - no direct archive-contribution credit;
@@ -500,9 +504,9 @@ The current implementation is intentionally precise about what it does not claim
 - no sparse posterior representation for hundreds of historical revisions;
 - no explicit change-point/state-space model for nonstationarity.
 
-These omissions keep the first core auditable and extensible. The first justified
-extension for a substantially larger bank is a randomized, propensity-logged
-candidate proposal stage, followed by the same Bayesian selector within its support.
+These omissions keep the core auditable and extensible. Retrieval remains a
+candidate-proposal stage followed by the same Bayesian selector within its realized
+support; its rank never becomes posterior evidence.
 
 ## Implementation map
 

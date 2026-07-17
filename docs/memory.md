@@ -43,7 +43,7 @@ python run.py problem.name=heilbron pipeline=guided memory=none
 
 | Arm | provider (read side) | writer (write side) | What runs |
 |---|---|---|---|
-| `memory=v2` | `CausalBanditMemoryProvider` | `MemoryWriter` with causal updater | whole-bank contextual Bayesian selection plus live content writing; one card, one parent, 70/30 delivery/control |
+| `memory=v2` | `CausalBanditMemoryProvider` | `MemoryWriter` with causal updater | agentic retrieval then contextual Bayesian selection plus live writing; one card, one parent, 70/30 delivery/control |
 | `memory=none` | `NullMemoryProvider` | `NullPostRunHook` | nothing |
 | `memory=reader` | `ReaderMemoryProvider` | `NullPostRunHook` | injects from a pre-built bank; no extraction |
 | `memory=writer` | `NullMemoryProvider` | `MemoryWriter` | authors a bank for a *later* run; injects nothing |
@@ -320,7 +320,7 @@ the identical RNG stream.
 
 `memory/llm` is independent of the main mutation `llm`. The default
 `memory/llm=gemini` calls OpenRouter and reads `OPENROUTER_API_KEY`.
-`memory/llm=qwen_instruct` reads `OPENAI_API_KEY` and targets
+`memory/llm=qwen_instruct` reads `OPENROUTER_API_KEY` and targets
 `LOCAL_LLM_PROXY`; pair it with a larger thinking model on the main
 `llm=local_proxy` route when mutation and card work should use different models.
 

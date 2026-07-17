@@ -119,7 +119,7 @@ python run.py problem.name=heilbron \
 ```
 
 `llm=local_proxy` and `memory/llm=qwen_instruct` both read
-`LOCAL_LLM_PROXY`; the latter reads `OPENAI_API_KEY` for authentication.
+`LOCAL_LLM_PROXY`; the latter reads `OPENROUTER_API_KEY` for authentication.
 `memory/llm=gemini` reads `OPENROUTER_API_KEY`.
 
 ### 3. Choose Storage
@@ -147,8 +147,11 @@ python run.py problem.name=heilbron
 ```
 
 Evolution starts with singleton-parent memory v2, live card writing, and the
-metadata-routing memory-guided pipeline. Conditional on proposing a card, normal
-runs deliver it with probability 0.70 and retain a 0.30 matched control arm.
+metadata-routing memory-guided pipeline. Before Bayesian selection, one agentic
+research pass forms a 12-card slate with at least four uniformly randomized
+discovery positions; unused research capacity is randomized too. Conditional
+on proposing a card, normal runs deliver it with
+probability 0.70 and retain a 0.30 matched control arm.
 Logs are saved to `outputs/`, with disk-backed programs under the same run
 directory.
 
@@ -330,8 +333,8 @@ shell before launching a run.
 
 | Variable | Effect |
 |----------|--------|
-| `OPENAI_API_KEY` | Primary LLM credential — read by the default mutation router (`config/llm/single.yaml`) and most LLM configs in `config/llm/`, plus the `qwen_instruct` memory router (`config/memory/llm/qwen_instruct.yaml`). Holds a LiteLLM-proxy key or a provider key depending on the configured `base_url`. |
-| `OPENROUTER_API_KEY` | Read only by the OpenRouter-keyed configs: the main routers `config/llm/gemini35_flash.yaml` and `config/llm/gpt54_mini.yaml`, and the default memory router `config/memory/llm/gemini.yaml`. Needed only when one of those is selected. |
+| `OPENAI_API_KEY` | Primary LLM credential — read by the default mutation router (`config/llm/single.yaml`) and most mutation LLM configs in `config/llm/`. Holds the credential expected by the selected mutation endpoint. |
+| `OPENROUTER_API_KEY` | Memory-model credential — read by `config/memory/llm/gemini.yaml`, `config/memory/llm/qwen_instruct.yaml`, and `config/memory/llm/gpt54_mini.yaml`. It is also read by any explicitly OpenRouter-keyed mutation config. |
 | `LOCAL_LLM_PROXY` | Shared OpenAI-compatible base URL for `llm=local_proxy`, `memory/llm=qwen_instruct`, and chain evaluators unless a task-specific URL overrides it. Include the `/v1` suffix. |
 
 The env-var name does **not** track the provider — e.g. the OpenRouter-targeted

@@ -57,6 +57,7 @@ async def test_startup_ingestion_aborts_when_causal_outcome_is_not_durable() -> 
         add=AsyncMock(return_value=True),
     )
     engine = SimpleNamespace(
+        _resumed=False,
         storage=storage,
         strategy=strategy,
         metrics=SimpleNamespace(iteration=0),

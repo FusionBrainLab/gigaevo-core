@@ -20,6 +20,10 @@ from gigaevo.evolution.strategies.paired_selectors import (
 )
 from gigaevo.memory.provider import LeasedMemoryProvider, ReaderMemoryProvider
 from gigaevo.memory.write.crediting import PairedEffectEstimator
+from gigaevo.memory_v2.candidates import (
+    AgenticCandidateSource,
+    WholeBankCandidateSource,
+)
 from gigaevo.memory_v2.eviction import CausalPosteriorEvictor
 from gigaevo.memory_v2.writer import CausalV2ContentOnlyUpdater
 
@@ -39,6 +43,8 @@ _PAIRED_SELECTOR_TARGET = _target_path(PairedBootstrapArchiveSelector)
 _PAIRED_CREDITING_TARGET = _target_path(PairedEffectEstimator)
 _MEMORY_V2_WRITER_TARGET = _target_path(CausalV2ContentOnlyUpdater)
 _MEMORY_V2_EVICTOR_TARGET = _target_path(CausalPosteriorEvictor)
+_MEMORY_V2_AGENTIC_SOURCE_TARGET = _target_path(AgenticCandidateSource)
+_MEMORY_V2_WHOLE_BANK_SOURCE_TARGET = _target_path(WholeBankCandidateSource)
 _MISSING = object()
 
 
@@ -231,10 +237,23 @@ def validate_memory_v2_scope(cfg: DictConfig) -> None:
             "memory=v2 requires offer_probability in [0.10, 0.90] for "
             "treatment/control overlap."
         )
-    if int(_raw_select(cfg, "memory.candidate_source.max_candidates", -1)) != 0:
+    candidate_source_target = _raw_select(cfg, "memory.candidate_source._target_", None)
+    if candidate_source_target == _MEMORY_V2_AGENTIC_SOURCE_TARGET:
+        max_candidates = int(
+            _raw_select(cfg, "memory.candidate_source.max_candidates", 0)
+        )
+        exploration_candidates = int(
+            _raw_select(cfg, "memory.candidate_source.exploration_candidates", 0)
+        )
+        if not 0 < exploration_candidates < max_candidates:
+            raise ValueError(
+                "memory=v2 agentic retrieval requires 0 < exploration_candidates "
+                "< max_candidates."
+            )
+    elif candidate_source_target != _MEMORY_V2_WHOLE_BANK_SOURCE_TARGET:
         raise ValueError(
-            "memory=v2 requires candidate_source.max_candidates=0 until a "
-            "retrieval policy logs exact candidate-inclusion propensities."
+            "memory=v2 candidate_source must be AgenticCandidateSource or "
+            "WholeBankCandidateSource."
         )
     updater_target = _raw_select(cfg, "memory.causal_writer_updater._target_", None)
     if updater_target != _MEMORY_V2_WRITER_TARGET:

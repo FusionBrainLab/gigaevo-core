@@ -75,6 +75,44 @@ class TestIngestCompletedPrograms:
         engine.strategy.add.assert_not_called()
         engine.state.set_program_state.assert_not_called()
 
+    async def test_evicted_initial_program_is_not_reingested(self) -> None:
+        """A seed remains historical input even after its archive cell is evicted."""
+        engine = _make_engine()
+        engine._record_memory_outcome = AsyncMock()
+        engine._resumed = True
+        engine._snapshot = engine._snapshot.model_copy(update={"total_mutants": 1})
+        seed = _prog(ProgramState.DONE)
+        seed.set_metadata("source", "initial_program")
+        engine.storage.get_ids_by_status.return_value = [seed.id]
+        engine.storage.mget.return_value = [seed]
+        engine.strategy.get_program_ids.return_value = []
+
+        await engine._ingest_completed_programs()
+
+        engine._record_memory_outcome.assert_not_awaited()
+        engine.strategy.add.assert_not_awaited()
+        engine.mutation_operator.on_program_ingested.assert_not_awaited()
+
+    async def test_resumed_initial_drain_ingests_unseen_seed(self) -> None:
+        """Resume before the first mutation must finish phase-0 seed ingestion."""
+        engine = _make_engine()
+        engine._record_memory_outcome = AsyncMock()
+        engine._resumed = True
+        engine.config.program_acceptor = MagicMock()
+        engine.config.program_acceptor.is_accepted.return_value = True
+        engine.strategy.add.return_value = True
+        seed = _prog(ProgramState.DONE)
+        seed.set_metadata("source", "initial_program")
+        engine.storage.get_ids_by_status.return_value = [seed.id]
+        engine.storage.mget.return_value = [seed]
+        engine.strategy.get_program_ids.return_value = []
+
+        await engine._ingest_completed_programs()
+
+        engine._record_memory_outcome.assert_awaited_once_with(seed)
+        engine.strategy.add.assert_awaited_once_with(seed)
+        engine.mutation_operator.on_program_ingested.assert_awaited_once()
+
     async def test_new_accepted_program_stays_done(self) -> None:
         """A newly accepted program is added to the strategy and stays DONE (no state write)."""
         engine = _make_engine()

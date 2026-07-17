@@ -18,6 +18,7 @@ from gigaevo.evolution.strategies.models import (
     BehaviorSpace,
     LinearBinning,
 )
+from gigaevo.memory_v2.candidates import WholeBankCandidateSource
 from gigaevo.memory_v2.context import MapContextConfig, MapElitesContextSource
 from gigaevo.memory_v2.models import (
     CardSnapshot,
@@ -286,7 +287,12 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.memory.capabilities.causal_v2 is True
         assert cfg.memory.coalesce_refresh is False
         assert cfg.engine_config.terminal_drain_timeout_s == cfg.dag_timeout
-        assert cfg.memory.candidate_source.max_candidates == 0
+        assert cfg.post_step_hook.refresh_every == 5
+        assert cfg.memory.candidate_source.max_candidates == 12
+        assert cfg.memory.candidate_source.exploration_candidates == 4
+        assert cfg.memory.candidate_source.mutation_mode == "rewrite"
+        assert cfg.memory.store.config.research.max_iters == 1
+        assert cfg.memory.store.config.research.max_cards == 8
         assert cfg.memory.credit.lineage_depth == 1
         assert cfg.memory.credit.opportunity_budget == 32
         assert cfg.memory.safety.gate_mode == "exclude_confident_incremental_harm"
@@ -328,8 +334,31 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
             validate_memory_v2_scope(cfg)
         cfg.memory.policy_config.offer_probability = 0.7
 
-        cfg.memory.candidate_source.max_candidates = 4
-        with pytest.raises(ValueError, match="max_candidates=0"):
+        cfg.memory.candidate_source.exploration_candidates = 0
+        with pytest.raises(ValueError, match="exploration_candidates"):
             validate_memory_v2_scope(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_memory_v2_whole_bank_control_composes_with_hydra() -> None:
+    config_dir = Path(__file__).parents[2] / "config"
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=heilbron",
+                    "memory=v2",
+                    (
+                        "memory.candidate_source._target_="
+                        f"{WholeBankCandidateSource.__module__}."
+                        f"{WholeBankCandidateSource.__qualname__}"
+                    ),
+                ],
+            )
+        validate_memory_v2_scope(cfg)
+        assert cfg.memory.candidate_source._target_.endswith("WholeBankCandidateSource")
     finally:
         GlobalHydra.instance().clear()

@@ -269,6 +269,15 @@ class InFlightSelectionRegistry:
                 self._rollback_attach_locked(attempt_id, vanished)
             return SelectionReservation(committed=True, card_ids=kept)
 
+    def retain_attempt_cards(
+        self, attempt_id: str, card_ids: Iterable[str]
+    ) -> tuple[str, ...]:
+        """Release temporary attempt leases while retaining the chosen treatment."""
+
+        retained = _card_ids(card_ids)
+        with self._lock:
+            return self._retain_attempt_cards_locked(attempt_id, retained)
+
     def is_leased(self, card_id: str) -> bool:
         with self._lock:
             return self._card_owner_count.get(card_id.strip(), 0) > 0
@@ -290,6 +299,16 @@ class InFlightSelectionRegistry:
         for card_id in card_ids:
             owned.remove(card_id)
             self._decrement_locked(card_id)
+
+    def _retain_attempt_cards_locked(
+        self, attempt_id: str, retained: set[str]
+    ) -> tuple[str, ...]:
+        owned = self._attempt_cards.get(attempt_id)
+        if owned is None:
+            raise MemoryStorageError(f"unknown selection attempt {attempt_id!r}")
+        retained.intersection_update(owned)
+        self._rollback_attach_locked(attempt_id, owned - retained)
+        return tuple(sorted(retained))
 
     def _release_attempt_locked(self, attempt_id: str) -> None:
         for card_id in self._attempt_cards.pop(attempt_id, set()):
@@ -496,6 +515,15 @@ class SharedSelectionRegistry(InFlightSelectionRegistry):
                 self._rollback_attach_locked(attempt_id, vanished)
                 self._sync_best_effort_locked()
             return SelectionReservation(committed=True, card_ids=kept)
+
+    def retain_attempt_cards(
+        self, attempt_id: str, card_ids: Iterable[str]
+    ) -> tuple[str, ...]:
+        retained = _card_ids(card_ids)
+        with self._lock:
+            result = self._retain_attempt_cards_locked(attempt_id, retained)
+            self._sync_best_effort_locked()
+            return result
 
     def _publish_acquisition_locked(
         self, attached_by_attempt: dict[str, set[str]]

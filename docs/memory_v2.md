@@ -98,7 +98,9 @@ At each mutation attempt, v2 freezes and durably records:
 
 - the typed parent identity, metrics, generation, and reward bounds;
 - the complete MAP-Elites snapshot described below;
-- every eligible immutable card snapshot;
+- the complete eligible bank registry and the retrieved immutable card slate;
+- the agentic core, randomized discovery draw, conditional inclusion
+  probabilities, and retrieval fallback state;
 - pending counts for stable treatments and bank lineages;
 - the evidence, context, candidate, posterior, and policy hashes;
 - posterior fit diagnostics and every candidate posterior summary;
@@ -229,9 +231,15 @@ for the highest usable effect or abstention. Those configured winner counts are
 the behavior policy, so the sampled categorical probability is exact for that
 finite-world policy. Its binomial Monte Carlo standard error is logged as a
 diagnostic. A configured uniform-exploration mixture gives every feasible card
-nonzero support. The initial implementation evaluates the whole eligible bank,
-so no card is silently dropped by deterministic top-k retrieval. A future
-scalable retrieval stage must randomize inclusion and log its propensity.
+in the realized slate nonzero proposal support. Before this policy, one agentic
+plan/retrieve/reflect pass selects up to eight context-relevant cards. Uniform
+sampling without replacement fills the 12-card slate, normally contributing
+four discovery cards and filling all 12 positions if research returns nothing.
+Thus every eligible non-core card has exact conditional inclusion probability
+`r / M`, where `r` cards are drawn from a remaining pool of size `M`. Research
+rank is never treated as causal reward evidence. The exact conditional
+unordered-subset probability is `1 / C(M, r)`. A research episode that exceeds
+its configured deadline fails open to the same replayable uniform slate.
 
 After proposing card `j`, v2 randomizes actual delivery:
 
@@ -289,9 +297,10 @@ decision-time reward/risk regressions and reports overlap, effective sample
 size, and maximum importance weight. Standard error is clustered by independent
 run when at least two runs exist; a single run reports `se=None`.
 
-This is not full retrieval/proposal-policy OPE. That requires prequential replay
-of the candidate proposal distribution and adaptive inference across independent
-runs.
+This is not full retrieval/proposal-policy OPE. Agentic core-inclusion
+probabilities are not observable; the ledger records exact probabilities only
+for the uniform discovery draw conditional on the realized core. Comparing
+retrievers requires prospective independent runs.
 
 ## Smoke Analytics
 
@@ -361,7 +370,7 @@ changing admission.
 ## Deliberately Deferred
 
 - mutation-level crossover and multi-card slate randomization;
-- randomized propensity-logged retrieval for very large banks;
+- full-policy evaluation or optimization of the agentic retriever;
 - sparse or low-rank posterior updates for long histories with many retired
   treatments;
 - full proposal-policy OPE and adaptive confidence sequences;

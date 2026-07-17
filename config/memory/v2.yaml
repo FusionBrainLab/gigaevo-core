@@ -9,6 +9,11 @@ defaults:
   - write: live
   - _self_
 
+# Start producing cards early enough for a 250-mutation run to evaluate them.
+# The shared v1 live-writer cadence remains ten successful ingestor sweeps.
+write:
+  refresh_every: 5
+
 capabilities:
   read: true
   write: true
@@ -143,18 +148,33 @@ store:
   config:
     _target_: gigaevo.memory.storage.config.StoreConfig
     path: ${checkpoint_dir}
+    research:
+      _target_: gigaevo.memory.storage.config.ResearchConfig
+      default_top_k: 8
+      max_iters: 1
+      max_cards: 8
   llm: ${ref:memory.llm}
   prompts_dir: ${prompts.dir}
 
-candidate_source:
-  _target_: gigaevo.memory_v2.candidates.WholeBankCandidateSource
+shortlister:
+  _target_: gigaevo.memory.read.shortlist.ResearchShortlister
   store: ${ref:memory.store}
+  digest_max_cards: 50
+
+candidate_source:
+  _target_: gigaevo.memory_v2.candidates.AgenticCandidateSource
+  store: ${ref:memory.store}
+  shortlister: ${ref:memory.shortlister}
   excluder: ${ref:memory.excluder}
   allow_cross_task: false
   allowed_kinds: [insight, program]
-  # The first v2 iteration gives every eligible bank card policy support.
-  # A future learned retrieval stage must log its own inclusion propensities.
-  max_candidates: 0
+  # One agentically researched core plus uniform discovery keeps every eligible
+  # card reachable without making the Bayesian selector compare the whole bank.
+  max_candidates: 12
+  exploration_candidates: 4
+  mutation_mode: ${mutation_mode}
+  # Fail open before the parent-refresh deadline if the retrieval LLM stalls.
+  research_timeout_seconds: 240.0
 
 renderer:
   _target_: gigaevo.memory_v2.render.ImmutableCardRenderer

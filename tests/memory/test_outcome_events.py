@@ -8,6 +8,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
+    MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_OUTCOME_METADATA_KEY,
     MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY,
 )
@@ -15,7 +16,11 @@ from gigaevo.evolution.mutation.terminal_failure import (
     MutationTerminalFailureStage,
     set_mutation_terminal_failure,
 )
-from gigaevo.memory.cards import AssignmentRecord, DecisionContext
+from gigaevo.memory.cards import (
+    AssignmentRecord,
+    DecisionContext,
+    MutationAssignmentRecord,
+)
 from gigaevo.memory.events import MemoryOutcome, MemoryOutcomeUpdate
 from gigaevo.memory.ope.reconcile import reconcile_rows
 from gigaevo.memory.outcomes import record_program_memory_outcome
@@ -44,6 +49,10 @@ def _child(*, child_fitness: float, base_fitness: float) -> Program:
     child.set_metadata(
         MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
         {"is_valid": 1.0, "fitness": base_fitness},
+    )
+    child.set_metadata(
+        MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+        MutationAssignmentRecord(mutation_id=child.id).model_dump(mode="json"),
     )
     return child
 
@@ -79,7 +88,36 @@ def _crossover_child(
     child.set_metadata(
         MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY, parent_assignments
     )
+    child.set_metadata(
+        MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+        MutationAssignmentRecord(
+            mutation_id=child.id,
+            parent_ids=tuple(parent_assignments),
+        ).model_dump(mode="json"),
+    )
     return child
+
+
+@pytest.mark.asyncio
+async def test_parent_read_metadata_is_not_a_child_terminal() -> None:
+    parent = Program(code="def parent(): return 1")
+    parent.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "parent-decision")
+    parent.set_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY, parent.id)
+    parent.set_metadata(
+        MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
+        {"is_valid": 1.0, "fitness": 0.5},
+    )
+    sink = AsyncMock()
+
+    result = await record_program_memory_outcome(
+        parent,
+        storage=AsyncMock(),
+        metrics_context=_metrics_context(),
+        outcome_sink=sink,
+    )
+
+    assert result == "not_applicable"
+    sink.record_memory_outcome.assert_not_called()
 
 
 @pytest.mark.asyncio

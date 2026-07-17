@@ -4,6 +4,7 @@ memory:
   write:
     enabled: true
     mode: live
+    refresh_every: 10
     # End-of-run flush still runs; the live hook below shares the same writer
     # instance so seen ids, bank state, and ledgers stay coherent.
     post_run_hook: ${ref:memory.writer}
@@ -16,6 +17,5 @@ post_step_hook:
   _target_: gigaevo.memory.live_memory_hook.LiveMemoryRefreshHook
   tracker: ${ref:memory.writer}
   storage: ${ref:program_storage}
-  refresh_every: 10
+  refresh_every: ${memory.write.refresh_every}
   max_programs_per_sweep: 24
-

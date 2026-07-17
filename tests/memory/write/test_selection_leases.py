@@ -633,6 +633,32 @@ def test_local_reservation_lookup_failure_rolls_back_attempt_lease():
     assert registry._attempt_cards["attempt-1"] == set()
 
 
+def test_local_registry_releases_temporary_slate_leases():
+    registry = InFlightSelectionRegistry()
+    lease = registry.open_attempt("attempt-1", "parent-1")
+    lease.attach_cards(("card-selected", "card-temporary"))
+
+    retained = registry.retain_attempt_cards("attempt-1", ("card-selected",))
+
+    assert retained == ("card-selected",)
+    assert registry.leased_ids() == frozenset({"card-selected"})
+    lease.release()
+
+
+def test_shared_registry_releases_temporary_slate_leases(tmp_path):
+    path = tmp_path / "selection_leases.json"
+    registry = SharedSelectionRegistry(path)
+    observer = SharedSelectionRegistry(path)
+    lease = registry.open_attempt("attempt-1", "parent-1")
+    lease.attach_cards(("card-selected", "card-temporary"))
+
+    retained = registry.retain_attempt_cards("attempt-1", ("card-selected",))
+
+    assert retained == ("card-selected",)
+    assert observer.leased_ids() == frozenset({"card-selected"})
+    lease.release()
+
+
 def test_transfer_retains_only_base_selected_ids():
     registry = InFlightSelectionRegistry()
     lease = registry.open_attempt("attempt-1", "parent-1")

@@ -14,13 +14,14 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_SCORE_SIGNATURE_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
     MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
+    MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_OUTCOME_METADATA_KEY,
     MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.terminal_failure import (
     get_mutation_terminal_failure,
 )
-from gigaevo.memory.cards import AssignmentRecord
+from gigaevo.memory.cards import AssignmentRecord, MutationAssignmentRecord
 from gigaevo.memory.events import (
     MemoryOutcome,
     MemoryOutcomeUpdate,
@@ -363,6 +364,20 @@ async def record_program_memory_outcome(
     a duplicate and emits nothing; a changed re-evaluation emits the explicitly
     non-terminal ``MEMORY_OUTCOME_UPDATE`` while the first terminal Y stays frozen.
     """
+    raw_mutation_assignment = program.get_metadata(
+        MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY
+    )
+    if not isinstance(raw_mutation_assignment, dict):
+        return "not_applicable"
+    mutation_assignment = MutationAssignmentRecord.model_validate(
+        raw_mutation_assignment
+    )
+    if mutation_assignment.mutation_id != program.id:
+        raise ValueError(
+            "memory mutation assignment does not belong to terminal child "
+            f"{program.id!r}"
+        )
+
     sources = _decision_sources(program)
     if not sources:
         return "not_applicable"
