@@ -2,6 +2,108 @@
 
 <!-- version list -->
 
+## v2.12.0 (2026-07-17)
+
+### Bug Fixes
+
+- **cli**: Harden operational and telemetry workflows
+  ([`66898a7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/66898a7bbd62006d5b52c826fa394a6be8026d70))
+
+- **cli**: Make storage targeting reliable and documented
+  ([`16c739a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/16c739a19d0e84c17f3e683f3d130267e143621d))
+
+- **config**: Un-ignore archive_selector config group
+  ([`f2a81a7`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f2a81a733b1d6b776c547083f4a37ffc71c4f3dd))
+
+- **dag-tab**: Close index-based probe evasion; repair red coalesce tests
+  ([`47e478e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/47e478ebd864ce5765d01edc72a5dbf55adae542))
+
+- **dag-tab**: Enforce deployable feature graph contracts
+  ([`eaa56b5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/eaa56b578c1e5aed1fbb344443a941fd54391ac5))
+
+- **dag-tab**: Review follow-ups, deps description, eval-parity guard
+  ([`6397df2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6397df2ba72e42139b8ae200eb374723e1b4d846))
+
+- **dag_tab**: Close probe bypass, revert shared CV, drop stray report
+  ([`524d75f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/524d75fd5597a16a46ce341ed402123e41ce4484))
+
+- **engine**: Refill failed steady-state reservations
+  ([`abc634f`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/abc634f8781734cfa0a7bcd3c0efbf3e185813d6))
+
+- **llm**: Name the unsourced mechanism_source instead of ""
+  ([`af0d43e`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/af0d43e27e3dc20b3e0db7fb43b8cac3f8327f79))
+
+- **memory**: Prevent Bayesian safety-gate lockout
+  ([`a406894`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a4068940f165385227a1c7d3f4056bce5c0d18b7))
+
+- **memory**: Satisfy repository quality gates
+  ([`0c2e022`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0c2e0228e17e0985e44ea1b5d7ea548cf99d4c45))
+
+- **storage**: Keep data updates state-neutral
+  ([`58a8530`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/58a853028bb2ac9909993f96d9a304065a8e3a02))
+
+### Chores
+
+- Untrack memory-bank lock files (covered by SHARE_*/ ignore rule)
+  ([`86d9390`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/86d9390c55c2064ccae7ba78c36d081e7995aec1))
+
+### Documentation
+
+- Add memory lifecycle tutorial
+  ([`857d233`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/857d233ce82158ac0221180efb65ffd082742f8b))
+
+- Make disk storage the default
+  ([`c2fa94b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c2fa94b944615720235792c7e061c064ae9b6fa8))
+
+- Remove stage output store design note
+  ([`b738167`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b7381671cbde087c6670fe0f1f07095f5e719d5f))
+
+- Update memory and chains readmes
+  ([`f739044`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f73904435d142a9fc4a92ebfa2464a562d21ffe6))
+
+- **chains**: Document comparable hover diff configs
+  ([`ebb9a34`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ebb9a346445fc82c5c153daa4128b7d82a87d4b2))
+
+- **chains**: Simplify hover diff examples
+  ([`0af34d2`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0af34d2078369a31bb471421c79d1a7cbcf86167))
+
+### Features
+
+- **dag-tab**: Evaluate feature graphs with CatBoost
+  ([`12140ab`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/12140ab6dcd410c01f8ea9ddb52f1d0a380adad5))
+
+- **dag-tab**: Evolve tabular feature graphs
+  ([`6e7f056`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/6e7f056044e4398d7c9326af8a922cb4bc576522))
+
+- **memory**: Add agentic Bayesian candidate retrieval
+  ([`093e718`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/093e7184fdd90416e63a4e7b98b543d035f56449))
+
+- **memory**: Add contextual Bayesian memory v2
+  ([`b8967f5`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/b8967f5d356a4c6b87a170bab1a67ac52761f3bd))
+
+- **memory**: Add safety-gate counterfactual reporting
+  ([`ce13d72`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ce13d72728997f4b4646865ddbc3838855ea02a8))
+
+- **memory**: Make v2 the default runtime
+  ([`490bde4`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/490bde4dffcb6714879fd289216bf824bb0bce20))
+
+### Refactoring
+
+- Split program format from pipelines
+  ([`e0b64cc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/e0b64ccdade8414ee441e03e29b932fa086fd959))
+
+- **dag-tab**: Drop all engine changes from the dag_tab stack
+  ([`ccbe3bf`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/ccbe3bfd36badf0db5889be47afc28fb29d0a307))
+
+### Testing
+
+- **memory**: Align config guards with v2 defaults
+  ([`2e219a1`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2e219a1ea882c25606ce85c362a8e587e6a7cb2a))
+
+- **memory**: Align review branch invariants
+  ([`2c1029c`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/2c1029cb46a2c855c0ca93709226d4309755a43a))
+
+
 ## v2.11.0 (2026-07-08)
 
 ### Bug Fixes
