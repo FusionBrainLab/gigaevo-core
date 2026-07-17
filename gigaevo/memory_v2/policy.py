@@ -51,7 +51,7 @@ def _finite_probability_matching(
     effect_worlds: Sequence[Sequence[float]] | np.ndarray,
     *,
     abstain_effect: float,
-    preferred_ids: frozenset[str] = frozenset(),
+    preferred_bank_card_ids: frozenset[str] = frozenset(),
     preferred_probability: float | None = None,
 ) -> tuple[dict[str, float], float, dict[str, float], dict[str, float]]:
     """Return exact winner frequencies, abstention, MC SEs, and the last world.
@@ -76,12 +76,14 @@ def _finite_probability_matching(
 
     all_indices = tuple(range(len(cards)))
     preferred_indices = tuple(
-        index for index, card in enumerate(cards) if card.treatment_id in preferred_ids
+        index
+        for index, card in enumerate(cards)
+        if card.bank_card_id in preferred_bank_card_ids
     )
     discovery_indices = tuple(
         index
         for index, card in enumerate(cards)
-        if card.treatment_id not in preferred_ids
+        if card.bank_card_id not in preferred_bank_card_ids
     )
     pools: tuple[tuple[float, tuple[int, ...]], ...]
     if preferred_probability is not None and preferred_indices and discovery_indices:
@@ -304,14 +306,14 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             proposal_rng,
             samples=self.config.proposal_worlds,
         )
-        preferred_ids: frozenset[str] = frozenset()
+        preferred_bank_card_ids: frozenset[str] = frozenset()
         preferred_probability: float | None = None
         if (
             retrieval is not None
             and retrieval.specification.name == "agentic_research_core_priority"
             and retrieval.core_bank_card_ids
         ):
-            preferred_ids = frozenset(retrieval.core_bank_card_ids)
+            preferred_bank_card_ids = frozenset(retrieval.core_bank_card_ids)
             preferred_probability = (
                 retrieval.specification.max_candidates
                 - retrieval.specification.exploration_candidates
@@ -325,7 +327,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             safe_cards,
             effect_worlds,
             abstain_effect=self.config.abstain_effect,
-            preferred_ids=preferred_ids,
+            preferred_bank_card_ids=preferred_bank_card_ids,
             preferred_probability=preferred_probability,
         )
         finite_probability = {

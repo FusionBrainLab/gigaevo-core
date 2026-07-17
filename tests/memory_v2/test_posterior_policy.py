@@ -278,7 +278,9 @@ def test_card_kind_contrast_shares_a_clean_program_vs_insight_signal(
 
 def test_retrieval_priority_probability_matches_within_each_source() -> None:
     cards = tuple(
-        CardSnapshot.from_card(Card(id=card_id, description=card_id))
+        CardSnapshot.from_card(Card(id=card_id, description=card_id)).model_copy(
+            update={"treatment_id": f"{card_id}-revision"}
+        )
         for card_id in ("core-a", "core-b", "tail-a", "tail-b")
     )
     worlds = np.asarray(
@@ -292,16 +294,16 @@ def test_retrieval_priority_probability_matches_within_each_source() -> None:
         cards,
         worlds,
         abstain_effect=0.0,
-        preferred_ids=frozenset({"core-a", "core-b"}),
+        preferred_bank_card_ids=frozenset({"core-a", "core-b"}),
         preferred_probability=0.75,
     )
 
     assert probabilities == pytest.approx(
         {
-            "core-a": 0.375,
-            "core-b": 0.375,
-            "tail-a": 0.125,
-            "tail-b": 0.125,
+            "core-a-revision": 0.375,
+            "core-b-revision": 0.375,
+            "tail-a-revision": 0.125,
+            "tail-b-revision": 0.125,
         }
     )
     assert abstain == 0.0
