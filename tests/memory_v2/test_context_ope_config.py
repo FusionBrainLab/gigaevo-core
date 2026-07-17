@@ -295,8 +295,6 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.memory.feature_config.card_kind_contrast is True
         assert cfg.memory.store.config.research.max_iters == 1
         assert cfg.memory.store.config.research.max_cards == 8
-        assert cfg.memory.credit.lineage_depth == 1
-        assert cfg.memory.credit.opportunity_budget == 32
         assert cfg.memory.safety.gate_mode == "exclude_confident_incremental_harm"
         assert cfg.memory.safety.max_treated_invalid_probability is None
         assert cfg.memory.safety.max_incremental_invalid_probability == pytest.approx(

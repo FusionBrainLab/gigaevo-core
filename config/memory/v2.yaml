@@ -64,7 +64,7 @@ credit:
   # Depth 1 is the original immediate-child endpoint. Larger depths use one
   # best-descendant outcome per randomized decision after a fixed number of
   # mutation opportunities in the root's pre-treatment MAP-Elites island.
-  lineage_depth: 1
+  lineage_depth: 3
   opportunity_budget: 32
 
 context_source:
