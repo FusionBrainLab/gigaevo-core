@@ -18,6 +18,13 @@ import pytest
 
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+    MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+    MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
+    MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
+    MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+)
 from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.programs.program import Program
@@ -45,6 +52,7 @@ class _FakeEngine:
         # state engine started sampling per-LLM occupancy for backpressure.
         self._llm_active: int = 0
         self._selection_leases = None
+        self.memory_attempt_has_decision: bool | None = None
         self.memory_failures: list[dict] = []
         self.memory_child_links: list[dict] = []
 
@@ -75,6 +83,9 @@ class _FakeEngine:
 
     async def _write_snapshot(self, **_kwargs) -> None:
         return None
+
+    def _memory_attempt_has_decision(self, _attempt_id: str | None) -> bool | None:
+        return self.memory_attempt_has_decision
 
     def _record_memory_attempt_failure(self, _parents, **payload) -> int:
         self.memory_failures.append(payload)
@@ -112,6 +123,52 @@ async def test_success_path_transfers_buffer_and_ticket(monkeypatch) -> None:
     assert "new-id-1" in engine._in_flight
     assert "new-id-1" in engine._inflight_tickets
     assert engine.memory_child_links[0]["child_id"] == "new-id-1"
+
+
+@pytest.mark.asyncio
+async def test_gate_skipped_memory_decision_mutates_without_stale_selection(
+    monkeypatch,
+) -> None:
+    parent = _make_parent()
+    parent.set_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, [{"old": True}])
+    parent.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, ["stale-card"])
+    parent.set_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY, True)
+    parent.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "old-decision")
+    parent.set_metadata(
+        MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+        {"decision_id": "old-decision"},
+    )
+    engine = _FakeEngine(parent, max_in_flight=2)
+    engine._selection_leases = InFlightSelectionRegistry()
+    engine.memory_attempt_has_decision = False
+    await _hold_producer_slot(engine)
+
+    async def fake_gen(*, parents, child_observer, **_kwargs):
+        refreshed = parents[0]
+        assert (
+            refreshed.get_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY) == []
+        )
+        assert refreshed.get_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY) == []
+        assert (
+            refreshed.get_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY)
+            is False
+        )
+        assert refreshed.get_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY) == ""
+        assert refreshed.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY) is None
+        assert child_observer is None
+        return "memory-free-child"
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+    )
+
+    result = await run_one_mutant(engine, task_id=234)
+
+    assert result == "memory-free-child"
+    assert "memory-free-child" in engine._in_flight
+    assert engine.metrics.mutations_created == 1
+    assert engine.memory_child_links == []
+    assert engine._selection_leases.attempts_for_parent(parent.id) == ()
 
 
 @pytest.mark.asyncio

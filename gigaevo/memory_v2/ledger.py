@@ -306,6 +306,14 @@ class SqliteCausalLedger:
         self._sync_mirror()
         return True
 
+    def has_attempt_decision(self, attempt_id: str) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM decisions WHERE attempt_id = ? LIMIT 1",
+                (attempt_id,),
+            ).fetchone()
+        return row is not None
+
     def record_attempt_failure(
         self,
         *,

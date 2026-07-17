@@ -43,8 +43,24 @@ from loguru import logger
 from gigaevo.evolution.engine.mutation import MutationFailure, generate_one_mutation
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
+    MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
+    MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
+    MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
+from gigaevo.programs.program import Program
+
+
+def _clear_uncommitted_memory_selection(parents: list[Program]) -> None:
+    """Make a gate-skipped refresh an explicit memory-free mutation."""
+
+    for parent in parents:
+        parent.set_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, [])
+        parent.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, [])
+        parent.set_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY, False)
+        parent.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "")
+        parent.set_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY, None)
 
 
 async def run_one_mutant(engine, task_id: int) -> str | None:
@@ -54,6 +70,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
     ticket: ParentRefreshTicket | None = None
     selection_lease = None
     attempt_id: str | None = None
+    memory_decision_absent = False
     new_id: str | None = None
     mutation_failure: MutationFailure | None = None
 
@@ -110,7 +127,10 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                     completion_ordinal=engine.metrics.iteration,
                     attempt_id=attempt_id,
                 )
-                if closed == 0:
+                memory_decision_absent = (
+                    engine._memory_attempt_has_decision(attempt_id) is False
+                )
+                if closed == 0 and not memory_decision_absent:
                     raise
                 return None
             refreshed = result.refreshed
@@ -165,12 +185,26 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                     completion_ordinal=engine.metrics.iteration,
                     attempt_id=attempt_id,
                 )
-                if closed == 0:
+                memory_decision_absent = (
+                    engine._memory_attempt_has_decision(attempt_id) is False
+                )
+                if closed == 0 and not memory_decision_absent:
                     raise
                 return None
             refreshed = ticket.refreshed
             if refreshed:
                 engine.metrics.submitted_for_refresh += len(refreshed)
+
+        memory_decision_absent = (
+            engine._memory_attempt_has_decision(attempt_id) is False
+        )
+        if memory_decision_absent:
+            _clear_uncommitted_memory_selection(refreshed)
+            logger.info(
+                "[MemoryV2] attempt {} has no committed decision; "
+                "mutating without memory",
+                attempt_id,
+            )
 
         # Atomic ordinal reserve — the read+increment pair has no `await` in
         # between, so under asyncio one coroutine cannot interleave another.
@@ -192,10 +226,14 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                     task_id=task_id,
                     selection_lease=selection_lease,
                     failure_observer=capture_mutation_failure,
-                    child_observer=lambda child_id: engine._link_memory_attempt_child(
-                        attempt_id=attempt_id,
-                        child_id=child_id,
-                        completion_ordinal=my_iteration,
+                    child_observer=(
+                        None
+                        if memory_decision_absent
+                        else lambda child_id: engine._link_memory_attempt_child(
+                            attempt_id=attempt_id,
+                            child_id=child_id,
+                            completion_ordinal=my_iteration,
+                        )
                     ),
                 )
             except asyncio.CancelledError:
@@ -209,7 +247,7 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                     completion_ordinal=my_iteration,
                     attempt_id=attempt_id,
                 )
-                if closed == 0:
+                if closed == 0 and not memory_decision_absent:
                     raise RuntimeError(
                         f"memory attempt {attempt_id!r} has no durable decision"
                     )
@@ -228,17 +266,18 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                 completion_ordinal=my_iteration,
                 attempt_id=attempt_id,
             )
-            if closed == 0:
+            if closed == 0 and not memory_decision_absent:
                 raise RuntimeError(
                     f"memory attempt {attempt_id!r} has no durable decision"
                 )
             return None
 
-        engine._link_memory_attempt_child(
-            attempt_id=attempt_id,
-            child_id=new_id,
-            completion_ordinal=my_iteration,
-        )
+        if not memory_decision_absent:
+            engine._link_memory_attempt_child(
+                attempt_id=attempt_id,
+                child_id=new_id,
+                completion_ordinal=my_iteration,
+            )
 
         async def handoff_persisted_child() -> None:
             """Finish the durable child-to-ingestor handoff despite cancellation."""

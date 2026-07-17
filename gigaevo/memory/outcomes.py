@@ -52,6 +52,11 @@ class MemoryOutcomeSink(Protocol):
 class MemoryAttemptLifecycleSink(Protocol):
     """Optional durable attempt/child lifecycle used by causal memory policies."""
 
+    def has_attempt_decision(self, attempt_id: str) -> bool:
+        """Whether this attempt committed a durable causal decision."""
+
+        ...
+
     def record_attempt_failure(
         self,
         *,

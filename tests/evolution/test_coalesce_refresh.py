@@ -88,6 +88,9 @@ class _FakeEngine:
     async def acquire_producer(self) -> None:
         await self._producer_sema.acquire()
 
+    def _memory_attempt_has_decision(self, _attempt_id: str | None) -> None:
+        return None
+
     def _record_memory_attempt_failure(self, _parents, **_payload) -> None:
         return None
 

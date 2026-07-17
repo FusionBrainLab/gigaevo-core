@@ -487,6 +487,14 @@ class EvolutionEngine:
         )
         return closed if lifecycle_attempt else None
 
+    def _memory_attempt_has_decision(self, attempt_id: str | None) -> bool | None:
+        """Return decision durability, or ``None`` for an untracked attempt."""
+
+        sink = self._memory_outcome_sink
+        if not attempt_id or not isinstance(sink, MemoryAttemptLifecycleSink):
+            return None
+        return sink.has_attempt_decision(attempt_id)
+
     def _link_memory_attempt_child(
         self, *, attempt_id: str | None, child_id: str, completion_ordinal: int
     ) -> None:

@@ -15,6 +15,9 @@ from gigaevo.programs.program_state import ProgramState
 
 
 class _MissingDecisionLifecycleSink:
+    def has_attempt_decision(self, _attempt_id: str) -> bool:
+        return False
+
     def record_attempt_failure(self, **_kwargs) -> bool:
         return False
 

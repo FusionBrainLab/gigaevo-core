@@ -72,7 +72,9 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
     )
     ledger.activate()
     record = decision_record(evolution_context, revisions[0], delivered=False)
+    assert not ledger.has_attempt_decision(record.attempt_id)
     ledger.record_decision(record)
+    assert ledger.has_attempt_decision(record.attempt_id)
     ledger.record_decision(record)
     assert ledger.link_attempt_child(
         attempt_id=record.attempt_id, child_id="child", completion_ordinal=4
