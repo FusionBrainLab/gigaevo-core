@@ -248,8 +248,7 @@ class ResearchAgent:
     Aggregates candidates across iterations (a card retrieved once stays a
     candidate), so the reflector always judges the full evidence pool. If the
     reflector violates the final-step contract and asks to continue after the
-    budget is exhausted, the loop falls back to the nearest visible candidates
-    instead of discarding a non-empty pool.
+    budget is exhausted, the loop fails closed to an empty shortlist.
     """
 
     def __init__(
@@ -328,9 +327,7 @@ class ResearchAgent:
                 self._observations(step, held_ids, new_ids),
             )
             if decision.mode != "final" and step == self._config.max_iters:
-                decision = self._final_step_fallback(
-                    request.query, candidates, decision
-                )
+                decision = self._final_step_fallback(decision)
             emit_memory_event(
                 MemoryResearchStep(
                     step=step,
@@ -365,30 +362,16 @@ class ResearchAgent:
 
     def _final_step_fallback(
         self,
-        request: str,
-        candidates: dict[str, tuple[Card, float]],
         decision: ShortlistDecision,
     ) -> ShortlistDecision:
-        ordered = self._ordered_candidates(request, candidates)
-        _, visible_ids = render_candidate_briefs_with_visible_ids(
-            ordered, self._config.reflect_payload_chars
+        logger.warning(
+            "[Memory][Research] reflector returned continue on final step; "
+            "returning an empty shortlist"
         )
-        selected_ids = [
-            card.id
-            for card in ordered
-            if card.id in visible_ids and not is_card_excluded(card, frozenset())
-        ][: self._config.max_cards]
-        if selected_ids:
-            logger.warning(
-                "[Memory][Research] reflector returned continue on final step; "
-                "falling back to {} visible candidate(s)",
-                len(selected_ids),
-            )
         return ShortlistDecision(
             mode="final",
             reasoning=decision.reasoning
-            or "Final-step fallback selected the nearest visible candidates.",
-            selected_ids=selected_ids,
+            or "Final-step fallback returned no card without a utility decision.",
         )
 
     def _step_status(self, step: int) -> str:

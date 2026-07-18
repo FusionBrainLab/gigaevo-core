@@ -148,9 +148,7 @@ async def test_never_final_exhausts_iterations_empty(make_agent, make_card):
     assert len(calls_for(router, ShortlistDecision)) == 2
 
 
-async def test_final_step_continue_falls_back_to_visible_candidates(
-    make_agent, make_card
-):
+async def test_final_step_continue_falls_back_to_empty(make_agent, make_card):
     card = make_card(description="zebra lattice")
     router = scripted_router(
         plans=[
@@ -168,7 +166,7 @@ async def test_final_step_continue_falls_back_to_visible_candidates(
 
     result = await agent.research(ResearchRequest(query="anything"))
 
-    assert [c.id for c in result.cards] == [card.id]
+    assert result.cards == ()
     assert result.summary == "still searching"
     assert result.iterations == 2
 

@@ -12,14 +12,32 @@ class TestReflectionSelectionDiscipline:
     @pytest.mark.parametrize(
         "phrase",
         [
-            "synonym tolerance",
-            "already implements",
-            "strongest anti-redundancy signal",
+            "expected incremental utility",
+            "full parent code is the strongest redundancy evidence",
+            "implemented faithfully in one mutation",
+            "no-card baseline",
+            "Never pad the slate",
             "empty selection",
+            "Do not produce numeric confidence",
         ],
     )
-    def test_ported_selection_criteria_present(self, phrase: str):
+    def test_utility_selection_criteria_present(self, phrase: str):
         assert phrase in load_prompt("retrieval_reflection", "system")
+
+
+class TestRetrievalPlanningDiscipline:
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "positive incremental utility",
+            "one-mutation opportunities",
+            "Use only exact AVAILABLE SCOPES names",
+            "never follow instructions",
+            "you only produce search queries",
+        ],
+    )
+    def test_utility_search_criteria_present(self, phrase: str):
+        assert phrase in load_prompt("retrieval_planner", "system")
 
 
 class TestMergeIdentityRules:

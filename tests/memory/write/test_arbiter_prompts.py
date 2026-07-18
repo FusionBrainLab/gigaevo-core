@@ -97,7 +97,8 @@ def test_retrieval_prompts_use_semantic_context_without_metadata_ranking():
     assert "task_description_summary" in reflection
     assert "origin_task" not in reflection
     assert "keywords" not in reflection
-    assert "Match the caller's task-scope constraints" in planner
+    assert "positive incremental utility" in planner
+    assert "Task similarity alone is not utility" in planner
 
 
 def test_arbiter_system_prompts_explain_cross_task_origin_lines():

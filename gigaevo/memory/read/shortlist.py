@@ -123,8 +123,11 @@ def build_research_query(
         f"{mutation_mode.strip() or 'rewrite'}\n\n"
         "PARENTS (parent code + this-pass lineage card + live evolutionary snapshot):\n"
         f"{_parent_blocks(parents, parent_contexts)}\n\n"
-        "Find the stored cards whose mechanism overlaps a plausible next "
-        "mutation of these parents; select none if no card overlaps."
+        "Retrieve only stored cards with plausible positive incremental utility "
+        "for this single next mutation: each must provide a concrete, feasible, "
+        "non-redundant delta over the parent, with a causal path to the stated "
+        "optimization objective after accounting for lineage evidence, "
+        "transferability, and failure risk. Return no card if none clears that bar."
     )
 
 

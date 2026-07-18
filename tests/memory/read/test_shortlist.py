@@ -67,7 +67,9 @@ class TestBuildResearchQuery:
         assert "=== Parent 1 ===" in query
         assert "def f(): pass" in query
         assert "snapshot A" in query
-        assert query.endswith("select none if no card overlaps.")
+        assert query.endswith(
+            "transferability, and failure risk. Return no card if none clears that bar."
+        )
 
     def test_empty_fields_get_placeholders(self):
         query = build_research_query(
