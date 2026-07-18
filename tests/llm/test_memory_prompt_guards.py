@@ -1,5 +1,4 @@
-"""Content guards for the memory prompt bundle: the reflector's selection
-discipline and the merge-identity rules shared by reconcile/consolidate."""
+"""Content guards for the memory prompt bundle."""
 
 from __future__ import annotations
 
@@ -40,15 +39,31 @@ class TestRetrievalPlanningDiscipline:
         assert phrase in load_prompt("retrieval_planner", "system")
 
 
-class TestMergeIdentityRules:
-    @pytest.mark.parametrize("agent", ["reconcile", "consolidate"])
+class TestEquivalenceIdentityRules:
     @pytest.mark.parametrize(
         "phrase",
         [
-            "same mechanism under the same condition",
-            "contradict",
-            "cover the evidence of BOTH",
+            "same applicability condition",
+            "same intervention",
+            "Do not create a union",
         ],
     )
-    def test_merge_rules_present(self, agent: str, phrase: str):
-        assert phrase in load_prompt(agent, "system")
+    def test_equivalence_rules_present(self, phrase: str):
+        assert phrase in load_prompt("equivalence", "system")
+
+
+class TestCardAuthorEvidenceContract:
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "parent fitness",
+            "child fitness",
+            "fitness direction",
+            "signed gain",
+            "archive status",
+            "One mutation is one observational sample",
+            "When condition C holds, try action A because mechanism M.",
+        ],
+    )
+    def test_outcome_and_hypothesis_rules_present(self, phrase: str):
+        assert phrase in load_prompt("card_author", "system")

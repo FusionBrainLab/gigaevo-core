@@ -1,60 +1,94 @@
-"""Tests for ProgramAuthorAgent: exemplar prose from a top program.
-
-The agent is built through ``create_program_author_agent`` so the externalized
-prompt files and the ``{task_description}`` bake are exercised end-to-end.
-"""
-
 from __future__ import annotations
 
+from pydantic import ValidationError
 import pytest
 
+from gigaevo.llm.agents.card_author import AuthoredCard
 from gigaevo.llm.agents.factories import create_program_author_agent
 from gigaevo.llm.agents.program_author import ProgramAuthorResponse
+from gigaevo.llm.schema_compat import nonportable_keys
+from gigaevo.memory.write.decisions import WriteDecision
 
 
-class _FakeStructuredLLM:
+class FakeStructuredLlm:
     def __init__(self, response: ProgramAuthorResponse) -> None:
-        self._response = response
+        self.response = response
         self.calls: list = []
 
-    async def ainvoke(self, messages):  # noqa: ANN001
+    async def ainvoke(self, messages):
         self.calls.append(messages)
-        return self._response
+        return self.response
 
 
-class _FakeLLM:
+class FakeLlm:
     def __init__(self, response: ProgramAuthorResponse) -> None:
-        self._structured = _FakeStructuredLLM(response)
+        self.structured = FakeStructuredLlm(response)
 
-    def with_structured_output(self, schema, **kwargs):  # noqa: ANN001
-        return self._structured
-
-
-def _agent(llm: _FakeLLM, task: str = "maximize min area"):  # noqa: ANN202
-    return create_program_author_agent(llm, task_description=task)
+    def with_structured_output(self, schema, **kwargs):
+        assert schema["title"] == "ProgramAuthorResponse"
+        assert nonportable_keys(schema) == set()
+        return self.structured
 
 
 @pytest.mark.asyncio
-async def test_author_program_describes_what_it_does() -> None:
-    agent = _agent(
-        _FakeLLM(
-            ProgramAuthorResponse(
-                description="greedy spectral placement; scores well by maximizing "
-                "the min pairwise area",
-                keywords=["spectral", "greedy"],
-            )
-        )
+async def test_program_author_returns_one_holistic_hypothesis() -> None:
+    expected = ProgramAuthorResponse(
+        decision=WriteDecision.NEW,
+        card=AuthoredCard(
+            description="When a constructive seed is brittle, try a guarded local "
+            "search because feasible swaps refine it without restarting.",
+            explanation_summary="The seed reaches a useful basin and guarded swaps "
+            "exploit it while retaining feasibility.",
+        ),
     )
-    out = await agent.arun(code="def solve(): ...", fitness=0.53)
-    assert "spectral" in out.keywords
-    assert out.description
+    llm = FakeLlm(expected)
+    agent = create_program_author_agent(
+        llm,
+        task_description="task",
+        metrics_description=(
+            '- loss: validation loss (↓ better; [0.0, 1.0] range; unit="nats")'
+        ),
+    )
+
+    result = await agent.arun(
+        code="def solve(): ...",
+        fitness=0.53,
+        higher_is_better=False,
+        archive_rank=2,
+    )
+
+    assert result == expected
+    rendered = str(llm.structured.calls[0])
+    assert "0.53" in rendered
+    assert "lower is better" in rendered
+    assert "2" in rendered
+    assert "validation loss" in rendered
+    assert "[0.0, 1.0] range" in rendered
+    assert 'unit="nats"' in rendered
 
 
 @pytest.mark.asyncio
-async def test_author_program_handles_unknown_fitness() -> None:
-    fake = _FakeLLM(ProgramAuthorResponse(description="does a thing", keywords=["k"]))
-    agent = _agent(fake)
-    out = await agent.arun(code="def s(): ...", fitness=None)
-    rendered = str(fake._structured.calls[0])
-    assert "(unknown)" in rendered
-    assert out.description == "does a thing"
+async def test_program_author_can_drop_uninformative_program() -> None:
+    expected = ProgramAuthorResponse(decision=WriteDecision.DROP, card=None)
+    agent = create_program_author_agent(
+        FakeLlm(expected),
+        task_description="task",
+        metrics_description="- score: objective (↑ better)",
+    )
+    assert (
+        await agent.arun(
+            code="pass",
+            fitness=None,
+            higher_is_better=True,
+            archive_rank=None,
+        )
+    ).decision is WriteDecision.DROP
+
+
+def test_program_author_schema_excludes_equivalence() -> None:
+    schema = ProgramAuthorResponse.model_json_schema()
+    decision_schema = schema["properties"]["decision"]
+    assert decision_schema["enum"] == ["DROP", "NEW"]
+    assert set(schema["required"]) == {"decision", "card"}
+    with pytest.raises(ValidationError):
+        ProgramAuthorResponse(decision=WriteDecision.EQUIVALENT, card=None)

@@ -326,7 +326,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
         store: MemoryStore,
         applicability: ApplicabilityProvider | None = None,
         excluder: CardExcluder | None = None,
-        allow_cross_task: bool = True,
+        allow_cross_task: bool = False,
         allowed_kinds: Sequence[str] = ("insight", "program"),
     ) -> None:
         super().__init__(

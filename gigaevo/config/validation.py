@@ -24,6 +24,7 @@ from gigaevo.memory_v2.candidates import (
     NullApplicabilityProvider,
     WholeBankCandidateSource,
 )
+from gigaevo.memory_v2.eviction import CausalRetirementEvictor
 from gigaevo.memory_v2.writer import CausalV2ContentOnlyUpdater
 
 
@@ -39,7 +40,8 @@ _MEMORY_V2_WRITER_TARGET = _target_path(CausalV2ContentOnlyUpdater)
 _MEMORY_V2_WHOLE_BANK_SOURCE_TARGET = _target_path(WholeBankCandidateSource)
 _MEMORY_V2_AGENTIC_APPLICABILITY_TARGET = _target_path(AgenticApplicabilityProvider)
 _MEMORY_V2_NULL_APPLICABILITY_TARGET = _target_path(NullApplicabilityProvider)
-_MEMORY_V2_EVICTOR_TARGET = _target_path(NullEvictor)
+_MEMORY_V2_EVICTOR_TARGET = _target_path(CausalRetirementEvictor)
+_MEMORY_V2_NULL_EVICTOR_TARGET = _target_path(NullEvictor)
 _MISSING = object()
 
 
@@ -213,10 +215,21 @@ def validate_memory_v2_scope(cfg: DictConfig) -> None:
             "gain restamping would create a second observational efficacy policy."
         )
     evictor_target = _raw_select(cfg, "memory.evictor._target_", None)
-    if evictor_target != _MEMORY_V2_EVICTOR_TARGET:
+    if evictor_target not in {
+        _MEMORY_V2_EVICTOR_TARGET,
+        _MEMORY_V2_NULL_EVICTOR_TARGET,
+    }:
         raise ValueError(
-            "memory=v2 wires NullEvictor: harm control is the read-time policy, "
-            "not write-side card-stat eviction on the randomized causal ledger."
+            "memory=v2 causal-retirement must use CausalRetirementEvictor or the "
+            "explicit NullEvictor ablation; observational card-stat evictors are "
+            "incompatible."
+        )
+    if evictor_target == _MEMORY_V2_EVICTOR_TARGET and bool(
+        _raw_select(cfg, "memory.candidate_source.allow_cross_task", False)
+    ):
+        raise ValueError(
+            "memory=v2 causal retirement requires allow_cross_task=false until "
+            "retirement evidence is identified per source task."
         )
 
 

@@ -36,7 +36,7 @@ from gigaevo.memory_v2.posterior import (
     _deterministic_safety_summary,
     _joint_gaussian_boundary_probability,
     _latent_to_gain,
-    _normalized_gain_bounds,
+    normalized_gain_bounds,
 )
 from gigaevo.memory_v2.rng import EventRNG
 
@@ -160,7 +160,7 @@ def test_posterior_accepts_context_boundary_tolerance(
     raw["reward"]["higher_is_better"] = higher_is_better
     context = EvolutionContext.model_validate(raw)
 
-    lower, upper = _normalized_gain_bounds(context)
+    lower, upper = normalized_gain_bounds(context)
 
     assert lower == pytest.approx(5e-10)
     assert upper == 1.0
@@ -511,6 +511,39 @@ def test_cold_safety_prior_is_calibrated_in_prediction_space(
     assert 0.03 < prediction.treated_invalid_probability < 0.10
     assert prediction.treated_invalid_upper < 0.20
     assert prediction.probability_safe > 0.85
+
+
+def test_practical_utility_boundary_reduces_helpful_probability(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    fitted = posterior_model.fit((), revisions[:1])
+    kwargs = {
+        "samples": 8192,
+        "max_treated_invalid_probability": 0.25,
+        "max_incremental_invalid_probability": 0.10,
+        "safety_alpha": 0.10,
+    }
+    relative_to_zero = fitted.prediction(
+        revisions[0],
+        evolution_context,
+        np.random.default_rng(13),
+        **kwargs,
+    )
+    practically_useful = fitted.prediction(
+        revisions[0],
+        evolution_context,
+        np.random.default_rng(13),
+        minimum_helpful_effect=0.05,
+        **kwargs,
+    )
+
+    assert practically_useful.probability_helpful < relative_to_zero.probability_helpful
+    assert (
+        practically_useful.probability_safe_and_helpful
+        < relative_to_zero.probability_safe_and_helpful
+    )
 
 
 def test_safety_feasibility_is_deterministic_under_laplace_posterior(

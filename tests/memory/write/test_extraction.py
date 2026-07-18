@@ -11,6 +11,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_BASE_SELECTED_IDS_METADATA_KEY,
     MUTATION_OUTPUT_METADATA_KEY,
 )
+from gigaevo.memory.write.decisions import ArchiveStatus
 from gigaevo.memory.write.extraction import (
     Improvement,
     MutationOutput,
@@ -74,7 +75,12 @@ def test_extraction_models_are_frozen():
     models = [
         Improvement(description="swapped solver"),
         MutationOutput(),
-        ProgramRecord(id="p1", fitness=0.5, generation=1),
+        ProgramRecord(
+            id="p1",
+            fitness=0.5,
+            generation=1,
+            archive_status=ArchiveStatus.ARCHIVED,
+        ),
     ]
     for model in models:
         field = next(iter(type(model).model_fields))
@@ -116,7 +122,7 @@ def test_program_to_record_out_of_range_base_falls_back_to_first(make_program):
     assert record.parent_code == ""
 
 
-def test_record_note_joins_descriptions_with_fallback(make_program):
+def test_record_note_renders_structured_changes_with_fallback(make_program):
     prog = make_program(
         parents=["p-first"],
         metadata={
@@ -129,9 +135,9 @@ def test_record_note_joins_descriptions_with_fallback(make_program):
         },
     )
     record = program_to_record(prog, "task", "summary")
-    assert record_note(record) == "one; two"
+    assert record_note(record) == "1. Change: one\n2. Change: two"
     bare = program_to_record(make_program(parents=["p-first"]), "task", "summary")
-    assert record_note(bare) == "Unspecified change"
+    assert record_note(bare) == "No mutator report was recorded."
 
 
 @pytest.fixture

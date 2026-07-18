@@ -23,7 +23,7 @@ class MemoryV2Decision(MemoryEvent):
 class MemoryV2WriterSync(MemoryEvent):
     event: ClassVar[str] = "MEMORY_V2_WRITER_SYNC"
     description: ClassVar[str] = (
-        "The content-only writer synchronized leases with causal evidence."
+        "The content-only writer synchronized leases and causal retirement."
     )
     health_question: ClassVar[str] = (
         "Does content generation expand the bank without observational efficacy credit?"
@@ -35,3 +35,4 @@ class MemoryV2WriterSync(MemoryEvent):
     pending_count: int
     bank_size: int
     released_child_count: int
+    retired_card_ids: tuple[str, ...] = ()

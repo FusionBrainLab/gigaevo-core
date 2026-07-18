@@ -1,11 +1,17 @@
-Author one library card for this high-fitness exemplar program.
+Decide whether this strong exemplar supports one holistic strategy hypothesis.
 
 ## FITNESS
 {fitness}
+
+## FITNESS DIRECTION
+{fitness_direction}
+
+## RANK AMONG SELECTED EXEMPLARS
+{archive_rank}
 
 ## PROGRAM
 ```python
 {code}
 ```
 
-Return one card matching the structured-output schema and the WHAT-MAKES-A-GOOD-EXEMPLAR-CARD and RULES contracts in the system prompt. No prose, no preamble, no fences.
+Return `DROP` or one `NEW` conditional hypothesis according to the system contract.

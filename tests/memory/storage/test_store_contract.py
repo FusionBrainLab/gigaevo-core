@@ -288,31 +288,6 @@ class TestLocalStore:
 
         assert store.get(card.id) == card
 
-    def test_merge_retire_rolls_back_ram_on_persist_failure(
-        self, make_store_config, make_card, monkeypatch
-    ):
-        store = LocalMemoryStore(make_store_config())
-        target = make_card(id="mem-target")
-        partner = make_card(id="mem-partner")
-        store.save(target)
-        store.save(partner)
-
-        def fail_persist():
-            raise RuntimeError("disk full")
-
-        monkeypatch.setattr(store._bank, "persist", fail_persist)
-        with pytest.raises(RuntimeError, match="disk full"):
-            store.merge_retire(
-                target.id,
-                partner.id,
-                lambda fresh, _partner: fresh.model_copy(
-                    update={"description": "merged description"}
-                ),
-            )
-
-        assert store.get(target.id) == target
-        assert store.get(partner.id) == partner
-
     def test_nearest_ranks_matching_card_first(self, make_store_config, make_card):
         store = LocalMemoryStore(make_store_config())
         target = make_card(description="zebra quantum lattice")
@@ -332,6 +307,17 @@ class TestLocalStore:
         store.save(exemplar)
         hits = store.nearest("shared topic", k=5, kind=CardKind.PROGRAM)
         assert [hit.card.id for hit in hits] == [exemplar.id]
+
+    def test_nearest_task_filter(self, make_store_config, make_card):
+        store = LocalMemoryStore(make_store_config())
+        own = make_card(task_key="own", description="shared topic")
+        foreign = make_card(task_key="foreign", description="shared topic")
+        store.save(own)
+        store.save(foreign)
+
+        hits = store.nearest("shared topic", k=5, task_key="own")
+
+        assert [hit.card.id for hit in hits] == [own.id]
 
     def test_deleted_card_leaves_retrieval(self, make_store_config, make_card):
         store = LocalMemoryStore(make_store_config())

@@ -34,7 +34,9 @@ class PosteriorFitError(RuntimeError):
     """Inference failed a numerical integrity check; the policy must abstain."""
 
 
-def _normalized_gain_bounds(context: EvolutionContext) -> tuple[float, float]:
+def normalized_gain_bounds(context: EvolutionContext) -> tuple[float, float]:
+    """Return parent-specific feasible oriented gain bounds in normalized units."""
+
     reward = context.reward
     try:
         parent = context.parent_metrics[reward.primary_metric]
@@ -54,7 +56,7 @@ def _normalized_gain_bounds(context: EvolutionContext) -> tuple[float, float]:
 
 
 def _gain_to_model_scale(value: float, context: EvolutionContext) -> float:
-    lower, upper = _normalized_gain_bounds(context)
+    lower, upper = normalized_gain_bounds(context)
     if value < lower - 1e-9 or value > upper + 1e-9:
         raise ValueError(
             f"normalized gain {value:.6g} is outside [{lower:.6g}, {upper:.6g}]"
@@ -66,7 +68,7 @@ def _latent_to_gain(
     centered_latent: np.ndarray | float,
     context: EvolutionContext,
 ) -> np.ndarray:
-    lower, upper = _normalized_gain_bounds(context)
+    lower, upper = normalized_gain_bounds(context)
     return np.clip(np.asarray(centered_latent, dtype=float), lower, upper)
 
 
@@ -1010,7 +1012,7 @@ class FittedTerminalUtilityPosterior:
         valid1 = _latent_to_gain(direct1 + option1, context)
         p0 = expit(safety_draws @ reward_design0.T)
         p1 = expit(safety_draws @ reward_design1.T)
-        lower, _ = _normalized_gain_bounds(context)
+        lower, _ = normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
         return q1 - q0
@@ -1027,11 +1029,14 @@ class FittedTerminalUtilityPosterior:
         safety_alpha: float,
         assessed_bank_card_ids: frozenset[str] = frozenset(),
         applicable_bank_card_ids: frozenset[str] = frozenset(),
+        minimum_helpful_effect: float = 0.0,
     ) -> dict[str, PosteriorPrediction]:
         """Summarize every candidate using one coherent set of posterior worlds."""
 
         if samples < 64:
             raise ValueError("posterior summaries require at least 64 samples")
+        if not math.isfinite(minimum_helpful_effect) or minimum_helpful_effect < 0.0:
+            raise ValueError("minimum_helpful_effect must be finite and non-negative")
         if not applicable_bank_card_ids <= assessed_bank_card_ids:
             raise ValueError("applicable cards must belong to the assessed universe")
         reward_draws, reward_residual_sds = self.reward.sample_many(rng, samples)
@@ -1060,6 +1065,7 @@ class FittedTerminalUtilityPosterior:
                     max_incremental_invalid_probability
                 ),
                 safety_alpha=safety_alpha,
+                minimum_helpful_effect=minimum_helpful_effect,
             )
             for card in cards
         }
@@ -1075,6 +1081,7 @@ class FittedTerminalUtilityPosterior:
         max_incremental_invalid_probability: float,
         safety_alpha: float,
         rag_applicability: RagApplicability = RagApplicability.UNASSESSED,
+        minimum_helpful_effect: float = 0.0,
     ) -> PosteriorPrediction:
         return self.predictions(
             (card,),
@@ -1094,6 +1101,7 @@ class FittedTerminalUtilityPosterior:
                 if rag_applicability is RagApplicability.APPLICABLE
                 else frozenset()
             ),
+            minimum_helpful_effect=minimum_helpful_effect,
         )[card.treatment_id]
 
     def _prediction_from_draws(
@@ -1110,6 +1118,7 @@ class FittedTerminalUtilityPosterior:
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
+        minimum_helpful_effect: float,
     ) -> PosteriorPrediction:
         x0, x1 = self._arm_designs(
             card,
@@ -1128,7 +1137,7 @@ class FittedTerminalUtilityPosterior:
         valid1 = _latent_to_gain(direct1 + option1, context)
         p0 = expit(safety_draws @ x0)
         p1 = expit(safety_draws @ x1)
-        lower, _ = _normalized_gain_bounds(context)
+        lower, _ = normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
         risk_delta = p1 - p0
@@ -1139,7 +1148,7 @@ class FittedTerminalUtilityPosterior:
         safe = (p1 <= absolute_limit) & (
             risk_delta <= max_incremental_invalid_probability
         )
-        helpful = effects > 0.0
+        helpful = effects > minimum_helpful_effect
         safety_mean = np.asarray(
             [x0 @ self.safety.mean, x1 @ self.safety.mean],
             dtype=float,

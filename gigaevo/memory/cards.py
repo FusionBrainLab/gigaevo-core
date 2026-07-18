@@ -364,8 +364,8 @@ class Card(BaseModel):
     """The one memory card.
 
     ``kind`` distinguishes distilled insights from program exemplars; the
-    exemplar-only fields (``program_id``, ``code``, ``code_sha256``,
-    ``fitness``) are kind-gated so an insight card can never smuggle them in.
+    exemplar-only fields (``program_id``, ``code``, ``fitness``) are kind-gated
+    so an insight card can never smuggle them in.
     Cards are frozen — the write path evolves them via ``model_copy(update=...)``.
     """
 
@@ -392,16 +392,13 @@ class Card(BaseModel):
     task_description_summary: str = Field(
         default="", description="LLM-condensed one-line task summary."
     )
-    keywords: tuple[str, ...] = Field(
-        default=(), description="Search keywords for retrieval ranking."
-    )
     programs: tuple[str, ...] = Field(
         default=(), description="Program ids that exhibited the idea."
     )
     absorbed_ids: tuple[str, ...] = Field(
         default=(),
-        description="Bank ids merged/consolidated into this survivor; children's "
-        "frozen card_ids_used pointing at them re-alias here at restamp.",
+        description="Historical bank aliases whose frozen attribution and causal "
+        "evidence belong to this card lineage.",
     )
     gain_events: tuple[ContextualGain, ...] = Field(
         default=(),
@@ -415,10 +412,6 @@ class Card(BaseModel):
     code: str = Field(
         default="", description="Exemplar program's source code (kind=program only)."
     )
-    code_sha256: str = Field(
-        default="",
-        description="SHA-256 of the normalized exemplar source (kind=program only).",
-    )
     fitness: float | None = Field(
         default=None,
         description="Exemplar fitness at capture time (kind=program only).",
@@ -429,12 +422,9 @@ class Card(BaseModel):
         if self.kind is CardKind.PROGRAM:
             if not self.program_id:
                 raise ValueError("kind=program requires a non-empty program_id")
-        elif (
-            self.program_id or self.code or self.code_sha256 or self.fitness is not None
-        ):
+        elif self.program_id or self.code or self.fitness is not None:
             raise ValueError(
-                "program_id/code/code_sha256/fitness are exemplar fields — "
-                "set kind=program"
+                "program_id/code/fitness are exemplar fields — set kind=program"
             )
         if self.id and self.id in self.absorbed_ids:
             raise ValueError("a card cannot absorb its own id")
@@ -442,15 +432,9 @@ class Card(BaseModel):
 
 
 def card_brief(card: Card) -> str:
-    """Compact card projection for the librarian judging prompts (reconcile /
-    consolidate): description + why-text + keywords on one line, empty fields
-    omitted. The reconcile caller prepends the id (it needs it as the
-    DUPLICATE/MERGE target); consolidate uses the body alone.
-    """
+    """Compact semantic projection used for retrieval and equivalence."""
     parts = [card.description]
     why = card.explanation_summary.strip()
     if why:
         parts.append(f"why: {why}")
-    if card.keywords:
-        parts.append(f"keywords: {', '.join(card.keywords)}")
     return " | ".join(parts)

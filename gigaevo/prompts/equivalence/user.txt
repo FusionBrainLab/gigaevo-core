@@ -1,0 +1,11 @@
+Classify this authored {kind} candidate against its nearest same-kind cards.
+
+## CANDIDATE
+
+{candidate}
+
+## NEIGHBORS
+
+{neighbors}
+
+Return `NEW` unless one offered neighbor has the exact same intervention and applicability condition; otherwise return `EQUIVALENT` with that id.

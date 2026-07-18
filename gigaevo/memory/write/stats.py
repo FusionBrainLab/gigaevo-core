@@ -629,10 +629,9 @@ class CardStatsStamper(BaseModel):
 
         The full pool is authoritative each sweep: a selected card carries this
         sweep's events; an unselected card has any stale events cleared. A
-        merge/consolidation survivor also folds in the events the pool still
-        attributes to its ``absorbed_ids`` — children frozen with a since-merged
-        card id credit that id, which no longer exists in the bank, so without the
-        re-alias their attribution would orphan on the deleted id.
+        A card carrying historical ``absorbed_ids`` also folds in events the pool
+        still attributes to those ids, so frozen child attribution does not
+        orphan on a retired alias.
 
         Multiplicity is the trial count the harm gate reads (intro_events): every
         invalid child of one base parent emits a value-identical forced-harm event,
@@ -649,9 +648,9 @@ class CardStatsStamper(BaseModel):
         Founding events (the delta a card was distilled from) are the one class of
         event the pool cannot recompute — the founding child predates the card, so
         outcome attribution never re-credits it. They live only on the card, are
-        carried onto a merge survivor by ``merge_cards`` unioning gain events, and
-        are preserved here across the recompute. They never double-count: the pool
-        only ever holds use events, so the absorbed-id fold below cannot re-add one.
+        carried on the card and preserved here across the recompute. They never
+        double-count: the pool only ever holds use events, so the absorbed-id fold
+        below cannot re-add one.
 
         In a shared bank, two runs may restamp the same card from disjoint program
         pools. When ``preserve_events_outside_child_ids`` is supplied, this

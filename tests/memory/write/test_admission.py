@@ -80,16 +80,19 @@ def test_admit_empty_id_mints_and_records_added(store, make_card, tmp_path):
     assert len(rows) == 1
     assert rows[0].outcome is WriteOutcome.ADDED
     assert rows[0].final_id == result.card_id
+    assert rows[0].incoming_description
 
 
-def test_admit_known_id_records_updated(store, make_card, tmp_path):
+def test_admit_known_id_preserves_payload_and_records_updated(
+    store, make_card, tmp_path
+):
     gate, ledger = make_gate(store, tmp_path)
-    card = make_card()
+    card = make_card(description="stable")
     store.save(card)
     result = gate.admit(card.model_copy(update={"description": "revised"}))
     assert result.outcome is WriteOutcome.UPDATED
     assert result.card_id == card.id
-    assert store.get(card.id).description == "revised"
+    assert store.get(card.id).description == "stable"
     assert read_rows(ledger.path)[-1].outcome is WriteOutcome.UPDATED
 
 
@@ -115,7 +118,7 @@ def test_task_card_cap_rejects_only_new_cards_in_same_task(store, make_card, tmp
     assert not rejected.landed
     assert store.get(second.id) is None
     assert updated.outcome is WriteOutcome.UPDATED
-    assert store.get(first.id).description == "updated"
+    assert store.get(first.id).description == first.description
     row = read_rows(ledger.path)[0]
     assert row.outcome is WriteOutcome.REJECTED_CAPACITY
     assert row.reason == "active task card cap reached (1)"
@@ -156,94 +159,22 @@ def test_sweep_does_not_delete_card_selected_by_in_flight_mutation(
     assert gate.sweep() == [card.id]
 
 
-def test_merge_missing_target_is_benign_noop(store, make_card, tmp_path):
-    gate, ledger = make_gate(store, tmp_path)
-    result = gate.merge("absent", make_card())
-    assert result.outcome is WriteOutcome.DISCARDED
-    assert not result.landed
-    assert not result.rejected_harm
-    assert read_rows(ledger.path) == []
-
-
-def test_merge_program_target_is_benign_noop(store, make_card, tmp_path):
-    target = make_card(
-        kind=CardKind.PROGRAM, program_id="p1", code="x = 1", fitness=0.5
-    )
-    store.save(target)
-    gate, _ = make_gate(store, tmp_path)
-    result = gate.merge(target.id, make_card())
-    assert result.outcome is WriteOutcome.DISCARDED
-    assert not result.rejected_harm
-
-
-def test_merge_success_records_submitted_card_id(store, make_card, tmp_path):
-    target = make_card()
-    store.save(target)
-    incoming = make_card()
-    gate, ledger = make_gate(store, tmp_path)
-    result = gate.merge(target.id, incoming)
-    assert result.outcome is WriteOutcome.MERGED
-    assert result.card_id == target.id
-    row = read_rows(ledger.path)[-1]
-    assert row.outcome is WriteOutcome.MERGED
-    assert row.incoming_id == incoming.id
-    assert row.final_id == target.id
-    assert row.merge_targets == (target.id,)
-    assert store.get(target.id).description == incoming.description
-
-
-def test_merge_atomically_retires_banked_unleased_partner(store, make_card, tmp_path):
-    target = make_card()
-    partner = make_card()
-    store.save(target)
-    store.save(partner)
-    gate, _ = make_gate(store, tmp_path)
-
-    result = gate.merge(target.id, partner)
-
-    assert result.outcome is WriteOutcome.MERGED
-    assert store.get(target.id) is not None
-    assert store.get(partner.id) is None
-
-
-def test_merge_skips_banked_leased_partner_before_fold(store, make_card):
-    target = make_card()
-    partner = make_card()
-    store.save(target)
-    store.save(partner)
+def test_sweep_protects_a_leased_historical_alias(store, make_card):
+    card = make_card(absorbed_ids=("historical-id",))
+    store.save(card)
     registry = InFlightSelectionRegistry()
     lease = registry.open_attempt("attempt-1", "parent-1")
-    lease.attach_cards((partner.id,))
+    lease.attach_cards(("historical-id",))
     gate = CardAdmissionGate(
-        store=store, evictor=NullEvictor(), selection_leases=registry
+        store=store,
+        evictor=MarkingEvictor({card.id}),
+        selection_leases=registry,
     )
 
-    result = gate.merge(target.id, partner)
-
-    assert result.outcome is WriteOutcome.DISCARDED
-    assert store.get(target.id) == target
-    assert store.get(partner.id) == partner
-
-
-def test_twin_retirement_skips_leased_program_card(store, make_card):
-    twin = make_card(
-        task_key="own-task",
-        kind=CardKind.PROGRAM,
-        program_id="old-program",
-        code="x = 1",
-        fitness=0.5,
-    )
-    store.save(twin)
-    registry = InFlightSelectionRegistry()
-    lease = registry.open_attempt("attempt-1", "parent-1")
-    lease.attach_cards((twin.id,))
-    gate = CardAdmissionGate(
-        store=store, evictor=NullEvictor(), selection_leases=registry
-    )
-
-    gate.retire_twin(twin, successor_id="program-new")
-
-    assert store.get(twin.id) == twin
+    assert gate.sweep() == []
+    assert store.get(card.id) == card
+    lease.release()
+    assert gate.sweep() == [card.id]
 
 
 def test_retire_exemplar_without_task_scope_keeps_single_task_behavior(
@@ -261,11 +192,11 @@ def test_retire_exemplar_without_task_scope_keeps_single_task_behavior(
     result = gate.retire_exemplar(card, reason="single-task prune")
 
     assert result.card_id == ""
-    assert result.outcome is WriteOutcome.UPDATED
+    assert result.outcome is WriteOutcome.RETIRED
     assert store.get(card.id) is None
 
 
-def test_gate_without_registry_keeps_legacy_eviction_behavior(store, make_card):
+def test_gate_without_selection_registry_still_sweeps(store, make_card):
     card = make_card()
     store.save(card)
     gate = CardAdmissionGate(store=store, evictor=MarkingEvictor({card.id}))
@@ -274,27 +205,10 @@ def test_gate_without_registry_keeps_legacy_eviction_behavior(store, make_card):
     assert store.get(card.id) is None
 
 
-def test_merge_onto_tombstoned_target_is_benign_noop(store, make_card, tmp_path):
-    # Gate-level pin: a tombstoned id is deleted from the store, so a MERGE
-    # onto it degrades to the missing-target no-op and writes no row. No live
-    # path reaches this — reconcile only offers targets from the store's
-    # neighbor context, which never contains a tombstoned (deleted) id.
-    card = make_card()
-    store.save(card)
-    harmful = {card.id}
-    gate, ledger = make_gate(store, tmp_path, MarkingEvictor(harmful))
-    gate.sweep()
-    harmful.clear()
-    rows_before = len(read_rows(ledger.path))
-    result = gate.merge(card.id, make_card())
-    assert result.outcome is WriteOutcome.DISCARDED
-    assert len(read_rows(ledger.path)) == rows_before
-
-
 def test_tombstoned_program_id_does_not_block_bare_insight_id(
     store, make_card, tmp_path
 ):
-    # Exemplar cache ids live in the "program-<id>" namespace; harm-evicting
+    # Exemplar cache ids live in the "program-<id>" namespace; retiring
     # one must not tombstone the bare insight id it embeds.
     exemplar = make_card(
         id="program-p1", kind=CardKind.PROGRAM, program_id="p1", code="x = 1"
@@ -309,45 +223,57 @@ def test_tombstoned_program_id_does_not_block_bare_insight_id(
     assert store.get("p1") is not None
 
 
-def test_merge_store_failure_is_benign_noop(store, make_card, tmp_path):
-    target = make_card()
-    store.save(target)
-    store.fail_merges = True
-    gate, ledger = make_gate(store, tmp_path)
-    result = gate.merge(target.id, make_card())
-    assert result.outcome is WriteOutcome.DISCARDED
-    assert not result.landed
-    assert not result.rejected_harm
-    assert read_rows(ledger.path) == []
-
-
-def test_bump_provenance_appends_child_once(store, make_card, tmp_path):
-    target = make_card()
-    store.save(target)
-    gate, ledger = make_gate(store, tmp_path)
-
-    assert gate.bump_provenance(target.id, "child-1").card_id == target.id
-    assert store.get(target.id).programs == ("child-1",)
-
-    saves_before = len(store.saved_ids)
-    assert gate.bump_provenance(target.id, "child-1").card_id == target.id
-    assert len(store.saved_ids) == saves_before
-    assert store.get(target.id).programs == ("child-1",)
-
-    rows = read_rows(ledger.path)
-    assert [r.outcome for r in rows] == [WriteOutcome.UPDATED, WriteOutcome.UPDATED]
-
-
-def test_bump_provenance_missing_or_program_target_is_benign_noop(
-    store, make_card, tmp_path
+def test_equivalent_insight_pools_provenance_and_evidence_without_rewriting(
+    store, make_card, make_event, tmp_path
 ):
+    target_event = make_event(0.1)
+    incoming_event = make_event(0.2)
+    target = make_card(
+        task_key="task",
+        description="stable action",
+        programs=("parent",),
+        gain_events=(target_event,),
+    )
+    store.save(target)
+    gate, ledger = make_gate(store, tmp_path)
+    incoming = make_card(
+        id="",
+        task_key="task",
+        description="different wording",
+        programs=("child",),
+        gain_events=(incoming_event,),
+    )
+
+    result = gate.update_equivalent(target.id, incoming)
+    updated = store.get(target.id)
+
+    assert result.outcome is WriteOutcome.UPDATED
+    assert updated.description == "stable action"
+    assert updated.programs == ("parent", "child")
+    assert updated.gain_events == (target_event, incoming_event)
+    row = read_rows(ledger.path)[-1]
+    assert row.duplicate_of == target.id
+    assert row.incoming_description == "different wording"
+
+
+def test_equivalent_update_requires_same_kind_and_task(store, make_card, tmp_path):
     program = make_card(
-        kind=CardKind.PROGRAM, program_id="p1", code="x = 1", fitness=0.5
+        task_key="task",
+        kind=CardKind.PROGRAM,
+        program_id="p1",
+        code="x = 1",
+        fitness=0.5,
     )
     store.save(program)
     gate, _ = make_gate(store, tmp_path)
-    assert gate.bump_provenance("absent", "child-1").outcome is WriteOutcome.DISCARDED
-    assert gate.bump_provenance(program.id, "child-1").outcome is WriteOutcome.DISCARDED
+    insight = make_card(task_key="task", programs=("child",))
+    foreign = program.model_copy(
+        update={"id": "program-p2", "task_key": "foreign", "program_id": "p2"}
+    )
+
+    assert gate.update_equivalent("absent", insight).outcome is WriteOutcome.DISCARDED
+    assert gate.update_equivalent(program.id, insight).outcome is WriteOutcome.DISCARDED
+    assert gate.update_equivalent(program.id, foreign).outcome is WriteOutcome.DISCARDED
 
 
 def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):
@@ -362,6 +288,23 @@ def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.EVICTED
     assert row.incoming_id == bad.id
+
+
+def test_sweep_honors_foreign_task_help_veto(store, make_card, make_event, tmp_path):
+    card = make_card(
+        task_key="current",
+        gain_events=tuple(make_event(0.2, task_key="foreign") for _ in range(3)),
+    )
+    store.save(card)
+    gate = CardAdmissionGate(
+        store=store,
+        evictor=MarkingEvictor({card.id}),
+        task_key="current",
+        min_effective_events=2.0,
+    )
+
+    assert gate.sweep() == []
+    assert store.get(card.id) == card
 
 
 def test_sweep_captures_harm_evicted_card_evidence(
@@ -451,13 +394,16 @@ def test_sweep_tombstones_id_against_readmission(store, make_card, tmp_path):
     # wave it straight back in — the tombstone must be what blocks it.
     harmful.clear()
     result = gate.admit(card.model_copy(update={"description": "re-authored twin"}))
-    assert result.rejected_harm
+    assert result.rejected_retired
     assert store.get(card.id) is None
     rows = read_rows(ledger.path)
     assert [r.outcome for r in rows] == [
         WriteOutcome.EVICTED,
-        WriteOutcome.REJECTED_HARM,
+        WriteOutcome.REJECTED_RETIRED,
     ]
+
+    exact_reauthor = gate.admit(card.model_copy(update={"id": ""}))
+    assert exact_reauthor.outcome is WriteOutcome.REJECTED_RETIRED
 
     fresh = gate.admit(make_card(id=""))
     assert fresh.outcome is WriteOutcome.ADDED
@@ -468,7 +414,7 @@ def test_reject_novelty_records_row_and_does_not_bank(store, make_card, tmp_path
     result = gate.reject_novelty(make_card(id=""), "prior-known staple")
     assert result.outcome is WriteOutcome.REJECTED_NOVELTY
     assert not result.landed
-    assert not result.rejected_harm
+    assert not result.rejected_retired
     assert not result.benign_noop
     assert store.snapshot() == ()
     row = read_rows(ledger.path)[-1]
@@ -481,12 +427,12 @@ def test_write_result_benign_noop_is_discarded_only():
     # Only DISCARDED is safe to re-author as fresh. Every other non-landed
     # verdict is a harm-driven deletion the librarian must drop — EVICTED must
     # never read as a benign no-op or a swept-harmful card resurrects as NEW.
-    landed = {WriteOutcome.ADDED, WriteOutcome.UPDATED, WriteOutcome.MERGED}
+    landed = {WriteOutcome.ADDED, WriteOutcome.UPDATED}
     for outcome in WriteOutcome:
         card_id = "x" if outcome in landed else ""
         result = WriteResult(outcome=outcome, card_id=card_id)
         assert result.benign_noop is (outcome is WriteOutcome.DISCARDED)
-        assert result.rejected_harm is (outcome is WriteOutcome.REJECTED_HARM)
+        assert result.rejected_retired is (outcome is WriteOutcome.REJECTED_RETIRED)
         assert result.landed is (outcome in landed)
     assert not WriteResult(outcome=WriteOutcome.EVICTED).benign_noop
 
@@ -539,7 +485,7 @@ def test_ledger_concurrent_threads_and_processes_write_complete_rows(tmp_path):
     rows = read_rows(path)
     expected_count = (process_count + thread_count) * rows_per_worker
     assert len(rows) == expected_count
-    assert len({row.record_id for row in rows}) == expected_count
+    assert len({row.incoming_id for row in rows}) == expected_count
 
 
 def test_ledger_record_logs_and_swallows_lock_failure(tmp_path, monkeypatch):

@@ -142,6 +142,30 @@ async def test_null_applicability_exposes_the_complete_eligible_bank() -> None:
 
 
 @pytest.mark.asyncio
+async def test_candidate_source_is_same_task_by_default() -> None:
+    cards = (
+        Card(id="local", task_key="task", description="local idea"),
+        Card(id="foreign", task_key="other", description="foreign idea"),
+    )
+
+    default_slate = await _snapshot(
+        WholeBankCandidateSource(store=_Store(cards))  # type: ignore[arg-type]
+    )
+    cross_task_slate = await _snapshot(
+        WholeBankCandidateSource(  # type: ignore[arg-type]
+            store=_Store(cards),
+            allow_cross_task=True,
+        )
+    )
+
+    assert tuple(card.id for card in default_slate.candidates) == ("local",)
+    assert tuple(card.id for card in cross_task_slate.candidates) == (
+        "foreign",
+        "local",
+    )
+
+
+@pytest.mark.asyncio
 async def test_agentic_assessment_labels_a_subset_without_gating_the_bank() -> None:
     cards = _cards(5)
     shortlister = _Shortlister(

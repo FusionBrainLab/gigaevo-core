@@ -362,14 +362,17 @@ class TestBankDigest:
         digest = _bank_digest((high_id, low_id), max_cards=10)
         assert digest.index("low id idea") < digest.index("high id idea")
 
-    def test_keywords_are_not_rendered(self, make_card):
-        card = make_card(description="anneal radius", keywords=("annealing", "radius"))
+    def test_only_description_is_rendered(self, make_card):
+        card = make_card(
+            description="anneal radius",
+            explanation_summary="supporting mechanism",
+        )
         digest = _bank_digest((card,), max_cards=10)
         assert "- anneal radius" in digest.splitlines()
-        assert "kw" not in digest
+        assert "supporting mechanism" not in digest
 
     def test_long_description_ellipsized(self, make_card):
-        card = make_card(description="y" * 205, keywords=("kw1",))
+        card = make_card(description="y" * 205)
         digest = _bank_digest((card,), max_cards=10)
         assert "- " + "y" * 199 + "…" in digest.splitlines()
 

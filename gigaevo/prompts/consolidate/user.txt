@@ -1,9 +1,0 @@
-Decide whether these two near library cards name the SAME generalizable lever. If they do, fold them into one canonical union card; if they prescribe different moves, keep them apart.
-
-## CARD A
-{card_a}
-
-## CARD B
-{card_b}
-
-Return one object matching the structured-output schema: set `merge: true` with the union `card` (following the DECIDE, WHAT-MAKES-A-GOOD-UNION, and RULES contracts in the system prompt) when they are the same lever, or `merge: false` with no card when they are distinct. No prose, no preamble, no fences.

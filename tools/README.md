@@ -208,7 +208,7 @@ Most read/write/plot functionality previously lived as standalone scripts here; 
 | Tool | Purpose | Key flags |
 |---|---|---|
 | `lineage.py` | Trace evolutionary ancestry chain back to seed | `python -m tools.lineage --run`, `--top-n 1`, `--depth N` |
-| `memory_card_health.py` | Read-only structural/attribute integrity snapshot across one or more run dirs. Loads each `<run>/memory/cards.json` and flags `missing_description`, `self_absorbed`, `absorbed_id_still_live`, `cross_absorbed`, and `duplicate_description` (the absorbed-id alias invariants of the dedup/merge path). Use to audit a live memory run for dedup/consolidation invariant violations. | `python tools/memory_card_health.py <run_roots...>`, `--json OUT` |
+| `memory_card_health.py` | Read-only structural/attribute integrity snapshot across one or more run dirs. Loads each `<run>/memory/cards.json` and flags `missing_description`, historical absorbed-id alias violations, and duplicate descriptions. Use it to audit bank integrity and residual semantic duplicates. | `python tools/memory_card_health.py <run_roots...>`, `--json OUT` |
 | `profiler.py` | Throughput profiler — Redis ops, serialization, DAG construction, stage execution (the log → HTML dashboard is the separate `gigaevo profiler` subcommand) | `python -m tools.profiler --redis-url redis://localhost:6379/15` |
 | `resource_manager.py` | Auto-detect available GPU servers and free Redis DBs; assign runs to servers/DBs | `--check`, `--experiment task/name` |
 | `telegram_notify.py` | Send Telegram notifications and wait for async approval at experiment gates | `import` — not a CLI tool |

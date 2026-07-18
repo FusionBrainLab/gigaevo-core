@@ -39,7 +39,7 @@ class CausalV2ContentOnlyUpdater:
         child_ids = {program.id for program in pool} & terminal_child_ids
         for child_id in child_ids:
             self.selection_leases.release_child(child_id)
-        gate.sweep()
+        retired_card_ids = tuple(gate.sweep())
         emit_memory_event(
             MemoryV2WriterSync(
                 evidence_version=snapshot.version,
@@ -48,5 +48,6 @@ class CausalV2ContentOnlyUpdater:
                 pending_count=sum(snapshot.pending_by_treatment.values()),
                 bank_size=len(store.snapshot()),
                 released_child_count=len(child_ids),
+                retired_card_ids=retired_card_ids,
             )
         )

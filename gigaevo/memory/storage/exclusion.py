@@ -22,11 +22,10 @@ def is_card_excluded(card: Card, exclude_ids: frozenset[str]) -> bool:
 def expand_exclude_ids(
     cards: Iterable[Card], exclude_ids: frozenset[str]
 ) -> frozenset[str]:
-    """Expand lineage/bench exclusions through merge aliases.
+    """Expand lineage/bench exclusions through historical aliases.
 
-    A program may have used ``mem-old`` before consolidation merged that card into
-    survivor ``mem-new``. Filtering only the live id would let the same idea
-    re-enter the prompt under the survivor id, so any excluded alias excludes the
+    A program may carry a frozen historical id while the live bank represents
+    that lineage under another id. Any excluded alias therefore excludes the
     survivor and every alias it carries.
     """
     if not exclude_ids:

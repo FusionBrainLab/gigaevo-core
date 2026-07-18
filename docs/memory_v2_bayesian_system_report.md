@@ -4,8 +4,8 @@
 
 Memory v2 achieves the intended first-iteration replacement:
 
-- v1 remains responsible for card content: insight authoring, program exemplars,
-  deduplication, consolidation, storage, lineage exclusion, and leases;
+- the content plane owns outcome-grounded insight authoring, program exemplars,
+  strict online equivalence, storage, lineage exclusion, and leases;
 - v1 reputation, gain restamping, bootstrap bidding, Thompson auction, efficacy
   rendering, and no-card heuristics do not control v2 selection;
 - one replayable hierarchical Bayesian model now owns reward, invalidity risk,
@@ -31,19 +31,22 @@ trustworthy only after randomized treated/control outcomes accumulate.
 
 ![Memory v2 content, decision, and evidence planes](diagrams/memory_v2_architecture.png)
 
-### What is retained from v1
+### Content plane
 
-The content plane keeps the useful and already tested memory machinery:
+The content plane provides the operational card lifecycle:
 
-1. The LLM librarian reads successful parent-child differences and proposes insight
-   cards.
-2. The writer can also preserve strong program exemplars.
-3. Admission reconciles duplicates, updates known cards, and consolidates related
-   cards.
+1. The LLM author reads the parent, child, diff, mutator explanation, signed gain,
+   validity, and archive status, then emits `DROP` or one conditional hypothesis.
+2. Strong programs may produce one holistic strategy hypothesis.
+3. Authored action text retrieves same-kind neighbors; a separate judge accepts
+   only exact action-and-condition equivalence and otherwise admits `NEW`.
 4. The local store persists the active card bank.
 5. Lineage exclusions prevent a child from immediately receiving its ancestors'
    cards again.
-6. Selection leases protect in-flight assignments and consolidation aliases.
+6. Selection leases protect in-flight assignments and historical absorbed aliases.
+
+Equivalence pools provenance and evidence without rewriting the banked treatment.
+There is no union prose, `MERGE` decision, or periodic exhaustive consolidation.
 
 The memory LLM writes cards and performs the pre-selection research pass. Its
 output is a bounded applicability annotation; the causal posterior compares the
@@ -69,11 +72,11 @@ v1 events are descriptive shadow-analysis data and are explicitly marked
 
 ## What a card means statistically
 
-A stored card has two identities:
+A stored card has two relevant identities:
 
-- **bank lineage**: the conceptual card across rewrites and consolidations;
-- **card snapshot**: the exact text block shown to the mutator; its stable card id
-  remains the Bayesian treatment identity.
+- **bank lineage**: the stable card id plus any historical absorbed ids;
+- **card snapshot**: the exact text block shown to the mutator, retained for audit
+  and stale-verdict checks.
 
 The delivered intervention is frozen as:
 
@@ -82,9 +85,10 @@ The delivered intervention is frozen as:
 <payload>
 ```
 
-The treatment id hashes that entire rendered block. Editing one word creates a new
-snapshot. Near-duplicate merges retain the stable treatment id, so randomized
-evidence continues pooling across the card's audited content snapshots.
+The stable bank card id is the treatment id. A content digest audits the exact
+rendered payload, but it is not a second action identity. The write path does not
+rewrite equivalent-card text, so evidence pools only for the treatment that was
+actually banked.
 
 **Plain English:** a card is treated like a medicine label. The family name says
 which medicine it belongs to; the exact formulation says which version was actually
@@ -415,17 +419,49 @@ The outcome taxonomy prevents common attribution errors:
 ## Bank growth and retirement
 
 The v2 configuration does not reject a genuinely new card because the same-task
-bank reached an arbitrary size. Deduplication, near-duplicate consolidation, and
-bounded program exemplars still control redundant content.
+bank reached an arbitrary size. Online authored-action equivalence and bounded
+program exemplars control redundant content; there is no periodic exhaustive
+consolidation.
 
-There is no write-side harm eviction on the v2 path. The wired evictor is
-`NullEvictor`: the admission gate's periodic `sweep` runs each writer increment but
-flags nothing, and `admit`/`merge` never pre-screen a card for harm. Harm control
-is the read-time policy alone — `ChanceConstrainedProbabilityMatchingPolicy` and
-its `SafetyConstraint` (`gate_mode: exclude_confident_incremental_harm`) decline to
-*offer* a confidently-harmful card, so such a card may remain in the bank but is
-never proposed to a mutation. A future harm evictor can return through the shared
-`Evictor` seam as a proper Bayesian mechanism.
+Read-time safety remains the first line of defense. In addition,
+`CausalRetirementEvictor` performs conservative periodic maintenance. A lineage
+is eligible only with randomized treated/control support, evidence from multiple
+discrete `(island, MAP-Elites parent cell)` contexts, and no immediate or lineage
+outcomes pending. Selection calls any positive effect helpful. Retirement uses
+a region-of-practical-equivalence boundary equal to a low quantile of non-zero
+absolute normalized gains in the task's randomized control arm. Using controls
+keeps the scale independent of the treatment effect being judged. This
+self-normalizes to realized evolutionary dynamics rather than configured bound
+width. A context whose feasible positive headroom cannot clear the boundary is
+not allowed to certify uselessness, and at least one assessable context is
+required. An empty non-zero control scale falls back to a zero, harm-only
+boundary.
+
+For every supported context and both unassessed and optimistic-applicable RAG
+states, retirement requires the Wilson upper bound on
+`P(safe and practically useful)` to remain below the configured boundary.
+Optimizer failure, upper hyperparameter contact, excessive residual-scale
+boundary mass, or safety-integration error in either immediate or lineage head
+vetoes deletion and emits a warning. The one-use verdict binds the exact card
+revision and evidence version. The admission gate then checks
+live/historical-alias leases and foreign-task positive evidence before removal.
+Production configuration forbids cross-task delivery while causal retirement
+is enabled because the retirement ledger is not yet identified per source task.
+
+This is sequential posterior monitoring, not a single fixed-sample test. The
+verdict RNG is deterministic per evidence version and the Monte Carlo bound is
+conservative; no alpha spending is currently applied across changed evidence
+versions, so misspecification is the important caveat. "One-use" means a
+verdict cannot be consumed twice, not that a surviving card is never judged
+again.
+
+The causal SQLite ledger and JSON card bank do not share a transaction. There is
+a narrow interval between the final evidence-version read and card deletion in
+which a terminal could commit. Removing that interval requires a common
+transactional store. Censored terminals are omitted from reward/safety fitting
+under a conditionally non-informative-censoring assumption. Cards that stop
+being proposed before minimum treated support fail-keep rather than receiving a
+non-causal staleness verdict.
 
 ## What the smoke run must monitor
 

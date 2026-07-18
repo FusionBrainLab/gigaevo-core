@@ -27,7 +27,6 @@ from gigaevo.memory.storage.local import LocalMemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
 from gigaevo.memory.write.crediting import PairedEffectEstimator, PointEffectEstimator
 from gigaevo.memory.write.eviction import NullEvictor
-from gigaevo.memory.write.merge import merge_cards
 from gigaevo.memory.write.stats import (
     CardStatsStamper,
     CardStatsUpdater,
@@ -852,14 +851,20 @@ def test_restamp_redirects_vanished_card_event_to_merge_survivor(
         nonlocal merged
         if card_id == absorbed.id and not merged:
             merged = True
-            result = store_b.merge_retire(
+            updated = store_b.update(
                 survivor.id,
-                absorbed.id,
-                lambda target, partner: merge_cards(
-                    target, partner, replace_description=False
+                lambda target: target.model_copy(
+                    update={
+                        "absorbed_ids": (*target.absorbed_ids, absorbed.id),
+                        "gain_events": (
+                            *target.gain_events,
+                            *absorbed.gain_events,
+                        ),
+                    }
                 ),
             )
-            assert result.outcome == "merged"
+            assert updated is not None
+            assert store_b.delete(absorbed.id)
         return original_update(card_id, transform)
 
     monkeypatch.setattr(store_a, "update", merge_before_update)

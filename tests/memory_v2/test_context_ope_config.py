@@ -18,12 +18,14 @@ from gigaevo.evolution.strategies.models import (
     BehaviorSpace,
     LinearBinning,
 )
+from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory_v2.candidates import (
     AgenticApplicabilityProvider,
     NullApplicabilityProvider,
     WholeBankCandidateSource,
 )
 from gigaevo.memory_v2.context import MapContextConfig, MapElitesContextSource
+from gigaevo.memory_v2.eviction import CausalRetirementEvictor
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -326,11 +328,16 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.memory.posterior_config.reference_offer_probability == pytest.approx(
             0.70
         )
+        assert cfg.memory.posterior_config.reward_residual_sd_bounds == [0.01, 5.0]
         assert "max_task_cards" not in cfg.memory.writer
         assert cfg.memory.ledger._target_.endswith("SqliteCausalLedger")
         # ``compose`` does not populate HydraConfig's runtime choice table.
         # Production ``@hydra.main`` does, so substitute only the remaining
-        # provenance label before exercising construction here.
+        # runtime-owned paths/provenance before exercising construction here.
+        cfg.log_dir = "/tmp/memory-v2-compose/logs"
+        cfg.disk_metrics_config.root_dir = "/tmp/memory-v2-compose/metrics"
+        cfg.program_storage.config.root_dir = "/tmp/memory-v2-compose/storage"
+        cfg.problem.dir = str(Path(__file__).parents[2] / "problems" / cfg.problem.name)
         cfg.memory.environment.algorithm = "chains_bd3d"
         instantiated_environment = instantiate(cfg.memory.environment)
         assert isinstance(instantiated_environment, EnvironmentFingerprint)
@@ -360,17 +367,52 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         )
 
         evictor_target = cfg.memory.evictor._target_
-        assert evictor_target.endswith("NullEvictor")
-        cfg.memory.evictor._target_ = (
-            "gigaevo.memory.write.eviction.BirthFailureEvictor"
+        assert evictor_target == (
+            f"{CausalRetirementEvictor.__module__}."
+            f"{CausalRetirementEvictor.__qualname__}"
         )
-        with pytest.raises(ValueError, match="NullEvictor"):
+        cfg.memory.evictor._target_ = "gigaevo.memory.write.eviction.NullEvictor"
+        validate_memory_v2_scope(cfg)
+        cfg.memory.evictor._target_ = "not.a.causal.evictor"
+        with pytest.raises(ValueError, match="causal-retirement"):
             validate_memory_v2_scope(cfg)
         cfg.memory.evictor._target_ = evictor_target
+        cfg.memory.candidate_source.allow_cross_task = True
+        with pytest.raises(ValueError, match="allow_cross_task=false"):
+            validate_memory_v2_scope(cfg)
+        cfg.memory.candidate_source.allow_cross_task = False
 
         cfg.memory.feature_config.retrieval_applicability_contrast = False
         with pytest.raises(ValueError, match="retrieval_applicability_contrast"):
             validate_memory_v2_scope(cfg)
+        cfg.memory.feature_config.retrieval_applicability_contrast = True
+
+        instantiated_evictor = instantiate(cfg.memory.evictor)
+        assert isinstance(instantiated_evictor, CausalRetirementEvictor)
+        assert instantiated_evictor.max_viability_probability == pytest.approx(
+            instantiated_evictor.safety.alpha
+        )
+        assert instantiated_evictor.practical_effect_quantile == pytest.approx(0.10)
+        instantiated_evictor.ledger.close()
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_memory_v2_null_retirement_ablation_composes() -> None:
+    config_dir = Path(__file__).parents[2] / "config"
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=heilbron",
+                    "memory=v2",
+                    "memory/evictor=none",
+                ],
+            )
+        validate_memory_v2_scope(cfg)
+        assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
     finally:
         GlobalHydra.instance().clear()
 

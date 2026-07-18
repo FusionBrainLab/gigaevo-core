@@ -152,6 +152,22 @@ def test_rebuild_diff_syncs_stale_and_changed(index, make_card, fake_embedder):
     assert ids == {keep.id}
 
 
+def test_rebuild_refreshes_filter_metadata_without_text_change(index, make_card):
+    original = make_card(task_key="task-a", description="same semantic text")
+    index.rebuild([original])
+
+    changed_task = original.model_copy(update={"task_key": "task-b"})
+    index.rebuild([changed_task])
+
+    assert index.query("description", "same semantic text", 1, task_key="task-a") == []
+    assert [
+        hit.card_id
+        for hit in index.query(
+            "description", "same semantic text", 1, task_key="task-b"
+        )
+    ] == [original.id]
+
+
 def test_upsert_drops_card_from_emptied_scope(index, make_card):
     card = make_card(description="alpha", explanation_summary="beta")
     index.upsert([card])

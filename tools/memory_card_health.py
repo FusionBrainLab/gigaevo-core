@@ -40,7 +40,6 @@ class CardHealth:
     card_id: str
     card_type: str
     missing_description: bool
-    n_keywords: int
     n_programs: int
     n_gain_events: int
     absorbed_ids: tuple[str, ...]
@@ -53,7 +52,6 @@ class RunHealth:
     n_mem: int
     n_program: int
     n_missing_description: int
-    n_zero_keywords: int
     n_with_gain_events: int
     n_with_absorbed: int
     cards: tuple[CardHealth, ...] = field(default_factory=tuple)
@@ -83,7 +81,6 @@ def assess_card(card_id: str, card: Mapping[str, Any]) -> CardHealth:
         card_id=card_id,
         card_type=_card_type(card_id, card),
         missing_description=not (isinstance(desc, str) and desc.strip()),
-        n_keywords=len(_as_seq(card.get("keywords"))),
         n_programs=len(_as_seq(card.get("programs"))),
         n_gain_events=len(_as_seq(card.get("gain_events"))),
         absorbed_ids=tuple(str(a) for a in _as_seq(card.get("absorbed_ids"))),
@@ -127,9 +124,6 @@ def assess_run(run: str, cards: Mapping[str, Mapping[str, Any]]) -> RunHealth:
         n_mem=sum(h.card_type == "mem" for h in healths),
         n_program=sum(h.card_type == "program" for h in healths),
         n_missing_description=sum(h.missing_description for h in healths),
-        n_zero_keywords=sum(
-            h.card_type == "mem" and h.n_keywords == 0 for h in healths
-        ),
         n_with_gain_events=sum(h.n_gain_events > 0 for h in healths),
         n_with_absorbed=sum(bool(h.absorbed_ids) for h in healths),
         cards=healths,
@@ -171,7 +165,6 @@ def _run_to_dict(h: RunHealth) -> dict[str, Any]:
             "n_mem": h.n_mem,
             "n_program": h.n_program,
             "n_missing_description": h.n_missing_description,
-            "n_zero_keywords": h.n_zero_keywords,
             "n_with_gain_events": h.n_with_gain_events,
             "n_with_absorbed": h.n_with_absorbed,
         },
@@ -181,7 +174,6 @@ def _run_to_dict(h: RunHealth) -> dict[str, Any]:
                 "id": c.card_id,
                 "type": c.card_type,
                 "missing_description": c.missing_description,
-                "n_keywords": c.n_keywords,
                 "n_programs": c.n_programs,
                 "n_gain_events": c.n_gain_events,
                 "absorbed_ids": list(c.absorbed_ids),
@@ -205,7 +197,6 @@ def _format_markdown(runs: Sequence[dict[str, Any]]) -> str:
         )
         lines.append(
             f"- attribute adequacy: missing_description={roll['n_missing_description']}, "
-            f"zero_keywords(mem)={roll['n_zero_keywords']}, "
             f"with_gain_events={roll['n_with_gain_events']}, "
             f"with_absorbed_ids={roll['n_with_absorbed']}"
         )

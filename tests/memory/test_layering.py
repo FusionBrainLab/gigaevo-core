@@ -89,7 +89,6 @@ EMBEDDING_PREFIXES = (
 LLM_ALLOWED = {
     "storage/research.py",
     "write/librarian.py",
-    "write/consolidation.py",
     "write/writer.py",
 }
 LLM_PREFIXES = ("gigaevo.llm", "langgraph", "langchain", "langchain_core")
