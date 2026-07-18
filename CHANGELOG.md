@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v2.13.0 (2026-07-18)
+
+### Bug Fixes
+
+- **memory-v2**: Address evolutionary credit review
+  ([`f395807`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f3958072fe211ecabccfb16bb07ddb7e8c873ebc))
+
+### Features
+
+- **engine**: Grace-then-kill on the mutant cap
+  ([#308](https://github.com/KhrulkovV/gigaevo-core-internal/pull/308),
+  [`a72f54b`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/a72f54b8cf7b3e5397a76ff5bfc2cb1108371c79))
+
+- **memory-v2**: Improve evolutionary credit and exploration
+  ([`0af5058`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/0af5058d0eb1f2b40f60786e1d6c48a98d046d5b))
+
+
 ## v2.12.2 (2026-07-18)
 
 ### Bug Fixes
