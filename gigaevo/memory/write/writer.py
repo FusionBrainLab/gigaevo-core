@@ -231,18 +231,18 @@ class LibrarianWriteStack:
         # The store is the neighbor source for authored-action retrieval.
         librarian = Librarian(
             author=create_card_author_agent(
-                self._llm,
-                self._task_description,
-                self._metrics_description,
+                llm=self._llm,
+                task_description=self._task_description,
+                metrics_description=self._metrics_description,
                 prompts_dir=self._prompts_dir,
             ),
             equivalence=create_equivalence_agent(
                 self._llm, self._task_description, prompts_dir=self._prompts_dir
             ),
             program_author=create_program_author_agent(
-                self._llm,
-                self._task_description,
-                self._metrics_description,
+                llm=self._llm,
+                task_description=self._task_description,
+                metrics_description=self._metrics_description,
                 prompts_dir=self._prompts_dir,
             ),
             gate=gate,
