@@ -24,6 +24,7 @@ from gigaevo.programs.metrics.context import (
     MetricsContext,
     MetricSpec,
 )
+from gigaevo.programs.program_state import ProgramState
 
 
 def base_meta(*, base_fitness: float = 0.5) -> dict:
@@ -209,3 +210,37 @@ def test_extract_minimize_direction_flips_founding_sign(metrics_context, make_pr
     (record,) = extractor.extract([child], task_description_summary="s")
     assert record.founding_gain is not None
     assert record.founding_gain.gain == pytest.approx(-0.2)
+
+
+def test_causal_admission_requires_archive_or_positive_gain(
+    metrics_context,
+    make_program,
+) -> None:
+    extractor = ProgramRecordExtractor(
+        task_description="task",
+        fitness_key="fitness",
+        metrics_context=metrics_context,
+        require_archive_or_positive_gain=True,
+    )
+    rejected_without_gain = make_program(parents=["parent"], metadata={})
+    rejected_improvement = make_program(
+        fitness=0.7,
+        parents=["parent-1"],
+        metadata=base_meta(),
+    )
+    archived_regression = make_program(
+        fitness=0.3,
+        parents=["parent-1"],
+        metadata=base_meta(),
+        state=ProgramState.DONE,
+    )
+
+    records = extractor.extract(
+        [rejected_without_gain, rejected_improvement, archived_regression],
+        task_description_summary="summary",
+    )
+
+    assert [record.id for record in records] == [
+        rejected_improvement.id,
+        archived_regression.id,
+    ]

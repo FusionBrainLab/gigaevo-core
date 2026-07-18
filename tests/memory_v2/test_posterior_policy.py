@@ -335,12 +335,12 @@ def test_rag_applicability_changes_only_the_treated_effect_design(
     card = revisions[0]
 
     control_without_rag = space.design(card, evolution_context, False)
-    control_with_rag = space.design(card, evolution_context, False, rag_applicable=True)
+    control_with_rag = space.design(card, evolution_context, False, rag_contrast=0.5)
     treated_without_rag = space.design(card, evolution_context, True)
-    treated_with_rag = space.design(card, evolution_context, True, rag_applicable=True)
+    treated_with_rag = space.design(card, evolution_context, True, rag_contrast=0.5)
 
     assert np.array_equal(control_without_rag, control_with_rag)
-    assert treated_with_rag[space.baseline_dim + space.retrieval_effect_index] == 1.0
+    assert treated_with_rag[space.baseline_dim + space.retrieval_effect_index] == 0.5
     assert treated_without_rag[space.baseline_dim + space.retrieval_effect_index] == 0.0
 
 
@@ -974,6 +974,7 @@ def test_exploration_mixture_gives_every_safe_card_policy_support() -> None:
         finite,
         0.0,
         0.08,
+        {treatment_id: 1.0 / len(treatment_ids) for treatment_id in treatment_ids},
     )
 
     assert all(probability >= 0.001 for probability in proposal.values())

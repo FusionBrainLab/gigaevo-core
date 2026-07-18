@@ -175,9 +175,20 @@ class _AlwaysTreatPolicy:
         candidates: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: EventRNG,
+        assessed_bank_card_ids: frozenset[str] = frozenset(),
         applicable_bank_card_ids: frozenset[str] = frozenset(),
+        pending_by_bank_card: Mapping[str, int] | None = None,
+        lineage_pending_by_bank_card: Mapping[str, int] | None = None,
     ) -> PolicyDecision:
-        del posterior, context, rng, applicable_bank_card_ids
+        del (
+            posterior,
+            context,
+            rng,
+            assessed_bank_card_ids,
+            applicable_bank_card_ids,
+            pending_by_bank_card,
+            lineage_pending_by_bank_card,
+        )
         card = candidates[0]
         rows = tuple(
             CandidateActionProbability(

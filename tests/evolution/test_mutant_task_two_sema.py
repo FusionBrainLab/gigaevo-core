@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
+from gigaevo.evolution.engine.mutation import MutationFailure
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY,
@@ -55,6 +56,7 @@ class _FakeEngine:
         self.memory_attempt_has_decision: bool | None = None
         self.memory_failures: list[dict] = []
         self.memory_child_links: list[dict] = []
+        self.memory_topology_failures: list[dict] = []
 
         self.metrics = type("M", (), {})()
         self.metrics.iteration = 0
@@ -94,6 +96,9 @@ class _FakeEngine:
     def _link_memory_attempt_child(self, **payload) -> None:
         self.memory_child_links.append(payload)
 
+    def _record_memory_topology_failure(self, child_id: str, **payload) -> None:
+        self.memory_topology_failures.append({"child_id": child_id, **payload})
+
 
 async def _hold_producer_slot(engine: _FakeEngine) -> None:
     """Mirror the dispatcher contract: caller holds one producer slot."""
@@ -105,7 +110,8 @@ async def test_success_path_transfers_buffer_and_ticket(monkeypatch) -> None:
     engine = _FakeEngine(_make_parent(), max_in_flight=3)
     await _hold_producer_slot(engine)
 
-    async def fake_gen(**_k):
+    async def fake_gen(*, parents, child_observer, **_kwargs):
+        child_observer("new-id-1", parents[0].id, "main")
         return "new-id-1"
 
     monkeypatch.setattr(
@@ -155,7 +161,8 @@ async def test_gate_skipped_memory_decision_mutates_without_stale_selection(
         )
         assert refreshed.get_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY) == ""
         assert refreshed.get_metadata(MUTATION_MEMORY_ASSIGNMENT_METADATA_KEY) is None
-        assert child_observer is None
+        assert child_observer is not None
+        child_observer("memory-free-child", refreshed.id, "main")
         return "memory-free-child"
 
     monkeypatch.setattr(
@@ -167,8 +174,50 @@ async def test_gate_skipped_memory_decision_mutates_without_stale_selection(
     assert result == "memory-free-child"
     assert "memory-free-child" in engine._in_flight
     assert engine.metrics.mutations_created == 1
-    assert engine.memory_child_links == []
+    assert engine.memory_child_links == [
+        {
+            "attempt_id": engine.memory_child_links[0]["attempt_id"],
+            "child_id": "memory-free-child",
+            "parent_id": parent.id,
+            "island_id": "main",
+            "completion_ordinal": 0,
+        }
+    ]
     assert engine._selection_leases.attempts_for_parent(parent.id) == ()
+
+
+@pytest.mark.asyncio
+async def test_memory_free_persistence_failure_closes_topology(monkeypatch) -> None:
+    parent = _make_parent()
+    engine = _FakeEngine(parent, max_in_flight=2)
+    engine.memory_attempt_has_decision = False
+    await _hold_producer_slot(engine)
+
+    async def fake_gen(
+        *,
+        child_observer,
+        failure_observer,
+        **_kwargs,
+    ):
+        child_observer("unpersisted-child", parent.id, "main")
+        failure_observer(
+            MutationFailure(status="censored", stage="mutation_persistence")
+        )
+        return None
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation",
+        fake_gen,
+    )
+
+    assert await run_one_mutant(engine, task_id=235) is None
+    assert engine.memory_topology_failures == [
+        {
+            "child_id": "unpersisted-child",
+            "status": "censored",
+            "failure_stage": "mutation_persistence",
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from gigaevo.memory.cards import ContextualGain
 from gigaevo.memory.write.stats import founding_gain_event
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
+from gigaevo.programs.program_state import ProgramState
 
 
 class Improvement(BaseModel):
@@ -182,12 +183,14 @@ class ProgramRecordExtractor:
         task_key: str = "",
         fitness_key: str,
         metrics_context: MetricsContext,
+        require_archive_or_positive_gain: bool = False,
     ) -> None:
         self._task_description = task_description
         self._task_key = task_key
         self._fitness_key = fitness_key
         self._metrics_context = metrics_context
         self._higher_is_better = metrics_context.is_higher_better(fitness_key)
+        self._require_archive_or_positive_gain = require_archive_or_positive_gain
         self._seen_ids: set[str] = set()
 
     @property
@@ -209,7 +212,7 @@ class ProgramRecordExtractor:
         pool the librarian loses the parent code its diff reconciliation needs
         and silently degrades to ungrounded authoring mid-run.
         """
-        eligible: list[Program] = []
+        eligible: list[tuple[Program, ContextualGain | None]] = []
         for prog in programs:
             if not prog.lineage.parents:
                 continue
@@ -220,28 +223,35 @@ class ProgramRecordExtractor:
                 continue
             if prog.id in self._seen_ids:
                 continue
-            eligible.append(prog)
+            founding_gain = founding_gain_event(
+                prog,
+                fitness_key=self._fitness_key,
+                higher_is_better=self._higher_is_better,
+                metrics_context=self._metrics_context,
+                task_key=self._task_key,
+            )
+            if (
+                self._require_archive_or_positive_gain
+                and prog.state is not ProgramState.DONE
+                and (founding_gain is None or founding_gain.gain <= 0.0)
+            ):
+                continue
+            eligible.append((prog, founding_gain))
 
         code_pool = programs if posterior_programs is None else posterior_programs
         parent_codes: dict[str, str] = {p.id: p.code for p in code_pool if p.code}
         records = [
             program_to_record(
-                p,
+                program,
                 self._task_description,
                 task_description_summary,
                 self._fitness_key,
                 parent_codes=parent_codes,
-                founding_gain=founding_gain_event(
-                    p,
-                    fitness_key=self._fitness_key,
-                    higher_is_better=self._higher_is_better,
-                    metrics_context=self._metrics_context,
-                    task_key=self._task_key,
-                ),
+                founding_gain=founding_gain,
             )
-            for p in eligible
+            for program, founding_gain in eligible
         ]
-        self._seen_ids.update(p.id for p in eligible)
+        self._seen_ids.update(program.id for program, _ in eligible)
         return records
 
     def forget(self, ids: set[str]) -> None:

@@ -24,6 +24,7 @@ from gigaevo.memory_v2.models import (
     EnvironmentFingerprint,
     EvolutionContext,
     PolicySpecification,
+    RagApplicability,
     SafetyGateMode,
     TerminalOutcome,
     canonical_digest,
@@ -113,8 +114,8 @@ class CalibrationDecision:
             None,
         )
 
-    def is_rag_applicable(self, bank_card_id: str) -> bool:
-        return bank_card_id in self.applicability.applicable_bank_card_ids
+    def rag_applicability(self, bank_card_id: str) -> RagApplicability:
+        return self.applicability.label(bank_card_id)
 
 
 @dataclass(frozen=True)
@@ -342,7 +343,7 @@ def load_calibration_trajectory(path: str | Path) -> CalibrationTrajectory:
                 event_ordinal=decision.event_ordinal,
                 card=card,
                 context=decision.context,
-                rag_applicable=decision.is_rag_applicable(card.bank_card_id),
+                rag_applicability=decision.rag_applicability(card.bank_card_id),
                 treatment=decision.delivered,
                 offer_propensity=offer_probability,
                 proposal_propensity=proposal_probability,
@@ -414,7 +415,7 @@ def _prepare_units(
                         row.card,
                         row.context,
                         row.treatment,
-                        rag_applicable=row.rag_applicable,
+                        rag_contrast=row.rag_applicability.contrast,
                     )
                     for row in history
                 ],
@@ -434,19 +435,17 @@ def _prepare_units(
                             card,
                             decision.context,
                             False,
-                            rag_applicable=(
+                            rag_contrast=decision.rag_applicability(
                                 card.bank_card_id
-                                in decision.applicability.applicable_bank_card_ids
-                            ),
+                            ).contrast,
                         ),
                         treated_design=space.design(
                             card,
                             decision.context,
                             True,
-                            rag_applicable=(
+                            rag_contrast=decision.rag_applicability(
                                 card.bank_card_id
-                                in decision.applicability.applicable_bank_card_ids
-                            ),
+                            ).contrast,
                         ),
                     )
                 )

@@ -9,12 +9,14 @@ import pytest
 from gigaevo.evolution.engine.core import EvolutionEngine
 from gigaevo.evolution.engine.dispatcher import dispatcher_loop
 from gigaevo.evolution.engine.ingestor import _ingest_batch
-from gigaevo.exceptions import MemoryStorageError
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
 
 class _MissingDecisionLifecycleSink:
+    def __init__(self) -> None:
+        self.edges: list[dict] = []
+
     def has_attempt_decision(self, _attempt_id: str) -> bool:
         return False
 
@@ -33,17 +35,40 @@ class _MissingDecisionLifecycleSink:
     def pending_child_ids(self) -> tuple[str, ...]:
         return ()
 
+    def record_mutation_edge(self, **payload) -> None:
+        self.edges.append(payload)
 
-def test_child_link_requires_a_durable_decision() -> None:
+    def record_mutation_outcome(self, _event) -> None:
+        return None
+
+    def record_archive_disposition(self, _child_id, *, accepted: bool) -> None:
+        del accepted
+
+    def pending_archive_child_ids(self) -> tuple[str, ...]:
+        return ()
+
+
+def test_memory_free_child_records_topology_without_a_decision_link() -> None:
     engine = EvolutionEngine.__new__(EvolutionEngine)
-    engine._memory_outcome_sink = _MissingDecisionLifecycleSink()
+    sink = _MissingDecisionLifecycleSink()
+    engine._memory_outcome_sink = sink
 
-    with pytest.raises(MemoryStorageError, match="has no durable decision"):
-        engine._link_memory_attempt_child(
-            attempt_id="attempt-without-decision",
-            child_id="child-id",
-            completion_ordinal=7,
-        )
+    engine._link_memory_attempt_child(
+        attempt_id="attempt-without-decision",
+        child_id="child-id",
+        parent_id="parent-id",
+        island_id="main",
+        completion_ordinal=7,
+    )
+
+    assert sink.edges == [
+        {
+            "parent_id": "parent-id",
+            "child_id": "child-id",
+            "island_id": "main",
+            "completion_ordinal": 7,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -99,6 +124,7 @@ async def test_outcome_sink_failure_retains_done_child_for_retry() -> None:
             causal_outcome_max_consecutive_failures=3,
         ),
         _record_memory_outcome=outcome,
+        _record_memory_archive_disposition=Mock(),
         _notify_hook=AsyncMock(),
     )
 

@@ -36,7 +36,7 @@ evictor:
   posterior: ${ref:memory.posterior}
   safety: ${ref:memory.safety}
   min_treated: 2
-  min_control: 2
+  min_global_control: 2
   min_distinct_contexts: 2
   posterior_samples: 4096
   max_viability_probability: 0.05
@@ -62,9 +62,9 @@ map_context_config:
 
 credit:
   _target_: gigaevo.memory_v2.models.LineageCreditConfig
-  # Depth 1 is the original immediate-child endpoint. Larger depths use one
-  # best-descendant outcome per randomized decision after a fixed number of
-  # mutation opportunities in the root's pre-treatment MAP-Elites island.
+  # D1 trains immediate utility. At larger depths, only the non-negative,
+  # archive-accepted best-descendant lift trains the separate lineage head,
+  # after a fixed number of same-island mutation opportunities.
   lineage_depth: 3
   opportunity_budget: 32
 
@@ -213,6 +213,9 @@ writer:
   metrics_context: ${ref:problem_context::metrics_context}
   stats_updater: ${ref:memory.causal_writer_updater}
   task_description: ${ref:problem_context::task_description}
+  # Do not turn every rejected mutation into a selectable action. Rejected
+  # programs enter only when their proximal gain is genuinely positive.
+  require_archive_or_positive_gain: true
   best_programs_percent: 5.0
   ingest_call_timeout_s: 300.0
   consolidation_every_n: 32

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import numpy as np
@@ -42,6 +43,20 @@ if TYPE_CHECKING:
 OutcomeEmission = Literal["emitted", "duplicate", "updated", "not_applicable"]
 
 
+@dataclass(frozen=True)
+class MutationTopologyOutcome:
+    """Terminal mutation result independent of whether memory made a decision."""
+
+    child_id: str
+    status: Literal["outcome", "invalid", "censored"]
+    fitness_delta: float | None
+    fitness_delta_se: float | None
+    n_pairs: int | None
+    measurement_kind: Literal["scalar", "paired", "deterministic"]
+    pairing_signature: str
+    failure_stage: str
+
+
 class MemoryOutcomeSink(Protocol):
     """Durable terminal sink injected into the evolution engine."""
 
@@ -79,6 +94,21 @@ class MemoryAttemptLifecycleSink(Protocol):
     def reconcile_unlinked_attempts(self, *, completion_ordinal: int) -> int: ...
 
     def pending_child_ids(self) -> tuple[str, ...]: ...
+
+    def record_mutation_edge(
+        self,
+        *,
+        parent_id: str,
+        child_id: str,
+        island_id: str,
+        completion_ordinal: int,
+    ) -> None: ...
+
+    def record_mutation_outcome(self, event: MutationTopologyOutcome) -> None: ...
+
+    def record_archive_disposition(self, child_id: str, *, accepted: bool) -> None: ...
+
+    def pending_archive_child_ids(self) -> tuple[str, ...]: ...
 
 
 class NullMemoryOutcomeSink:
@@ -383,9 +413,40 @@ async def record_program_memory_outcome(
             f"{program.id!r}"
         )
 
+    sink = outcome_sink if outcome_sink is not None else NullMemoryOutcomeSink()
+    topology_recorded = False
+    if isinstance(sink, MemoryAttemptLifecycleSink):
+        raw_base_metrics = program.get_metadata(
+            MUTATION_MEMORY_BASE_METRICS_METADATA_KEY
+        )
+        raw_base_id = program.get_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY)
+        topology_payload = _outcome_payload(
+            program,
+            metrics_context,
+            decision_id="topology",
+            base_id=raw_base_id if isinstance(raw_base_id, str) else "",
+            base_metrics=(
+                dict(raw_base_metrics) if isinstance(raw_base_metrics, dict) else {}
+            ),
+            ope_eligible=False,
+        )
+        sink.record_mutation_outcome(
+            MutationTopologyOutcome(
+                child_id=program.id,
+                status=topology_payload["status"],
+                fitness_delta=topology_payload["fitness_delta"],
+                fitness_delta_se=topology_payload["fitness_delta_se"],
+                n_pairs=topology_payload["n_pairs"],
+                measurement_kind=topology_payload["measurement_kind"],
+                pairing_signature=topology_payload["pairing_signature"],
+                failure_stage=topology_payload["failure_stage"],
+            )
+        )
+        topology_recorded = True
+
     sources = _decision_sources(program)
     if not sources:
-        return "not_applicable"
+        return "emitted" if topology_recorded else "not_applicable"
 
     # A child born from >1 randomized-probe decision cannot be attributed to any
     # single probe arm: its one outcome would enter multiple estimator arms. Mark
@@ -434,7 +495,6 @@ async def record_program_memory_outcome(
         )
         for payload in new_terminals
     )
-    sink = outcome_sink if outcome_sink is not None else NullMemoryOutcomeSink()
     for event in terminal_events:
         # The causal sink is the source of truth and must succeed before the
         # program claims the at-most-once marker. SQLite inserts are idempotent.

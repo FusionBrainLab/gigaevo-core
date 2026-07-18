@@ -19,9 +19,10 @@ from gigaevo.memory_v2.models import (
     CausalObservation,
     EvolutionContext,
     PosteriorPrediction,
+    RagApplicability,
     RewardDefinition,
     canonical_digest,
-    validate_reward_observations,
+    validate_lineage_observations,
 )
 
 _SAFETY_INTEGRATION_LIMIT = 10.0
@@ -887,6 +888,7 @@ class FittedTerminalUtilityPosterior:
         *,
         space: FeatureSpace,
         reward: GaussianPosterior,
+        lineage_reward: GaussianPosterior,
         safety: LogisticPosterior,
         model_config_hash: str,
         evidence_count: int,
@@ -898,6 +900,7 @@ class FittedTerminalUtilityPosterior:
     ) -> None:
         self.space = space
         self.reward = reward
+        self.lineage_reward = lineage_reward
         self.safety = safety
         self.model_config_hash = model_config_hash
         self.evidence_count = evidence_count
@@ -913,7 +916,7 @@ class FittedTerminalUtilityPosterior:
         card: CardSnapshot,
         context: EvolutionContext,
         *,
-        rag_applicable: bool = False,
+        rag_applicability: RagApplicability = RagApplicability.UNASSESSED,
     ) -> tuple[np.ndarray, np.ndarray]:
         if (
             self.reward_definition is not None
@@ -932,13 +935,13 @@ class FittedTerminalUtilityPosterior:
                 card,
                 context,
                 False,
-                rag_applicable=rag_applicable,
+                rag_contrast=rag_applicability.contrast,
             ),
             self.space.design(
                 card,
                 context,
                 True,
-                rag_applicable=rag_applicable,
+                rag_contrast=rag_applicability.contrast,
             ),
         )
 
@@ -958,6 +961,7 @@ class FittedTerminalUtilityPosterior:
         rng: np.random.Generator,
         *,
         samples: int,
+        assessed_bank_card_ids: frozenset[str] = frozenset(),
         applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> np.ndarray:
         """Draw shared posterior worlds as a samples-by-cards effect matrix."""
@@ -966,20 +970,37 @@ class FittedTerminalUtilityPosterior:
             raise ValueError("samples must be positive")
         if not cards:
             return np.empty((samples, 0), dtype=float)
+        if not applicable_bank_card_ids <= assessed_bank_card_ids:
+            raise ValueError("applicable cards must belong to the assessed universe")
         reward_draws, _ = self.reward.sample_many(rng, samples)
+        lineage_draws, _ = self.lineage_reward.sample_many(rng, samples)
         safety_draws = self._draws(self.safety.mean, self._safety_factor, rng, samples)
         reward_designs = [
             self._arm_designs(
                 card,
                 context,
-                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
+                rag_applicability=(
+                    RagApplicability.APPLICABLE
+                    if card.bank_card_id in applicable_bank_card_ids
+                    else RagApplicability.NOT_APPLICABLE
+                    if card.bank_card_id in assessed_bank_card_ids
+                    else RagApplicability.UNASSESSED
+                ),
             )
             for card in cards
         ]
         reward_design0 = np.stack([row[0] for row in reward_designs])
         reward_design1 = np.stack([row[1] for row in reward_designs])
-        valid0 = _latent_to_gain(reward_draws @ reward_design0.T, context)
-        valid1 = _latent_to_gain(reward_draws @ reward_design1.T, context)
+        direct0 = reward_draws @ reward_design0.T
+        direct1 = reward_draws @ reward_design1.T
+        if self.lineage_reward.observations:
+            option0 = np.maximum(lineage_draws @ reward_design0.T, 0.0)
+            option1 = np.maximum(lineage_draws @ reward_design1.T, 0.0)
+        else:
+            option0 = np.zeros_like(direct0)
+            option1 = np.zeros_like(direct1)
+        valid0 = _latent_to_gain(direct0 + option0, context)
+        valid1 = _latent_to_gain(direct1 + option1, context)
         p0 = expit(safety_draws @ reward_design0.T)
         p1 = expit(safety_draws @ reward_design1.T)
         lower, _ = _normalized_gain_bounds(context)
@@ -997,13 +1018,19 @@ class FittedTerminalUtilityPosterior:
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
+        assessed_bank_card_ids: frozenset[str] = frozenset(),
         applicable_bank_card_ids: frozenset[str] = frozenset(),
     ) -> dict[str, PosteriorPrediction]:
         """Summarize every candidate using one coherent set of posterior worlds."""
 
         if samples < 64:
             raise ValueError("posterior summaries require at least 64 samples")
+        if not applicable_bank_card_ids <= assessed_bank_card_ids:
+            raise ValueError("applicable cards must belong to the assessed universe")
         reward_draws, reward_residual_sds = self.reward.sample_many(rng, samples)
+        lineage_draws, lineage_residual_sds = self.lineage_reward.sample_many(
+            rng, samples
+        )
         safety_draws = self._draws(self.safety.mean, self._safety_factor, rng, samples)
         return {
             card.treatment_id: self._prediction_from_draws(
@@ -1011,8 +1038,16 @@ class FittedTerminalUtilityPosterior:
                 context,
                 reward_draws,
                 reward_residual_sds,
+                lineage_draws,
+                lineage_residual_sds,
                 safety_draws,
-                rag_applicable=card.bank_card_id in applicable_bank_card_ids,
+                rag_applicability=(
+                    RagApplicability.APPLICABLE
+                    if card.bank_card_id in applicable_bank_card_ids
+                    else RagApplicability.NOT_APPLICABLE
+                    if card.bank_card_id in assessed_bank_card_ids
+                    else RagApplicability.UNASSESSED
+                ),
                 max_treated_invalid_probability=max_treated_invalid_probability,
                 max_incremental_invalid_probability=(
                     max_incremental_invalid_probability
@@ -1032,7 +1067,7 @@ class FittedTerminalUtilityPosterior:
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
-        rag_applicable: bool = False,
+        rag_applicability: RagApplicability = RagApplicability.UNASSESSED,
     ) -> PosteriorPrediction:
         return self.predictions(
             (card,),
@@ -1042,8 +1077,15 @@ class FittedTerminalUtilityPosterior:
             max_treated_invalid_probability=max_treated_invalid_probability,
             max_incremental_invalid_probability=max_incremental_invalid_probability,
             safety_alpha=safety_alpha,
+            assessed_bank_card_ids=(
+                frozenset({card.bank_card_id})
+                if rag_applicability is not RagApplicability.UNASSESSED
+                else frozenset()
+            ),
             applicable_bank_card_ids=(
-                frozenset({card.bank_card_id}) if rag_applicable else frozenset()
+                frozenset({card.bank_card_id})
+                if rag_applicability is RagApplicability.APPLICABLE
+                else frozenset()
             ),
         )[card.treatment_id]
 
@@ -1053,9 +1095,11 @@ class FittedTerminalUtilityPosterior:
         context: EvolutionContext,
         reward_draws: np.ndarray,
         reward_residual_sds: np.ndarray,
+        lineage_draws: np.ndarray,
+        lineage_residual_sds: np.ndarray,
         safety_draws: np.ndarray,
         *,
-        rag_applicable: bool,
+        rag_applicability: RagApplicability,
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
@@ -1063,12 +1107,18 @@ class FittedTerminalUtilityPosterior:
         x0, x1 = self._arm_designs(
             card,
             context,
-            rag_applicable=rag_applicable,
+            rag_applicability=rag_applicability,
         )
-        latent0 = reward_draws @ x0
-        latent1 = reward_draws @ x1
-        valid0 = _latent_to_gain(latent0, context)
-        valid1 = _latent_to_gain(latent1, context)
+        direct0 = reward_draws @ x0
+        direct1 = reward_draws @ x1
+        if self.lineage_reward.observations:
+            option0 = np.maximum(lineage_draws @ x0, 0.0)
+            option1 = np.maximum(lineage_draws @ x1, 0.0)
+        else:
+            option0 = np.zeros_like(direct0)
+            option1 = np.zeros_like(direct1)
+        valid0 = _latent_to_gain(direct0 + option0, context)
+        valid1 = _latent_to_gain(direct1 + option1, context)
         p0 = expit(safety_draws @ x0)
         p1 = expit(safety_draws @ x1)
         lower, _ = _normalized_gain_bounds(context)
@@ -1113,7 +1163,10 @@ class FittedTerminalUtilityPosterior:
             incremental_invalid_upper = 1.0
             probability_safe = 0.0
             safety_integration_error = 1.0
-        within_world_variance = (1.0 - p1) * reward_residual_sds**2 + p1 * (
+        valid_residual_variance = reward_residual_sds**2
+        if self.lineage_reward.observations:
+            valid_residual_variance = valid_residual_variance + lineage_residual_sds**2
+        within_world_variance = (1.0 - p1) * valid_residual_variance + p1 * (
             1.0 - p1
         ) * (valid1 - lower) ** 2
         predictive_variance = max(
@@ -1142,7 +1195,7 @@ class FittedTerminalUtilityPosterior:
 class HierarchicalTerminalUtilityPosterior:
     """Fit a bounded valid-gain/invalidity hurdle posterior."""
 
-    MODEL_NAME = "hierarchical-hurdle-terminal-utility"
+    MODEL_NAME = "hierarchical-direct-plus-lineage-utility"
 
     def __init__(
         self,
@@ -1168,20 +1221,12 @@ class HierarchicalTerminalUtilityPosterior:
         observations: Sequence[CausalObservation],
         candidates: Sequence[CardSnapshot],
         *,
-        reward_observations: Sequence[CausalObservation] | None = None,
+        lineage_observations: Sequence[CausalObservation] = (),
     ) -> FittedTerminalUtilityPosterior:
         rows = tuple(observations)
-        if reward_observations is None:
-            if any(row.context.reward.lineage_depth > 1 for row in rows):
-                raise ValueError(
-                    "depth-greater-than-one reward fitting requires explicit "
-                    "matured lineage observations"
-                )
-            reward_rows = rows
-        else:
-            reward_rows = tuple(reward_observations)
-        validate_reward_observations(rows, reward_rows)
-        reward_definitions = {row.context.reward for row in (*rows, *reward_rows)}
+        lineage_rows = tuple(lineage_observations)
+        validate_lineage_observations(rows, lineage_rows)
+        reward_definitions = {row.context.reward for row in (*rows, *lineage_rows)}
         if len(reward_definitions) > 1:
             raise ValueError("posterior evidence mixes reward definitions")
         semantic_schema_hashes = {
@@ -1210,7 +1255,7 @@ class HierarchicalTerminalUtilityPosterior:
         all_cards = tuple(
             (
                 *(observation.card for observation in rows),
-                *(observation.card for observation in reward_rows),
+                *(observation.card for observation in lineage_rows),
                 *candidates,
             )
         )
@@ -1221,7 +1266,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.card,
                     row.context,
                     row.treatment,
-                    rag_applicable=row.rag_applicable,
+                    rag_contrast=row.rag_applicability.contrast,
                 )
                 for row in rows
             ],
@@ -1245,14 +1290,14 @@ class HierarchicalTerminalUtilityPosterior:
             safety_prior_variance,
         )
 
-        valid_rows = tuple(row for row in reward_rows if not row.invalid)
+        valid_rows = tuple(row for row in rows if not row.invalid)
         reward_design = self._matrix(
             [
                 space.design(
                     row.card,
                     row.context,
                     row.treatment,
-                    rag_applicable=row.rag_applicable,
+                    rag_contrast=row.rag_applicability.contrast,
                 )
                 for row in valid_rows
             ],
@@ -1279,6 +1324,37 @@ class HierarchicalTerminalUtilityPosterior:
             measurement_sd_array,
             space,
         )
+        lineage_design = self._matrix(
+            [
+                space.design(
+                    row.card,
+                    row.context,
+                    row.treatment,
+                    rag_contrast=row.rag_applicability.contrast,
+                )
+                for row in lineage_rows
+            ],
+            space.outcome_dim,
+        )
+        lineage_values: list[float] = []
+        lineage_measurement_sd: list[float] = []
+        for row in lineage_rows:
+            if row.measurement is None:
+                raise ValueError("lineage residual row lacks a measurement")
+            normalized_value = row.measurement.value / row.context.reward.scale
+            normalized_se = (
+                self.config.unknown_measurement_sd
+                if row.measurement.se is None
+                else row.measurement.se / row.context.reward.scale
+            )
+            lineage_values.append(normalized_value)
+            lineage_measurement_sd.append(normalized_se)
+        lineage_reward = self.reward_regressor.fit(
+            lineage_design,
+            np.asarray(lineage_values, dtype=float),
+            np.asarray(lineage_measurement_sd, dtype=float),
+            space,
+        )
         propensity_sum: dict[str, float] = {}
         propensity_count: dict[str, int] = {}
         for row in rows:
@@ -1290,6 +1366,7 @@ class HierarchicalTerminalUtilityPosterior:
         return FittedTerminalUtilityPosterior(
             space=space,
             reward=reward,
+            lineage_reward=lineage_reward,
             safety=safety,
             model_config_hash=self.model_config_hash,
             evidence_count=len(rows),

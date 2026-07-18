@@ -16,12 +16,15 @@ import uuid
 from loguru import logger
 
 from gigaevo.memory.events import MemoryOutcome
+from gigaevo.memory.outcomes import MutationTopologyOutcome
 from gigaevo.memory_v2.credit import LineageCreditResolver
 from gigaevo.memory_v2.models import (
+    ArchiveDisposition,
     CausalObservation,
     DecisionRecord,
     EnvironmentFingerprint,
     EvidenceSnapshot,
+    MutationEdge,
     OutcomeMeasurement,
     TerminalOutcome,
     canonical_digest,
@@ -209,6 +212,193 @@ class SqliteCausalLedger:
         self._sync_mirror()
         return ordinal
 
+    def record_mutation_edge(
+        self,
+        *,
+        parent_id: str,
+        child_id: str,
+        island_id: str,
+        completion_ordinal: int,
+    ) -> None:
+        """Persist every mutation edge, including memory-free mutations."""
+
+        edge = MutationEdge(
+            parent_id=parent_id,
+            child_id=child_id,
+            island_id=island_id,
+            completion_ordinal=completion_ordinal,
+        )
+        payload = (
+            edge.parent_id,
+            edge.child_id,
+            edge.island_id,
+            edge.completion_ordinal,
+        )
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT parent_id, child_id, island_id, completion_ordinal
+                FROM mutation_edges WHERE child_id = ?
+                """,
+                (child_id,),
+            ).fetchone()
+            if existing is not None and tuple(existing) != payload:
+                raise CausalLedgerConflict(
+                    f"conflicting mutation edge for child {child_id!r}"
+                )
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO mutation_edges(
+                        parent_id, child_id, island_id, completion_ordinal,
+                        status, archive_disposition
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        *payload,
+                        edge.status,
+                        edge.archive_disposition,
+                    ),
+                )
+            connection.commit()
+        self._sync_mirror()
+
+    def _record_mutation_terminal(
+        self,
+        *,
+        child_id: str,
+        status: Literal["outcome", "invalid", "censored"],
+        measurement: OutcomeMeasurement | None,
+        failure_stage: str = "",
+    ) -> None:
+        archive = (
+            ArchiveDisposition.PENDING
+            if status == "outcome"
+            else ArchiveDisposition.REJECTED
+        )
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT parent_id, island_id, completion_ordinal, status,
+                       measurement_json, archive_disposition, failure_stage
+                FROM mutation_edges WHERE child_id = ?
+                """,
+                (child_id,),
+            ).fetchone()
+            if row is None:
+                raise CausalLedgerConflict(
+                    f"mutation terminal precedes edge for child {child_id!r}"
+                )
+            measurement_json = (
+                measurement.model_dump_json(exclude_computed_fields=True)
+                if measurement is not None
+                else None
+            )
+            expected = MutationEdge(
+                parent_id=row[0],
+                child_id=child_id,
+                island_id=row[1],
+                completion_ordinal=row[2],
+                status=status,
+                measurement=measurement,
+                archive_disposition=archive,
+                failure_stage=failure_stage,
+            )
+            if row[3] != "pending":
+                existing = self._load_mutation_edge(
+                    parent_id=row[0],
+                    child_id=child_id,
+                    island_id=row[1],
+                    completion_ordinal=row[2],
+                    status=row[3],
+                    measurement_json=row[4],
+                    archive_disposition=row[5],
+                    failure_stage=row[6],
+                )
+                if (
+                    existing.status != expected.status
+                    or existing.measurement != expected.measurement
+                    or existing.failure_stage != expected.failure_stage
+                ):
+                    raise CausalLedgerConflict(
+                        f"conflicting mutation terminal for child {child_id!r}"
+                    )
+            else:
+                connection.execute(
+                    """
+                    UPDATE mutation_edges
+                    SET status = ?, measurement_json = ?,
+                        archive_disposition = ?, failure_stage = ?
+                    WHERE child_id = ?
+                    """,
+                    (
+                        status,
+                        measurement_json,
+                        archive,
+                        failure_stage,
+                        child_id,
+                    ),
+                )
+            connection.commit()
+        self._sync_mirror()
+
+    def record_mutation_outcome(self, event: MutationTopologyOutcome) -> None:
+        measurement = None
+        if event.status == "outcome":
+            if event.fitness_delta is None:
+                raise ValueError("valid mutation topology outcome lacks a gain")
+            measurement = OutcomeMeasurement(
+                value=event.fitness_delta,
+                se=event.fitness_delta_se,
+                n_pairs=event.n_pairs,
+                kind=event.measurement_kind,
+                pairing_signature=event.pairing_signature,
+            )
+        self._record_mutation_terminal(
+            child_id=event.child_id,
+            status=event.status,
+            measurement=measurement,
+            failure_stage=event.failure_stage,
+        )
+
+    def record_archive_disposition(
+        self,
+        child_id: str,
+        *,
+        accepted: bool,
+    ) -> None:
+        disposition = (
+            ArchiveDisposition.ACCEPTED if accepted else ArchiveDisposition.REJECTED
+        )
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status, archive_disposition FROM mutation_edges "
+                "WHERE child_id = ?",
+                (child_id,),
+            ).fetchone()
+            if row is None:
+                raise CausalLedgerConflict(
+                    f"archive result precedes mutation edge for child {child_id!r}"
+                )
+            if row[0] == "pending":
+                raise CausalLedgerConflict(
+                    f"archive result precedes terminal for child {child_id!r}"
+                )
+            current = ArchiveDisposition(row[1])
+            if current is not ArchiveDisposition.PENDING and current is not disposition:
+                raise CausalLedgerConflict(
+                    f"conflicting archive result for child {child_id!r}"
+                )
+            connection.execute(
+                "UPDATE mutation_edges SET archive_disposition = ? WHERE child_id = ?",
+                (disposition, child_id),
+            )
+            connection.commit()
+        self._sync_mirror()
+
     def record_decision(self, record: DecisionRecord) -> None:
         if record.context.environment != self.environment:
             raise ValueError("decision environment does not match its causal ledger")
@@ -280,6 +470,19 @@ class SqliteCausalLedger:
                 return False
             decision_id, record_json, record_hash = row
             record = self._load_decision(record_json, record_hash)
+            edge = connection.execute(
+                "SELECT parent_id, completion_ordinal FROM mutation_edges "
+                "WHERE child_id = ?",
+                (child_id,),
+            ).fetchone()
+            if edge is None:
+                raise CausalLedgerConflict(
+                    f"decision child {child_id!r} lacks a mutation edge"
+                )
+            if tuple(edge) != (record.context.parent_id, completion_ordinal):
+                raise CausalLedgerConflict(
+                    f"decision child {child_id!r} conflicts with mutation topology"
+                )
             payload = (
                 decision_id,
                 attempt_id,
@@ -357,6 +560,21 @@ class SqliteCausalLedger:
 
     def record_missing_child(self, child_id: str, *, failure_stage: str) -> bool:
         with self._connection() as connection:
+            topology_exists = (
+                connection.execute(
+                    "SELECT 1 FROM mutation_edges WHERE child_id = ?",
+                    (child_id,),
+                ).fetchone()
+                is not None
+            )
+        if topology_exists:
+            self._record_mutation_terminal(
+                child_id=child_id,
+                status="censored",
+                measurement=None,
+                failure_stage=failure_stage,
+            )
+        with self._connection() as connection:
             row = connection.execute(
                 """
                 SELECT c.decision_id, c.base_id, c.completion_ordinal,
@@ -368,7 +586,7 @@ class SqliteCausalLedger:
                 (child_id,),
             ).fetchone()
         if row is None:
-            return False
+            return topology_exists
         record = self._load_decision(row[3], row[4])
         self.record_terminal(
             TerminalOutcome(
@@ -386,15 +604,30 @@ class SqliteCausalLedger:
         )
         return True
 
+    def pending_archive_child_ids(self) -> tuple[str, ...]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT child_id FROM mutation_edges
+                WHERE status = 'outcome' AND archive_disposition = 'pending'
+                ORDER BY completion_ordinal, child_id
+                """
+            ).fetchall()
+        return tuple(row[0] for row in rows)
+
     def pending_child_ids(self) -> tuple[str, ...]:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT c.child_id FROM decision_children AS c
+                SELECT child_id, completion_ordinal FROM mutation_edges
+                WHERE status = 'pending'
+                UNION
+                SELECT c.child_id, c.completion_ordinal
+                FROM decision_children AS c
                 JOIN decisions AS d USING(decision_id)
                 LEFT JOIN terminals AS t USING(decision_id)
                 WHERE t.decision_id IS NULL AND d.environment_hash = ?
-                ORDER BY c.completion_ordinal, c.child_id
+                ORDER BY completion_ordinal, child_id
                 """,
                 (self.environment.digest,),
             ).fetchall()
@@ -545,6 +778,27 @@ class SqliteCausalLedger:
                 """,
                 (self.environment.digest,),
             ).fetchall()
+            edge_rows = connection.execute(
+                """
+                SELECT parent_id, child_id, island_id, completion_ordinal,
+                       status, measurement_json, archive_disposition, failure_stage
+                FROM mutation_edges
+                ORDER BY completion_ordinal, child_id
+                """
+            ).fetchall()
+        mutation_edges = tuple(
+            self._load_mutation_edge(
+                parent_id=row[0],
+                child_id=row[1],
+                island_id=row[2],
+                completion_ordinal=row[3],
+                status=row[4],
+                measurement_json=row[5],
+                archive_disposition=row[6],
+                failure_stage=row[7],
+            )
+            for row in edge_rows
+        )
         observations: list[CausalObservation] = []
         decisions: list[DecisionRecord] = []
         terminals: dict[str, TerminalOutcome] = {}
@@ -622,7 +876,7 @@ class SqliteCausalLedger:
                     event_ordinal=record.event_ordinal,
                     card=card,
                     context=record.context,
-                    rag_applicable=record.is_rag_applicable(card.bank_card_id),
+                    rag_applicability=record.rag_applicability(card.bank_card_id),
                     treatment=record.delivered,
                     offer_propensity=record.offer_probability,
                     proposal_propensity=record.proposal_probability,
@@ -636,11 +890,14 @@ class SqliteCausalLedger:
                 )
             )
             model_version_parts.extend((record_hash, terminal_hash))
-        lineage_outcomes, reward_observations = LineageCreditResolver().resolve(
+        lineage_outcomes, lineage_observations = LineageCreditResolver().resolve(
             decisions,
             terminals,
             {row.decision_id: row for row in observations},
+            mutation_edges,
         )
+        lineage_pending_treatment: dict[str, int] = {}
+        lineage_pending_bank: dict[str, int] = {}
         decisions_by_id = {row.decision_id: row for row in decisions}
         for lineage in lineage_outcomes:
             if lineage.status != "pending":
@@ -652,24 +909,31 @@ class SqliteCausalLedger:
             card = next(
                 row for row in record.candidates if row.treatment_id == treatment_id
             )
-            pending_treatment[treatment_id] = pending_treatment.get(treatment_id, 0) + 1
-            pending_bank[card.bank_card_id] = pending_bank.get(card.bank_card_id, 0) + 1
-        version = canonical_digest(version_parts)
+            lineage_pending_treatment[treatment_id] = (
+                lineage_pending_treatment.get(treatment_id, 0) + 1
+            )
+            lineage_pending_bank[card.bank_card_id] = (
+                lineage_pending_bank.get(card.bank_card_id, 0) + 1
+            )
+        topology_payload = [edge.model_dump(mode="json") for edge in mutation_edges]
+        version = canonical_digest([*version_parts, topology_payload])
         return EvidenceSnapshot(
             version=version,
             model_version=canonical_digest(
                 {
                     "immediate": model_version_parts,
-                    "reward": [
-                        row.model_dump(mode="json") for row in reward_observations
+                    "lineage": [
+                        row.model_dump(mode="json") for row in lineage_observations
                     ],
                 }
             ),
             observations=tuple(observations),
-            reward_observations=reward_observations,
+            lineage_observations=lineage_observations,
             lineage_outcomes=lineage_outcomes,
             pending_by_treatment=pending_treatment,
             pending_by_bank_card=pending_bank,
+            lineage_pending_by_treatment=lineage_pending_treatment,
+            lineage_pending_by_bank_card=lineage_pending_bank,
             censored_count=censored,
             ineligible_count=ineligible,
         )
@@ -699,6 +963,30 @@ class SqliteCausalLedger:
                 (self.environment.digest,),
             ).fetchall()
         return tuple(self._load_terminal(row[0], row[1]) for row in rows)
+
+    def mutation_edges(self) -> tuple[MutationEdge, ...]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT parent_id, child_id, island_id, completion_ordinal,
+                       status, measurement_json, archive_disposition, failure_stage
+                FROM mutation_edges
+                ORDER BY completion_ordinal, child_id
+                """
+            ).fetchall()
+        return tuple(
+            self._load_mutation_edge(
+                parent_id=row[0],
+                child_id=row[1],
+                island_id=row[2],
+                completion_ordinal=row[3],
+                status=row[4],
+                measurement_json=row[5],
+                archive_disposition=row[6],
+                failure_stage=row[7],
+            )
+            for row in rows
+        )
 
     def _initialize(self) -> None:
         with self._connection() as connection:
@@ -742,6 +1030,20 @@ class SqliteCausalLedger:
                     linked_at_utc TEXT NOT NULL DEFAULT
                         (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 );
+                CREATE TABLE IF NOT EXISTS mutation_edges(
+                    child_id TEXT PRIMARY KEY,
+                    parent_id TEXT NOT NULL,
+                    island_id TEXT NOT NULL,
+                    completion_ordinal INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    measurement_json TEXT,
+                    archive_disposition TEXT NOT NULL,
+                    failure_stage TEXT NOT NULL DEFAULT '',
+                    created_at_utc TEXT NOT NULL DEFAULT
+                        (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                );
+                CREATE INDEX IF NOT EXISTS mutation_edges_island_ordinal
+                    ON mutation_edges(island_id, completion_ordinal);
                 """
             )
 
@@ -785,6 +1087,34 @@ class SqliteCausalLedger:
                 f"terminal payload hash mismatch for {terminal.decision_id!r}"
             )
         return terminal
+
+    @staticmethod
+    def _load_mutation_edge(
+        *,
+        parent_id: str,
+        child_id: str,
+        island_id: str,
+        completion_ordinal: int,
+        status: Literal["pending", "outcome", "invalid", "censored"],
+        measurement_json: str | None,
+        archive_disposition: ArchiveDisposition | str,
+        failure_stage: str,
+    ) -> MutationEdge:
+        measurement = (
+            OutcomeMeasurement.model_validate_json(measurement_json)
+            if measurement_json is not None
+            else None
+        )
+        return MutationEdge(
+            parent_id=parent_id,
+            child_id=child_id,
+            island_id=island_id,
+            completion_ordinal=completion_ordinal,
+            status=status,
+            measurement=measurement,
+            archive_disposition=ArchiveDisposition(archive_disposition),
+            failure_stage=failure_stage,
+        )
 
     def _sync_mirror(self) -> None:
         if self._mirror_path is None:

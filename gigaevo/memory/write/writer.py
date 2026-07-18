@@ -354,6 +354,7 @@ class MemoryWriter(IncrementalPostRunHook):
         max_task_cards: int | None = None,
         evicted_evidence: EvictedEvidenceSink | None = None,
         ope_reporter: MemoryOpeReporter | None = None,
+        require_archive_or_positive_gain: bool = False,
     ) -> None:
         # Default to the task's primary metric, not a literal "fitness": on a
         # task whose primary key differs, a hardcoded key would resolve to no
@@ -396,6 +397,7 @@ class MemoryWriter(IncrementalPostRunHook):
             task_key=task_key,
             fitness_key=fitness_key,
             metrics_context=metrics_context,
+            require_archive_or_positive_gain=require_archive_or_positive_gain,
         )
         if stats_updater is not None and any(
             value is not None

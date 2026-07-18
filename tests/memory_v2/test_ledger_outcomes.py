@@ -26,6 +26,7 @@ from gigaevo.memory.cards import (
 )
 from gigaevo.memory.events import MemoryOutcome
 from gigaevo.memory.outcomes import (
+    MutationTopologyOutcome,
     record_memory_attempt_failure,
     record_program_memory_outcome,
 )
@@ -45,6 +46,25 @@ from gigaevo.programs.metrics.paired import (
 from gigaevo.programs.program import Program
 
 from .factories import decision_record
+
+
+def link_decision(
+    ledger: SqliteCausalLedger,
+    record,
+    child_id: str,
+    completion_ordinal: int,
+) -> None:
+    ledger.record_mutation_edge(
+        parent_id=record.context.parent_id,
+        child_id=child_id,
+        island_id=record.context.map_elites.island_id,
+        completion_ordinal=completion_ordinal,
+    )
+    assert ledger.link_attempt_child(
+        attempt_id=record.attempt_id,
+        child_id=child_id,
+        completion_ordinal=completion_ordinal,
+    )
 
 
 def metrics_context() -> MetricsContext:
@@ -76,9 +96,7 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
     ledger.record_decision(record)
     assert ledger.has_attempt_decision(record.attempt_id)
     ledger.record_decision(record)
-    assert ledger.link_attempt_child(
-        attempt_id=record.attempt_id, child_id="child", completion_ordinal=4
-    )
+    link_decision(ledger, record, "child", 4)
 
     pending = ledger.snapshot()
     assert pending.pending_by_treatment == {revisions[0].treatment_id: 1}
@@ -97,11 +115,24 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
         completion_ordinal=4,
     )
     ledger.record_terminal(terminal)
+    ledger.record_mutation_outcome(
+        MutationTopologyOutcome(
+            child_id="child",
+            status="outcome",
+            fitness_delta=0.2,
+            fitness_delta_se=None,
+            n_pairs=None,
+            measurement_kind="scalar",
+            pairing_signature="",
+            failure_stage="",
+        )
+    )
+    ledger.record_archive_disposition("child", accepted=True)
     ledger.record_terminal(terminal)
     snapshot = ledger.snapshot()
     assert snapshot.pending_by_treatment == {}
     assert len(snapshot.observations) == 1
-    assert snapshot.reward_observations == snapshot.observations
+    assert snapshot.lineage_observations == ()
     assert snapshot.lineage_outcomes[0].best_depth == 1
     assert snapshot.observations[0].treatment is False
     assert snapshot.observations[0].measurement == terminal.measurement
@@ -143,11 +174,7 @@ def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
         )
 
     def close(record, child_id: str) -> None:
-        assert ledger.link_attempt_child(
-            attempt_id=record.attempt_id,
-            child_id=child_id,
-            completion_ordinal=record.event_ordinal,
-        )
+        link_decision(ledger, record, child_id, record.event_ordinal)
         ledger.record_terminal(
             TerminalOutcome(
                 decision_id=record.decision_id,
@@ -161,6 +188,19 @@ def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
                 completion_ordinal=record.event_ordinal,
             )
         )
+        ledger.record_mutation_outcome(
+            MutationTopologyOutcome(
+                child_id=child_id,
+                status="outcome",
+                fitness_delta=0.0,
+                fitness_delta_se=None,
+                n_pairs=None,
+                measurement_kind="scalar",
+                pairing_signature="",
+                failure_stage="",
+            )
+        )
+        ledger.record_archive_disposition(child_id, accepted=True)
 
     root = decision_record(
         context("parent", 0),
@@ -172,9 +212,11 @@ def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
     close(root, "root-child")
 
     pending = ledger.snapshot()
-    assert pending.pending_by_treatment == {revisions[0].treatment_id: 1}
-    assert pending.pending_by_bank_card == {revisions[0].bank_card_id: 1}
-    assert pending.reward_observations == ()
+    assert pending.pending_by_treatment == {}
+    assert pending.pending_by_bank_card == {}
+    assert pending.lineage_pending_by_treatment == {revisions[0].treatment_id: 1}
+    assert pending.lineage_pending_by_bank_card == {revisions[0].bank_card_id: 1}
+    assert pending.lineage_observations == ()
 
     first = decision_record(
         context("other-1", 1),
@@ -193,10 +235,10 @@ def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
         close(record, child_id)
 
     matured = ledger.snapshot()
-    assert revisions[0].treatment_id not in matured.pending_by_treatment
-    assert revisions[0].bank_card_id not in matured.pending_by_bank_card
+    assert revisions[0].treatment_id not in matured.lineage_pending_by_treatment
+    assert revisions[0].bank_card_id not in matured.lineage_pending_by_bank_card
     assert any(
-        row.decision_id == root.decision_id for row in matured.reward_observations
+        row.decision_id == root.decision_id for row in matured.lineage_observations
     )
 
 
@@ -236,11 +278,7 @@ def test_ledger_rejects_gain_outside_parent_specific_opportunity(
     ledger.activate()
     record = decision_record(context, revisions[0])
     ledger.record_decision(record)
-    ledger.link_attempt_child(
-        attempt_id=record.attempt_id,
-        child_id="child",
-        completion_ordinal=1,
-    )
+    link_decision(ledger, record, "child", 1)
 
     with pytest.raises(CausalLedgerConflict, match="parent-specific metric bounds"):
         ledger.record_terminal(
@@ -282,9 +320,7 @@ def test_ledger_attempt_lifecycle_and_terminal_contracts(
     )
     ledger.record_decision(unlinked)
     ledger.record_decision(linked)
-    assert ledger.link_attempt_child(
-        attempt_id="linked", child_id="missing-child", completion_ordinal=3
-    )
+    link_decision(ledger, linked, "missing-child", 3)
 
     assert ledger.reconcile_unlinked_attempts(completion_ordinal=4) == 1
     assert ledger.record_missing_child(
@@ -307,6 +343,34 @@ def test_ledger_attempt_lifecycle_and_terminal_contracts(
                 }
             )
         )
+
+
+def test_memory_free_missing_child_is_reconcilable(
+    tmp_path,
+    environment: EnvironmentFingerprint,
+    evolution_context: EvolutionContext,
+) -> None:
+    ledger = SqliteCausalLedger(
+        path=tmp_path / "memory-free.sqlite3",
+        environment=environment,
+    )
+    ledger.activate()
+    ledger.record_mutation_edge(
+        parent_id=evolution_context.parent_id,
+        child_id="memory-free-missing",
+        island_id=evolution_context.map_elites.island_id,
+        completion_ordinal=3,
+    )
+
+    assert ledger.pending_child_ids() == ("memory-free-missing",)
+    assert ledger.record_missing_child(
+        "memory-free-missing",
+        failure_stage="startup_child_missing",
+    )
+    assert ledger.pending_child_ids() == ()
+    edge = ledger.mutation_edges()[0]
+    assert edge.status == "censored"
+    assert edge.failure_stage == "startup_child_missing"
 
 
 def test_ledger_detects_payload_tampering_on_read(

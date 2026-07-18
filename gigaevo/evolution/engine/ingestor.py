@@ -269,6 +269,7 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
 
         _clear_outcome_failures(engine, prog.id)
 
+        archive_accepted = False
         try:
             if not engine.config.program_acceptor.is_accepted(prog):
                 logger.info(
@@ -280,6 +281,7 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
                 reject_ids.append(prog.id)
                 rej_valid += 1
             elif await engine.strategy.add(prog):
+                archive_accepted = True
                 added += 1
                 await engine._notify_hook(prog, MutationOutcome.ACCEPTED)
             else:
@@ -289,6 +291,10 @@ async def _ingest_batch(engine, program_ids: list[str]) -> tuple[int, list[str]]
         except Exception as exc:
             logger.error("[ingestor] {} ingestion failed: {}", prog.short_id, exc)
             reject_ids.append(prog.id)
+        engine._record_memory_archive_disposition(
+            prog,
+            accepted=archive_accepted,
+        )
         handled.append(prog)
 
     if reject_ids:

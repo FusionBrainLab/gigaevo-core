@@ -72,11 +72,27 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
     attempt_id: str | None = None
     memory_decision_absent = False
     new_id: str | None = None
+    topology_child_id: str | None = None
     mutation_failure: MutationFailure | None = None
 
     def capture_mutation_failure(failure: MutationFailure) -> None:
         nonlocal mutation_failure
         mutation_failure = failure
+
+    def record_child_topology(
+        child_id: str,
+        parent_id: str,
+        island_id: str,
+    ) -> None:
+        nonlocal topology_child_id
+        topology_child_id = child_id
+        engine._link_memory_attempt_child(
+            attempt_id=attempt_id,
+            child_id=child_id,
+            parent_id=parent_id,
+            island_id=island_id,
+            completion_ordinal=my_iteration,
+        )
 
     try:
         parents = await engine._select_parents_for_mutation()
@@ -226,20 +242,18 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                     task_id=task_id,
                     selection_lease=selection_lease,
                     failure_observer=capture_mutation_failure,
-                    child_observer=(
-                        None
-                        if memory_decision_absent
-                        else lambda child_id: engine._link_memory_attempt_child(
-                            attempt_id=attempt_id,
-                            child_id=child_id,
-                            completion_ordinal=my_iteration,
-                        )
-                    ),
+                    child_observer=record_child_topology,
                 )
             except asyncio.CancelledError:
                 failure = mutation_failure or MutationFailure(
                     status="censored", stage="mutation_cancelled"
                 )
+                if topology_child_id is not None:
+                    engine._record_memory_topology_failure(
+                        topology_child_id,
+                        status=failure.status,
+                        failure_stage=failure.stage,
+                    )
                 closed = engine._record_memory_attempt_failure(
                     refreshed,
                     status=failure.status,
@@ -259,6 +273,12 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
             failure = mutation_failure or MutationFailure(
                 status="censored", stage="mutation_unknown"
             )
+            if topology_child_id is not None:
+                engine._record_memory_topology_failure(
+                    topology_child_id,
+                    status=failure.status,
+                    failure_stage=failure.stage,
+                )
             closed = engine._record_memory_attempt_failure(
                 refreshed,
                 status=failure.status,
@@ -271,13 +291,6 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                     f"memory attempt {attempt_id!r} has no durable decision"
                 )
             return None
-
-        if not memory_decision_absent:
-            engine._link_memory_attempt_child(
-                attempt_id=attempt_id,
-                child_id=new_id,
-                completion_ordinal=my_iteration,
-            )
 
         async def handoff_persisted_child() -> None:
             """Finish the durable child-to-ingestor handoff despite cancellation."""

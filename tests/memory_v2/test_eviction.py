@@ -114,6 +114,44 @@ def test_causal_posterior_evictor_uses_current_supported_posterior(
     assert evictor.should_evict(bank_card)
 
 
+def test_eviction_uses_pooled_randomized_controls(
+    evolution_context: EvolutionContext,
+) -> None:
+    harmful = Card(id="harmful", task_key="task", description="harmful treatment")
+    control_arm = Card(id="control-arm", task_key="task", description="other treatment")
+    harmful_revision = CardSnapshot.from_card(harmful)
+    control_revision = CardSnapshot.from_card(control_arm)
+    observations = (
+        *(
+            _observation(
+                harmful_revision,
+                evolution_context,
+                ordinal=index,
+                treated=True,
+            )
+            for index in range(2)
+        ),
+        *(
+            _observation(
+                control_revision,
+                evolution_context,
+                ordinal=index + 2,
+                treated=False,
+            )
+            for index in range(2)
+        ),
+    )
+    ledger = _Ledger(
+        EvidenceSnapshot(
+            version="pooled-controls",
+            model_version="pooled-controls-model",
+            observations=observations,
+        )
+    )
+
+    assert _evictor(ledger, viability=0.0).sweep((harmful, control_arm)) == [harmful.id]
+
+
 def test_causal_posterior_evictor_retains_pending_undertested_or_viable_cards(
     evolution_context: EvolutionContext,
 ) -> None:
