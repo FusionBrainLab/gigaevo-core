@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v2.12.2 (2026-07-18)
+
+### Bug Fixes
+
+- **memory-v2**: Make RAG utility-aware
+  ([#305](https://github.com/KhrulkovV/gigaevo-core-internal/pull/305),
+  [`5a63735`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5a63735ef7d2cd9850d8ce1cf0d6615d46dba132))
+
+### Testing
+
+- **memory**: Align retrieval prompt guard
+  ([#305](https://github.com/KhrulkovV/gigaevo-core-internal/pull/305),
+  [`5a63735`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5a63735ef7d2cd9850d8ce1cf0d6615d46dba132))
+
+- **memory-v2**: Cover non-RAG observations
+  ([#305](https://github.com/KhrulkovV/gigaevo-core-internal/pull/305),
+  [`5a63735`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/5a63735ef7d2cd9850d8ce1cf0d6615d46dba132))
+
+
 ## v2.12.1 (2026-07-17)
 
 ### Bug Fixes
