@@ -115,32 +115,28 @@ class MutationSuggestionsPrompts:
         return load_prompt("mutation_suggestions", "user", prompts_dir=prompts_dir)
 
 
-class ReconcilePrompts:
-    """Librarian reconcile agent prompt templates."""
+class CardAuthorPrompts:
+    """Mutation-outcome card author prompt templates."""
 
     @staticmethod
     def system(prompts_dir: str | Path | None = None) -> str:
-        """System prompt for the reconcile (diff→cards) hop."""
-        return load_prompt("reconcile", "system", prompts_dir=prompts_dir)
+        return load_prompt("card_author", "system", prompts_dir=prompts_dir)
 
     @staticmethod
     def user(prompts_dir: str | Path | None = None) -> str:
-        """User prompt template for the reconcile hop."""
-        return load_prompt("reconcile", "user", prompts_dir=prompts_dir)
+        return load_prompt("card_author", "user", prompts_dir=prompts_dir)
 
 
-class ConsolidatePrompts:
-    """Librarian consolidate agent prompt templates."""
+class EquivalencePrompts:
+    """Strict authored-card equivalence prompt templates."""
 
     @staticmethod
     def system(prompts_dir: str | Path | None = None) -> str:
-        """System prompt for the consolidate (fold two near-dups) hop."""
-        return load_prompt("consolidate", "system", prompts_dir=prompts_dir)
+        return load_prompt("equivalence", "system", prompts_dir=prompts_dir)
 
     @staticmethod
     def user(prompts_dir: str | Path | None = None) -> str:
-        """User prompt template for the consolidate hop."""
-        return load_prompt("consolidate", "user", prompts_dir=prompts_dir)
+        return load_prompt("equivalence", "user", prompts_dir=prompts_dir)
 
 
 class AdmissionNoveltyPrompts:

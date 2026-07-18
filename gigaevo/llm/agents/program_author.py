@@ -1,47 +1,38 @@
-"""Program-author agent: exemplar card prose from a top-fitness program.
-
-Authors one card describing what a high-fitness exemplar program does and *why*
-it scores well — a transferable mechanism, not a line-by-line trace. Used by the
-librarian to fill ``ProgramCard.description`` so no exemplar card carries a
-borrowed or empty (``pending_analysis``) description.
-
-Prompts follow the insights/lineage convention: the system prompt (with the
-task baked into its CONTEXT) and the user template are injected at construction
-via :func:`gigaevo.llm.agents.factories.create_program_author_agent`.
-"""
+"""Author one holistic strategy hypothesis from a strong exemplar program."""
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Self, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, model_validator
 
 from gigaevo.llm.agents.base import LangGraphAgent
+from gigaevo.llm.agents.card_author import AuthoredCard
 from gigaevo.llm.models import MultiModelRouter
+from gigaevo.memory.write.decisions import WriteDecision
 
 
 class ProgramAuthorResponse(BaseModel):
-    description: str = Field(
-        description="What the exemplar does and why it scores well; transferable "
-        "mechanism, not a line-by-line trace."
-    )
-    explanation_summary: str = Field(
-        default="",
-        description="One sentence condensing WHY the exemplar scores well — the "
-        "causal reason, not a restatement of the description. Indexed as its own "
-        "retrieval channel, so always author it.",
-    )
-    keywords: list[str] = Field(
-        default_factory=list,
-        description="Semantic retrieval tags; plain words, no machine prefixes.",
-    )
+    decision: WriteDecision
+    card: AuthoredCard | None = None
+
+    @model_validator(mode="after")
+    def _consistent_decision(self) -> Self:
+        if self.decision is WriteDecision.DROP and self.card is not None:
+            raise ValueError("DROP requires card=null")
+        if self.decision is WriteDecision.NEW and self.card is None:
+            raise ValueError("NEW requires one authored card")
+        if self.decision is WriteDecision.EQUIVALENT:
+            raise ValueError("the author cannot decide equivalence")
+        return self
 
 
 class ProgramAuthorState(TypedDict, total=False):
     code: str
     fitness: float | None
+    archive_rank: int | None
     messages: list[BaseMessage]
     llm_response: Any
     result: ProgramAuthorResponse
@@ -66,6 +57,7 @@ class ProgramAuthorAgent(LangGraphAgent):
         fitness_line = "(unknown)" if fitness is None else f"{fitness}"
         user = self.user_prompt_template.format(
             fitness=fitness_line,
+            archive_rank=state.get("archive_rank") or "(unknown)",
             code=state["code"],
         )
         state["messages"] = [
@@ -83,10 +75,13 @@ class ProgramAuthorAgent(LangGraphAgent):
         )
         return state
 
-    async def arun(self, *, code: str, fitness: float | None) -> ProgramAuthorResponse:
+    async def arun(
+        self, *, code: str, fitness: float | None, archive_rank: int | None = None
+    ) -> ProgramAuthorResponse:
         state: ProgramAuthorState = {
             "code": code,
             "fitness": fitness,
+            "archive_rank": archive_rank,
         }
         final = await self.graph.ainvoke(state)
         return final["result"]

@@ -1,0 +1,33 @@
+Decide whether this mutation outcome supports one durable, actionable hypothesis.
+
+## OUTCOME
+
+- Parent fitness: {parent_fitness}
+- Child fitness: {child_fitness}
+- Signed gain (positive is better): {signed_gain}
+- Validity: {validity_status}
+- Archive status: {archive_status}
+
+## MUTATOR REPORT
+
+{mutation_report}
+
+## BASE PARENT
+
+```python
+{base_parent_code}
+```
+
+## CHILD
+
+```python
+{child_code}
+```
+
+## UNIFIED DIFF
+
+```diff
+{unified_diff}
+```
+
+Return `DROP` or one `NEW` conditional hypothesis according to the system contract.

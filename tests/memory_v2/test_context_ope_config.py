@@ -24,6 +24,7 @@ from gigaevo.memory_v2.candidates import (
     WholeBankCandidateSource,
 )
 from gigaevo.memory_v2.context import MapContextConfig, MapElitesContextSource
+from gigaevo.memory_v2.eviction import CausalRetirementEvictor
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -360,11 +361,12 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         )
 
         evictor_target = cfg.memory.evictor._target_
-        assert evictor_target.endswith("NullEvictor")
-        cfg.memory.evictor._target_ = (
-            "gigaevo.memory.write.eviction.BirthFailureEvictor"
+        assert evictor_target == (
+            f"{CausalRetirementEvictor.__module__}."
+            f"{CausalRetirementEvictor.__qualname__}"
         )
-        with pytest.raises(ValueError, match="NullEvictor"):
+        cfg.memory.evictor._target_ = "gigaevo.memory.write.eviction.NullEvictor"
+        with pytest.raises(ValueError, match="CausalRetirementEvictor"):
             validate_memory_v2_scope(cfg)
         cfg.memory.evictor._target_ = evictor_target
 

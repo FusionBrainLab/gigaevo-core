@@ -1,26 +1,4 @@
-"""Librarian: the LLM-first idea-write path from a mutation diff into the bank.
-
-One ``ingest_idea`` per valid child at birth. The librarian asks a
-``NeighborSource`` for the nearest existing cards, then runs the
-``ReconcileAgent`` over the parent->child diff with those neighbors as context
-to author 0..N clean cards, each routed to the gate by decision: NEW (admit),
-DUPLICATE (bump the target's provenance), or MERGE (union onto the target).
-The agent is the only write-time dedup arbiter on the idea path — there is no
-embedding-distance threshold anywhere in it (raw notes and authored prose sit
-too far apart in embedding space for a cosine gate to fire on real twins). An
-LLM failure lands the note verbatim — deduped to its exact banked twin when
-one exists — never a silent drop.
-
-An optional ``admission_judge`` gates freshly-authored cards on novelty against
-the mutator's prior: a lever a strong model would already reach for unprompted
-is rejected before it enters the bank (the bank's binding constraint is an
-excess of prior-known cards, not plumbing). Off by default; a judge error fails
-open and admits. The reconcile-failed verbatim path is never gated — it is the
-never-silent-drop degrade path, and a second LLM hop would likely fail too.
-
-``author_program`` fills exemplar card prose, cached by program id so a
-re-seeded exemplar never re-pays the LLM.
-"""
+"""Minimal author → retrieve → equivalence memory write pipeline."""
 
 from __future__ import annotations
 
@@ -30,11 +8,17 @@ from typing import Protocol
 from loguru import logger
 
 from gigaevo.llm.agents.admission_novelty import NoveltyAdmissionAgent
-from gigaevo.llm.agents.program_author import ProgramAuthorAgent, ProgramAuthorResponse
-from gigaevo.llm.agents.reconcile import ReconcileAgent
-from gigaevo.memory.cards import Card, CardKind, ContextualGain
+from gigaevo.llm.agents.card_author import CardAuthorAgent
+from gigaevo.llm.agents.equivalence import EquivalenceAgent
+from gigaevo.llm.agents.program_author import ProgramAuthorAgent
+from gigaevo.memory.cards import Card, CardKind, ContextualGain, card_brief
 from gigaevo.memory.storage.base import MemoryStore, ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate, WriteOutcome, WriteResult
+from gigaevo.memory.write.decisions import (
+    ArchiveStatus,
+    ValidityStatus,
+    WriteDecision,
+)
 
 
 class NeighborSource(Protocol):
@@ -44,32 +28,44 @@ class NeighborSource(Protocol):
 
 
 class Librarian:
+    """Owns one clean write protocol for both insights and program exemplars.
+
+    An author first proposes at most one actionable card without seeing the
+    bank. Only then do we retrieve same-kind neighbors from that authored
+    action and ask a strict interventional-equivalence judge. ``EQUIVALENT``
+    preserves the existing treatment payload and appends provenance; ``NEW``
+    admits the authored candidate. There is no union prose or merge decision.
+    """
+
     def __init__(
         self,
         *,
-        agent: ReconcileAgent,
+        author: CardAuthorAgent,
+        equivalence: EquivalenceAgent,
         program_author: ProgramAuthorAgent,
         gate: CardAdmissionGate,
         store: MemoryStore,
         neighbors: NeighborSource,
         top_k: int = 5,
-        max_cards: int = 3,
         task_key: str = "",
         task_description: str = "",
         task_description_summary: str = "",
         admission_judge: NoveltyAdmissionAgent | None = None,
     ) -> None:
-        self._agent = agent
+        self._author = author
+        self._equivalence = equivalence
         self._program_author = program_author
         self._gate = gate
         self._store = store
         self._neighbors = neighbors
+        if top_k < 0:
+            raise ValueError("top_k cannot be negative")
         self._top_k = top_k
-        self._max_cards = max_cards
         self._task_key = task_key
         self._task_description = task_description
         self._task_description_summary = task_description_summary
         self._admission_judge = admission_judge
+        self._reviewed_programs: set[str] = set()
 
     async def ingest_idea(
         self,
@@ -77,168 +73,193 @@ class Librarian:
         base_parent_code: str,
         child_id: str,
         child_code: str,
-        note: str,
+        mutation_report: str,
+        parent_fitness: float | None,
+        child_fitness: float,
+        signed_gain: float | None,
+        validity_status: ValidityStatus,
+        archive_status: ArchiveStatus,
         founding_gain: ContextualGain | None = None,
-        sink: list[WriteResult] | None = None,
     ) -> list[WriteResult]:
-        # One WriteResult per routed card: the writer needs the outcome, not
-        # just an id — landed ids feed the consolidation cadence, freshly
-        # ADDED ids the inline intra-batch consolidation subset.
-        # ``sink`` receives each result the moment it is produced: when the
-        # writer's wait_for cancels a hung ingest, the return value dies with
-        # the coroutine but cards already routed through the gate are banked —
-        # the sink is how they still reach the writer's accounting.
-        # founding_gain seeds the child's verified parent->child delta for
-        # origin audit and birth-failure eviction. It is not later-use evidence:
-        # reputation/EV exclude founding events, so a founding-only card remains
-        # statistically cold. A MERGE or DUPLICATE target keeps exactly its own
-        # evidence — the delta was measured for THIS child against ITS parent,
-        # foreign context for a pre-existing lever.
-        events = (founding_gain,) if founding_gain is not None else ()
-
-        def record_result(result: WriteResult) -> WriteResult:
-            if sink is not None:
-                sink.append(result)
-            return result
-
+        """Author and route zero or one insight card."""
         try:
-            # Idea dedup is insight-only: an idea is never a near-duplicate of
-            # a program exemplar, and the reconcile agent must not be offered
-            # program ids as MERGE/DUPLICATE targets.
-            hits = self._neighbors.nearest(note, self._top_k, CardKind.INSIGHT)
+            response = await self._author.arun(
+                base_parent_code=base_parent_code,
+                child_code=child_code,
+                mutation_report=mutation_report,
+                parent_fitness=parent_fitness,
+                child_fitness=child_fitness,
+                signed_gain=signed_gain,
+                validity_status=validity_status,
+                archive_status=archive_status,
+            )
         except Exception as exc:
             logger.warning(
-                "[Memory][Librarian] neighbor retrieval failed for child {}: {}",
+                "[Memory][Librarian] card author failed for child {}; dropping "
+                "this proposal: {}",
                 child_id,
                 exc,
             )
-            hits = []
-        allowed_targets = {h.card.id for h in hits if h.card.id}
-
-        try:
-            resp = await self._agent.arun(
-                base_parent_code=base_parent_code,
-                child_code=child_code,
-                note=note,
-                neighbors=[h.card for h in hits],
-                task_key=self._task_key,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[Memory][Librarian] reconcile LLM failed ({}); admitting note "
-                "verbatim (NOT a drop).",
-                exc,
-            )
-            card = Card(
-                id="",
-                task_key=self._task_key,
-                description=note,
-                programs=(child_id,),
-                task_description=self._task_description,
-                task_description_summary=self._task_description_summary,
-                gain_events=events,
-            )
-            # Never gated by the novelty judge (degrade path), but the zero-LLM
-            # exact-twin check still applies: a repeated note must bump its
-            # banked twin's provenance, not mint a second id for the same prose.
-            twin = self._desc_twin(card)
-            if twin is not None:
-                return [record_result(self._gate.bump_provenance(twin.id, child_id))]
-            return [record_result(self._gate.admit(card))]
-
-        out: list[WriteResult] = []
-        for item in resp.items[: self._max_cards]:
-            card = Card(
-                id="",
-                task_key=self._task_key,
-                description=item.card.description,
-                explanation_summary=item.card.explanation_summary,
-                keywords=tuple(item.card.keywords),
-                programs=(child_id,),
-                task_description=self._task_description,
-                task_description_summary=self._task_description_summary,
-                gain_events=events,
-            )
-            if item.decision == "NEW":
-                result = await self._admit_new(card)
-            elif item.decision == "DUPLICATE":
-                target_id = _allowed_target_id(item.target_id, allowed_targets)
-                result = await self._land_dedup(
-                    self._gate.bump_provenance(target_id, child_id)
-                    if target_id
-                    else None,
-                    card,
-                    item.target_id,
-                )
-            else:  # MERGE
-                target_id = _allowed_target_id(item.target_id, allowed_targets)
-                result = await self._land_dedup(
-                    self._gate.merge(
-                        target_id, card.model_copy(update={"gain_events": ()})
-                    )
-                    if target_id
-                    else None,
-                    card,
-                    item.target_id,
-                )
-            out.append(record_result(result))
-        return out
-
-    async def _land_dedup(
-        self, result: WriteResult | None, card: Card, target_id: str
-    ) -> WriteResult:
-        """Resolve a DUPLICATE/MERGE gate verdict to its final write result.
-
-        A landed verdict stands. Re-authoring as NEW is whitelisted to the
-        two genuinely benign cases — an empty target id (``None`` here) or a
-        gate no-op (``DISCARDED``: target absent/ineligible, or the store merge
-        failed). Every other non-landed verdict is a harm-driven deletion (the
-        gate judged the union confidently harmful and deleted the merge target)
-        and is passed through as-is — never laundered back in as a fresh card.
-        A target-absent no-op is NOT benign when the target was harm-tombstoned
-        earlier this run (typically by a prior item of the same ingest): the
-        harm verdict must stick, so that card drops too.
-        """
-        if result is not None and result.landed:
-            return result
-        if (
-            (result is None or result.benign_noop)
-            and target_id
-            and self._gate.is_tombstoned(target_id)
-        ):
+            return []
+        if response.decision is WriteDecision.DROP or response.card is None:
             logger.info(
-                "[Memory][Librarian] dedup target {} was harm-tombstoned this "
-                "run; dropping the card rather than re-authoring it as new.",
-                target_id,
+                "[Memory][Librarian] idea source={} author={}",
+                child_id,
+                WriteDecision.DROP.value,
             )
-            return result or WriteResult(outcome=WriteOutcome.REJECTED_HARM)
-        if result is None or result.benign_noop:
-            return await self._admit_new(card)
+            return []
+
+        events = (founding_gain,) if founding_gain is not None else ()
+        card = Card(
+            id="",
+            task_key=self._task_key,
+            description=response.card.description,
+            explanation_summary=response.card.explanation_summary,
+            programs=(child_id,),
+            task_description=self._task_description,
+            task_description_summary=self._task_description_summary,
+            gain_events=events,
+        )
+        result = await self._route(card)
         logger.info(
-            "[Memory][Librarian] dedup target folded to a confidently harmful "
-            "union; dropping the card rather than re-authoring it as new."
+            "[Memory][Librarian] idea source={} author={} write={}",
+            child_id,
+            WriteDecision.NEW.value,
+            result.outcome.value,
+        )
+        return [result]
+
+    async def ingest_program(
+        self,
+        *,
+        program_id: str,
+        code: str,
+        fitness: float | None,
+        archive_rank: int,
+        higher_is_better: bool,
+        min_fitness_gap: float = 0.0,
+        store_code: bool = False,
+    ) -> WriteResult:
+        """Author a strategy family and retain its best concrete representative."""
+        if self._program_was_reviewed(program_id):
+            return WriteResult(outcome=WriteOutcome.DISCARDED)
+        try:
+            response = await self._program_author.arun(
+                code=code,
+                fitness=fitness,
+                archive_rank=archive_rank,
+            )
+        except Exception:
+            # Do not cache failures: a later refresh may retry a transient LLM error.
+            raise
+        self._reviewed_programs.add(program_id)
+        if response.decision is WriteDecision.DROP or response.card is None:
+            logger.info(
+                "[Memory][Librarian] program source={} author={}",
+                program_id,
+                WriteDecision.DROP.value,
+            )
+            return WriteResult(outcome=WriteOutcome.DISCARDED)
+
+        card = Card(
+            kind=CardKind.PROGRAM,
+            id=f"program-{program_id}",
+            task_key=self._task_key,
+            program_id=program_id,
+            programs=(program_id,),
+            task_description=self._task_description,
+            task_description_summary=self._task_description_summary,
+            description=response.card.description,
+            explanation_summary=response.card.explanation_summary,
+            fitness=fitness,
+            code=code if store_code else "",
+            code_sha256=code_sha256(code),
+        )
+        result = await self._route(
+            card,
+            higher_is_better=higher_is_better,
+            min_fitness_gap=min_fitness_gap,
+        )
+        logger.info(
+            "[Memory][Librarian] program source={} author={} write={}",
+            program_id,
+            WriteDecision.NEW.value,
+            result.outcome.value,
         )
         return result
 
-    async def _admit_new(self, card: Card) -> WriteResult:
-        """Admit a fresh idea card, deduping exact text twins and gating it
-        through the novelty judge.
+    async def _route(
+        self,
+        card: Card,
+        *,
+        higher_is_better: bool = True,
+        min_fitness_gap: float = 0.0,
+    ) -> WriteResult:
+        hits = self._same_task_neighbors(card)
+        if not hits:
+            return await self._admit_new(card)
 
-        The reconcile agent only sees top-k neighbors, so a NEW ruling can bank
-        a description the bank already holds verbatim when the true twin missed
-        that window; an exact normalized-description match is the zero-LLM last
-        line of defense and resolves as a DUPLICATE provenance bump. With no
-        judge wired (the default) the rest is a plain gate admit. With a judge,
-        a card the mutator would already reach for unprompted is rejected
-        before it enters the bank (ledgered as REJECTED_NOVELTY); a judge error
-        fails open and admits, so the gate can never silently drop the write
-        path.
-        """
-        twin = self._desc_twin(card)
-        if twin is not None:
-            child_id = card.programs[0] if card.programs else ""
-            return self._gate.bump_provenance(twin.id, child_id)
-        if self._admission_judge is not None:
+        offered = {hit.card.id: hit.card for hit in hits if hit.card.id}
+        try:
+            decision = await self._equivalence.arun(
+                candidate=card,
+                neighbors=list(offered.values()),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Memory][Librarian] equivalence check failed ({}); treating "
+                "authored candidate as NEW.",
+                exc,
+            )
+            return await self._admit_new(card)
+
+        if decision.decision is WriteDecision.NEW:
+            return await self._admit_new(card)
+        target = offered.get(decision.target_id.strip())
+        if target is None:
+            logger.warning(
+                "[Memory][Librarian] equivalence target {!r} was not offered; "
+                "treating candidate as NEW.",
+                decision.target_id,
+            )
+            return await self._admit_new(card)
+
+        result = self._gate.update_equivalent(
+            target.id,
+            card,
+            higher_is_better=higher_is_better,
+            min_fitness_gap=min_fitness_gap,
+        )
+        return result if result.landed else await self._admit_new(card)
+
+    def _same_task_neighbors(self, card: Card) -> list[ScoredCard]:
+        """Retrieve by authored semantics, then keep same-kind/same-task cards."""
+        if self._top_k == 0:
+            return []
+        foreign = sum(
+            1
+            for existing in self._store.snapshot()
+            if existing.kind is card.kind and existing.task_key != card.task_key
+        )
+        try:
+            hits = self._neighbors.nearest(
+                card_brief(card), self._top_k + foreign, card.kind
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Memory][Librarian] authored-card retrieval failed: {}", exc
+            )
+            return []
+        return [
+            hit
+            for hit in hits
+            if hit.card.kind is card.kind
+            and hit.card.task_key == card.task_key
+            and hit.card.id != card.id
+        ][: self._top_k]
+
+    async def _admit_new(self, card: Card) -> WriteResult:
+        if card.kind is CardKind.INSIGHT and self._admission_judge is not None:
             try:
                 verdict = await self._admission_judge.arun(
                     description=card.description,
@@ -246,156 +267,33 @@ class Librarian:
                 )
             except Exception as exc:
                 logger.warning(
-                    "[Memory][Librarian] novelty gate failed ({}); admitting card "
-                    "(fail-open).",
+                    "[Memory][Librarian] novelty gate failed ({}); admitting "
+                    "candidate.",
                     exc,
                 )
             else:
                 if not verdict.keep:
-                    logger.info(
-                        "[Memory][Librarian] novelty gate rejected prior-known "
-                        "card: {}",
-                        verdict.reason,
-                    )
                     return self._gate.reject_novelty(card, verdict.reason)
         return self._gate.admit(card)
 
-    async def author_program(
-        self, *, program_id: str, code: str, fitness: float | None
-    ) -> ProgramAuthorResponse:
-        existing = self._store.get(f"program-{program_id}")
-        if existing is not None and (existing.description or "").strip():
-            return ProgramAuthorResponse(
-                description=existing.description,
-                explanation_summary=existing.explanation_summary,
-                keywords=list(existing.keywords),
-            )
-        return await self._program_author.arun(code=code, fitness=fitness)
-
-    def admit_program(
-        self,
-        card: Card,
-        *,
-        higher_is_better: bool,
-        min_fitness_gap: float = 0.0,
-    ) -> str:
-        """Admit an exemplar card, deduping code-identical twins by fitness.
-
-        Exemplar cards are program-id-keyed, so two distinct ids can represent
-        the same source. Identity is exact via the stored source hash (or
-        legacy source body). We keep the best-fitness representative, replacing
-        existing twins only when the incoming card clears ``min_fitness_gap``.
-        Twins are retired only AFTER the incoming card lands, so a harm-rejected
-        incoming never deletes the banked representative.
-        """
-        twins = self._program_twins(card)
-        best_twin = _best_by_fitness(twins, higher_is_better)
-        if best_twin is not None and not _strictly_better(
-            card.fitness,
-            best_twin.fitness,
-            higher_is_better,
-            min_delta=min_fitness_gap,
-        ):
-            return ""
-        result = self._gate.admit(card)
-        if result.landed:
-            for twin in twins:
-                self._gate.retire_twin(twin, successor_id=result.card_id)
-        return result.card_id
-
-    def _program_twins(self, card: Card) -> list[Card]:
-        code_identity = program_code_sha256(card)
-        if not code_identity:
-            return []
-        out: list[Card] = []
-        for other in self._store.snapshot():
-            if (
-                other.kind is not CardKind.PROGRAM
-                or other.id == card.id
-                or other.task_key != card.task_key
-            ):
+    def _program_was_reviewed(self, program_id: str) -> bool:
+        if program_id in self._reviewed_programs:
+            return True
+        for card in self._store.snapshot():
+            if card.kind is not CardKind.PROGRAM:
                 continue
-            if program_code_sha256(other) == code_identity:
-                out.append(other)
-        return out
-
-    def _desc_twin(self, card: Card) -> Card | None:
-        key = _desc_key(card.description)
-        if not key:
-            return None
-        for other in self._store.snapshot():
-            if (
-                other.kind is CardKind.INSIGHT
-                and other.id != card.id
-                and _desc_key(other.description) == key
-            ):
-                return other
-        return None
-
-
-def _allowed_target_id(target_id: str, allowed_targets: set[str]) -> str:
-    target_id = target_id.strip()
-    if not target_id:
-        return ""
-    if target_id not in allowed_targets:
-        logger.info(
-            "[Memory][Librarian] ignoring reconcile target {} because it was not "
-            "one of the offered neighbor ids",
-            target_id,
-        )
-        return ""
-    return target_id
-
-
-def _strictly_better(
-    incoming: float | None,
-    banked: float | None,
-    higher_is_better: bool,
-    *,
-    min_delta: float = 0.0,
-) -> bool:
-    if incoming is None:
+            if card.program_id == program_id or program_id in card.programs:
+                self._reviewed_programs.add(program_id)
+                return True
         return False
-    if banked is None:
-        return True
-    return (
-        incoming > banked + min_delta
-        if higher_is_better
-        else incoming < banked - min_delta
-    )
-
-
-def _best_by_fitness(cards: list[Card], higher_is_better: bool) -> Card | None:
-    best: Card | None = None
-    for card in cards:
-        if best is None or _strictly_better(
-            card.fitness, best.fitness, higher_is_better
-        ):
-            best = card
-    return best
 
 
 def _code_key(code: str) -> str:
-    """Normalize program source for exact-twin comparison: strip surrounding
-    blank lines and per-line trailing whitespace so trailing-whitespace noise
-    can't split a genuine code twin. Deliberately does not reformat — two
-    differently-structured programs are different exemplars, not twins."""
     return "\n".join(line.rstrip() for line in code.strip().splitlines())
 
 
 def code_sha256(code: str) -> str:
-    key = _code_key(code)
-    if not key:
+    normalized = _code_key(code)
+    if not normalized:
         return ""
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
-
-def program_code_sha256(card: Card) -> str:
-    return card.code_sha256 or code_sha256(card.code)
-
-
-def _desc_key(text: str) -> str:
-    """Normalize idea prose for exact-twin comparison: collapse whitespace and
-    casefold so formatting noise can't split a genuine twin. Deliberately not a
-    fuzzy match — near-duplicates stay the reconcile/consolidation agents' call."""
-    return " ".join(text.split()).casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

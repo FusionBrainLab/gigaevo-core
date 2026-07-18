@@ -18,12 +18,12 @@ from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.strategies.paired_selectors import (
     PairedBootstrapArchiveSelector,
 )
-from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory_v2.candidates import (
     AgenticApplicabilityProvider,
     NullApplicabilityProvider,
     WholeBankCandidateSource,
 )
+from gigaevo.memory_v2.eviction import CausalRetirementEvictor
 from gigaevo.memory_v2.writer import CausalV2ContentOnlyUpdater
 
 
@@ -39,7 +39,7 @@ _MEMORY_V2_WRITER_TARGET = _target_path(CausalV2ContentOnlyUpdater)
 _MEMORY_V2_WHOLE_BANK_SOURCE_TARGET = _target_path(WholeBankCandidateSource)
 _MEMORY_V2_AGENTIC_APPLICABILITY_TARGET = _target_path(AgenticApplicabilityProvider)
 _MEMORY_V2_NULL_APPLICABILITY_TARGET = _target_path(NullApplicabilityProvider)
-_MEMORY_V2_EVICTOR_TARGET = _target_path(NullEvictor)
+_MEMORY_V2_EVICTOR_TARGET = _target_path(CausalRetirementEvictor)
 _MISSING = object()
 
 
@@ -215,8 +215,8 @@ def validate_memory_v2_scope(cfg: DictConfig) -> None:
     evictor_target = _raw_select(cfg, "memory.evictor._target_", None)
     if evictor_target != _MEMORY_V2_EVICTOR_TARGET:
         raise ValueError(
-            "memory=v2 wires NullEvictor: harm control is the read-time policy, "
-            "not write-side card-stat eviction on the randomized causal ledger."
+            "memory=v2 requires CausalRetirementEvictor so periodic maintenance "
+            "uses the randomized causal ledger rather than observational card stats."
         )
 
 

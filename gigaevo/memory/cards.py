@@ -392,9 +392,6 @@ class Card(BaseModel):
     task_description_summary: str = Field(
         default="", description="LLM-condensed one-line task summary."
     )
-    keywords: tuple[str, ...] = Field(
-        default=(), description="Search keywords for retrieval ranking."
-    )
     programs: tuple[str, ...] = Field(
         default=(), description="Program ids that exhibited the idea."
     )
@@ -442,15 +439,9 @@ class Card(BaseModel):
 
 
 def card_brief(card: Card) -> str:
-    """Compact card projection for the librarian judging prompts (reconcile /
-    consolidate): description + why-text + keywords on one line, empty fields
-    omitted. The reconcile caller prepends the id (it needs it as the
-    DUPLICATE/MERGE target); consolidate uses the body alone.
-    """
+    """Compact semantic projection used for retrieval and equivalence."""
     parts = [card.description]
     why = card.explanation_summary.strip()
     if why:
         parts.append(f"why: {why}")
-    if card.keywords:
-        parts.append(f"keywords: {', '.join(card.keywords)}")
     return " | ".join(parts)

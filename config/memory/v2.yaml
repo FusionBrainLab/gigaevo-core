@@ -30,12 +30,20 @@ baseline_prior: [3.0, 3.0]
 evidence:
   min_effective_events: 3
 
-# No write-side harm eviction on the v2 path. Harm control is the read-time
-# ChanceConstrainedProbabilityMatchingPolicy + SafetyConstraint, which declines
-# to offer a confidently-harmful card. A future harm evictor returns here as a
-# bayesian mechanism through the shared Evictor seam.
+# Read-time safety prevents harmful delivery. This separate, periodic maintenance
+# rule removes only supported lineages whose current causal posterior is
+# non-viable across every context where they were tested.
 evictor:
-  _target_: gigaevo.memory.write.eviction.NullEvictor
+  _target_: gigaevo.memory_v2.eviction.CausalRetirementEvictor
+  ledger: ${ref:memory.ledger}
+  posterior: ${ref:memory.posterior}
+  safety: ${ref:memory.safety}
+  min_treated: 2
+  min_global_control: 2
+  min_distinct_contexts: 2
+  posterior_samples: 4096
+  max_viability_probability: ${memory.safety.alpha}
+  mc_confidence_z: 1.96
 
 environment:
   _target_: gigaevo.memory_v2.models.EnvironmentFingerprint
@@ -218,15 +226,11 @@ writer:
   require_archive_or_positive_gain: true
   best_programs_percent: 5.0
   ingest_call_timeout_s: 300.0
-  consolidation_every_n: 32
   dedup_policy:
-    _target_: gigaevo.memory.write.merge.DedupPolicy
+    _target_: gigaevo.memory.write.policies.DedupPolicy
     online_top_k: 5
-    max_cards_per_diff: 3
-    consolidation_k: 5
-    preserve_survivor_payload: true
   program_exemplars:
-    _target_: gigaevo.memory.write.merge.ProgramExemplarPolicy
+    _target_: gigaevo.memory.write.policies.ProgramExemplarPolicy
     enabled: true
     top_k_per_refresh: 4
     max_cards: 32

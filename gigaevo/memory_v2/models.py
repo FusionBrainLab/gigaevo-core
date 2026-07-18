@@ -255,7 +255,6 @@ class CardSnapshot(StrictFrozenModel):
     source_task_key: str = ""
     kind: str = "insight"
     category: str = "general"
-    keywords: tuple[str, ...] = ()
 
     @classmethod
     def from_card(cls, card: Card) -> CardSnapshot:
@@ -278,7 +277,6 @@ class CardSnapshot(StrictFrozenModel):
             source_task_key=card.task_key,
             kind=str(card.kind),
             category=card.category,
-            keywords=tuple(card.keywords),
         )
 
     @model_validator(mode="after")

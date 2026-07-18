@@ -1,12 +1,4 @@
-"""Sole admission authority on the memory write path.
-
-The Librarian owns dedup and prose authoring; this gate only decides
-admit-or-reject on harm and records every verdict to the write ledger. The one
-externally-consumed artifact is the ``WriteLedger`` (``write_ledger.jsonl``) —
-its row schema is the contract (``write_ledger.v1``). Store save/merge events
-fire automatically through the store (``MEMORY_STORE_WRITE``); the gate adds
-no counters and no admission event of its own (no consumer).
-"""
+"""Atomic card admission, equivalence updates, and periodic retirement."""
 
 from __future__ import annotations
 
@@ -20,32 +12,23 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-from gigaevo.exceptions import MergeAborted
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card, CardKind, ContextualGain
 from gigaevo.memory.prior_evidence import EvictedEvidenceSink, _JsonlFileLock
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.eviction import Evictor, foreign_retention_veto
-from gigaevo.memory.write.merge import merge_cards, union_events, union_strings
 
 
 class WriteOutcome(StrEnum):
     """Verdict of one card-bank ingest.
 
-    ADDED / UPDATED / MERGED / REJECTED_HARM / REJECTED_NOVELTY /
-    REJECTED_CAPACITY / EVICTED are
-    each recorded as a write-ledger row. DISCARDED is the no-op verdict: the
-    gate did nothing (merge/bump target absent or ineligible, or the store
-    merge failed) and recorded no row — the submitted card was neither admitted
-    nor rejected, so a caller may re-author it as fresh. It is deliberately
-    distinct from the judged rejections: REJECTED_HARM must never be
-    re-admitted, and REJECTED_NOVELTY (the novelty judge ruled the lever
-    prior-known) must not be re-authored either or the judge just re-rejects it.
+    Every state-changing verdict is recorded in the write ledger. DISCARDED is
+    the no-op verdict: the target was absent or ineligible and no row is written,
+    so the caller may route the candidate through ordinary admission.
     """
 
     ADDED = "added"
     UPDATED = "updated"
-    MERGED = "merged"
     DISCARDED = "discarded"
     REJECTED_HARM = "rejected_harm"
     REJECTED_NOVELTY = "rejected_novelty"
@@ -117,10 +100,6 @@ class WriteLedgerRecord(BaseModel):
     duplicate_of: str = Field(
         default="", description="Id of the existing card this one duplicated, if any."
     )
-    merge_targets: tuple[str, ...] = Field(
-        default=(),
-        description="Ids of the cards this one was merged into.",
-    )
     category: str = Field(
         default="", description="Category of the incoming card at submission time."
     )
@@ -146,7 +125,6 @@ class WriteLedger:
         outcome: WriteOutcome | str,
         reason: str = "",
         duplicate_of: str = "",
-        merge_targets: Sequence[str] | None = None,
         category: str = "",
     ) -> None:
         try:
@@ -157,7 +135,6 @@ class WriteLedger:
                 outcome=WriteOutcome(outcome),
                 reason=reason,
                 duplicate_of=duplicate_of,
-                merge_targets=tuple(merge_targets or ()),
                 category=category,
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,22 +146,13 @@ class WriteLedger:
 
 
 class CardAdmissionGate:
-    """Write ledger over the card store; harm eviction lives in ``sweep``.
+    """Write ledger over the card store; causal retirement lives in ``sweep``.
 
-    Six methods make up the whole write-path admission surface:
-    ``admit`` (new/known-id card), ``merge`` (synthesized union onto an existing
-    card), ``bump_provenance`` (DUPLICATE-ruling provenance append, no LLM),
-    ``reject_novelty`` (ledger a novelty-judge kill), ``retire_exemplar`` (delete
-    a non-harm superseded/pruned exemplar), and ``sweep`` (periodic eviction of
-    whatever the configured evictor flags). Harm is not pre-screened at author
-    time: ``admit``/``merge`` never consult the evictor, so ``sweep`` is the
-    single point where an eviction verdict is applied. The memory=v2 default
-    wires ``NullEvictor`` (no write-side harm eviction); harm control there is the
-    read-time policy, which declines to offer a confidently-harmful card. When an
-    evictor does flag a card, ``sweep`` tombstones its id for the rest of the run:
-    the deletion destroys the very gain events the verdict rested on, so a
-    re-authored twin arrives evidence-free and would otherwise churn evict →
-    re-author → re-admit every sweep.
+    Admission never consults the evictor. Periodic maintenance is the only place
+    where a verdict can remove a card, and it is atomically revalidated against
+    the fresh store revision before deletion. Retired ids are tombstoned for the
+    rest of the run so the writer cannot immediately re-author the same lineage
+    without its causal history.
     """
 
     def __init__(
@@ -198,7 +166,6 @@ class CardAdmissionGate:
         task_key: str = "",
         min_effective_events: float = 0.0,
         max_task_cards: int | None = None,
-        preserve_survivor_payload: bool = False,
     ) -> None:
         if max_task_cards is not None and max_task_cards < 1:
             raise ValueError("max_task_cards must be positive when configured")
@@ -210,7 +177,6 @@ class CardAdmissionGate:
         self._task_key = task_key
         self._min_effective_events = min_effective_events
         self._max_task_cards = max_task_cards
-        self._preserve_survivor_payload = preserve_survivor_payload
         self._tombstoned: set[str] = set()
 
     def is_tombstoned(self, card_id: str) -> bool:
@@ -249,8 +215,7 @@ class CardAdmissionGate:
                 )
 
             def replace(fresh: Card) -> Card | None:
-                base = fresh if self._preserve_survivor_payload else card
-                return base.model_copy(
+                return fresh.model_copy(
                     update={
                         "gain_events": union_events(
                             fresh.gain_events, card.gain_events
@@ -269,58 +234,8 @@ class CardAdmissionGate:
                 saved,
                 incoming_id,
                 WriteOutcome.UPDATED,
-                "known id replaced",
+                "known id evidence updated",
                 incoming_id=incoming_id,
-            )
-
-    def merge(self, target_id: str, card: Card) -> WriteResult:
-        with self._eviction_guard():
-            submitted_id = card.id
-            fresh_target: Card | None = None
-            merged: Card | None = None
-
-            def fold(target: Card, partner: Card | None) -> Card | None:
-                nonlocal fresh_target, merged
-                fresh_target = target
-                if target.kind is not CardKind.INSIGHT:
-                    raise MergeAborted
-                if partner is not None and self._is_leased(partner.id):
-                    self._log_leased_skip(
-                        partner.id, "librarian merge would retire absorbed partner"
-                    )
-                    raise MergeAborted
-                incoming = card
-                if partner is not None:
-                    incoming = card.model_copy(
-                        update={
-                            "gain_events": union_events(
-                                partner.gain_events, card.gain_events
-                            ),
-                            "absorbed_ids": union_strings(
-                                partner.absorbed_ids, card.absorbed_ids
-                            ),
-                            "programs": union_strings(partner.programs, card.programs),
-                        }
-                    )
-                merged = merge_cards(
-                    target,
-                    incoming,
-                    replace_description=not self._preserve_survivor_payload,
-                )
-                return merged
-
-            result = self._store.merge_retire(target_id, submitted_id, fold)
-            if result.outcome in {"target_missing", "aborted"}:
-                return _DISCARDED
-            if fresh_target is None or merged is None:
-                raise RuntimeError("merge transaction completed without fold state")
-            return self._ledger_record(
-                merged,
-                target_id,
-                WriteOutcome.MERGED,
-                "librarian merge",
-                incoming_id=submitted_id,
-                merge_targets=(target_id,),
             )
 
     def reject_novelty(self, card: Card, reason: str) -> WriteResult:
@@ -372,60 +287,58 @@ class CardAdmissionGate:
                 fresh_card, successor_id, WriteOutcome.UPDATED, reason
             )
 
-    def retire_twin(self, twin: Card, *, successor_id: str) -> WriteResult:
-        """Fold a fresh superseded twin into its successor and retire it."""
-        reason = "exemplar superseded by strictly-better twin"
-        fresh_twin: Card | None = None
-        blocker = ""
+    def update_equivalent(
+        self,
+        target_id: str,
+        incoming: Card,
+        *,
+        higher_is_better: bool = True,
+        min_fitness_gap: float = 0.0,
+    ) -> WriteResult:
+        """Pool exact-equivalent evidence without changing the banked action."""
 
-        def fold(successor: Card, partner: Card | None) -> Card:
-            nonlocal fresh_twin, blocker
-            if partner is None:
-                raise MergeAborted
-            fresh_twin = partner
-            if partner.kind is not CardKind.PROGRAM:
-                blocker = "fresh card is not a program exemplar"
-                raise MergeAborted
-            if self._is_leased(partner.id):
-                blocker = "card is leased by an in-flight mutation"
-                raise MergeAborted
-            blocker = self._foreign_retention_veto(partner) or ""
-            if blocker:
-                raise MergeAborted
-            return merge_cards(successor, partner, replace_description=False)
-
-        with self._eviction_guard():
-            result = self._store.merge_retire(successor_id, twin.id, fold)
-        if result.outcome != "merged" or fresh_twin is None:
-            if blocker:
-                logger.info(
-                    "[Memory][Admission] skipped retirement of card {}: {}; {}",
-                    twin.id,
-                    reason,
-                    blocker,
-                )
-            return _DISCARDED
-        return self._ledger_record(
-            fresh_twin, successor_id, WriteOutcome.UPDATED, reason
-        )
-
-    def bump_provenance(self, target_id: str, child_id: str) -> WriteResult:
         eligible = False
+        representative_improved = False
 
         def fold(target: Card) -> Card:
-            nonlocal eligible
-            if target.kind is not CardKind.INSIGHT:
+            nonlocal eligible, representative_improved
+            if target.kind is not incoming.kind or target.task_key != incoming.task_key:
                 return target
             eligible = True
-            if not child_id or child_id in target.programs:
-                return target
-            return target.model_copy(update={"programs": (*target.programs, child_id)})
+            updates: dict = {
+                "programs": union_strings(target.programs, incoming.programs),
+                "gain_events": union_events(target.gain_events, incoming.gain_events),
+            }
+            if target.kind is CardKind.PROGRAM and _fitness_improves(
+                incoming.fitness,
+                target.fitness,
+                higher_is_better=higher_is_better,
+                min_delta=min_fitness_gap,
+            ):
+                representative_improved = True
+                updates.update(
+                    {
+                        "program_id": incoming.program_id,
+                        "fitness": incoming.fitness,
+                        "code": incoming.code,
+                        "code_sha256": incoming.code_sha256,
+                    }
+                )
+            return target.model_copy(update=updates)
 
         target = self._store.update(target_id, fold)
         if target is None or not eligible:
             return _DISCARDED
+        reason = "equivalent action; evidence pooled"
+        if representative_improved:
+            reason = "equivalent program strategy; best representative updated"
         return self._ledger_record(
-            target, target_id, WriteOutcome.UPDATED, "duplicate provenance bump"
+            incoming,
+            target_id,
+            WriteOutcome.UPDATED,
+            reason,
+            incoming_id=incoming.id,
+            duplicate_of=target_id,
         )
 
     def sweep(self) -> list[str]:
@@ -524,7 +437,7 @@ class CardAdmissionGate:
         reason: str,
         *,
         incoming_id: str | None = None,
-        merge_targets: Sequence[str] | None = None,
+        duplicate_of: str = "",
     ) -> WriteResult:
         if self._ledger is not None:
             self._ledger.record(
@@ -532,10 +445,39 @@ class CardAdmissionGate:
                 final_id=final_id,
                 outcome=outcome,
                 reason=reason,
-                merge_targets=merge_targets,
+                duplicate_of=duplicate_of,
                 category=card.category,
             )
         return WriteResult(outcome=outcome, card_id=final_id)
+
+
+def union_strings(a: Sequence[str], b: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*a, *b)))
+
+
+def union_events(
+    a: Sequence[ContextualGain],
+    b: Sequence[ContextualGain],
+) -> tuple[ContextualGain, ...]:
+    out = list(a)
+    out.extend(event for event in b if event not in out)
+    return tuple(out)
+
+
+def _fitness_improves(
+    incoming: float | None,
+    current: float | None,
+    *,
+    higher_is_better: bool,
+    min_delta: float,
+) -> bool:
+    if incoming is None:
+        return False
+    if current is None:
+        return True
+    if higher_is_better:
+        return incoming > current + min_delta
+    return incoming < current - min_delta
 
 
 def _eviction_reason(evictor: Evictor, card: Card, default: str) -> str:
