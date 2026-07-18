@@ -311,7 +311,6 @@ def test_candidate_brief_contains_only_semantic_applicability_evidence(make_card
         description="line one\n  line two " + "x " * 300,
         explanation_summary="e " * 300,
         task_description_summary="t " * 300,
-        keywords=tuple(f"kw{i}" for i in range(10)),
         task_key="origin-task",
     )
 
@@ -328,7 +327,7 @@ def test_candidate_brief_contains_only_semantic_applicability_evidence(make_card
         "evidence_summary",
         "task_description_summary",
     }
-    assert not {"keywords", "category", "fitness", "origin_task"}.intersection(brief)
+    assert not {"category", "fitness", "origin_task"}.intersection(brief)
 
 
 def test_render_briefs_under_budget_keeps_all_cards(make_card):

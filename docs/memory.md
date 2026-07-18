@@ -127,20 +127,22 @@ text. The child program is stamped with frozen card-attribution metadata (see
 
 ```
 extract    eligible parent→child records (strict metric validity)
-reconcile  librarian LLM turns each diff into NEW / DUPLICATE / MERGE cards;
-           a byte-identical description never mints a second id (exact
-           text-twin dedup resolves to a provenance bump on the banked twin)
+author     inspect parent, child, diff, mutator explanation, signed gain,
+           validity, and archive status; emit DROP or at most one NEW
+           conditional hypothesis
+dedup      retrieve same-kind/same-task neighbors using the authored
+           description + mechanism, then classify strict NEW / EQUIVALENT;
+           equivalence requires the same action and applicability condition
+           and pools evidence without rewriting the banked treatment
 admit      novelty gate (optional, off by default) — reject NEW idea cards
            inside the mutator's prior
-exemplars  author program cards for top-fitness programs (best_programs_percent);
-           a harm-evicted exemplar is tombstoned and never re-authored this run
-restamp    base-relative fitness gain events across the full lineage pool;
-           credit that no longer resolves to a banked card is dropped
-evict      configured eviction sweep — catastrophic-birth, confidently-harmful,
-           and policy-non-viable cards leave the bank; deleted ids are
-           tombstoned against re-admission for the rest of the run
-consolidate inline same-batch folding of each increment's freshly added cards,
-           plus a throttled background pass over the whole bank
+exemplars  author one holistic strategy hypothesis for each selected strong
+           program; equivalent strategy families retain their best concrete
+           representative
+evidence   synchronize completed causal outcomes and selection leases
+retire     periodically remove only supported card lineages whose optimistic
+           posterior probability of safe, helpful utility is low in every
+           observed context; pending or stale verdicts fail closed
 ```
 
 When `writer.novelty_admission_gate` is on (**off by default** — the A/B
@@ -358,10 +360,10 @@ defaults are 3/3 — the arms override them.
 Embedding is config, not code. `embed.embed_scopes` maps a scope name to the
 card text fields concatenated into that scope's vector collection (defaults:
 `description`, `desc_expl`, `desc_task`); `embed.nearest_scope` (default
-`desc_expl`) backs the write path's nearest-card lookups (reconcile-agent
-context, consolidation candidates — all pure top-k; there is no distance
-threshold anywhere in the write path — program exemplars dedup by exact
-normalized-code identity, not by embedding distance);
+`desc_expl`) backs the write path's authored-action neighbor lookup. Embedding
+similarity generates candidates only; the LLM equivalence judge requires the
+same intervention and applicability condition. There is no distance threshold
+or periodic exhaustive consolidation;
 `embed.embedding_model` defaults to `Snowflake/snowflake-arctic-embed-m-v1.5`.
 `embed.query_prefix` is the instruction prepended to every retrieval *query*
 before it is embedded (never to the indexed card documents) — the asymmetric
@@ -416,8 +418,8 @@ Each card stores its authoring `task_key`; every gain event's decision context
 stores the task key under which its measurement ran.
 
 - **insight** — a distilled, transferable optimization lever: `description`
-  (the mechanism), `explanation_summary` (one-line *why*, indexed as its own
-  retrieval scope), `task_description_summary`, `keywords`, `category`.
+  (conditional action + mechanism), `explanation_summary` (one-line *why*,
+  indexed as its own retrieval scope), `task_description_summary`, `category`.
 - **program** — a top-fitness exemplar: the same prose fields plus
   `program_id`, `code`, and `fitness` (kind-gated by a validator).
 
@@ -534,8 +536,8 @@ Per run, under `checkpoint_dir`:
 
 | File | Contents |
 |---|---|
-| `memory_events.jsonl` | canonical event stream: read decisions, research steps, auction slates, budget caps, store writes/syncs, gain restamps, eviction sweeps, consolidation passes |
-| `write_ledger.jsonl` | append-only admission/eviction verdicts (outcomes: `added`, `updated`, `merged`, `rejected_harm`, `rejected_novelty`, `evicted`; a benign no-op ingest — `DISCARDED` — writes no row) |
+| `memory_events.jsonl` | canonical event stream: read decisions, applicability research, policy actions, store writes/syncs, and writer synchronization including retired card ids |
+| `write_ledger.jsonl` | append-only content and retirement verdicts (`added`, `updated`, `rejected_retired`, `rejected_novelty`, `evicted`; `discarded` is an unledgered no-op) |
 | `ope_summary.json` | auto-computed DR-AIPW probe-ITT effect (`tau_dr`, CI, IPS cross-check) of the card policy over the ledger, plus reconciliation health (orphans/dupes). Refreshed by the writer after each increment, so it lands in-progress, not only at completion; `status: insufficient_data` until a reconciled treated/control probe outcome exists. Also emitted as a `MEMORY_OPE_SUMMARY` event line |
 | `cards.json` | the bank itself |
 | `selection_leases.json` | live cross-process owners and their leased card ids; created on first lease |

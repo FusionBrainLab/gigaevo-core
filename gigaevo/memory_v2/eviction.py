@@ -20,6 +20,7 @@ from gigaevo.memory_v2.models import (
 )
 from gigaevo.memory_v2.policy import SafetyConstraint
 from gigaevo.memory_v2.posterior import (
+    FittedTerminalUtilityPosterior,
     HierarchicalTerminalUtilityPosterior,
     PosteriorFitError,
 )
@@ -104,14 +105,12 @@ class CausalRetirementEvictor:
     def sweep(self, cards: Sequence[Card]) -> list[str]:
         evidence = self.ledger.snapshot()
         revisions: list[CardSnapshot] = []
-        cards_by_id: dict[str, Card] = {}
         for card in cards:
             try:
                 revision = CardSnapshot.from_card(card)
             except ValueError:
                 continue
             revisions.append(revision)
-            cards_by_id[revision.bank_card_id] = card
 
         self._verdicts.clear()
         if not revisions or not evidence.observations:
@@ -127,9 +126,10 @@ class CausalRetirementEvictor:
                 "[MemoryV2][Retirement] posterior fit failed closed: {}", exc
             )
             return []
-        if (
-            not fitted.reward.optimizer_success
-            or fitted.reward.hyperparameters_at_boundary
+        reward_heads = (fitted.reward, fitted.lineage_reward)
+        if any(
+            not head.optimizer_success or head.hyperparameters_at_boundary
+            for head in reward_heads
         ):
             return []
 
@@ -161,7 +161,7 @@ class CausalRetirementEvictor:
             logger.info(
                 "[MemoryV2][Retirement] proposed {}/{} cards for retirement: {}",
                 len(retired_ids),
-                len(cards_by_id),
+                len(revisions),
                 retired_ids,
             )
         return retired_ids
@@ -169,7 +169,7 @@ class CausalRetirementEvictor:
     def _non_viable_everywhere(
         self,
         *,
-        fitted,
+        fitted: FittedTerminalUtilityPosterior,
         revision: CardSnapshot,
         contexts: Sequence[EvolutionContext],
         rng: EventRNG,

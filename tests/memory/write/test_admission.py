@@ -177,7 +177,7 @@ def test_retire_exemplar_without_task_scope_keeps_single_task_behavior(
     assert store.get(card.id) is None
 
 
-def test_gate_without_registry_keeps_legacy_eviction_behavior(store, make_card):
+def test_gate_without_selection_registry_still_sweeps(store, make_card):
     card = make_card()
     store.save(card)
     gate = CardAdmissionGate(store=store, evictor=MarkingEvictor({card.id}))
@@ -189,7 +189,7 @@ def test_gate_without_registry_keeps_legacy_eviction_behavior(store, make_card):
 def test_tombstoned_program_id_does_not_block_bare_insight_id(
     store, make_card, tmp_path
 ):
-    # Exemplar cache ids live in the "program-<id>" namespace; harm-evicting
+    # Exemplar cache ids live in the "program-<id>" namespace; retiring
     # one must not tombstone the bare insight id it embeds.
     exemplar = make_card(
         id="program-p1", kind=CardKind.PROGRAM, program_id="p1", code="x = 1"
@@ -357,12 +357,12 @@ def test_sweep_tombstones_id_against_readmission(store, make_card, tmp_path):
     # wave it straight back in — the tombstone must be what blocks it.
     harmful.clear()
     result = gate.admit(card.model_copy(update={"description": "re-authored twin"}))
-    assert result.rejected_harm
+    assert result.rejected_retired
     assert store.get(card.id) is None
     rows = read_rows(ledger.path)
     assert [r.outcome for r in rows] == [
         WriteOutcome.EVICTED,
-        WriteOutcome.REJECTED_HARM,
+        WriteOutcome.REJECTED_RETIRED,
     ]
 
     fresh = gate.admit(make_card(id=""))
@@ -374,7 +374,7 @@ def test_reject_novelty_records_row_and_does_not_bank(store, make_card, tmp_path
     result = gate.reject_novelty(make_card(id=""), "prior-known staple")
     assert result.outcome is WriteOutcome.REJECTED_NOVELTY
     assert not result.landed
-    assert not result.rejected_harm
+    assert not result.rejected_retired
     assert not result.benign_noop
     assert store.snapshot() == ()
     row = read_rows(ledger.path)[-1]
@@ -392,7 +392,7 @@ def test_write_result_benign_noop_is_discarded_only():
         card_id = "x" if outcome in landed else ""
         result = WriteResult(outcome=outcome, card_id=card_id)
         assert result.benign_noop is (outcome is WriteOutcome.DISCARDED)
-        assert result.rejected_harm is (outcome is WriteOutcome.REJECTED_HARM)
+        assert result.rejected_retired is (outcome is WriteOutcome.REJECTED_RETIRED)
         assert result.landed is (outcome in landed)
     assert not WriteResult(outcome=WriteOutcome.EVICTED).benign_noop
 
@@ -445,7 +445,7 @@ def test_ledger_concurrent_threads_and_processes_write_complete_rows(tmp_path):
     rows = read_rows(path)
     expected_count = (process_count + thread_count) * rows_per_worker
     assert len(rows) == expected_count
-    assert len({row.record_id for row in rows}) == expected_count
+    assert len({row.incoming_id for row in rows}) == expected_count
 
 
 def test_ledger_record_logs_and_swallows_lock_failure(tmp_path, monkeypatch):

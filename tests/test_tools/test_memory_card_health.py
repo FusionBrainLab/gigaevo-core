@@ -19,7 +19,6 @@ def _mem(card_id="mem-1", **over):
     card = {
         "id": card_id,
         "description": "Bin gain-to-bid ratio before clipping the upper tail.",
-        "keywords": ["binning", "clip"],
         "programs": ["p1", "p2"],
         "gain_events": None,
         "absorbed_ids": [],
@@ -35,7 +34,6 @@ def _bank(*cards):
 def test_assess_card_counts_attributes():
     h = assess_card("mem-1", _mem(gain_events=[{"gain": 0.1}], absorbed_ids=["mem-9"]))
     assert h.card_type == "mem"
-    assert h.n_keywords == 2
     assert h.n_programs == 2
     assert h.n_gain_events == 1
     assert h.absorbed_ids == ("mem-9",)
@@ -49,7 +47,6 @@ def test_assess_card_flags_missing_description():
 
 def test_assess_card_handles_absent_optional_fields():
     h = assess_card("mem-1", {"id": "mem-1", "description": "x"})
-    assert h.n_keywords == 0
     assert h.n_programs == 0
     assert h.n_gain_events == 0
     assert h.absorbed_ids == ()
@@ -57,7 +54,7 @@ def test_assess_card_handles_absent_optional_fields():
 
 def test_assess_run_rolls_up_counts():
     bank = _bank(
-        _mem("mem-1", keywords=[], gain_events=[{"gain": 0.1}]),
+        _mem("mem-1", gain_events=[{"gain": 0.1}]),
         _mem("mem-2", absorbed_ids=["mem-3"]),
         {"id": "prog-1", "description": "a program card"},
     )
@@ -65,7 +62,6 @@ def test_assess_run_rolls_up_counts():
     assert r.n_cards == 3
     assert r.n_mem == 2
     assert r.n_program == 1
-    assert r.n_zero_keywords == 1
     assert r.n_with_gain_events == 1
     assert r.n_with_absorbed == 1
 

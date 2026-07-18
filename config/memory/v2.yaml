@@ -11,7 +11,7 @@ defaults:
   - _self_
 
 # Start producing cards early enough for a 250-mutation run to evaluate them.
-# The shared v1 live-writer cadence remains ten successful ingestor sweeps.
+# Refresh content and retirement every five successful ingestor sweeps.
 write:
   refresh_every: 5
 

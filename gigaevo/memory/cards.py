@@ -364,8 +364,8 @@ class Card(BaseModel):
     """The one memory card.
 
     ``kind`` distinguishes distilled insights from program exemplars; the
-    exemplar-only fields (``program_id``, ``code``, ``code_sha256``,
-    ``fitness``) are kind-gated so an insight card can never smuggle them in.
+    exemplar-only fields (``program_id``, ``code``, ``fitness``) are kind-gated
+    so an insight card can never smuggle them in.
     Cards are frozen — the write path evolves them via ``model_copy(update=...)``.
     """
 
@@ -397,8 +397,8 @@ class Card(BaseModel):
     )
     absorbed_ids: tuple[str, ...] = Field(
         default=(),
-        description="Bank ids merged/consolidated into this survivor; children's "
-        "frozen card_ids_used pointing at them re-alias here at restamp.",
+        description="Historical bank aliases whose frozen attribution and causal "
+        "evidence belong to this card lineage.",
     )
     gain_events: tuple[ContextualGain, ...] = Field(
         default=(),
@@ -412,10 +412,6 @@ class Card(BaseModel):
     code: str = Field(
         default="", description="Exemplar program's source code (kind=program only)."
     )
-    code_sha256: str = Field(
-        default="",
-        description="SHA-256 of the normalized exemplar source (kind=program only).",
-    )
     fitness: float | None = Field(
         default=None,
         description="Exemplar fitness at capture time (kind=program only).",
@@ -426,12 +422,9 @@ class Card(BaseModel):
         if self.kind is CardKind.PROGRAM:
             if not self.program_id:
                 raise ValueError("kind=program requires a non-empty program_id")
-        elif (
-            self.program_id or self.code or self.code_sha256 or self.fitness is not None
-        ):
+        elif self.program_id or self.code or self.fitness is not None:
             raise ValueError(
-                "program_id/code/code_sha256/fitness are exemplar fields — "
-                "set kind=program"
+                "program_id/code/fitness are exemplar fields — set kind=program"
             )
         if self.id and self.id in self.absorbed_ids:
             raise ValueError("a card cannot absorb its own id")

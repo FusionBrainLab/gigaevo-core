@@ -15,7 +15,7 @@ from gigaevo.memory.write.decisions import (
     WriteDecision,
 )
 from gigaevo.memory.write.eviction import NullEvictor
-from gigaevo.memory.write.librarian import Librarian, code_sha256
+from gigaevo.memory.write.librarian import Librarian
 
 
 def authored(description: str = "When C holds, try A because M.") -> AuthoredCard:
@@ -253,12 +253,13 @@ async def test_unoffered_target_and_equivalence_failure_fail_open_to_new(store) 
 
 
 @pytest.mark.asyncio
-async def test_author_failure_drops_instead_of_banking_raw_note(store) -> None:
+async def test_author_failure_propagates_without_banking_raw_note(store) -> None:
     author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.DROP))
     author.error = RuntimeError("llm down")
     librarian = make_librarian(store, author=author)
 
-    assert await ingest_idea(librarian, mutation_report="raw uncurated note") == []
+    with pytest.raises(RuntimeError, match="llm down"):
+        await ingest_idea(librarian, mutation_report="raw uncurated note")
     assert store.snapshot() == ()
 
 
@@ -275,7 +276,6 @@ async def test_program_equivalence_keeps_family_id_and_best_representative(
         description="stable holistic strategy",
         explanation_summary="stable mechanism",
         fitness=0.5,
-        code_sha256=code_sha256("old code"),
     )
     store.save(target)
     store.hits = [ScoredCard(card=target, distance=0.1)]
@@ -319,7 +319,6 @@ async def test_worse_equivalent_program_only_appends_provenance_and_is_cached(st
         description="stable strategy",
         explanation_summary="stable why",
         fitness=0.9,
-        code_sha256=code_sha256("best"),
     )
     store.save(target)
     store.hits = [ScoredCard(card=target, distance=0.1)]

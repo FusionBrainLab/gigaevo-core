@@ -52,6 +52,5 @@ class ProgramExemplarPolicy(BaseModel):
     )
     store_code: bool = Field(
         default=False,
-        description="When false, new program cards keep only code_sha256, not "
-        "the full source body.",
+        description="Whether program cards retain the full source body.",
     )

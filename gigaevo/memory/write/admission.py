@@ -7,7 +7,6 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from uuid import uuid4
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,19 +29,14 @@ class WriteOutcome(StrEnum):
     ADDED = "added"
     UPDATED = "updated"
     DISCARDED = "discarded"
-    REJECTED_HARM = "rejected_harm"
+    REJECTED_RETIRED = "rejected_retired"
     REJECTED_NOVELTY = "rejected_novelty"
     REJECTED_CAPACITY = "rejected_capacity"
     EVICTED = "evicted"
 
 
 class WriteResult(BaseModel):
-    """What one gate ingest did, and the bank id the card landed under.
-
-    Replaces the former bare-``str`` return whose ``""`` conflated two verdicts a
-    caller must tell apart: a benign no-op (``DISCARDED`` — retry as fresh) and
-    terminal rejections such as harm, novelty, or bank capacity.
-    """
+    """What one gate ingest did, and the bank id the card landed under."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -57,8 +51,8 @@ class WriteResult(BaseModel):
         return bool(self.card_id)
 
     @property
-    def rejected_harm(self) -> bool:
-        return self.outcome is WriteOutcome.REJECTED_HARM
+    def rejected_retired(self) -> bool:
+        return self.outcome is WriteOutcome.REJECTED_RETIRED
 
     @property
     def benign_noop(self) -> bool:
@@ -78,20 +72,12 @@ class WriteLedgerRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = Field(
-        default="write_ledger.v1",
-        description="Stable schema id for append-only write ledger rows.",
-    )
-    record_id: str = Field(
-        default_factory=lambda: uuid4().hex,
-        description="Unique id for this ledger row.",
-    )
     timestamp_utc: str = Field(
         description="ISO-8601 UTC time the verdict was recorded."
     )
     incoming_id: str = Field(description="Id of the card as submitted to the bank.")
     final_id: str = Field(
-        description="Id the card ended up under (merge target for merges, '' if dropped)."
+        description="Id the card ended up under; empty if it did not land."
     )
     outcome: WriteOutcome = Field(description="Gate verdict for this card.")
     reason: str = Field(
@@ -99,9 +85,6 @@ class WriteLedgerRecord(BaseModel):
     )
     duplicate_of: str = Field(
         default="", description="Id of the existing card this one duplicated, if any."
-    )
-    category: str = Field(
-        default="", description="Category of the incoming card at submission time."
     )
 
 
@@ -125,7 +108,6 @@ class WriteLedger:
         outcome: WriteOutcome | str,
         reason: str = "",
         duplicate_of: str = "",
-        category: str = "",
     ) -> None:
         try:
             row = WriteLedgerRecord(
@@ -135,7 +117,6 @@ class WriteLedger:
                 outcome=WriteOutcome(outcome),
                 reason=reason,
                 duplicate_of=duplicate_of,
-                category=category,
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with _JsonlFileLock(self._path.with_suffix(self._path.suffix + ".lock")):
@@ -180,7 +161,7 @@ class CardAdmissionGate:
         self._tombstoned: set[str] = set()
 
     def is_tombstoned(self, card_id: str) -> bool:
-        """True iff this id was harm-deleted earlier in the run. Lets callers
+        """True iff this id was retired earlier in the run. Lets callers
         skip work the gate would reject anyway — the writer checks before
         paying the exemplar-author LLM call. In-memory only: a restart clears
         the set (accepted — the churn this kills is intra-run)."""
@@ -193,8 +174,8 @@ class CardAdmissionGate:
                 return self._ledger_record(
                     card,
                     "",
-                    WriteOutcome.REJECTED_HARM,
-                    "tombstoned: harm-evicted earlier this run",
+                    WriteOutcome.REJECTED_RETIRED,
+                    "tombstoned: causally retired earlier this run",
                 )
             known = bool(incoming_id) and self._store.get(incoming_id) is not None
 
@@ -321,7 +302,6 @@ class CardAdmissionGate:
                         "program_id": incoming.program_id,
                         "fitness": incoming.fitness,
                         "code": incoming.code,
-                        "code_sha256": incoming.code_sha256,
                     }
                 )
             return target.model_copy(update=updates)
@@ -358,7 +338,7 @@ class CardAdmissionGate:
                     rescued = True
                     reason = "fresh verdict no longer says evict"
                     return card
-                reason = _eviction_reason(self._evictor, card, "confidently harmful")
+                reason = _eviction_reason(self._evictor, card, "retirement verdict")
                 if self._is_leased(card.id):
                     leased = True
                     return card
@@ -446,7 +426,6 @@ class CardAdmissionGate:
                 outcome=outcome,
                 reason=reason,
                 duplicate_of=duplicate_of,
-                category=card.category,
             )
         return WriteResult(outcome=outcome, card_id=final_id)
 

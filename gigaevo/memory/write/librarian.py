@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Protocol
 
 from loguru import logger
@@ -82,25 +81,16 @@ class Librarian:
         founding_gain: ContextualGain | None = None,
     ) -> list[WriteResult]:
         """Author and route zero or one insight card."""
-        try:
-            response = await self._author.arun(
-                base_parent_code=base_parent_code,
-                child_code=child_code,
-                mutation_report=mutation_report,
-                parent_fitness=parent_fitness,
-                child_fitness=child_fitness,
-                signed_gain=signed_gain,
-                validity_status=validity_status,
-                archive_status=archive_status,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[Memory][Librarian] card author failed for child {}; dropping "
-                "this proposal: {}",
-                child_id,
-                exc,
-            )
-            return []
+        response = await self._author.arun(
+            base_parent_code=base_parent_code,
+            child_code=child_code,
+            mutation_report=mutation_report,
+            parent_fitness=parent_fitness,
+            child_fitness=child_fitness,
+            signed_gain=signed_gain,
+            validity_status=validity_status,
+            archive_status=archive_status,
+        )
         if response.decision is WriteDecision.DROP or response.card is None:
             logger.info(
                 "[Memory][Librarian] idea source={} author={}",
@@ -173,7 +163,6 @@ class Librarian:
             explanation_summary=response.card.explanation_summary,
             fitness=fitness,
             code=code if store_code else "",
-            code_sha256=code_sha256(code),
         )
         result = await self._route(
             card,
@@ -286,14 +275,3 @@ class Librarian:
                 self._reviewed_programs.add(program_id)
                 return True
         return False
-
-
-def _code_key(code: str) -> str:
-    return "\n".join(line.rstrip() for line in code.strip().splitlines())
-
-
-def code_sha256(code: str) -> str:
-    normalized = _code_key(code)
-    if not normalized:
-        return ""
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

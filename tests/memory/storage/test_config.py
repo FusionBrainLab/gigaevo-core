@@ -29,7 +29,7 @@ def test_default_embed_scopes_use_only_semantic_card_content():
         "task_description_summary",
     }
     assert "description" in fields
-    assert not {"keywords", "category", "fitness", "task_key"}.intersection(fields)
+    assert not {"category", "fitness", "task_key"}.intersection(fields)
 
 
 def test_embed_scopes_must_exist():

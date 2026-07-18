@@ -3,8 +3,8 @@
 The write path must not import the read system. The ``Evictor`` protocol and
 ``foreign_retention_veto`` are the eviction surface consumed by the admission
 gate's periodic sweep. ``NullEvictor`` disables write-side eviction (the
-``memory=v2`` default), the bank-maintenance twin of ``memory=none`` on the read
-side. A future harm evictor returns through the same ``Evictor`` seam.
+``memory=none`` path), the bank-maintenance twin of disabled memory on the read
+side. ``memory=v2`` wires its causal retirement policy through this seam.
 """
 
 from __future__ import annotations

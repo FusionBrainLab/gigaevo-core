@@ -29,6 +29,10 @@ class _FittedPosterior:
         optimizer_success=True,
         hyperparameters_at_boundary=False,
     )
+    lineage_reward = SimpleNamespace(
+        optimizer_success=True,
+        hyperparameters_at_boundary=False,
+    )
     safety_integration_tolerance = 1e-8
 
     def __init__(self, viability) -> None:
@@ -180,6 +184,21 @@ def test_pending_or_optimistically_viable_card_is_retained(
         RagApplicability.UNASSESSED,
         RagApplicability.APPLICABLE,
     ]
+
+
+def test_unhealthy_lineage_posterior_vetoes_retirement(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="card", task_key="task", description="conditional treatment")
+    revision = CardSnapshot.from_card(card)
+    ledger = _Ledger(_evidence(revision, evolution_context))
+    evictor, posterior = _evictor(ledger, viability=0.0)
+    posterior.fitted.lineage_reward = SimpleNamespace(
+        optimizer_success=False,
+        hyperparameters_at_boundary=False,
+    )
+
+    assert evictor.sweep((card,)) == []
 
 
 def test_absorbed_lineage_evidence_supports_survivor_retirement(

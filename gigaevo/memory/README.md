@@ -20,8 +20,8 @@ Strictly ordered — a layer imports only layers to its left; `read/` and
 `write/` never import each other (the write-side eviction surface — the
 `Evictor` Protocol + `NullEvictor` — is self-contained in `write/`). Only
 `storage/index.py` touches Chroma; LLM handles live only in
-`storage/research.py` and the write-side authoring modules
-(`librarian.py`, `consolidation.py`, `writer.py`).
+`storage/research.py` and the write-side authoring modules (`librarian.py`,
+`writer.py`).
 `tests/memory/test_layering.py` enforces all three rules over the AST.
 
 Everything is Pydantic (frozen, `extra="forbid"`, no aliases); malformed
@@ -48,15 +48,14 @@ persisted data raises instead of being coerced.
 | `read/interfaces.py` | Shared read-side Protocols: `Shortlister`, `PolicyDigestProvider` + the `policy_digest` fallback |
 | `read/shortlist.py` | `ResearchShortlister`: mutation-grounded query → `store.research()`; passes a digest of the newest banked cards (one description line each) as the planner's context |
 | `read/exclusion.py` | `CardExcluder` Protocol, `NullExcluder`, `LineageExcluder` (filter-first lineage gate) |
-| `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): extract → reconcile → author exemplars → restamp gains → configured eviction sweep (`NullEvictor` by default), one lock |
+| `write/writer.py` | `MemoryWriter` (`IncrementalPostRunHook`): extract outcomes → author at most one hypothesis per mutation → author bounded program strategy exemplars → update causal evidence → periodic retirement sweep, one lock |
 | `write/crediting.py` | `EffectEstimator` seam: one `InjectionOutcome` → a `Measurement` (base-relative gain attribution) |
-| `write/librarian.py` | LLM card authoring: reconcile diffs into NEW/DUPLICATE/MERGE cards (byte-identical descriptions dedup to a provenance bump, never a second id), author exemplar prose; optional novelty-admission gate on NEW idea cards |
+| `write/librarian.py` | One write protocol for both card kinds: author one candidate without bank context → retrieve same-task/same-kind neighbors from the authored action → strict `NEW` / `EQUIVALENT` judgment; equivalence preserves the existing treatment text and pools evidence |
 | `gigaevo/llm/agents/admission_novelty.py` (outside this package) | `NoveltyAdmissionAgent`: keep/reject an idea card on novelty vs the mutator's prior (`writer.novelty_admission_gate`, off by default pending its A/B) |
-| `write/admission.py` | Transactional admit/merge/provenance and fresh guarded retirement; harm deletions tombstone ids + `WriteLedger` |
+| `write/admission.py` | Transactional admission, exact-equivalent evidence pooling, guarded program pruning, one-shot retirement revalidation, tombstones, and the minimal `WriteLedger` |
 | `write/stats.py` | `CardStatsUpdater`: base-relative gain attribution + bank-wide restamp (credit that no longer resolves to a banked card is dropped); seeds each new insight card's `founding` gain event (signed parent→child delta) and preserves it across restamps |
-| `write/merge.py` | `DedupPolicy` + card merge semantics |
-| `write/consolidation.py` | Near-duplicate consolidation: inline same-batch pass over each increment's freshly-ADDED cards (`consolidate_written`) + throttled background pass over the whole bank |
-| `write/eviction.py` | `Evictor` Protocol, `NullEvictor` (the `memory=v2` default), and the shared hard-sign foreign-retention veto |
+| `write/policies.py` | Immutable authored-neighbor and program-exemplar bounds |
+| `write/eviction.py` | Write-side `Evictor` seam plus `NullEvictor`; `memory=v2` supplies `CausalRetirementEvictor` from `memory_v2/eviction.py` |
 | `write/extraction.py` | `ProgramRecordExtractor` — eligible records via strict `MetricsContext` validity |
 | `provider.py` | `MemoryProvider` ABC + `NullMemoryProvider` / `LeasedMemoryProvider` |
 | `live_memory_hook.py` | `LiveMemoryRefreshHook` — periodic in-run writer sweeps (`post_step_hook`) |
@@ -83,7 +82,7 @@ groups, and launch recipes.
 | File | Writer | Contents |
 |---|---|---|
 | `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, atomic rewrite per save |
-| `write_ledger.jsonl` | `WriteLedger` | Append-only admission/eviction verdicts; outcomes: `added` / `updated` / `merged` / `rejected_harm` / `rejected_novelty` / `evicted` (a benign no-op ingest — `DISCARDED` — writes no row) |
+| `write_ledger.jsonl` | `WriteLedger` | Append-only content and retirement verdicts; outcomes include `added`, `updated`, `rejected_retired`, `rejected_novelty`, and `evicted` (`discarded` is an unledgered no-op) |
 | `memory_events.jsonl` | `events.py` sink | Every memory event, one JSON row each |
 
 The bank is the source of truth. `VectorIndex` is process-local and in-memory;
@@ -97,7 +96,7 @@ the bank up from disk, so a later run consumes a bank a prior run built.
 All modules log under `[Memory][<Component>]`; single-grep `\[Memory\]\[`
 covers the subsystem. `memory_events.jsonl` is the primary trace
 (read decisions, research steps, store writes/syncs, gain restamps,
-eviction sweeps, consolidation passes).
+and retirement sweeps).
 First stop for debugging:
 
 ```bash

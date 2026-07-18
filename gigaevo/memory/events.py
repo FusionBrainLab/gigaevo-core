@@ -389,47 +389,6 @@ class MemoryGainRestamp(MemoryEvent):
     event_count_by_card_id: dict[str, int] = Field(default_factory=dict)
 
 
-class MemoryEvictionSweep(MemoryEvent):
-    event: ClassVar[str] = "MEMORY_EVICTION_SWEEP"
-    description: ClassVar[str] = (
-        "A configured eviction sweep deleted cards from the bank."
-    )
-    health_question: ClassVar[str] = "Is memory eviction firing, and how often?"
-
-    bank_count: int = 0
-    evicted_ids: tuple[str, ...] = ()
-
-
-class MemoryPriorCohort(MemoryEvent):
-    event: ClassVar[str] = "MEMORY_PRIOR_COHORT"
-    description: ClassVar[str] = (
-        "Live and evicted card counts backing an empirical-Bayes cold prior."
-    )
-    health_question: ClassVar[str] = (
-        "Is cold-prior evidence retaining the evicted cohort?"
-    )
-
-    live_card_count: int = 0
-    evicted_card_count: int = 0
-    cohort_card_count: int = 0
-
-
-class MemoryConsolidationPass(MemoryEvent):
-    event: ClassVar[str] = "MEMORY_CONSOLIDATION_PASS"
-    description: ClassVar[str] = (
-        "One background near-duplicate consolidation pass finished."
-    )
-    health_question: ClassVar[str] = (
-        "Is consolidation folding drifted near-duplicates (or failing)?"
-    )
-
-    # {"ok", "failed"}
-    outcome: str
-    merged: int = 0
-    failures: int = 0
-    error: str = ""
-
-
 class MemoryAssignment(MemoryEvent):
     event: ClassVar[str] = "MEMORY_ASSIGNMENT"
     description: ClassVar[str] = "One durable memory read-policy assignment."

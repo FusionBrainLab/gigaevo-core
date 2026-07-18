@@ -1,9 +1,10 @@
 # Memory v2: Causal Bayesian Core
 
 Memory v2 keeps the useful operational machinery from memory v1: the Pydantic
-card schema, local store, live writer, deduplication, consolidation, program
-exemplars, lineage exclusion, and selection leases. It replaces the entangled
-reputation and auction path with one replayable hierarchical causal bandit.
+card schema, local store, live writer, online authored-action equivalence,
+program exemplars, lineage exclusion, and selection leases. It replaces the
+entangled reputation and auction path with one replayable hierarchical causal
+bandit.
 
 The full posterior, selection, lifecycle, diagrams, and plain-English Bayesian
 glossary are in [the Bayesian system report](memory_v2_bayesian_system_report.md).
@@ -252,26 +253,28 @@ rho(j) * (1 - e(j))    withheld-control joint probability
 ```
 
 `e(j)` is a fixed configured overlap probability. Both arms consume the same
-pending budget over the complete consolidation lineage, preventing delayed
-controls or recently absorbed ids from bypassing the concurrency cap.
+pending budget over the complete stable card lineage, preventing delayed
+controls or historical absorbed ids from bypassing the concurrency cap.
 
-## V1 Content, Bayesian Retirement
+## Content Authoring and Bayesian Retirement
 
-The writer retains v1's useful content lifecycle: insight extraction from
-successful diffs, program exemplars, duplicate reconciliation, consolidation,
-and program-exemplar replacement. It does not restamp v1 heuristic efficacy
-events into the v2 model. The initial v2 configuration does not impose a
-task-wide card cap. Duplicate reconciliation, consolidation, program-exemplar
-pruning, and posterior harm retirement still operate; new ideas are not
-rejected merely because the bank reached an arbitrary size.
+The writer inspects each parent→child diff and observed outcome, authors at most
+one conditional hypothesis, retrieves neighbors from that authored action, and
+uses strict same-action/same-condition equivalence before admission. Program
+exemplars use the same protocol and retain the best concrete representative of
+each semantic strategy family. There is no union prose, merge decision, or
+periodic exhaustive consolidation. The writer does not restamp heuristic
+efficacy events into the v2 model.
 
-Harm retirement refits the current causal posterior, requires direct treated
-and withheld-control support for the stable treatment, and protects every pending
-lineage alias. A card is removed only when its Monte Carlo upper confidence
-bound for `P(safe and helpful)` is below the configured threshold in every
-distinct observed modeled context. Optimizer, posterior-boundary, or safety
-integration uncertainty vetoes irreversible retirement. The existing admission
-gate rechecks the verdict under the selection-lease lock before deletion.
+Causal retirement refits the current causal posterior, requires randomized
+treated and pooled-control support across multiple observed contexts, and
+protects every pending lineage alias. A card is removed only when the Monte
+Carlo upper bound for `P(safe and helpful)` is below the configured threshold
+in every observed modeled context under both unassessed and applicable RAG
+states. Optimizer, posterior-boundary, or safety-integration uncertainty vetoes
+irreversible retirement. The admission gate consumes a one-shot verdict and
+rechecks both the exact treatment revision and evidence version under the
+selection-lease lock before deletion.
 
 ## Durable Evidence
 

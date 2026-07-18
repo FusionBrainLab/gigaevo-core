@@ -10,7 +10,6 @@ from gigaevo.exceptions import MergeAborted, StorageError
 from gigaevo.memory.cards import ContextualGain, DecisionContext
 from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.local import LocalMemoryStore
-from gigaevo.memory.write.merge import merge_cards
 
 
 def _run_thread(call):
@@ -29,6 +28,23 @@ def _run_thread(call):
     assert not worker.is_alive()
     assert errors == []
     return result[0]
+
+
+def _fold_evidence(target, partner):
+    if partner is None:
+        return target
+    absorbed = tuple(
+        dict.fromkeys((*target.absorbed_ids, *partner.absorbed_ids, partner.id))
+    )
+    events = list(target.gain_events)
+    events.extend(event for event in partner.gain_events if event not in events)
+    return target.model_copy(
+        update={
+            "programs": tuple(dict.fromkeys((*target.programs, *partner.programs))),
+            "absorbed_ids": absorbed,
+            "gain_events": tuple(events),
+        }
+    )
 
 
 def test_update_transform_can_read_same_store(make_store_config, make_card):
@@ -81,7 +97,7 @@ def test_merge_retire_uses_fresh_target_evidence(make_store_config, make_card):
     def fold(fresh_target, fresh_partner):
         folded_targets.append(fresh_target)
         assert fresh_partner == partner
-        return merge_cards(fresh_target, fresh_partner, replace_description=True)
+        return _fold_evidence(fresh_target, fresh_partner)
 
     result = store.merge_retire(target.id, partner.id, fold)
 
@@ -163,11 +179,7 @@ def test_opposite_direction_merges_cannot_delete_both_cards(
                 store.merge_retire(
                     target_id,
                     partner_id,
-                    lambda target, partner: merge_cards(
-                        target,
-                        partner if partner is not None else target,
-                        replace_description=False,
-                    ),
+                    _fold_evidence,
                 )
             except BaseException as exc:
                 errors.append(exc)

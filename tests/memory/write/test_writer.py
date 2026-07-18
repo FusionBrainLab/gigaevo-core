@@ -20,7 +20,6 @@ from gigaevo.memory.write.admission import (
     WriteResult,
 )
 from gigaevo.memory.write.eviction import NullEvictor
-from gigaevo.memory.write.librarian import code_sha256
 from gigaevo.memory.write.policies import ProgramExemplarPolicy
 from gigaevo.memory.write.writer import MemoryWriter
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext, MetricSpec
@@ -43,10 +42,13 @@ class FakeLibrarian:
         self.ingest_calls: list[dict] = []
         self.authored: list[str] = []
         self.ingest_delay_s = 0.0
+        self.ingest_error: Exception | None = None
 
     async def ingest_idea(self, **kwargs) -> list[WriteResult]:
         if self.ingest_delay_s:
             await asyncio.sleep(self.ingest_delay_s)
+        if self.ingest_error is not None:
+            raise self.ingest_error
         self.ingest_calls.append(kwargs)
         return [
             WriteResult(
@@ -80,7 +82,6 @@ class FakeLibrarian:
             explanation_summary="test strategy",
             fitness=fitness,
             code=code if store_code else "",
-            code_sha256=code_sha256(code),
         )
         return WriteResult(outcome=WriteOutcome.ADDED, card_id=self._store.save(card))
 
@@ -214,6 +215,29 @@ async def test_ingest_timeout_forgets_record_for_retry(
     assert [c["child_id"] for c in librarian.ingest_calls] == [child.id]
 
 
+async def test_ingest_failure_forgets_record_and_continues_for_retry(
+    store, make_program, metrics_context, tmp_path
+):
+    child = make_program(fitness=0.7, parents=["p"])
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        best_programs_percent=0.0,
+    )
+    librarian = writer._stack.librarian
+    librarian.ingest_error = RuntimeError("temporary author failure")
+
+    await writer.run_increment([child])
+
+    assert librarian.ingest_calls == []
+    assert child.id not in writer._extractor.seen_ids
+
+    librarian.ingest_error = None
+    await writer.run_increment([child])
+    assert [c["child_id"] for c in librarian.ingest_calls] == [child.id]
+
+
 async def test_cancelled_stats_restamp_holds_writer_lock_until_thread_finishes(
     store, make_program, metrics_context, tmp_path, monkeypatch
 ):
@@ -316,7 +340,7 @@ async def test_program_exemplar_policy_caps_authored_per_refresh(
     assert sorted(banked) == sorted(expected)
 
 
-async def test_program_exemplar_policy_stores_hash_not_code_by_default(
+async def test_program_exemplar_policy_omits_code_by_default(
     store, make_program, metrics_context, tmp_path
 ):
     program = make_program(fitness=0.8, parents=[], code="def solve():\n    return 1\n")
@@ -332,7 +356,6 @@ async def test_program_exemplar_policy_stores_hash_not_code_by_default(
     card = store.get(f"program-{program.id}")
     assert card is not None
     assert card.code == ""
-    assert card.code_sha256 == code_sha256(program.code)
 
 
 def test_program_exemplar_policy_prunes_to_max_cards(
@@ -344,21 +367,18 @@ def test_program_exemplar_policy_prunes_to_max_cards(
             kind=CardKind.PROGRAM,
             program_id="low",
             fitness=0.1,
-            code_sha256="low",
         ),
         make_card(
             id="program-mid",
             kind=CardKind.PROGRAM,
             program_id="mid",
             fitness=0.5,
-            code_sha256="mid",
         ),
         make_card(
             id="program-high",
             kind=CardKind.PROGRAM,
             program_id="high",
             fitness=0.9,
-            code_sha256="high",
         ),
     ]
     for card in cards:
@@ -386,7 +406,6 @@ def test_program_exemplar_prune_keeps_foreign_helpful_and_retires_cold(
         kind=CardKind.PROGRAM,
         program_id="helpful",
         fitness=0.1,
-        code_sha256="helpful",
         gain_events=(
             make_event(0.2, task_key="foreign-task"),
             make_event(0.1, task_key="foreign-task"),
@@ -399,7 +418,6 @@ def test_program_exemplar_prune_keeps_foreign_helpful_and_retires_cold(
         kind=CardKind.PROGRAM,
         program_id="cold",
         fitness=0.2,
-        code_sha256="cold",
     )
     best = make_card(
         id="program-best",
@@ -407,7 +425,6 @@ def test_program_exemplar_prune_keeps_foreign_helpful_and_retires_cold(
         kind=CardKind.PROGRAM,
         program_id="best",
         fitness=0.9,
-        code_sha256="best",
     )
     for card in (helpful, cold, best):
         store.save(card)
@@ -437,7 +454,6 @@ def test_program_exemplar_cap_ignores_foreign_task_cards(
             kind=CardKind.PROGRAM,
             program_id=f"foreign-{i}",
             fitness=100.0 + i,
-            code_sha256=f"foreign-{i}",
         )
         for i in range(3)
     ]
@@ -447,7 +463,6 @@ def test_program_exemplar_cap_ignores_foreign_task_cards(
         kind=CardKind.PROGRAM,
         program_id="own-only",
         fitness=0.5,
-        code_sha256="own-only",
     )
     for card in [*foreign, own]:
         store.save(card)
@@ -473,7 +488,6 @@ def test_program_exemplar_cap_prunes_only_own_task_cards(
         kind=CardKind.PROGRAM,
         program_id="foreign-best-looking",
         fitness=-100.0,
-        code_sha256="foreign-best-looking",
     )
     own = [
         make_card(
@@ -482,7 +496,6 @@ def test_program_exemplar_cap_prunes_only_own_task_cards(
             kind=CardKind.PROGRAM,
             program_id=f"own-{label}",
             fitness=fitness,
-            code_sha256=f"own-{label}",
         )
         for label, fitness in [("low", 0.1), ("mid", 0.5), ("high", 0.9)]
     ]

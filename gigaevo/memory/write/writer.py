@@ -415,7 +415,7 @@ class MemoryWriter(IncrementalPostRunHook):
         posterior_programs: list[Program] | None = None,
     ) -> None:
         """Full pipeline: filter eligible records → author one hypothesis per diff →
-        cards → author exemplar cards → stamp gain events → harm-evict.
+        cards → author exemplar cards → update causal evidence → sweep retirement.
 
         ``programs`` feeds the expensive librarian agents and may be a bounded
         window (the live hook caps it to keep each sweep inside the engine's
@@ -479,7 +479,7 @@ class MemoryWriter(IncrementalPostRunHook):
                 )
             except TimeoutError:
                 # A stalled memory-LLM call must not starve the rest of the
-                # sweep (sibling ingests, exemplars, harm eviction). Drop this
+                # sweep (sibling ingests, exemplars, causal retirement). Drop this
                 # record so it is retried on a later increment, and continue.
                 logger.warning(
                     "[Memory][Writer] ingest of {} ({}/{}) timed out after "
@@ -490,6 +490,16 @@ class MemoryWriter(IncrementalPostRunHook):
                     self._ingest_call_timeout_s,
                 )
                 self._extractor.forget({rec.id})
+                continue
+            except Exception as exc:
+                # A transient author/store failure should neither abort the
+                # remaining records nor permanently mark this mutation seen.
+                self._extractor.forget({rec.id})
+                logger.warning(
+                    "[Memory][Writer] ingest of {} failed ({}); scheduling retry",
+                    rec.id,
+                    exc,
+                )
                 continue
             except BaseException:
                 # CancelledError included: the record was marked seen before

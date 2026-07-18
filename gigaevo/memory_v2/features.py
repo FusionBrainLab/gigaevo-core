@@ -57,7 +57,7 @@ class FeatureSpace:
     def _resolve_bank_lineages(
         cards: tuple[CardSnapshot, ...],
     ) -> dict[str, str]:
-        """Resolve transitive consolidation aliases to one unambiguous survivor."""
+        """Resolve historical aliases to one unambiguous live lineage."""
 
         adjacency: dict[str, set[str]] = {}
         absorbed: set[str] = set()
@@ -86,7 +86,7 @@ class FeatureSpace:
             roots = sorted((component & actual) - absorbed)
             if len(roots) != 1:
                 raise ValueError(
-                    "bank consolidation lineage must have exactly one survivor; "
+                    "bank alias lineage must have exactly one survivor; "
                     f"component={sorted(component)!r}, survivors={roots!r}"
                 )
             survivor = roots[0]

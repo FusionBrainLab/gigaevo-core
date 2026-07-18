@@ -672,9 +672,7 @@ def test_shared_registry_exposes_and_releases_cross_process_lease(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == {"owners": {}}
 
 
-def test_shared_registry_blocks_cross_process_sweep_and_merge(
-    tmp_path, make_card, monkeypatch
-):
+def test_shared_registry_blocks_cross_process_sweep(tmp_path, make_card, monkeypatch):
     monkeypatch.setattr(
         "gigaevo.memory.storage.index.SentenceTransformerEmbeddingFunction",
         FakeEmbeddingFunction,
@@ -703,7 +701,6 @@ def test_shared_registry_blocks_cross_process_sweep_and_merge(
         )
 
         assert gate_b.sweep() == []
-        assert gate_b.merge(target.id, card).benign_noop
         assert store_b.get(card.id) == card
 
         lease.release()

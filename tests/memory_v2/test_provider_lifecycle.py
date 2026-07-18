@@ -563,6 +563,7 @@ def test_v2_writer_releases_leases_without_restamping_card_efficacy(
     )
 
     gate = Mock()
+    gate.sweep.return_value = ["retired-card"]
     updater.update(children, store=store, gate=gate)
 
     assert store.snapshot() == (card,)
@@ -574,6 +575,7 @@ def test_v2_writer_releases_leases_without_restamping_card_efficacy(
     assert events[0].evidence_count == 0
     assert events[0].bank_size == 1
     assert events[0].released_child_count == 1
+    assert events[0].retired_card_ids == ("retired-card",)
 
 
 @pytest.mark.asyncio

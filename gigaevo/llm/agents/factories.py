@@ -291,7 +291,7 @@ def create_novelty_admission_agent(
     """Create the librarian's novelty-admission judge (idea-card write gate).
 
     Bakes the task into the system prompt's CONTEXT once at construction (the
-    task is fixed for a run), mirroring the reconcile factory. No metrics: the
+    task is fixed for a run), mirroring the other authoring factories. No metrics: the
     judge reasons over one authored card against the model's prior for the task.
 
     Args:
