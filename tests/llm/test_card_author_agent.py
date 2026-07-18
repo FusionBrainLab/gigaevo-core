@@ -45,7 +45,13 @@ def response(decision: WriteDecision) -> CardAuthorResponse:
 @pytest.mark.asyncio
 async def test_author_returns_at_most_one_candidate_and_renders_outcome() -> None:
     llm = FakeLlm(response(WriteDecision.NEW))
-    agent = create_card_author_agent(llm, task_description="maximize quality")
+    agent = create_card_author_agent(
+        llm,
+        task_description="maximize quality",
+        metrics_description=(
+            '- quality: objective score (↑ better; [0.0, 1.0] range; unit="points")'
+        ),
+    )
 
     result = await agent.arun(
         base_parent_code="x = 1",
@@ -68,6 +74,9 @@ async def test_author_returns_at_most_one_candidate_and_renders_outcome() -> Non
         "higher is better",
         "archived",
         "avoid overshoot",
+        "objective score",
+        "[0.0, 1.0] range",
+        'unit="points"',
     ):
         assert marker in prompt
     assert "--- base_parent.py" in prompt
@@ -77,7 +86,9 @@ async def test_author_returns_at_most_one_candidate_and_renders_outcome() -> Non
 @pytest.mark.asyncio
 async def test_drop_has_no_card() -> None:
     agent = create_card_author_agent(
-        FakeLlm(response(WriteDecision.DROP)), task_description="task"
+        FakeLlm(response(WriteDecision.DROP)),
+        task_description="task",
+        metrics_description="- score: objective (↓ better)",
     )
     result = await agent.arun(
         base_parent_code="x = 1",

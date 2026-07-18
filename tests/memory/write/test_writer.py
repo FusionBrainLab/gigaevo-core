@@ -130,6 +130,27 @@ def make_writer(store, metrics_context, tmp_path, **overrides) -> MemoryWriter:
     return writer
 
 
+def test_writer_pre_renders_metric_context_for_librarian(store, tmp_path) -> None:
+    metrics_context = MetricsContext(
+        specs={
+            "latency": MetricSpec(
+                description="validation latency",
+                higher_is_better=False,
+                is_primary=True,
+                lower_bound=0.0,
+                upper_bound=100.0,
+                unit="ms",
+            )
+        }
+    )
+
+    writer = make_writer(store, metrics_context, tmp_path)
+
+    assert writer._stack._metrics_description == (
+        '- latency: validation latency (↓ better; [0.0, 100.0] range; unit="ms")'
+    )
+
+
 async def test_run_increment_ingests_and_authors_exemplars(
     store, make_program, metrics_context, tmp_path
 ):

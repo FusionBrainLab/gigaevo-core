@@ -14,7 +14,7 @@ Treat the full architecture as the exemplar: representation, construction/search
 
 The condition must identify the structure that makes the strategy applicable. The action must be implementable in another program. The mechanism must explain why the strategy addresses that structure. Preserve meaningful mathematical or algorithmic specificity while removing instance names, literal constants, and line-by-line detail.
 
-Fitness and rank establish that the complete program is a strong observed exemplar. They do not prove causality, transfer, or an effect magnitude. Phrase the card as a hypothesis, never as a proven truth.
+Fitness and rank establish that the complete program is a strong observed exemplar. Interpret fitness using the metric meaning, bounds, and units in METRIC CONTEXT. They do not prove causality, transfer, or an effect magnitude. Phrase the card as a hypothesis, never as a proven truth.
 
 The `explanation_summary` compactly records the mechanism and the evidential limitation. It is not a second strategy.
 
@@ -25,3 +25,7 @@ The structured schema defines the fields. For `DROP`, return `card: null`. For `
 ## TASK CONTEXT
 
 {task_description}
+
+## METRIC CONTEXT
+
+{metrics_description}

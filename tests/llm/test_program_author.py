@@ -42,7 +42,13 @@ async def test_program_author_returns_one_holistic_hypothesis() -> None:
         ),
     )
     llm = FakeLlm(expected)
-    agent = create_program_author_agent(llm, task_description="task")
+    agent = create_program_author_agent(
+        llm,
+        task_description="task",
+        metrics_description=(
+            '- loss: validation loss (↓ better; [0.0, 1.0] range; unit="nats")'
+        ),
+    )
 
     result = await agent.arun(
         code="def solve(): ...",
@@ -56,12 +62,19 @@ async def test_program_author_returns_one_holistic_hypothesis() -> None:
     assert "0.53" in rendered
     assert "lower is better" in rendered
     assert "2" in rendered
+    assert "validation loss" in rendered
+    assert "[0.0, 1.0] range" in rendered
+    assert 'unit="nats"' in rendered
 
 
 @pytest.mark.asyncio
 async def test_program_author_can_drop_uninformative_program() -> None:
     expected = ProgramAuthorResponse(decision=WriteDecision.DROP, card=None)
-    agent = create_program_author_agent(FakeLlm(expected), task_description="task")
+    agent = create_program_author_agent(
+        FakeLlm(expected),
+        task_description="task",
+        metrics_description="- score: objective (↑ better)",
+    )
     assert (
         await agent.arun(
             code="pass",

@@ -39,6 +39,7 @@ from gigaevo.memory.write.librarian import Librarian, exemplar_card_id
 from gigaevo.memory.write.policies import DedupPolicy, ProgramExemplarPolicy
 from gigaevo.memory.write.stats import CardStatsUpdater, NoCardBaselineEstimator
 from gigaevo.programs.metrics.context import MetricsContext
+from gigaevo.programs.metrics.formatter import MetricsFormatter
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 
 if TYPE_CHECKING:
@@ -99,6 +100,7 @@ class LibrarianWriteStack:
         checkpoint_dir: str | Path,
         task_key: str = "",
         task_description: str = "",
+        metrics_description: str,
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
         novelty_admission_gate: bool = False,
@@ -113,6 +115,7 @@ class LibrarianWriteStack:
         self._checkpoint_dir = Path(checkpoint_dir)
         self._task_key = task_key
         self._task_description = task_description
+        self._metrics_description = metrics_description
         self._dedup_policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._prompts_dir = prompts_dir
         self._novelty_admission_gate = novelty_admission_gate
@@ -228,13 +231,19 @@ class LibrarianWriteStack:
         # The store is the neighbor source for authored-action retrieval.
         librarian = Librarian(
             author=create_card_author_agent(
-                self._llm, self._task_description, prompts_dir=self._prompts_dir
+                self._llm,
+                self._task_description,
+                self._metrics_description,
+                prompts_dir=self._prompts_dir,
             ),
             equivalence=create_equivalence_agent(
                 self._llm, self._task_description, prompts_dir=self._prompts_dir
             ),
             program_author=create_program_author_agent(
-                self._llm, self._task_description, prompts_dir=self._prompts_dir
+                self._llm,
+                self._task_description,
+                self._metrics_description,
+                prompts_dir=self._prompts_dir,
             ),
             gate=gate,
             store=store,
@@ -338,6 +347,9 @@ class MemoryWriter(IncrementalPostRunHook):
         self._higher_is_better = metrics_context.is_higher_better(fitness_key)
         self._task_key = task_key
         self._task_description = task_description
+        metrics_description = MetricsFormatter(
+            metrics_context
+        ).format_metrics_description()
         policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._program_exemplars = (
             program_exemplars
@@ -355,6 +367,7 @@ class MemoryWriter(IncrementalPostRunHook):
             checkpoint_dir=checkpoint_dir,
             task_key=task_key,
             task_description=task_description,
+            metrics_description=metrics_description,
             dedup_policy=policy,
             prompts_dir=prompts_dir,
             novelty_admission_gate=novelty_admission_gate,

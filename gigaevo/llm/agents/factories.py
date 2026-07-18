@@ -270,12 +270,16 @@ def create_lineage_agent(
 def create_card_author_agent(
     llm: ChatOpenAI | MultiModelRouter,
     task_description: str,
+    metrics_description: str,
     prompts_dir: str | Path | None = None,
 ) -> CardAuthorAgent:
     """Create the mutation-outcome card author."""
     system_template = CardAuthorPrompts.system(prompts_dir=prompts_dir)
     user_template = CardAuthorPrompts.user(prompts_dir=prompts_dir)
-    system_prompt = system_template.format(task_description=task_description)
+    system_prompt = system_template.format(
+        task_description=task_description,
+        metrics_description=metrics_description,
+    )
     return CardAuthorAgent(
         llm=llm,
         system_prompt=system_prompt,
@@ -332,6 +336,7 @@ def create_equivalence_agent(
 def create_program_author_agent(
     llm: ChatOpenAI | MultiModelRouter,
     task_description: str,
+    metrics_description: str,
     prompts_dir: str | Path | None = None,
 ) -> ProgramAuthorAgent:
     """Create the librarian's exemplar program-author agent.
@@ -339,6 +344,7 @@ def create_program_author_agent(
     Args:
         llm: LangChain chat model or multi-model router.
         task_description: Description of the optimization task.
+        metrics_description: Metric meanings, directions, bounds, and units.
         prompts_dir: Optional prompts directory (e.g. ``config.prompts.dir``).
             If None, package defaults are used.
 
@@ -347,7 +353,10 @@ def create_program_author_agent(
     """
     system_template = ProgramAuthorPrompts.system(prompts_dir=prompts_dir)
     user_template = ProgramAuthorPrompts.user(prompts_dir=prompts_dir)
-    system_prompt = system_template.format(task_description=task_description)
+    system_prompt = system_template.format(
+        task_description=task_description,
+        metrics_description=metrics_description,
+    )
     return ProgramAuthorAgent(
         llm=llm,
         system_prompt=system_prompt,

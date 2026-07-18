@@ -15,6 +15,7 @@ The unified diff is the authoritative action. The full programs provide context.
 
 The outcome block contains parent fitness, child fitness, fitness direction, signed gain, and archive status. Signed gain is direction-normalized: positive is better, negative is worse. Use this evidence to decide whether the mutation is worth preserving:
 
+- Interpret fitness and gain magnitude using the metric meaning, bounds, and units in METRIC CONTEXT.
 - A valid archived child is evidence that the resulting program remained competitive, but it does not prove every edit caused success.
 - Positive signed gain supports the changed action in this parent context.
 - Negative signed gain is counter-evidence. Normally `DROP`; retain only a narrower, explicitly conditional hypothesis when the code and mechanism make that restriction defensible.
@@ -49,3 +50,7 @@ The structured schema defines the fields. For `DROP`, return `card: null`. For `
 ## TASK CONTEXT
 
 {task_description}
+
+## METRIC CONTEXT
+
+{metrics_description}
