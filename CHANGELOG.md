@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v2.14.0 (2026-07-18)
+
+### Bug Fixes
+
+- **memory**: Address causal librarian review
+  ([`86bf3cc`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/86bf3cc55ab39c392cf6a83783e9034b9feca7ce))
+
+- **memory**: Ground librarian in metric context
+  ([`51aa654`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/51aa654a135f2673c1f6275822e13ff88721a6f4))
+
+- **memory**: Polish librarian prompt wiring
+  ([`833464a`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/833464acb851ab9e55b71189420db32f96752758))
+
+- **memory**: Self-normalize causal retirement
+  ([`c7adce9`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/c7adce97fbcb3593193b861f10799fa5ec34a0b5))
+
+### Features
+
+- **memory**: Redesign librarian and causal retirement
+  ([`22651d8`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/22651d81fd3f9d9085c6210d899cead7717649f0))
+
+### Refactoring
+
+- **memory**: Finish minimal causal writer lifecycle
+  ([`f658301`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/f658301a532286a49654a1259254cde32debe865))
+
+- **memory**: Remove retired v1 memory system (Phase 1)
+  ([#304](https://github.com/KhrulkovV/gigaevo-core-internal/pull/304),
+  [`1d4bfc3`](https://github.com/KhrulkovV/gigaevo-core-internal/commit/1d4bfc308825ba5f07268cbdd4cf5ae260ba7374))
+
+
 ## v2.13.0 (2026-07-18)
 
 ### Bug Fixes
