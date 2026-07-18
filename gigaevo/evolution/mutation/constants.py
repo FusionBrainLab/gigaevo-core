@@ -43,12 +43,11 @@ MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY = "memory_injected_idea_ids"
 #: Bool stamped on a child at birth: whether any card was in its mutation prompt.
 MUTATION_MEMORY_USED_METADATA_KEY = "memory_used"
 
-#: Frozen onto a child at birth: sorted transitive closure of every card id
-#: applied to this program or any ancestor — ``injected_ids(child)`` unioned with
-#: each parent's own lineage-applied closure. Read by the lineage card-excluder so
-#: a mutation never re-serves a card already used up the ancestry. Sourced only
-#: from frozen keys (a program's own selected-ids are overwritten on requeue).
-MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY = "memory_lineage_applied_ids"
+#: Frozen onto a child at birth: sorted transitive closure of every card revision
+#: blocked from this branch. This includes cards actually applied and randomized
+#: probes in both treated and control arms, so delayed outcomes compare symmetric
+#: downstream policies. Read by the lineage card-excluder.
+MUTATION_MEMORY_LINEAGE_BLOCKED_IDS_METADATA_KEY = "memory_lineage_blocked_ids"
 
 #: Structured mutation output (archetype, changes) stamped on a child program's
 #: metadata by the mutation operator (``MutationSpec.META_OUTPUT``).

@@ -67,6 +67,12 @@ def _closed_calibration_ledger(
             max_treated_invalid_probability=None,
         ).model_copy(update={"fitted_observation_ids": fitted})
         ledger.record_decision(record)
+        ledger.record_mutation_edge(
+            parent_id=current_context.parent_id,
+            child_id=f"child-{ordinal}",
+            island_id=current_context.map_elites.island_id,
+            completion_ordinal=ordinal,
+        )
         assert ledger.link_attempt_child(
             attempt_id=record.attempt_id,
             child_id=f"child-{ordinal}",

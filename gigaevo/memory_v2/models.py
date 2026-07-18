@@ -44,6 +44,30 @@ class ApplicabilityStatus(StrEnum):
     FAILED = "failed"
 
 
+class RagApplicability(StrEnum):
+    """Decision-time applicability state with a centered model contrast."""
+
+    UNASSESSED = "unassessed"
+    NOT_APPLICABLE = "not_applicable"
+    APPLICABLE = "applicable"
+
+    @property
+    def contrast(self) -> float:
+        return {
+            RagApplicability.UNASSESSED: 0.0,
+            RagApplicability.NOT_APPLICABLE: -0.5,
+            RagApplicability.APPLICABLE: 0.5,
+        }[self]
+
+
+class ArchiveDisposition(StrEnum):
+    """Eventual archive result of one mutation."""
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
 def canonical_digest(payload: Any) -> str:
     """Return a stable SHA-256 digest for JSON-native domain records."""
 
@@ -352,6 +376,7 @@ class ApplicabilityRecord(StrictFrozenModel):
 
     specification: ApplicabilitySpecification
     status: ApplicabilityStatus
+    assessed_bank_card_ids: tuple[str, ...] = ()
     applicable_bank_card_ids: tuple[str, ...] = ()
     research_iterations: int = Field(default=0, ge=0)
     summary: str = ""
@@ -359,13 +384,20 @@ class ApplicabilityRecord(StrictFrozenModel):
 
     @model_validator(mode="after")
     def _coherent_assessment(self) -> ApplicabilityRecord:
-        if len(self.applicable_bank_card_ids) != len(
-            set(self.applicable_bank_card_ids)
+        for label, ids in (
+            ("assessed", self.assessed_bank_card_ids),
+            ("applicable", self.applicable_bank_card_ids),
         ):
-            raise ValueError("applicable card ids must be unique")
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{label} card ids must be unique")
+            if ids != tuple(sorted(ids)):
+                raise ValueError(f"{label} card ids must be sorted")
+        if not set(self.applicable_bank_card_ids) <= set(self.assessed_bank_card_ids):
+            raise ValueError("applicable cards must belong to the assessed universe")
         if self.specification.name == "none":
             if (
                 self.status is not ApplicabilityStatus.DISABLED
+                or self.assessed_bank_card_ids
                 or self.applicable_bank_card_ids
                 or self.research_iterations
                 or self.summary
@@ -375,23 +407,36 @@ class ApplicabilityRecord(StrictFrozenModel):
             return self
         if self.status is ApplicabilityStatus.DISABLED:
             raise ValueError("agentic applicability cannot be disabled")
-        if (
-            self.status is ApplicabilityStatus.ASSESSED
-            and not self.applicable_bank_card_ids
+        if self.status is ApplicabilityStatus.ASSESSED and (
+            not self.assessed_bank_card_ids or not self.applicable_bank_card_ids
         ):
-            raise ValueError("assessed applicability requires at least one card")
-        if self.status is ApplicabilityStatus.EMPTY and self.applicable_bank_card_ids:
-            raise ValueError("empty applicability cannot carry cards")
+            raise ValueError(
+                "assessed applicability requires assessed and applicable cards"
+            )
+        if self.status is ApplicabilityStatus.EMPTY:
+            if self.applicable_bank_card_ids:
+                raise ValueError("empty applicability cannot carry applicable cards")
         if self.status is ApplicabilityStatus.FAILED:
-            if self.applicable_bank_card_ids or self.failure is None:
+            if (
+                self.assessed_bank_card_ids
+                or self.applicable_bank_card_ids
+                or self.failure is None
+            ):
                 raise ValueError(
-                    "failed applicability requires a failure marker and no cards"
+                    "failed applicability requires a failure marker and no assessment"
                 )
             if self.summary:
                 raise ValueError("failed applicability cannot carry a RAG summary")
         elif self.failure is not None:
             raise ValueError("only failed applicability can carry a failure marker")
         return self
+
+    def label(self, bank_card_id: str) -> RagApplicability:
+        if bank_card_id in self.applicable_bank_card_ids:
+            return RagApplicability.APPLICABLE
+        if bank_card_id in self.assessed_bank_card_ids:
+            return RagApplicability.NOT_APPLICABLE
+        return RagApplicability.UNASSESSED
 
 
 class BehaviorCoordinate(StrictFrozenModel):
@@ -612,6 +657,7 @@ class PosteriorFitDiagnostics(StrictFrozenModel):
 
     evidence_count: int = Field(ge=0)
     reward_observations: int = Field(ge=0)
+    lineage_observations: int = Field(default=0, ge=0)
     safety_observations: int = Field(ge=0)
     reward_residual_sd: float = Field(gt=0.0)
     reward_card_effect_sd: float = Field(gt=0.0)
@@ -733,10 +779,10 @@ class DecisionRecord(StrictFrozenModel):
             raise ValueError(
                 "candidate-universe eligibility is outside the lineage registry"
             )
-        if set(self.applicability.applicable_bank_card_ids) - {
+        if set(self.applicability.assessed_bank_card_ids) - {
             row.bank_card_id for row in self.candidates
         }:
-            raise ValueError("RAG applicability is outside the Bayesian candidate set")
+            raise ValueError("RAG assessment is outside the Bayesian candidate set")
         key = DecisionKey(
             run_id=self.context.run_id,
             run_seed=self.run_seed,
@@ -833,8 +879,8 @@ class DecisionRecord(StrictFrozenModel):
             raise ValueError("selected joint propensity differs from the policy row")
         return self
 
-    def is_rag_applicable(self, bank_card_id: str) -> bool:
-        return bank_card_id in self.applicability.applicable_bank_card_ids
+    def rag_applicability(self, bank_card_id: str) -> RagApplicability:
+        return self.applicability.label(bank_card_id)
 
 
 class OutcomeMeasurement(StrictFrozenModel):
@@ -900,7 +946,7 @@ class CausalObservation(StrictFrozenModel):
     event_ordinal: int = Field(ge=0)
     card: CardSnapshot
     context: EvolutionContext
-    rag_applicable: bool = False
+    rag_applicability: RagApplicability = RagApplicability.UNASSESSED
     treatment: bool
     offer_propensity: float = Field(gt=0.0, lt=1.0)
     proposal_propensity: float = Field(gt=0.0, le=1.0)
@@ -936,29 +982,62 @@ class CausalObservation(StrictFrozenModel):
         return self
 
 
-def validate_reward_observations(
+def validate_lineage_observations(
     observations: tuple[CausalObservation, ...],
-    reward_observations: tuple[CausalObservation, ...],
+    lineage_observations: tuple[CausalObservation, ...],
 ) -> None:
-    """Enforce one delayed measurement for an existing randomized decision."""
+    """Enforce one delayed residual for an existing valid randomized decision."""
 
     immediate_by_id = {row.decision_id: row for row in observations}
     if len(immediate_by_id) != len(observations):
         raise ValueError("immediate evidence contains duplicate decision ids")
-    reward_by_id = {row.decision_id: row for row in reward_observations}
-    if len(reward_by_id) != len(reward_observations):
-        raise ValueError("reward evidence contains duplicate decision ids")
-    for decision_id, reward_row in reward_by_id.items():
+    lineage_by_id = {row.decision_id: row for row in lineage_observations}
+    if len(lineage_by_id) != len(lineage_observations):
+        raise ValueError("lineage evidence contains duplicate decision ids")
+    for decision_id, lineage_row in lineage_by_id.items():
         immediate = immediate_by_id.get(decision_id)
         if immediate is None:
-            raise ValueError("reward evidence is not a subset of immediate evidence")
-        reward_payload = reward_row.model_dump(mode="json", exclude={"measurement"})
+            raise ValueError("lineage evidence is not a subset of immediate evidence")
+        if lineage_row.invalid:
+            raise ValueError("invalid roots cannot carry delayed lineage residuals")
+        lineage_payload = lineage_row.model_dump(mode="json", exclude={"measurement"})
         immediate_payload = immediate.model_dump(mode="json", exclude={"measurement"})
-        if reward_payload != immediate_payload:
+        if lineage_payload != immediate_payload:
             raise ValueError(
-                "delayed reward may change only the outcome measurement for "
+                "delayed lineage evidence may change only the measurement for "
                 f"decision {decision_id!r}"
             )
+
+
+class MutationEdge(StrictFrozenModel):
+    """One mutation edge, recorded independently of memory assignment."""
+
+    parent_id: str = Field(min_length=1)
+    child_id: str = Field(min_length=1)
+    island_id: str = Field(min_length=1)
+    completion_ordinal: int = Field(ge=0)
+    status: Literal["pending", "outcome", "invalid", "censored"] = "pending"
+    measurement: OutcomeMeasurement | None = None
+    archive_disposition: ArchiveDisposition = ArchiveDisposition.PENDING
+    failure_stage: str = ""
+
+    @model_validator(mode="after")
+    def _edge_contract(self) -> MutationEdge:
+        if self.parent_id == self.child_id:
+            raise ValueError("a mutation edge cannot be self-referential")
+        if self.status == "outcome" and self.measurement is None:
+            raise ValueError("valid mutation edges require a measurement")
+        if self.status != "outcome" and self.measurement is not None:
+            raise ValueError("non-outcome mutation edges cannot carry a measurement")
+        if self.status in ("invalid", "censored"):
+            if self.archive_disposition is not ArchiveDisposition.REJECTED:
+                raise ValueError("failed mutation edges must be archive-rejected")
+        if (
+            self.status == "pending"
+            and self.archive_disposition is not ArchiveDisposition.PENDING
+        ):
+            raise ValueError("pending mutation edges cannot have an archive result")
+        return self
 
 
 class LineageOutcome(StrictFrozenModel):
@@ -976,6 +1055,11 @@ class LineageOutcome(StrictFrozenModel):
     best_descendant_id: str = ""
     best_depth: int | None = Field(default=None, ge=1)
     measurement: OutcomeMeasurement | None = None
+    residual_measurement: OutcomeMeasurement | None = None
+    credit_owner_decision_id: str = ""
+    valid_descendant_count: int = Field(default=0, ge=0)
+    invalid_descendant_count: int = Field(default=0, ge=0)
+    archive_survived: bool = False
     reason: str = ""
 
     @model_validator(mode="after")
@@ -989,12 +1073,22 @@ class LineageOutcome(StrictFrozenModel):
                 raise ValueError("lineage outcome requires its best descendant")
             if self.descendant_count < 1:
                 raise ValueError("lineage outcome requires at least one descendant")
+            if self.lineage_depth > 1 and self.residual_measurement is None:
+                raise ValueError("deep lineage outcomes require a residual measurement")
         elif self.measurement is not None:
             raise ValueError("non-outcome lineage states cannot carry a measurement")
+        if self.status != "outcome" and self.residual_measurement is not None:
+            raise ValueError(
+                "non-outcome lineage states cannot carry a residual measurement"
+            )
         if self.status != "outcome" and (
             self.descendant_count
             or self.best_descendant_id
             or self.best_depth is not None
+            or self.credit_owner_decision_id
+            or self.valid_descendant_count
+            or self.invalid_descendant_count
+            or self.archive_survived
         ):
             raise ValueError("non-outcome lineage states cannot name descendants")
         if self.best_depth is not None and self.best_depth > self.lineage_depth:
@@ -1003,7 +1097,7 @@ class LineageOutcome(StrictFrozenModel):
             raise ValueError("observed opportunities exceed the configured budget")
         if self.lineage_depth == 1 and self.status == "pending":
             raise ValueError("depth-one lineage outcomes cannot remain pending")
-        if self.lineage_depth > 1 and self.status in ("outcome", "invalid"):
+        if self.lineage_depth > 1 and self.status == "outcome":
             if self.opportunities_observed != self.opportunity_budget:
                 raise ValueError("mature lineage outcome lacks its opportunity budget")
         if self.status == "pending":
@@ -1033,46 +1127,36 @@ class EvidenceSnapshot(StrictFrozenModel):
     version: str = Field(min_length=1)
     model_version: str = Field(min_length=1)
     observations: tuple[CausalObservation, ...] = ()
-    reward_observations: tuple[CausalObservation, ...] = ()
+    lineage_observations: tuple[CausalObservation, ...] = ()
     lineage_outcomes: tuple[LineageOutcome, ...] = ()
     pending_by_treatment: dict[str, int] = Field(default_factory=dict)
     pending_by_bank_card: dict[str, int] = Field(default_factory=dict)
+    lineage_pending_by_treatment: dict[str, int] = Field(default_factory=dict)
+    lineage_pending_by_bank_card: dict[str, int] = Field(default_factory=dict)
     censored_count: int = Field(default=0, ge=0)
     ineligible_count: int = Field(default=0, ge=0)
     conflict_count: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _aligned_evidence(self) -> EvidenceSnapshot:
-        validate_reward_observations(self.observations, self.reward_observations)
+        validate_lineage_observations(self.observations, self.lineage_observations)
         lineage_by_id = {row.decision_id: row for row in self.lineage_outcomes}
         if len(lineage_by_id) != len(self.lineage_outcomes):
             raise ValueError("lineage evidence contains duplicate decision ids")
         if self.lineage_outcomes:
-            mature_ids = {
+            outcome_ids = {
                 row.decision_id
                 for row in self.lineage_outcomes
-                if row.status in ("outcome", "invalid")
+                if row.status == "outcome" and row.lineage_depth > 1
             }
-            reward_ids = {row.decision_id for row in self.reward_observations}
-            if mature_ids != reward_ids:
-                raise ValueError("mature lineage and reward evidence ids differ")
-            for reward_row in self.reward_observations:
-                lineage = lineage_by_id[reward_row.decision_id]
-                if lineage.status != reward_row.status:
-                    raise ValueError("lineage and reward terminal states differ")
-                if lineage.measurement != reward_row.measurement:
-                    raise ValueError("lineage and reward measurements differ")
+            residual_ids = {row.decision_id for row in self.lineage_observations}
+            if outcome_ids != residual_ids:
+                raise ValueError("deep lineage outcomes and residual evidence differ")
+            for residual_row in self.lineage_observations:
+                lineage = lineage_by_id[residual_row.decision_id]
+                if lineage.residual_measurement != residual_row.measurement:
+                    raise ValueError("lineage and residual measurements differ")
         return self
-
-    @property
-    def posterior_reward_observations(self) -> tuple[CausalObservation, ...]:
-        if self.reward_observations:
-            return self.reward_observations
-        if self.observations and all(
-            row.context.reward.lineage_depth == 1 for row in self.observations
-        ):
-            return self.observations
-        return ()
 
 
 def _propensity_mismatch(actual: float | None, expected: float | None) -> bool:

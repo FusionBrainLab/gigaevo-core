@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 from gigaevo.evolution.mutation.constants import (
-    MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_LINEAGE_BLOCKED_IDS_METADATA_KEY,
 )
 from gigaevo.memory.storage.exclusion import expand_exclude_ids, is_card_excluded
 
@@ -40,8 +40,8 @@ class NullExcluder:
 
 
 class LineageExcluder:
-    """Excludes every card applied to this program or any ancestor."""
+    """Excludes every card blocked on this program's ancestry."""
 
     def exclude_for(self, program: Any) -> frozenset[str]:
-        applied = program.get_metadata(MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY)
-        return frozenset(applied or ())
+        blocked = program.get_metadata(MUTATION_MEMORY_LINEAGE_BLOCKED_IDS_METADATA_KEY)
+        return frozenset(blocked or ())

@@ -20,8 +20,8 @@ from gigaevo.memory.events import (
 from gigaevo.memory.provider import MemoryProvider
 from gigaevo.memory.read.reader import MemorySelection
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
-from gigaevo.memory.storage.base import MemoryStore, ResearchResult
-from gigaevo.memory_v2.candidates import CandidateSource
+from gigaevo.memory.storage.base import MemoryStore
+from gigaevo.memory_v2.candidates import CandidateSource, PreparedApplicability
 from gigaevo.memory_v2.context import DecisionContextSource
 from gigaevo.memory_v2.events import MemoryV2Decision
 from gigaevo.memory_v2.ledger import SqliteCausalLedger
@@ -158,7 +158,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
         *,
         attempt_id: str,
         context: EvolutionContext,
-        research: ResearchResult,
+        research: PreparedApplicability,
         task_description: str,
         metrics_description: str,
         parent_context: str | None,
@@ -221,7 +221,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
             fitted = self._fit(
                 evidence.model_version,
                 evidence.observations,
-                evidence.posterior_reward_observations,
+                evidence.lineage_observations,
                 lineage_registry,
             )
             decision = self.policy.choose(
@@ -229,9 +229,14 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 candidates=eligible,
                 context=context,
                 rng=EventRNG(key.rng_key),
+                assessed_bank_card_ids=frozenset(
+                    slate.applicability.assessed_bank_card_ids
+                ),
                 applicable_bank_card_ids=frozenset(
                     slate.applicability.applicable_bank_card_ids
                 ),
+                pending_by_bank_card=evidence.pending_by_bank_card,
+                lineage_pending_by_bank_card=(evidence.lineage_pending_by_bank_card),
             )
             if self._reserve_candidate_slate(
                 program,
@@ -312,7 +317,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
         self,
         evidence_version: str,
         observations: Sequence[CausalObservation],
-        reward_observations: Sequence[CausalObservation],
+        lineage_observations: Sequence[CausalObservation],
         candidates: tuple[CardSnapshot, ...],
     ) -> FittedTerminalUtilityPosterior:
         descriptor_key = tuple(
@@ -324,7 +329,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
             self._posterior_cache = self.posterior.fit(
                 observations,
                 candidates,
-                reward_observations=reward_observations,
+                lineage_observations=lineage_observations,
             )
             self._posterior_cache_key = cache_key
         return self._posterior_cache
@@ -372,6 +377,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
             fit_diagnostics=PosteriorFitDiagnostics(
                 evidence_count=fitted.evidence_count,
                 reward_observations=fitted.reward.observations,
+                lineage_observations=fitted.lineage_reward.observations,
                 safety_observations=fitted.safety.observations,
                 reward_residual_sd=fitted.reward.residual_sd,
                 reward_card_effect_sd=fitted.reward.card_effect_sd,

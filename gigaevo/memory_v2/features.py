@@ -136,8 +136,8 @@ class FeatureSpace:
 
     @property
     def card_context_dim(self) -> int:
-        # Card rankings vary only by intercept, parent fitness, and MAP position.
-        return 2 + len(self.config.behavior_keys)
+        # Card rankings may change with fitness, search progress, and MAP position.
+        return self.context_dim
 
     @property
     def card_effect_slice(self) -> slice:
@@ -174,13 +174,15 @@ class FeatureSpace:
             if context.reward.higher_is_better
             else 1.0 - primary_normalized
         )
+        # Smoothly approaches one without erasing all temporal information after
+        # an arbitrary iteration boundary.
         progress = math.log1p(context.parent_iteration) / math.log1p(
-            self.config.progress_log_scale
+            context.parent_iteration + self.config.progress_log_scale
         )
         result = [
             1.0,
             2.0 * oriented_primary - 1.0,
-            min(progress, 1.0),
+            progress,
         ]
         semantic = [
             2.0 * coordinates[key].semantic_normalized - 1.0
@@ -198,10 +200,9 @@ class FeatureSpace:
     ) -> np.ndarray:
         bank_id = self.bank_lineage_id(card)
         shared = self.context_features(context)
-        card_context = np.concatenate((shared[:2], shared[3:]))
         result = np.zeros(len(self._bank_index) * self.card_context_dim)
         start = self._bank_index[bank_id] * self.card_context_dim
-        result[start : start + self.card_context_dim] = card_context
+        result[start : start + self.card_context_dim] = shared
         return result / math.sqrt(self.card_context_dim)
 
     def effect(
@@ -209,7 +210,7 @@ class FeatureSpace:
         card: CardSnapshot,
         context: EvolutionContext,
         *,
-        rag_applicable: bool = False,
+        rag_contrast: float = 0.0,
     ) -> np.ndarray:
         result = np.zeros(self.effect_dim, dtype=float)
         context_features = self.context_features(context)
@@ -222,7 +223,11 @@ class FeatureSpace:
                 "program": 0.5,
             }.get(card.kind, 0.0)
         if self.config.retrieval_applicability_contrast:
-            result[self.retrieval_effect_index] = float(rag_applicable)
+            if rag_contrast not in (-0.5, 0.0, 0.5):
+                raise ValueError(
+                    "RAG contrast must be centered tri-state effect coding"
+                )
+            result[self.retrieval_effect_index] = rag_contrast
         result[self.card_effect_slice] = self._card_deviation(card, context)
         return result
 
@@ -232,13 +237,13 @@ class FeatureSpace:
         context: EvolutionContext,
         treatment: bool | float,
         *,
-        rag_applicable: bool = False,
+        rag_contrast: float = 0.0,
     ) -> np.ndarray:
         action_weight = float(treatment)
         effect = action_weight * self.effect(
             card,
             context,
-            rag_applicable=rag_applicable,
+            rag_contrast=rag_contrast,
         )
         return np.concatenate((self.baseline(card, context), effect))
 
@@ -252,9 +257,9 @@ class FeatureSpace:
         card: CardSnapshot,
         context: EvolutionContext,
         *,
-        rag_applicable: bool = False,
+        rag_contrast: float = 0.0,
     ) -> np.ndarray:
-        return self.effect(card, context, rag_applicable=rag_applicable)
+        return self.effect(card, context, rag_contrast=rag_contrast)
 
     def prior_variance(
         self,

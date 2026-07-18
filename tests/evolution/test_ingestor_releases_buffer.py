@@ -64,6 +64,7 @@ class _FakeIngestorEngine:
             return None
 
         self._record_memory_outcome = _record_memory_outcome
+        self._record_memory_archive_disposition = lambda _program, **_kwargs: None
         self._record_missing_memory_child = lambda _child_id: None
 
         async def _write_snapshot(**_k):

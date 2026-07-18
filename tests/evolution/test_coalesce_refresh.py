@@ -100,6 +100,9 @@ class _FakeEngine:
     async def _record_memory_outcome(self, _program) -> None:
         return None
 
+    def _record_memory_archive_disposition(self, _program, **_payload) -> None:
+        return None
+
 
 @pytest.fixture
 def mock_generate_one_mutation(monkeypatch):
@@ -125,7 +128,7 @@ def mock_generate_one_mutation(monkeypatch):
         )
         prog.lineage.parents = [p.id for p in parents]
         if child_observer is not None:
-            child_observer(new_id)
+            child_observer(new_id, parents[0].id, "main")
         await storage.add(prog)
         return new_id
 

@@ -32,14 +32,14 @@ class CausalPosteriorEvictor:
         posterior: HierarchicalTerminalUtilityPosterior,
         safety: SafetyConstraint,
         min_treated: int = 2,
-        min_control: int = 2,
+        min_global_control: int = 2,
         min_distinct_contexts: int = 2,
         posterior_samples: int = 4096,
         max_viability_probability: float = 0.05,
         mc_confidence_z: float = 2.576,
     ) -> None:
-        if min_treated < 1 or min_control < 1:
-            raise ValueError("both treatment arms require positive support")
+        if min_treated < 1 or min_global_control < 1:
+            raise ValueError("treated and pooled-control support must be positive")
         if min_distinct_contexts < 1:
             raise ValueError("min_distinct_contexts must be positive")
         if posterior_samples < 256:
@@ -52,7 +52,7 @@ class CausalPosteriorEvictor:
         self.posterior = posterior
         self.safety = safety
         self.min_treated = min_treated
-        self.min_control = min_control
+        self.min_global_control = min_global_control
         self.min_distinct_contexts = min_distinct_contexts
         self.posterior_samples = posterior_samples
         self.max_viability_probability = max_viability_probability
@@ -96,7 +96,7 @@ class CausalPosteriorEvictor:
             fitted = self.posterior.fit(
                 snapshot.observations,
                 tuple(revisions),
-                reward_observations=snapshot.posterior_reward_observations,
+                lineage_observations=snapshot.lineage_observations,
             )
         except (PosteriorFitError, ValueError) as exc:
             logger.warning("[MemoryV2][Evictor] posterior fit failed closed: {}", exc)
@@ -112,11 +112,7 @@ class CausalPosteriorEvictor:
             by_treatment.setdefault(observation.card.treatment_id, []).append(
                 observation
             )
-        reward_by_treatment: dict[str, list[CausalObservation]] = {}
-        for observation in snapshot.posterior_reward_observations:
-            reward_by_treatment.setdefault(observation.card.treatment_id, []).append(
-                observation
-            )
+        global_controls = sum(not row.treatment for row in snapshot.observations)
         rng = EventRNG(snapshot.model_version)
         for revision in revisions:
             if any(
@@ -125,10 +121,9 @@ class CausalPosteriorEvictor:
             ) or snapshot.pending_by_treatment.get(revision.treatment_id, 0):
                 continue
             treatment_rows = by_treatment.get(revision.treatment_id, [])
-            reward_rows = reward_by_treatment.get(revision.treatment_id, [])
-            if not self._supported(treatment_rows) or not self._supported(reward_rows):
+            if not self._supported(treatment_rows, global_controls):
                 continue
-            contexts = self._distinct_contexts(reward_rows, fitted.space)
+            contexts = self._distinct_contexts(treatment_rows, fitted.space)
             if len(contexts) < self.min_distinct_contexts:
                 continue
             non_viable_everywhere = True
@@ -174,9 +169,15 @@ class CausalPosteriorEvictor:
             )
         return evicted_ids
 
-    def _supported(self, rows: Sequence[CausalObservation]) -> bool:
+    def _supported(
+        self,
+        rows: Sequence[CausalObservation],
+        global_controls: int,
+    ) -> bool:
         treated = sum(row.treatment for row in rows)
-        return treated >= self.min_treated and len(rows) - treated >= self.min_control
+        return (
+            treated >= self.min_treated and global_controls >= self.min_global_control
+        )
 
     @staticmethod
     def _distinct_contexts(

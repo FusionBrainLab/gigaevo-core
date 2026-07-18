@@ -26,15 +26,21 @@ def _mix_finite_policy_with_exploration(
     finite_probability: Mapping[str, float],
     finite_abstain_probability: float,
     exploration_probability: float,
+    exploration_distribution: Mapping[str, float],
 ) -> tuple[dict[str, float], float]:
-    """Give every feasible action logged support without changing unsafe mass."""
+    """Mix probability matching with a full-support challenger distribution."""
 
     if not safe_ids:
         return {treatment_id: 0.0 for treatment_id in treatment_ids}, 1.0
-    floor = exploration_probability / len(safe_ids)
+    distribution_mass = sum(
+        exploration_distribution[treatment_id] for treatment_id in safe_ids
+    )
+    if not math.isclose(distribution_mass, 1.0, rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError("challenger exploration distribution must sum to one")
     proposal = {
         treatment_id: (
-            (1.0 - exploration_probability) * finite_probability[treatment_id] + floor
+            (1.0 - exploration_probability) * finite_probability[treatment_id]
+            + exploration_probability * exploration_distribution[treatment_id]
             if treatment_id in safe_ids
             else 0.0
         )
@@ -96,6 +102,113 @@ def _finite_probability_matching(
         finite_mc_variance,
         last_effects,
     )
+
+
+def _world_winner_and_challenger(
+    cards: tuple[CardSnapshot, ...],
+    effects: Sequence[float],
+    *,
+    abstain_effect: float,
+) -> tuple[int | None, int]:
+    order = sorted(
+        range(len(cards)),
+        key=lambda index: (effects[index], cards[index].treatment_id),
+        reverse=True,
+    )
+    winner = order[0] if effects[order[0]] > abstain_effect else None
+    challenger = next((index for index in order if index != winner), order[0])
+    return winner, challenger
+
+
+def _challenger_distribution(
+    cards: tuple[CardSnapshot, ...],
+    effect_worlds: Sequence[Sequence[float]] | np.ndarray,
+    *,
+    abstain_effect: float,
+    pending_by_treatment: Mapping[str, int],
+) -> dict[str, float]:
+    """Allocate exploration to posterior runner-ups with full-support smoothing."""
+
+    if not cards:
+        return {}
+    challenger_counts = {card.treatment_id: 1.0 for card in cards}
+    for effects in effect_worlds:
+        _, challenger = _world_winner_and_challenger(
+            cards,
+            effects,
+            abstain_effect=abstain_effect,
+        )
+        challenger_counts[cards[challenger].treatment_id] += 1.0
+    weights = {
+        treatment_id: count / math.sqrt(1.0 + pending_by_treatment.get(treatment_id, 0))
+        for treatment_id, count in challenger_counts.items()
+    }
+    total = sum(weights.values())
+    return {treatment_id: weight / total for treatment_id, weight in weights.items()}
+
+
+def _mixed_policy_mc_variance(
+    cards: tuple[CardSnapshot, ...],
+    effect_worlds: Sequence[Sequence[float]] | np.ndarray,
+    *,
+    abstain_effect: float,
+    exploration_probability: float,
+    pending_by_treatment: Mapping[str, int],
+) -> dict[str, float]:
+    """Delta-method MC variance of matching plus challenger exploration.
+
+    Both components use the same posterior worlds. The per-world influence
+    calculation therefore retains their covariance instead of adding two
+    independent Bernoulli variances.
+    """
+
+    if not cards:
+        return {}
+    worlds = tuple(effect_worlds)
+    if not worlds:
+        raise ValueError("proposal uncertainty requires posterior worlds")
+    world_count = len(worlds)
+    card_count = len(cards)
+    winners = np.zeros((world_count, card_count), dtype=float)
+    challengers = np.zeros((world_count, card_count), dtype=float)
+    for world_index, effects in enumerate(worlds):
+        winner, challenger = _world_winner_and_challenger(
+            cards,
+            effects,
+            abstain_effect=abstain_effect,
+        )
+        if winner is not None:
+            winners[world_index, winner] = 1.0
+        challengers[world_index, challenger] = 1.0
+
+    winner_mean = np.mean(winners, axis=0)
+    challenger_mean = np.mean(challengers, axis=0)
+    discounts = np.asarray(
+        [
+            1.0 / math.sqrt(1.0 + pending_by_treatment.get(card.treatment_id, 0))
+            for card in cards
+        ],
+        dtype=float,
+    )
+    # One fixed pseudo-count per card is the full-support smoothing used by
+    # _challenger_distribution. It has no sampling variance.
+    smoothed_mean = challenger_mean + 1.0 / world_count
+    weights = discounts * smoothed_mean
+    weight_sum = float(np.sum(weights))
+    challenger_probability = weights / weight_sum
+    challenger_jacobian = np.diag(discounts / weight_sum) - np.outer(
+        challenger_probability,
+        discounts / weight_sum,
+    )
+    challenger_influence = (challengers - challenger_mean) @ challenger_jacobian.T
+    influence = (1.0 - exploration_probability) * (
+        winners - winner_mean
+    ) + exploration_probability * challenger_influence
+    variances = np.sum(influence * influence, axis=0) / (world_count * world_count)
+    return {
+        card.treatment_id: float(max(variances[index], 0.0))
+        for index, card in enumerate(cards)
+    }
 
 
 class SafetyConstraint(BaseModel):
@@ -205,14 +318,21 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         candidates: Sequence[CardSnapshot],
         context: EvolutionContext,
         rng: EventRNG,
+        assessed_bank_card_ids: frozenset[str] = frozenset(),
         applicable_bank_card_ids: frozenset[str] = frozenset(),
+        pending_by_bank_card: Mapping[str, int] | None = None,
+        lineage_pending_by_bank_card: Mapping[str, int] | None = None,
     ) -> PolicyDecision:
         cards = tuple(sorted(candidates, key=lambda row: row.treatment_id))
         if not cards:
             return PolicyDecision(abstain_probability=1.0)
         candidate_bank_ids = {card.bank_card_id for card in cards}
-        if not applicable_bank_card_ids <= candidate_bank_ids:
-            raise ValueError("RAG applicability contains a non-candidate card")
+        if not assessed_bank_card_ids <= candidate_bank_ids:
+            raise ValueError("RAG assessment contains a non-candidate card")
+        if not applicable_bank_card_ids <= assessed_bank_card_ids:
+            raise ValueError("RAG applicability is outside its assessed universe")
+        pending_by_bank_card = pending_by_bank_card or {}
+        lineage_pending_by_bank_card = lineage_pending_by_bank_card or {}
         if not math.isclose(
             posterior.reference_offer_probability,
             self.config.offer_probability,
@@ -232,6 +352,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
                 self.safety.max_incremental_invalid_probability
             ),
             safety_alpha=self.safety.alpha,
+            assessed_bank_card_ids=assessed_bank_card_ids,
             applicable_bank_card_ids=applicable_bank_card_ids,
         )
         if (
@@ -273,12 +394,13 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             context,
             proposal_rng,
             samples=self.config.proposal_worlds,
+            assessed_bank_card_ids=assessed_bank_card_ids,
             applicable_bank_card_ids=applicable_bank_card_ids,
         )
         (
             finite_safe_probability,
             finite_abstain_probability,
-            finite_mc_variance,
+            _finite_mc_variance,
             last_effects,
         ) = _finite_probability_matching(
             safe_cards,
@@ -291,12 +413,34 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         }
         exploration = self.config.proposal_exploration_probability
         safe_ids = frozenset(card.treatment_id for card in safe_cards)
+        pending_by_treatment = {
+            card.treatment_id: sum(
+                pending_by_bank_card.get(bank_id, 0)
+                + lineage_pending_by_bank_card.get(bank_id, 0)
+                for bank_id in card.bank_lineage_ids
+            )
+            for card in safe_cards
+        }
+        challenger_distribution = _challenger_distribution(
+            safe_cards,
+            effect_worlds,
+            abstain_effect=self.config.abstain_effect,
+            pending_by_treatment=pending_by_treatment,
+        )
+        proposal_mc_variance = _mixed_policy_mc_variance(
+            safe_cards,
+            effect_worlds,
+            abstain_effect=self.config.abstain_effect,
+            exploration_probability=exploration,
+            pending_by_treatment=pending_by_treatment,
+        )
         proposal_probability, abstain_probability = _mix_finite_policy_with_exploration(
             tuple(card.treatment_id for card in cards),
             safe_ids,
             finite_probability,
             finite_abstain_probability,
             exploration,
+            challenger_distribution,
         )
         actions: list[CandidateActionProbability] = []
         offer_probability: dict[str, float | None] = {}
@@ -313,8 +457,9 @@ class ChanceConstrainedProbabilityMatchingPolicy:
                     treatment_id=treatment_id,
                     bank_card_id=card.bank_card_id,
                     proposal_probability=rho,
-                    proposal_mc_se=(1.0 - exploration)
-                    * math.sqrt(max(finite_mc_variance.get(treatment_id, 0.0), 0.0)),
+                    proposal_mc_se=math.sqrt(
+                        proposal_mc_variance.get(treatment_id, 0.0)
+                    ),
                     offer_probability=offer,
                     joint_treated_probability=(0.0 if offer is None else rho * offer),
                     joint_control_probability=(

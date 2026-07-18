@@ -24,15 +24,18 @@ from gigaevo.evolution.engine.stopper import (
     StopContext,
 )
 from gigaevo.evolution.mutation.base import MutationOperator
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+)
 from gigaevo.evolution.mutation.mutation_operator import (
     LLMMutationOperator,
 )
 from gigaevo.evolution.strategies.base import EvolutionStrategy
-from gigaevo.exceptions import MemoryStorageError
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
 from gigaevo.memory.outcomes import (
     MemoryAttemptLifecycleSink,
     MemoryOutcomeSink,
+    MutationTopologyOutcome,
     record_memory_attempt_failure,
     record_program_memory_outcome,
 )
@@ -339,6 +342,7 @@ class EvolutionEngine:
                 raise RuntimeError(
                     f"startup causal outcome write failed for {prog.id}"
                 ) from exc
+            archive_accepted = False
             try:
                 if not self.config.program_acceptor.is_accepted(prog):
                     # rejected by basic checks
@@ -352,6 +356,7 @@ class EvolutionEngine:
                     reject_ids.append(prog.id)
                 elif await self.strategy.add(prog):
                     # accepted by strategy — stays DONE until next refresh
+                    archive_accepted = True
                     added += 1
                     await self._notify_hook(prog, MutationOutcome.ACCEPTED)
                     logger.debug(
@@ -378,6 +383,10 @@ class EvolutionEngine:
                     e,
                 )
                 reject_ids.append(prog.id)
+            self._record_memory_archive_disposition(
+                prog,
+                accepted=archive_accepted,
+            )
 
         # Batch DONE → DISCARDED (raw JSON patch, no Pydantic serialization).
         # Also update in-memory state so any downstream code sees DISCARDED.
@@ -496,24 +505,71 @@ class EvolutionEngine:
         return sink.has_attempt_decision(attempt_id)
 
     def _link_memory_attempt_child(
-        self, *, attempt_id: str | None, child_id: str, completion_ordinal: int
+        self,
+        *,
+        attempt_id: str | None,
+        child_id: str,
+        parent_id: str,
+        island_id: str,
+        completion_ordinal: int,
     ) -> None:
         sink = self._memory_outcome_sink
-        if attempt_id and isinstance(sink, MemoryAttemptLifecycleSink):
-            linked = sink.link_attempt_child(
+        if not isinstance(sink, MemoryAttemptLifecycleSink):
+            return
+        sink.record_mutation_edge(
+            parent_id=parent_id,
+            child_id=child_id,
+            island_id=island_id,
+            completion_ordinal=completion_ordinal,
+        )
+        if attempt_id and sink.has_attempt_decision(attempt_id):
+            sink.link_attempt_child(
                 attempt_id=attempt_id,
                 child_id=child_id,
                 completion_ordinal=completion_ordinal,
             )
-            if not linked:
-                raise MemoryStorageError(
-                    f"memory attempt {attempt_id!r} has no durable decision"
-                )
+
+    def _record_memory_archive_disposition(
+        self,
+        prog: Program,
+        *,
+        accepted: bool,
+    ) -> None:
+        """Close the topology edge after the archive makes its decision."""
+
+        assignment = prog.get_metadata(MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY)
+        sink = self._memory_outcome_sink
+        if isinstance(assignment, dict) and isinstance(
+            sink, MemoryAttemptLifecycleSink
+        ):
+            sink.record_archive_disposition(prog.id, accepted=accepted)
 
     def _record_missing_memory_child(self, child_id: str) -> None:
         sink = self._memory_outcome_sink
         if isinstance(sink, MemoryAttemptLifecycleSink):
             sink.record_missing_child(child_id, failure_stage="child_missing")
+
+    def _record_memory_topology_failure(
+        self,
+        child_id: str,
+        *,
+        status: Literal["invalid", "censored"],
+        failure_stage: str,
+    ) -> None:
+        sink = self._memory_outcome_sink
+        if isinstance(sink, MemoryAttemptLifecycleSink):
+            sink.record_mutation_outcome(
+                MutationTopologyOutcome(
+                    child_id=child_id,
+                    status=status,
+                    fitness_delta=None,
+                    fitness_delta_se=None,
+                    n_pairs=None,
+                    measurement_kind="deterministic",
+                    pairing_signature="",
+                    failure_stage=failure_stage,
+                )
+            )
 
     async def _reconcile_memory_attempts(self) -> None:
         """Close prior-process attempt rows that cannot produce an outcome."""
@@ -543,6 +599,20 @@ class EvolutionEngine:
                 "[MemoryV2] reconciled {} unlinked decision(s) from a prior process",
                 closed,
             )
+        pending_archive_ids = sink.pending_archive_child_ids()
+        if pending_archive_ids:
+            archive_ids = set(await self.strategy.get_program_ids())
+            programs = await self.storage.mget(
+                list(pending_archive_ids), exclude=EXCLUDE_STAGE_RESULTS
+            )
+            by_id = {program.id: program for program in programs if program is not None}
+            for child_id in pending_archive_ids:
+                if child_id in archive_ids:
+                    sink.record_archive_disposition(child_id, accepted=True)
+                    continue
+                program = by_id.get(child_id)
+                if program is None or program.state == ProgramState.DISCARDED:
+                    sink.record_archive_disposition(child_id, accepted=False)
 
     async def _write_snapshot(self, **updates: Any) -> None:
         """Merge fields into the snapshot, bump version, persist to Redis,

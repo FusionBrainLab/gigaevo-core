@@ -20,7 +20,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_CARD_PROVENANCE_METADATA_KEY,
     MUTATION_MEMORY_DECISION_ID_METADATA_KEY,
     MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY,
-    MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
+    MUTATION_MEMORY_LINEAGE_BLOCKED_IDS_METADATA_KEY,
     MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
     MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY,
     MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY,
@@ -30,6 +30,10 @@ from gigaevo.evolution.mutation.constants import (
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
 from gigaevo.evolution.mutation.parent_snapshot import snapshot_parent_stage_outputs
+from gigaevo.evolution.strategies.island import (
+    METADATA_KEY_CURRENT_ISLAND,
+    METADATA_KEY_HOME_ISLAND,
+)
 from gigaevo.exceptions import StorageError
 from gigaevo.memory.cards import (
     AssignmentRecord,
@@ -70,21 +74,23 @@ def _pre_persist_failure_status(
     return "invalid"
 
 
-def lineage_applied_closure(
-    *, applied_ids: list[str], parents: list[Program]
+def lineage_blocked_closure(
+    *,
+    blocked_ids: list[str],
+    parents: list[Program],
 ) -> list[str]:
-    """Transitive closure of every card applied to this child or any ancestor.
+    """Transitive closure of every card excluded from this branch.
 
-    Built from frozen inputs only: the child's just-computed ``applied_ids``
-    unioned with each parent's own (birth-frozen) lineage-applied closure.
+    The current mutation contributes cards it applied plus the proposed card in
+    either randomized arm. Parents contribute their birth-frozen closure.
     """
-    closure: set[str] = {cid for cid in applied_ids if cid}
+    closure: set[str] = {card_id for card_id in blocked_ids if card_id}
     for parent in parents:
-        for cid in (
-            parent.get_metadata(MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY) or []
+        for card_id in (
+            parent.get_metadata(MUTATION_MEMORY_LINEAGE_BLOCKED_IDS_METADATA_KEY) or []
         ):
-            if cid:
-                closure.add(cid)
+            if card_id:
+                closure.add(card_id)
     return sorted(closure)
 
 
@@ -277,7 +283,7 @@ async def generate_one_mutation(
     task_id: int = 0,
     selection_lease: SelectionLease | None = None,
     failure_observer: Callable[[MutationFailure], None] | None = None,
-    child_observer: Callable[[str], None] | None = None,
+    child_observer: Callable[[str, str, str], None] | None = None,
 ) -> str | None:
     """Generate a single mutation and persist it. Returns program ID if successful.
 
@@ -337,21 +343,30 @@ async def generate_one_mutation(
                 if card_id
             }
         )
-        retained_probe_ids = sorted(
-            set(injected_ids) | set(proposed_probe_ids(parents))
-        )
+        probe_ids = proposed_probe_ids(parents)
+        retained_probe_ids = sorted(set(injected_ids) | set(probe_ids))
         mutation_output = mutation_spec.metadata.get(MutationSpec.META_OUTPUT)
         base_parent = 1
         if isinstance(mutation_output, dict):
             base_parent = base_parent_index(mutation_output.get("base_parent", 1) or 1)
         applied_ids = applied_memory_ids(injected_ids, mutation_output)
+        blocked_ids = sorted(set(applied_ids) | set(probe_ids))
         program.set_metadata(MUTATION_MEMORY_INJECTED_IDS_METADATA_KEY, injected_ids)
         program.set_metadata(MUTATION_MEMORY_USED_METADATA_KEY, bool(injected_ids))
         program.set_metadata(
-            MUTATION_MEMORY_LINEAGE_APPLIED_IDS_METADATA_KEY,
-            lineage_applied_closure(applied_ids=applied_ids, parents=parents),
+            MUTATION_MEMORY_LINEAGE_BLOCKED_IDS_METADATA_KEY,
+            lineage_blocked_closure(blocked_ids=blocked_ids, parents=parents),
         )
         memory_snapshot = freeze_base_parent_snapshot(parents, base_parent)
+        base_index = base_parent - 1
+        if base_index < 0 or base_index >= len(parents):
+            base_index = 0
+        topology_parent = parents[base_index]
+        topology_island = str(
+            topology_parent.get_metadata(METADATA_KEY_CURRENT_ISLAND)
+            or topology_parent.get_metadata(METADATA_KEY_HOME_ISLAND)
+            or topology_parent.id
+        )
         for key, value in memory_snapshot.items():
             program.set_metadata(key, value)
         card_sources = {
@@ -400,7 +415,7 @@ async def generate_one_mutation(
             # Durable causal handoff precedes Redis persistence. A crash after
             # this point leaves either a linked child or a linked-missing child
             # that startup reconciliation can close without guessing.
-            child_observer(program.id)
+            child_observer(program.id, topology_parent.id, topology_island)
         await storage.add(program)
         persisted_id = program.id  # Point of no return — ID must be returned
         if selection_lease is not None:

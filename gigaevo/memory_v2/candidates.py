@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from time import perf_counter
 from typing import Protocol, runtime_checkable
@@ -41,6 +41,14 @@ class CandidateSlate:
     candidates: tuple[Card, ...]
     candidate_universe: CandidateUniverseRecord
     applicability: ApplicabilityRecord
+
+
+@dataclass(frozen=True)
+class PreparedApplicability:
+    """Research result plus the exact pre-research candidate universe."""
+
+    result: ResearchResult = field(default_factory=ResearchResult)
+    assessed_bank_card_ids: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -229,7 +237,7 @@ class CandidateSource(Protocol):
         parent_context: str | None,
         pending_by_bank_card: Mapping[str, int],
         max_pending_per_card: int,
-    ) -> ResearchResult: ...
+    ) -> PreparedApplicability: ...
 
     async def candidate_snapshot(
         self,
@@ -241,7 +249,7 @@ class CandidateSource(Protocol):
         parent_context: str | None,
         pending_by_bank_card: Mapping[str, int],
         max_pending_per_card: int,
-        research: ResearchResult | None = None,
+        research: PreparedApplicability | None = None,
     ) -> CandidateSlate: ...
 
 
@@ -359,7 +367,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
         parent_context: str | None,
         pending_by_bank_card: Mapping[str, int],
         max_pending_per_card: int,
-    ) -> ResearchResult:
+    ) -> PreparedApplicability:
         _, eligible, excluded = self._snapshot(
             program,
             task_key=task_key,
@@ -367,13 +375,16 @@ class WholeBankCandidateSource(_BankCandidateSource):
             max_pending_per_card=max_pending_per_card,
         )
         if not eligible:
-            return ResearchResult()
-        return await self.applicability.assess(
-            program,
-            task_description=task_description,
-            metrics_description=metrics_description,
-            parent_context=parent_context,
-            exclude_ids=excluded,
+            return PreparedApplicability()
+        return PreparedApplicability(
+            result=await self.applicability.assess(
+                program,
+                task_description=task_description,
+                metrics_description=metrics_description,
+                parent_context=parent_context,
+                exclude_ids=excluded,
+            ),
+            assessed_bank_card_ids=tuple(card.id for card in eligible),
         )
 
     async def candidate_snapshot(
@@ -386,7 +397,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
         parent_context: str | None,
         pending_by_bank_card: Mapping[str, int],
         max_pending_per_card: int,
-        research: ResearchResult | None = None,
+        research: PreparedApplicability | None = None,
     ) -> CandidateSlate:
         if research is None:
             research = await self.prepare(
@@ -400,7 +411,7 @@ class WholeBankCandidateSource(_BankCandidateSource):
             )
         # The writer may merge or retire cards while the LLM assesses
         # applicability. Refresh eligibility, retain every current candidate,
-        # and drop only stale assessment ids.
+        # and mark newly arrived cards unassessed rather than negative.
         registry, eligible, _ = self._snapshot(
             program,
             task_key=task_key,
@@ -409,9 +420,16 @@ class WholeBankCandidateSource(_BankCandidateSource):
         )
         eligible_ids = tuple(card.id for card in eligible)
         eligible_id_set = frozenset(eligible_ids)
+        assessed_ids = tuple(
+            sorted(eligible_id_set.intersection(research.assessed_bank_card_ids))
+        )
         applicable_ids = tuple(
-            dict.fromkeys(
-                card.id for card in research.cards if card.id in eligible_id_set
+            sorted(
+                {
+                    card.id
+                    for card in research.result.cards
+                    if card.id in set(assessed_ids)
+                }
             )
         )
         if self.applicability_specification.name == "none":
@@ -419,12 +437,12 @@ class WholeBankCandidateSource(_BankCandidateSource):
                 specification=self.applicability_specification,
                 status=ApplicabilityStatus.DISABLED,
             )
-        elif research.failure is not None:
+        elif research.result.failure is not None:
             applicability = ApplicabilityRecord(
                 specification=self.applicability_specification,
                 status=ApplicabilityStatus.FAILED,
-                research_iterations=research.iterations,
-                failure=research.failure,
+                research_iterations=research.result.iterations,
+                failure=research.result.failure,
             )
         else:
             applicability = ApplicabilityRecord(
@@ -434,9 +452,10 @@ class WholeBankCandidateSource(_BankCandidateSource):
                     if applicable_ids
                     else ApplicabilityStatus.EMPTY
                 ),
+                assessed_bank_card_ids=assessed_ids,
                 applicable_bank_card_ids=applicable_ids,
-                research_iterations=research.iterations,
-                summary=research.summary,
+                research_iterations=research.result.iterations,
+                summary=research.result.summary,
             )
         status = (
             CandidateUniverseStatus.ELIGIBLE_BANK
