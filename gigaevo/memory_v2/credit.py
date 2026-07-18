@@ -21,7 +21,19 @@ class _LineageCensored(RuntimeError):
 
 
 class LineageCreditResolver:
-    """Resolve delayed option-value residuals without duplicating breakthroughs."""
+    """Resolve direct utility and additive, exclusive lineage option value.
+
+    The closest eligible root owns a shared breakthrough. Overlapping non-owner
+    roots remain in the lineage regression as structural zero residuals; dropping
+    them would selectively censor on the realized outcome. This estimand is
+    exclusive incremental enablement, not the total downstream value reachable
+    from every ancestor. Direct descendant D1 utility and ancestor option value
+    are intentionally different attributions and must not be summed across
+    decisions as if they were realized search fitness. Structural zeros count as
+    observations and therefore activate the delayed head.
+    """
+
+    _GAIN_BOUND_TOLERANCE = 1e-9
 
     def resolve(
         self,
@@ -300,7 +312,17 @@ class LineageCreditResolver:
         reward = root.context.reward
         if root_edge.status != "outcome" or root_edge.measurement is None:
             raise ValueError("valid root terminal lacks a valid topology edge")
-        direct_gain = root_edge.measurement.value
+        parent_value = root.context.parent_metrics[reward.primary_metric]
+        lower = reward.metric_lower_bound - parent_value
+        upper = reward.metric_upper_bound - parent_value
+        if not reward.higher_is_better:
+            lower, upper = -upper, -lower
+        direct_gain = LineageCreditResolver._validated_gain(
+            root_edge.measurement.value,
+            lower=lower,
+            upper=upper,
+            child_id=root_edge.child_id,
+        )
         queue: deque[tuple[MutationEdge, int, float]] = deque(
             [(root_edge, 1, direct_gain)]
         )
@@ -327,6 +349,12 @@ class LineageCreditResolver:
                 raise _LineageCensored(
                     f"reachable mutation {edge.child_id!r} is incomplete"
                 )
+            cumulative_gain = LineageCreditResolver._validated_gain(
+                cumulative_gain,
+                lower=lower,
+                upper=upper,
+                child_id=edge.child_id,
+            )
             valid_count += 1
             accepted = edge.archive_disposition is ArchiveDisposition.ACCEPTED
             archive_survived = archive_survived or accepted
@@ -347,17 +375,6 @@ class LineageCreditResolver:
                     next_gain += child_edge.measurement.value
                 queue.append((child_edge, depth + 1, next_gain))
 
-        lower = (
-            reward.metric_lower_bound
-            - root.context.parent_metrics[reward.primary_metric]
-        )
-        upper = (
-            reward.metric_upper_bound
-            - root.context.parent_metrics[reward.primary_metric]
-        )
-        if not reward.higher_is_better:
-            lower, upper = -upper, -lower
-        best_gain = min(max(best_gain, lower), upper)
         residual = max(0.0, best_gain - direct_gain)
         return (
             OutcomeMeasurement(value=best_gain, se=None, kind="scalar"),
@@ -369,3 +386,20 @@ class LineageCreditResolver:
             invalid_count,
             archive_survived,
         )
+
+    @staticmethod
+    def _validated_gain(
+        value: float,
+        *,
+        lower: float,
+        upper: float,
+        child_id: str,
+    ) -> float:
+        tolerance = LineageCreditResolver._GAIN_BOUND_TOLERANCE
+        if value < lower - tolerance or value > upper + tolerance:
+            raise ValueError(
+                "lineage gain exceeds root-specific metric bounds for "
+                f"child {child_id!r}: {value} not in [{lower}, {upper}]"
+            )
+        # Normalize only floating-point drift inside the accepted tolerance.
+        return min(max(value, lower), upper)

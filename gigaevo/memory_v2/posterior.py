@@ -883,6 +883,13 @@ class StableBayesianLogisticRegressor:
 
 
 class FittedTerminalUtilityPosterior:
+    """Posterior worlds for immediate utility plus learned lineage option value.
+
+    The option head is disabled until at least one residual is observed. Once
+    active, it is rectified per posterior world: this preserves the intended
+    uncertainty-driven exploration bonus rather than rectifying only the mean.
+    """
+
     def __init__(
         self,
         *,

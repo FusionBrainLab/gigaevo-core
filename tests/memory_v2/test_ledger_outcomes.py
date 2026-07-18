@@ -373,6 +373,52 @@ def test_memory_free_missing_child_is_reconcilable(
     assert edge.failure_stage == "startup_child_missing"
 
 
+def test_missing_child_closes_pending_decision_without_rewriting_terminal_topology(
+    tmp_path,
+    environment: EnvironmentFingerprint,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    ledger = SqliteCausalLedger(
+        path=tmp_path / "split-terminal-crash.sqlite3",
+        environment=environment,
+    )
+    ledger.activate()
+    record = decision_record(evolution_context, revisions[0])
+    ledger.record_decision(record)
+    link_decision(ledger, record, "closed-topology-child", 3)
+    ledger.record_mutation_outcome(
+        MutationTopologyOutcome(
+            child_id="closed-topology-child",
+            status="outcome",
+            fitness_delta=0.1,
+            fitness_delta_se=None,
+            n_pairs=None,
+            measurement_kind="scalar",
+            pairing_signature="",
+            failure_stage="",
+        )
+    )
+
+    assert ledger.pending_child_ids() == ("closed-topology-child",)
+    assert ledger.record_missing_child(
+        "closed-topology-child",
+        failure_stage="startup_child_missing",
+    )
+
+    assert ledger.pending_child_ids() == ()
+    edge = ledger.mutation_edges()[0]
+    assert edge.status == "outcome"
+    assert edge.measurement == OutcomeMeasurement(
+        value=0.1,
+        se=None,
+        kind="scalar",
+    )
+    terminal = ledger.terminals()[0]
+    assert terminal.status == "censored"
+    assert terminal.failure_stage == "startup_child_missing"
+
+
 def test_ledger_detects_payload_tampering_on_read(
     tmp_path,
     environment: EnvironmentFingerprint,

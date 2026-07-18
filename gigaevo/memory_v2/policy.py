@@ -104,6 +104,22 @@ def _finite_probability_matching(
     )
 
 
+def _world_winner_and_challenger(
+    cards: tuple[CardSnapshot, ...],
+    effects: Sequence[float],
+    *,
+    abstain_effect: float,
+) -> tuple[int | None, int]:
+    order = sorted(
+        range(len(cards)),
+        key=lambda index: (effects[index], cards[index].treatment_id),
+        reverse=True,
+    )
+    winner = order[0] if effects[order[0]] > abstain_effect else None
+    challenger = next((index for index in order if index != winner), order[0])
+    return winner, challenger
+
+
 def _challenger_distribution(
     cards: tuple[CardSnapshot, ...],
     effect_worlds: Sequence[Sequence[float]] | np.ndarray,
@@ -117,13 +133,11 @@ def _challenger_distribution(
         return {}
     challenger_counts = {card.treatment_id: 1.0 for card in cards}
     for effects in effect_worlds:
-        order = sorted(
-            range(len(cards)),
-            key=lambda index: (effects[index], cards[index].treatment_id),
-            reverse=True,
+        _, challenger = _world_winner_and_challenger(
+            cards,
+            effects,
+            abstain_effect=abstain_effect,
         )
-        winner = order[0] if effects[order[0]] > abstain_effect else None
-        challenger = next((index for index in order if index != winner), order[0])
         challenger_counts[cards[challenger].treatment_id] += 1.0
     weights = {
         treatment_id: count / math.sqrt(1.0 + pending_by_treatment.get(treatment_id, 0))
@@ -131,6 +145,70 @@ def _challenger_distribution(
     }
     total = sum(weights.values())
     return {treatment_id: weight / total for treatment_id, weight in weights.items()}
+
+
+def _mixed_policy_mc_variance(
+    cards: tuple[CardSnapshot, ...],
+    effect_worlds: Sequence[Sequence[float]] | np.ndarray,
+    *,
+    abstain_effect: float,
+    exploration_probability: float,
+    pending_by_treatment: Mapping[str, int],
+) -> dict[str, float]:
+    """Delta-method MC variance of matching plus challenger exploration.
+
+    Both components use the same posterior worlds. The per-world influence
+    calculation therefore retains their covariance instead of adding two
+    independent Bernoulli variances.
+    """
+
+    if not cards:
+        return {}
+    worlds = tuple(effect_worlds)
+    if not worlds:
+        raise ValueError("proposal uncertainty requires posterior worlds")
+    world_count = len(worlds)
+    card_count = len(cards)
+    winners = np.zeros((world_count, card_count), dtype=float)
+    challengers = np.zeros((world_count, card_count), dtype=float)
+    for world_index, effects in enumerate(worlds):
+        winner, challenger = _world_winner_and_challenger(
+            cards,
+            effects,
+            abstain_effect=abstain_effect,
+        )
+        if winner is not None:
+            winners[world_index, winner] = 1.0
+        challengers[world_index, challenger] = 1.0
+
+    winner_mean = np.mean(winners, axis=0)
+    challenger_mean = np.mean(challengers, axis=0)
+    discounts = np.asarray(
+        [
+            1.0 / math.sqrt(1.0 + pending_by_treatment.get(card.treatment_id, 0))
+            for card in cards
+        ],
+        dtype=float,
+    )
+    # One fixed pseudo-count per card is the full-support smoothing used by
+    # _challenger_distribution. It has no sampling variance.
+    smoothed_mean = challenger_mean + 1.0 / world_count
+    weights = discounts * smoothed_mean
+    weight_sum = float(np.sum(weights))
+    challenger_probability = weights / weight_sum
+    challenger_jacobian = np.diag(discounts / weight_sum) - np.outer(
+        challenger_probability,
+        discounts / weight_sum,
+    )
+    challenger_influence = (challengers - challenger_mean) @ challenger_jacobian.T
+    influence = (1.0 - exploration_probability) * (
+        winners - winner_mean
+    ) + exploration_probability * challenger_influence
+    variances = np.sum(influence * influence, axis=0) / (world_count * world_count)
+    return {
+        card.treatment_id: float(max(variances[index], 0.0))
+        for index, card in enumerate(cards)
+    }
 
 
 class SafetyConstraint(BaseModel):
@@ -322,7 +400,7 @@ class ChanceConstrainedProbabilityMatchingPolicy:
         (
             finite_safe_probability,
             finite_abstain_probability,
-            finite_mc_variance,
+            _finite_mc_variance,
             last_effects,
         ) = _finite_probability_matching(
             safe_cards,
@@ -349,6 +427,13 @@ class ChanceConstrainedProbabilityMatchingPolicy:
             abstain_effect=self.config.abstain_effect,
             pending_by_treatment=pending_by_treatment,
         )
+        proposal_mc_variance = _mixed_policy_mc_variance(
+            safe_cards,
+            effect_worlds,
+            abstain_effect=self.config.abstain_effect,
+            exploration_probability=exploration,
+            pending_by_treatment=pending_by_treatment,
+        )
         proposal_probability, abstain_probability = _mix_finite_policy_with_exploration(
             tuple(card.treatment_id for card in cards),
             safe_ids,
@@ -372,8 +457,9 @@ class ChanceConstrainedProbabilityMatchingPolicy:
                     treatment_id=treatment_id,
                     bank_card_id=card.bank_card_id,
                     proposal_probability=rho,
-                    proposal_mc_se=(1.0 - exploration)
-                    * math.sqrt(max(finite_mc_variance.get(treatment_id, 0.0), 0.0)),
+                    proposal_mc_se=math.sqrt(
+                        proposal_mc_variance.get(treatment_id, 0.0)
+                    ),
                     offer_probability=offer,
                     joint_treated_probability=(0.0 if offer is None else rho * offer),
                     joint_control_probability=(

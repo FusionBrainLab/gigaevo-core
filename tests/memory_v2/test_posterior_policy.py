@@ -24,6 +24,7 @@ from gigaevo.memory_v2.policy import (
     SafetyConstraint,
     _finite_probability_matching,
     _mix_finite_policy_with_exploration,
+    _mixed_policy_mc_variance,
     safety_gate_admits,
 )
 from gigaevo.memory_v2.posterior import (
@@ -318,6 +319,35 @@ def test_probability_matching_compares_every_eligible_card_in_one_pool() -> None
     )
     assert abstain == 0.0
     assert sum(variances.values()) > 0.0
+
+
+def test_mixed_policy_mc_variance_includes_challenger_covariance() -> None:
+    cards = tuple(
+        CardSnapshot.from_card(Card(id=card_id, description=card_id))
+        for card_id in ("a", "b")
+    )
+    worlds = np.asarray(
+        [
+            [3.0, 2.0],
+            [3.0, 2.0],
+            [2.0, 3.0],
+            [-1.0, -2.0],
+        ]
+    )
+
+    variances = _mixed_policy_mc_variance(
+        cards,
+        worlds,
+        abstain_effect=0.0,
+        exploration_probability=0.2,
+        pending_by_treatment={},
+    )
+
+    # Winner and challenger indicators are negatively correlated for card a;
+    # the full mixture variance is therefore 1/36 rather than the 0.04 obtained
+    # by scaling only its probability-matching variance.
+    assert variances["a"] == pytest.approx(1.0 / 36.0)
+    assert variances["a"] < 0.04
 
 
 def test_rag_applicability_changes_only_the_treated_effect_design(

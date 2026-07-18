@@ -245,6 +245,111 @@ def test_memory_free_descendant_adds_only_incremental_option_value(
     assert lineage_rows[0].measurement == outcomes[0].residual_measurement
 
 
+def test_lower_is_better_lineage_uses_oriented_root_bounds(
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    context = _context(
+        evolution_context.model_copy(
+            update={
+                "parent_metrics": {
+                    **evolution_context.parent_metrics,
+                    "fitness": 0.8,
+                },
+                "reward": evolution_context.reward.model_copy(
+                    update={"higher_is_better": False}
+                ),
+            }
+        ),
+        parent_id="parent",
+        ordinal=0,
+        depth=2,
+        opportunities=2,
+    )
+    root = _record(context, revisions[0], ordinal=0)
+    terminal = _terminal(root, child_id="root-child", gain=0.1)
+    edges = (
+        _edge(
+            context,
+            parent_id="parent",
+            child_id="root-child",
+            ordinal=0,
+            gain=0.1,
+        ),
+        _edge(
+            context,
+            parent_id="root-child",
+            child_id="lower-fitness-child",
+            ordinal=1,
+            gain=0.2,
+        ),
+        _edge(
+            context,
+            parent_id="other",
+            child_id="closing",
+            ordinal=2,
+            gain=0.0,
+        ),
+    )
+
+    outcomes, _ = _resolve((root,), (terminal,), edges)
+
+    assert outcomes[0].measurement is not None
+    assert outcomes[0].measurement.value == pytest.approx(0.3)
+    assert outcomes[0].residual_measurement is not None
+    assert outcomes[0].residual_measurement.value == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    ("direct_gain", "descendant_gain"),
+    ((0.6, 0.0), (0.4, 0.2)),
+)
+def test_lineage_rejects_gain_outside_root_metric_bounds(
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+    direct_gain: float,
+    descendant_gain: float,
+) -> None:
+    context = _context(
+        evolution_context,
+        parent_id="parent",
+        ordinal=0,
+        depth=2,
+        opportunities=2,
+    )
+    root = _record(context, revisions[0], ordinal=0)
+    terminal = _terminal(root, child_id="root-child", gain=direct_gain)
+    edges = (
+        _edge(
+            context,
+            parent_id="parent",
+            child_id="root-child",
+            ordinal=0,
+            gain=direct_gain,
+        ),
+        _edge(
+            context,
+            parent_id="root-child",
+            child_id="descendant",
+            ordinal=1,
+            gain=descendant_gain,
+        ),
+        _edge(
+            context,
+            parent_id="other",
+            child_id="closing",
+            ordinal=2,
+            gain=0.0,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="lineage gain exceeds root-specific metric bounds",
+    ):
+        _resolve((root,), (terminal,), edges)
+
+
 def test_lineage_waits_for_fixed_opportunity_budget_and_archive_result(
     evolution_context: EvolutionContext,
     revisions: tuple[CardSnapshot, CardSnapshot],

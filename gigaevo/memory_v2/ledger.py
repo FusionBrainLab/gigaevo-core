@@ -560,20 +560,21 @@ class SqliteCausalLedger:
 
     def record_missing_child(self, child_id: str, *, failure_stage: str) -> bool:
         with self._connection() as connection:
-            topology_exists = (
-                connection.execute(
-                    "SELECT 1 FROM mutation_edges WHERE child_id = ?",
-                    (child_id,),
-                ).fetchone()
-                is not None
-            )
-        if topology_exists:
+            topology_row = connection.execute(
+                "SELECT status FROM mutation_edges WHERE child_id = ?",
+                (child_id,),
+            ).fetchone()
+        topology_exists = topology_row is not None
+        if topology_row is not None and topology_row[0] == "pending":
             self._record_mutation_terminal(
                 child_id=child_id,
                 status="censored",
                 measurement=None,
                 failure_stage=failure_stage,
             )
+        # The topology terminal is committed before the optional decision
+        # terminal. A crash between them must close only the latter, never
+        # rewrite an already-observed mutation as missing.
         with self._connection() as connection:
             row = connection.execute(
                 """
