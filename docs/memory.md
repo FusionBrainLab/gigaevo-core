@@ -164,9 +164,15 @@ A card can be proposed for deletion only when all of the following hold:
   supported context.
 
 Selection defines helpfulness relative to zero. Retirement instead uses
-`minimum_useful_effect` (default `0.01` of the configured metric range), a
-Bayesian practical-equivalence boundary. This lets sufficiently supported
-neutral cards retire while sparse or uncertain cards fail closed.
+`practical_effect_quantile`: a low quantile (default `0.10`) of non-zero
+absolute normalized gains in the randomized control arm. Using controls keeps
+the practical scale independent of the card effect being judged, and follows
+realized task dynamics rather than the problem author's chosen metric bounds. A
+context whose remaining feasible positive headroom does not clear the boundary
+is skipped; at least one assessable context is required. With no non-zero
+control gain the boundary falls back to zero, preserving harm retirement while
+deferring neutral-card retirement. Sparse support, uncertainty, and
+numerical-boundary mass all fail-keep.
 
 The evictor creates a one-use verdict containing:
 
@@ -177,6 +183,10 @@ The evictor creates a one-use verdict containing:
 update, rechecks leases (including historical aliases), and applies the
 foreign-task positive-evidence veto before deletion. A changed card or evidence
 version rescues the card.
+
+Production causal retirement requires `allow_cross_task=false`. Cross-task
+delivery remains disabled until retirement evidence is identified separately
+per source task; the admission veto is only a defensive final check.
 
 The SQLite evidence ledger and JSON card bank are separate stores, so there is a
 small residual interval between the final ledger-version read and the bank
@@ -205,8 +215,10 @@ The canonical graph is `config/memory/v2.yaml`. Important component groups:
 |---|---|---|
 | `memory/llm` | `gemini`, `qwen_instruct`, `gpt54_mini` | shared memory LLM router |
 | `memory/applicability` | `agentic`, `none` | semantic RAG assessment or ablation |
+| `memory/context` | `global` | task and MAP-Elites decision context |
 | `memory/excluder` | `lineage`, `none` | prevent immediate lineage reuse |
 | `memory/evictor` | `causal`, `none` | causal retirement or explicit ablation |
+| `memory/no_card_evidence` | `none` | explicit absence of heuristic no-card evidence |
 | `memory/write` | `live`, `end_of_run`, `none` | writer cadence |
 
 The resolver-safe causal evictor couples its viability probability to

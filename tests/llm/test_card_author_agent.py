@@ -89,14 +89,16 @@ async def test_drop_has_no_card() -> None:
         higher_is_better=False,
         archive_status=ArchiveStatus.REJECTED,
     )
-    assert result == CardAuthorResponse(decision=WriteDecision.DROP)
+    assert result == CardAuthorResponse(decision=WriteDecision.DROP, card=None)
 
 
 def test_author_schema_rejects_equivalent_and_inconsistent_payloads() -> None:
-    decision_schema = CardAuthorResponse.model_json_schema()["properties"]["decision"]
+    schema = CardAuthorResponse.model_json_schema()
+    decision_schema = schema["properties"]["decision"]
     assert decision_schema["enum"] == ["DROP", "NEW"]
+    assert set(schema["required"]) == {"decision", "card"}
     with pytest.raises(ValidationError):
-        CardAuthorResponse(decision=WriteDecision.EQUIVALENT)
+        CardAuthorResponse(decision=WriteDecision.EQUIVALENT, card=None)
     with pytest.raises(ValidationError):
         CardAuthorResponse(decision=WriteDecision.NEW)
     with pytest.raises(ValidationError):

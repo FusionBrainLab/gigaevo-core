@@ -17,7 +17,7 @@ from gigaevo.memory.write.decisions import WriteDecision
 
 class ProgramAuthorResponse(BaseModel):
     decision: Literal[WriteDecision.DROP, WriteDecision.NEW]
-    card: AuthoredCard | None = None
+    card: AuthoredCard | None
 
     @model_validator(mode="after")
     def _consistent_decision(self) -> Self:
@@ -31,6 +31,7 @@ class ProgramAuthorResponse(BaseModel):
 class ProgramAuthorState(TypedDict, total=False):
     code: str
     fitness: float | None
+    higher_is_better: bool
     archive_rank: int | None
     messages: list[BaseMessage]
     llm_response: Any
@@ -57,6 +58,9 @@ class ProgramAuthorAgent(LangGraphAgent):
         fitness_line = "(unknown)" if fitness is None else f"{fitness}"
         user = self.user_prompt_template.format(
             fitness=fitness_line,
+            fitness_direction=(
+                "higher is better" if state["higher_is_better"] else "lower is better"
+            ),
             archive_rank=state.get("archive_rank") or "(unknown)",
             code=state["code"],
         )
@@ -76,11 +80,17 @@ class ProgramAuthorAgent(LangGraphAgent):
         return state
 
     async def arun(
-        self, *, code: str, fitness: float | None, archive_rank: int | None = None
+        self,
+        *,
+        code: str,
+        fitness: float | None,
+        higher_is_better: bool,
+        archive_rank: int | None = None,
     ) -> ProgramAuthorResponse:
         state: ProgramAuthorState = {
             "code": code,
             "fitness": fitness,
+            "higher_is_better": higher_is_better,
             "archive_rank": archive_rank,
         }
         final = await self.graph.ainvoke(state)

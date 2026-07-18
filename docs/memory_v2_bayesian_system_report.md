@@ -428,18 +428,25 @@ Read-time safety remains the first line of defense. In addition,
 is eligible only with randomized treated/control support, evidence from multiple
 discrete `(island, MAP-Elites parent cell)` contexts, and no immediate or lineage
 outcomes pending. Selection calls any positive effect helpful. Retirement uses
-a region-of-practical-equivalence boundary, expressed as a fraction of the
-configured task metric range, so sufficient evidence can distinguish useful
-actions from neutral dilution without treating uncertainty as uselessness.
+a region-of-practical-equivalence boundary equal to a low quantile of non-zero
+absolute normalized gains in the task's randomized control arm. Using controls
+keeps the scale independent of the treatment effect being judged. This
+self-normalizes to realized evolutionary dynamics rather than configured bound
+width. A context whose feasible positive headroom cannot clear the boundary is
+not allowed to certify uselessness, and at least one assessable context is
+required. An empty non-zero control scale falls back to a zero, harm-only
+boundary.
 
 For every supported context and both unassessed and optimistic-applicable RAG
 states, retirement requires the Wilson upper bound on
 `P(safe and practically useful)` to remain below the configured boundary.
 Optimizer failure, upper hyperparameter contact, excessive residual-scale
 boundary mass, or safety-integration error in either immediate or lineage head
-vetoes deletion. The one-use verdict binds the exact card revision and evidence
-version. The admission gate then checks live/historical-alias leases and
-foreign-task positive evidence before removal.
+vetoes deletion and emits a warning. The one-use verdict binds the exact card
+revision and evidence version. The admission gate then checks
+live/historical-alias leases and foreign-task positive evidence before removal.
+Production configuration forbids cross-task delivery while causal retirement
+is enabled because the retirement ledger is not yet identified per source task.
 
 This is sequential posterior monitoring, not a single fixed-sample test. The
 verdict RNG is deterministic per evidence version and the Monte Carlo bound is

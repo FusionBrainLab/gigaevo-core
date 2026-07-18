@@ -328,6 +328,7 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert cfg.memory.posterior_config.reference_offer_probability == pytest.approx(
             0.70
         )
+        assert cfg.memory.posterior_config.reward_residual_sd_bounds == [0.01, 5.0]
         assert "max_task_cards" not in cfg.memory.writer
         assert cfg.memory.ledger._target_.endswith("SqliteCausalLedger")
         # ``compose`` does not populate HydraConfig's runtime choice table.
@@ -376,6 +377,10 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         with pytest.raises(ValueError, match="causal-retirement"):
             validate_memory_v2_scope(cfg)
         cfg.memory.evictor._target_ = evictor_target
+        cfg.memory.candidate_source.allow_cross_task = True
+        with pytest.raises(ValueError, match="allow_cross_task=false"):
+            validate_memory_v2_scope(cfg)
+        cfg.memory.candidate_source.allow_cross_task = False
 
         cfg.memory.feature_config.retrieval_applicability_contrast = False
         with pytest.raises(ValueError, match="retrieval_applicability_contrast"):
@@ -387,6 +392,7 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
         assert instantiated_evictor.max_viability_probability == pytest.approx(
             instantiated_evictor.safety.alpha
         )
+        assert instantiated_evictor.practical_effect_quantile == pytest.approx(0.10)
         instantiated_evictor.ledger.close()
     finally:
         GlobalHydra.instance().clear()

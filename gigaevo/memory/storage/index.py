@@ -82,17 +82,21 @@ class VectorIndex:
         with self._lock:
             for scope, collection in self._collections.items():
                 desired = self._desired_documents(scope, cards)
-                existing = collection.get(include=["documents"])
+                existing = collection.get(include=["documents", "metadatas"])
                 existing_docs = dict(
                     zip(existing["ids"], existing["documents"] or [], strict=True)
+                )
+                existing_metadata = dict(
+                    zip(existing["ids"], existing["metadatas"] or [], strict=True)
                 )
                 stale = sorted(set(existing_docs) - desired.keys())
                 if stale:
                     collection.delete(ids=stale)
                 changed = sorted(
                     cid
-                    for cid, (document, _) in desired.items()
+                    for cid, (document, metadata) in desired.items()
                     if existing_docs.get(cid) != document
+                    or existing_metadata.get(cid) != metadata
                 )
                 if changed:
                     collection.upsert(

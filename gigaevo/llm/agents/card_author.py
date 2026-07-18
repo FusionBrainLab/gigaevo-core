@@ -36,7 +36,7 @@ class CardAuthorResponse(BaseModel):
     """A mutation produces either no durable idea or one candidate."""
 
     decision: Literal[WriteDecision.DROP, WriteDecision.NEW]
-    card: AuthoredCard | None = None
+    card: AuthoredCard | None
 
     @model_validator(mode="after")
     def _consistent_decision(self) -> Self:

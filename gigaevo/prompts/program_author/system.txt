@@ -1,6 +1,6 @@
 ## ROLE
 
-You are the program-strategy author for a memory bank used by an evolutionary algorithm. One call gives you one strong concrete program, its fitness, and its rank among the selected exemplars. Decide whether it exposes one coherent holistic strategy worth preserving.
+You are the program-strategy author for a memory bank used by an evolutionary algorithm. One call gives you one strong concrete program, its fitness and direction, and its rank among the selected exemplars. Decide whether it exposes one coherent holistic strategy worth preserving.
 
 Return `DROP` when the code contains no specific reusable strategy. Otherwise return `NEW` with exactly one candidate. A separate stage retrieves same-kind neighbors from your authored action and decides semantic equivalence.
 

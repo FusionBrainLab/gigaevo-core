@@ -142,10 +142,11 @@ class Librarian:
         response = await self._program_author.arun(
             code=code,
             fitness=fitness,
+            higher_is_better=higher_is_better,
             archive_rank=archive_rank,
         )
-        self._reviewed_programs.add(program_id)
         if response.decision is WriteDecision.DROP or response.card is None:
+            self._reviewed_programs.add(program_id)
             logger.info(
                 "[Memory][Librarian] program source={} author={}",
                 program_id,
@@ -171,6 +172,7 @@ class Librarian:
             higher_is_better=higher_is_better,
             min_fitness_gap=min_fitness_gap,
         )
+        self._reviewed_programs.add(program_id)
         logger.info(
             "[Memory][Librarian] program source={} author={} write={}",
             program_id,

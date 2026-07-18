@@ -79,6 +79,8 @@ feature_config:
   _target_: gigaevo.memory_v2.features.FeatureConfig
   # The live BehaviorSpace owns the ordered statistical axes and transforms.
   behavior_keys: ${ref:memory.context_source::behavior_keys}
+  # Smooth progress coordinate with an O(100)-iteration half-scale; this is a
+  # monotone context feature, never an eligibility or retirement threshold.
   progress_log_scale: 100.0
   # Card kind is durable action metadata, unlike free-form tags. A single
   # program-minus-insight contrast shares evidence across exact card lineages.
@@ -98,6 +100,9 @@ posterior_config:
   shared_effect_prior_sd: 0.35
   card_effect_prior_sd: 0.25
   reward_residual_sd_initial: 0.20
+  # Numerical support in normalized reward units. Retirement fails closed and
+  # emits a warning when posterior mass accumulates at either boundary.
+  reward_residual_sd_bounds: [0.01, 5.0]
   reward_residual_log_prior_sd: 0.75
   reward_residual_mode_grid_points: 17
   reward_residual_quadrature_mass_rtol: 1.0e-5
@@ -165,6 +170,8 @@ candidate_source:
   store: ${ref:memory.store}
   applicability: ${ref:memory.applicability}
   excluder: ${ref:memory.excluder}
+  # Causal retirement evidence is environment-scoped, not yet identified per
+  # source task. Validation rejects cross-task delivery while retirement is on.
   allow_cross_task: false
   allowed_kinds: [insight, program]
 
@@ -221,6 +228,8 @@ writer:
     enabled: true
     top_k_per_refresh: 4
     max_cards: 32
+    # Zero means strict improvement without a raw task-scale epsilon. Any
+    # non-zero override is task-specific and must use that metric's units.
     min_fitness_gap: 0.0
     store_code: false
   selection_leases: ${ref:selection_leases}

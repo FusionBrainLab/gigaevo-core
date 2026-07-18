@@ -8,8 +8,9 @@ min_treated: 2
 min_global_control: 2
 min_distinct_contexts: 2
 posterior_samples: 4096
-# One percent of the task's configured metric range is the practical-utility
-# boundary. Selection still defines helpfulness relative to zero.
-minimum_useful_effect: 0.01
+# Self-normalize practical utility to a low quantile of non-zero absolute gains
+# in the randomized control arm. Selection still defines helpfulness relative
+# to zero.
+practical_effect_quantile: 0.10
 max_viability_probability: ${ref:memory.safety::alpha}
 mc_confidence_z: 1.96

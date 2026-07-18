@@ -114,8 +114,8 @@ Raw mutation notes are never banked as a fallback.
 
 A complete author/retrieval/equivalence chain has a wall-clock timeout. A failed
 mutation record or exemplar is retried only up to
-`writer.max_ingest_attempts` (default `3`), so a deterministic schema/context
-failure cannot consume one LLM call forever.
+`writer.max_ingest_attempts` (default `3`), so a persistent timeout,
+schema/context error, or store failure cannot consume one LLM call forever.
 
 ## 6. Retrieve and deduplicate the authored action
 
@@ -194,9 +194,18 @@ For each supported context it predicts two optimistic semantic states:
 - RAG applicable.
 
 The selection policy calls any positive effect helpful. Retirement instead asks
-whether effect exceeds `minimum_useful_effect`, default `0.01` of the configured
-metric range. This is a practical-equivalence boundary: a supported neutral card
-can eventually retire, while an uncertain card retains exploration value.
+whether effect exceeds a low quantile (default 10th percentile) of the non-zero
+absolute normalized gains in this task's randomized control arm. Controls keep
+the scale independent of the card effect under judgment, and the boundary
+follows realized mutation dynamics rather than configured metric width. A
+supported neutral card can eventually retire, while an uncertain card retains
+exploration value.
+
+A supported context whose remaining feasible positive headroom does not exceed
+that threshold cannot certify uselessness and is skipped. At least one
+assessable context is required. With no non-zero control gains, the practical
+boundary is zero: confidently harmful cards can still retire, while neutral
+retirement waits for an empirical scale.
 
 For every context/state pair, the evictor computes a Wilson upper bound over the
 posterior Monte Carlo estimate of:

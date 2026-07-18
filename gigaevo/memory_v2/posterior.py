@@ -34,7 +34,9 @@ class PosteriorFitError(RuntimeError):
     """Inference failed a numerical integrity check; the policy must abstain."""
 
 
-def _normalized_gain_bounds(context: EvolutionContext) -> tuple[float, float]:
+def normalized_gain_bounds(context: EvolutionContext) -> tuple[float, float]:
+    """Return parent-specific feasible oriented gain bounds in normalized units."""
+
     reward = context.reward
     try:
         parent = context.parent_metrics[reward.primary_metric]
@@ -54,7 +56,7 @@ def _normalized_gain_bounds(context: EvolutionContext) -> tuple[float, float]:
 
 
 def _gain_to_model_scale(value: float, context: EvolutionContext) -> float:
-    lower, upper = _normalized_gain_bounds(context)
+    lower, upper = normalized_gain_bounds(context)
     if value < lower - 1e-9 or value > upper + 1e-9:
         raise ValueError(
             f"normalized gain {value:.6g} is outside [{lower:.6g}, {upper:.6g}]"
@@ -66,7 +68,7 @@ def _latent_to_gain(
     centered_latent: np.ndarray | float,
     context: EvolutionContext,
 ) -> np.ndarray:
-    lower, upper = _normalized_gain_bounds(context)
+    lower, upper = normalized_gain_bounds(context)
     return np.clip(np.asarray(centered_latent, dtype=float), lower, upper)
 
 
@@ -1010,7 +1012,7 @@ class FittedTerminalUtilityPosterior:
         valid1 = _latent_to_gain(direct1 + option1, context)
         p0 = expit(safety_draws @ reward_design0.T)
         p1 = expit(safety_draws @ reward_design1.T)
-        lower, _ = _normalized_gain_bounds(context)
+        lower, _ = normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
         return q1 - q0
@@ -1135,7 +1137,7 @@ class FittedTerminalUtilityPosterior:
         valid1 = _latent_to_gain(direct1 + option1, context)
         p0 = expit(safety_draws @ x0)
         p1 = expit(safety_draws @ x1)
-        lower, _ = _normalized_gain_bounds(context)
+        lower, _ = normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
         risk_delta = p1 - p0

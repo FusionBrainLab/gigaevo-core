@@ -278,7 +278,7 @@ class MemoryWriter(IncrementalPostRunHook):
         ingest_call_timeout_s: Per-call wall-clock bound on each librarian LLM
             ingest chain (author/retrieval/equivalence); a stalled chain is retried.
         max_ingest_attempts: Maximum attempts for a mutation record or exemplar
-            before a deterministic failure is dropped for the rest of the run.
+            before repeated failures drop it for the rest of the run.
         dedup_policy: Authored-action neighbor count for equivalence checking.
         program_exemplars: Program exemplar caps/dedup policy; defaults to
             ``ProgramExemplarPolicy()``.

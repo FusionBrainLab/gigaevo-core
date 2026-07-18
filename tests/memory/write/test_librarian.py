@@ -118,7 +118,7 @@ async def ingest_idea(librarian: Librarian, **overrides):
 
 @pytest.mark.asyncio
 async def test_drop_is_a_valid_zero_write_path(store) -> None:
-    author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.DROP))
+    author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.DROP, card=None))
     equivalence = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
     librarian = make_librarian(store, author=author, equivalence=equivalence)
 
@@ -253,7 +253,7 @@ async def test_unoffered_target_and_equivalence_failure_fail_open_to_new(store) 
 
 @pytest.mark.asyncio
 async def test_author_failure_propagates_without_banking_raw_note(store) -> None:
-    author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.DROP))
+    author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.DROP, card=None))
     author.error = RuntimeError("llm down")
     librarian = make_librarian(store, author=author)
 
@@ -305,6 +305,40 @@ async def test_program_equivalence_keeps_family_id_and_best_representative(
     assert family.fitness == 0.8
     assert family.code == "better code"
     assert family.programs == ("old", "better")
+    assert program_author.calls[0]["higher_is_better"] is True
+
+
+@pytest.mark.asyncio
+async def test_program_route_failure_is_retried_before_marking_reviewed(
+    store, monkeypatch
+) -> None:
+    program_author = FakeProgramAuthor()
+    librarian = make_librarian(store, program_author=program_author)
+    original_save = store.save
+    attempts = 0
+
+    def fail_first_save(card):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient store failure")
+        return original_save(card)
+
+    monkeypatch.setattr(store, "save", fail_first_save)
+    kwargs = {
+        "program_id": "retry-me",
+        "code": "strong code",
+        "fitness": 0.8,
+        "archive_rank": 1,
+        "higher_is_better": True,
+    }
+
+    with pytest.raises(RuntimeError, match="transient store failure"):
+        await librarian.ingest_program(**kwargs)
+    result = await librarian.ingest_program(**kwargs)
+
+    assert result.outcome is WriteOutcome.ADDED
+    assert len(program_author.calls) == 2
 
 
 @pytest.mark.asyncio

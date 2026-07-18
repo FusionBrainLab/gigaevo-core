@@ -3,6 +3,9 @@ Decide whether this strong exemplar supports one holistic strategy hypothesis.
 ## FITNESS
 {fitness}
 
+## FITNESS DIRECTION
+{fitness_direction}
+
 ## RANK AMONG SELECTED EXEMPLARS
 {archive_rank}
 

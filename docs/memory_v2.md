@@ -270,8 +270,12 @@ Causal retirement refits the current causal posterior, requires randomized
 treated and pooled-control support across multiple discrete MAP-Elites
 island/cell contexts, and protects every pending lineage alias. Selection
 defines helpfulness relative to zero; retirement uses a normalized practical
-utility boundary so a well-supported neutral card can eventually leave the
-bank. A card is removed only when the Wilson Monte Carlo upper bound for
+utility boundary derived from a low quantile of the task ledger's own non-zero
+randomized-control gain magnitudes, so it follows realized dynamics without
+using the judged card's treatment effect and a well-supported neutral card can
+eventually leave the bank. Contexts without enough feasible positive headroom
+cannot certify uselessness. A card is removed only when the
+Wilson Monte Carlo upper bound for
 `P(safe and practically useful)` is below the configured threshold in every
 supported context under both unassessed and applicable RAG states. Optimizer,
 residual-scale boundary, posterior-boundary, or safety-integration uncertainty

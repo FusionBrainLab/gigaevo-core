@@ -224,6 +224,13 @@ def validate_memory_v2_scope(cfg: DictConfig) -> None:
             "explicit NullEvictor ablation; observational card-stat evictors are "
             "incompatible."
         )
+    if evictor_target == _MEMORY_V2_EVICTOR_TARGET and bool(
+        _raw_select(cfg, "memory.candidate_source.allow_cross_task", False)
+    ):
+        raise ValueError(
+            "memory=v2 causal retirement requires allow_cross_task=false until "
+            "retirement evidence is identified per source task."
+        )
 
 
 def validate_archive_gate_pipeline_compat(cfg: DictConfig) -> None:

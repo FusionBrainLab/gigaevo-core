@@ -36,7 +36,7 @@ from gigaevo.memory_v2.posterior import (
     _deterministic_safety_summary,
     _joint_gaussian_boundary_probability,
     _latent_to_gain,
-    _normalized_gain_bounds,
+    normalized_gain_bounds,
 )
 from gigaevo.memory_v2.rng import EventRNG
 
@@ -160,7 +160,7 @@ def test_posterior_accepts_context_boundary_tolerance(
     raw["reward"]["higher_is_better"] = higher_is_better
     context = EvolutionContext.model_validate(raw)
 
-    lower, upper = _normalized_gain_bounds(context)
+    lower, upper = normalized_gain_bounds(context)
 
     assert lower == pytest.approx(5e-10)
     assert upper == 1.0

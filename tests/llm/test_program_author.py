@@ -44,27 +44,38 @@ async def test_program_author_returns_one_holistic_hypothesis() -> None:
     llm = FakeLlm(expected)
     agent = create_program_author_agent(llm, task_description="task")
 
-    result = await agent.arun(code="def solve(): ...", fitness=0.53, archive_rank=2)
+    result = await agent.arun(
+        code="def solve(): ...",
+        fitness=0.53,
+        higher_is_better=False,
+        archive_rank=2,
+    )
 
     assert result == expected
     rendered = str(llm.structured.calls[0])
     assert "0.53" in rendered
+    assert "lower is better" in rendered
     assert "2" in rendered
 
 
 @pytest.mark.asyncio
 async def test_program_author_can_drop_uninformative_program() -> None:
-    expected = ProgramAuthorResponse(decision=WriteDecision.DROP)
+    expected = ProgramAuthorResponse(decision=WriteDecision.DROP, card=None)
     agent = create_program_author_agent(FakeLlm(expected), task_description="task")
     assert (
-        await agent.arun(code="pass", fitness=None, archive_rank=None)
+        await agent.arun(
+            code="pass",
+            fitness=None,
+            higher_is_better=True,
+            archive_rank=None,
+        )
     ).decision is WriteDecision.DROP
 
 
 def test_program_author_schema_excludes_equivalence() -> None:
-    decision_schema = ProgramAuthorResponse.model_json_schema()["properties"][
-        "decision"
-    ]
+    schema = ProgramAuthorResponse.model_json_schema()
+    decision_schema = schema["properties"]["decision"]
     assert decision_schema["enum"] == ["DROP", "NEW"]
+    assert set(schema["required"]) == {"decision", "card"}
     with pytest.raises(ValidationError):
-        ProgramAuthorResponse(decision=WriteDecision.EQUIVALENT)
+        ProgramAuthorResponse(decision=WriteDecision.EQUIVALENT, card=None)

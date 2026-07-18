@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from gigaevo.memory.cards import Card
 from gigaevo.memory_v2.eviction import CausalRetirementEvictor
 from gigaevo.memory_v2.models import (
@@ -43,8 +45,11 @@ class _FittedPosterior:
         self.applicability_states: list[RagApplicability] = []
         self.minimum_helpful_effects: list[float] = []
         self.safety_integration_error = 0.0
+        self.prediction_error: Exception | None = None
 
     def prediction(self, *_args, **kwargs):
+        if self.prediction_error is not None:
+            raise self.prediction_error
         applicability = kwargs["rag_applicability"]
         self.applicability_states.append(applicability)
         self.minimum_helpful_effects.append(kwargs["minimum_helpful_effect"])
@@ -131,6 +136,7 @@ def _evidence(
 def _evictor(
     ledger: _Ledger,
     viability,
+    **overrides,
 ) -> tuple[CausalRetirementEvictor, _Posterior]:
     posterior = _Posterior(viability)
     return (
@@ -139,6 +145,7 @@ def _evictor(
             posterior=posterior,  # type: ignore[arg-type]
             safety=SafetyConstraint(),
             posterior_samples=256,
+            **overrides,
         ),
         posterior,
     )
@@ -197,7 +204,7 @@ def test_pending_or_optimistically_viable_card_is_retained(
         RagApplicability.UNASSESSED,
         RagApplicability.APPLICABLE,
     ]
-    assert posterior.fitted.minimum_helpful_effects == [0.01, 0.01]
+    assert posterior.fitted.minimum_helpful_effects == [0.1, 0.1]
 
 
 def test_unhealthy_lineage_posterior_vetoes_retirement(
@@ -254,7 +261,14 @@ def test_support_gates_block_below_treated_or_control_minimum(
         }
     )
 
-    assert _evictor(_Ledger(one_treated), viability=0.0)[0].sweep((card,)) == []
+    assert (
+        _evictor(
+            _Ledger(one_treated),
+            viability=0.0,
+            min_distinct_contexts=1,
+        )[0].sweep((card,))
+        == []
+    )
     assert _evictor(_Ledger(one_control), viability=0.0)[0].sweep((card,)) == []
 
 
@@ -293,6 +307,52 @@ def test_fit_and_prediction_failures_keep_cards(
     integration_evictor, integration_posterior = _evictor(ledger, viability=0.0)
     integration_posterior.fitted.safety_integration_error = 1.0
     assert integration_evictor.sweep((card,)) == []
+
+    prediction_evictor, prediction_posterior = _evictor(ledger, viability=0.0)
+    prediction_posterior.fitted.prediction_error = PosteriorFitError("bad prediction")
+    assert prediction_evictor.sweep((card,)) == []
+
+
+def test_practical_threshold_tracks_randomized_control_gain_scale(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    evidence = _evidence(revision, evolution_context)
+    values = (0.001, -0.002, 0.004, -0.008)
+    observations = tuple(
+        row.model_copy(
+            update={"measurement": row.measurement.model_copy(update={"value": value})}
+        )
+        for row, value in zip(evidence.observations, values, strict=True)
+        if row.measurement is not None
+    )
+    evictor, _ = _evictor(
+        _Ledger(evidence.model_copy(update={"observations": observations})),
+        viability=0.0,
+    )
+
+    assert evictor._practical_effect_threshold(observations) == pytest.approx(0.0026)
+
+
+def test_context_without_practical_headroom_cannot_certify_retirement(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    near_optimum = evolution_context.model_copy(
+        update={
+            "parent_metrics": {
+                **evolution_context.parent_metrics,
+                "fitness": 0.95,
+            }
+        }
+    )
+    ledger = _Ledger(_evidence(revision, near_optimum))
+    evictor, posterior = _evictor(ledger, viability=0.0)
+
+    assert evictor.sweep((card,)) == []
+    assert posterior.fitted.applicability_states == []
 
 
 def test_both_reward_heads_and_residual_boundaries_veto_retirement(
@@ -356,3 +416,43 @@ def test_real_posterior_retirement_smoke(
     )
 
     assert set(evictor.sweep((card,))) <= {card.id}
+
+
+def test_real_posterior_retires_confidently_harmful_card(
+    evolution_context: EvolutionContext,
+    posterior_model,
+) -> None:
+    card = Card(id="harmful", task_key="task", description="harmful candidate")
+    revision = CardSnapshot.from_card(card)
+    noise = (-0.04, -0.02, 0.02, 0.04)
+    observations = tuple(
+        _observation(
+            revision,
+            evolution_context,
+            ordinal=index,
+            treated=index % 2 == 0,
+        ).model_copy(
+            update={
+                "measurement": OutcomeMeasurement(
+                    value=(-0.20 if index % 2 == 0 else 0.0) + noise[index % 4],
+                    se=0.0,
+                    kind="deterministic",
+                )
+            }
+        )
+        for index in range(80)
+    )
+    evidence = EvidenceSnapshot(
+        version="harmful-evidence",
+        model_version="harmful-model",
+        observations=observations,
+    )
+
+    evictor = CausalRetirementEvictor(
+        ledger=_Ledger(evidence),
+        posterior=posterior_model,
+        safety=SafetyConstraint(),
+        posterior_samples=4096,
+    )
+
+    assert evictor.sweep((card,)) == [card.id]
