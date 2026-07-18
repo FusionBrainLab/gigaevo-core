@@ -193,9 +193,28 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 raise asyncio.CancelledError from None
 
     async def _await_terminal_drain(self) -> None:
-        """Wait for every registered child to reach a durable terminal record."""
+        """Wait for every registered child to reach a durable terminal record.
 
-        deadline = time.monotonic() + self._ss_config.terminal_drain_timeout_s
+        Two bounds apply. ``post_cap_drain_grace_s`` (when set) is the intended
+        graceful budget: once it elapses with stragglers still pending, the
+        drain **returns** — teardown (``dag_runner.stop()``) then SIGKILLs the
+        stragglers and the run finalizes normally. ``terminal_drain_timeout_s``
+        remains the outer safety cap: on expiry the drain **raises**. Whichever
+        bound is smaller fires first, so a grace below the drain timeout (the
+        production default: 30 s « ~2 h) always yields the graceful stop; set
+        the grace to ``None`` to restore the legacy drain-or-raise contract.
+        """
+
+        grace_s = self._ss_config.post_cap_drain_grace_s
+        # Resolve both bounds from one start so their ordering is exact, then let
+        # the *earlier* deadline decide the outcome — even when the loop wakes
+        # past both at once (a stalled loop / slow NFS). grace-first returns
+        # cleanly; drain-first raises. Deciding on the deadline values, not on
+        # whichever branch is checked first, is what makes the documented
+        # "whichever bound is smaller fires first" contract hold.
+        start = time.monotonic()
+        drain_deadline = start + self._ss_config.terminal_drain_timeout_s
+        grace_deadline = start + grace_s if grace_s is not None else None
         while True:
             async with self._in_flight_lock:
                 pending = tuple(sorted(self._in_flight))
@@ -208,12 +227,29 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
                 if exc is not None:
                     raise exc
                 raise RuntimeError("ingestor exited during terminal drain")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            now = time.monotonic()
+            if (
+                grace_deadline is not None
+                and grace_deadline <= drain_deadline
+                and now >= grace_deadline
+            ):
+                logger.warning(
+                    "[SteadyState] post-cap drain grace {}s elapsed with "
+                    "{} straggler(s); killed on teardown: {}",
+                    grace_s,
+                    len(pending),
+                    list(pending[:10]),
+                )
+                return
+            if now >= drain_deadline:
                 raise TimeoutError(
                     "terminal drain timed out with "
                     f"{len(pending)} child(ren) pending: {list(pending[:10])}"
                 )
+            # Sleep to the next poll, never past the earliest live deadline.
+            remaining = drain_deadline - now
+            if grace_deadline is not None:
+                remaining = min(remaining, grace_deadline - now)
             await asyncio.sleep(min(self._ss_config.loop_interval, remaining))
 
     async def _final_ingestion_sweep(self, *, deadline_seconds: float) -> None:

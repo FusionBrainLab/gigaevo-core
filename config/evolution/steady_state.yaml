@@ -16,6 +16,7 @@ engine_config:
   max_in_flight: 8
   coalesce_refresh: ${oc.select:memory.coalesce_refresh,true}
   terminal_drain_timeout_s: ${dag_timeout}
+  post_cap_drain_grace_s: ${post_cap_drain_grace_s}
 
 # Override engine target
 evolution_engine:

@@ -55,6 +55,12 @@ python run.py problem.name=toy_example \
     max_concurrent_dags=20 \
     max_in_flight=12
 
+# Bound the post-cap drain grace (seconds). Once the mutant cap is reached the
+# engine drains in-flight evals up to this budget, then abandons any stragglers
+# for teardown to kill and finalizes cleanly (default 30). Use null to restore
+# the legacy "drain up to dag_timeout, then raise" contract.
+python run.py problem.name=toy_example post_cap_drain_grace_s=60
+
 # Use Redis-backed storage on a specific DB
 python run.py problem.name=toy_example storage=redis redis.db=5
 

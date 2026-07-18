@@ -144,6 +144,20 @@ class EngineConfig(BaseModel):
             "small value only in tests."
         ),
     )
+    post_cap_drain_grace_s: float | None = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Bounded drain budget after the mutant cap is reached. Default "
+            "30 s: drain up to this budget so fast evals still land, then log "
+            "the stragglers and return cleanly — teardown (dag_runner.stop()) "
+            "SIGKILLs them and the run finalizes normally. Set to None to "
+            "restore the legacy contract: drain up to terminal_drain_timeout_s "
+            "and raise TimeoutError on expiry. When both apply, whichever bound "
+            "is smaller fires first, so a grace below terminal_drain_timeout_s "
+            "always yields the graceful stop in production."
+        ),
+    )
     causal_outcome_max_consecutive_failures: int = Field(
         default=3,
         gt=0,
