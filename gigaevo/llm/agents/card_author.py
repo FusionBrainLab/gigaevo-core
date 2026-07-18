@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import difflib
-from typing import Any, Self, TypedDict
+from typing import Any, Literal, Self, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -11,11 +11,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
-from gigaevo.memory.write.decisions import (
-    ArchiveStatus,
-    ValidityStatus,
-    WriteDecision,
-)
+from gigaevo.llm.schema_compat import portable_json_schema
+from gigaevo.memory.write.decisions import ArchiveStatus, WriteDecision
 
 _MAX_DIFF_CHARS = 16_000
 
@@ -25,8 +22,8 @@ class AuthoredCard(BaseModel):
 
     description: str = Field(
         min_length=1,
-        description="A conditional hypothesis in the form: When condition C "
-        "holds, try action A because mechanism M.",
+        description="A conditional hypothesis naming one observable applicability "
+        "condition, one implementable intervention or strategy, and its mechanism.",
     )
     explanation_summary: str = Field(
         min_length=1,
@@ -38,7 +35,7 @@ class AuthoredCard(BaseModel):
 class CardAuthorResponse(BaseModel):
     """A mutation produces either no durable idea or one candidate."""
 
-    decision: WriteDecision
+    decision: Literal[WriteDecision.DROP, WriteDecision.NEW]
     card: AuthoredCard | None = None
 
     @model_validator(mode="after")
@@ -47,8 +44,6 @@ class CardAuthorResponse(BaseModel):
             raise ValueError("DROP requires card=null")
         if self.decision is WriteDecision.NEW and self.card is None:
             raise ValueError("NEW requires one authored card")
-        if self.decision is WriteDecision.EQUIVALENT:
-            raise ValueError("the author cannot decide equivalence")
         return self
 
 
@@ -60,7 +55,7 @@ class CardAuthorState(TypedDict, total=False):
     parent_fitness: float | None
     child_fitness: float
     signed_gain: float | None
-    validity_status: ValidityStatus
+    higher_is_better: bool
     archive_status: ArchiveStatus
     messages: list[BaseMessage]
     llm_response: Any
@@ -79,7 +74,8 @@ class CardAuthorAgent(LangGraphAgent):
     ) -> None:
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
-        super().__init__(llm.with_structured_output(CardAuthorResponse))
+        schema = portable_json_schema(CardAuthorResponse.model_json_schema())
+        super().__init__(llm.with_structured_output(schema))
 
     def build_prompt(self, state: CardAuthorState) -> CardAuthorState:
         user = self.user_prompt_template.format(
@@ -91,7 +87,9 @@ class CardAuthorAgent(LangGraphAgent):
             parent_fitness=_render_metric(state.get("parent_fitness")),
             child_fitness=_render_metric(state["child_fitness"]),
             signed_gain=_render_metric(state.get("signed_gain")),
-            validity_status=state["validity_status"].value,
+            fitness_direction=(
+                "higher is better" if state["higher_is_better"] else "lower is better"
+            ),
             archive_status=state["archive_status"].value,
         )
         state["messages"] = [
@@ -118,7 +116,7 @@ class CardAuthorAgent(LangGraphAgent):
         parent_fitness: float | None,
         child_fitness: float,
         signed_gain: float | None,
-        validity_status: ValidityStatus,
+        higher_is_better: bool,
         archive_status: ArchiveStatus,
     ) -> CardAuthorResponse:
         state: CardAuthorState = {
@@ -129,7 +127,7 @@ class CardAuthorAgent(LangGraphAgent):
             "parent_fitness": parent_fitness,
             "child_fitness": child_fitness,
             "signed_gain": signed_gain,
-            "validity_status": validity_status,
+            "higher_is_better": higher_is_better,
             "archive_status": archive_status,
         }
         final = await self.graph.ainvoke(state)

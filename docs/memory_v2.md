@@ -267,14 +267,27 @@ periodic exhaustive consolidation. The writer does not restamp heuristic
 efficacy events into the v2 model.
 
 Causal retirement refits the current causal posterior, requires randomized
-treated and pooled-control support across multiple observed contexts, and
-protects every pending lineage alias. A card is removed only when the Monte
-Carlo upper bound for `P(safe and helpful)` is below the configured threshold
-in every observed modeled context under both unassessed and applicable RAG
-states. Optimizer, posterior-boundary, or safety-integration uncertainty vetoes
-irreversible retirement. The admission gate consumes a one-shot verdict and
-rechecks both the exact treatment revision and evidence version under the
-selection-lease lock before deletion.
+treated and pooled-control support across multiple discrete MAP-Elites
+island/cell contexts, and protects every pending lineage alias. Selection
+defines helpfulness relative to zero; retirement uses a normalized practical
+utility boundary so a well-supported neutral card can eventually leave the
+bank. A card is removed only when the Wilson Monte Carlo upper bound for
+`P(safe and practically useful)` is below the configured threshold in every
+supported context under both unassessed and applicable RAG states. Optimizer,
+residual-scale boundary, posterior-boundary, or safety-integration uncertainty
+in either reward head vetoes irreversible retirement. The admission gate
+consumes a one-use verdict, rechecks the exact treatment revision and evidence
+version, protects live and historical-alias leases, and applies foreign-task
+positive-evidence retention before deletion.
+
+Each new evidence version may be judged again; "one-use" describes verdict
+consumption, not a fixed-sample sequential-testing guarantee. Deterministic
+evidence-version RNG and the Wilson upper bound make repeated checks
+conservative, but posterior misspecification remains a risk. Censored outcomes
+are excluded under a conditionally non-informative-censoring assumption, and a
+card that stops receiving proposals before minimum support fails-keep. The
+causal ledger and card bank are separate stores, leaving a narrow
+ledger-version/read-to-bank-delete interval outside a shared transaction.
 
 ## Durable Evidence
 

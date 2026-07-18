@@ -11,11 +11,6 @@ class WriteDecision(StrEnum):
     EQUIVALENT = "EQUIVALENT"
 
 
-class ValidityStatus(StrEnum):
-    VALID = "valid"
-    INVALID = "invalid"
-
-
 class ArchiveStatus(StrEnum):
     ARCHIVED = "archived"
     REJECTED = "rejected"

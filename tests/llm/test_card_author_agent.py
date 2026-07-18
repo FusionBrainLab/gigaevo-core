@@ -5,11 +5,8 @@ import pytest
 
 from gigaevo.llm.agents.card_author import AuthoredCard, CardAuthorResponse
 from gigaevo.llm.agents.factories import create_card_author_agent
-from gigaevo.memory.write.decisions import (
-    ArchiveStatus,
-    ValidityStatus,
-    WriteDecision,
-)
+from gigaevo.llm.schema_compat import nonportable_keys
+from gigaevo.memory.write.decisions import ArchiveStatus, WriteDecision
 
 
 class FakeStructuredLlm:
@@ -27,7 +24,8 @@ class FakeLlm:
         self.structured = FakeStructuredLlm(response)
 
     def with_structured_output(self, schema, **kwargs):
-        assert schema is CardAuthorResponse
+        assert schema["title"] == "CardAuthorResponse"
+        assert nonportable_keys(schema) == set()
         return self.structured
 
 
@@ -56,14 +54,21 @@ async def test_author_returns_at_most_one_candidate_and_renders_outcome() -> Non
         parent_fitness=0.4,
         child_fitness=0.6,
         signed_gain=0.2,
-        validity_status=ValidityStatus.VALID,
+        higher_is_better=True,
         archive_status=ArchiveStatus.ARCHIVED,
     )
 
     assert result.decision is WriteDecision.NEW
     assert result.card is not None
     prompt = str(llm.structured.calls[0])
-    for marker in ("0.4", "0.6", "0.2", "valid", "archived", "avoid overshoot"):
+    for marker in (
+        "0.4",
+        "0.6",
+        "0.2",
+        "higher is better",
+        "archived",
+        "avoid overshoot",
+    ):
         assert marker in prompt
     assert "--- base_parent.py" in prompt
     assert "+++ child.py" in prompt
@@ -81,13 +86,15 @@ async def test_drop_has_no_card() -> None:
         parent_fitness=None,
         child_fitness=0.1,
         signed_gain=None,
-        validity_status=ValidityStatus.VALID,
+        higher_is_better=False,
         archive_status=ArchiveStatus.REJECTED,
     )
     assert result == CardAuthorResponse(decision=WriteDecision.DROP)
 
 
 def test_author_schema_rejects_equivalent_and_inconsistent_payloads() -> None:
+    decision_schema = CardAuthorResponse.model_json_schema()["properties"]["decision"]
+    assert decision_schema["enum"] == ["DROP", "NEW"]
     with pytest.raises(ValidationError):
         CardAuthorResponse(decision=WriteDecision.EQUIVALENT)
     with pytest.raises(ValidationError):

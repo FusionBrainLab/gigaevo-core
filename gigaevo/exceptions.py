@@ -121,12 +121,6 @@ class MemoryError(GigaEvoError):
     pass
 
 
-class MergeAborted(MemoryError):
-    """A merge fold declined without changing storage."""
-
-    pass
-
-
 class MemoryRetrieverError(MemoryError):
     """GAM/retriever build or initialization failures."""
 

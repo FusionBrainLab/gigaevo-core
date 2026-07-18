@@ -426,11 +426,35 @@ consolidation.
 Read-time safety remains the first line of defense. In addition,
 `CausalRetirementEvictor` performs conservative periodic maintenance. A lineage
 is eligible only with randomized treated/control support, evidence from multiple
-observed contexts, and no immediate or lineage outcomes pending. It is retired
-only when the optimistic probability of being both safe and helpful is below
-the configured boundary for every observed context under both unassessed and
-applicable RAG states. The verdict is one-shot and deletion requires the exact
-card treatment revision and evidence version to remain unchanged.
+discrete `(island, MAP-Elites parent cell)` contexts, and no immediate or lineage
+outcomes pending. Selection calls any positive effect helpful. Retirement uses
+a region-of-practical-equivalence boundary, expressed as a fraction of the
+configured task metric range, so sufficient evidence can distinguish useful
+actions from neutral dilution without treating uncertainty as uselessness.
+
+For every supported context and both unassessed and optimistic-applicable RAG
+states, retirement requires the Wilson upper bound on
+`P(safe and practically useful)` to remain below the configured boundary.
+Optimizer failure, upper hyperparameter contact, excessive residual-scale
+boundary mass, or safety-integration error in either immediate or lineage head
+vetoes deletion. The one-use verdict binds the exact card revision and evidence
+version. The admission gate then checks live/historical-alias leases and
+foreign-task positive evidence before removal.
+
+This is sequential posterior monitoring, not a single fixed-sample test. The
+verdict RNG is deterministic per evidence version and the Monte Carlo bound is
+conservative; no alpha spending is currently applied across changed evidence
+versions, so misspecification is the important caveat. "One-use" means a
+verdict cannot be consumed twice, not that a surviving card is never judged
+again.
+
+The causal SQLite ledger and JSON card bank do not share a transaction. There is
+a narrow interval between the final evidence-version read and card deletion in
+which a terminal could commit. Removing that interval requires a common
+transactional store. Censored terminals are omitted from reward/safety fitting
+under a conditionally non-informative-censoring assumption. Cards that stop
+being proposed before minimum treated support fail-keep rather than receiving a
+non-causal staleness verdict.
 
 ## What the smoke run must monitor
 

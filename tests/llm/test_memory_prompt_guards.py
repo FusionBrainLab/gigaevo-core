@@ -58,8 +58,8 @@ class TestCardAuthorEvidenceContract:
         [
             "parent fitness",
             "child fitness",
+            "fitness direction",
             "signed gain",
-            "validity",
             "archive status",
             "One mutation is one observational sample",
             "When condition C holds, try action A because mechanism M.",

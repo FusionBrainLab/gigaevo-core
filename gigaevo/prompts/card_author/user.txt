@@ -4,8 +4,8 @@ Decide whether this mutation outcome supports one durable, actionable hypothesis
 
 - Parent fitness: {parent_fitness}
 - Child fitness: {child_fitness}
+- Fitness direction: {fitness_direction}
 - Signed gain (positive is better): {signed_gain}
-- Validity: {validity_status}
 - Archive status: {archive_status}
 
 ## MUTATOR REPORT

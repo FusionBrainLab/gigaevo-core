@@ -851,20 +851,20 @@ def test_restamp_redirects_vanished_card_event_to_merge_survivor(
         nonlocal merged
         if card_id == absorbed.id and not merged:
             merged = True
-            result = store_b.merge_retire(
+            updated = store_b.update(
                 survivor.id,
-                absorbed.id,
-                lambda target, partner: target.model_copy(
+                lambda target: target.model_copy(
                     update={
-                        "absorbed_ids": (*target.absorbed_ids, partner.id),
+                        "absorbed_ids": (*target.absorbed_ids, absorbed.id),
                         "gain_events": (
                             *target.gain_events,
-                            *partner.gain_events,
+                            *absorbed.gain_events,
                         ),
                     }
                 ),
             )
-            assert result.outcome == "merged"
+            assert updated is not None
+            assert store_b.delete(absorbed.id)
         return original_update(card_id, transform)
 
     monkeypatch.setattr(store_a, "update", merge_before_update)

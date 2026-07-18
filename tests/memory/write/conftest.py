@@ -7,11 +7,9 @@ from threading import RLock
 
 import pytest
 
-from gigaevo.exceptions import MergeAborted
 from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 from gigaevo.memory.storage.base import (
     MemoryStore,
-    MergeRetireResult,
     ResearchRequest,
     ResearchResult,
     ScoredCard,
@@ -25,14 +23,13 @@ from gigaevo.programs.program import Lineage, Program
 
 
 class FakeStore(MemoryStore):
-    """Dict-backed MemoryStore honoring the id-minting and merge contracts."""
+    """Dict-backed MemoryStore honoring id minting and atomic updates."""
 
     def __init__(self) -> None:
         self._cards: dict[str, Card] = {}
         self._lock = RLock()
         self._minted = 0
         self.hits: list[ScoredCard] = []
-        self.fail_merges = False
         self.saved_ids: list[str] = []
         self.deleted_ids: list[str] = []
 
@@ -81,46 +78,19 @@ class FakeStore(MemoryStore):
         with self._lock:
             return tuple(self._cards[cid] for cid in sorted(self._cards))
 
-    def merge_retire(
-        self,
-        target_id: str,
-        partner_id: str,
-        fold: Callable[[Card, Card | None], Card | None],
-    ) -> MergeRetireResult:
-        with self._lock:
-            target = self._cards.get(target_id)
-            partner = self._cards.get(partner_id) if partner_id else None
-            if target is None:
-                return MergeRetireResult(outcome="target_missing")
-            if self.fail_merges or partner_id == target_id:
-                return MergeRetireResult(outcome="aborted")
-            if partner is not None and target_id in partner.absorbed_ids:
-                return MergeRetireResult(outcome="aborted")
-            try:
-                survivor = fold(target, partner)
-            except MergeAborted:
-                return MergeRetireResult(outcome="aborted")
-            if survivor is not None and survivor.id != target_id:
-                raise ValueError("atomic merge survivor must keep the target id")
-            if survivor is not None and survivor.id in survivor.absorbed_ids:
-                return MergeRetireResult(outcome="aborted")
-            if survivor is None:
-                self._cards.pop(target_id)
-                self.deleted_ids.append(target_id)
-                outcome = "retired"
-            else:
-                self._cards[target_id] = survivor
-                self.saved_ids.append(target_id)
-                outcome = "merged"
-            if partner is not None:
-                self._cards.pop(partner_id)
-                self.deleted_ids.append(partner_id)
-            return MergeRetireResult(outcome=outcome)
-
     def nearest(
-        self, text: str, k: int, kind: CardKind | None = None
+        self,
+        text: str,
+        k: int,
+        kind: CardKind | None = None,
+        task_key: str | None = None,
     ) -> list[ScoredCard]:
-        hits = [h for h in self.hits if kind is None or h.card.kind is kind]
+        hits = [
+            hit
+            for hit in self.hits
+            if (kind is None or hit.card.kind is kind)
+            and (task_key is None or hit.card.task_key == task_key)
+        ]
         return hits[:k]
 
     async def research(self, request: ResearchRequest) -> ResearchResult:

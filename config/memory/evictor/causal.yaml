@@ -1,0 +1,15 @@
+# @package memory.evictor
+# Periodic maintenance over randomized v2 treatment/control evidence.
+_target_: gigaevo.memory_v2.eviction.CausalRetirementEvictor
+ledger: ${ref:memory.ledger}
+posterior: ${ref:memory.posterior}
+safety: ${ref:memory.safety}
+min_treated: 2
+min_global_control: 2
+min_distinct_contexts: 2
+posterior_samples: 4096
+# One percent of the task's configured metric range is the practical-utility
+# boundary. Selection still defines helpfulness relative to zero.
+minimum_useful_effect: 0.01
+max_viability_probability: ${ref:memory.safety::alpha}
+mc_confidence_z: 1.96

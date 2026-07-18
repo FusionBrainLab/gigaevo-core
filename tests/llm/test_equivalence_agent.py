@@ -5,6 +5,7 @@ import pytest
 
 from gigaevo.llm.agents.equivalence import EquivalenceResponse
 from gigaevo.llm.agents.factories import create_equivalence_agent
+from gigaevo.llm.schema_compat import nonportable_keys
 from gigaevo.memory.cards import Card
 from gigaevo.memory.write.decisions import WriteDecision
 
@@ -24,7 +25,8 @@ class FakeLlm:
         self.structured = FakeStructuredLlm(response)
 
     def with_structured_output(self, schema, **kwargs):
-        assert schema is EquivalenceResponse
+        assert schema["title"] == "EquivalenceResponse"
+        assert nonportable_keys(schema) == set()
         return self.structured
 
 
@@ -68,6 +70,8 @@ async def test_equivalence_can_return_new_without_rewriting_payload() -> None:
 
 
 def test_equivalence_schema_rejects_drop_and_bad_targets() -> None:
+    decision_schema = EquivalenceResponse.model_json_schema()["properties"]["decision"]
+    assert decision_schema["enum"] == ["NEW", "EQUIVALENT"]
     with pytest.raises(ValidationError):
         EquivalenceResponse(decision=WriteDecision.DROP)
     with pytest.raises(ValidationError):

@@ -9,11 +9,7 @@ from gigaevo.llm.agents.program_author import ProgramAuthorResponse
 from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 from gigaevo.memory.storage.base import ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate, WriteOutcome
-from gigaevo.memory.write.decisions import (
-    ArchiveStatus,
-    ValidityStatus,
-    WriteDecision,
-)
+from gigaevo.memory.write.decisions import ArchiveStatus, WriteDecision
 from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory.write.librarian import Librarian
 
@@ -108,7 +104,7 @@ async def ingest_idea(librarian: Librarian, **overrides):
         "parent_fitness": 0.4,
         "child_fitness": 0.6,
         "signed_gain": 0.2,
-        "validity_status": ValidityStatus.VALID,
+        "higher_is_better": True,
         "archive_status": ArchiveStatus.ARCHIVED,
         "founding_gain": ContextualGain(
             context=DecisionContext(parent_metrics={"fitness": 0.4}),
@@ -126,7 +122,7 @@ async def test_drop_is_a_valid_zero_write_path(store) -> None:
     equivalence = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
     librarian = make_librarian(store, author=author, equivalence=equivalence)
 
-    assert await ingest_idea(librarian) == []
+    assert await ingest_idea(librarian) is None
     assert store.snapshot() == ()
     assert equivalence.calls == []
 
@@ -138,16 +134,16 @@ async def test_author_receives_complete_outcome_and_only_one_card_is_added(
     author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.NEW, card=authored()))
     librarian = make_librarian(store, author=author)
 
-    results = await ingest_idea(librarian)
+    result = await ingest_idea(librarian)
 
-    assert len(results) == 1
-    assert results[0].outcome is WriteOutcome.ADDED
+    assert result is not None
+    assert result.outcome is WriteOutcome.ADDED
     assert len(store.snapshot()) == 1
     call = author.calls[0]
     assert call["parent_fitness"] == 0.4
     assert call["child_fitness"] == 0.6
     assert call["signed_gain"] == 0.2
-    assert call["validity_status"] is ValidityStatus.VALID
+    assert call["higher_is_better"] is True
     assert call["archive_status"] is ArchiveStatus.ARCHIVED
     assert "Mutator explanation" in call["mutation_report"]
 
@@ -161,10 +157,10 @@ async def test_retrieval_uses_authored_action_not_raw_mutator_report(store) -> N
         explanation_summary="existing why",
     )
     store.save(existing)
-    queries: list[tuple[str, int, CardKind | None]] = []
+    queries: list[tuple[str, int, CardKind | None, str | None]] = []
 
-    def nearest(text, k, kind=None):
-        queries.append((text, k, kind))
+    def nearest(text, k, kind=None, task_key=None):
+        queries.append((text, k, kind, task_key))
         return [ScoredCard(card=existing, distance=0.1)]
 
     store.nearest = nearest
@@ -177,6 +173,7 @@ async def test_retrieval_uses_authored_action_not_raw_mutator_report(store) -> N
     assert "When C holds, try A because M." in queries[0][0]
     assert "RAW_NOTE_MARKER" not in queries[0][0]
     assert queries[0][2] is CardKind.INSIGHT
+    assert queries[0][3] == "task-a"
 
 
 @pytest.mark.asyncio
@@ -195,8 +192,9 @@ async def test_equivalent_insight_keeps_payload_and_appends_provenance(store) ->
     )
     librarian = make_librarian(store, equivalence=equivalence)
 
-    result = (await ingest_idea(librarian))[0]
+    result = await ingest_idea(librarian)
 
+    assert result is not None
     assert result.card_id == existing.id
     assert len(store.snapshot()) == 1
     updated = store.get(existing.id)
@@ -220,8 +218,9 @@ async def test_foreign_task_neighbor_cannot_be_an_equivalence_target(store) -> N
     equivalence = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
     librarian = make_librarian(store, equivalence=equivalence)
 
-    result = (await ingest_idea(librarian))[0]
+    result = await ingest_idea(librarian)
 
+    assert result is not None
     assert result.outcome is WriteOutcome.ADDED
     assert equivalence.calls == []
 
@@ -240,16 +239,16 @@ async def test_unoffered_target_and_equivalence_failure_fail_open_to_new(store) 
         EquivalenceResponse(decision=WriteDecision.EQUIVALENT, target_id="not-offered")
     )
     first = make_librarian(store, equivalence=invalid)
-    assert (await ingest_idea(first, child_id="child-1"))[
-        0
-    ].outcome is WriteOutcome.ADDED
+    first_result = await ingest_idea(first, child_id="child-1")
+    assert first_result is not None
+    assert first_result.outcome is WriteOutcome.ADDED
 
     failing = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
     failing.error = RuntimeError("llm down")
     second = make_librarian(store, equivalence=failing)
-    assert (await ingest_idea(second, child_id="child-2"))[
-        0
-    ].outcome is WriteOutcome.ADDED
+    second_result = await ingest_idea(second, child_id="child-2")
+    assert second_result is not None
+    assert second_result.outcome is WriteOutcome.ADDED
 
 
 @pytest.mark.asyncio
@@ -359,8 +358,9 @@ async def test_novelty_judge_only_gates_new_insights(store) -> None:
     judge = FakeNoveltyJudge(keep=False)
     librarian = make_librarian(store, admission_judge=judge)
 
-    result = (await ingest_idea(librarian))[0]
+    result = await ingest_idea(librarian)
 
+    assert result is not None
     assert result.outcome is WriteOutcome.REJECTED_NOVELTY
     assert store.snapshot() == ()
     assert len(judge.calls) == 1

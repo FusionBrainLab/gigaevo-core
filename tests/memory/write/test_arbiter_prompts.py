@@ -3,7 +3,7 @@ from __future__ import annotations
 from gigaevo.llm.agents.card_author import CardAuthorAgent
 from gigaevo.llm.agents.equivalence import EquivalenceAgent
 from gigaevo.memory.cards import Card
-from gigaevo.memory.write.decisions import ArchiveStatus, ValidityStatus
+from gigaevo.memory.write.decisions import ArchiveStatus
 
 
 def uninitialized(agent_type, template):
@@ -16,7 +16,7 @@ def uninitialized(agent_type, template):
 def test_card_author_renders_all_outcome_signal_and_mutator_explanation():
     agent = uninitialized(
         CardAuthorAgent,
-        "{parent_fitness}|{child_fitness}|{signed_gain}|{validity_status}|"
+        "{parent_fitness}|{child_fitness}|{signed_gain}|{fitness_direction}|"
         "{archive_status}|{mutation_report}|{base_parent_code}|{child_code}|"
         "{unified_diff}",
     )
@@ -29,12 +29,14 @@ def test_card_author_renders_all_outcome_signal_and_mutator_explanation():
             "parent_fitness": 1.0,
             "child_fitness": 2.0,
             "signed_gain": 1.0,
-            "validity_status": ValidityStatus.VALID,
+            "higher_is_better": False,
             "archive_status": ArchiveStatus.ARCHIVED,
         }
     )
     prompt = state["messages"][1].content
-    assert prompt == "1.0|2.0|1.0|valid|archived|EXPLANATION_MARKER|parent|child|diff"
+    assert prompt == (
+        "1.0|2.0|1.0|lower is better|archived|EXPLANATION_MARKER|parent|child|diff"
+    )
 
 
 def test_equivalence_renders_candidate_and_only_offered_neighbors():

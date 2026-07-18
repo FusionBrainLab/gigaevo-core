@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Self, TypedDict
+from typing import Any, Literal, Self, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -11,11 +11,12 @@ from pydantic import BaseModel, model_validator
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.agents.card_author import AuthoredCard
 from gigaevo.llm.models import MultiModelRouter
+from gigaevo.llm.schema_compat import portable_json_schema
 from gigaevo.memory.write.decisions import WriteDecision
 
 
 class ProgramAuthorResponse(BaseModel):
-    decision: WriteDecision
+    decision: Literal[WriteDecision.DROP, WriteDecision.NEW]
     card: AuthoredCard | None = None
 
     @model_validator(mode="after")
@@ -24,8 +25,6 @@ class ProgramAuthorResponse(BaseModel):
             raise ValueError("DROP requires card=null")
         if self.decision is WriteDecision.NEW and self.card is None:
             raise ValueError("NEW requires one authored card")
-        if self.decision is WriteDecision.EQUIVALENT:
-            raise ValueError("the author cannot decide equivalence")
         return self
 
 
@@ -50,7 +49,8 @@ class ProgramAuthorAgent(LangGraphAgent):
     ) -> None:
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
-        super().__init__(llm.with_structured_output(ProgramAuthorResponse))
+        schema = portable_json_schema(ProgramAuthorResponse.model_json_schema())
+        super().__init__(llm.with_structured_output(schema))
 
     def build_prompt(self, state: ProgramAuthorState) -> ProgramAuthorState:
         fitness = state.get("fitness")

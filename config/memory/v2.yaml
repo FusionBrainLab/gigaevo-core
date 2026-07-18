@@ -7,6 +7,7 @@ defaults:
   - no_card_evidence: none
   - excluder: lineage
   - applicability: agentic
+  - evictor: causal
   - write: live
   - _self_
 
@@ -29,21 +30,6 @@ neutral_gain: 0.0
 baseline_prior: [3.0, 3.0]
 evidence:
   min_effective_events: 3
-
-# Read-time safety prevents harmful delivery. This separate, periodic maintenance
-# rule removes only supported lineages whose current causal posterior is
-# non-viable across every context where they were tested.
-evictor:
-  _target_: gigaevo.memory_v2.eviction.CausalRetirementEvictor
-  ledger: ${ref:memory.ledger}
-  posterior: ${ref:memory.posterior}
-  safety: ${ref:memory.safety}
-  min_treated: 2
-  min_global_control: 2
-  min_distinct_contexts: 2
-  posterior_samples: 4096
-  max_viability_probability: ${memory.safety.alpha}
-  mc_confidence_z: 1.96
 
 environment:
   _target_: gigaevo.memory_v2.models.EnvironmentFingerprint
@@ -226,6 +212,7 @@ writer:
   require_archive_or_positive_gain: true
   best_programs_percent: 5.0
   ingest_call_timeout_s: 300.0
+  max_ingest_attempts: 3
   dedup_policy:
     _target_: gigaevo.memory.write.policies.DedupPolicy
     online_top_k: 5

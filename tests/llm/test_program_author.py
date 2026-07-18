@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
 import pytest
 
 from gigaevo.llm.agents.card_author import AuthoredCard
 from gigaevo.llm.agents.factories import create_program_author_agent
 from gigaevo.llm.agents.program_author import ProgramAuthorResponse
+from gigaevo.llm.schema_compat import nonportable_keys
 from gigaevo.memory.write.decisions import WriteDecision
 
 
@@ -23,7 +25,8 @@ class FakeLlm:
         self.structured = FakeStructuredLlm(response)
 
     def with_structured_output(self, schema, **kwargs):
-        assert schema is ProgramAuthorResponse
+        assert schema["title"] == "ProgramAuthorResponse"
+        assert nonportable_keys(schema) == set()
         return self.structured
 
 
@@ -56,3 +59,12 @@ async def test_program_author_can_drop_uninformative_program() -> None:
     assert (
         await agent.arun(code="pass", fitness=None, archive_rank=None)
     ).decision is WriteDecision.DROP
+
+
+def test_program_author_schema_excludes_equivalence() -> None:
+    decision_schema = ProgramAuthorResponse.model_json_schema()["properties"][
+        "decision"
+    ]
+    assert decision_schema["enum"] == ["DROP", "NEW"]
+    with pytest.raises(ValidationError):
+        ProgramAuthorResponse(decision=WriteDecision.EQUIVALENT)

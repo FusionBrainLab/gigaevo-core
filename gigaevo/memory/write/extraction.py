@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from gigaevo.evolution.engine.mutation import base_parent_index
 from gigaevo.evolution.mutation.constants import MUTATION_OUTPUT_METADATA_KEY
 from gigaevo.memory.cards import ContextualGain
-from gigaevo.memory.write.decisions import ArchiveStatus, ValidityStatus
+from gigaevo.memory.write.decisions import ArchiveStatus
 from gigaevo.memory.write.stats import founding_gain_event
 from gigaevo.programs.metrics.context import MetricsContext
 from gigaevo.programs.program import Program
@@ -77,10 +77,6 @@ class ProgramRecord(BaseModel):
         description="The founding gain event seeded onto a card authored from this "
         "record — the child's true signed delta against its base parent. None when "
         "the child predates the memory path or has no honest base baseline.",
-    )
-    validity_status: ValidityStatus = Field(
-        default=ValidityStatus.VALID,
-        description="Whether the child passed the task's strict validity contract.",
     )
     archive_status: ArchiveStatus = Field(
         description="Whether evolution retained the child in its archive."
@@ -162,7 +158,6 @@ def program_to_record(
         base_parent_id=base_parent_id,
         parent_code=parent_code,
         founding_gain=founding_gain,
-        validity_status=ValidityStatus.VALID,
         archive_status=(
             ArchiveStatus.ARCHIVED
             if program.state is ProgramState.DONE

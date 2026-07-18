@@ -32,6 +32,7 @@ class WriteOutcome(StrEnum):
     REJECTED_RETIRED = "rejected_retired"
     REJECTED_NOVELTY = "rejected_novelty"
     REJECTED_CAPACITY = "rejected_capacity"
+    RETIRED = "retired"
     EVICTED = "evicted"
 
 
@@ -86,6 +87,10 @@ class WriteLedgerRecord(BaseModel):
     duplicate_of: str = Field(
         default="", description="Id of the existing card this one duplicated, if any."
     )
+    incoming_description: str = Field(
+        default="",
+        description="Authored treatment text, retained for equivalence auditing.",
+    )
 
 
 class WriteLedger:
@@ -108,6 +113,7 @@ class WriteLedger:
         outcome: WriteOutcome | str,
         reason: str = "",
         duplicate_of: str = "",
+        incoming_description: str = "",
     ) -> None:
         try:
             row = WriteLedgerRecord(
@@ -117,6 +123,7 @@ class WriteLedger:
                 outcome=WriteOutcome(outcome),
                 reason=reason,
                 duplicate_of=duplicate_of,
+                incoming_description=incoming_description,
             )
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with _JsonlFileLock(self._path.with_suffix(self._path.suffix + ".lock")):
@@ -131,9 +138,9 @@ class CardAdmissionGate:
 
     Admission never consults the evictor. Periodic maintenance is the only place
     where a verdict can remove a card, and it is atomically revalidated against
-    the fresh store revision before deletion. Retired ids are tombstoned for the
-    rest of the run so the writer cannot immediately re-author the same lineage
-    without its causal history.
+    the fresh store revision before deletion. Retired ids and exact authored
+    hypothesis payloads are tombstoned for the rest of the run, preventing
+    deterministic re-author churn without adding a durable legacy registry.
     """
 
     def __init__(
@@ -159,6 +166,7 @@ class CardAdmissionGate:
         self._min_effective_events = min_effective_events
         self._max_task_cards = max_task_cards
         self._tombstoned: set[str] = set()
+        self._retired_hypotheses: set[tuple[str, CardKind, str, str]] = set()
 
     def is_tombstoned(self, card_id: str) -> bool:
         """True iff this id was retired earlier in the run. Lets callers
@@ -170,7 +178,10 @@ class CardAdmissionGate:
     def admit(self, card: Card) -> WriteResult:
         with self._eviction_guard():
             incoming_id = card.id.strip()
-            if incoming_id in self._tombstoned:
+            if (
+                incoming_id in self._tombstoned
+                or _hypothesis_key(card) in self._retired_hypotheses
+            ):
                 return self._ledger_record(
                     card,
                     "",
@@ -246,7 +257,7 @@ class CardAdmissionGate:
                 if fresh.kind is not CardKind.PROGRAM:
                     blocker = "fresh card is not a program exemplar"
                     return fresh
-                if self._is_leased(fresh.id):
+                if self._is_card_leased(fresh):
                     blocker = "card is leased by an in-flight mutation"
                     return fresh
                 blocker = self._foreign_retention_veto(fresh) or ""
@@ -265,7 +276,7 @@ class CardAdmissionGate:
             if fresh_card is None:
                 return _DISCARDED
             return self._ledger_record(
-                fresh_card, successor_id, WriteOutcome.UPDATED, reason
+                fresh_card, successor_id, WriteOutcome.RETIRED, reason
             )
 
     def update_equivalent(
@@ -330,17 +341,22 @@ class CardAdmissionGate:
             reason = ""
             rescued = False
             leased = False
+            retained_elsewhere = False
 
             def revalidate(card: Card) -> Card | None:
-                nonlocal fresh_card, reason, rescued, leased
+                nonlocal fresh_card, reason, rescued, leased, retained_elsewhere
                 fresh_card = card
                 if not self._evictor.should_evict(card):
                     rescued = True
                     reason = "fresh verdict no longer says evict"
                     return card
                 reason = _eviction_reason(self._evictor, card, "retirement verdict")
-                if self._is_leased(card.id):
+                if self._is_card_leased(card):
                     leased = True
+                    return card
+                if blocker := self._foreign_retention_veto(card):
+                    retained_elsewhere = True
+                    reason = blocker
                     return card
                 # Persist evicted evidence BEFORE the card leaves the live bank so
                 # the empirical-Bayes cold prior never sees a survivorship-biased
@@ -368,9 +384,17 @@ class CardAdmissionGate:
             if leased:
                 self._log_leased_skip(cid, reason)
                 continue
+            if retained_elsewhere:
+                logger.info(
+                    "[Memory][Admission] skipped retirement of card {}: {}",
+                    cid,
+                    reason,
+                )
+                continue
             evicted.append(cid)
             self._tombstoned.add(cid)
             if fresh_card is not None:
+                self._retired_hypotheses.add(_hypothesis_key(fresh_card))
                 self._ledger_record(fresh_card, "", WriteOutcome.EVICTED, reason)
         return evicted
 
@@ -383,6 +407,11 @@ class CardAdmissionGate:
         return bool(
             self._selection_leases is not None
             and self._selection_leases.is_leased(card_id)
+        )
+
+    def _is_card_leased(self, card: Card) -> bool:
+        return any(
+            self._is_leased(card_id) for card_id in (card.id, *card.absorbed_ids)
         )
 
     def _foreign_retention_veto(self, card: Card) -> str | None:
@@ -426,6 +455,7 @@ class CardAdmissionGate:
                 outcome=outcome,
                 reason=reason,
                 duplicate_of=duplicate_of,
+                incoming_description=card.description,
             )
         return WriteResult(outcome=outcome, card_id=final_id)
 
@@ -457,6 +487,19 @@ def _fitness_improves(
     if higher_is_better:
         return incoming > current + min_delta
     return incoming < current - min_delta
+
+
+def _hypothesis_key(card: Card) -> tuple[str, CardKind, str, str]:
+    return (
+        card.task_key,
+        card.kind,
+        _normalized_hypothesis_text(card.description),
+        _normalized_hypothesis_text(card.explanation_summary),
+    )
+
+
+def _normalized_hypothesis_text(value: str) -> str:
+    return " ".join(value.split()).casefold()
 
 
 def _eviction_reason(evictor: Evictor, card: Card, default: str) -> str:

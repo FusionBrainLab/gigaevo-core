@@ -11,7 +11,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import StrEnum
 from types import TracebackType
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,12 +56,6 @@ class ResearchResult(BaseModel):
     failure: ResearchFailure | None = None
 
 
-class MergeRetireResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    outcome: Literal["merged", "retired", "target_missing", "aborted"]
-
-
 class MemoryStore(ABC):
     """Typed card storage with retrieval built in.
 
@@ -104,17 +97,12 @@ class MemoryStore(ABC):
         """A stable view of the whole bank, ordered by card id."""
 
     @abstractmethod
-    def merge_retire(
-        self,
-        target_id: str,
-        partner_id: str,
-        fold: Callable[[Card, Card | None], Card | None],
-    ) -> MergeRetireResult:
-        """Atomically fold fresh cards and retire the target or partner."""
-
-    @abstractmethod
     def nearest(
-        self, text: str, k: int, kind: CardKind | None = None
+        self,
+        text: str,
+        k: int,
+        kind: CardKind | None = None,
+        task_key: str | None = None,
     ) -> list[ScoredCard]:
         """The ``k`` closest cards under the configured nearest scope."""
 

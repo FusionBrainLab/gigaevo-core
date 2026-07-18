@@ -513,6 +513,39 @@ def test_cold_safety_prior_is_calibrated_in_prediction_space(
     assert prediction.probability_safe > 0.85
 
 
+def test_practical_utility_boundary_reduces_helpful_probability(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    fitted = posterior_model.fit((), revisions[:1])
+    kwargs = {
+        "samples": 8192,
+        "max_treated_invalid_probability": 0.25,
+        "max_incremental_invalid_probability": 0.10,
+        "safety_alpha": 0.10,
+    }
+    relative_to_zero = fitted.prediction(
+        revisions[0],
+        evolution_context,
+        np.random.default_rng(13),
+        **kwargs,
+    )
+    practically_useful = fitted.prediction(
+        revisions[0],
+        evolution_context,
+        np.random.default_rng(13),
+        minimum_helpful_effect=0.05,
+        **kwargs,
+    )
+
+    assert practically_useful.probability_helpful < relative_to_zero.probability_helpful
+    assert (
+        practically_useful.probability_safe_and_helpful
+        < relative_to_zero.probability_safe_and_helpful
+    )
+
+
 def test_safety_feasibility_is_deterministic_under_laplace_posterior(
     posterior_model: HierarchicalTerminalUtilityPosterior,
     evolution_context: EvolutionContext,

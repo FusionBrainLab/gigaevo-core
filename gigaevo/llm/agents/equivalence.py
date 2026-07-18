@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Self, TypedDict
+from typing import Any, Literal, Self, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -10,12 +10,13 @@ from pydantic import BaseModel, Field, model_validator
 
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
+from gigaevo.llm.schema_compat import portable_json_schema
 from gigaevo.memory.cards import Card, card_brief
 from gigaevo.memory.write.decisions import WriteDecision
 
 
 class EquivalenceResponse(BaseModel):
-    decision: WriteDecision
+    decision: Literal[WriteDecision.NEW, WriteDecision.EQUIVALENT]
     target_id: str = Field(
         default="",
         description="Offered neighbor id for EQUIVALENT; empty for NEW.",
@@ -27,8 +28,6 @@ class EquivalenceResponse(BaseModel):
             raise ValueError("EQUIVALENT requires target_id")
         if self.decision is WriteDecision.NEW and self.target_id:
             raise ValueError("NEW requires an empty target_id")
-        if self.decision is WriteDecision.DROP:
-            raise ValueError("equivalence checking cannot drop an authored candidate")
         return self
 
 
@@ -52,7 +51,8 @@ class EquivalenceAgent(LangGraphAgent):
     ) -> None:
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
-        super().__init__(llm.with_structured_output(EquivalenceResponse))
+        schema = portable_json_schema(EquivalenceResponse.model_json_schema())
+        super().__init__(llm.with_structured_output(schema))
 
     def build_prompt(self, state: EquivalenceState) -> EquivalenceState:
         candidate = state["candidate"]

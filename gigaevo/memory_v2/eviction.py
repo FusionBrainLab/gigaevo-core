@@ -5,12 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 import math
+from typing import Protocol
 
 from loguru import logger
 
 from gigaevo.memory.cards import Card
-from gigaevo.memory_v2.features import FeatureSpace
-from gigaevo.memory_v2.ledger import SqliteCausalLedger
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -21,7 +20,6 @@ from gigaevo.memory_v2.models import (
 from gigaevo.memory_v2.policy import SafetyConstraint
 from gigaevo.memory_v2.posterior import (
     FittedTerminalUtilityPosterior,
-    HierarchicalTerminalUtilityPosterior,
     PosteriorFitError,
 )
 from gigaevo.memory_v2.rng import EventRNG
@@ -33,13 +31,29 @@ class _RetirementVerdict:
     revision: CardSnapshot
 
 
+class CausalEvidenceSource(Protocol):
+    def snapshot(self) -> EvidenceSnapshot: ...
+
+
+class RetirementPosterior(Protocol):
+    def fit(
+        self,
+        observations: Sequence[CausalObservation],
+        cards: Sequence[CardSnapshot],
+        *,
+        lineage_observations: Sequence[CausalObservation] = (),
+    ) -> FittedTerminalUtilityPosterior: ...
+
+
 class CausalRetirementEvictor:
     """Retire cards with supported, globally non-viable causal posteriors.
 
     A card is removable only when it has randomized treatment support, no
     immediate or lineage outcome pending, and its optimistic probability of
     being both safe and helpful is below the configured boundary in every
-    modeled context in which its lineage was proposed.
+    modeled MAP-Elites context in which its lineage was proposed. For retirement,
+    "helpful" means clearing a small task-normalized practical-utility boundary;
+    the read policy still evaluates ordinary helpfulness relative to zero.
 
     Verdicts are deliberately one-shot. ``CardAdmissionGate.sweep`` computes
     them and immediately revalidates the exact card revision before deletion.
@@ -50,13 +64,14 @@ class CausalRetirementEvictor:
     def __init__(
         self,
         *,
-        ledger: SqliteCausalLedger,
-        posterior: HierarchicalTerminalUtilityPosterior,
+        ledger: CausalEvidenceSource,
+        posterior: RetirementPosterior,
         safety: SafetyConstraint,
         min_treated: int = 2,
         min_global_control: int = 2,
         min_distinct_contexts: int = 2,
         posterior_samples: int = 4096,
+        minimum_useful_effect: float = 0.01,
         max_viability_probability: float = 0.10,
         mc_confidence_z: float = 1.96,
     ) -> None:
@@ -66,6 +81,8 @@ class CausalRetirementEvictor:
             raise ValueError("min_distinct_contexts must be positive")
         if posterior_samples < 256:
             raise ValueError("posterior_samples must be at least 256")
+        if not 0.0 <= minimum_useful_effect < 1.0:
+            raise ValueError("minimum_useful_effect must be in [0, 1)")
         if not 0.0 < max_viability_probability < 0.5:
             raise ValueError("max_viability_probability must be in (0, 0.5)")
         if mc_confidence_z <= 0.0:
@@ -77,6 +94,7 @@ class CausalRetirementEvictor:
         self.min_global_control = min_global_control
         self.min_distinct_contexts = min_distinct_contexts
         self.posterior_samples = posterior_samples
+        self.minimum_useful_effect = minimum_useful_effect
         self.max_viability_probability = max_viability_probability
         self.mc_confidence_z = mc_confidence_z
         self._verdicts: dict[str, _RetirementVerdict] = {}
@@ -99,7 +117,7 @@ class CausalRetirementEvictor:
         del card
         return (
             "supported causal posterior assigns little probability to safe, "
-            "helpful utility in every observed context"
+            "practically useful utility in every supported MAP-Elites context"
         )
 
     def sweep(self, cards: Sequence[Card]) -> list[str]:
@@ -128,7 +146,9 @@ class CausalRetirementEvictor:
             return []
         reward_heads = (fitted.reward, fitted.lineage_reward)
         if any(
-            not head.optimizer_success or head.hyperparameters_at_boundary
+            not head.optimizer_success
+            or head.hyperparameters_at_boundary
+            or head.residual_boundary_probability > self.safety.alpha
             for head in reward_heads
         ):
             return []
@@ -141,7 +161,7 @@ class CausalRetirementEvictor:
                 rows, global_controls
             ):
                 continue
-            contexts = self._distinct_contexts(rows, fitted.space)
+            contexts = self._distinct_contexts(rows)
             if len(contexts) < self.min_distinct_contexts:
                 continue
             if not self._non_viable_everywhere(
@@ -201,6 +221,7 @@ class CausalRetirementEvictor:
                         ),
                         safety_alpha=self.safety.alpha,
                         rag_applicability=applicability,
+                        minimum_helpful_effect=self.minimum_useful_effect,
                     )
                 except (PosteriorFitError, ValueError) as exc:
                     logger.warning(
@@ -237,12 +258,7 @@ class CausalRetirementEvictor:
         rows: Sequence[CausalObservation],
     ) -> tuple[CausalObservation, ...]:
         lineage_ids = set(revision.bank_lineage_ids)
-        return tuple(
-            row
-            for row in rows
-            if row.card.bank_card_id in lineage_ids
-            or row.card.treatment_id in lineage_ids
-        )
+        return tuple(row for row in rows if row.card.bank_card_id in lineage_ids)
 
     @staticmethod
     def _has_pending_lineage(
@@ -262,17 +278,21 @@ class CausalRetirementEvictor:
     @staticmethod
     def _distinct_contexts(
         rows: Sequence[CausalObservation],
-        feature_space: FeatureSpace,
     ) -> tuple[EvolutionContext, ...]:
-        contexts: dict[tuple[float, ...], EvolutionContext] = {}
+        contexts: dict[tuple[str, tuple[int, ...]], EvolutionContext] = {}
         for row in rows:
-            key = tuple(
-                float(value) for value in feature_space.context_features(row.context)
+            if not row.treatment:
+                continue
+            key = (
+                row.context.map_elites.island_id,
+                row.context.map_elites.parent_cell,
             )
             contexts.setdefault(key, row.context)
         return tuple(contexts[key] for key in sorted(contexts))
 
     def _wilson_upper(self, probability: float) -> float:
+        """Conservative binomial bound for plain i.i.d. posterior MC draws."""
+
         n = float(self.posterior_samples)
         z = self.mc_confidence_z
         denominator = 1.0 + z * z / n

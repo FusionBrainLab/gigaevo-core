@@ -33,7 +33,7 @@ persisted data raises instead of being coerced.
 |---|---|
 | `cards.py` | The one `Card` model (`kind ∈ {insight, program}`; program fields kind-gated), `ContextualGain` + `EvidenceAttribution` (origin/use/exposure provenance), `DecisionContext`, `CardStatsBlock`, `card_brief()` |
 | `events.py` | Typed `MemoryEvent`s (canonical monitoring events + per-run `memory_events.jsonl` sink), `memory_event_context` correlation (decision/program/parent ids) |
-| `storage/base.py` | `MemoryStore` ABC: `save/get/delete/snapshot/merge_retire`, `nearest()`, `research()`, `rebuild/close/is_ready` |
+| `storage/base.py` | `MemoryStore` ABC: `save/update/get/delete/snapshot`, `nearest()`, `research()`, `rebuild/close/is_ready` |
 | `storage/bank.py` | `CardBank`: thread-safe in-proc dict + atomic `cards.json` persist; cold-loaded from disk once at construction |
 | `storage/index.py` | `VectorIndex` (in-memory Chroma, one collection per embed scope) |
 | `storage/research.py` | LangGraph research agent: plan → retrieve → reflect, ≤`max_iters`, fail-to-empty; prompts under `gigaevo/prompts/retrieval_{planner,reflection}/` |
@@ -82,7 +82,7 @@ groups, and launch recipes.
 | File | Writer | Contents |
 |---|---|---|
 | `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, atomic rewrite per save |
-| `write_ledger.jsonl` | `WriteLedger` | Append-only content and retirement verdicts; outcomes include `added`, `updated`, `rejected_retired`, `rejected_novelty`, and `evicted` (`discarded` is an unledgered no-op) |
+| `write_ledger.jsonl` | `WriteLedger` | Append-only content and retirement verdicts: `added`, `updated`, `rejected_retired`, `rejected_novelty`, `rejected_capacity`, `retired`, and `evicted` (`discarded` is an unledgered no-op) |
 | `memory_events.jsonl` | `events.py` sink | Every memory event, one JSON row each |
 
 The bank is the source of truth. `VectorIndex` is process-local and in-memory;

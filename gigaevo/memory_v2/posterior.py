@@ -1027,11 +1027,14 @@ class FittedTerminalUtilityPosterior:
         safety_alpha: float,
         assessed_bank_card_ids: frozenset[str] = frozenset(),
         applicable_bank_card_ids: frozenset[str] = frozenset(),
+        minimum_helpful_effect: float = 0.0,
     ) -> dict[str, PosteriorPrediction]:
         """Summarize every candidate using one coherent set of posterior worlds."""
 
         if samples < 64:
             raise ValueError("posterior summaries require at least 64 samples")
+        if not math.isfinite(minimum_helpful_effect) or minimum_helpful_effect < 0.0:
+            raise ValueError("minimum_helpful_effect must be finite and non-negative")
         if not applicable_bank_card_ids <= assessed_bank_card_ids:
             raise ValueError("applicable cards must belong to the assessed universe")
         reward_draws, reward_residual_sds = self.reward.sample_many(rng, samples)
@@ -1060,6 +1063,7 @@ class FittedTerminalUtilityPosterior:
                     max_incremental_invalid_probability
                 ),
                 safety_alpha=safety_alpha,
+                minimum_helpful_effect=minimum_helpful_effect,
             )
             for card in cards
         }
@@ -1075,6 +1079,7 @@ class FittedTerminalUtilityPosterior:
         max_incremental_invalid_probability: float,
         safety_alpha: float,
         rag_applicability: RagApplicability = RagApplicability.UNASSESSED,
+        minimum_helpful_effect: float = 0.0,
     ) -> PosteriorPrediction:
         return self.predictions(
             (card,),
@@ -1094,6 +1099,7 @@ class FittedTerminalUtilityPosterior:
                 if rag_applicability is RagApplicability.APPLICABLE
                 else frozenset()
             ),
+            minimum_helpful_effect=minimum_helpful_effect,
         )[card.treatment_id]
 
     def _prediction_from_draws(
@@ -1110,6 +1116,7 @@ class FittedTerminalUtilityPosterior:
         max_treated_invalid_probability: float | None,
         max_incremental_invalid_probability: float,
         safety_alpha: float,
+        minimum_helpful_effect: float,
     ) -> PosteriorPrediction:
         x0, x1 = self._arm_designs(
             card,
@@ -1139,7 +1146,7 @@ class FittedTerminalUtilityPosterior:
         safe = (p1 <= absolute_limit) & (
             risk_delta <= max_incremental_invalid_probability
         )
-        helpful = effects > 0.0
+        helpful = effects > minimum_helpful_effect
         safety_mean = np.asarray(
             [x0 @ self.safety.mean, x1 @ self.safety.mean],
             dtype=float,

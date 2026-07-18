@@ -13,17 +13,23 @@ from gigaevo.llm.agents.program_author import ProgramAuthorAgent
 from gigaevo.memory.cards import Card, CardKind, ContextualGain, card_brief
 from gigaevo.memory.storage.base import MemoryStore, ScoredCard
 from gigaevo.memory.write.admission import CardAdmissionGate, WriteOutcome, WriteResult
-from gigaevo.memory.write.decisions import (
-    ArchiveStatus,
-    ValidityStatus,
-    WriteDecision,
-)
+from gigaevo.memory.write.decisions import ArchiveStatus, WriteDecision
 
 
 class NeighborSource(Protocol):
     def nearest(
-        self, text: str, k: int, kind: CardKind | None = None
+        self,
+        text: str,
+        k: int,
+        kind: CardKind | None = None,
+        task_key: str | None = None,
     ) -> list[ScoredCard]: ...
+
+
+def exemplar_card_id(program_id: str) -> str:
+    """Return the single card-id namespace for concrete program exemplars."""
+
+    return f"program-{program_id}"
 
 
 class Librarian:
@@ -76,10 +82,10 @@ class Librarian:
         parent_fitness: float | None,
         child_fitness: float,
         signed_gain: float | None,
-        validity_status: ValidityStatus,
+        higher_is_better: bool,
         archive_status: ArchiveStatus,
         founding_gain: ContextualGain | None = None,
-    ) -> list[WriteResult]:
+    ) -> WriteResult | None:
         """Author and route zero or one insight card."""
         response = await self._author.arun(
             base_parent_code=base_parent_code,
@@ -88,7 +94,7 @@ class Librarian:
             parent_fitness=parent_fitness,
             child_fitness=child_fitness,
             signed_gain=signed_gain,
-            validity_status=validity_status,
+            higher_is_better=higher_is_better,
             archive_status=archive_status,
         )
         if response.decision is WriteDecision.DROP or response.card is None:
@@ -97,7 +103,7 @@ class Librarian:
                 child_id,
                 WriteDecision.DROP.value,
             )
-            return []
+            return None
 
         events = (founding_gain,) if founding_gain is not None else ()
         card = Card(
@@ -117,7 +123,7 @@ class Librarian:
             WriteDecision.NEW.value,
             result.outcome.value,
         )
-        return [result]
+        return result
 
     async def ingest_program(
         self,
@@ -133,15 +139,11 @@ class Librarian:
         """Author a strategy family and retain its best concrete representative."""
         if self._program_was_reviewed(program_id):
             return WriteResult(outcome=WriteOutcome.DISCARDED)
-        try:
-            response = await self._program_author.arun(
-                code=code,
-                fitness=fitness,
-                archive_rank=archive_rank,
-            )
-        except Exception:
-            # Do not cache failures: a later refresh may retry a transient LLM error.
-            raise
+        response = await self._program_author.arun(
+            code=code,
+            fitness=fitness,
+            archive_rank=archive_rank,
+        )
         self._reviewed_programs.add(program_id)
         if response.decision is WriteDecision.DROP or response.card is None:
             logger.info(
@@ -153,7 +155,7 @@ class Librarian:
 
         card = Card(
             kind=CardKind.PROGRAM,
-            id=f"program-{program_id}",
+            id=exemplar_card_id(program_id),
             task_key=self._task_key,
             program_id=program_id,
             programs=(program_id,),
@@ -225,14 +227,12 @@ class Librarian:
         """Retrieve by authored semantics, then keep same-kind/same-task cards."""
         if self._top_k == 0:
             return []
-        foreign = sum(
-            1
-            for existing in self._store.snapshot()
-            if existing.kind is card.kind and existing.task_key != card.task_key
-        )
         try:
             hits = self._neighbors.nearest(
-                card_brief(card), self._top_k + foreign, card.kind
+                card_brief(card),
+                self._top_k,
+                card.kind,
+                task_key=card.task_key,
             )
         except Exception as exc:
             logger.warning(

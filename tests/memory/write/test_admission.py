@@ -80,6 +80,7 @@ def test_admit_empty_id_mints_and_records_added(store, make_card, tmp_path):
     assert len(rows) == 1
     assert rows[0].outcome is WriteOutcome.ADDED
     assert rows[0].final_id == result.card_id
+    assert rows[0].incoming_description
 
 
 def test_admit_known_id_preserves_payload_and_records_updated(
@@ -158,6 +159,24 @@ def test_sweep_does_not_delete_card_selected_by_in_flight_mutation(
     assert gate.sweep() == [card.id]
 
 
+def test_sweep_protects_a_leased_historical_alias(store, make_card):
+    card = make_card(absorbed_ids=("historical-id",))
+    store.save(card)
+    registry = InFlightSelectionRegistry()
+    lease = registry.open_attempt("attempt-1", "parent-1")
+    lease.attach_cards(("historical-id",))
+    gate = CardAdmissionGate(
+        store=store,
+        evictor=MarkingEvictor({card.id}),
+        selection_leases=registry,
+    )
+
+    assert gate.sweep() == []
+    assert store.get(card.id) == card
+    lease.release()
+    assert gate.sweep() == [card.id]
+
+
 def test_retire_exemplar_without_task_scope_keeps_single_task_behavior(
     store, make_card, make_event
 ):
@@ -173,7 +192,7 @@ def test_retire_exemplar_without_task_scope_keeps_single_task_behavior(
     result = gate.retire_exemplar(card, reason="single-task prune")
 
     assert result.card_id == ""
-    assert result.outcome is WriteOutcome.UPDATED
+    assert result.outcome is WriteOutcome.RETIRED
     assert store.get(card.id) is None
 
 
@@ -234,6 +253,7 @@ def test_equivalent_insight_pools_provenance_and_evidence_without_rewriting(
     assert updated.gain_events == (target_event, incoming_event)
     row = read_rows(ledger.path)[-1]
     assert row.duplicate_of == target.id
+    assert row.incoming_description == "different wording"
 
 
 def test_equivalent_update_requires_same_kind_and_task(store, make_card, tmp_path):
@@ -268,6 +288,23 @@ def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):
     row = read_rows(ledger.path)[-1]
     assert row.outcome is WriteOutcome.EVICTED
     assert row.incoming_id == bad.id
+
+
+def test_sweep_honors_foreign_task_help_veto(store, make_card, make_event, tmp_path):
+    card = make_card(
+        task_key="current",
+        gain_events=tuple(make_event(0.2, task_key="foreign") for _ in range(3)),
+    )
+    store.save(card)
+    gate = CardAdmissionGate(
+        store=store,
+        evictor=MarkingEvictor({card.id}),
+        task_key="current",
+        min_effective_events=2.0,
+    )
+
+    assert gate.sweep() == []
+    assert store.get(card.id) == card
 
 
 def test_sweep_captures_harm_evicted_card_evidence(
@@ -364,6 +401,9 @@ def test_sweep_tombstones_id_against_readmission(store, make_card, tmp_path):
         WriteOutcome.EVICTED,
         WriteOutcome.REJECTED_RETIRED,
     ]
+
+    exact_reauthor = gate.admit(card.model_copy(update={"id": ""}))
+    assert exact_reauthor.outcome is WriteOutcome.REJECTED_RETIRED
 
     fresh = gate.admit(make_card(id=""))
     assert fresh.outcome is WriteOutcome.ADDED

@@ -40,22 +40,24 @@ class FakeLibrarian:
         self._task_description = task_description
         self._task_description_summary = task_description_summary
         self.ingest_calls: list[dict] = []
+        self.ingest_attempts: list[str] = []
         self.authored: list[str] = []
         self.ingest_delay_s = 0.0
         self.ingest_error: Exception | None = None
+        self.program_error: Exception | None = None
+        self.program_attempts: list[str] = []
 
-    async def ingest_idea(self, **kwargs) -> list[WriteResult]:
+    async def ingest_idea(self, **kwargs) -> WriteResult:
+        self.ingest_attempts.append(kwargs["child_id"])
         if self.ingest_delay_s:
             await asyncio.sleep(self.ingest_delay_s)
         if self.ingest_error is not None:
             raise self.ingest_error
         self.ingest_calls.append(kwargs)
-        return [
-            WriteResult(
-                outcome=WriteOutcome.ADDED,
-                card_id=f"card-for-{kwargs['child_id']}",
-            )
-        ]
+        return WriteResult(
+            outcome=WriteOutcome.ADDED,
+            card_id=f"card-for-{kwargs['child_id']}",
+        )
 
     async def ingest_program(
         self,
@@ -69,6 +71,9 @@ class FakeLibrarian:
         store_code: bool,
     ) -> WriteResult:
         del archive_rank, higher_is_better, min_fitness_gap
+        self.program_attempts.append(program_id)
+        if self.program_error is not None:
+            raise self.program_error
         self.authored.append(program_id)
         card = Card(
             kind=CardKind.PROGRAM,
@@ -115,7 +120,6 @@ def make_writer(store, metrics_context, tmp_path, **overrides) -> MemoryWriter:
         task_key=params.get("task_key", ""),
         min_effective_events=params.get("min_effective_events", 0.0),
     )
-    stack._neighbors = store
     stack._summary = "task-summary"
     stack._librarian = FakeLibrarian(
         store,
@@ -147,6 +151,7 @@ async def test_run_increment_ingests_and_authors_exemplars(
     assert len(librarian.ingest_calls) == 1
     call = librarian.ingest_calls[0]
     assert call["child_id"] == child.id
+    assert call["higher_is_better"] is True
     assert call["base_parent_code"] == parent.code
     assert "Change: swapped solver" in call["mutation_report"]
 
@@ -236,6 +241,49 @@ async def test_ingest_failure_forgets_record_and_continues_for_retry(
     librarian.ingest_error = None
     await writer.run_increment([child])
     assert [c["child_id"] for c in librarian.ingest_calls] == [child.id]
+
+
+async def test_persistent_ingest_failure_stops_at_attempt_limit(
+    store, make_program, metrics_context, tmp_path
+):
+    child = make_program(fitness=0.7, parents=["p"])
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        best_programs_percent=0.0,
+        max_ingest_attempts=2,
+    )
+    librarian = writer._stack.librarian
+    librarian.ingest_error = RuntimeError("deterministic schema failure")
+
+    await writer.run_increment([child])
+    assert child.id not in writer._extractor.seen_ids
+    await writer.run_increment([child])
+    assert child.id in writer._extractor.seen_ids
+    await writer.run_increment([child])
+
+    assert librarian.ingest_attempts == [child.id, child.id]
+
+
+async def test_persistent_exemplar_failure_stops_at_attempt_limit(
+    store, make_program, metrics_context, tmp_path
+):
+    program = make_program(fitness=0.7, parents=[])
+    writer = make_writer(
+        store,
+        metrics_context,
+        tmp_path,
+        max_ingest_attempts=2,
+    )
+    librarian = writer._stack.librarian
+    librarian.program_error = RuntimeError("deterministic schema failure")
+
+    await writer.run_increment([program])
+    await writer.run_increment([program])
+    await writer.run_increment([program])
+
+    assert librarian.program_attempts == [program.id, program.id]
 
 
 async def test_cancelled_stats_restamp_holds_writer_lock_until_thread_finishes(

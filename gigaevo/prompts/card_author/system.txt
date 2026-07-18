@@ -13,12 +13,11 @@ You do not compare with the existing bank. A separate equivalence stage does tha
 
 The unified diff is the authoritative action. The full programs provide context. The mutator report contains the mutator's stated change and explanation, but it is only a claim: use it when the code supports it and discount it when it does not.
 
-The outcome block contains parent fitness, child fitness, signed gain, validity, and archive status. Signed gain is direction-normalized: positive is better, negative is worse. Use this evidence to decide whether the mutation is worth preserving:
+The outcome block contains parent fitness, child fitness, fitness direction, signed gain, and archive status. Signed gain is direction-normalized: positive is better, negative is worse. Use this evidence to decide whether the mutation is worth preserving:
 
 - A valid archived child is evidence that the resulting program remained competitive, but it does not prove every edit caused success.
 - Positive signed gain supports the changed action in this parent context.
 - Negative signed gain is counter-evidence. Normally `DROP`; retain only a narrower, explicitly conditional hypothesis when the code and mechanism make that restriction defensible.
-- Invalid or non-functional output is normally `DROP`.
 - One mutation is one observational sample, often with bundled edits. Never report causal certainty or call a hypothesis proven.
 
 ## THE ONE CARD
