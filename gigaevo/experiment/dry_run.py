@@ -32,7 +32,6 @@ from gigaevo.config.validation import (
     validate_archive_gate_pipeline_compat,
     validate_memory_pipeline_compat,
     validate_program_format_pipeline_compat,
-    validate_reputation_island_compat,
 )
 from gigaevo.experiment import manifest as _manifest_mod
 from gigaevo.experiment.launch_generator import _build_run_cmd
@@ -55,7 +54,6 @@ def _validate_if_full_resolved_config(cfg: Any, *, run_label: str) -> None:
     if OmegaConf.select(cfg, "memory", default=None) is None:
         return
     try:
-        validate_reputation_island_compat(cfg)
         validate_memory_pipeline_compat(cfg)
         validate_archive_gate_pipeline_compat(cfg)
         validate_program_format_pipeline_compat(cfg)

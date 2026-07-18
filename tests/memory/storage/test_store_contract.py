@@ -1,9 +1,7 @@
-"""MemoryStore contract against both backends, plus backend-specific behavior.
+"""MemoryStore contract for LocalMemoryStore (persisted bank + in-memory Chroma).
 
-The shared contract runs parametrized over LocalMemoryStore (persisted bank +
-in-memory Chroma) and RemoteMemoryStore (httpx MockTransport over an in-memory
-card service). Backend-specific sections cover local persistence/retrieval/state
-and the remote skeleton's not-yet-implemented surface.
+The shared contract runs against the store; backend-specific sections cover
+local persistence, retrieval, and state.
 """
 
 from __future__ import annotations
@@ -12,7 +10,6 @@ import json
 import multiprocessing
 from unittest.mock import Mock
 
-import httpx
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
@@ -22,7 +19,6 @@ from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest
 import gigaevo.memory.storage.local as local_module
 from gigaevo.memory.storage.local import LocalMemoryStore
-from gigaevo.memory.storage.remote import RemoteMemoryStore
 from gigaevo.memory.storage.state import StoreState
 
 
@@ -44,56 +40,10 @@ def _append_program_markers(config, card_id, markers, ready, start):
         )
 
 
-class FakeCardService:
-    def __init__(self) -> None:
-        self.cards: dict[str, dict] = {}
-        self.rebuilds = 0
-        self.healthy = True
-
-    def client(self) -> httpx.Client:
-        return httpx.Client(
-            transport=httpx.MockTransport(self._handle),
-            base_url="http://memory.test",
-        )
-
-    def _mint(self, card: dict) -> str:
-        card_id = card["id"] or f"mem-remote{len(self.cards):04d}"
-        card["id"] = card_id
-        self.cards[card_id] = card
-        return card_id
-
-    def _handle(self, request: httpx.Request) -> httpx.Response:
-        method, path = request.method, request.url.path
-        if path == "/health":
-            return httpx.Response(200 if self.healthy else 503)
-        if path == "/cards" and method == "POST":
-            card_id = self._mint(json.loads(request.content))
-            return httpx.Response(200, json={"id": card_id})
-        if path == "/cards" and method == "GET":
-            return httpx.Response(200, json={"cards": list(self.cards.values())})
-        if path == "/rebuild" and method == "POST":
-            self.rebuilds += 1
-            return httpx.Response(200)
-        if path.startswith("/cards/"):
-            card_id = path.removeprefix("/cards/")
-            if card_id not in self.cards:
-                return httpx.Response(404)
-            if method == "GET":
-                return httpx.Response(200, json=self.cards[card_id])
-            if method == "DELETE":
-                del self.cards[card_id]
-                return httpx.Response(200)
-        return httpx.Response(404)
-
-
-@pytest.fixture(params=["local", "remote"])
-def store(request, make_store_config):
-    if request.param == "local":
-        with LocalMemoryStore(make_store_config()) as local:
-            yield local
-    else:
-        with RemoteMemoryStore(client=FakeCardService().client()) as remote:
-            yield remote
+@pytest.fixture
+def store(make_store_config):
+    with LocalMemoryStore(make_store_config()) as local:
+        yield local
 
 
 def test_save_round_trips(store, make_card):
@@ -404,45 +354,3 @@ class TestLocalStore:
         rows = [json.loads(line) for line in events_file.read_text().splitlines()]
         assert [row["event"] for row in rows] == ["MEMORY_RESEARCH"]
         assert rows[0]["outcome"] == "empty"
-
-
-class TestRemoteStore:
-    def test_requires_url_or_client(self):
-        with pytest.raises(ValueError, match="base_url"):
-            RemoteMemoryStore()
-
-    def test_is_ready_reflects_health(self):
-        service = FakeCardService()
-        store = RemoteMemoryStore(client=service.client())
-        assert store.is_ready
-        service.healthy = False
-        assert not store.is_ready
-
-    def test_is_ready_false_on_transport_error(self):
-        def refuse(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("connection refused")
-
-        client = httpx.Client(
-            transport=httpx.MockTransport(refuse), base_url="http://memory.test"
-        )
-        assert not RemoteMemoryStore(client=client).is_ready
-
-    def test_retrieval_not_implemented(self, make_card):
-        store = RemoteMemoryStore(client=FakeCardService().client())
-        with pytest.raises(NotImplementedError):
-            store.nearest("text", k=3)
-
-    async def test_research_not_implemented(self):
-        store = RemoteMemoryStore(client=FakeCardService().client())
-        with pytest.raises(NotImplementedError):
-            await store.research(ResearchRequest(query="anything"))
-
-    def test_atomic_merge_not_implemented(self, make_card):
-        store = RemoteMemoryStore(client=FakeCardService().client())
-        with pytest.raises(NotImplementedError):
-            store.merge_retire("target", "partner", lambda target, partner: target)
-
-    def test_rebuild_posts(self):
-        service = FakeCardService()
-        RemoteMemoryStore(client=service.client()).rebuild()
-        assert service.rebuilds == 1

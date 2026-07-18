@@ -27,10 +27,10 @@ def _compose(*overrides: str) -> Any:
         return compose(config_name="config", overrides=[*_BASE, *overrides])
 
 
-def test_reader_on_non_reading_pipeline_is_rejected() -> None:
-    cfg = _compose("pipeline=guided", "memory=reader", "checkpoint_dir=/tmp/bank")
+def test_reading_memory_on_non_reading_pipeline_is_rejected() -> None:
+    cfg = _compose("pipeline=guided", "memory=v2")
 
-    with pytest.raises(ValueError, match="pipeline=guided|memory_guided"):
+    with pytest.raises(ValueError, match="does not read external memory"):
         validate_memory_pipeline_compat(cfg)
 
 
@@ -41,27 +41,8 @@ def test_memory_guided_requires_read_enabled_memory() -> None:
         validate_memory_pipeline_compat(cfg)
 
 
-def test_memory_guided_reader_is_allowed_with_explicit_bank() -> None:
-    cfg = _compose(
-        "pipeline=memory_guided", "memory=reader", "checkpoint_dir=/tmp/bank"
-    )
-
-    validate_memory_pipeline_compat(cfg)
-
-
-def test_reader_requires_explicit_checkpoint_dir() -> None:
-    cfg = _compose("pipeline=memory_guided", "memory=reader")
-
-    with pytest.raises(ValueError, match="checkpoint_dir"):
-        validate_memory_pipeline_compat(cfg)
-
-
-def test_static_reader_does_not_need_writer_or_checkpoint_bank() -> None:
-    cfg = _compose(
-        "pipeline=memory_guided",
-        "memory=static",
-        "memory.provider.levers_file=/tmp/levers.md",
-    )
+def test_v2_read_write_is_allowed_on_memory_guided() -> None:
+    cfg = _compose("pipeline=memory_guided", "memory=v2")
 
     validate_memory_pipeline_compat(cfg)
 
@@ -73,34 +54,10 @@ def test_live_write_requires_writer_enabled_memory() -> None:
         validate_memory_pipeline_compat(cfg)
 
 
-def test_full_live_read_write_is_allowed() -> None:
-    cfg = _compose("pipeline=memory_guided", "memory=full", "memory/write=live")
-
-    validate_memory_pipeline_compat(cfg)
-
-
-def test_full_default_write_is_live() -> None:
-    cfg = _compose("pipeline=memory_guided", "memory=full")
+def test_v2_default_write_is_live() -> None:
+    cfg = _compose("pipeline=memory_guided", "memory=v2")
 
     assert cfg.memory.write.mode == "live"
-    validate_memory_pipeline_compat(cfg)
-
-
-def test_full_end_of_run_default_bank_is_rejected() -> None:
-    cfg = _compose("pipeline=memory_guided", "memory=full", "memory/write=end_of_run")
-
-    with pytest.raises(ValueError, match="default per-run bank|memory/write=live"):
-        validate_memory_pipeline_compat(cfg)
-
-
-def test_full_end_of_run_existing_bank_is_allowed() -> None:
-    cfg = _compose(
-        "pipeline=memory_guided",
-        "memory=full",
-        "memory/write=end_of_run",
-        "checkpoint_dir=/tmp/existing-bank",
-    )
-
     validate_memory_pipeline_compat(cfg)
 
 
@@ -111,8 +68,8 @@ def test_write_none_mode_is_a_string() -> None:
     assert isinstance(cfg.memory.write.mode, str)
 
 
-def test_live_write_installs_live_refresh_hook() -> None:
-    cfg = _compose("pipeline=memory_guided", "memory=full", "memory/write=live")
+def test_v2_installs_live_refresh_hook() -> None:
+    cfg = _compose("pipeline=memory_guided", "memory=v2")
 
     assert (
         cfg.post_step_hook._target_
@@ -151,8 +108,7 @@ def test_memory_guided_json_document_format_is_allowed() -> None:
     cfg = _compose(
         "pipeline=memory_guided",
         "program_format=json_document",
-        "memory=reader",
-        "checkpoint_dir=/tmp/bank",
+        "memory=v2",
     )
 
     assert cfg.program_format.id == "json_document"
@@ -165,8 +121,7 @@ def test_memory_guided_noise_composes_like_memory_guided() -> None:
     cfg = _compose(
         "pipeline=memory_guided_noise",
         "program_format=json_document",
-        "memory=reader",
-        "checkpoint_dir=/tmp/bank",
+        "memory=v2",
     )
 
     assert cfg.pipeline.id == "memory_guided_noise"
@@ -182,8 +137,7 @@ def test_guided_json_document_still_rejects_external_memory_reader() -> None:
     cfg = _compose(
         "pipeline=guided",
         "program_format=json_document",
-        "memory=reader",
-        "checkpoint_dir=/tmp/bank",
+        "memory=v2",
     )
 
     validate_program_format_pipeline_compat(cfg)

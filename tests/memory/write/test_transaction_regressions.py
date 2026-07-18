@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-from threading import Thread
-
 import pytest
 
 from gigaevo.memory.cards import Card, CardKind
-from gigaevo.memory.read.reputation import (
-    BetaBinomialReputation,
-    BootstrapReputation,
-)
 from gigaevo.memory.storage.config import StoreConfig
 from gigaevo.memory.storage.local import LocalMemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate, WriteOutcome
-from gigaevo.memory.write.eviction import HarmEvictor, NullEvictor
+from gigaevo.memory.write.eviction import NullEvictor
 from tests.fakes.embedding import FakeEmbeddingFunction
 
 
@@ -26,34 +20,6 @@ def local_store(tmp_path, monkeypatch):
     )
     FakeEmbeddingFunction.embedded.clear()
     return LocalMemoryStore(StoreConfig(path=tmp_path / "store"))
-
-
-def test_sweep_with_same_store_bootstrap_reputation_completes(
-    local_store, make_card, make_event
-):
-    card = make_card(gain_events=tuple(make_event(-0.1) for _ in range(4)))
-    local_store.save(card)
-    reputation = BootstrapReputation(
-        BetaBinomialReputation(), local_store, n_bootstrap=32
-    )
-    gate = CardAdmissionGate(store=local_store, evictor=HarmEvictor(reputation))
-    errors: list[BaseException] = []
-    results: list[list[str]] = []
-
-    def sweep() -> None:
-        try:
-            results.append(gate.sweep())
-        except BaseException as exc:
-            errors.append(exc)
-
-    worker = Thread(target=sweep, daemon=True)
-    worker.start()
-    worker.join(timeout=10)
-
-    assert not worker.is_alive()
-    assert errors == []
-    assert results == [[card.id]]
-    assert local_store.get(card.id) is None
 
 
 def _second_store(tmp_path) -> LocalMemoryStore:
@@ -176,31 +142,6 @@ def test_known_id_harm_readmit_uses_fresh_union_that_rescues_card(
     assert result.card_id == banked.id
     assert survivor.description == "new prose"
     assert survivor.gain_events == (positive_restamp, stale_harm)
-
-
-def test_known_id_harm_readmit_deletes_when_fresh_union_remains_harmful(
-    local_store, tmp_path, make_card, make_event
-):
-    stale_harm = make_event(-1.0, parent_id="stale")
-    banked = make_card(gain_events=(stale_harm,))
-    local_store.save(banked)
-    stale_reauthor = local_store.get(banked.id)
-    weak_positive_restamp = make_event(0.2, parent_id="fresh")
-    store2 = _second_store(tmp_path)
-    store2.update(
-        banked.id,
-        lambda fresh: fresh.model_copy(
-            update={"gain_events": (weak_positive_restamp,)}
-        ),
-    )
-    gate = CardAdmissionGate(store=local_store, evictor=NegativeTotalEvictor())
-
-    result = gate.admit(stale_reauthor)
-
-    assert result.outcome is WriteOutcome.REJECTED_HARM
-    assert result.card_id == ""
-    assert local_store.get(banked.id) is None
-    assert gate.is_tombstoned(banked.id)
 
 
 def test_twin_retirement_folds_fresh_restamp_into_successor(

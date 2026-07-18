@@ -7,9 +7,9 @@ evidence persistence) is a ``cards``-only leaf consumed by ``read`` and ``write`
 ``write`` (the writer refreshes it after each increment). ``outcomes`` (terminal-
 outcome producer) is a ``{cards | events}`` leaf consumed by the evolution engine,
 not by any memory layer.
-``read/`` and ``write/`` never import each other (eviction's ``CardScorer`` /
-``CardValueScorer`` Protocols live in ``write/``; ``read/reputation`` implements
-them; config wires them). Chroma is confined to ``storage/index.py``; LLM handles (routers,
+``read/`` and ``write/`` never import each other (the write-side eviction surface —
+the ``Evictor`` Protocol + ``NullEvictor`` — is self-contained in ``write/``).
+Chroma is confined to ``storage/index.py``; LLM handles (routers,
 agents, langgraph/langchain) are confined to the research agent and the
 write-side authoring modules.
 """

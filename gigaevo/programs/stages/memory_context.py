@@ -83,9 +83,11 @@ class MemoryContextStage(Stage):
     Always present in the DAG. When the provider is NullMemoryProvider,
     this stage returns an empty string instantly (no-op).
 
-    Always writes selected ids and slate metadata, empty lists included —
-    this NO_CACHE stage re-runs on every parent requeue, and a stale slate
-    left behind by a previous run would hand phantom credit to children.
+    Always writes selected ids metadata, empty lists included — this NO_CACHE
+    stage re-runs on every parent requeue, so a stale id list left by a previous
+    run must be cleared. The candidate-slate key is retained but always empty
+    (the v1 auction that filled it is gone); it persists only for the downstream
+    log schema.
     """
 
     InputsModel = MemoryContextInputs
@@ -146,10 +148,12 @@ class MemoryContextStage(Stage):
         return CompositeMutationContext(contexts=contexts).format()
 
     async def compute(self, program: Program) -> StageIO:
-        # Erase any slate left by a prior run of this NO_CACHE stage BEFORE the
-        # provider call: a select_cards failure (e.g. stage timeout) must not
-        # leave a requeued parent carrying a stale slate that would hand phantom
-        # credit to its children. Overwritten with the real selection on success.
+        # Clear per-run metadata BEFORE the provider call: this NO_CACHE stage
+        # re-runs on every parent requeue, so a select_cards failure (e.g. stage
+        # timeout) must not leave a requeued parent carrying stale ids from a
+        # previous run. The id/decision/assignment keys are overwritten with the
+        # real selection on success; the candidate-slate key stays empty (the v1
+        # auction that filled it is gone) and is kept only for the log schema.
         program.set_metadata(MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY, [])
         program.set_metadata(MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY, [])
         program.set_metadata(MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY, False)
@@ -170,10 +174,6 @@ class MemoryContextStage(Stage):
 
         program.set_metadata(
             MUTATION_MEMORY_DECISION_ID_METADATA_KEY, selection.decision_id
-        )
-        program.set_metadata(
-            MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY,
-            [bid.model_dump() for bid in selection.slate],
         )
 
         assignment = selection.assignment
@@ -263,8 +263,7 @@ class MemoryContextStage(Stage):
             return StringContainer(data="\n\n".join(numbered))
 
         logger.info(
-            "[Memory][ContextStage] Empty selection for {} (candidates={})",
+            "[Memory][ContextStage] Empty selection for {}",
             program.id[:8],
-            len(selection.slate),
         )
         return StringContainer(data="")

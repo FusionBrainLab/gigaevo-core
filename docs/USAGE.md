@@ -219,7 +219,7 @@ python run.py problem.name=my_task pipeline=my_pipeline \
 ```bash
 # See docs/MEMORY_GUIDED_PIPELINE.md for the full mode guide
 python run.py problem.name=heilbron \
-    pipeline=memory_guided memory=full memory/write=live \
+    pipeline=memory_guided memory=v2 memory/write=live \
     num_parents=4 max_mutants=500
 ```
 

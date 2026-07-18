@@ -9,8 +9,8 @@ Memory v2 achieves the intended first-iteration replacement:
 - v1 reputation, gain restamping, bootstrap bidding, Thompson auction, efficacy
   rendering, and no-card heuristics do not control v2 selection;
 - one replayable hierarchical Bayesian model now owns reward, invalidity risk,
-  contextual card comparison, conservative safety admission, probability matching,
-  and harm retirement;
+  contextual card comparison, conservative safety admission, and probability
+  matching;
 - every delivered card has a randomized withheld-card control and an exact logged
   conditional probability;
 - every eligible same-task card enters one posterior action universe; an agentic
@@ -415,22 +415,17 @@ The outcome taxonomy prevents common attribution errors:
 ## Bank growth and retirement
 
 The v2 configuration does not reject a genuinely new card because the same-task
-bank reached an arbitrary size. Deduplication, consolidation, bounded program
-exemplars, and evidence-backed harm retirement still control redundant or harmful
-content.
+bank reached an arbitrary size. Deduplication, near-duplicate consolidation, and
+bounded program exemplars still control redundant content.
 
-A card is not evicted simply because it has a low posterior mean. Retirement requires:
-
-- a fresh current posterior fit;
-- at least two direct treated and two direct withheld outcomes for the stable card;
-- at least two distinct observed modeled contexts;
-- no pending assignment anywhere in its consolidation lineage;
-- successful reward and safety numerical diagnostics;
-- a 99% Wilson upper confidence bound for `P(safe and helpful)` at or below 5% in
-  every observed context.
-
-The verdict is invalidated if the ledger changes before deletion. This makes eviction
-conservative and evidence-driven while allowing bad cards eventually to free capacity.
+There is no write-side harm eviction on the v2 path. The wired evictor is
+`NullEvictor`: the admission gate's periodic `sweep` runs each writer increment but
+flags nothing, and `admit`/`merge` never pre-screen a card for harm. Harm control
+is the read-time policy alone — `ChanceConstrainedProbabilityMatchingPolicy` and
+its `SafetyConstraint` (`gate_mode: exclude_confident_incremental_harm`) decline to
+*offer* a confidently-harmful card, so such a card may remain in the bank but is
+never proposed to a mutation. A future harm evictor can return through the shared
+`Evictor` seam as a proper Bayesian mechanism.
 
 ## What the smoke run must monitor
 
@@ -528,6 +523,5 @@ its rank never becomes posterior evidence.
 - Atomic decision provider: [`gigaevo/memory_v2/provider.py`](../gigaevo/memory_v2/provider.py)
 - Causal ledger: [`gigaevo/memory_v2/ledger.py`](../gigaevo/memory_v2/ledger.py)
 - Content-only v2 writer bridge: [`gigaevo/memory_v2/writer.py`](../gigaevo/memory_v2/writer.py)
-- Conservative retirement: [`gigaevo/memory_v2/eviction.py`](../gigaevo/memory_v2/eviction.py)
 - Production configuration: [`config/memory/v2.yaml`](../config/memory/v2.yaml)
 - Smoke launcher and analytics: [`experiments/hover/memory_v2_smoke`](../experiments/hover/memory_v2_smoke)

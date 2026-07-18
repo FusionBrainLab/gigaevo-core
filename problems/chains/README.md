@@ -41,10 +41,11 @@ CHAIN_DEFAULTS=(
 # Memory ON (recommended exploratory default). The memory bank goes to the
 # default checkpoint dir under the run's output dir; override checkpoint_dir
 # only when a bank must live at a specific path (e.g. shared across tooling).
-# `memory/write=live` is the shipped memory=full default (same-run read+write);
-# it is passed explicitly here to mirror the launcher.
+# `memory/write=live` is the shipped memory=v2 default (same-run read+write);
+# it is passed explicitly here to mirror the launcher. Crediting is internal to
+# memory=v2 (the v1 memory/crediting group is gone).
 python run.py "${CHAIN_DEFAULTS[@]}" pipeline=memory_guided_noise \
-    memory=full memory/write=live memory/crediting=paired memory/llm=qwen_instruct \
+    memory=v2 memory/write=live memory/llm=qwen_instruct \
     memory.llm.models.0.base_url="$LITELLM_BASE_URL"
 
 # Memory OFF (control arm — keep one in any A/B):
@@ -187,7 +188,7 @@ python run.py \
     problem.name=chains/hover/full7 \
     pipeline=memory_guided \
     program_format=json_document \
-    memory=full \
+    memory=v2 \
     memory/write=live \
     memory/llm=qwen_instruct \
     checkpoint_dir="$PWD/SHARE_HOVER_DIFF_MEMORY" \

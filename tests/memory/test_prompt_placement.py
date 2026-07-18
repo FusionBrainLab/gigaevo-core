@@ -17,7 +17,6 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
 )
 from gigaevo.memory.provider import MemoryProvider
-from gigaevo.memory.read.auction import AuctionBid
 from gigaevo.memory.read.reader import MemorySelection
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
@@ -101,20 +100,9 @@ async def test_memory_context_reverse_repack_renders_worst_first():
 
 
 async def test_memory_context_no_card_control_withholds_rendered_cards():
-    bid = AuctionBid(
-        card_id="best-id",
-        posterior_a=10.0,
-        posterior_b=1.0,
-        theta=0.9,
-        baseline_a=3.0,
-        baseline_b=3.0,
-        baseline_theta=0.5,
-        selected=True,
-    )
     selection = MemorySelection(
         cards=("best card text",),
         card_ids=("best-id",),
-        slate=(bid,),
     )
     stage = _memory_stage(
         memory_provider=FixedProvider(selection),
@@ -128,9 +116,7 @@ async def test_memory_context_no_card_control_withholds_rendered_cards():
     assert out.data == ""
     assert prog.metadata[MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY] == []
     assert prog.metadata[MUTATION_MEMORY_NO_CARD_CONTROL_METADATA_KEY] is True
-    assert prog.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == [
-        bid.model_dump()
-    ]
+    assert prog.metadata[MUTATION_MEMORY_CANDIDATE_SLATE_METADATA_KEY] == []
 
 
 def _mutation_inputs() -> dict:

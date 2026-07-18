@@ -30,17 +30,12 @@ baseline_prior: [3.0, 3.0]
 evidence:
   min_effective_events: 3
 
+# No write-side harm eviction on the v2 path. Harm control is the read-time
+# ChanceConstrainedProbabilityMatchingPolicy + SafetyConstraint, which declines
+# to offer a confidently-harmful card. A future harm evictor returns here as a
+# bayesian mechanism through the shared Evictor seam.
 evictor:
-  _target_: gigaevo.memory_v2.eviction.CausalPosteriorEvictor
-  ledger: ${ref:memory.ledger}
-  posterior: ${ref:memory.posterior}
-  safety: ${ref:memory.safety}
-  min_treated: 2
-  min_global_control: 2
-  min_distinct_contexts: 2
-  posterior_samples: 4096
-  max_viability_probability: 0.05
-  mc_confidence_z: 2.576
+  _target_: gigaevo.memory.write.eviction.NullEvictor
 
 environment:
   _target_: gigaevo.memory_v2.models.EnvironmentFingerprint
@@ -184,10 +179,15 @@ renderer:
 
 provider:
   _target_: gigaevo.memory_v2.provider.CausalBanditMemoryProvider
+  # posterior must resolve before candidate_source: it pulls feature_map ->
+  # feature_config, whose retrieval_applicability_contrast is a plain
+  # interpolation into memory.applicability, while candidate_source is what
+  # instantiates memory.applicability (the ${ref:} resolver replaces the tree
+  # node with the object). Resolve feature_config first, then applicability.
+  posterior: ${ref:memory.posterior}
   candidate_source: ${ref:memory.candidate_source}
   context_source: ${ref:memory.context_source}
   ledger: ${ref:memory.ledger}
-  posterior: ${ref:memory.posterior}
   policy: ${ref:memory.policy}
   renderer: ${ref:memory.renderer}
   store: ${ref:memory.store}

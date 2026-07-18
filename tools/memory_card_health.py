@@ -9,8 +9,7 @@ The objective integrity checks here target the absorbed-id alias layer (the new
 gain-attribution machinery): an absorbed id must reference a *removed* card, be
 claimed by exactly one survivor, and never name its own survivor. Subjective
 quality (specificity, tautology, dedup) is left to the existing
-``memory_quality_audit.py`` and to the reviewer's verdict; the event side
-(auction winners, dominance, budget) is delegated to ``memory_event_report.py``.
+``memory_quality_audit.py`` and to the reviewer's verdict.
 
 Usage:
     python tools/memory_card_health.py outputs/run_a outputs/run_b --json out.json
@@ -24,12 +23,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-import subprocess
-import sys
 from typing import Any, NamedTuple
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_EVENT_REPORT = _REPO_ROOT / "tools" / "memory_event_report.py"
 
 
 class HealthFlag(NamedTuple):
@@ -145,8 +139,7 @@ def assess_run(run: str, cards: Mapping[str, Mapping[str, Any]]) -> RunHealth:
 
 def _resolve_bank(run_root: Path) -> Path | None:
     """``cards.json`` under a run, tolerating being pointed at either the run dir
-    (``<run>/memory/cards.json``) or the memory dir itself (``<dir>/cards.json``)
-    — mirrors ``memory_event_report._resolve_checkpoint_dir``."""
+    (``<run>/memory/cards.json``) or the memory dir itself (``<dir>/cards.json``)."""
     direct = run_root / "cards.json"
     if direct.exists():
         return direct
@@ -170,23 +163,7 @@ def load_card_bank(run_root: Path) -> dict[str, dict[str, Any]]:
     return {cid: c for cid, c in cards.items() if isinstance(c, dict)}
 
 
-def _event_summary(run_root: Path) -> dict[str, Any] | None:
-    """Delegate the event side (auction/dominance/budget) to memory_event_report."""
-    try:
-        out = subprocess.run(
-            [sys.executable, str(_EVENT_REPORT), str(run_root), "--json"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return json.loads(out.stdout)
-    except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
-        return None
-    return None
-
-
-def _run_to_dict(h: RunHealth, events: Mapping[str, Any] | None) -> dict[str, Any]:
+def _run_to_dict(h: RunHealth) -> dict[str, Any]:
     return {
         "run": h.run,
         "rollup": {
@@ -211,7 +188,6 @@ def _run_to_dict(h: RunHealth, events: Mapping[str, Any] | None) -> dict[str, An
             }
             for c in h.cards
         ],
-        "events": events,
     }
 
 
@@ -248,19 +224,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("run_roots", type=Path, nargs="+", help="Run output directories.")
     ap.add_argument("--json", type=Path, default=None, help="Write combined JSON here.")
-    ap.add_argument(
-        "--no-events",
-        action="store_true",
-        help="Skip the memory_event_report delegation (cards only).",
-    )
     args = ap.parse_args()
 
     runs: list[dict[str, Any]] = []
     for root in args.run_roots:
         bank = load_card_bank(root)
         health = assess_run(root.name, bank)
-        events = None if args.no_events else _event_summary(root)
-        runs.append(_run_to_dict(health, events))
+        runs.append(_run_to_dict(health))
 
     combined = {"runs": runs}
     if args.json:

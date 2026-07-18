@@ -3,7 +3,7 @@
 > **This backend no longer exists.** The remote `gigaevo-memory`
 > (Postgres + pgvector) backend and its `gigaevo.memory_platform` package were
 > removed in the one-knob memory-config collapse
-> (`memory={none,reader,writer,full}`). The Hydra overrides this guide used to
+> (`memory={none,v2}`). The Hydra overrides this guide used to
 > describe — `memory=api`, `ideas_tracker=default`, `namespace=…` — no longer
 > exist; following the old instructions yields an immediate Hydra error.
 >

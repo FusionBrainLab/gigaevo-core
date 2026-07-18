@@ -11,7 +11,6 @@ from gigaevo.config.validation import (
     validate_archive_gate_pipeline_compat,
     validate_memory_pipeline_compat,
     validate_program_format_pipeline_compat,
-    validate_reputation_island_compat,
 )
 
 __all__ = [
@@ -25,5 +24,4 @@ __all__ = [
     "validate_archive_gate_pipeline_compat",
     "validate_memory_pipeline_compat",
     "validate_program_format_pipeline_compat",
-    "validate_reputation_island_compat",
 ]

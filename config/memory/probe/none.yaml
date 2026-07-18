@@ -1,2 +1,0 @@
-# @package memory.probe_policy
-_target_: gigaevo.memory.read.probe.NoColdProbePolicy

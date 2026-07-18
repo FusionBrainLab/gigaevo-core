@@ -18,14 +18,12 @@ from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.strategies.paired_selectors import (
     PairedBootstrapArchiveSelector,
 )
-from gigaevo.memory.provider import LeasedMemoryProvider, ReaderMemoryProvider
-from gigaevo.memory.write.crediting import PairedEffectEstimator
+from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory_v2.candidates import (
     AgenticApplicabilityProvider,
     NullApplicabilityProvider,
     WholeBankCandidateSource,
 )
-from gigaevo.memory_v2.eviction import CausalPosteriorEvictor
 from gigaevo.memory_v2.writer import CausalV2ContentOnlyUpdater
 
 
@@ -35,35 +33,14 @@ def _target_path(symbol: Any) -> str:
     return f"{symbol.__module__}.{symbol.__qualname__}"
 
 
-_SHARED_BEHAVIOR_SPACE_REF = "${ref:behavior_space}"
-_DEFAULT_CHECKPOINT_DIR = "${hydra:runtime.output_dir}/memory"
-_READER_PROVIDER_TARGET = _target_path(ReaderMemoryProvider)
-_LEASED_PROVIDER_TARGET = _target_path(LeasedMemoryProvider)
 _ARCHIVE_GATE_PROVIDER_TARGET = _target_path(build_archive_gate_provider)
 _PAIRED_SELECTOR_TARGET = _target_path(PairedBootstrapArchiveSelector)
-_PAIRED_CREDITING_TARGET = _target_path(PairedEffectEstimator)
 _MEMORY_V2_WRITER_TARGET = _target_path(CausalV2ContentOnlyUpdater)
-_MEMORY_V2_EVICTOR_TARGET = _target_path(CausalPosteriorEvictor)
 _MEMORY_V2_WHOLE_BANK_SOURCE_TARGET = _target_path(WholeBankCandidateSource)
 _MEMORY_V2_AGENTIC_APPLICABILITY_TARGET = _target_path(AgenticApplicabilityProvider)
 _MEMORY_V2_NULL_APPLICABILITY_TARGET = _target_path(NullApplicabilityProvider)
+_MEMORY_V2_EVICTOR_TARGET = _target_path(NullEvictor)
 _MISSING = object()
-
-
-def _references_shared_behavior_space(node: Any) -> bool:
-    """True if any leaf in ``node`` interpolates the shared ``behavior_space``.
-
-    Matches the structural dependency, not a class name — so a subclass, an
-    import alias, or a BD reputation nested as another reputation's ``fallback``
-    is caught the same as a top-level ``bd_proximity``.
-    """
-    if isinstance(node, str):
-        return _SHARED_BEHAVIOR_SPACE_REF in node
-    if isinstance(node, dict):
-        return any(_references_shared_behavior_space(v) for v in node.values())
-    if isinstance(node, list):
-        return any(_references_shared_behavior_space(v) for v in node)
-    return False
 
 
 def _raw_select(cfg: DictConfig, path: str, default: Any = None) -> Any:
@@ -75,31 +52,6 @@ def _raw_select(cfg: DictConfig, path: str, default: Any = None) -> Any:
             return default
         node = node[part]
     return node
-
-
-def validate_reputation_island_compat(cfg: DictConfig) -> None:
-    """Reject multi-island memory configs that require one shared behavior space.
-
-    BD-local memory components resolve a single ``${ref:behavior_space}`` and
-    partition card/no-card evidence by that one tessellation. A multi-island
-    algorithm has a per-island behavior space and no top-level ``behavior_space``
-    for the ref to bind to, so the pairing has no coherent meaning — fail fast.
-    """
-    islands = OmegaConf.select(cfg, "islands", default=None)
-    if not islands or len(islands) <= 1:
-        return
-    memory = OmegaConf.select(cfg, "memory", default=None)
-    if memory is None:
-        return
-    raw = OmegaConf.to_container(memory, resolve=False)
-    if _references_shared_behavior_space(raw):
-        raise NotImplementedError(
-            "BD-local memory components read one ${ref:behavior_space}, but "
-            f"this algorithm configures {len(islands)} islands with per-island "
-            "behavior spaces and no top-level behavior_space for the ref to bind "
-            "to. Use a single-island algorithm, or switch to "
-            "memory/read_policy=portable for multi-island runs."
-        )
 
 
 def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
@@ -123,22 +75,20 @@ def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
         raise ValueError(
             f"memory read is enabled but pipeline={pipeline_id} does not read "
             "external memory cards. Use pipeline=memory_guided, or switch to "
-            "memory=none / memory=writer for a non-reading run."
+            "memory=none for a non-reading run."
         )
 
     if pipeline_reads and not memory_reads:
         raise ValueError(
             f"pipeline={pipeline_id} reads external memory cards, but the selected "
-            "memory preset has read=false. Use memory=v2, memory=reader, "
-            "memory=full, or memory=static; use pipeline=guided for no "
-            "external-memory reads."
+            "memory preset has read=false. Use memory=v2; use pipeline=guided for "
+            "no external-memory reads."
         )
 
     if (write_enabled or write_mode in {"end_of_run", "live"}) and not memory_writes:
         raise ValueError(
             f"memory/write={write_mode} requires a writer-enabled memory preset. "
-            "Use memory=v2, memory=writer, or memory=full, or switch to "
-            "memory/write=none."
+            "Use memory=v2, or switch to memory/write=none."
         )
 
     if write_mode == "live":
@@ -148,23 +98,6 @@ def validate_memory_pipeline_compat(cfg: DictConfig) -> None:
                 "memory/write=live must install LiveMemoryRefreshHook as "
                 "post_step_hook; check config/memory/write/live.yaml."
             )
-
-    provider_target = _raw_select(cfg, "memory.provider._target_", None)
-    if provider_target == _LEASED_PROVIDER_TARGET:
-        provider_target = _raw_select(cfg, "memory.provider.provider._target_", None)
-    checkpoint_dir = _raw_select(cfg, "checkpoint_dir", None)
-    if (
-        memory_reads
-        and provider_target == _READER_PROVIDER_TARGET
-        and checkpoint_dir == _DEFAULT_CHECKPOINT_DIR
-        and write_mode != "live"
-    ):
-        raise ValueError(
-            "memory reads from the default per-run bank, but no live writer will "
-            "populate that bank during the run. Set checkpoint_dir=/path/to/an/"
-            "existing/bank, use memory/write=live for same-run read+write, or "
-            "use pipeline=guided memory=writer to build a bank for a later run."
-        )
 
 
 def validate_memory_v2_scope(cfg: DictConfig) -> None:
@@ -282,8 +215,8 @@ def validate_memory_v2_scope(cfg: DictConfig) -> None:
     evictor_target = _raw_select(cfg, "memory.evictor._target_", None)
     if evictor_target != _MEMORY_V2_EVICTOR_TARGET:
         raise ValueError(
-            "memory=v2 requires the causal Bayesian harm evictor; legacy mutable "
-            "card-stat eviction is not valid for the randomized v2 ledger."
+            "memory=v2 wires NullEvictor: harm control is the read-time policy, "
+            "not write-side card-stat eviction on the randomized causal ledger."
         )
 
 
@@ -381,30 +314,6 @@ def validate_paired_selector_pipeline_compat(cfg: DictConfig) -> None:
         "routes_program_metadata: true (see config/pipeline/) and a problem "
         "whose validate() emits the vector, or archive_selector=point for a "
         "control arm."
-    )
-
-
-def validate_crediting_pipeline_compat(cfg: DictConfig) -> None:
-    """Reject paired crediting when no pipeline routes per-sample scores.
-
-    ``PairedEffectEstimator`` compares the child's live ``per_sample_scores``
-    metadata against the base vector frozen at birth; only a metadata-routing
-    pipeline populates either. Under any other pipeline every event silently
-    degrades to the exact point delta — an inert treatment the run would never
-    surface.
-    """
-
-    if _raw_select(cfg, "memory.crediting._target_", None) != _PAIRED_CREDITING_TARGET:
-        return
-    if bool(_raw_select(cfg, "pipeline.routes_program_metadata", False)):
-        return
-    pipeline_id = str(_raw_select(cfg, "pipeline.id", "<unknown>"))
-    raise ValueError(
-        "memory/crediting=paired needs per_sample_scores on program.metadata, "
-        f"but pipeline={pipeline_id} does not route _program_metadata. Pick a "
-        "pipeline that declares routes_program_metadata: true (see "
-        "config/pipeline/) and a problem whose validate() emits the vector, "
-        "or use memory/crediting=point."
     )
 
 

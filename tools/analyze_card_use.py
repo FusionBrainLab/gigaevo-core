@@ -8,7 +8,6 @@ child when it is in ``base_selected ∩ card_ids_used`` — the same credit rule
 system uses for ``gain_events`` (compute_contextual_gains).
 
 Pre-registration + decision thresholds: docs/audits/card_use_offline_prereg_2026-06-25.md.
-Sibling of tools/analyze_bandit_health.py; same arm layout and JSONL conventions.
 """
 
 from __future__ import annotations

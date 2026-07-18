@@ -85,9 +85,7 @@ def test_explicit_guided_pipeline_wires_archive_gate():
 
 
 def test_explicit_memory_guided_pipeline_wires_archive_gate():
-    cfg = _compose(
-        "pipeline=memory_guided", "memory=reader", "checkpoint_dir=/tmp/bank"
-    )
+    cfg = _compose("pipeline=memory_guided", "memory=v2", "checkpoint_dir=/tmp/bank")
     assert cfg.pipeline.archive_gate_mode == "builder"
     assert cfg.pipeline_builder.archive_gate_enabled is True
     assert cfg.archive_gate_provider.enabled is True

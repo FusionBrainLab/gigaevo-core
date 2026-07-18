@@ -62,9 +62,8 @@ class LiveMemoryRefreshHook:
             raise TypeError(
                 "LiveMemoryRefreshHook needs an IncrementalPostRunHook (got "
                 f"{type(tracker).__name__}); memory/write=live needs a "
-                "writer-enabled memory preset: memory=full (read+write) or "
-                "memory=writer (write-only). For read-only memory, use "
-                "memory/write=none."
+                "writer-enabled memory preset such as memory=v2 (read+write). "
+                "For read-only memory, use memory/write=none."
             )
         self._tracker = tracker
         self._storage = storage

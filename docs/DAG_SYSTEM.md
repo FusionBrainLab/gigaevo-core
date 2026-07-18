@@ -25,8 +25,8 @@ python run.py problem.name=heilbron
 # Explicit no-external-memory baseline
 python run.py pipeline=guided memory=none problem.name=heilbron
 
-# External memory-card reader pipeline
-python run.py pipeline=memory_guided memory=reader \
+# External memory-card pipeline (memory v2: read + live writer refresh)
+python run.py pipeline=memory_guided memory=v2 \
     checkpoint_dir=/data/banks/heilbron problem.name=heilbron
 
 # Custom pipeline — define your own in config/pipeline/my_pipeline.yaml

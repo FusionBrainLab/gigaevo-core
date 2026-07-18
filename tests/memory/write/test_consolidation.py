@@ -18,20 +18,6 @@ from gigaevo.memory.write.consolidation import ConsolidationScheduler, consolida
 from gigaevo.memory.write.eviction import NullEvictor
 
 
-class MarkingEvictor:
-    def __init__(self, harmful: set[str]) -> None:
-        self._harmful = harmful
-
-    def should_evict(self, card) -> bool:
-        return card.id in self._harmful
-
-    def eviction_reason(self, card) -> str:
-        return "test evictor"
-
-    def sweep(self, cards) -> list[str]:
-        return [card.id for card in cards if self.should_evict(card)]
-
-
 class FakeConsolidateAgent:
     def __init__(self, *, merge: bool = True) -> None:
         self.merge = merge
@@ -155,23 +141,6 @@ async def test_abstain_reviews_symmetric_pair_once(store, make_card):
     assert len(agent.calls) == 1
     assert store.get(a.id) is not None
     assert store.get(b.id) is not None
-
-
-async def test_harmful_consolidation_removes_both_banked_cards(store, make_card):
-    a = make_card()
-    b = make_card()
-    store.save(a)
-    store.save(b)
-    pair_neighbors(store, a, b)
-    gate = CardAdmissionGate(store=store, evictor=MarkingEvictor({a.id}))
-
-    merged = await run_consolidate(store, FakeConsolidateAgent(), gate=gate)
-
-    assert merged == 0
-    assert store.get(a.id) is None
-    assert store.get(b.id) is None
-    assert gate.is_tombstoned(a.id)
-    assert gate.is_tombstoned(b.id)
 
 
 async def test_program_cards_never_offered(store, make_card):

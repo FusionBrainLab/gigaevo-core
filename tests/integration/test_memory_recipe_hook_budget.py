@@ -51,7 +51,7 @@ def test_cli_override_propagates():
 
 def test_live_memory_write_raises_budget_over_memory_free_run():
     memory_free = _compose("memory=none")
-    live_memory = _compose("pipeline=memory_guided", "memory=full", "memory/write=live")
+    live_memory = _compose("pipeline=memory_guided", "memory=v2", "memory/write=live")
     assert (
         live_memory.engine_config.post_step_hook_timeout_s
         > memory_free.engine_config.post_step_hook_timeout_s

@@ -1,5 +1,14 @@
 # Memory System
 
+> **⚠️ v1 — superseded.** This guide documents the retired v1 read stack
+> (`MemoryReader`, the reputation/auction/probe pipeline, and the
+> `memory={reader,writer,full,static}` arms), all removed in the memory-v1
+> removal. The live system is the contextual Bayesian **memory v2**
+> (`memory={none,v2}`); its canonical reference is
+> [`memory_v2_bayesian_system_report.md`](memory_v2_bayesian_system_report.md).
+> Sections below are kept for historical context and are **not** an accurate
+> description of the current code. Full v1→v2 rewrite of this guide is pending.
+
 Cross-run memory for the evolutionary loop. A **write system** distills each
 run's mutation diffs and top exemplars into reusable cards; a **read system**
 researches that bank and injects the most promising cards into mutation
@@ -534,8 +543,7 @@ Per run, under `checkpoint_dir`:
 First stop when debugging empty selections, repeated winners, or evictions:
 
 ```bash
-python tools/memory_event_report.py <run-dir>    # events + ledger + bank summary
-python tools/analyze_bandit_health.py <run-dir>  # auction/posterior health + figures
+python tools/memory_card_health.py <run-dir>     # card bank structural/integrity snapshot
 python -m gigaevo.memory.ope.reconcile <run-dir> # off-policy probe-ITT (tau) + A/A + reconciliation, on demand
 ```
 

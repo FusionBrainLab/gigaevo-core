@@ -1,6 +1,0 @@
-# @package memory.prior
-# Legacy static cold-card prior: neutral Beta(3,3). Use for exact ablations and
-# old-run reproduction. The no-card abstention prior is owned by
-# memory/no_card_evidence.
-_target_: gigaevo.memory.read.prior.FixedMemoryPrior
-cold_card: ${memory.baseline_prior}

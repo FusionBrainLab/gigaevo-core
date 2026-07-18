@@ -177,14 +177,14 @@ python run.py problem.name=heilbron \
     memory.posterior_config.reference_offer_probability=0.50 \
     memory.policy_config.offer_probability=0.50
 
-# Build a memory bank for later use
+# Build a shared memory bank (memory v2 reads + writes it)
 python run.py problem.name=heilbron \
-    pipeline=guided memory=writer \
+    pipeline=memory_guided memory=v2 \
     checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
 
-# Read a pre-built memory bank
+# Reuse the same bank on a later run (also refreshes it)
 python run.py problem.name=heilbron \
-    pipeline=memory_guided memory=reader \
+    pipeline=memory_guided memory=v2 \
     checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
 
 # JSON-document genomes, e.g. CARL chain problems

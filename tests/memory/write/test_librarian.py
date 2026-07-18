@@ -24,22 +24,6 @@ def founding_event(gain: float = 0.2, parent_id: str = "parent-1") -> Contextual
     )
 
 
-class MarkEvictor:
-    """Evicts exactly the ids in ``harmful`` (harm-gate stand-in)."""
-
-    def __init__(self, harmful: set[str]) -> None:
-        self._harmful = harmful
-
-    def should_evict(self, card: Card) -> bool:
-        return card.id in self._harmful
-
-    def eviction_reason(self, card: Card) -> str:
-        return "test evictor"
-
-    def sweep(self, cards) -> list[str]:
-        return [card.id for card in cards if self.should_evict(card)]
-
-
 class FakeReconcileAgent:
     def __init__(self, response: ReconcileResponse | None = None) -> None:
         self.response = response or ReconcileResponse(items=[])
@@ -447,54 +431,6 @@ async def test_merge_empty_target_falls_back_to_admit(store, make_librarian):
     ids = await ingest(librarian)
     assert len(ids) == 1
     assert store.get(ids[0]).description == "an idea"
-
-
-async def test_merge_ruled_harmful_is_not_reauthored_as_new(
-    store, make_card, make_librarian
-):
-    # A MERGE whose union the harm gate rejects must be DROPPED — never laundered
-    # back in as a fresh NEW card. This is the verdict a benign missing-target
-    # merge (which DOES fall back to NEW) must be distinguished from: the harm
-    # gate already judged and deleted the target, so re-authoring resurrects it.
-    target = make_card()
-    store.save(target)
-    offer_neighbors(store, target)
-    gate = CardAdmissionGate(store=store, evictor=MarkEvictor({target.id}))
-    agent = FakeReconcileAgent(
-        ReconcileResponse(
-            items=[item("MERGE", description="union prose", target_id=target.id)]
-        )
-    )
-    librarian = make_librarian(agent, gate=gate)
-    ids = await ingest(librarian)
-    assert ids == []
-    assert store.get(target.id) is None
-    assert store.snapshot() == ()
-
-
-async def test_second_merge_onto_harm_tombstoned_target_is_not_laundered(
-    store, make_card, make_librarian
-):
-    # Two MERGE items in ONE ingest hit the same target; the first union is
-    # judged confidently harmful, deleting AND tombstoning the target. The
-    # second then finds its target absent — a benign-looking no-op — but
-    # re-authoring it as NEW would launder the harm verdict away in the very
-    # call that issued it.
-    target = make_card()
-    store.save(target)
-    offer_neighbors(store, target)
-    gate = CardAdmissionGate(store=store, evictor=MarkEvictor({target.id}))
-    agent = FakeReconcileAgent(
-        ReconcileResponse(
-            items=[
-                item("MERGE", description="union v1", target_id=target.id),
-                item("MERGE", description="union v2", target_id=target.id),
-            ]
-        )
-    )
-    librarian = make_librarian(agent, gate=gate)
-    assert await ingest(librarian) == []
-    assert store.snapshot() == ()
 
 
 async def test_new_card_born_with_founding_event(store, make_librarian):
@@ -1007,22 +943,6 @@ async def test_admit_program_twin_replacement_writes_ledger_row(
     assert by_incoming["program-new"]["outcome"] == "added"
     assert by_incoming["program-old"]["outcome"] == "updated"
     assert by_incoming["program-old"]["final_id"] == "program-new"
-
-
-async def test_admit_program_harm_rejected_incoming_keeps_twin(
-    store, make_card, make_librarian
-):
-    # The twin must not be retired until the incoming exemplar actually lands:
-    # a harm-rejected incoming would otherwise take the banked twin down with
-    # it and leave no exemplar for that code at all.
-    twin = program_card(make_card, card_id="program-old", fitness=0.3)
-    store.save(twin)
-    gate = CardAdmissionGate(store=store, evictor=MarkEvictor({"program-new"}))
-    librarian = make_librarian(FakeReconcileAgent(), gate=gate)
-    incoming = program_card(make_card, card_id="program-new", fitness=0.6)
-    assert librarian.admit_program(incoming, higher_is_better=True) == ""
-    assert store.get(twin.id) is not None
-    assert store.get(incoming.id) is None
 
 
 def test_strictly_better_direction_table():

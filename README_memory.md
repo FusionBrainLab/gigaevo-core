@@ -8,26 +8,23 @@ reference, card anatomy, observability, workflows). Package internals:
 
 ```bash
 # Full memory within the same run (read + live writes, one shared bank):
-python run.py problem.name=heilbron pipeline=memory_guided memory=full memory/write=live
+python run.py problem.name=heilbron pipeline=memory_guided memory=v2
 
 # True no-memory baseline:
 python run.py problem.name=heilbron pipeline=guided memory=none
 
-# Two-pass: build a bank, then read it
-python run.py problem.name=heilbron pipeline=guided memory=writer \
+# Two-pass: build a bank on one run, reuse it on the next. Both runs use
+# memory=v2 and share checkpoint_dir; memory=v2 reads and refreshes the bank.
+python run.py problem.name=heilbron pipeline=guided memory=v2 \
     checkpoint_dir=outputs/memory_bank_01
-python run.py problem.name=heilbron pipeline=memory_guided memory=reader \
+python run.py problem.name=heilbron pipeline=memory_guided memory=v2 \
     checkpoint_dir=outputs/memory_bank_01
-
-# Static curated levers (no bank, no memory LLM):
-python run.py problem.name=heilbron pipeline=memory_guided memory=static \
-    memory.provider.levers_file=/abs/path/levers.md
 ```
 
-`memory={none,reader,writer,full,static}` is one Hydra knob; arms swap
-`_target_`s, while `memory/write={none,end_of_run,live}` chooses write cadence.
-`pipeline=guided` never reads external memory cards; `pipeline=memory_guided`
-does.
+`memory={none,v2}` is one Hydra knob; `memory=v2` swaps in the causal-bandit
+provider + live writer, while `memory/write={none,end_of_run,live}` chooses
+write cadence. `pipeline=guided` never reads external memory cards;
+`pipeline=memory_guided` does.
 
 The memory subsystem has its own LLM route. The default `memory/llm=gemini`
 uses OpenRouter and reads `OPENROUTER_API_KEY`; in-cluster/local setups can use
@@ -38,13 +35,13 @@ configured LiteLLM-compatible proxy.
 
 - Pipeline: [`config/pipeline/`](config/pipeline/) — `guided`, `memory_guided`, ...
 - Program format: [`config/program_format/`](config/program_format/) — `python_source`, `json_document`
-- Memory arms: [`config/memory/`](config/memory/) — `none`, `reader`, `writer`, `full`, `static`
-- Components: [`config/memory/`](config/memory/) subgroups — `llm`, `reputation`,
-  `auction`, `budget`, `excluder`, `evictor`
+- Memory arms: [`config/memory/`](config/memory/) — `none`, `v2`
+- Components: [`config/memory/`](config/memory/) subgroups — `llm`, `write`,
+  `excluder`, `evictor`, `applicability`, `context`
 
 ## Platform / API-backed memory (removed)
 
-The remote `gigaevo-memory` (Postgres + pgvector) backend was removed; only
-the local backend remains (`RemoteMemoryStore` is a skeleton awaiting the
-remote port). See [`README_memory_platform_run.md`](README_memory_platform_run.md)
+The remote `gigaevo-memory` (Postgres + pgvector) backend was removed, along
+with its `RemoteMemoryStore` skeleton (`gigaevo/memory/storage/remote.py`); only
+the local backend remains. See [`README_memory_platform_run.md`](README_memory_platform_run.md)
 for the tombstone.

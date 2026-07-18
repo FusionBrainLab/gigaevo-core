@@ -1,4 +1,0 @@
-# @package memory.budget
-# Theta-ranked budgeter: caps auction winners to max_cards by posterior theta
-# (pairs with `memory/auction=thompson`).
-_target_: gigaevo.memory.read.auction.TopThetaBudgeter

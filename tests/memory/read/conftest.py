@@ -46,14 +46,3 @@ def make_event():
         )
 
     return _make_event
-
-
-@pytest.fixture
-def captured_events(monkeypatch):
-    events: list = []
-    for module in (
-        "gigaevo.memory.read.reader",
-        "gigaevo.memory.read.auction",
-    ):
-        monkeypatch.setattr(f"{module}.emit_memory_event", events.append)
-    return events

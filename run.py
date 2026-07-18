@@ -15,12 +15,10 @@ from gigaevo.config.resolvers import register_resolvers
 from gigaevo.config.validation import (
     validate_algorithm_requirements,
     validate_archive_gate_pipeline_compat,
-    validate_crediting_pipeline_compat,
     validate_memory_pipeline_compat,
     validate_memory_v2_scope,
     validate_paired_selector_pipeline_compat,
     validate_program_format_pipeline_compat,
-    validate_reputation_island_compat,
 )
 from gigaevo.database.disk_program_storage import DiskProgramStorage
 from gigaevo.database.program_storage import ProgramStorage
@@ -55,13 +53,11 @@ async def run_experiment(cfg: DictConfig) -> None:
     writer: LogWriter | None = None
     causal_ledger: SqliteCausalLedger | None = None
     try:
-        validate_reputation_island_compat(cfg)
         validate_memory_pipeline_compat(cfg)
         validate_memory_v2_scope(cfg)
         validate_archive_gate_pipeline_compat(cfg)
         validate_program_format_pipeline_compat(cfg)
         validate_paired_selector_pipeline_compat(cfg)
-        validate_crediting_pipeline_compat(cfg)
         validate_algorithm_requirements(cfg)
         config_with_instances = instantiate(cfg, recursive=True)
         storage = cast(ProgramStorage, config_with_instances.program_storage)

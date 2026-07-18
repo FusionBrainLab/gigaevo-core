@@ -358,6 +358,16 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
             f"{WholeBankCandidateSource.__module__}."
             f"{WholeBankCandidateSource.__qualname__}"
         )
+
+        evictor_target = cfg.memory.evictor._target_
+        assert evictor_target.endswith("NullEvictor")
+        cfg.memory.evictor._target_ = (
+            "gigaevo.memory.write.eviction.BirthFailureEvictor"
+        )
+        with pytest.raises(ValueError, match="NullEvictor"):
+            validate_memory_v2_scope(cfg)
+        cfg.memory.evictor._target_ = evictor_target
+
         cfg.memory.feature_config.retrieval_applicability_contrast = False
         with pytest.raises(ValueError, match="retrieval_applicability_contrast"):
             validate_memory_v2_scope(cfg)

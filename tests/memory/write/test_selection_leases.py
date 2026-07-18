@@ -23,9 +23,7 @@ from gigaevo.memory.events import (
     MemoryResearchStep,
 )
 from gigaevo.memory.provider import LeasedMemoryProvider, MemoryProvider
-from gigaevo.memory.read.projection import AuctionCandidateProjector
 from gigaevo.memory.read.reader import MemorySelection
-from gigaevo.memory.read.reputation import BetaBinomialReputation
 import gigaevo.memory.selection_leases as selection_leases_module
 from gigaevo.memory.selection_leases import (
     InFlightSelectionRegistry,
@@ -338,40 +336,7 @@ async def test_provider_snapshots_prior_pending_count_before_current_attach(
     prior.attach_cards((card.id,))
     registry.open_attempt("attempt-current", current_parent.id)
 
-    class ProjectingProvider(FixedProvider):
-        def __init__(self):
-            super().__init__(
-                MemorySelection(cards=("pending text",), card_ids=(card.id,))
-            )
-            self.projected = []
-
-        async def select_cards(
-            self,
-            program,
-            *,
-            task_description,
-            metrics_description,
-            parent_context=None,
-            pending_counts=None,
-        ) -> MemorySelection:
-            self.projected.append(
-                AuctionCandidateProjector().project(
-                    card=card,
-                    block=None,
-                    reputation=BetaBinomialReputation(),
-                    context=None,
-                    pending_counts=pending_counts,
-                )
-            )
-            return await super().select_cards(
-                program,
-                task_description=task_description,
-                metrics_description=metrics_description,
-                parent_context=parent_context,
-                pending_counts=pending_counts,
-            )
-
-    inner = ProjectingProvider()
+    inner = FixedProvider(MemorySelection(cards=("pending text",), card_ids=(card.id,)))
     provider = LeasedMemoryProvider(provider=inner, store=store, registry=registry)
 
     selection = await provider.select_cards(
@@ -382,7 +347,6 @@ async def test_provider_snapshots_prior_pending_count_before_current_attach(
 
     assert selection.card_ids == (card.id,)
     assert inner.pending_counts_seen == [{card.id: 1}]
-    assert [candidate.pending_count for candidate in inner.projected] == [1]
     assert registry.pending_counts() == {card.id: 2}
 
 

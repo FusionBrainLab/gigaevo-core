@@ -169,17 +169,22 @@ class WriteLedger:
 
 
 class CardAdmissionGate:
-    """Harm gate + ledger over the card store.
+    """Write ledger over the card store; harm eviction lives in ``sweep``.
 
     Six methods make up the whole write-path admission surface:
     ``admit`` (new/known-id card), ``merge`` (synthesized union onto an existing
     card), ``bump_provenance`` (DUPLICATE-ruling provenance append, no LLM),
     ``reject_novelty`` (ledger a novelty-judge kill), ``retire_exemplar`` (delete
-    a non-harm superseded/pruned exemplar), and ``sweep`` (periodic harm
-    eviction). Every harm deletion also tombstones the id for the rest of the
-    run: the deletion destroys the very gain events the evictor's verdict
-    rested on, so a re-authored twin arrives evidence-free and would otherwise
-    churn evict → re-author → re-admit every sweep.
+    a non-harm superseded/pruned exemplar), and ``sweep`` (periodic eviction of
+    whatever the configured evictor flags). Harm is not pre-screened at author
+    time: ``admit``/``merge`` never consult the evictor, so ``sweep`` is the
+    single point where an eviction verdict is applied. The memory=v2 default
+    wires ``NullEvictor`` (no write-side harm eviction); harm control there is the
+    read-time policy, which declines to offer a confidently-harmful card. When an
+    evictor does flag a card, ``sweep`` tombstones its id for the rest of the run:
+    the deletion destroys the very gain events the verdict rested on, so a
+    re-authored twin arrives evidence-free and would otherwise churn evict →
+    re-author → re-admit every sweep.
     """
 
     def __init__(
@@ -235,20 +240,6 @@ class CardAdmissionGate:
                         WriteOutcome.REJECTED_CAPACITY,
                         f"active task card cap reached ({self._max_task_cards})",
                     )
-                if self._evictor.should_evict(card):
-                    reason = _eviction_reason(
-                        self._evictor,
-                        card,
-                        "injection posterior confidently harmful",
-                    )
-                    if incoming_id:
-                        self._tombstoned.add(incoming_id)
-                    return self._ledger_record(
-                        card,
-                        "",
-                        WriteOutcome.REJECTED_HARM,
-                        reason,
-                    )
                 final_id = self._store.save(card)
                 return self._ledger_record(
                     card,
@@ -257,14 +248,9 @@ class CardAdmissionGate:
                     "librarian-authored card",
                 )
 
-            harmful = False
-            leased = False
-            reason = ""
-
             def replace(fresh: Card) -> Card | None:
-                nonlocal harmful, leased, reason
                 base = fresh if self._preserve_survivor_payload else card
-                merged = base.model_copy(
+                return base.model_copy(
                     update={
                         "gain_events": union_events(
                             fresh.gain_events, card.gain_events
@@ -275,33 +261,10 @@ class CardAdmissionGate:
                         "programs": union_strings(fresh.programs, card.programs),
                     }
                 )
-                if not self._evictor.should_evict(merged):
-                    return merged
-                harmful = True
-                reason = _eviction_reason(
-                    self._evictor,
-                    merged,
-                    "injection posterior confidently harmful",
-                )
-                if self._is_leased(fresh.id):
-                    leased = True
-                    return fresh
-                return None
 
             saved = self._store.update(incoming_id, replace)
             if saved is None:
                 return _DISCARDED
-            if harmful:
-                if leased:
-                    self._log_leased_skip(incoming_id, reason)
-                else:
-                    self._tombstoned.add(incoming_id)
-                return self._ledger_record(
-                    card,
-                    "",
-                    WriteOutcome.REJECTED_HARM,
-                    reason,
-                )
             return self._ledger_record(
                 saved,
                 incoming_id,
@@ -315,13 +278,10 @@ class CardAdmissionGate:
             submitted_id = card.id
             fresh_target: Card | None = None
             merged: Card | None = None
-            submitted_banked = False
-            reason = ""
 
             def fold(target: Card, partner: Card | None) -> Card | None:
-                nonlocal fresh_target, merged, submitted_banked, reason
+                nonlocal fresh_target, merged
                 fresh_target = target
-                submitted_banked = partner is not None
                 if target.kind is not CardKind.INSIGHT:
                     raise MergeAborted
                 if partner is not None and self._is_leased(partner.id):
@@ -347,34 +307,13 @@ class CardAdmissionGate:
                     incoming,
                     replace_description=not self._preserve_survivor_payload,
                 )
-                if not self._evictor.should_evict(merged):
-                    return merged
-                reason = _eviction_reason(
-                    self._evictor, merged, "merged card confidently harmful"
-                )
-                if self._is_leased(target.id):
-                    self._log_leased_skip(target.id, reason)
-                    raise MergeAborted
-                return None
+                return merged
 
             result = self._store.merge_retire(target_id, submitted_id, fold)
             if result.outcome in {"target_missing", "aborted"}:
                 return _DISCARDED
             if fresh_target is None or merged is None:
                 raise RuntimeError("merge transaction completed without fold state")
-            if result.outcome == "retired":
-                self._tombstoned.add(target_id)
-                if submitted_banked:
-                    self._tombstoned.add(submitted_id)
-                self._ledger_record(fresh_target, "", WriteOutcome.EVICTED, reason)
-                return self._ledger_record(
-                    merged,
-                    "",
-                    WriteOutcome.REJECTED_HARM,
-                    reason,
-                    incoming_id=submitted_id,
-                    merge_targets=(target_id,),
-                )
             return self._ledger_record(
                 merged,
                 target_id,

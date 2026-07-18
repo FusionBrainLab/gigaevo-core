@@ -441,10 +441,7 @@ class MemoryGuidedMutationPipelineBuilder(GuidedMutationPipelineBuilder):
 
     Common pairings:
 
-        memory=reader           — read a pre-built bank; no writer.
-        memory=full             — read + end-of-run writer by default.
-        memory=full memory/write=live
-                                — read + live writer refresh.
+        memory=v2               — read + live writer refresh (default).
 
     Verify ``.hydra/config.yaml`` does not show ``NullMemoryProvider`` before
     trusting memory-guided results.

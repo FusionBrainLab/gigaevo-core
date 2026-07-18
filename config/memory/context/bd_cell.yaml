@@ -1,5 +1,0 @@
-# @package memory.context_model
-_target_: gigaevo.memory.context.models.BDCellMemoryContext
-behavior_space: ${ref:behavior_space}
-fallback:
-  _target_: gigaevo.memory.context.models.GlobalMemoryContext

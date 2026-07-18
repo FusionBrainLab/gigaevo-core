@@ -1,6 +1,14 @@
 # Memory Lifecycle Tutorial
 
-This tutorial explains the current external-memory system as an idea lifecycle:
+> **⚠️ v1 — superseded.** This tutorial describes the retired v1 memory system
+> (the `MemoryReader` auction/reputation/probe/eviction lifecycle), removed in
+> the memory-v1 removal. The live system is the contextual Bayesian **memory
+> v2**; its canonical reference is
+> [`memory_v2_bayesian_system_report.md`](memory_v2_bayesian_system_report.md).
+> The lifecycle below is kept for historical context and no longer matches the
+> current code. Full v1→v2 rewrite of this tutorial is pending.
+
+This tutorial explains the memory system as an idea lifecycle:
 how an idea becomes a card, how it is read, how it wins or loses the auction,
 how evidence is credited back to it, and how it can be merged, ignored, decay
 toward neutral, or be evicted.
@@ -1374,14 +1382,7 @@ a bad card to be selected three more times after it already looks bad.
 The fastest way to diagnose a run is to start with the reporting tools:
 
 ```bash
-python tools/memory_event_report.py <run-dir-or-memory-dir>
 python tools/memory_card_health.py <run-dir-or-memory-dir>
-
-# Shared-bank run: join run-local events with shared-bank card/ledger files.
-python tools/memory_event_report.py \
-  --events <run>/memory/memory_events.jsonl \
-  --cards <bank>/cards.json \
-  --write-ledger <bank>/write_ledger.jsonl
 
 # Shared-bank card-health audit.
 python tools/memory_card_health.py <bank>

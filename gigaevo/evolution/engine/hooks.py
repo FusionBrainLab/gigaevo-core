@@ -2,11 +2,11 @@
 
 ``PostRunHook`` is the ABC; concrete implementations are injected via Hydra.
 
-- ``NullPostRunHook`` — no-op (writer off: ``memory=none`` or ``memory=reader``)
+- ``NullPostRunHook`` — no-op (writer off: ``memory=none``)
 - ``IncrementalPostRunHook`` — abstract extension that also supports mid-run
   refreshes via ``run_increment`` (required by ``LiveMemoryRefreshHook``)
 - ``MemoryWriter`` — authors memory cards from run results (writer on:
-  ``memory=writer`` or ``memory=full``)
+  ``memory=v2``)
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class IncrementalPostRunHook(PostRunHook):
 
 
 class NullPostRunHook(PostRunHook):
-    """No-op hook. Default when the writer is off (``memory=none`` or ``memory=reader``)."""
+    """No-op hook. Default when the writer is off (``memory=none``)."""
 
     async def on_run_complete(self, storage: ProgramStorage) -> None:
         pass

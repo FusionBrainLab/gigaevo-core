@@ -292,9 +292,9 @@ class MemoryWriter(IncrementalPostRunHook):
 
     Args:
         llm: Memory LLM router for the librarian agents.
-        evictor: Eviction policy consulted by the admission gate — the default
-            config wires a composite over the read side's reputation;
-            ``memory/evictor=none`` uses ``NullEvictor``.
+        evictor: Eviction policy consulted by the gate's periodic ``sweep``. The
+            ``memory=v2`` config wires ``NullEvictor``, disabling write-side harm
+            eviction so harm control is the read-time policy alone.
         store: The one ``MemoryStore`` the run shares (``${ref:memory.store}``);
             the reader reads the same instance, so a write is visible to the
             next read with no cross-view sync.

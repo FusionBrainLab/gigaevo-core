@@ -134,36 +134,6 @@ def test_task_card_cap_must_be_positive(store):
         raise AssertionError("expected invalid card cap to be rejected")
 
 
-def test_admit_harmful_known_card_revalidates_union_and_deletes(
-    store, make_card, make_event, tmp_path
-):
-    banked_event = make_event(0.2, parent_id="banked")
-    submitted_event = make_event(-0.8, parent_id="submitted")
-    card = make_card(gain_events=(banked_event,))
-    store.save(card)
-    submitted = card.model_copy(update={"gain_events": (submitted_event,)})
-    evictor = MarkingEvictor({card.id})
-    gate, ledger = make_gate(store, tmp_path, evictor)
-
-    result = gate.admit(submitted)
-
-    assert result.rejected_harm
-    assert result.card_id == ""
-    assert not result.landed
-    assert store.get(card.id) is None
-    assert evictor.judged_cards[0].gain_events == (banked_event, submitted_event)
-    row = read_rows(ledger.path)[-1]
-    assert row.outcome is WriteOutcome.REJECTED_HARM
-    assert row.final_id == ""
-
-
-def test_admit_harmful_unknown_card_does_not_delete(store, make_card, tmp_path):
-    card = make_card()
-    gate, _ = make_gate(store, tmp_path, MarkingEvictor({card.id}))
-    assert gate.admit(card).rejected_harm
-    assert store.deleted_ids == []
-
-
 def test_sweep_does_not_delete_card_selected_by_in_flight_mutation(
     store, make_card, tmp_path
 ):
@@ -184,25 +154,6 @@ def test_sweep_does_not_delete_card_selected_by_in_flight_mutation(
     assert store.get(card.id) is not None
     lease.release()
     assert gate.sweep() == [card.id]
-
-
-def test_admit_does_not_harm_delete_leased_known_card(store, make_card):
-    card = make_card()
-    store.save(card)
-    registry = InFlightSelectionRegistry()
-    lease = registry.open_attempt("attempt-1", "parent-1")
-    lease.attach_cards((card.id,))
-    gate = CardAdmissionGate(
-        store=store,
-        evictor=MarkingEvictor({card.id}),
-        selection_leases=registry,
-    )
-
-    result = gate.admit(card)
-
-    assert result.rejected_harm
-    assert store.get(card.id) == card
-    assert not gate.is_tombstoned(card.id)
 
 
 def test_merge_missing_target_is_benign_noop(store, make_card, tmp_path):
@@ -274,40 +225,6 @@ def test_merge_skips_banked_leased_partner_before_fold(store, make_card):
     assert store.get(partner.id) == partner
 
 
-def test_merge_harmful_union_deletes_target(store, make_card, tmp_path):
-    target = make_card()
-    store.save(target)
-    incoming = make_card()
-    gate, ledger = make_gate(store, tmp_path, MarkingEvictor({target.id}))
-    result = gate.merge(target.id, incoming)
-    assert result.rejected_harm
-    assert result.card_id == ""
-    assert store.get(target.id) is None
-    row = read_rows(ledger.path)[-1]
-    assert row.outcome is WriteOutcome.REJECTED_HARM
-    assert row.incoming_id == incoming.id
-
-
-def test_merge_does_not_harm_delete_leased_target(store, make_card):
-    target = make_card()
-    incoming = make_card()
-    store.save(target)
-    registry = InFlightSelectionRegistry()
-    lease = registry.open_attempt("attempt-1", "parent-1")
-    lease.attach_cards((target.id,))
-    gate = CardAdmissionGate(
-        store=store,
-        evictor=MarkingEvictor({target.id}),
-        selection_leases=registry,
-    )
-
-    result = gate.merge(target.id, incoming)
-
-    assert result.outcome is WriteOutcome.DISCARDED
-    assert store.get(target.id) == target
-    assert not gate.is_tombstoned(target.id)
-
-
 def test_twin_retirement_skips_leased_program_card(store, make_card):
     twin = make_card(
         task_key="own-task",
@@ -355,51 +272,6 @@ def test_gate_without_registry_keeps_legacy_eviction_behavior(store, make_card):
 
     assert gate.sweep() == [card.id]
     assert store.get(card.id) is None
-
-
-def test_merge_harmful_union_deletes_banked_incoming(store, make_card, tmp_path):
-    target = make_card()
-    incoming = make_card()
-    store.save(target)
-    store.save(incoming)
-    gate, ledger = make_gate(store, tmp_path, MarkingEvictor({target.id}))
-
-    result = gate.merge(target.id, incoming)
-
-    assert result.rejected_harm
-    assert store.get(target.id) is None
-    assert store.get(incoming.id) is None
-    assert gate.is_tombstoned(target.id)
-    assert gate.is_tombstoned(incoming.id)
-    rows = read_rows(ledger.path)
-    assert [row.outcome for row in rows] == [
-        WriteOutcome.EVICTED,
-        WriteOutcome.REJECTED_HARM,
-    ]
-    assert rows[-1].incoming_id == incoming.id
-
-
-def test_merge_harmful_union_ledgers_target_eviction(store, make_card, tmp_path):
-    # The harm verdict destroys TWO cards: the banked target (deleted) and the
-    # submitted partner (rejected). Each needs its own ledger row or the
-    # target's disappearance is unexplained and the rejected row points at the
-    # wrong card's fate.
-    target = make_card()
-    store.save(target)
-    incoming = make_card()
-    gate, ledger = make_gate(store, tmp_path, MarkingEvictor({target.id}))
-    result = gate.merge(target.id, incoming)
-    assert result.rejected_harm
-    rows = read_rows(ledger.path)
-    assert [r.outcome for r in rows] == [
-        WriteOutcome.EVICTED,
-        WriteOutcome.REJECTED_HARM,
-    ]
-    evicted, rejected = rows
-    assert evicted.incoming_id == target.id
-    assert evicted.final_id == ""
-    assert rejected.incoming_id == incoming.id
-    assert rejected.merge_targets == (target.id,)
 
 
 def test_merge_onto_tombstoned_target_is_benign_noop(store, make_card, tmp_path):
@@ -589,29 +461,6 @@ def test_sweep_tombstones_id_against_readmission(store, make_card, tmp_path):
 
     fresh = gate.admit(make_card(id=""))
     assert fresh.outcome is WriteOutcome.ADDED
-
-
-def test_admit_harm_rejection_tombstones_id(store, make_card, tmp_path):
-    card = make_card()
-    store.save(card)
-    harmful = {card.id}
-    gate, _ = make_gate(store, tmp_path, MarkingEvictor(harmful))
-    assert gate.admit(card).rejected_harm
-    harmful.clear()
-    assert gate.admit(card).rejected_harm
-    assert store.get(card.id) is None
-
-
-def test_merge_harmful_union_tombstones_target(store, make_card, tmp_path):
-    target = make_card()
-    store.save(target)
-    harmful = {target.id}
-    gate, _ = make_gate(store, tmp_path, MarkingEvictor(harmful))
-    assert gate.merge(target.id, make_card()).rejected_harm
-    harmful.clear()
-    assert gate.admit(target).rejected_harm
-    assert store.get(target.id) is None
-    assert not gate.is_tombstoned("unrelated-id")
 
 
 def test_reject_novelty_records_row_and_does_not_bank(store, make_card, tmp_path):
