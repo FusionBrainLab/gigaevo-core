@@ -1,12 +1,22 @@
 specs:
   fitness:
-    description: Counterexample margin 1-Phi; positive is a real counterexample candidate
+    description: Robust counterexample margin 1-Phi-1e-10; positive clears the float64 candidate threshold
     decimals: 10
     is_primary: true
     higher_is_better: true
-    lower_bound: -9.0
+    lower_bound: -10.0
     upper_bound: 1.0
     include_in_prompts: true
+    significant_change: 0.0001
+    sentinel_value: -1000.0
+  raw_margin:
+    description: Exact mathematical margin 1-Phi before the numerical counterexample tolerance
+    decimals: 12
+    is_primary: false
+    higher_is_better: true
+    lower_bound: -9.0
+    upper_bound: 1.0
+    include_in_prompts: false
     significant_change: 0.0001
     sentinel_value: -1000.0
   phi:
@@ -30,13 +40,13 @@ specs:
     significant_change: 0.00001
     sentinel_value: 1000.0
   basis_density:
-    description: Fraction of the 252 subsets that are numerical matroid bases
+    description: Diversity descriptor only; fraction of subsets that are numerical matroid bases
     decimals: 6
     is_primary: false
     higher_is_better: true
     lower_bound: 0.0
     upper_bound: 1.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 0.02
     sentinel_value: -1.0
   numerical_basis_count:
@@ -50,23 +60,23 @@ specs:
     significant_change: 5.0
     sentinel_value: 0.0
   active_log_density:
-    description: log(active_count)/log(252), where active means at least 95 percent of the maximum subset score
+    description: Diversity descriptor only; log(active_count)/log(252) for the 95-percent active set
     decimals: 6
     is_primary: false
     higher_is_better: true
     lower_bound: 0.0
     upper_bound: 1.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 0.02
     sentinel_value: -1.0
   active_count:
-    description: Number of subsets within 95 percent of the maximum subset score
+    description: Diversity diagnostic; number of subsets within 95 percent of the maximum subset score
     decimals: 0
     is_primary: false
     higher_is_better: true
     lower_bound: 1.0
     upper_bound: 252.0
-    include_in_prompts: true
+    include_in_prompts: false
     significant_change: 2.0
     sentinel_value: 0.0
   leverage_cv:

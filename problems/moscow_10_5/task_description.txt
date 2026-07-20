@@ -14,13 +14,20 @@ so A.T @ A = I_5.  For every 5-element row set S, it computes
 All C(10, 5) = 252 subsets are exhaustively enumerated in float64.  Define
 
     Phi(A) = 10 * max_{|S|=5} score(S)
-    fitness = 1 - Phi(A).
+    raw_margin = 1 - Phi(A)
+    fitness = raw_margin - 1e-10.
 
 The real Moscow conjecture predicts Phi(A) >= 1 for every A.  Therefore:
 
-  - fitness > 0 (equivalently Phi < 1) is a counterexample candidate;
-  - fitness = 0 is a sharp equality construction;
+  - raw_margin > 0 (equivalently Phi < 1) is the exact mathematical criterion;
+  - fitness > 0 means the result clears a 1e-10 float64 safety threshold and
+    is a numerical counterexample candidate;
+  - Phi = 1 is a sharp equality construction;
   - higher fitness is always better.
+
+The safety subtraction is constant, so it does not change candidate rankings.
+Any numerical candidate still requires independent high-precision verification
+before it can be claimed as a mathematical counterexample.
 
 Do not optimize just one chosen submatrix.  The objective is the maximum over
 all 252 subsets: lowering one active subset usually exposes another.
@@ -34,8 +41,9 @@ Implement:
 
 Return a finite NumPy-compatible array with shape exactly (10, 5).  It must be
 numerically full rank in float64.  Returning an orthonormal matrix is preferred,
-but not required.  The validator canonicalizes the column space, so the
-following do not change fitness:
+but not required.  Provided the resulting representation remains numerically
+recoverable, the validator canonicalizes the column space, so the following do
+not change fitness:
 
   - multiplying all entries by a nonzero scalar;
   - right-multiplying by an invertible 5 x 5 matrix;

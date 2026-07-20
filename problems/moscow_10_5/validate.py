@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from helper import NUM_SUBSETS, analyze_candidate
+from helper import COUNTEREXAMPLE_TOL, NUM_SUBSETS, analyze_candidate
 import numpy as np
 
 
 def validate(candidate: object):
     """Exactly evaluate all C(10, 5) = 252 square row submatrices.
 
-    Fitness is ``1 - Phi``, where
+    The exact Moscow margin is ``1 - Phi``, where
 
         Phi = 10 * max_S sigma_min(Q[S, :])**2
 
-    and Q is an orthonormal basis for the returned column space.  A genuine
-    counterexample has positive fitness.  Equality examples have fitness zero.
+    and Q is an orthonormal basis for the returned column space.  The primary
+    fitness subtracts ``COUNTEREXAMPLE_TOL`` from that raw margin.  This does
+    not change rankings, and positive fitness then means the float64 result
+    clears the numerical counterexample threshold.
     """
 
     analysis = analyze_candidate(candidate)
@@ -22,6 +24,7 @@ def validate(candidate: object):
     metrics = {
         "fitness": analysis.fitness,
         "phi": analysis.phi,
+        "raw_margin": analysis.raw_margin,
         "max_min_eigenvalue": analysis.max_min_eigenvalue,
         "basis_density": analysis.basis_density,
         "numerical_basis_count": float(analysis.numerical_basis_count),
@@ -37,13 +40,13 @@ def validate(candidate: object):
     top_values = [float(10.0 * analysis.subset_scores[index]) for index in top_indices]
     one_based_subset = tuple(index + 1 for index in analysis.best_subset)
     verdict = (
-        "COUNTEREXAMPLE CANDIDATE"
-        if analysis.fitness > 1.0e-10
-        else "no counterexample"
+        "COUNTEREXAMPLE CANDIDATE" if analysis.fitness > 0.0 else "no counterexample"
     )
     feedback = (
         f"{verdict}: Phi={analysis.phi:.12g}, "
-        f"fitness=1-Phi={analysis.fitness:.12g}. "
+        f"raw margin=1-Phi={analysis.raw_margin:.12g}, "
+        f"robust fitness=raw margin-{COUNTEREXAMPLE_TOL:.1e}"
+        f"={analysis.fitness:.12g}. "
         f"Best row subset (1-based)={one_based_subset}; "
         f"top five normalized subset values={top_values}. "
         f"Near-active subsets={analysis.active_count}/{NUM_SUBSETS}; "

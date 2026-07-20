@@ -24,6 +24,10 @@ SUBSETS = np.asarray(
 RELATIVE_RANK_TOL = 1.0e-12
 NUMERICAL_BASIS_EIGENVALUE_TOL = 1.0e-10
 NEAR_ACTIVE_FRACTION = 0.95
+# A float64 score must clear this margin before feedback calls it a numerical
+# counterexample candidate.  Subtracting a constant from the primary fitness
+# leaves every candidate ranking unchanged.
+COUNTEREXAMPLE_TOL = 1.0e-10
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,7 @@ class MoscowAnalysis:
     best_subset: tuple[int, ...]
     max_min_eigenvalue: float
     phi: float
+    raw_margin: float
     fitness: float
     numerical_basis_count: int
     basis_density: float
@@ -137,7 +142,14 @@ def analyze_candidate(candidate: object) -> MoscowAnalysis:
     best_subset_index = int(np.argmax(subset_scores))
     max_min_eigenvalue = float(subset_scores[best_subset_index])
     phi = float(np.clip(N_ROWS * max_min_eigenvalue, 0.0, float(N_ROWS)))
-    fitness = float(np.clip(1.0 - phi, 1.0 - N_ROWS, 1.0))
+    raw_margin = float(np.clip(1.0 - phi, 1.0 - N_ROWS, 1.0))
+    fitness = float(
+        np.clip(
+            raw_margin - COUNTEREXAMPLE_TOL,
+            -float(N_ROWS),
+            1.0,
+        )
+    )
 
     numerical_basis_count = int(
         np.count_nonzero(
@@ -170,6 +182,7 @@ def analyze_candidate(candidate: object) -> MoscowAnalysis:
         best_subset=tuple(int(i) for i in SUBSETS[best_subset_index]),
         max_min_eigenvalue=max_min_eigenvalue,
         phi=phi,
+        raw_margin=raw_margin,
         fitness=fitness,
         numerical_basis_count=numerical_basis_count,
         basis_density=basis_density,

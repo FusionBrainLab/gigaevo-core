@@ -7,11 +7,13 @@ import math
 from pathlib import Path
 import sys
 
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
+from hydra.utils import instantiate
 import numpy as np
 import pytest
 import yaml
 
-from gigaevo.config.helpers import build_behavior_space
 from gigaevo.problems.context import ProblemContext
 from gigaevo.programs.core_types import ProgramStageResult
 from gigaevo.programs.program import Program
@@ -63,7 +65,7 @@ def test_problem_bundle_and_metric_contract() -> None:
     context.validate()
 
     assert context.metrics_context.get_primary_key() == "fitness"
-    assert context.metrics_context.get_bounds("fitness") == (-9.0, 1.0)
+    assert context.metrics_context.get_bounds("fitness") == (-10.0, 1.0)
     assert "active_log_density" in context.metrics_context.specs
     assert len(SEED_PATHS) == 5
 
@@ -126,10 +128,23 @@ def test_series_parallel_seed_is_exact_equality_regression(
     metrics, _ = validator.validate(seed.entrypoint())
 
     assert metrics["phi"] == pytest.approx(1.0, abs=5.0e-13)
-    assert metrics["fitness"] == pytest.approx(0.0, abs=5.0e-13)
+    assert metrics["raw_margin"] == pytest.approx(0.0, abs=5.0e-13)
+    assert metrics["fitness"] == pytest.approx(
+        -helper.COUNTEREXAMPLE_TOL,
+        abs=5.0e-13,
+    )
     assert metrics["numerical_basis_count"] == 64.0
     assert metrics["basis_density"] == pytest.approx(64 / helper.NUM_SUBSETS)
     assert metrics["active_count"] == 64.0
+
+    analysis = helper.analyze_candidate(seed.entrypoint())
+    positive_scores = analysis.subset_scores[
+        analysis.subset_scores > helper.NUMERICAL_BASIS_EIGENVALUE_TOL
+    ]
+    assert positive_scores == pytest.approx(
+        np.full(64, 0.1),
+        abs=5.0e-13,
+    )
 
 
 def test_score_depends_only_on_the_subspace(problem_modules) -> None:
@@ -154,6 +169,65 @@ def test_score_depends_only_on_the_subspace(problem_modules) -> None:
         np.sort(reference.subset_scores),
         abs=2.0e-13,
     )
+
+
+def test_orthogonal_complement_self_duality(problem_modules) -> None:
+    helper, _ = problem_modules
+    rng = np.random.default_rng(2027)
+    matrix = rng.standard_normal((10, 5))
+    analysis = helper.analyze_candidate(matrix)
+
+    _, _, right_vectors_t = np.linalg.svd(
+        analysis.basis.T,
+        full_matrices=True,
+    )
+    complement_basis = right_vectors_t[5:].T
+    complement = helper.analyze_candidate(complement_basis)
+
+    complement_lookup = {
+        tuple(int(index) for index in subset): subset_index
+        for subset_index, subset in enumerate(helper.SUBSETS)
+    }
+    all_rows = frozenset(range(helper.N_ROWS))
+    for subset_index, subset in enumerate(helper.SUBSETS):
+        other_rows = tuple(sorted(all_rows.difference(int(index) for index in subset)))
+        other_index = complement_lookup[other_rows]
+        assert analysis.subset_scores[subset_index] == pytest.approx(
+            complement.subset_scores[other_index],
+            abs=5.0e-13,
+        )
+
+    assert complement.phi == pytest.approx(analysis.phi, abs=5.0e-13)
+    assert complement.numerical_basis_count == analysis.numerical_basis_count
+    assert complement.active_count == analysis.active_count
+
+
+def test_initial_programs_are_deterministic_and_cover_distinct_cells(
+    problem_modules,
+) -> None:
+    _, validator = problem_modules
+    cells: set[tuple[int, int]] = set()
+
+    for seed_index, seed_path in enumerate(SEED_PATHS):
+        seed = _load_module(
+            f"_test_moscow_10_5_determinism_seed_{seed_index}",
+            seed_path,
+        )
+        first = seed.entrypoint()
+        second = seed.entrypoint()
+        assert np.array_equal(first, second)
+
+        first_metrics, _ = validator.validate(first)
+        second_metrics, _ = validator.validate(second)
+        assert first_metrics == second_metrics
+        cells.add(
+            (
+                min(9, int(first_metrics["basis_density"] * 10)),
+                min(9, int(first_metrics["active_log_density"] * 10)),
+            )
+        )
+
+    assert len(cells) == len(SEED_PATHS) == 5
 
 
 @pytest.mark.parametrize(
@@ -187,11 +261,33 @@ def test_qd_preset_is_fixed_at_exactly_100_cells() -> None:
     assert behavior["dynamic"] is False
     assert config["islands"][0]["max_size"] == 100
 
-    space = build_behavior_space(
-        keys=behavior["keys"],
-        bounds=[tuple(bounds) for bounds in behavior["bounds"]],
-        resolutions=behavior["resolutions"],
-        binning_types=behavior["binning_types"],
-        dynamic=behavior["dynamic"],
-    )
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(
+            config_dir=str((REPO_ROOT / "config").absolute()),
+            version_base=None,
+        ):
+            composed = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=moscow_10_5",
+                    "algorithm=moscow_10_5_qd",
+                ],
+            )
+        space = instantiate(composed.behavior_space)
+    finally:
+        GlobalHydra.instance().clear()
+
     assert space.total_cells == 100
+    assert space.get_cell(
+        {
+            "basis_density": 0.0,
+            "active_log_density": 0.0,
+        }
+    ) == (0, 0)
+    assert space.get_cell(
+        {
+            "basis_density": 1.0,
+            "active_log_density": 1.0,
+        }
+    ) == (9, 9)
