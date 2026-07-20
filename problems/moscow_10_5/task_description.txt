@@ -64,20 +64,6 @@ The following are available from helper.py:
 The main feedback reports Phi, the best row subset, the five largest normalized
 subset values, the near-active count, basis count, and leverage distribution.
 
-MAP-ELITES BEHAVIOR SPACE
-
-The supplied algorithm preset uses a fixed 10 x 10 archive (100 cells):
-
-  1. basis_density in [0, 1]: the fraction of row subsets whose minimum
-     projector eigenvalue exceeds 1e-10.  This separates sparse/graphic
-     matroids from generic uniform ones.
-  2. active_log_density in [0, 1]: log(active_count) / log(252), where a
-     subset is near-active if its score is at least 95% of the maximum.
-     Log scaling distinguishes the usually small active-set counts.
-
-Both axes are descriptors, not substitute objectives.  Fitness still decides
-the elite within every cell.
-
 PROMISING SEARCH DIRECTIONS
 
   - Perturb the supplied series-parallel equality example into nearby dense
@@ -100,9 +86,3 @@ COMMON FAILURE MODES
     scores.
   - Declaring a tiny floating-point fluctuation around Phi=1 a counterexample.
     Seek a clear positive fitness margin and then verify at higher precision.
-
-RUN PRESET
-
-Select the problem and its 100-cell behavior space with:
-
-    problem.name=moscow_10_5 algorithm=moscow_10_5_qd
