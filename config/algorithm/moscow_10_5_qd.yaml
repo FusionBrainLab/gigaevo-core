@@ -1,0 +1,52 @@
+# @package _global_
+
+defaults:
+  - _base
+
+# Fixed 10 x 10 = 100-cell MAP-Elites archive for the Moscow (10, 5) search.
+# active_log_density is already log-transformed by validate.py, so both axes
+# use ordinary linear bins here.
+behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - basis_density
+    - active_log_density
+  bounds:
+    - [0.0, 1.0]
+    - [0.0, 1.0]
+  resolutions:
+    - 10
+    - 10
+  binning_types:
+    - linear
+    - linear
+  dynamic: false
+
+islands:
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: ${island_id}
+    max_size: 100
+    behavior_space: ${ref:behavior_space}
+    archive_selector: ${archive_selector}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessProportionalTournamentEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migration_rate: ${migration_rate}
+
+evolution_strategy:
+  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
+  island_configs: ${islands}
+  program_storage: ${ref:program_storage}
+  archive_storage_factory: ${ref:archive_storage_factory}
+  migration_interval: ${migration_interval}
+  enable_migration: ${enable_migration}
+  max_migrants_per_island: ${max_migrants_per_island}

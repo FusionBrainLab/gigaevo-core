@@ -1,0 +1,100 @@
+TASK DEFINITION — REAL MOSCOW PROBLEM COUNTEREXAMPLE SEARCH, (n, r) = (10, 5)
+
+Return a real 10 x 5 full-column-rank matrix whose column space makes every
+5 x 5 coordinate submatrix unusually ill-conditioned.
+
+MATHEMATICAL OBJECTIVE
+
+The validator replaces your matrix X by an orthonormal basis A for range(X),
+so A.T @ A = I_5.  For every 5-element row set S, it computes
+
+    score(S) = sigma_min(A[S, :])^2
+             = lambda_min(P[S, S]),       P = A @ A.T.
+
+All C(10, 5) = 252 subsets are exhaustively enumerated in float64.  Define
+
+    Phi(A) = 10 * max_{|S|=5} score(S)
+    fitness = 1 - Phi(A).
+
+The real Moscow conjecture predicts Phi(A) >= 1 for every A.  Therefore:
+
+  - fitness > 0 (equivalently Phi < 1) is a counterexample candidate;
+  - fitness = 0 is a sharp equality construction;
+  - higher fitness is always better.
+
+Do not optimize just one chosen submatrix.  The objective is the maximum over
+all 252 subsets: lowering one active subset usually exposes another.
+
+OUTPUT CONTRACT
+
+Implement:
+
+    def entrypoint() -> numpy.ndarray:
+        ...
+
+Return a finite NumPy-compatible array with shape exactly (10, 5).  It must be
+numerically full rank in float64.  Returning an orthonormal matrix is preferred,
+but not required.  The validator canonicalizes the column space, so the
+following do not change fitness:
+
+  - multiplying all entries by a nonzero scalar;
+  - right-multiplying by an invertible 5 x 5 matrix;
+  - choosing a different basis for the same column space.
+
+This prevents artificial gains from column scaling or ill-conditioning.
+Fix random seeds in stochastic programs so evaluations are reproducible.
+
+EXACT VALIDATOR AND HELPERS
+
+The following are available from helper.py:
+
+  - SUBSETS: the (252, 5) array of zero-based row subsets;
+  - orthonormal_basis(X): stable canonicalization of a candidate;
+  - subset_min_eigenvalues_from_basis(A): all 252 subset scores;
+  - analyze_candidate(X): the complete exact analysis used by validate.py.
+
+The main feedback reports Phi, the best row subset, the five largest normalized
+subset values, the near-active count, basis count, and leverage distribution.
+
+MAP-ELITES BEHAVIOR SPACE
+
+The supplied algorithm preset uses a fixed 10 x 10 archive (100 cells):
+
+  1. basis_density in [0, 1]: the fraction of row subsets whose minimum
+     projector eigenvalue exceeds 1e-10.  This separates sparse/graphic
+     matroids from generic uniform ones.
+  2. active_log_density in [0, 1]: log(active_count) / log(252), where a
+     subset is near-active if its score is at least 95% of the maximum.
+     Log scaling distinguishes the usually small active-set counts.
+
+Both axes are descriptors, not substitute objectives.  Fitness still decides
+the elite within every cell.
+
+PROMISING SEARCH DIRECTIONS
+
+  - Perturb the supplied series-parallel equality example into nearby dense
+    subspaces and optimize the newly exposed active constraints.
+  - Use Grassmann/Stiefel updates.  After a step on A, re-orthonormalize with
+    QR or SVD; optimize the subspace rather than its arbitrary basis.
+  - Smooth the max with log-sum-exp, anneal the temperature, then finish with
+    exact active-set or bundle-style steps.
+  - Explore graphic/cographic, regular-matroid, block, and glued constructions.
+    At (10, 5), orthogonal complementation is self-dual and complementary
+    5-subsets provide a useful symmetry check.
+  - Balance row leverage scores only as a heuristic.  Equal leverage alone
+    does not control the worst 5 x 5 submatrix.
+
+COMMON FAILURE MODES
+
+  - Rank-deficient matrices, duplicated effective columns, NaN, or infinity.
+  - Apparent gains produced only by an ill-conditioned output basis.
+  - Surrogate-only progress that does not reduce the exact maximum of all 252
+    scores.
+  - Declaring a tiny floating-point fluctuation around Phi=1 a counterexample.
+    Seek a clear positive fitness margin and then verify at higher precision.
+
+RUN PRESET
+
+Select the problem and its 100-cell behavior space with:
+
+    problem.name=moscow_10_5 algorithm=moscow_10_5_qd
