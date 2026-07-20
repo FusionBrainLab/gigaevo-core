@@ -51,6 +51,7 @@ async def test_author_returns_at_most_one_candidate_and_renders_outcome() -> Non
         metrics_description=(
             '- quality: objective score (↑ better; [0.0, 1.0] range; unit="points")'
         ),
+        fitness_key="quality",
     )
 
     result = await agent.arun(
@@ -81,6 +82,8 @@ async def test_author_returns_at_most_one_candidate_and_renders_outcome() -> Non
         assert marker in prompt
     assert "--- base_parent.py" in prompt
     assert "+++ child.py" in prompt
+    assert "Parent fitness (quality): 0.4" in prompt
+    assert "Child fitness (quality): 0.6" in prompt
 
 
 @pytest.mark.asyncio
@@ -89,6 +92,7 @@ async def test_drop_has_no_card() -> None:
         FakeLlm(response(WriteDecision.DROP)),
         task_description="task",
         metrics_description="- score: objective (↓ better)",
+        fitness_key="score",
     )
     result = await agent.arun(
         base_parent_code="x = 1",

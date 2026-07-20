@@ -100,6 +100,7 @@ class CalibrationDecision:
     policy: PolicySpecification
     applicability: ApplicabilityRecord
     card_kind_contrast: bool
+    citation_contrast: bool
 
     @property
     def proposed_card(self) -> CardSnapshot | None:
@@ -237,6 +238,7 @@ def _parse_decision(payload: dict[str, Any]) -> CalibrationDecision:
         policy=PolicySpecification.model_validate(payload["policy"]),
         applicability=ApplicabilityRecord.model_validate(payload["applicability"]),
         card_kind_contrast=bool(payload["card_kind_contrast"]),
+        citation_contrast=bool(payload.get("citation_contrast", False)),
     )
 
 
@@ -345,6 +347,9 @@ def load_calibration_trajectory(path: str | Path) -> CalibrationTrajectory:
                 context=decision.context,
                 rag_applicability=decision.rag_applicability(card.bank_card_id),
                 treatment=decision.delivered,
+                card_used=(
+                    decision.delivered and card.bank_card_id in terminal.used_card_ids
+                ),
                 offer_propensity=offer_probability,
                 proposal_propensity=proposal_probability,
                 joint_action_propensity=joint_action_probability,
@@ -406,6 +411,7 @@ def _prepare_units(
                     retrieval_applicability_contrast=(
                         decision.applicability.specification.retrieval_applicability_contrast
                     ),
+                    citation_contrast=decision.citation_contrast,
                 ),
                 cards,
             )
@@ -416,6 +422,7 @@ def _prepare_units(
                         row.context,
                         row.treatment,
                         rag_contrast=row.rag_applicability.contrast,
+                        use_contrast=row.use_contrast,
                     )
                     for row in history
                 ],

@@ -116,6 +116,7 @@ def posterior_model() -> HierarchicalTerminalUtilityPosterior:
         feature_map=HierarchicalFeatureMap(
             config=FeatureConfig(
                 behavior_keys=("hop_depth", "passages_fetched", "instr_chars"),
+                citation_contrast=True,
             )
         ),
         config=TerminalUtilityPosteriorConfig(),
@@ -135,7 +136,7 @@ def synthetic_observations(
     good, bad = revisions
     for card in revisions:
         for treatment in (False, True):
-            for _ in range(per_arm):
+            for repeat in range(per_arm):
                 invalid_probability = (
                     (0.82 if treatment else 0.04) if card is bad else 0.04
                 )
@@ -149,6 +150,7 @@ def synthetic_observations(
                         card=card,
                         context=context,
                         treatment=treatment,
+                        card_used=treatment and repeat % 2 == 0,
                         offer_propensity=0.5,
                         proposal_propensity=0.5,
                         joint_action_propensity=0.25,

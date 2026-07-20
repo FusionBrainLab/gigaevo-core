@@ -271,6 +271,7 @@ def create_card_author_agent(
     llm: ChatOpenAI | MultiModelRouter,
     task_description: str,
     metrics_description: str,
+    fitness_key: str,
     prompts_dir: str | Path | None = None,
 ) -> CardAuthorAgent:
     """Create the mutation-outcome card author."""
@@ -284,6 +285,7 @@ def create_card_author_agent(
         llm=llm,
         system_prompt=system_prompt,
         user_prompt_template=user_template,
+        fitness_key=fitness_key,
     )
 
 
@@ -322,7 +324,7 @@ def create_equivalence_agent(
     task_description: str,
     prompts_dir: str | Path | None = None,
 ) -> EquivalenceAgent:
-    """Create the strict same-action/same-condition equivalence judge."""
+    """Create the strict-insight / strategy-family equivalence judge."""
     system_template = EquivalencePrompts.system(prompts_dir=prompts_dir)
     user_template = EquivalencePrompts.user(prompts_dir=prompts_dir)
     system_prompt = system_template.format(task_description=task_description)

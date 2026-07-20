@@ -88,12 +88,13 @@ class _Excluder:
 async def _snapshot(
     source: WholeBankCandidateSource,
     *,
+    task_key: str = "task",
     research: ResearchResult | None = None,
     pending_by_bank_card: dict[str, int] | None = None,
 ):
     return await source.candidate_snapshot(
         Program(id=_PARENT_ID, code="pass"),
-        task_key="task",
+        task_key=task_key,
         task_description="task",
         metrics_description="score",
         parent_context="live state",
@@ -163,6 +164,34 @@ async def test_candidate_source_is_same_task_by_default() -> None:
         "foreign",
         "local",
     )
+
+
+@pytest.mark.asyncio
+async def test_same_task_source_refuses_unscoped_query_and_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "gigaevo.memory_v2.candidates.logger.warning",
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    cards = (
+        Card(id="local", task_key="task", description="local idea"),
+        Card(id="unscoped", task_key="", description="unknown task"),
+    )
+    source = WholeBankCandidateSource(  # type: ignore[arg-type]
+        store=_Store(cards),
+        allow_cross_task=False,
+    )
+
+    scoped = await _snapshot(source)
+    unscoped = await _snapshot(source, task_key="")
+
+    assert tuple(card.id for card in scoped.candidates) == ("local",)
+    assert unscoped.candidates == ()
+    assert source._warned_empty_task_keys == {"card", "query"}
+    assert any("refusing 1 unscoped candidate(s)" in warning for warning in warnings)
+    assert any("refusing 2 unscoped candidate(s)" in warning for warning in warnings)
 
 
 @pytest.mark.asyncio

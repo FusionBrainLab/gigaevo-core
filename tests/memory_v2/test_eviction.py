@@ -43,6 +43,7 @@ class _FittedPosterior:
     def __init__(self, viability) -> None:
         self.viability = viability
         self.applicability_states: list[RagApplicability] = []
+        self.context_fitnesses: list[float] = []
         self.minimum_helpful_effects: list[float] = []
         self.safety_integration_error = 0.0
         self.prediction_error: Exception | None = None
@@ -51,12 +52,20 @@ class _FittedPosterior:
         if self.prediction_error is not None:
             raise self.prediction_error
         applicability = kwargs["rag_applicability"]
+        context = _args[1]
         self.applicability_states.append(applicability)
+        self.context_fitnesses.append(
+            context.parent_metrics[context.reward.primary_metric]
+        )
         self.minimum_helpful_effects.append(kwargs["minimum_helpful_effect"])
         probability = (
-            self.viability[applicability]
-            if isinstance(self.viability, dict)
-            else self.viability
+            self.viability(context, applicability)
+            if callable(self.viability)
+            else (
+                self.viability[applicability]
+                if isinstance(self.viability, dict)
+                else self.viability
+            )
         )
         return SimpleNamespace(
             probability_safe_and_helpful=probability,
@@ -97,6 +106,7 @@ def _observation(
             }
         ),
         treatment=treated,
+        card_used=treated,
         offer_propensity=0.5,
         proposal_propensity=1.0,
         joint_action_propensity=0.5,
@@ -133,6 +143,32 @@ def _evidence(
     )
 
 
+def _with_first_map_cell_fitness(
+    evidence: EvidenceSnapshot,
+    fitness: float,
+) -> EvidenceSnapshot:
+    observations = tuple(
+        (
+            row.model_copy(
+                update={
+                    "context": row.context.model_copy(
+                        update={
+                            "parent_metrics": {
+                                **row.context.parent_metrics,
+                                row.context.reward.primary_metric: fitness,
+                            }
+                        }
+                    )
+                }
+            )
+            if row.event_ordinal < 2
+            else row
+        )
+        for row in evidence.observations
+    )
+    return evidence.model_copy(update={"observations": observations})
+
+
 def _evictor(
     ledger: _Ledger,
     viability,
@@ -163,7 +199,7 @@ def test_supported_nonviable_revision_gets_one_shot_verdict(
     assert not evictor.should_evict(card)
 
 
-def test_verdict_fails_closed_when_evidence_or_card_revision_changes(
+def test_verdict_ignores_audit_only_change_but_revalidates_model_and_card(
     evolution_context: EvolutionContext,
 ) -> None:
     card = Card(id="bad", task_key="task", description="bad treatment")
@@ -173,9 +209,23 @@ def test_verdict_fails_closed_when_evidence_or_card_revision_changes(
 
     assert evictor.sweep((card,)) == [card.id]
     ledger.evidence = ledger.evidence.model_copy(update={"version": "changed"})
-    assert not evictor.should_evict(card)
+    assert evictor.should_evict(card)
 
     ledger.evidence = _evidence(revision, evolution_context, version="fresh")
+    assert evictor.sweep((card,)) == [card.id]
+    ledger.evidence = ledger.evidence.model_copy(
+        update={"model_version": "changed-model"}
+    )
+    assert not evictor.should_evict(card)
+
+    ledger.evidence = _evidence(revision, evolution_context, version="pending-sweep")
+    assert evictor.sweep((card,)) == [card.id]
+    ledger.evidence = ledger.evidence.model_copy(
+        update={"pending_by_bank_card": {card.id: 1}}
+    )
+    assert not evictor.should_evict(card)
+
+    ledger.evidence = _evidence(revision, evolution_context, version="new-sweep")
     assert evictor.sweep((card,)) == [card.id]
     changed = card.model_copy(update={"description": "changed treatment"})
     assert not evictor.should_evict(changed)
@@ -272,6 +322,28 @@ def test_support_gates_block_below_treated_or_control_minimum(
     assert _evictor(_Ledger(one_control), viability=0.0)[0].sweep((card,)) == []
 
 
+def test_uncited_treatments_supply_retirement_support(
+    evolution_context: EvolutionContext,
+) -> None:
+    """Delivered-but-uncited randomized evidence retires a card that never earns
+    citations, instead of leaving it immortal (intention-to-treat support)."""
+
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    evidence = _evidence(revision, evolution_context)
+    observations = tuple(
+        row.model_copy(update={"card_used": False}) if row.treatment else row
+        for row in evidence.observations
+    )
+    evictor, _ = _evictor(
+        _Ledger(evidence.model_copy(update={"observations": observations})),
+        viability=0.0,
+        min_distinct_contexts=1,
+    )
+
+    assert evictor.sweep((card,)) == [card.id]
+
+
 def test_iteration_changes_inside_one_map_cell_are_not_distinct_contexts(
     evolution_context: EvolutionContext,
 ) -> None:
@@ -295,7 +367,13 @@ def test_iteration_changes_inside_one_map_cell_are_not_distinct_contexts(
 
 def test_fit_and_prediction_failures_keep_cards(
     evolution_context: EvolutionContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "gigaevo.memory_v2.eviction.logger.warning",
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
     card = Card(id="card", task_key="task", description="candidate")
     revision = CardSnapshot.from_card(card)
     ledger = _Ledger(_evidence(revision, evolution_context))
@@ -307,6 +385,7 @@ def test_fit_and_prediction_failures_keep_cards(
     integration_evictor, integration_posterior = _evictor(ledger, viability=0.0)
     integration_posterior.fitted.safety_integration_error = 1.0
     assert integration_evictor.sweep((card,)) == []
+    assert any("safety integration failed closed" in warning for warning in warnings)
 
     prediction_evictor, prediction_posterior = _evictor(ledger, viability=0.0)
     prediction_posterior.fitted.prediction_error = PosteriorFitError("bad prediction")
@@ -335,7 +414,100 @@ def test_practical_threshold_tracks_randomized_control_gain_scale(
     assert evictor._practical_effect_threshold(observations) == pytest.approx(0.0026)
 
 
-def test_context_without_practical_headroom_cannot_certify_retirement(
+@pytest.mark.parametrize(
+    ("control_values", "min_global_control", "expected"),
+    (
+        ((0.0, 0.0), 1, 0.0),
+        ((0.0, 0.008), 1, 0.008),
+        ((0.0, 0.008), 2, 0.0),
+    ),
+)
+def test_practical_threshold_requires_enough_nonzero_measured_controls(
+    evolution_context: EvolutionContext,
+    control_values: tuple[float, float],
+    min_global_control: int,
+    expected: float,
+) -> None:
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    evidence = _evidence(revision, evolution_context)
+    controls = iter(control_values)
+    observations = [
+        (
+            row.model_copy(
+                update={
+                    "measurement": row.measurement.model_copy(
+                        update={"value": next(controls)}
+                    )
+                }
+            )
+            if not row.treatment and row.measurement is not None
+            else row
+        )
+        for row in evidence.observations
+    ]
+    invalid_control = next(row for row in evidence.observations if not row.treatment)
+    observations.append(
+        invalid_control.model_copy(
+            update={
+                "decision_id": "invalid-control",
+                "event_ordinal": 99,
+                "status": "invalid",
+                "measurement": None,
+            }
+        )
+    )
+    evictor, _ = _evictor(
+        _Ledger(evidence.model_copy(update={"observations": tuple(observations)})),
+        viability=0.0,
+        min_global_control=min_global_control,
+    )
+
+    assert evictor._practical_effect_threshold(observations) == pytest.approx(expected)
+
+
+def test_headroom_clipped_context_can_still_vote_to_keep(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    evidence = _with_first_map_cell_fitness(
+        _evidence(revision, evolution_context),
+        0.95,
+    )
+    ledger = _Ledger(evidence)
+    evictor, posterior = _evictor(
+        ledger,
+        viability=lambda context, _applicability: (
+            0.2 if context.parent_metrics["fitness"] > 0.9 else 0.0
+        ),
+        min_distinct_contexts=1,
+    )
+
+    assert evictor.sweep((card,)) == []
+    assert posterior.fitted.context_fitnesses == [0.95]
+
+
+def test_distinct_context_support_counts_only_assessable_contexts(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    evidence = _with_first_map_cell_fitness(
+        _evidence(revision, evolution_context),
+        0.95,
+    )
+    ledger = _Ledger(evidence)
+
+    assert _evictor(ledger, viability=0.0)[0].sweep((card,)) == []
+    assert _evictor(
+        ledger,
+        viability=0.0,
+        min_distinct_contexts=1,
+    )[0].sweep((card,)) == [card.id]
+
+
+def test_context_without_practical_headroom_cannot_certify_but_can_keep(
     evolution_context: EvolutionContext,
 ) -> None:
     card = Card(id="card", task_key="task", description="candidate")
@@ -355,9 +527,36 @@ def test_context_without_practical_headroom_cannot_certify_retirement(
     assert posterior.fitted.applicability_states == []
 
 
-def test_both_reward_heads_and_residual_boundaries_veto_retirement(
+def test_invalid_controls_do_not_supply_reward_retirement_support(
     evolution_context: EvolutionContext,
 ) -> None:
+    card = Card(id="card", task_key="task", description="candidate")
+    revision = CardSnapshot.from_card(card)
+    evidence = _evidence(revision, evolution_context)
+    observations = tuple(
+        (
+            row.model_copy(update={"status": "invalid", "measurement": None})
+            if not row.treatment
+            else row
+        )
+        for row in evidence.observations
+    )
+    ledger = _Ledger(evidence.model_copy(update={"observations": observations}))
+    evictor, posterior = _evictor(ledger, viability=0.0)
+
+    assert evictor.sweep((card,)) == []
+    assert posterior.fitted.applicability_states == []
+
+
+def test_both_reward_heads_and_residual_boundaries_veto_retirement(
+    evolution_context: EvolutionContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "gigaevo.memory_v2.eviction.logger.warning",
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
     card = Card(id="card", task_key="task", description="candidate")
     revision = CardSnapshot.from_card(card)
     ledger = _Ledger(_evidence(revision, evolution_context))
@@ -377,6 +576,10 @@ def test_both_reward_heads_and_residual_boundaries_veto_retirement(
         residual_boundary_probability=0.2,
     )
     assert boundary_evictor.sweep((card,)) == []
+    assert any(
+        "memory.posterior_config.reward_residual_sd_bounds" in warning
+        for warning in warnings
+    )
 
 
 def test_wilson_upper_bound_prevents_borderline_mc_retirement(
@@ -433,11 +636,12 @@ def test_real_posterior_retires_confidently_harmful_card(
             treated=index % 2 == 0,
         ).model_copy(
             update={
+                "card_used": index % 4 == 0,
                 "measurement": OutcomeMeasurement(
                     value=(-0.20 if index % 2 == 0 else 0.0) + noise[index % 4],
                     se=0.0,
                     kind="deterministic",
-                )
+                ),
             }
         )
         for index in range(80)

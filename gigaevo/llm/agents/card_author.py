@@ -71,14 +71,19 @@ class CardAuthorAgent(LangGraphAgent):
         llm: ChatOpenAI | MultiModelRouter,
         system_prompt: str,
         user_prompt_template: str,
+        fitness_key: str,
     ) -> None:
+        if not fitness_key.strip():
+            raise ValueError("fitness_key cannot be empty")
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
+        self.fitness_key = fitness_key.strip()
         schema = portable_json_schema(CardAuthorResponse.model_json_schema())
         super().__init__(llm.with_structured_output(schema))
 
     def build_prompt(self, state: CardAuthorState) -> CardAuthorState:
         user = self.user_prompt_template.format(
+            fitness_key=self.fitness_key,
             base_parent_code=state["base_parent_code"],
             child_code=state["child_code"],
             unified_diff=state.get("unified_diff")

@@ -20,8 +20,10 @@ from gigaevo.memory_v2.models import (
     CandidateActionProbability,
     CardSnapshot,
     EvolutionContext,
+    OutcomeMeasurement,
     PolicyDecision,
     PolicySpecification,
+    TerminalOutcome,
 )
 from gigaevo.memory_v2.policy import ProbabilityMatchingConfig
 from gigaevo.memory_v2.posterior import HierarchicalTerminalUtilityPosterior
@@ -317,6 +319,92 @@ async def test_provider_creates_one_decision_per_active_mutation_attempt(
         row.applicability.applicable_bank_card_ids == (card.id,)
         for row in ledger.decisions()
     )
+
+
+@pytest.mark.asyncio
+async def test_provider_fits_ignored_outcome_as_uncited_delivery(
+    tmp_path,
+    environment,
+    evolution_context: EvolutionContext,
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+) -> None:
+    card = Card(id="card", task_key="task", description="exact treatment")
+    store = _Store(card)
+    registry = InFlightSelectionRegistry()
+    ledger = SqliteCausalLedger(
+        path=tmp_path / "ignored-diagnostics.sqlite3",
+        environment=environment,
+    )
+    ledger.activate()
+    provider = CausalBanditMemoryProvider(
+        candidate_source=WholeBankCandidateSource(store=store),  # type: ignore[arg-type]
+        context_source=_ContextSource(evolution_context),  # type: ignore[arg-type]
+        ledger=ledger,
+        posterior=posterior_model,
+        policy=_AlwaysTreatPolicy(),  # type: ignore[arg-type]
+        renderer=ImmutableCardRenderer(),
+        store=store,  # type: ignore[arg-type]
+        selection_leases=registry,
+        task_key="task",
+        run_seed=9,
+    )
+    parent = Program(
+        id=evolution_context.parent_id,
+        code="def parent(): return 1",
+        iteration=evolution_context.parent_iteration,
+    )
+
+    first_lease = registry.open_attempt("ignored-attempt", parent.id)
+    with registry.activate_attempt("ignored-attempt", (parent.id,)):
+        await provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="fitness",
+        )
+    first_lease.release()
+    first = ledger.decisions()[0]
+    ledger.record_mutation_edge(
+        parent_id=parent.id,
+        child_id="ignored-child",
+        island_id=evolution_context.map_elites.island_id,
+        completion_ordinal=1,
+    )
+    assert ledger.link_attempt_child(
+        attempt_id=first.attempt_id,
+        child_id="ignored-child",
+        completion_ordinal=1,
+    )
+    ledger.record_terminal(
+        TerminalOutcome(
+            decision_id=first.decision_id,
+            child_id="ignored-child",
+            base_id=parent.id,
+            primary_metric=evolution_context.reward.primary_metric,
+            higher_is_better=evolution_context.reward.higher_is_better,
+            ope_eligible=True,
+            status="outcome",
+            used_card_ids=(),
+            measurement=OutcomeMeasurement(value=0.4, se=None, kind="scalar"),
+            completion_ordinal=1,
+        )
+    )
+
+    second_lease = registry.open_attempt("next-attempt", parent.id)
+    with registry.activate_attempt("next-attempt", (parent.id,)):
+        await provider.select_cards(
+            parent,
+            task_description="task",
+            metrics_description="fitness",
+        )
+    second_lease.release()
+
+    diagnostics = ledger.decisions()[-1].fit_diagnostics
+    assert diagnostics.evidence_count == 1
+    assert diagnostics.offered_observations == 1
+    assert diagnostics.used_observations == 0
+    assert diagnostics.ignored_observations == 1
+    assert diagnostics.reward_observations == 1
+    assert diagnostics.safety_observations == 1
 
 
 @pytest.mark.asyncio

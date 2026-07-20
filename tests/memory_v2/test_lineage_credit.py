@@ -76,6 +76,17 @@ def _terminal(
         higher_is_better=record.context.reward.higher_is_better,
         ope_eligible=True,
         status=status,
+        used_card_ids=(
+            (
+                next(
+                    card.bank_card_id
+                    for card in record.candidates
+                    if card.treatment_id == record.proposed_treatment_id
+                ),
+            )
+            if record.delivered
+            else ()
+        ),
         measurement=(
             OutcomeMeasurement(value=gain, se=None, kind="scalar")
             if gain is not None
@@ -107,6 +118,7 @@ def _observation(
         card=card,
         context=record.context,
         treatment=record.delivered,
+        card_used=(record.delivered and card.bank_card_id in terminal.used_card_ids),
         offer_propensity=record.offer_probability,
         proposal_propensity=record.proposal_probability,
         joint_action_propensity=record.joint_action_probability,
@@ -528,6 +540,88 @@ def test_shared_breakthrough_has_one_closest_credit_owner(
     assert by_id[first.decision_id].best_descendant_id == "breakthrough"
     assert by_id[second.decision_id].best_descendant_id == "breakthrough"
     assert by_id[first.decision_id].credit_owner_decision_id == second.decision_id
+    assert residual_by_id[first.decision_id] == 0.0
+    assert residual_by_id[second.decision_id] > 0.0
+
+
+def test_uncited_root_still_owns_closest_breakthrough_credit(
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    first_context = _context(
+        evolution_context,
+        parent_id="parent",
+        ordinal=0,
+        depth=3,
+        opportunities=3,
+    )
+    second_context = _context(
+        evolution_context,
+        parent_id="first-child",
+        ordinal=1,
+        depth=2,
+        opportunities=2,
+    )
+    first = _record(first_context, revisions[0], ordinal=0)
+    second = decision_record(
+        second_context,
+        revisions[1],
+        ordinal=1,
+        attempt_id="ignored-attempt",
+        delivered=True,
+    )
+    terminals = (
+        _terminal(first, child_id="first-child", gain=0.1),
+        _terminal(second, child_id="second-child", gain=0.05).model_copy(
+            update={"used_card_ids": ()}
+        ),
+    )
+    edges = (
+        _edge(
+            first_context,
+            parent_id="parent",
+            child_id="first-child",
+            ordinal=0,
+            gain=0.1,
+        ),
+        _edge(
+            first_context,
+            parent_id="first-child",
+            child_id="second-child",
+            ordinal=1,
+            gain=0.05,
+        ),
+        _edge(
+            first_context,
+            parent_id="second-child",
+            child_id="breakthrough",
+            ordinal=2,
+            gain=0.2,
+        ),
+        _edge(
+            first_context,
+            parent_id="other",
+            child_id="closing",
+            ordinal=3,
+            gain=0.0,
+        ),
+    )
+
+    outcomes, rows = _resolve((first, second), terminals, edges)
+    by_id = {row.decision_id: row for row in outcomes}
+    residual_by_id = {
+        row.decision_id: row.measurement.value
+        for row in rows
+        if row.measurement is not None
+    }
+    use_contrast_by_id = {row.decision_id: row.use_contrast for row in rows}
+
+    assert use_contrast_by_id == {
+        first.decision_id: 0.5,
+        second.decision_id: -0.5,
+    }
+    assert by_id[first.decision_id].credit_owner_decision_id == second.decision_id
+    assert by_id[second.decision_id].credit_owner_decision_id == second.decision_id
     assert residual_by_id[first.decision_id] == 0.0
     assert residual_by_id[second.decision_id] > 0.0
 

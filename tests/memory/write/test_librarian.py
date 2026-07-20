@@ -5,6 +5,7 @@ import pytest
 from gigaevo.llm.agents.admission_novelty import NoveltyVerdict
 from gigaevo.llm.agents.card_author import AuthoredCard, CardAuthorResponse
 from gigaevo.llm.agents.equivalence import EquivalenceResponse
+from gigaevo.llm.agents.factories import create_equivalence_agent
 from gigaevo.llm.agents.program_author import ProgramAuthorResponse
 from gigaevo.memory.cards import Card, CardKind, ContextualGain, DecisionContext
 from gigaevo.memory.storage.base import ScoredCard
@@ -47,6 +48,24 @@ class FakeEquivalence:
         return self.response
 
 
+class RawStructuredLlm:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.calls: list = []
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        return self.response
+
+
+class RawLlm:
+    def __init__(self, response: dict) -> None:
+        self.structured = RawStructuredLlm(response)
+
+    def with_structured_output(self, _schema, **_kwargs):
+        return self.structured
+
+
 class FakeProgramAuthor:
     def __init__(self, response: ProgramAuthorResponse | None = None) -> None:
         self.response = response or ProgramAuthorResponse(
@@ -82,7 +101,13 @@ def make_librarian(
         author=author
         or FakeAuthor(CardAuthorResponse(decision=WriteDecision.NEW, card=authored())),
         equivalence=equivalence
-        or FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW)),
+        or FakeEquivalence(
+            EquivalenceResponse(
+                program_axes=None,
+                decision=WriteDecision.NEW,
+                comparison_summary="different action",
+            )
+        ),
         program_author=program_author or FakeProgramAuthor(),
         gate=CardAdmissionGate(store=store, evictor=NullEvictor()),
         store=store,
@@ -119,7 +144,13 @@ async def ingest_idea(librarian: Librarian, **overrides):
 @pytest.mark.asyncio
 async def test_drop_is_a_valid_zero_write_path(store) -> None:
     author = FakeAuthor(CardAuthorResponse(decision=WriteDecision.DROP, card=None))
-    equivalence = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
+    equivalence = FakeEquivalence(
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.NEW,
+            comparison_summary="different action",
+        )
+    )
     librarian = make_librarian(store, author=author, equivalence=equivalence)
 
     assert await ingest_idea(librarian) is None
@@ -164,7 +195,13 @@ async def test_retrieval_uses_authored_action_not_raw_mutator_report(store) -> N
         return [ScoredCard(card=existing, distance=0.1)]
 
     store.nearest = nearest
-    equivalence = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
+    equivalence = FakeEquivalence(
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.NEW,
+            comparison_summary="different action",
+        )
+    )
     librarian = make_librarian(store, equivalence=equivalence)
 
     await ingest_idea(librarian, mutation_report="RAW_NOTE_MARKER")
@@ -188,7 +225,12 @@ async def test_equivalent_insight_keeps_payload_and_appends_provenance(store) ->
     store.save(existing)
     store.hits = [ScoredCard(card=existing, distance=0.1)]
     equivalence = FakeEquivalence(
-        EquivalenceResponse(decision=WriteDecision.EQUIVALENT, target_id=existing.id)
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.EQUIVALENT,
+            target_id=existing.id,
+            comparison_summary="same action",
+        )
     )
     librarian = make_librarian(store, equivalence=equivalence)
 
@@ -215,7 +257,13 @@ async def test_foreign_task_neighbor_cannot_be_an_equivalence_target(store) -> N
     )
     store.save(foreign)
     store.hits = [ScoredCard(card=foreign, distance=0.01)]
-    equivalence = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
+    equivalence = FakeEquivalence(
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.NEW,
+            comparison_summary="different action",
+        )
+    )
     librarian = make_librarian(store, equivalence=equivalence)
 
     result = await ingest_idea(librarian)
@@ -236,14 +284,25 @@ async def test_unoffered_target_and_equivalence_failure_fail_open_to_new(store) 
     store.save(existing)
     store.hits = [ScoredCard(card=existing, distance=0.1)]
     invalid = FakeEquivalence(
-        EquivalenceResponse(decision=WriteDecision.EQUIVALENT, target_id="not-offered")
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.EQUIVALENT,
+            target_id="not-offered",
+            comparison_summary="same action",
+        )
     )
     first = make_librarian(store, equivalence=invalid)
     first_result = await ingest_idea(first, child_id="child-1")
     assert first_result is not None
     assert first_result.outcome is WriteOutcome.ADDED
 
-    failing = FakeEquivalence(EquivalenceResponse(decision=WriteDecision.NEW))
+    failing = FakeEquivalence(
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.NEW,
+            comparison_summary="different action",
+        )
+    )
     failing.error = RuntimeError("llm down")
     second = make_librarian(store, equivalence=failing)
     second_result = await ingest_idea(second, child_id="child-2")
@@ -279,7 +338,12 @@ async def test_program_equivalence_keeps_family_id_and_best_representative(
     store.save(target)
     store.hits = [ScoredCard(card=target, distance=0.1)]
     equivalence = FakeEquivalence(
-        EquivalenceResponse(decision=WriteDecision.EQUIVALENT, target_id=target.id)
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.EQUIVALENT,
+            target_id=target.id,
+            comparison_summary="same strategy family",
+        )
     )
     program_author = FakeProgramAuthor()
     librarian = make_librarian(
@@ -306,6 +370,65 @@ async def test_program_equivalence_keeps_family_id_and_best_representative(
     assert family.code == "better code"
     assert family.programs == ("old", "better")
     assert program_author.calls[0]["higher_is_better"] is True
+
+
+@pytest.mark.asyncio
+async def test_program_schema_contract_failure_fails_open_to_new(store) -> None:
+    target = Card(
+        id="program-family",
+        kind=CardKind.PROGRAM,
+        task_key="task-a",
+        program_id="old",
+        programs=("old",),
+        description="existing strategy",
+    )
+    store.save(target)
+    store.hits = [ScoredCard(card=target, distance=0.1)]
+    llm = RawLlm(
+        {
+            "comparison_summary": "same family",
+            "decision": "EQUIVALENT",
+            "target_id": target.id,
+        }
+    )
+    equivalence = create_equivalence_agent(llm, task_description="full task")
+    librarian = make_librarian(store, equivalence=equivalence)  # type: ignore[arg-type]
+
+    result = await librarian.ingest_program(
+        program_id="new",
+        code="new code",
+        fitness=0.8,
+        archive_rank=1,
+        higher_is_better=True,
+    )
+
+    assert result.outcome is WriteOutcome.ADDED
+    assert result.card_id != target.id
+    assert len(store.snapshot()) == 2
+    assert len(llm.structured.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_program_cold_bank_skips_equivalence_call(store) -> None:
+    equivalence = FakeEquivalence(
+        EquivalenceResponse(
+            comparison_summary="different family",
+            program_axes=None,
+            decision=WriteDecision.NEW,
+        )
+    )
+    librarian = make_librarian(store, equivalence=equivalence)
+
+    result = await librarian.ingest_program(
+        program_id="first",
+        code="first code",
+        fitness=0.8,
+        archive_rank=1,
+        higher_is_better=True,
+    )
+
+    assert result.outcome is WriteOutcome.ADDED
+    assert equivalence.calls == []
 
 
 @pytest.mark.asyncio
@@ -356,7 +479,12 @@ async def test_worse_equivalent_program_only_appends_provenance_and_is_cached(st
     store.save(target)
     store.hits = [ScoredCard(card=target, distance=0.1)]
     equivalence = FakeEquivalence(
-        EquivalenceResponse(decision=WriteDecision.EQUIVALENT, target_id=target.id)
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.EQUIVALENT,
+            target_id=target.id,
+            comparison_summary="same strategy family",
+        )
     )
     program_author = FakeProgramAuthor()
     librarian = make_librarian(

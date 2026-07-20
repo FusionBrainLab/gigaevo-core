@@ -150,13 +150,20 @@ class MutationAssignmentRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: int = 1
+    schema_version: int = 2
     mutation_id: str
     parent_ids: tuple[str, ...] = ()
     delivered_ids: tuple[str, ...] = ()
+    used_ids: tuple[str, ...]
     source_decision_ids: tuple[str, ...] = ()
     card_sources: dict[str, CardAssignmentSource] = Field(default_factory=dict)
     ope_eligible: bool = False
+
+    @model_validator(mode="after")
+    def _used_cards_were_delivered(self) -> MutationAssignmentRecord:
+        if not set(self.used_ids) <= set(self.delivered_ids):
+            raise ValueError("used card ids must be a subset of delivered card ids")
+        return self
 
 
 class EvidenceAttribution(BaseModel):

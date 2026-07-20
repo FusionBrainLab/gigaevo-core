@@ -401,6 +401,7 @@ class MemoryAssignment(MemoryEvent):
 
 class MemoryOutcome(MemoryEvent):
     event: ClassVar[str] = "MEMORY_OUTCOME"
+    schema_version: ClassVar[int] = 2
     description: ClassVar[str] = (
         "The first terminal child evaluation for one memory assignment."
     )
@@ -423,10 +424,12 @@ class MemoryOutcome(MemoryEvent):
     primary_metric: str = ""
     higher_is_better: bool = True
     ope_eligible: bool = True
+    used_card_ids: tuple[str, ...]
 
 
 class MemoryOutcomeUpdate(MemoryEvent):
     event: ClassVar[str] = "MEMORY_OUTCOME_UPDATE"
+    schema_version: ClassVar[int] = 2
     description: ClassVar[str] = (
         "A changed re-evaluation of a child whose terminal memory outcome is frozen."
     )
@@ -451,6 +454,7 @@ class MemoryOutcomeUpdate(MemoryEvent):
     primary_metric: str = ""
     higher_is_better: bool = True
     ope_eligible: bool = True
+    used_card_ids: tuple[str, ...]
 
 
 class MemoryDelivery(MemoryEvent):

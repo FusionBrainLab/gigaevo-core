@@ -334,6 +334,64 @@ class TestFormatMetricsDescription:
         desc = fmt.format_metrics_description()
         assert "↓ better" in desc
 
+    def test_primary_without_description_has_no_dangling_colon(self) -> None:
+        ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="",
+                    higher_is_better=True,
+                    is_primary=True,
+                ),
+            }
+        )
+
+        assert MetricsFormatter(ctx).format_metrics_description() == (
+            "- fitness (↑ better)"
+        )
+
+    def test_primary_is_described_even_when_hidden_from_prompt_blocks(self) -> None:
+        ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="Main score",
+                    higher_is_better=True,
+                    is_primary=True,
+                    include_in_prompts=False,
+                ),
+                "hidden": MetricSpec(
+                    description="Internal diagnostic",
+                    higher_is_better=True,
+                    include_in_prompts=False,
+                ),
+            }
+        )
+
+        description = MetricsFormatter(ctx).format_metrics_description()
+
+        assert "- fitness: Main score" in description
+        assert "hidden" not in description
+
+    def test_hidden_primary_without_description_still_renders_first(self) -> None:
+        ctx = MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="",
+                    higher_is_better=True,
+                    is_primary=True,
+                    include_in_prompts=False,
+                ),
+                "cost": MetricSpec(
+                    description="Compute cost",
+                    higher_is_better=False,
+                ),
+            }
+        )
+
+        assert MetricsFormatter(ctx).format_metrics_description().splitlines() == [
+            "- fitness (↑ better)",
+            "- cost: Compute cost (↓ better)",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # value_counts annotation (Task 3)

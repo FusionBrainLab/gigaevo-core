@@ -37,7 +37,11 @@ strictly valid mutation outcomes
 
 The reader never assigns efficacy from prose, embedding similarity, retrieval,
 or the mutator explanation. Those signals generate or describe actions.
-Efficacy is learned only from frozen randomized decisions and terminal outcomes.
+The full randomized offer ledger supports offer-policy ITT/OPE. Card usefulness
+is learned only from withheld controls and delivered cards explicitly named in
+the mutator's grounded `card_ids_used` output. A delivered-but-uncited card
+remains an offer/uptake observation but contributes nothing to reward,
+invalidity, delayed-lineage, or retirement inference.
 
 ## Card model
 
@@ -67,7 +71,11 @@ authored strategy.
 The write-neighbor query is `card_brief(description + explanation_summary)`.
 The default `desc_expl` embedding scope indexes the same semantic fields.
 Embedding proximity only proposes neighbors. The LLM equivalence judge requires
-the same intervention and the same applicability condition.
+the same intervention and applicability condition for insight cards, or the
+same strategy-family applicability condition, load-bearing representation or
+state, core procedure, decision logic, update or output policy, and essential
+constraints for program cards while ignoring incidental implementation
+variants.
 
 ## Librarian protocol
 
@@ -97,8 +105,9 @@ author/retrieval/equivalence chain for one ingest.
 Only after a candidate is authored does the librarian retrieve neighbors. The
 equivalence response schema permits only:
 
-- `NEW`: no offered neighbor has the same condition and action;
-- `EQUIVALENT`: one offered id has exactly the same condition and action.
+- `NEW`: no offered neighbor is equivalent under the card-kind rule;
+- `EQUIVALENT`: one offered id is the same insight intervention or program
+  strategy family.
 
 An equivalent candidate does not rewrite or broaden the banked treatment.
 Provenance and founding evidence are pooled into the existing card. The write
@@ -138,6 +147,11 @@ One mutation attempt owns one decision and one terminal. A selection lease
 protects every offered live card until the corresponding attempt/child is
 resolved.
 
+At child birth, the system intersects `card_ids_used` with the immutable
+prompt-time slate and freezes the result on the mutation assignment. Missing,
+malformed, or hallucinated ids receive no use credit. The terminal carries that
+frozen set into the causal ledger; later metadata changes cannot alter it.
+
 Lineage credit is separate from immediate credit. The default depth is `3`;
 only non-negative archive-accepted best-descendant lift after the configured
 same-island opportunity budget trains the delayed head.
@@ -149,9 +163,9 @@ The default `memory/evictor=causal` arm runs during the live writer cadence.
 
 A card can be proposed for deletion only when all of the following hold:
 
-- its lineage has at least the configured randomized treated support;
+- its lineage has at least the configured cited-treatment support;
 - the ledger has the configured pooled randomized controls;
-- support spans the configured number of discrete
+- support spans the configured number of assessable discrete
   `(MAP-Elites island, parent cell)` contexts;
 - no immediate or delayed-lineage outcome is pending;
 - both reward heads optimized successfully;
@@ -167,12 +181,24 @@ Selection defines helpfulness relative to zero. Retirement instead uses
 `practical_effect_quantile`: a low quantile (default `0.10`) of non-zero
 absolute normalized gains in the randomized control arm. Using controls keeps
 the practical scale independent of the card effect being judged, and follows
-realized task dynamics rather than the problem author's chosen metric bounds. A
-context whose remaining feasible positive headroom does not clear the boundary
-is skipped; at least one assessable context is required. With no non-zero
-control gain the boundary falls back to zero, preserving harm retirement while
-deferring neutral-card retirement. Sparse support, uncertainty, and
-numerical-boundary mass all fail-keep.
+realized task dynamics rather than the problem author's chosen metric bounds.
+The quantile is used only after `min_global_control` measured, non-zero control
+magnitudes exist. Exact zeros are intentionally excluded, so this is the scale
+of a non-trivial realized step rather than a zero-inflated quantile; with
+insufficient support the boundary falls back to zero, preserving harm
+retirement while deferring neutral-card retirement.
+
+A context whose remaining feasible positive headroom does not clear the
+boundary cannot certify deletion and does not count toward
+`min_distinct_contexts`, but its posterior is still evaluated and any optimistic
+keep-vote rescues the card. Sparse support, uncertainty, and numerical-boundary
+mass all fail-keep.
+
+The default normalized residual lower bound is `0.01`. On tasks whose realized
+noise lies below that floor, residual-boundary diagnostics disable retirement
+and warn with the startup-validated
+`memory.posterior_config.reward_residual_sd_bounds` knob. This is a loud,
+operator-configurable fail-keep envelope; selection and writing continue.
 
 The evictor creates a one-use verdict containing:
 
@@ -187,6 +213,11 @@ version rescues the card.
 Production causal retirement requires `allow_cross_task=false`. Cross-task
 delivery remains disabled until retirement evidence is identified separately
 per source task; the admission veto is only a defensive final check.
+With that setting, an empty query or card `task_key` is warned once and refused
+rather than treated as a wildcard.
+Consequently, legacy cards with an empty `task_key` are not candidates. Restamp
+them with the correct task key, or set `allow_cross_task=true` only for a run
+whose legacy bank is known to contain one compatible task.
 
 The SQLite evidence ledger and JSON card bank are separate stores, so there is a
 small residual interval between the final ledger-version read and the bank
@@ -203,9 +234,10 @@ censoring is non-informative conditional on recorded context. A card that causes
 hangs recorded only as censoring will therefore be retained rather than
 declared safe or harmful.
 
-Cards that stop being proposed before reaching minimum treated support also
+Delivered-but-uncited terminals are also excluded from every usefulness head.
+Cards that stop being cited before reaching minimum use support therefore
 fail-keep. This is intentional: retirement never fabricates causal support from
-staleness.
+exposure or staleness.
 
 ## Configuration
 

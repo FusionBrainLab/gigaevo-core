@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import stat
@@ -37,6 +38,7 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     OutcomeMeasurement,
     TerminalOutcome,
+    canonical_digest,
 )
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.metrics.paired import (
@@ -46,6 +48,17 @@ from gigaevo.programs.metrics.paired import (
 from gigaevo.programs.program import Program
 
 from .factories import decision_record
+
+
+def _used_card_ids(record) -> tuple[str, ...]:
+    if not record.delivered or record.proposed_treatment_id is None:
+        return ()
+    card = next(
+        card
+        for card in record.candidates
+        if card.treatment_id == record.proposed_treatment_id
+    )
+    return (card.bank_card_id,)
 
 
 def link_decision(
@@ -111,6 +124,7 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
         higher_is_better=evolution_context.reward.higher_is_better,
         ope_eligible=True,
         status="outcome",
+        used_card_ids=_used_card_ids(record),
         measurement=OutcomeMeasurement(value=0.2, se=None, kind="scalar"),
         completion_ordinal=4,
     )
@@ -143,6 +157,131 @@ def test_sqlite_ledger_counts_control_as_pending_and_freezes_terminal(
         )
     with pytest.raises(CausalLedgerConflict, match="conflicting decision"):
         ledger.record_decision(record.model_copy(update={"reward_q_hat_treated": 0.5}))
+
+
+def test_uncited_delivery_advances_model_version_and_counts_lineage(
+    tmp_path,
+    environment: EnvironmentFingerprint,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    ledger = SqliteCausalLedger(
+        path=tmp_path / "uncited.sqlite3",
+        environment=environment,
+    )
+    ledger.activate()
+    lineage_context = evolution_context.model_copy(
+        update={
+            "reward": evolution_context.reward.model_copy(
+                update={
+                    "endpoint": "bounded_lineage_utility",
+                    "lineage_depth": 3,
+                    "lineage_opportunity_budget": 2,
+                }
+            )
+        }
+    )
+    record = decision_record(lineage_context, revisions[0], delivered=True)
+    ledger.record_decision(record)
+    link_decision(ledger, record, "ignored-child", 1)
+    before = ledger.snapshot()
+
+    ledger.record_terminal(
+        TerminalOutcome(
+            decision_id=record.decision_id,
+            child_id="ignored-child",
+            base_id=lineage_context.parent_id,
+            primary_metric=lineage_context.reward.primary_metric,
+            higher_is_better=lineage_context.reward.higher_is_better,
+            ope_eligible=True,
+            status="outcome",
+            used_card_ids=(),
+            measurement=OutcomeMeasurement(value=0.49, se=None, kind="scalar"),
+            completion_ordinal=1,
+        )
+    )
+    ignored = ledger.snapshot()
+
+    assert ignored.version != before.version
+    assert ignored.model_version != before.model_version
+    assert len(ignored.observations) == 1
+    assert ignored.observations[0].treatment is True
+    assert ignored.observations[0].card_used is False
+    assert ignored.observations[0].use_contrast == -0.5
+    assert ignored.lineage_pending_by_bank_card == {revisions[0].bank_card_id: 1}
+
+    cited_context = lineage_context.model_copy(
+        update={"parent_id": "cited-parent", "parent_iteration": 2}
+    )
+    cited_record = decision_record(
+        cited_context,
+        revisions[0],
+        ordinal=1,
+        attempt_id="cited-attempt",
+        delivered=True,
+    )
+    ledger.record_decision(cited_record)
+    link_decision(ledger, cited_record, "cited-child", 2)
+    ledger.record_terminal(
+        TerminalOutcome(
+            decision_id=cited_record.decision_id,
+            child_id="cited-child",
+            base_id=cited_context.parent_id,
+            primary_metric=cited_context.reward.primary_metric,
+            higher_is_better=cited_context.reward.higher_is_better,
+            ope_eligible=True,
+            status="outcome",
+            used_card_ids=(revisions[0].bank_card_id,),
+            measurement=OutcomeMeasurement(value=0.1, se=None, kind="scalar"),
+            completion_ordinal=2,
+        )
+    )
+    cited = ledger.snapshot()
+
+    assert cited.model_version != ignored.model_version
+    assert cited.observations[-1].card_used is True
+    assert cited.observations[-1].use_contrast == 0.5
+    assert cited.lineage_pending_by_bank_card == {revisions[0].bank_card_id: 2}
+
+
+@pytest.mark.parametrize(
+    ("delivered", "use_proposed_card"),
+    [(False, True), (False, False), (True, False)],
+)
+def test_ledger_rejects_use_credit_outside_the_delivered_card(
+    tmp_path,
+    environment: EnvironmentFingerprint,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+    delivered: bool,
+    use_proposed_card: bool,
+) -> None:
+    ledger = SqliteCausalLedger(
+        path=tmp_path / "withheld-cited.sqlite3",
+        environment=environment,
+    )
+    ledger.activate()
+    record = decision_record(evolution_context, revisions[0], delivered=delivered)
+    ledger.record_decision(record)
+    link_decision(ledger, record, "child", 1)
+
+    with pytest.raises(CausalLedgerConflict, match="outside the delivered decision"):
+        ledger.record_terminal(
+            TerminalOutcome(
+                decision_id=record.decision_id,
+                child_id="child",
+                base_id=evolution_context.parent_id,
+                primary_metric=evolution_context.reward.primary_metric,
+                higher_is_better=evolution_context.reward.higher_is_better,
+                ope_eligible=True,
+                status="outcome",
+                used_card_ids=(
+                    revisions[0].bank_card_id if use_proposed_card else "foreign-card",
+                ),
+                measurement=OutcomeMeasurement(value=0.1, se=None, kind="scalar"),
+                completion_ordinal=1,
+            )
+        )
 
 
 def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
@@ -184,6 +323,7 @@ def test_sqlite_ledger_keeps_delayed_reward_debt_in_pending_limits(
                 higher_is_better=True,
                 ope_eligible=True,
                 status="outcome",
+                used_card_ids=_used_card_ids(record),
                 measurement=OutcomeMeasurement(value=0.0, se=None, kind="scalar"),
                 completion_ordinal=record.event_ordinal,
             )
@@ -290,6 +430,7 @@ def test_ledger_rejects_gain_outside_parent_specific_opportunity(
                 higher_is_better=higher_is_better,
                 ope_eligible=True,
                 status="outcome",
+                used_card_ids=_used_card_ids(record),
                 measurement=OutcomeMeasurement(
                     value=impossible_gain,
                     se=None,
@@ -440,6 +581,37 @@ def test_ledger_detects_payload_tampering_on_read(
         ledger.snapshot()
 
 
+def test_ledger_reads_pre_citation_contrast_rows(
+    tmp_path,
+    environment: EnvironmentFingerprint,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    """Rows hashed before the citation_contrast field existed must still verify."""
+
+    ledger = SqliteCausalLedger(
+        path=tmp_path / "pre-contrast.sqlite3", environment=environment
+    )
+    ledger.activate()
+    record = decision_record(evolution_context, revisions[0])
+    ledger.record_decision(record)
+    legacy_payload = record.model_dump(mode="json", exclude_computed_fields=True)
+    del legacy_payload["citation_contrast"]
+    with sqlite3.connect(ledger._database_path) as connection:
+        connection.execute(
+            "UPDATE decisions SET record_json = ?, record_hash = ?",
+            (json.dumps(legacy_payload), canonical_digest(legacy_payload)),
+        )
+        connection.commit()
+
+    loaded = ledger.decisions()[0]
+    assert loaded.decision_id == record.decision_id
+    assert loaded.citation_contrast is False
+
+    ledger.record_decision(record)
+    assert len(ledger.decisions()) == 1
+
+
 def test_network_ledger_uses_local_database_and_atomic_mirror(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -558,7 +730,10 @@ async def test_paired_outcome_requires_matching_ordered_cohort_signature(
     child.set_metadata(MUTATION_MEMORY_DECISION_ID_METADATA_KEY, "decision-paired")
     child.set_metadata(
         MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
-        MutationAssignmentRecord(mutation_id=child.id).model_dump(mode="json"),
+        MutationAssignmentRecord(
+            mutation_id=child.id,
+            used_ids=(),
+        ).model_dump(mode="json"),
     )
     child.set_metadata(MUTATION_MEMORY_BASE_ID_METADATA_KEY, "base")
     child.set_metadata(

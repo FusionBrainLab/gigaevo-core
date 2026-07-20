@@ -2,8 +2,8 @@ Decide whether this mutation outcome supports one durable, actionable hypothesis
 
 ## OUTCOME
 
-- Parent fitness: {parent_fitness}
-- Child fitness: {child_fitness}
+- Parent fitness ({fitness_key}): {parent_fitness}
+- Child fitness ({fitness_key}): {child_fitness}
 - Fitness direction: {fitness_direction}
 - Signed gain (positive is better): {signed_gain}
 - Archive status: {archive_status}

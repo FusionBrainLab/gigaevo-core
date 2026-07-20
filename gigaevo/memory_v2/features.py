@@ -19,6 +19,7 @@ class FeatureConfig(BaseModel):
     progress_log_scale: float = Field(default=100.0, gt=1.0)
     card_kind_contrast: bool = False
     retrieval_applicability_contrast: bool = False
+    citation_contrast: bool = False
 
 
 class HierarchicalFeatureMap:
@@ -135,6 +136,16 @@ class FeatureSpace:
         return self.shared_effect_dim + self.kind_effect_dim
 
     @property
+    def citation_effect_dim(self) -> int:
+        return int(self.config.citation_contrast)
+
+    @property
+    def citation_effect_index(self) -> int:
+        if not self.config.citation_contrast:
+            raise ValueError("citation contrast is disabled")
+        return self.shared_effect_dim + self.kind_effect_dim + self.retrieval_effect_dim
+
+    @property
     def card_context_dim(self) -> int:
         # Card rankings may change with fitness, search progress, and MAP position.
         return self.context_dim
@@ -142,7 +153,10 @@ class FeatureSpace:
     @property
     def card_effect_slice(self) -> slice:
         start = (
-            self.shared_effect_dim + self.kind_effect_dim + self.retrieval_effect_dim
+            self.shared_effect_dim
+            + self.kind_effect_dim
+            + self.retrieval_effect_dim
+            + self.citation_effect_dim
         )
         return slice(start, start + len(self._bank_index) * self.card_context_dim)
 
@@ -211,6 +225,7 @@ class FeatureSpace:
         context: EvolutionContext,
         *,
         rag_contrast: float = 0.0,
+        use_contrast: float = 0.0,
     ) -> np.ndarray:
         result = np.zeros(self.effect_dim, dtype=float)
         context_features = self.context_features(context)
@@ -228,6 +243,15 @@ class FeatureSpace:
                     "RAG contrast must be centered tri-state effect coding"
                 )
             result[self.retrieval_effect_index] = rag_contrast
+        if self.config.citation_contrast:
+            # Citation is post-treatment uptake, never eligibility: cited and
+            # delivered-but-uncited rows both stay in every head, split by one
+            # effect-coded coefficient. Predictions use the 0.0 midpoint.
+            if use_contrast not in (-0.5, 0.0, 0.5):
+                raise ValueError(
+                    "citation contrast must be centered tri-state effect coding"
+                )
+            result[self.citation_effect_index] = use_contrast
         result[self.card_effect_slice] = self._card_deviation(card, context)
         return result
 
@@ -238,12 +262,14 @@ class FeatureSpace:
         treatment: bool | float,
         *,
         rag_contrast: float = 0.0,
+        use_contrast: float = 0.0,
     ) -> np.ndarray:
         action_weight = float(treatment)
         effect = action_weight * self.effect(
             card,
             context,
             rag_contrast=rag_contrast,
+            use_contrast=use_contrast,
         )
         return np.concatenate((self.baseline(card, context), effect))
 
@@ -258,8 +284,14 @@ class FeatureSpace:
         context: EvolutionContext,
         *,
         rag_contrast: float = 0.0,
+        use_contrast: float = 0.0,
     ) -> np.ndarray:
-        return self.effect(card, context, rag_contrast=rag_contrast)
+        return self.effect(
+            card,
+            context,
+            rag_contrast=rag_contrast,
+            use_contrast=use_contrast,
+        )
 
     def prior_variance(
         self,

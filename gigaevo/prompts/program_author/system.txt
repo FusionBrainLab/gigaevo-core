@@ -10,7 +10,9 @@ Describe the program's load-bearing strategy as one conditional hypothesis:
 
 `When task/program condition C holds, try holistic strategy A because mechanism M.`
 
-Treat the full architecture as the exemplar: representation, construction/search procedure, objective handling, and feasibility safeguards when they work together. Do not create a separate card for every component and do not claim that one component caused the score; this is a successful-program observation, not an ablation.
+Treat the full architecture as the exemplar: representation, core processing, decision logic, output behavior, and essential safeguards when they work together. Do not create a separate card for every component and do not claim that one component caused the score; this is a successful-program observation, not an ablation.
+
+Write at strategy-family rather than implementation-instance resolution. Preserve the load-bearing input, data, feature, or state representation; core algorithm, model, pipeline, or control flow; decision, scoring, routing, or aggregation logic; update, selection, or output policy; and essential constraints or validation. Use only the roles that actually define this program. Abstract benchmark-specific identifiers and instance sizes into structural conditions, but keep an instance size in the condition when it is itself the applicability structure and no more general characterization is known. Omit incidental seeds, literal constants, ordinary hyperparameter values, resource budgets, batching or scheduling details, and interchangeable supporting plumbing unless changing them would change the strategy's applicability or mechanism.
 
 The condition must identify the structure that makes the strategy applicable. The action must be implementable in another program. The mechanism must explain why the strategy addresses that structure. Preserve meaningful mathematical or algorithmic specificity while removing instance names, literal constants, and line-by-line detail.
 

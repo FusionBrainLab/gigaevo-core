@@ -179,6 +179,7 @@ def record_memory_attempt_failure(
             primary_metric=primary_metric,
             higher_is_better=higher_is_better,
             ope_eligible=probe_count <= 1,
+            used_card_ids=(),
         )
         outcome_sink.record_memory_outcome(event)
         emit_memory_event(event)
@@ -237,6 +238,7 @@ def _outcome_payload(
     base_id: str,
     base_metrics: dict[str, float],
     ope_eligible: bool,
+    used_card_ids: tuple[str, ...],
 ) -> dict[str, Any]:
     primary_metric = ""
     higher_is_better = True
@@ -300,7 +302,7 @@ def _outcome_payload(
                 )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "decision_id": decision_id,
         "program_id": program.id,
         "status": status,
@@ -316,6 +318,10 @@ def _outcome_payload(
         "primary_metric": primary_metric,
         "higher_is_better": higher_is_better,
         "ope_eligible": ope_eligible,
+        # Program metadata crosses JSON-backed storage boundaries. Keep the
+        # at-most-once marker JSON-native so a restart cannot turn an unchanged
+        # tuple into a list and manufacture a terminal update.
+        "used_card_ids": list(used_card_ids),
         "failure_stage": failure_stage,
         "completion_ordinal": program.iteration,
     }
@@ -323,11 +329,11 @@ def _outcome_payload(
 
 def _decision_sources(
     program: Program,
-) -> list[tuple[str, str, dict[str, float]]]:
+) -> list[tuple[str, str, dict[str, float], tuple[str, ...] | None]]:
     raw_assignments = program.get_metadata(
         MUTATION_MEMORY_PARENT_ASSIGNMENTS_METADATA_KEY
     )
-    sources: list[tuple[str, str, dict[str, float]]] = []
+    sources: list[tuple[str, str, dict[str, float], tuple[str, ...] | None]] = []
     seen: set[str] = set()
     if isinstance(raw_assignments, dict):
         for parent_id, raw_assignment in raw_assignments.items():
@@ -345,6 +351,7 @@ def _decision_sources(
                     assignment.decision_id,
                     parent_id,
                     dict(assignment.context.parent_metrics),
+                    tuple(assignment.delivered_ids),
                 )
             )
     if sources:
@@ -360,6 +367,7 @@ def _decision_sources(
             decision_id,
             base_id if isinstance(base_id, str) else "",
             dict(raw_base_metrics) if isinstance(raw_base_metrics, dict) else {},
+            None,
         )
     ]
 
@@ -429,6 +437,7 @@ async def record_program_memory_outcome(
                 dict(raw_base_metrics) if isinstance(raw_base_metrics, dict) else {}
             ),
             ope_eligible=False,
+            used_card_ids=(),
         )
         sink.record_mutation_outcome(
             MutationTopologyOutcome(
@@ -460,8 +469,20 @@ async def record_program_memory_outcome(
             base_id=base_id,
             base_metrics=base_metrics,
             ope_eligible=child_ope_eligible,
+            # Each terminal cites only its own decision's delivered card(s). A
+            # crossover child unions cited ids across parents, but a terminal
+            # may only carry the card its decision delivered (ledger guard);
+            # ``delivered_ids is None`` marks the single-decision fallback where
+            # the union is already that decision's own delivered slate.
+            used_card_ids=(
+                tuple(
+                    cid for cid in mutation_assignment.used_ids if cid in delivered_ids
+                )
+                if delivered_ids is not None
+                else mutation_assignment.used_ids
+            ),
         )
-        for decision_id, base_id, base_metrics in sources
+        for decision_id, base_id, base_metrics, delivered_ids in sources
     }
     previous_marker = program.get_metadata(MUTATION_MEMORY_OUTCOME_METADATA_KEY)
     previous_by_decision: dict[str, dict[str, Any]] = {}

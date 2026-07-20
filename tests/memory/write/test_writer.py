@@ -21,7 +21,7 @@ from gigaevo.memory.write.admission import (
 )
 from gigaevo.memory.write.eviction import NullEvictor
 from gigaevo.memory.write.policies import ProgramExemplarPolicy
-from gigaevo.memory.write.writer import MemoryWriter
+from gigaevo.memory.write.writer import LibrarianWriteStack, MemoryWriter
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext, MetricSpec
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
 
@@ -101,6 +101,16 @@ class FakeProgramStorage:
         return list(self._programs)
 
 
+class _UnusedStructuredLlm:
+    async def ainvoke(self, _messages):
+        raise AssertionError("stack construction must not call the LLM")
+
+
+class _FactoryLlm:
+    def with_structured_output(self, _schema, **_kwargs):
+        return _UnusedStructuredLlm()
+
+
 def make_writer(store, metrics_context, tmp_path, **overrides) -> MemoryWriter:
     params = {
         "llm": object(),
@@ -149,6 +159,30 @@ def test_writer_pre_renders_metric_context_for_librarian(store, tmp_path) -> Non
     assert writer._stack._metrics_description == (
         '- latency: validation latency (↓ better; [0.0, 100.0] range; unit="ms")'
     )
+
+
+async def test_stack_forwards_metric_context_and_key_to_built_author(
+    store, tmp_path
+) -> None:
+    metrics_description = (
+        '- quality: held-out F1 (↑ better; [0.0, 1.0] range; unit="score")'
+    )
+    stack = LibrarianWriteStack(
+        llm=_FactoryLlm(),  # type: ignore[arg-type]
+        evictor=NullEvictor(),
+        store=store,
+        checkpoint_dir=tmp_path,
+        task_description="",
+        metrics_description=metrics_description,
+        fitness_key="quality",
+    )
+
+    await stack.ensure()
+
+    author = stack.require_librarian()._author
+    metric_header = author.system_prompt.index("## METRIC CONTEXT")
+    assert author.system_prompt.index(metrics_description) > metric_header
+    assert author.fitness_key == "quality"
 
 
 async def test_run_increment_ingests_and_authors_exemplars(
@@ -703,3 +737,23 @@ def test_fitness_key_defaults_to_primary_metric(store, tmp_path):
         metrics_context=ctx,
     )
     assert writer._fitness_key == "r2"
+
+
+def test_fitness_key_is_normalized_once_before_all_lookups(store, tmp_path):
+    ctx = MetricsContext(
+        specs={
+            "r2": MetricSpec(description="r2", higher_is_better=True, is_primary=True)
+        }
+    )
+
+    writer = MemoryWriter(
+        llm=object(),
+        evictor=NullEvictor(),
+        store=store,
+        checkpoint_dir=tmp_path,
+        metrics_context=ctx,
+        fitness_key="  r2  ",
+    )
+
+    assert writer._fitness_key == "r2"
+    assert writer._stack._fitness_key == "r2"

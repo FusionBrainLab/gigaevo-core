@@ -52,6 +52,17 @@ class _InterceptOnlyFeatureSpace:
 
 
 @pytest.mark.parametrize(
+    "bounds",
+    ((0.0, 1.0), (-0.1, 1.0), (1.0, 1.0), (2.0, 1.0)),
+)
+def test_reward_residual_bounds_fail_at_config_construction(
+    bounds: tuple[float, float],
+) -> None:
+    with pytest.raises(ValidationError, match="positive and ordered"):
+        TerminalUtilityPosteriorConfig(reward_residual_sd_bounds=bounds)
+
+
+@pytest.mark.parametrize(
     ("probability_acceptable", "expected"),
     ((0.1000001, True), (0.10, False), (0.0999999, False)),
 )
@@ -374,6 +385,28 @@ def test_rag_applicability_changes_only_the_treated_effect_design(
     assert treated_without_rag[space.baseline_dim + space.retrieval_effect_index] == 0.0
 
 
+def test_citation_contrast_changes_only_the_treated_effect_design(
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    space = posterior_model.feature_map.space(revisions)
+    card = revisions[0]
+
+    control_cited = space.design(card, evolution_context, False, use_contrast=0.5)
+    control_midpoint = space.design(card, evolution_context, False)
+    cited = space.design(card, evolution_context, True, use_contrast=0.5)
+    uncited = space.design(card, evolution_context, True, use_contrast=-0.5)
+    midpoint = space.design(card, evolution_context, True)
+
+    assert np.array_equal(control_cited, control_midpoint)
+    assert cited[space.baseline_dim + space.citation_effect_index] == 0.5
+    assert uncited[space.baseline_dim + space.citation_effect_index] == -0.5
+    assert midpoint[space.baseline_dim + space.citation_effect_index] == 0.0
+    with pytest.raises(ValueError, match="citation contrast"):
+        space.design(card, evolution_context, True, use_contrast=0.3)
+
+
 def test_terminal_utility_posterior_detects_treatment_dependent_invalidity(
     posterior_model: HierarchicalTerminalUtilityPosterior,
     evolution_context: EvolutionContext,
@@ -645,6 +678,7 @@ def test_outcome_model_rejects_mixed_offer_probabilities(
             card=card,
             context=evolution_context,
             treatment=bool(ordinal),
+            card_used=bool(ordinal),
             offer_propensity=offer,
             proposal_propensity=1.0,
             joint_action_propensity=offer if ordinal else 1.0 - offer,
@@ -666,6 +700,78 @@ def test_outcome_model_rejects_mixed_offer_probabilities(
 
     with pytest.raises(ValueError, match="one fixed offer probability"):
         posterior_model.fit(rows, (card,))
+
+
+@pytest.mark.parametrize("status", ["outcome", "invalid"])
+def test_uncited_delivery_updates_every_usefulness_posterior(
+    status: str,
+    posterior_model: HierarchicalTerminalUtilityPosterior,
+    evolution_context: EvolutionContext,
+    revisions: tuple[CardSnapshot, CardSnapshot],
+) -> None:
+    rows = synthetic_observations(
+        evolution_context,
+        revisions,
+        per_arm=4,
+        seed=11,
+    )
+    cited = next(
+        row
+        for row in rows
+        if row.treatment and row.card.treatment_id == revisions[0].treatment_id
+    )
+    ignored = cited.model_copy(
+        update={
+            "decision_id": f"ignored-{status}",
+            "event_ordinal": len(rows),
+            "card_used": False,
+            "status": status,
+            "measurement": (
+                OutcomeMeasurement(value=0.49, se=None, kind="scalar")
+                if status == "outcome"
+                else None
+            ),
+        }
+    )
+
+    assert ignored.use_contrast == -0.5
+
+    before = posterior_model.fit(rows, revisions)
+    after = posterior_model.fit(
+        (*rows, ignored),
+        revisions,
+        lineage_observations=(
+            (
+                ignored.model_copy(
+                    update={
+                        "measurement": OutcomeMeasurement(
+                            value=0.49,
+                            se=None,
+                            kind="scalar",
+                        )
+                    }
+                ),
+            )
+            if status == "outcome"
+            else ()
+        ),
+    )
+
+    assert after.evidence_count == before.evidence_count + 1
+    assert after.offered_observations == before.offered_observations + 1
+    assert after.used_observations == before.used_observations
+    assert after.ignored_observations == before.ignored_observations + 1
+    assert after.safety.observations == before.safety.observations + 1
+    assert not np.array_equal(after.safety.mean, before.safety.mean)
+    if status == "outcome":
+        assert after.reward.observations == before.reward.observations + 1
+        assert (
+            after.lineage_reward.observations == before.lineage_reward.observations + 1
+        )
+        assert not np.array_equal(after.reward.mean, before.reward.mean)
+    else:
+        assert after.reward.observations == before.reward.observations
+        assert after.lineage_reward.observations == before.lineage_reward.observations
 
 
 def test_bounded_gain_link_respects_parent_specific_opportunity(
@@ -693,6 +799,7 @@ def test_bounded_gain_link_respects_parent_specific_opportunity(
                 card=card,
                 context=training_context,
                 treatment=treated,
+                card_used=treated,
                 offer_propensity=0.5,
                 proposal_propensity=1.0,
                 joint_action_propensity=0.5,
@@ -1008,6 +1115,7 @@ def test_safety_model_rejects_mixed_offer_probabilities(
             card=card,
             context=evolution_context,
             treatment=bool(ordinal),
+            card_used=bool(ordinal),
             offer_propensity=offer,
             proposal_propensity=1.0,
             joint_action_propensity=offer if ordinal else 1.0 - offer,

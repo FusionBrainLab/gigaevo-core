@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 import hashlib
 import importlib
@@ -537,12 +538,21 @@ class DecisionKey(StrictFrozenModel):
     model_evidence_hash: str = Field(min_length=64, max_length=64)
     candidate_set_hash: str = Field(min_length=64, max_length=64)
     lineage_registry_hash: str = Field(min_length=64, max_length=64)
+    pending_by_bank_card: dict[str, int]
+    lineage_pending_by_bank_card: dict[str, int]
+    assessed_bank_card_ids: tuple[str, ...]
+    applicable_bank_card_ids: tuple[str, ...]
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def rng_key(self) -> str:
+        # Full evidence identifies the audit snapshot, not the inference state.
+        # Uncited outcomes must not perturb otherwise identical policy draws.
         return canonical_digest(
-            self.model_dump(mode="json", exclude={"rng_key", "decision_id"})
+            self.model_dump(
+                mode="json",
+                exclude={"rng_key", "decision_id", "evidence_hash"},
+            )
         )
 
     @computed_field  # type: ignore[prop-decorator]
@@ -654,6 +664,12 @@ class PosteriorFitDiagnostics(StrictFrozenModel):
     """Decision-time numerical health needed for posterior monitoring."""
 
     evidence_count: int = Field(ge=0)
+    # Defaulted so a diagnostics row persisted before these fields existed keeps
+    # loading and verifying against its stored digest (ledger additive-field
+    # invariant); 0/0/0 satisfies the use-accounting contract below.
+    offered_observations: int = Field(default=0, ge=0)
+    used_observations: int = Field(default=0, ge=0)
+    ignored_observations: int = Field(default=0, ge=0)
     reward_observations: int = Field(ge=0)
     lineage_observations: int = Field(default=0, ge=0)
     safety_observations: int = Field(ge=0)
@@ -676,6 +692,19 @@ class PosteriorFitDiagnostics(StrictFrozenModel):
     safety_hessian_condition: float = Field(ge=1.0)
     offer_probability_hash: str = Field(min_length=64, max_length=64)
 
+    @model_validator(mode="after")
+    def _use_accounting_contract(self) -> PosteriorFitDiagnostics:
+        if (
+            self.offered_observations
+            != self.used_observations + self.ignored_observations
+        ):
+            raise ValueError(
+                "offered observations must partition into used and ignored"
+            )
+        if self.used_observations > self.evidence_count:
+            raise ValueError("used observations cannot exceed usefulness evidence")
+        return self
+
 
 class DecisionRecord(StrictFrozenModel):
     """Durable write-ahead row for the complete two-stage memory action."""
@@ -693,6 +722,7 @@ class DecisionRecord(StrictFrozenModel):
     model_config_hash: str = Field(min_length=64, max_length=64)
     posterior_config_hash: str = Field(min_length=64, max_length=64)
     card_kind_contrast: bool
+    citation_contrast: bool = False
     policy: PolicySpecification
     candidate_universe: CandidateUniverseRecord
     applicability: ApplicabilityRecord
@@ -704,6 +734,7 @@ class DecisionRecord(StrictFrozenModel):
     action_probabilities: tuple[CandidateActionProbability, ...]
     pending_by_treatment: dict[str, int] = Field(default_factory=dict)
     pending_by_bank_card: dict[str, int] = Field(default_factory=dict)
+    lineage_pending_by_bank_card: dict[str, int] = Field(default_factory=dict)
     censored_count: int = Field(default=0, ge=0)
     ineligible_count: int = Field(default=0, ge=0)
     abstain_probability: float = Field(ge=0.0, le=1.0)
@@ -796,6 +827,16 @@ class DecisionRecord(StrictFrozenModel):
             model_evidence_hash=self.model_evidence_hash,
             candidate_set_hash=self.candidate_set_hash,
             lineage_registry_hash=self.lineage_registry_hash,
+            pending_by_bank_card=candidate_pending_counts(
+                self.candidates,
+                self.pending_by_bank_card,
+            ),
+            lineage_pending_by_bank_card=candidate_pending_counts(
+                self.candidates,
+                self.lineage_pending_by_bank_card,
+            ),
+            assessed_bank_card_ids=self.applicability.assessed_bank_card_ids,
+            applicable_bank_card_ids=self.applicability.applicable_bank_card_ids,
         )
         if key.rng_key != self.rng_key or key.decision_id != self.decision_id:
             raise ValueError("decision identity does not match its immutable inputs")
@@ -919,6 +960,9 @@ class TerminalOutcome(StrictFrozenModel):
     higher_is_better: bool
     ope_eligible: bool
     status: Literal["outcome", "invalid", "censored"]
+    # Defaulted so a terminal persisted before cited-use tracking existed loads
+    # and verifies against its stored digest; empty = no card cited (uncited).
+    used_card_ids: tuple[str, ...] = ()
     measurement: OutcomeMeasurement | None = None
     censor_reason: str = ""
     failure_stage: str = ""
@@ -938,7 +982,7 @@ class TerminalOutcome(StrictFrozenModel):
 
 
 class CausalObservation(StrictFrozenModel):
-    """One reconciled randomized card/control terminal used for inference."""
+    """One reconciled card/control terminal with explicit use eligibility."""
 
     decision_id: str
     event_ordinal: int = Field(ge=0)
@@ -946,6 +990,7 @@ class CausalObservation(StrictFrozenModel):
     context: EvolutionContext
     rag_applicability: RagApplicability = RagApplicability.UNASSESSED
     treatment: bool
+    card_used: bool
     offer_propensity: float = Field(gt=0.0, lt=1.0)
     proposal_propensity: float = Field(gt=0.0, le=1.0)
     joint_action_propensity: float = Field(gt=0.0, le=1.0)
@@ -961,8 +1006,18 @@ class CausalObservation(StrictFrozenModel):
     def invalid(self) -> bool:
         return self.status == "invalid"
 
+    @property
+    def use_contrast(self) -> float:
+        """Effect-coded citation status: cited +0.5, delivered-uncited -0.5."""
+
+        if not self.treatment:
+            return 0.0
+        return 0.5 if self.card_used else -0.5
+
     @model_validator(mode="after")
     def _observed_action_contract(self) -> CausalObservation:
+        if self.card_used and not self.treatment:
+            raise ValueError("a withheld card cannot be cited as used")
         if self.invalid and self.measurement is not None:
             raise ValueError("invalid observations cannot carry a gain measurement")
         if not self.invalid and self.measurement is None:
@@ -1224,3 +1279,17 @@ def candidate_set_hash(cards: tuple[CardSnapshot, ...]) -> str:
             for card in sorted(cards, key=lambda row: row.treatment_id)
         ]
     )
+
+
+def candidate_pending_counts(
+    cards: Sequence[CardSnapshot],
+    pending_by_bank_card: Mapping[str, int],
+) -> dict[str, int]:
+    """Return only pending counts that can affect this policy slate."""
+
+    relevant_ids = {bank_id for card in cards for bank_id in card.bank_lineage_ids}
+    return {
+        bank_id: pending_by_bank_card[bank_id]
+        for bank_id in sorted(relevant_ids)
+        if pending_by_bank_card.get(bank_id, 0)
+    }

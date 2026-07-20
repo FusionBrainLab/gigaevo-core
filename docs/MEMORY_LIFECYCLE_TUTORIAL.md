@@ -69,6 +69,7 @@ in-flight treatment cannot disappear before credit lands.
 A terminal row records:
 
 - whether treatment was delivered;
+- which delivered card ids the mutator explicitly cited as used;
 - whether the terminal is a valid outcome, invalid outcome, ineligible row, or
   censoring event;
 - bounded direction-normalized gain when observed;
@@ -76,6 +77,13 @@ A terminal row records:
 - child/base linkage and archive disposition.
 
 Immediate utility is the child outcome relative to its base parent.
+
+Delivery and use are deliberately separate. The immutable ledger retains every
+randomized delivery/withholding outcome for offer-policy ITT/OPE and uptake
+diagnostics. The card-usefulness posterior admits withheld controls and cited
+deliveries only. If a delivered card is absent from grounded `card_ids_used`,
+that outcome has zero effect on its reward, safety, lineage, and retirement
+posterior.
 
 With the default lineage depth `3`, the system also waits for a fixed number of
 same-island mutation opportunities and records the best non-negative,
@@ -136,13 +144,20 @@ allows only:
 NEW | EQUIVALENT
 ```
 
-`EQUIVALENT` requires both:
+For an `insight`, `EQUIVALENT` requires both:
 
 1. materially the same applicability condition;
 2. materially the same intervention.
 
 Shared topic, mechanism, objective, vocabulary, or expected effect is
 insufficient. Broader/narrower conditions are not equivalent.
+
+For a `program`, `EQUIVALENT` instead means the same load-bearing strategy
+family under materially the same applicability condition: materially the same
+representation or state, core procedure, decision logic, update or output
+policy, and essential constraints. Seeds, constants, ordinary hyperparameters,
+resource budgets, batching or scheduling details, and interchangeable
+supporting plumbing do not split a family.
 
 For `EQUIVALENT`, the existing treatment prose remains immutable. The gate pools
 provenance and founding evidence and records the incoming candidate description
@@ -159,10 +174,10 @@ The writer also selects a bounded number of strong programs and asks the program
 author for one holistic strategy hypothesis. The response is again
 `DROP | NEW`.
 
-Program candidates pass through the same authored-action retrieval and strict
-equivalence protocol. Equivalent strategy families keep the better concrete
-representative under the configured fitness direction. The default bank cap is
-32 same-task program families.
+Program candidates pass through the same authored-action retrieval and
+kind-aware equivalence protocol. Equivalent strategy families keep the better
+concrete representative under the configured fitness direction. The default
+bank cap is 32 same-task program families.
 
 By default program source is not stored. There is no unused source hash.
 
@@ -176,9 +191,9 @@ After content and evidence synchronization, the causal evictor snapshots:
 
 For each card lineage it requires:
 
-- minimum treated support;
+- minimum cited-treatment support;
 - minimum pooled controls;
-- support across distinct `(island, MAP-Elites parent cell)` contexts;
+- support across distinct assessable `(island, MAP-Elites parent cell)` contexts;
 - no pending immediate or lineage outcomes.
 
 It fits the current hierarchical posterior over the current bank. Retirement
@@ -199,13 +214,20 @@ absolute normalized gains in this task's randomized control arm. Controls keep
 the scale independent of the card effect under judgment, and the boundary
 follows realized mutation dynamics rather than configured metric width. A
 supported neutral card can eventually retire, while an uncertain card retains
-exploration value.
+exploration value. Exact zeros are excluded so the quantile measures a
+non-trivial step; it is trusted only with the configured number of measured
+non-zero controls. Otherwise the boundary falls back to zero.
 
 A supported context whose remaining feasible positive headroom does not exceed
-that threshold cannot certify uselessness and is skipped. At least one
-assessable context is required. With no non-zero control gains, the practical
-boundary is zero: confidently harmful cards can still retire, while neutral
-retirement waits for an empirical scale.
+that threshold cannot certify uselessness or count toward context support. Its
+posterior is still evaluated: an optimistic keep-vote rescues the card, while a
+non-viable verdict from that clipped context is ignored. Confidently harmful
+cards can still retire when enough assessable contexts exist.
+
+The default normalized residual-scale floor is `0.01`. A lower-noise task can
+push posterior mass onto that boundary; retirement then fails-keep and warns
+with the startup-validated
+`memory.posterior_config.reward_residual_sd_bounds` knob.
 
 For every context/state pair, the evictor computes a Wilson upper bound over the
 posterior Monte Carlo estimate of:
@@ -246,12 +268,12 @@ last interval would require one shared transactional store.
 A card remaining in the bank does not necessarily mean it is good:
 
 - it may be uncertain;
-- it may lack treated/control support;
+- it may lack cited-treatment/control support;
 - all observations may come from one MAP-Elites cell;
 - a lineage outcome may still be pending;
 - posterior numerical checks may have failed;
 - it may be useful in another task;
-- it may have stopped being proposed before support accumulated.
+- it may have stopped being cited before use support accumulated.
 
 Likewise, censored outcomes do not train the reward or safety head. This is
 conservative—cards are retained—but assumes censoring is conditionally
@@ -280,12 +302,12 @@ Questions to answer:
 | Was the whole bank eligible? | decision candidate snapshots |
 | What did RAG assess? | applicability assessment and candidate labels |
 | Which card was proposed/offered? | decision record and propensities |
-| Did the child receive it? | immutable render metadata and terminal |
+| Did the child receive and cite it? | immutable render metadata, frozen mutation assignment, and terminal |
 | Was reward immediate or delayed? | terminal versus lineage observations |
 | Did authoring drop, add, or deduplicate? | write ledger and authored-candidate description |
 | Why was a card retained? | support/pending/numerical retirement diagnostics |
 | Which ids were removed? | `MEMORY_V2_WRITER_SYNC.retired_card_ids` and `evicted` rows |
-| Was retrieval useful overall? | randomized treatment/control OPE and posterior summaries |
+| Was retrieval useful overall? | offer-policy ITT/OPE, uptake rate, and cited-use posterior summaries |
 
 Do not infer RAG or memory value from card count, embedding distance, or selected
 examples alone. The randomized ledger and its treatment/control statistics are

@@ -87,6 +87,7 @@ def _closed_calibration_ledger(
                 higher_is_better=True,
                 ope_eligible=True,
                 status="invalid" if invalid else "outcome",
+                used_card_ids=(card.bank_card_id,) if record.delivered else (),
                 measurement=(
                     None
                     if invalid

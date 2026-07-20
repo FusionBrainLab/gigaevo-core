@@ -89,6 +89,10 @@ feature_config:
   # shared effect is learned from randomized terminal outcomes, never asserted
   # by the retriever itself. The no-RAG arm removes this coordinate entirely.
   retrieval_applicability_contrast: ${memory.applicability.retrieval_applicability_contrast}
+  # The mutator's grounded citation is post-treatment uptake. It never gates
+  # posterior eligibility (intention-to-treat); it is one effect-coded contrast
+  # separating cited from delivered-but-uncited outcomes.
+  citation_contrast: true
 
 feature_map:
   _target_: gigaevo.memory_v2.features.HierarchicalFeatureMap
@@ -100,8 +104,9 @@ posterior_config:
   shared_effect_prior_sd: 0.35
   card_effect_prior_sd: 0.25
   reward_residual_sd_initial: 0.20
-  # Numerical support in normalized reward units. Retirement fails closed and
-  # emits a warning when posterior mass accumulates at either boundary.
+  # Numerical support in normalized reward units. The 0.01 lower bound is the
+  # default low-noise operating floor. Retirement fails closed and names this
+  # knob in its warning when posterior mass accumulates at either boundary.
   reward_residual_sd_bounds: [0.01, 5.0]
   reward_residual_log_prior_sd: 0.75
   reward_residual_mode_grid_points: 17

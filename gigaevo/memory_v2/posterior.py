@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from scipy.integrate import quad
 from scipy.optimize import brentq, minimize, minimize_scalar
 from scipy.special import expit, logit, logsumexp, ndtr
@@ -360,6 +360,16 @@ class TerminalUtilityPosteriorConfig(BaseModel):
     optimizer_gradient_tolerance: float = Field(default=1e-6, gt=0.0)
     max_hessian_condition: float = Field(default=1e12, gt=1.0)
     jitter: float = Field(default=1e-9, gt=0.0)
+
+    @field_validator("reward_residual_sd_bounds")
+    @classmethod
+    def _ordered_reward_residual_bounds(
+        cls, bounds: tuple[float, float]
+    ) -> tuple[float, float]:
+        lower, upper = bounds
+        if lower <= 0.0 or upper <= lower:
+            raise ValueError("reward residual bounds must be positive and ordered")
+        return bounds
 
 
 @dataclass(frozen=True)
@@ -901,6 +911,9 @@ class FittedTerminalUtilityPosterior:
         safety: LogisticPosterior,
         model_config_hash: str,
         evidence_count: int,
+        offered_observations: int,
+        used_observations: int,
+        ignored_observations: int,
         offer_probability_by_treatment: dict[str, float],
         reference_offer_probability: float,
         safety_integration_tolerance: float,
@@ -913,6 +926,9 @@ class FittedTerminalUtilityPosterior:
         self.safety = safety
         self.model_config_hash = model_config_hash
         self.evidence_count = evidence_count
+        self.offered_observations = offered_observations
+        self.used_observations = used_observations
+        self.ignored_observations = ignored_observations
         self.offer_probability_by_treatment = dict(offer_probability_by_treatment)
         self.reference_offer_probability = reference_offer_probability
         self.safety_integration_tolerance = safety_integration_tolerance
@@ -1211,7 +1227,7 @@ class FittedTerminalUtilityPosterior:
 class HierarchicalTerminalUtilityPosterior:
     """Fit a bounded valid-gain/invalidity hurdle posterior."""
 
-    MODEL_NAME = "hierarchical-direct-plus-lineage-utility"
+    MODEL_NAME = "hierarchical-cited-use-plus-lineage-utility"
 
     def __init__(
         self,
@@ -1239,14 +1255,19 @@ class HierarchicalTerminalUtilityPosterior:
         *,
         lineage_observations: Sequence[CausalObservation] = (),
     ) -> FittedTerminalUtilityPosterior:
+        # Randomized delivery is the treatment; citation is post-treatment
+        # uptake. Every delivered row therefore stays in every usefulness head
+        # (intention-to-treat), with citation entering only as an effect-coded
+        # design contrast — conditioning eligibility on it is collider bias.
         rows = tuple(observations)
         lineage_rows = tuple(lineage_observations)
         validate_lineage_observations(rows, lineage_rows)
-        reward_definitions = {row.context.reward for row in (*rows, *lineage_rows)}
+        model_rows = (*rows, *lineage_rows)
+        reward_definitions = {row.context.reward for row in model_rows}
         if len(reward_definitions) > 1:
             raise ValueError("posterior evidence mixes reward definitions")
         semantic_schema_hashes = {
-            row.context.map_elites.semantic_schema_hash for row in rows
+            row.context.map_elites.semantic_schema_hash for row in model_rows
         }
         if len(semantic_schema_hashes) > 1:
             raise ValueError("posterior evidence mixes semantic behavior schemas")
@@ -1283,6 +1304,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.context,
                     row.treatment,
                     rag_contrast=row.rag_applicability.contrast,
+                    use_contrast=row.use_contrast,
                 )
                 for row in rows
             ],
@@ -1314,6 +1336,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.context,
                     row.treatment,
                     rag_contrast=row.rag_applicability.contrast,
+                    use_contrast=row.use_contrast,
                 )
                 for row in valid_rows
             ],
@@ -1347,6 +1370,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.context,
                     row.treatment,
                     rag_contrast=row.rag_applicability.contrast,
+                    use_contrast=row.use_contrast,
                 )
                 for row in lineage_rows
             ],
@@ -1386,6 +1410,11 @@ class HierarchicalTerminalUtilityPosterior:
             safety=safety,
             model_config_hash=self.model_config_hash,
             evidence_count=len(rows),
+            offered_observations=sum(row.treatment for row in rows),
+            used_observations=sum(row.card_used for row in rows),
+            ignored_observations=sum(
+                row.treatment and not row.card_used for row in rows
+            ),
             offer_probability_by_treatment={
                 treatment_id: propensity_sum[treatment_id] / count
                 for treatment_id, count in propensity_count.items()

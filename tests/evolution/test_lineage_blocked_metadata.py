@@ -92,5 +92,5 @@ def test_applied_memory_ids_does_not_treat_structured_missing_used_as_used():
     assert applied_memory_ids(["shown-a"], {"changes": []}) == []
 
 
-def test_applied_memory_ids_legacy_without_structured_output_falls_back_to_injected():
-    assert applied_memory_ids(["shown-a", "shown-b"], None) == ["shown-a", "shown-b"]
+def test_applied_memory_ids_without_grounded_output_credits_nothing():
+    assert applied_memory_ids(["shown-a", "shown-b"], None) == []

@@ -266,6 +266,7 @@ class _BankCandidateSource:
         self.excluder = excluder if excluder is not None else NullExcluder()
         self.allow_cross_task = allow_cross_task
         self.allowed_kinds = frozenset(str(kind) for kind in allowed_kinds)
+        self._warned_empty_task_keys: set[str] = set()
 
     def _snapshot(
         self,
@@ -302,19 +303,45 @@ class _BankCandidateSource:
     def _registry_from_snapshot(
         self, snapshot: Sequence[Card], *, task_key: str
     ) -> tuple[Card, ...]:
+        if not self.allow_cross_task:
+            if not task_key.strip():
+                self._warn_empty_task_key("query", excluded_count=len(snapshot))
+                return ()
+            unscoped_count = sum(not card.task_key.strip() for card in snapshot)
+            if unscoped_count:
+                self._warn_empty_task_key("card", excluded_count=unscoped_count)
         cards = [
             card
             for card in snapshot
             if card.description.strip()
             and str(card.kind) in self.allowed_kinds
-            and (
-                self.allow_cross_task
-                or not card.task_key
-                or not task_key
-                or card.task_key == task_key
-            )
+            and self._matches_task(card, task_key=task_key)
         ]
         return tuple(sorted(cards, key=lambda card: card.id))
+
+    def _matches_task(self, card: Card, *, task_key: str) -> bool:
+        if self.allow_cross_task:
+            return True
+        query_key = task_key.strip()
+        card_key = card.task_key.strip()
+        if not query_key:
+            self._warn_empty_task_key("query", excluded_count=1)
+            return False
+        if not card_key:
+            self._warn_empty_task_key("card", excluded_count=1)
+            return False
+        return card_key == query_key
+
+    def _warn_empty_task_key(self, source: str, *, excluded_count: int) -> None:
+        if source in self._warned_empty_task_keys:
+            return
+        self._warned_empty_task_keys.add(source)
+        logger.warning(
+            "[MemoryV2][Candidates] allow_cross_task=false but the {} task_key "
+            "is empty; refusing {} unscoped candidate(s)",
+            source,
+            excluded_count,
+        )
 
 
 class WholeBankCandidateSource(_BankCandidateSource):

@@ -160,6 +160,7 @@ async def test_crossover_credits_each_card_in_its_parent_context_and_full_slate(
         child.get_metadata(MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY)
     )
     assert mutation_assignment.delivered_ids == ("base-card", "donor-card")
+    assert mutation_assignment.used_ids == ("base-card", "donor-card")
     assert mutation_assignment.ope_eligible is False
 
     child.metrics = {"is_valid": 1.0, "fitness": 0.8, "x": 4.0}
@@ -200,4 +201,13 @@ async def test_crossover_credits_each_card_in_its_parent_context_and_full_slate(
     assert {event.base_id: event.fitness_delta for event in terminals} == {
         base.id: pytest.approx(0.3),
         donor.id: pytest.approx(0.2),
+    }
+    # Each terminal is scoped to ONE parent decision, so its cited-card set must
+    # carry only that decision's own delivered card — never the global crossover
+    # union. The union would violate the ledger guard (a terminal may only cite
+    # the card its own decision delivered), hard-erroring cited crossover
+    # children under the default num_parents>=2.
+    assert {event.decision_id: event.used_card_ids for event in terminals} == {
+        "decision-base": ("base-card",),
+        "decision-donor": ("donor-card",),
     }

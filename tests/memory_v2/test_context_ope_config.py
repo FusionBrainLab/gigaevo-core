@@ -29,14 +29,57 @@ from gigaevo.memory_v2.eviction import CausalRetirementEvictor
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
+    DecisionKey,
     EnvironmentFingerprint,
     EvolutionContext,
     LineageCreditConfig,
     OutcomeMeasurement,
+    canonical_digest,
 )
 from gigaevo.memory_v2.ope import ConditionalOfferDREvaluator, PreDecisionUnit
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
+
+
+def test_full_audit_evidence_does_not_perturb_policy_rng(
+    evolution_context: EvolutionContext,
+) -> None:
+    key = DecisionKey(
+        run_id=evolution_context.run_id,
+        run_seed=7,
+        task_key=evolution_context.environment.task_key,
+        parent_id=evolution_context.parent_id,
+        attempt_id="attempt",
+        parent_iteration=evolution_context.parent_iteration,
+        event_ordinal=3,
+        environment_hash=evolution_context.environment.digest,
+        context_hash=canonical_digest(
+            evolution_context.model_dump(
+                mode="json",
+                exclude_computed_fields=True,
+            )
+        ),
+        model_config_hash="a" * 64,
+        evidence_hash="b" * 64,
+        model_evidence_hash="c" * 64,
+        candidate_set_hash="d" * 64,
+        lineage_registry_hash="e" * 64,
+        pending_by_bank_card={},
+        lineage_pending_by_bank_card={},
+        assessed_bank_card_ids=(),
+        applicable_bank_card_ids=(),
+    )
+
+    audit_only_change = key.model_copy(update={"evidence_hash": "f" * 64})
+    model_change = key.model_copy(update={"model_evidence_hash": "f" * 64})
+    pending_change = key.model_copy(update={"pending_by_bank_card": {"card": 1}})
+
+    assert audit_only_change.rng_key == key.rng_key
+    assert audit_only_change.decision_id == key.decision_id
+    assert model_change.rng_key != key.rng_key
+    assert model_change.decision_id != key.decision_id
+    assert pending_change.rng_key != key.rng_key
+    assert pending_change.decision_id != key.decision_id
 
 
 @pytest.mark.asyncio
@@ -167,6 +210,7 @@ def observation(
         card=card,
         context=context.model_copy(update={"run_id": run_id}),
         treatment=treatment,
+        card_used=treatment,
         offer_propensity=0.5,
         proposal_propensity=1.0,
         joint_action_propensity=0.5,

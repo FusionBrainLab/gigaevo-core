@@ -8,4 +8,4 @@ Classify this authored {kind} candidate against its nearest same-kind cards.
 
 {neighbors}
 
-Return `NEW` unless one offered neighbor has the exact same intervention and applicability condition; otherwise return `EQUIVALENT` with that id.
+Apply the system contract for the `{kind}` card kind. Return `NEW` unless one offered neighbor is equivalent under that rule; otherwise return `EQUIVALENT` with that id.

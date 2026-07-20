@@ -14,6 +14,7 @@ from gigaevo.memory_v2.models import (
     PosteriorFitDiagnostics,
     PosteriorPrediction,
     SafetyGateMode,
+    candidate_pending_counts,
     candidate_set_hash,
     canonical_digest,
 )
@@ -95,6 +96,8 @@ def decision_record(
         status="disabled",
     )
     posterior_config_hash = "c" * 64
+    pending_by_bank_card = {"older-bank": 1}
+    lineage_pending_by_bank_card: dict[str, int] = {}
     model_config_hash = canonical_digest(
         {
             "posterior": posterior_config_hash,
@@ -124,6 +127,16 @@ def decision_record(
         model_evidence_hash="e" * 64,
         candidate_set_hash=candidate_hash,
         lineage_registry_hash=candidate_hash,
+        pending_by_bank_card=candidate_pending_counts(
+            candidates,
+            pending_by_bank_card,
+        ),
+        lineage_pending_by_bank_card=candidate_pending_counts(
+            candidates,
+            lineage_pending_by_bank_card,
+        ),
+        assessed_bank_card_ids=applicability.assessed_bank_card_ids,
+        applicable_bank_card_ids=applicability.applicable_bank_card_ids,
     )
     return DecisionRecord(
         decision_id=key.decision_id,
@@ -144,6 +157,9 @@ def decision_record(
         applicability=applicability,
         fit_diagnostics=PosteriorFitDiagnostics(
             evidence_count=0,
+            offered_observations=0,
+            used_observations=0,
+            ignored_observations=0,
             reward_observations=0,
             safety_observations=0,
             reward_residual_sd=0.2,
@@ -170,7 +186,8 @@ def decision_record(
         candidates=candidates,
         action_probabilities=(row,),
         pending_by_treatment={"older-treatment": 1},
-        pending_by_bank_card={"older-bank": 1},
+        pending_by_bank_card=pending_by_bank_card,
+        lineage_pending_by_bank_card=lineage_pending_by_bank_card,
         censored_count=2,
         abstain_probability=0.0,
         proposed_treatment_id=card.treatment_id,

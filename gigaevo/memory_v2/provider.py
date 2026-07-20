@@ -36,6 +36,7 @@ from gigaevo.memory_v2.models import (
     EvolutionContext,
     PolicyDecision,
     PosteriorFitDiagnostics,
+    candidate_pending_counts,
     candidate_set_hash,
     canonical_digest,
 )
@@ -217,6 +218,15 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 model_evidence_hash=evidence.model_version,
                 candidate_set_hash=candidate_hash,
                 lineage_registry_hash=lineage_registry_hash,
+                pending_by_bank_card=candidate_pending_counts(
+                    eligible,
+                    evidence.pending_by_bank_card,
+                ),
+                lineage_pending_by_bank_card=candidate_pending_counts(
+                    eligible, evidence.lineage_pending_by_bank_card
+                ),
+                assessed_bank_card_ids=slate.applicability.assessed_bank_card_ids,
+                applicable_bank_card_ids=slate.applicability.applicable_bank_card_ids,
             )
             fitted = self._fit(
                 evidence.model_version,
@@ -356,6 +366,19 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 for row in decision.action_probabilities
                 if row.treatment_id == proposed.treatment_id
             )
+        offered_observations = sum(row.treatment for row in evidence.observations)
+        used_observations = sum(row.card_used for row in evidence.observations)
+        ignored_observations = offered_observations - used_observations
+        offer_propensity_sum: dict[str, float] = {}
+        offer_propensity_count: dict[str, int] = {}
+        for row in evidence.observations:
+            treatment_id = row.card.treatment_id
+            offer_propensity_sum[treatment_id] = (
+                offer_propensity_sum.get(treatment_id, 0.0) + row.offer_propensity
+            )
+            offer_propensity_count[treatment_id] = (
+                offer_propensity_count.get(treatment_id, 0) + 1
+            )
         scale = context.reward.scale
         record = DecisionRecord(
             decision_id=key.decision_id,
@@ -371,11 +394,15 @@ class CausalBanditMemoryProvider(MemoryProvider):
             model_config_hash=key.model_config_hash,
             posterior_config_hash=self.posterior.model_config_hash,
             card_kind_contrast=self.posterior.feature_map.config.card_kind_contrast,
+            citation_contrast=self.posterior.feature_map.config.citation_contrast,
             policy=self.policy.specification,
             candidate_universe=candidate_universe,
             applicability=applicability,
             fit_diagnostics=PosteriorFitDiagnostics(
                 evidence_count=fitted.evidence_count,
+                offered_observations=offered_observations,
+                used_observations=used_observations,
+                ignored_observations=ignored_observations,
                 reward_observations=fitted.reward.observations,
                 lineage_observations=fitted.lineage_reward.observations,
                 safety_observations=fitted.safety.observations,
@@ -403,7 +430,10 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 safety_gradient_inf=fitted.safety.gradient_norm,
                 safety_hessian_condition=fitted.safety.hessian_condition,
                 offer_probability_hash=canonical_digest(
-                    fitted.offer_probability_by_treatment
+                    {
+                        treatment_id: offer_propensity_sum[treatment_id] / count
+                        for treatment_id, count in offer_propensity_count.items()
+                    }
                 ),
             ),
             context=context,
@@ -415,6 +445,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
             action_probabilities=decision.action_probabilities,
             pending_by_treatment=dict(evidence.pending_by_treatment),
             pending_by_bank_card=dict(evidence.pending_by_bank_card),
+            lineage_pending_by_bank_card=dict(evidence.lineage_pending_by_bank_card),
             censored_count=evidence.censored_count,
             ineligible_count=evidence.ineligible_count,
             abstain_probability=decision.abstain_probability,

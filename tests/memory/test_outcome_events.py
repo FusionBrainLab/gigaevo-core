@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -52,7 +53,10 @@ def _child(*, child_fitness: float, base_fitness: float) -> Program:
     )
     child.set_metadata(
         MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
-        MutationAssignmentRecord(mutation_id=child.id).model_dump(mode="json"),
+        MutationAssignmentRecord(
+            mutation_id=child.id,
+            used_ids=(),
+        ).model_dump(mode="json"),
     )
     return child
 
@@ -93,6 +97,7 @@ def _crossover_child(
         MutationAssignmentRecord(
             mutation_id=child.id,
             parent_ids=tuple(parent_assignments),
+            used_ids=(),
         ).model_dump(mode="json"),
     )
     return child
@@ -209,6 +214,40 @@ async def test_terminal_outcome_emits_once_and_reevaluation_is_an_update(
     assert reconciliation.dupes == {}
     (terminal,) = reconciliation.terminals["memsel-terminal"]
     assert terminal.outcome == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
+async def test_cited_outcome_marker_remains_duplicate_after_json_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted = []
+    monkeypatch.setattr("gigaevo.memory.outcomes.emit_memory_event", emitted.append)
+    child = _child(child_fitness=0.8, base_fitness=0.5)
+    child.set_metadata(
+        MUTATION_MEMORY_MUTATION_ASSIGNMENT_METADATA_KEY,
+        MutationAssignmentRecord(
+            mutation_id=child.id,
+            delivered_ids=("card",),
+            used_ids=("card",),
+        ).model_dump(mode="json"),
+    )
+
+    first = await record_program_memory_outcome(
+        child,
+        storage=AsyncMock(),
+        metrics_context=_metrics_context(),
+    )
+    restarted = Program.from_dict(json.loads(json.dumps(child.to_dict())))
+    duplicate = await record_program_memory_outcome(
+        restarted,
+        storage=AsyncMock(),
+        metrics_context=_metrics_context(),
+    )
+
+    assert (first, duplicate) == ("emitted", "duplicate")
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], MemoryOutcome)
+    assert emitted[0].used_card_ids == ("card",)
 
 
 @pytest.mark.asyncio

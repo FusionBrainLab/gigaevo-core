@@ -15,7 +15,9 @@ Memory v2 achieves the intended first-iteration replacement:
   conditional probability;
 - every eligible same-task card enters one posterior action universe; an agentic
   research pass can add a frozen pre-treatment applicability label but cannot
-  remove a card from that universe.
+  remove a card from that universe;
+- randomized offer outcomes remain complete for ITT/OPE, while only grounded
+  cited use can update a card's usefulness posterior.
 
 This is a solid causal core without an arbitrary task-wide admission cap. Agentic
 retrieval supplies semantic context through a learned, outcome-checked feature
@@ -25,7 +27,7 @@ a full archive-contribution model.
 At cold start, cards with no v2 randomized evidence are deliberately close to
 exchangeable. The policy explores them instead of pretending that v1 observational
 scores or an unlogged semantic ranker are causal evidence. Differentiation becomes
-trustworthy only after randomized treated/control outcomes accumulate.
+trustworthy only after cited-treatment and randomized-control outcomes accumulate.
 
 ## System architecture
 
@@ -89,6 +91,12 @@ The stable bank card id is the treatment id. A content digest audits the exact
 rendered payload, but it is not a second action identity. The write path does not
 rewrite equivalent-card text, so evidence pools only for the treatment that was
 actually banked.
+
+The mutation assignment separately freezes the prompt-time delivered ids and
+the subset explicitly returned in grounded `card_ids_used`. Missing structured
+output, omitted ids, and hallucinated ids yield no use credit. This signal is
+carried into the immutable terminal instead of being reconstructed from mutable
+parent metadata.
 
 **Plain English:** a card is treated like a medicine label. The family name says
 which medicine it belongs to; the exact formulation says which version was actually
@@ -167,7 +175,7 @@ Terminals have three states:
 
 - **valid**: an evaluable child with a bounded numeric gain;
 - **invalid**: treatment occurred, but mutation or evaluation failed;
-- **censored**: treatment effect cannot be observed, for example a pre-treatment or
+- **censored**: the offered intervention outcome cannot be observed, for example a pre-treatment or
   administrative failure.
 
 Invalid outcomes train the risk model. They never receive an invented numeric reward.
@@ -177,24 +185,38 @@ Censored outcomes remain auditable but do not train either outcome likelihood.
 
 ![Hierarchical reward and invalidity posterior](diagrams/memory_v2_posterior_hierarchy.png)
 
-For card revision `j`, context `x`, delivered-card indicator `A`, and frozen RAG
+Let `Z` be randomized delivery and `U` be grounded cited use. The usefulness
+likelihood admits exactly `Z=0` controls and `Z=1,U=1` cited deliveries:
+
+```text
+E = 1{Z = 0 or U = 1}
+```
+
+Rows with `Z=1,U=0` remain in the full assignment ledger but are mathematically
+absent from reward, invalidity, delayed-lineage, and retirement fitting. For
+admitted card revision `j`, context `x`, use indicator `A=U`, and frozen RAG
 applicability label `r`, the design vector is:
 
 ```text
 z_j(A, x, r) = [ baseline(x), A * effect_j(x, r) ]
 ```
 
-The effect weight is `0` for withheld control and `1` for delivered treatment.
+The effect weight is `0` for withheld control and `1` for a cited delivery.
 All proposed-but-withheld cards therefore share the same contextual control arm;
-only delivered cards add a stable card effect. When enabled, `r` adds one shared
-treatment-effect contrast that is learned from randomized outcomes. It is neither
-a manual reward nor a candidate filter. Normal post-validation runs use fixed
-probability `e = 0.7`; balanced validation runs use `e = 0.5` to collect
-information faster.
+only cited cards add a stable card effect. When enabled, `r` adds one shared
+treatment-effect contrast learned from those usefulness-eligible outcomes. It is
+neither a manual reward nor a candidate filter. Normal post-validation runs use
+fixed delivery probability `e = 0.7`; balanced validation runs use `e = 0.5`.
+
+This strict use-attribution posterior is not itself the randomized
+intention-to-treat effect of offering a card: citation is post-delivery behavior.
+The complete randomized `Z` ledger is retained separately for offer ITT/OPE and
+uptake analysis. An uncited outcome can inform those diagnostics, but cannot
+move any card-usefulness coefficient directly or indirectly.
 
 ### Valid-gain model
 
-For valid terminals:
+For usefulness-eligible valid terminals:
 
 ```text
 Y_i | beta, sigma ~ Normal(z_i^T beta, sigma^2 + s_i^2)
@@ -223,7 +245,7 @@ measured more precisely than others.
 
 ### Invalidity model
 
-Every non-censored terminal, valid or invalid, trains:
+Every usefulness-eligible non-censored terminal, valid or invalid, trains:
 
 ```text
 D_i ~ Bernoulli(sigmoid(z_i^T gamma))
@@ -334,8 +356,9 @@ For each mutation attempt:
 4. **Resolve the complete universe.** Refresh eligibility after research, render
    and hash every eligible singleton card text, and retain the stable card id as
    the treatment identity. The assessment cannot gate this universe.
-5. **Fit only prior evidence.** Load eligible closed terminals committed before this
-   decision and fit the reward and invalidity posteriors.
+5. **Fit only prior use evidence.** Load withheld controls and cited-delivery
+   terminals committed before this decision and fit the reward and invalidity
+   posteriors. Keep uncited deliveries only in offer-policy analytics.
 6. **Predict every candidate.** Draw 1,024 shared posterior samples and record effect,
    gain, risk, and uncertainty summaries. The RAG label contributes only its learned
    treatment-effect contrast.
@@ -366,6 +389,8 @@ For each mutation attempt:
 13. **Inject at most one card.** Only the delivered branch enters the mutator. The
     withheld branch still records the proposed revision and consumes a lease until its
     terminal closes.
+14. **Freeze grounded use.** At child birth, intersect `card_ids_used` with the
+    immutable delivered slate. The terminal carries that exact set to the ledger.
 
 
 The logged leaf probabilities are:
@@ -379,9 +404,10 @@ P(propose j and withhold)  = rho_j * 0.3
 ### How the system decides which card is better
 
 It does not assign a permanent global score. In each posterior world, it estimates
-the delivered-minus-withheld hurdle utility for every card under the **current
-numeric evolutionary context**. A card is better for this parent when more posterior
-worlds say it has the largest positive safe effect.
+the cited-use-versus-withheld-control hurdle utility for every card under the
+**current numeric evolutionary context**. A card is better for this parent when
+more posterior worlds say it has the largest positive safe effect. Full-ledger
+offer ITT is reported separately.
 
 At cold start, identical prior structure means admitted cards receive approximately
 uniform exploration. After evidence accumulates, card rankings can differ by parent
@@ -398,6 +424,7 @@ active attempt
   -> context and candidates frozen
   -> decision committed
   -> one card delivered or withheld
+  -> grounded cited-use subset frozen at child birth
   -> child linked before storage exposure
   -> exactly one terminal recorded
   -> lease released only at terminal closure
@@ -414,6 +441,7 @@ The outcome taxonomy prevents common attribution errors:
 - pre-treatment failures are censored;
 - orphan decisions are reconciled and explicitly closed;
 - mixed offer propensities are rejected by this first model;
+- uncited deliveries remain offer evidence but never train usefulness;
 - v1 gains never silently warm the v2 posterior.
 
 ## Bank growth and retirement
@@ -425,25 +453,27 @@ consolidation.
 
 Read-time safety remains the first line of defense. In addition,
 `CausalRetirementEvictor` performs conservative periodic maintenance. A lineage
-is eligible only with randomized treated/control support, evidence from multiple
+is eligible only with cited-treatment/control support, evidence from multiple
 discrete `(island, MAP-Elites parent cell)` contexts, and no immediate or lineage
 outcomes pending. Selection calls any positive effect helpful. Retirement uses
 a region-of-practical-equivalence boundary equal to a low quantile of non-zero
 absolute normalized gains in the task's randomized control arm. Using controls
 keeps the scale independent of the treatment effect being judged. This
 self-normalizes to realized evolutionary dynamics rather than configured bound
-width. A context whose feasible positive headroom cannot clear the boundary is
-not allowed to certify uselessness, and at least one assessable context is
-required. An empty non-zero control scale falls back to a zero, harm-only
-boundary.
+width. The quantile requires the configured number of measured non-zero
+controls; exact zeros are excluded deliberately, and insufficient support falls
+back to a zero, harm-only boundary. A context whose feasible positive headroom
+cannot clear the boundary is not allowed to certify uselessness or count toward
+context support, but its optimistic posterior can still veto deletion.
 
 For every supported context and both unassessed and optimistic-applicable RAG
 states, retirement requires the Wilson upper bound on
 `P(safe and practically useful)` to remain below the configured boundary.
 Optimizer failure, upper hyperparameter contact, excessive residual-scale
 boundary mass, or safety-integration error in either immediate or lineage head
-vetoes deletion and emits a warning. The one-use verdict binds the exact card
-revision and evidence version. The admission gate then checks
+vetoes deletion and emits a warning. Residual-bound warnings name the startup-validated
+`memory.posterior_config.reward_residual_sd_bounds` knob. The one-use verdict
+binds the exact card revision and evidence version. The admission gate then checks
 live/historical-alias leases and foreign-task positive evidence before removal.
 Production configuration forbids cross-task delivery while causal retirement
 is enabled because the retirement ledger is not yet identified per source task.
@@ -459,16 +489,18 @@ The causal SQLite ledger and JSON card bank do not share a transaction. There is
 a narrow interval between the final evidence-version read and card deletion in
 which a terminal could commit. Removing that interval requires a common
 transactional store. Censored terminals are omitted from reward/safety fitting
-under a conditionally non-informative-censoring assumption. Cards that stop
-being proposed before minimum treated support fail-keep rather than receiving a
-non-causal staleness verdict.
+under a conditionally non-informative-censoring assumption. Delivered-but-uncited
+terminals are omitted from all usefulness heads. Cards that stop being cited
+before minimum use support fail-keep rather than receiving a non-causal exposure
+or staleness verdict.
 
 ## What the smoke run must monitor
 
 The first real experiment is a machinery and calibration gate, not a performance
 claim. The analytics must inspect:
 
-- number of decisions, proposals, abstentions, deliveries, controls, and terminals;
+- number of decisions, proposals, abstentions, deliveries, citations, ignored
+  deliveries, controls, and terminals;
 - eligible-bank, RAG-applicable, and final-slate sizes; research-empty rate;
 - full-bank coverage and RAG-label turnover;
 - complete probability mass and exact joint treatment/control propensities;
@@ -481,6 +513,7 @@ claim. The analytics must inspect:
 - posterior changes over decision prefixes;
 - assignment balance, overlap, effective sample size, and conditional-offer DR
   sensitivity;
+- offer ITT/OPE separately from cited-use posterior behavior;
 - terminal closure, bounded gains, immutable hashes, and ledger accounting.
 
 Expected cold-start behavior is broad uncertainty and near-symmetric safe-card
@@ -500,10 +533,11 @@ card superior.
 | Hierarchical model | Effects exist at shared, card-family, and card-by-context levels instead of fitting isolated cards independently. |
 | Partial pooling | Cards share evidence where appropriate but retain individual effects. It lies between one global score and unrelated per-card scores. |
 | Shrinkage | With little data, extreme estimates are pulled toward the common center. Strong evidence can overcome that pull. |
-| Treatment | The proposed card was actually shown to the mutator. |
+| Offered treatment | The proposed card was actually shown to the mutator (`Z=1`). |
+| Cited use | The mutator explicitly named the delivered card in grounded `card_ids_used` (`U=1`). Only this delivered subset can update usefulness. |
 | Control | The same card was proposed but deliberately withheld, giving a comparable no-card outcome. |
 | Propensity | The logged probability that the policy assigned a particular action. Here it includes proposal probability and the configured offer probability (0.7 normally, 0.5 in balanced validation). |
-| Shared control baseline | Every withheld proposal uses the same contextual no-card baseline; a delivered card adds its contextual effect. |
+| Shared control baseline | Every withheld proposal uses the same contextual no-card baseline; a cited delivery adds its contextual effect. |
 | Nuisance effect | A necessary background term, such as some parents/cards naturally having different baseline outcomes, that is not itself the causal card effect of interest. |
 | Gaussian / Normal | A bell-shaped uncertainty model used for valid numeric gains and coefficient uncertainty. |
 | Bernoulli | A two-outcome model used for valid versus invalid terminals. |
@@ -524,7 +558,7 @@ card superior.
 | Abstention | The no-proposal action wins a posterior world when no admitted card has positive usable effect. |
 | Covariance / correlation | Uncertainties that move together. Shared posterior worlds preserve the fact that cards depend on common coefficients and evidence. |
 | Monte Carlo | Approximate a probability by counting outcomes across many reproducible posterior draws. The 512 proposal worlds define the finite behavior policy. |
-| Identifiability | Having enough randomized treated/control evidence to distinguish a card effect from background differences. |
+| Identifiability | Having enough cited-treatment and randomized-control evidence to distinguish the use contrast from background differences; offer ITT uses the complete randomized ledger. |
 | Cold start | No eligible v2 outcomes yet. The policy honestly relies on priors and exploration rather than fabricated confidence. |
 | OPE | Off-policy evaluation: estimate how another delivery rule might have performed using logged randomized data. Current scope changes only the conditional offer gate. |
 | Doubly robust (DR) | An OPE estimator combining logged propensities and frozen outcome predictions; it can remain consistent if one of those two components is correct under its assumptions. |
@@ -537,6 +571,8 @@ The current implementation is intentionally precise about what it does not claim
 - no semantic program representation in the posterior;
 - no multi-card slate or crossover attribution;
 - no direct archive-contribution credit;
+- no claim that the cited-use contrast is randomized ITT; offer ITT/OPE remains a
+  separate full-ledger estimand;
 - no full RAG/proposal-policy OPE;
 - no learned hierarchy-scale hyperpriors;
 - no exact full-Bayes claim: reward coefficients are conditionally conjugate with

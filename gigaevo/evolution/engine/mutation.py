@@ -116,15 +116,13 @@ def applied_memory_ids(injected_ids: list[str], mutation_output: object) -> list
 
     ``injected_ids`` remains the full exposure slate for write-time attribution.
     Lineage exclusion is stricter: descendants should not re-see cards the branch
-    truly used, but merely showing a card should not ban it forever. Current
-    structured mutation output carries ``card_ids_used``; legacy/non-structured
-    mutations fall back to the injected slate because they have no use signal.
+    truly used, but merely showing a card should not ban it forever. Only the
+    grounded ``card_ids_used`` field is a use signal; absent structured output
+    means that no card can receive use credit.
     """
     injected = {cid.strip() for cid in injected_ids if cid.strip()}
-    if not injected:
+    if not injected or not isinstance(mutation_output, dict):
         return []
-    if not isinstance(mutation_output, dict):
-        return sorted(injected)
     raw_used = mutation_output.get("card_ids_used")
     if not isinstance(raw_used, list):
         return []
@@ -379,6 +377,7 @@ async def generate_one_mutation(
             mutation_id=program.id,
             parent_ids=tuple(parent.id for parent in parents),
             delivered_ids=tuple(injected_ids),
+            used_ids=tuple(applied_ids),
             source_decision_ids=tuple(
                 sorted(
                     {

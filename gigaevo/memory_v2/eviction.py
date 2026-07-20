@@ -29,7 +29,7 @@ from gigaevo.memory_v2.rng import EventRNG
 
 @dataclass(frozen=True)
 class _RetirementVerdict:
-    evidence_version: str
+    model_evidence_version: str
     revision: CardSnapshot
 
 
@@ -108,7 +108,10 @@ class CausalRetirementEvictor:
         verdict = self._verdicts.pop(card.id, None)
         if verdict is None:
             return False
-        if self.ledger.snapshot().version != verdict.evidence_version:
+        evidence = self.ledger.snapshot()
+        if evidence.model_version != verdict.model_evidence_version:
+            return False
+        if self._has_pending_lineage(verdict.revision, evidence):
             return False
         try:
             revision = CardSnapshot.from_card(card)
@@ -134,9 +137,10 @@ class CausalRetirementEvictor:
             revisions.append(revision)
 
         self._verdicts.clear()
-        if not revisions or not evidence.observations:
+        usefulness_rows = evidence.observations
+        if not revisions or not usefulness_rows:
             return []
-        minimum_useful_effect = self._practical_effect_threshold(evidence.observations)
+        minimum_useful_effect = self._practical_effect_threshold(usefulness_rows)
         try:
             fitted = self.posterior.fit(
                 evidence.observations,
@@ -154,33 +158,50 @@ class CausalRetirementEvictor:
         ):
             if not head.optimizer_success:
                 reason = "optimizer failed"
+                residual_hint = ""
             elif head.hyperparameters_at_boundary:
-                reason = "hyperparameters reached a boundary"
+                reason = "residual scale reached the configured upper bound"
+                residual_hint = (
+                    "; raise the upper value in "
+                    "memory.posterior_config.reward_residual_sd_bounds "
+                    "for high-noise tasks"
+                )
             elif head.residual_boundary_probability > self.safety.alpha:
                 reason = (
                     "residual-scale boundary mass "
                     f"{head.residual_boundary_probability:.6g} exceeds "
                     f"alpha={self.safety.alpha:.6g}"
                 )
+                residual_hint = (
+                    "; adjust memory.posterior_config.reward_residual_sd_bounds "
+                    "(including a lower floor for low-noise or variance-floor tasks)"
+                )
             else:
                 continue
             logger.warning(
-                "[MemoryV2][Retirement] disabled for evidence {}: {} reward head {}",
+                "[MemoryV2][Retirement] disabled for evidence {}: {} reward head {}{}",
                 evidence.version,
                 name,
                 reason,
+                residual_hint,
             )
             return []
 
-        global_controls = sum(not row.treatment for row in evidence.observations)
+        # Invalid controls still inform the risk head, but without a gain
+        # measurement they cannot support reward-based retirement.
+        global_controls = sum(
+            not row.treatment and row.measurement is not None for row in usefulness_rows
+        )
         rng = EventRNG(evidence.model_version)
         for revision in revisions:
-            rows = self._lineage_rows(revision, evidence.observations)
+            rows = self._lineage_rows(revision, usefulness_rows)
             if self._has_pending_lineage(revision, evidence) or not self._supported(
                 rows, global_controls
             ):
                 continue
             contexts = self._distinct_contexts(rows)
+            # Cheap coarse gate before the stricter assessable-context check in
+            # _non_viable_everywhere.
             if len(contexts) < self.min_distinct_contexts:
                 continue
             if not self._non_viable_everywhere(
@@ -192,7 +213,7 @@ class CausalRetirementEvictor:
             ):
                 continue
             self._verdicts[revision.bank_card_id] = _RetirementVerdict(
-                evidence_version=evidence.version,
+                model_evidence_version=evidence.model_version,
                 revision=revision,
             )
 
@@ -222,8 +243,8 @@ class CausalRetirementEvictor:
             RagApplicability.UNASSESSED,
             RagApplicability.APPLICABLE,
         )
-        assessed_context = False
-        for context_index, context in enumerate(contexts):
+        assessable_contexts = 0
+        for context in contexts:
             try:
                 _, feasible_headroom = normalized_gain_bounds(context)
             except ValueError as exc:
@@ -233,9 +254,12 @@ class CausalRetirementEvictor:
                     exc,
                 )
                 return False
-            if feasible_headroom <= minimum_useful_effect:
-                continue
-            assessed_context = True
+            if feasible_headroom > minimum_useful_effect:
+                assessable_contexts += 1
+        if assessable_contexts < self.min_distinct_contexts:
+            return False
+
+        for context_index, context in enumerate(contexts):
             for applicability_index, applicability in enumerate(applicability_states):
                 try:
                     prediction = fitted.prediction(
@@ -268,13 +292,20 @@ class CausalRetirementEvictor:
                     prediction.safety_integration_error
                     > fitted.safety_integration_tolerance
                 ):
+                    logger.warning(
+                        "[MemoryV2][Retirement] safety integration failed closed "
+                        "for {}: error {:.6g} exceeds tolerance {:.6g}",
+                        revision.bank_card_id,
+                        prediction.safety_integration_error,
+                        fitted.safety_integration_tolerance,
+                    )
                     return False
                 if (
                     self._wilson_upper(prediction.probability_safe_and_helpful)
                     > self.max_viability_probability
                 ):
                     return False
-        return assessed_context
+        return True
 
     def _practical_effect_threshold(
         self,
@@ -287,10 +318,19 @@ class CausalRetirementEvictor:
             and row.measurement is not None
             and row.measurement.value != 0.0
         ]
-        if not magnitudes:
+        # Exact zeros are deliberately excluded: the quantile estimates the
+        # scale of a realized non-trivial step instead of collapsing toward a
+        # harm-only boundary on plateau-heavy tasks. Require the configured
+        # pooled-control support in measured non-zero magnitudes before using
+        # that conditional scale. The immediate-control denomination is also
+        # applied to lineage-inclusive utility; option value enters both arms,
+        # so this mismatch is fail-keep.
+        if len(magnitudes) < self.min_global_control:
             logger.debug(
-                "[MemoryV2][Retirement] no non-zero randomized-control gains; "
-                "using zero (harm-only) practical threshold"
+                "[MemoryV2][Retirement] only {} non-zero measured randomized-control "
+                "gains (need {}); using zero (harm-only) practical threshold",
+                len(magnitudes),
+                self.min_global_control,
             )
             return 0.0
         threshold = float(

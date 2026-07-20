@@ -66,6 +66,10 @@ key for the exact block. The context stage recognizes the block as preformatted
 and does not wrap it a second time. Rewriting a near-duplicate card therefore
 keeps the same Bayesian arm and continues accumulating its randomized evidence.
 
+The mutation assignment also freezes the delivered ids and the grounded subset
+explicitly returned in `card_ids_used`. Missing structured output, omitted ids,
+and hallucinated ids receive no use credit.
+
 Evidence is isolated by a compact `EnvironmentFingerprint`: task, mutation
 model settings, algorithm, the concrete `MutationOperator` class, program
 format, and pipeline. The operator belongs to each decision's frozen
@@ -112,13 +116,18 @@ The decision is committed before prompt exposure. If a card is delivered, its
 selection lease is reserved with compare-and-swap semantics. The child link is
 persisted before the child enters program storage. Every decision then accepts
 one immutable terminal whose parent, child link, metric direction, and metric
-bounds are checked against the frozen decision.
+bounds are checked against the frozen decision. That terminal carries the
+birth-frozen cited-use subset; mutable parent metadata is never consulted for
+credit.
 
 Evaluation-invalid results and post-decision mutation/prompt failures are
 invalid outcomes. Pre-treatment or administrative failures are censored.
 Discarded or missing children are explicitly closed, and startup reconciliation
 closes orphan decisions. Censored and OPE-ineligible rows remain auditable but
-do not enter posterior fitting. SQLite records decision, child-link, and
+do not enter posterior fitting. Every valid randomized row enters the usefulness
+heads under intention-to-treat, whether or not its card was cited; grounded
+citation is an effect-coded contrast, not an eligibility gate (see Bounded
+Hierarchical Utility). SQLite records decision, child-link, and
 terminal UTC timestamps independently of immutable payload hashes, so retries
 cannot manufacture timestamp conflicts.
 
@@ -164,30 +173,58 @@ update rates do not share one clock. The immediate terminal still trains the
 safety head; only matured lineage rows train valid reward. This endpoint is not
 direct MAP-Elites archive contribution.
 
-Invalidity is modeled as a separate treatment-dependent hurdle. The final
+Invalidity is modeled as a separate hurdle. Let `Z` denote randomized delivery
+and `U` grounded cited use. Under intention-to-treat the usefulness likelihood
+keeps every valid randomized row — `Z=0` controls and both `Z=1,U=1` cited and
+`Z=1,U=0` uncited deliveries. Citation is post-treatment uptake, so gating
+eligibility on it would open a collider; `U` instead enters only as an
+effect-coded contrast (below). The final
 action value combines valid gain with the frozen parent's worst feasible gain
 under invalidity:
 
 ```text
-D | x,j,a ~ Bernoulli(p_a)                         # every terminal
-Y | D=0,x,j,a ~ Normal(g_Y + a tau_Y, sigma)       # valid gain only
+D | x,j,a ~ Bernoulli(p_a)                         # every randomized terminal (ITT)
+Y | D=0,x,j,a ~ Normal(g_Y + a tau_Y, sigma)       # valid gain, ITT over citation
 v_a = clip(E[Y | D=0,x,j,a], parent_gain_bounds)
 logit(p_a) = g_D(x) + a tau_D(x,j)
 q_a = (1-p_a) v_a + p_a worst_feasible_gain(parent)
 effect(x,j) = q_1 - q_0
 ```
 
-The design is `baseline(x) + A * card_effect(x)`: proposed-but-withheld controls
-all use the same contextual baseline, while delivered cards add their lineage and
-stable card effect. When enabled, a frozen RAG-applicability indicator is one
-additional shared treatment-effect contrast. It is learned from the same randomized
-outcomes; it is not a hand-written reward or a candidate gate. A fixed conditional
+The design is `baseline(x) + Z * card_effect(x)` over the randomized delivery
+`Z`: proposed-but-withheld controls (`Z=0`) use the contextual baseline, while
+every delivery (`Z=1`, cited or not) adds its lineage and stable card effect.
+Grounded citation enters as one additional effect-coded contrast
+`u ∈ {+0.5 cited, −0.5 delivered-uncited, 0.0 control}`, gated by the
+`citation_contrast` feature flag (`config/memory/v2.yaml`, on by default). The
+auction and retirement read predictions at the citation-neutral midpoint `u=0`:
+the fitted delivery effect with the (endogenous, post-treatment) citation
+contrast held at its neutral level. This midpoint is a modeling convention, not a
+nonparametrically identified controlled direct effect — citation is endogenous
+uptake, so reading at `u=0` is parametric interpolation, not an identified
+mediator intervention — and it is likewise distinct from the endogenous marginal
+delivery effect, whose value depends on the cited/uncited composition of
+deliveries. With `citation_contrast=false` the contrast
+column is absent and the design is byte-identical to the no-citation baseline,
+which the control-arm A/B depends on. When enabled, a frozen
+RAG-applicability indicator is one
+additional shared treatment-effect contrast. It is learned from the same
+intention-to-treat outcomes; it is not a hand-written reward or a candidate gate. A fixed conditional
 offer probability `e` supplies randomized overlap (`0.7` by default for normal
 runs); mixed offer propensities inside one fitted ledger are rejected by this first
 implementation.
-Invalidity learns from every randomized terminal; valid gain learns only where a
-gain exists. The composite value still assigns invalidity its parent-specific
-pessimistic consequence instead of treating it as missing or zero.
+Invalidity (the safety head) learns from every randomized terminal; valid gain
+(the reward head) learns from every valid terminal where a gain exists. Under
+intention-to-treat a delivered-but-uncited terminal now enters both heads — the
+earlier cited-use gate dropped it and opened a collider on the citation decision —
+and its citation status registers only through the effect-coded contrast. What
+closes the collider is intention-to-treat itself — the sample is never
+conditioned on the post-treatment citation decision — while the contrast is only
+a descriptive adjustment layered on that already-unbiased sample. The complete
+randomized assignment
+ledger still supports offer-policy ITT/OPE and uptake diagnostics. The composite
+value assigns eligible invalidity its parent-specific pessimistic consequence
+instead of treating it as missing or zero.
 
 The reward posterior uses proper configured shrinkage priors over shared,
 card-lineage, and contextual effects. Conditional coefficient
@@ -266,8 +303,9 @@ each semantic strategy family. There is no union prose, merge decision, or
 periodic exhaustive consolidation. The writer does not restamp heuristic
 efficacy events into the v2 model.
 
-Causal retirement refits the current causal posterior, requires randomized
-treated and pooled-control support across multiple discrete MAP-Elites
+Causal retirement refits the current causal posterior, requires randomized-treatment
+(delivered, not conditioned on citation) and pooled-control support across
+multiple discrete MAP-Elites
 island/cell contexts, and protects every pending lineage alias. Selection
 defines helpfulness relative to zero; retirement uses a normalized practical
 utility boundary derived from a low quantile of the task ledger's own non-zero
@@ -289,7 +327,7 @@ consumption, not a fixed-sample sequential-testing guarantee. Deterministic
 evidence-version RNG and the Wilson upper bound make repeated checks
 conservative, but posterior misspecification remains a risk. Censored outcomes
 are excluded under a conditionally non-informative-censoring assumption, and a
-card that stops receiving proposals before minimum support fails-keep. The
+card that stops being delivered before minimum treated support fails-keep. The
 causal ledger and card bank are separate stores, leaving a narrow
 ledger-version/read-to-bank-delete interval outside a shared transaction.
 
@@ -304,8 +342,14 @@ The causal source of truth is:
 Decisions, child links, terminals, and event ordinals share one transactionally
 consistent ledger. This separate filename deliberately starts the new
 candidate-universe/applicability schema without migrating, restamping, or
-rewriting earlier ledgers. Payload hashes are verified on every read, and writes use
-full synchronization. SQLite locking on the project NFS mount is not trusted:
+rewriting earlier ledgers. Decision identity is itself the isolation boundary:
+each decision's immutable key is re-derived and re-checked on read, so a decision
+written under an earlier key schema fails that check and a run resumed against a
+pre-schema ledger stops at load rather than silently pooling schema-incompatible
+rows into a posterior fit. This is why a historical terminal — whose citation
+status was never recorded — can never enter an effect-coded citation contrast:
+it is unreachable, not defaulted-away. Payload hashes are verified on every read,
+and writes use full synchronization. SQLite locking on the project NFS mount is not trusted:
 v2 detects network filesystems, runs the live database on node-local scratch,
 then fsyncs and atomically replaces a checkpoint mirror after every causal
 write. Treatment is returned only after that mirror succeeds. JSONL memory
@@ -324,6 +368,9 @@ This is not full proposal-policy OPE or a causal estimate of the RAG assessor.
 RAG applicability is an adaptive, non-randomized pre-treatment covariate, while
 the complete eligible bank remains the logged action universe. Comparing
 agentic and null applicability requires prospective independent runs.
+Conditional-offer OPE, like the intention-to-treat usefulness posterior, retains
+uncited deliveries: they are valid outcomes of randomized exposure even though
+they say nothing about the usefulness of card content that was not applied.
 
 ## Smoke Analytics
 
@@ -339,9 +386,9 @@ membership, bounded outcomes, optimizer health, immutable terminal contracts,
 timestamps, and evidence accounting. It exports complete decision, candidate
 posterior, and terminal CSV traces plus a probability/posterior/MAP dashboard
 and conditional-offer calibration plot, plus a conditional-offer DR sensitivity
-trace. Hard gates require both randomized arms, terminal closure, posterior
-updating, minimum decision/candidate/proposal counts, and acceptable assignment
-balance.
+trace. Citation, ignored-delivery, and uptake counts are reported separately.
+Hard gates require both randomized arms, terminal closure, posterior updating,
+minimum decision/candidate/proposal counts, and acceptable assignment balance.
 
 ## Safety-Prior Calibration
 
@@ -397,7 +444,7 @@ changing admission.
 - sparse or low-rank posterior updates for long histories with many retired
   treatments;
 - full proposal-policy OPE and adaptive confidence sequences;
-- archive-contribution credit or LLM self-reported use attribution;
+- an instrumental-variable or principal-stratification claim for cited use;
 - change-point or nonstationary state-space models;
 - a separate frozen-snapshot MAP-Elites archive-contribution endpoint.
 

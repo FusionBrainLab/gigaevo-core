@@ -37,9 +37,11 @@ class Librarian:
 
     An author first proposes at most one actionable card without seeing the
     bank. Only then do we retrieve same-kind neighbors from that authored
-    action and ask a strict interventional-equivalence judge. ``EQUIVALENT``
-    preserves the existing treatment payload and appends provenance; ``NEW``
-    admits the authored candidate. There is no union prose or merge decision.
+    action and ask for strict interventional identity between insights or
+    load-bearing strategy-family identity between program exemplars.
+    ``EQUIVALENT`` preserves the existing treatment payload and appends
+    provenance; ``NEW`` admits the authored candidate. There is no union prose
+    or merge decision.
     """
 
     def __init__(
@@ -198,6 +200,13 @@ class Librarian:
                 candidate=card,
                 neighbors=list(offered.values()),
             )
+        except ValueError as exc:
+            logger.warning(
+                "[Memory][Librarian] equivalence response violated its schema or "
+                "semantic contract ({}); treating authored candidate as NEW.",
+                exc,
+            )
+            return await self._admit_new(card)
         except Exception as exc:
             logger.warning(
                 "[Memory][Librarian] equivalence check failed ({}); treating "

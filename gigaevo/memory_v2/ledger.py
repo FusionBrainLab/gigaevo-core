@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 import fcntl
+import json
 import os
 from pathlib import Path
 import shutil
@@ -414,8 +415,9 @@ class SqliteCausalLedger:
                 (record.decision_id,),
             ).fetchone()
             if existing is not None:
-                self._load_decision(existing[0], existing[1])
-                if existing[1] != digest:
+                # Compare models, not digests: an old row missing a later
+                # defaulted field must still count as the same decision.
+                if self._load_decision(existing[0], existing[1]) != record:
                     raise CausalLedgerConflict(
                         f"conflicting decision record {record.decision_id!r}"
                     )
@@ -551,6 +553,7 @@ class SqliteCausalLedger:
                 higher_is_better=record.context.reward.higher_is_better,
                 ope_eligible=True,
                 status=status,
+                used_card_ids=(),
                 censor_reason=failure_stage if status == "censored" else "",
                 failure_stage=failure_stage,
                 completion_ordinal=completion_ordinal,
@@ -598,6 +601,7 @@ class SqliteCausalLedger:
                 higher_is_better=record.context.reward.higher_is_better,
                 ope_eligible=True,
                 status="censored",
+                used_card_ids=(),
                 censor_reason=failure_stage,
                 failure_stage=failure_stage,
                 completion_ordinal=row[2],
@@ -676,6 +680,7 @@ class SqliteCausalLedger:
             higher_is_better=event.higher_is_better,
             ope_eligible=event.ope_eligible,
             status=event.status,
+            used_card_ids=event.used_card_ids,
             measurement=measurement,
             censor_reason=event.censor_reason,
             failure_stage=event.failure_stage,
@@ -703,6 +708,24 @@ class SqliteCausalLedger:
                 )
             record = self._load_decision(decision[0], decision[1])
             reward = record.context.reward
+            proposed_card = next(
+                (
+                    card
+                    for card in record.candidates
+                    if card.treatment_id == record.proposed_treatment_id
+                ),
+                None,
+            )
+            allowed_used_ids = (
+                {proposed_card.bank_card_id}
+                if proposed_card is not None and record.delivered
+                else set()
+            )
+            if not set(terminal.used_card_ids) <= allowed_used_ids:
+                raise CausalLedgerConflict(
+                    "terminal cites a card outside the delivered decision "
+                    f"{terminal.decision_id!r}"
+                )
             if terminal.base_id != record.context.parent_id:
                 raise CausalLedgerConflict(
                     f"terminal base does not match decision {terminal.decision_id!r}"
@@ -750,8 +773,7 @@ class SqliteCausalLedger:
                 (terminal.decision_id,),
             ).fetchone()
             if existing is not None:
-                self._load_terminal(existing[0], existing[1])
-                if existing[1] != digest:
+                if self._load_terminal(existing[0], existing[1]) != terminal:
                     raise CausalLedgerConflict(
                         f"conflicting terminal for decision {terminal.decision_id!r}"
                     )
@@ -879,6 +901,9 @@ class SqliteCausalLedger:
                     context=record.context,
                     rag_applicability=record.rag_applicability(card.bank_card_id),
                     treatment=record.delivered,
+                    card_used=(
+                        record.delivered and card.bank_card_id in terminal.used_card_ids
+                    ),
                     offer_propensity=record.offer_probability,
                     proposal_propensity=record.proposal_probability,
                     joint_action_propensity=record.joint_action_probability,
@@ -900,8 +925,12 @@ class SqliteCausalLedger:
         lineage_pending_treatment: dict[str, int] = {}
         lineage_pending_bank: dict[str, int] = {}
         decisions_by_id = {row.decision_id: row for row in decisions}
+        observations_by_id = {row.decision_id: row for row in observations}
         for lineage in lineage_outcomes:
             if lineage.status != "pending":
+                continue
+            observation = observations_by_id.get(lineage.decision_id)
+            if observation is None:
                 continue
             record = decisions_by_id[lineage.decision_id]
             treatment_id = record.proposed_treatment_id
@@ -1067,11 +1096,13 @@ class SqliteCausalLedger:
 
     @staticmethod
     def _load_decision(record_json: str, record_hash: str) -> DecisionRecord:
+        # Digest the stored payload, not a re-serialized model: rows written
+        # before a defaulted field existed must keep verifying forever. Relies
+        # on model_dump_json agreeing with model_dump(mode="json") under
+        # canonical_digest, which holds while StrictFrozenModel forbids
+        # inf/nan and fields carry no custom serializers.
         record = DecisionRecord.model_validate_json(record_json)
-        actual = canonical_digest(
-            record.model_dump(mode="json", exclude_computed_fields=True)
-        )
-        if actual != record_hash:
+        if canonical_digest(json.loads(record_json)) != record_hash:
             raise CausalLedgerConflict(
                 f"decision payload hash mismatch for {record.decision_id!r}"
             )
@@ -1080,10 +1111,7 @@ class SqliteCausalLedger:
     @staticmethod
     def _load_terminal(terminal_json: str, terminal_hash: str) -> TerminalOutcome:
         terminal = TerminalOutcome.model_validate_json(terminal_json)
-        actual = canonical_digest(
-            terminal.model_dump(mode="json", exclude_computed_fields=True)
-        )
-        if actual != terminal_hash:
+        if canonical_digest(json.loads(terminal_json)) != terminal_hash:
             raise CausalLedgerConflict(
                 f"terminal payload hash mismatch for {terminal.decision_id!r}"
             )

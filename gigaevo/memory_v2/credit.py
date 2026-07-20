@@ -234,7 +234,11 @@ class LineageCreditResolver:
             immediate_by_outcome[root.decision_id] = immediate_row
             root_ordinal[root.decision_id] = root.event_ordinal
 
-        owned = self._assign_exclusive_credit(outcomes, root_ordinal)
+        owned = self._assign_exclusive_credit(
+            outcomes,
+            root_ordinal,
+            frozenset(immediate_by_outcome),
+        )
         lineage_rows = tuple(
             immediate_by_outcome[outcome.decision_id].model_copy(
                 update={"measurement": outcome.residual_measurement}
@@ -248,13 +252,15 @@ class LineageCreditResolver:
     def _assign_exclusive_credit(
         outcomes: Sequence[LineageOutcome],
         root_ordinal: Mapping[str, int],
+        observed_root_ids: frozenset[str],
     ) -> list[LineageOutcome]:
-        """Give a reused breakthrough to its closest eligible root exactly once."""
+        """Give a reused breakthrough to its closest observed root exactly once."""
 
         by_descendant: dict[str, list[LineageOutcome]] = defaultdict(list)
         for outcome in outcomes:
             if (
-                outcome.status == "outcome"
+                outcome.decision_id in observed_root_ids
+                and outcome.status == "outcome"
                 and outcome.residual_measurement is not None
                 and outcome.residual_measurement.value > 0.0
             ):

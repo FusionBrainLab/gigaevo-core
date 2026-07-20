@@ -132,11 +132,13 @@ class MetricsFormatter:
         """Build a concise overview of available metrics from context.
 
         Example block:
-        - fitness: Main objective (↑ better; [0.0, 1.0] range; unit="")
-        - is_valid: Whether program is valid (↑ better; [0.0, 1.0] range; unit="")
+        - fitness: Main objective (↑ better; [0.0, 1.0] range)
+        - is_valid: Whether program is valid (↑ better; [0.0, 1.0] range)
         """
-        ordered_keys = self.context.prompt_keys()
         primary_key = self.context.get_primary_key()
+        # Fitness evidence is always rendered, even when the primary metric is
+        # hidden from ordinary multi-metric prompt blocks.
+        ordered_keys = self.context.prompt_keys()
         keys: list[str] = [primary_key] + [k for k in ordered_keys if k != primary_key]
         lines: list[str] = []
         for key in keys:
@@ -148,5 +150,6 @@ class MetricsFormatter:
                 parts.append(f"[{bounds[0]}, {bounds[1]}] range")
             if spec.unit:
                 parts.append(f'unit="{spec.unit}"')
-            lines.append(f"- {key}: {spec.description} (" + "; ".join(parts) + ")")
+            description = f": {spec.description}" if spec.description else ""
+            lines.append(f"- {key}{description} (" + "; ".join(parts) + ")")
         return "\n".join(lines)

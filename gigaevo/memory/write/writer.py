@@ -101,6 +101,7 @@ class LibrarianWriteStack:
         task_key: str = "",
         task_description: str = "",
         metrics_description: str,
+        fitness_key: str,
         dedup_policy: DedupPolicy | None = None,
         prompts_dir: str | Path | None = None,
         novelty_admission_gate: bool = False,
@@ -116,6 +117,7 @@ class LibrarianWriteStack:
         self._task_key = task_key
         self._task_description = task_description
         self._metrics_description = metrics_description
+        self._fitness_key = fitness_key
         self._dedup_policy = dedup_policy if dedup_policy is not None else DedupPolicy()
         self._prompts_dir = prompts_dir
         self._novelty_admission_gate = novelty_admission_gate
@@ -234,6 +236,7 @@ class LibrarianWriteStack:
                 llm=self._llm,
                 task_description=self._task_description,
                 metrics_description=self._metrics_description,
+                fitness_key=self._fitness_key,
                 prompts_dir=self._prompts_dir,
             ),
             equivalence=create_equivalence_agent(
@@ -332,7 +335,7 @@ class MemoryWriter(IncrementalPostRunHook):
         # Default to the task's primary metric, not a literal "fitness": on a
         # task whose primary key differs, a hardcoded key would resolve to no
         # metric and silently zero every gain event (reputation never warms).
-        fitness_key = fitness_key or metrics_context.get_primary_key()
+        fitness_key = fitness_key.strip() or metrics_context.get_primary_key()
         if ingest_call_timeout_s <= 0.0:
             raise ValueError("ingest_call_timeout_s must be positive")
         if max_ingest_attempts < 1:
@@ -368,6 +371,7 @@ class MemoryWriter(IncrementalPostRunHook):
             task_key=task_key,
             task_description=task_description,
             metrics_description=metrics_description,
+            fitness_key=fitness_key,
             dedup_policy=policy,
             prompts_dir=prompts_dir,
             novelty_admission_gate=novelty_admission_gate,
