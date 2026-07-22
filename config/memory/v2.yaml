@@ -238,6 +238,7 @@ writer:
   dedup_policy:
     _target_: gigaevo.memory.write.policies.DedupPolicy
     online_top_k: 5
+    across_tasks: false
   program_exemplars:
     _target_: gigaevo.memory.write.policies.ProgramExemplarPolicy
     enabled: true

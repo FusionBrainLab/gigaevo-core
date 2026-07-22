@@ -65,8 +65,12 @@ logistic head learns a global card effect plus task/card deviations, with
 run-specific baselines, and weakly initializes the new task's reward card
 intercept. Success is scale-free (`valid and oriented gain > 0`); reward
 magnitudes, behavior coordinates, invalidity, and lineage value remain local to
-the active task. The preset enables cross-task candidates and disables causal
-retirement. Detailed causal ledgers remain under each run's `checkpoint_dir`.
+the active task. The preset also deduplicates newly authored semantic actions
+against the whole bank. Equivalent actions keep one canonical ID and prose;
+their labelled trials and gain events are unioned, while program fitness is
+compared only within one task. The preset enables cross-task candidates and
+disables causal retirement. Detailed causal ledgers remain under each run's
+`checkpoint_dir`.
 
 `memory_task_key` defaults to `problem.name`. Qualify it when one problem config
 has materially different dataset parameters, for example

@@ -9,6 +9,8 @@ from gigaevo.memory.write.policies import DedupPolicy, ProgramExemplarPolicy
 def test_dedup_policy_is_bounded_and_frozen() -> None:
     policy = DedupPolicy(online_top_k=3)
     assert policy.online_top_k == 3
+    assert policy.across_tasks is False
+    assert DedupPolicy(across_tasks=True).across_tasks is True
     with pytest.raises(ValidationError):
         policy.online_top_k = 4
     with pytest.raises(ValidationError):

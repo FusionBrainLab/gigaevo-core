@@ -133,9 +133,9 @@ Only after authoring does the librarian build:
 card_brief = description + explanation_summary
 ```
 
-It retrieves embedding neighbors from the same card kind, then keeps only the
-same task. The default write embedding scope contains those same semantic
-fields.
+It retrieves embedding neighbors from the same card kind. Ordinary memory-v2
+keeps only the same task; `memory=v2_multitask` searches the whole shared bank.
+The default write embedding scope contains those same semantic fields.
 
 The equivalence judge sees the candidate and offered neighbor ids. Its schema
 allows only:
@@ -160,8 +160,10 @@ resource budgets, batching or scheduling details, and interchangeable
 supporting plumbing do not split a family.
 
 For `EQUIVALENT`, the existing treatment prose remains immutable. The gate pools
-provenance and founding evidence and records the incoming candidate description
-for audit. There is no `MERGE`, union prose, or later consolidation scheduler.
+provenance, task-labelled gain events, and task/run-labelled randomized trials,
+and records the incoming candidate description for audit. Cross-task program
+fitness is never used to replace the canonical representative. There is no
+`MERGE`, union prose, or later consolidation scheduler.
 
 For `NEW`, the card is admitted. The optional novelty judge may reject a
 prior-obvious insight before admission. Equivalence and novelty failures

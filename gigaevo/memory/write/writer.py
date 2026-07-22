@@ -252,6 +252,7 @@ class LibrarianWriteStack:
             store=store,
             neighbors=store,
             top_k=policy.online_top_k,
+            dedup_across_tasks=policy.across_tasks,
             task_key=self._task_key,
             task_description=self._task_description,
             task_description_summary=summary,

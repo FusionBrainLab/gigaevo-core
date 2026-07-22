@@ -96,6 +96,7 @@ def make_librarian(
     program_author: FakeProgramAuthor | None = None,
     admission_judge=None,
     task_key: str = "task-a",
+    dedup_across_tasks: bool = False,
 ) -> Librarian:
     return Librarian(
         author=author
@@ -113,6 +114,7 @@ def make_librarian(
         store=store,
         neighbors=store,
         top_k=5,
+        dedup_across_tasks=dedup_across_tasks,
         task_key=task_key,
         task_description="full task",
         task_description_summary="task summary",
@@ -248,7 +250,7 @@ async def test_equivalent_insight_keeps_payload_and_appends_provenance(store) ->
 
 
 @pytest.mark.asyncio
-async def test_foreign_task_neighbor_cannot_be_an_equivalence_target(store) -> None:
+async def test_task_scoped_dedup_does_not_offer_foreign_neighbor(store) -> None:
     foreign = Card(
         id="foreign",
         task_key="task-b",
@@ -271,6 +273,54 @@ async def test_foreign_task_neighbor_cannot_be_an_equivalence_target(store) -> N
     assert result is not None
     assert result.outcome is WriteOutcome.ADDED
     assert equivalence.calls == []
+
+
+@pytest.mark.asyncio
+async def test_bank_scoped_dedup_merges_foreign_equivalent_into_canonical_card(
+    store,
+) -> None:
+    foreign = Card(
+        id="foreign",
+        task_key="task-b",
+        description="canonical treatment",
+        explanation_summary="canonical mechanism",
+        programs=("task-b-child",),
+    )
+    store.save(foreign)
+    store.hits = [ScoredCard(card=foreign, distance=0.01)]
+    equivalence = FakeEquivalence(
+        EquivalenceResponse(
+            program_axes=None,
+            decision=WriteDecision.EQUIVALENT,
+            target_id=foreign.id,
+            comparison_summary="same applicability and intervention",
+        )
+    )
+    librarian = make_librarian(
+        store,
+        equivalence=equivalence,
+        task_key="task-a",
+        dedup_across_tasks=True,
+    )
+    founding = ContextualGain(
+        context=DecisionContext(task_key="task-a", parent_id="parent-a"),
+        gain=0.2,
+        founding=True,
+    )
+
+    result = await ingest_idea(librarian, founding_gain=founding)
+
+    assert result is not None
+    assert result.outcome is WriteOutcome.UPDATED
+    assert result.card_id == foreign.id
+    assert len(store.snapshot()) == 1
+    canonical = store.get(foreign.id)
+    assert canonical is not None
+    assert canonical.task_key == "task-b"
+    assert canonical.description == "canonical treatment"
+    assert canonical.programs == ("task-b-child", "child-1")
+    assert canonical.gain_events == (founding,)
+    assert len(equivalence.calls) == 1
 
 
 @pytest.mark.asyncio

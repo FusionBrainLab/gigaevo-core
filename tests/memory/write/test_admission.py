@@ -8,7 +8,7 @@ import multiprocessing
 
 from loguru import logger
 
-from gigaevo.memory.cards import Card, CardKind
+from gigaevo.memory.cards import Card, CardKind, CardUseTrial
 import gigaevo.memory.prior_evidence as prior_evidence_module
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.write.admission import (
@@ -223,25 +223,43 @@ def test_tombstoned_program_id_does_not_block_bare_insight_id(
     assert store.get("p1") is not None
 
 
-def test_equivalent_insight_pools_provenance_and_evidence_without_rewriting(
+def test_cross_task_equivalent_pools_labelled_evidence_without_rewriting(
     store, make_card, make_event, tmp_path
 ):
-    target_event = make_event(0.1)
-    incoming_event = make_event(0.2)
+    target_event = make_event(0.1, task_key="task-a")
+    incoming_event = make_event(0.2, task_key="task-b")
+    target_trial = CardUseTrial(
+        decision_id="decision-a",
+        run_id="run-a",
+        task_key="task-a",
+        treatment=True,
+        success=True,
+    )
+    incoming_trial = CardUseTrial(
+        decision_id="decision-b",
+        run_id="run-b",
+        task_key="task-b",
+        treatment=False,
+        success=False,
+    )
     target = make_card(
-        task_key="task",
+        task_key="task-a",
         description="stable action",
         programs=("parent",),
         gain_events=(target_event,),
+        use_trials=(target_trial,),
+        absorbed_ids=("old-a",),
     )
     store.save(target)
     gate, ledger = make_gate(store, tmp_path)
     incoming = make_card(
         id="",
-        task_key="task",
+        task_key="task-b",
         description="different wording",
         programs=("child",),
         gain_events=(incoming_event,),
+        use_trials=(incoming_trial,),
+        absorbed_ids=("old-b",),
     )
 
     result = gate.update_equivalent(target.id, incoming)
@@ -249,18 +267,24 @@ def test_equivalent_insight_pools_provenance_and_evidence_without_rewriting(
 
     assert result.outcome is WriteOutcome.UPDATED
     assert updated.description == "stable action"
+    assert updated.task_key == "task-a"
     assert updated.programs == ("parent", "child")
     assert updated.gain_events == (target_event, incoming_event)
+    assert updated.use_trials == (target_trial, incoming_trial)
+    assert updated.absorbed_ids == ("old-a", "old-b")
     row = read_rows(ledger.path)[-1]
     assert row.duplicate_of == target.id
     assert row.incoming_description == "different wording"
 
 
-def test_equivalent_update_requires_same_kind_and_task(store, make_card, tmp_path):
+def test_equivalent_update_requires_same_kind_and_keeps_cross_task_representative(
+    store, make_card, tmp_path
+):
     program = make_card(
         task_key="task",
         kind=CardKind.PROGRAM,
         program_id="p1",
+        programs=("p1",),
         code="x = 1",
         fitness=0.5,
     )
@@ -268,12 +292,27 @@ def test_equivalent_update_requires_same_kind_and_task(store, make_card, tmp_pat
     gate, _ = make_gate(store, tmp_path)
     insight = make_card(task_key="task", programs=("child",))
     foreign = program.model_copy(
-        update={"id": "program-p2", "task_key": "foreign", "program_id": "p2"}
+        update={
+            "id": "program-p2",
+            "task_key": "foreign",
+            "program_id": "p2",
+            "programs": ("p2",),
+            "code": "x = 2",
+            "fitness": 0.9,
+        }
     )
 
     assert gate.update_equivalent("absent", insight).outcome is WriteOutcome.DISCARDED
     assert gate.update_equivalent(program.id, insight).outcome is WriteOutcome.DISCARDED
-    assert gate.update_equivalent(program.id, foreign).outcome is WriteOutcome.DISCARDED
+    result = gate.update_equivalent(program.id, foreign)
+    updated = store.get(program.id)
+
+    assert result.outcome is WriteOutcome.UPDATED
+    assert updated is not None
+    assert updated.programs == ("p1", "p2")
+    assert updated.program_id == "p1"
+    assert updated.code == "x = 1"
+    assert updated.fitness == 0.5
 
 
 def test_sweep_deletes_evicted_and_records(store, make_card, tmp_path):

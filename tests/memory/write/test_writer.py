@@ -20,7 +20,7 @@ from gigaevo.memory.write.admission import (
     WriteResult,
 )
 from gigaevo.memory.write.eviction import NullEvictor
-from gigaevo.memory.write.policies import ProgramExemplarPolicy
+from gigaevo.memory.write.policies import DedupPolicy, ProgramExemplarPolicy
 from gigaevo.memory.write.writer import LibrarianWriteStack, MemoryWriter
 from gigaevo.programs.metrics.context import VALIDITY_KEY, MetricsContext, MetricSpec
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS
@@ -161,7 +161,7 @@ def test_writer_pre_renders_metric_context_for_librarian(store, tmp_path) -> Non
     )
 
 
-async def test_stack_forwards_metric_context_and_key_to_built_author(
+async def test_stack_forwards_metric_context_key_and_dedup_scope_to_librarian(
     store, tmp_path
 ) -> None:
     metrics_description = (
@@ -175,6 +175,7 @@ async def test_stack_forwards_metric_context_and_key_to_built_author(
         task_description="",
         metrics_description=metrics_description,
         fitness_key="quality",
+        dedup_policy=DedupPolicy(across_tasks=True),
     )
 
     await stack.ensure()
@@ -183,6 +184,7 @@ async def test_stack_forwards_metric_context_and_key_to_built_author(
     metric_header = author.system_prompt.index("## METRIC CONTEXT")
     assert author.system_prompt.index(metrics_description) > metric_header
     assert author.fitness_key == "quality"
+    assert stack.require_librarian()._dedup_across_tasks is True
 
 
 async def test_run_increment_ingests_and_authors_exemplars(

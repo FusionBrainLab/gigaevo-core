@@ -27,7 +27,7 @@ whole live bank
 WRITE
 strictly valid mutation outcomes
   -> author DROP or at most one conditional hypothesis
-  -> retrieve same-task/same-kind neighbors from the authored action
+  -> retrieve same-kind neighbors in the configured task or whole-bank scope
   -> strict NEW or EQUIVALENT judgment
   -> admit new treatment or pool evidence into the exact equivalent
   -> author bounded program-strategy exemplars
@@ -110,9 +110,13 @@ equivalence response schema permits only:
   strategy family.
 
 An equivalent candidate does not rewrite or broaden the banked treatment.
-Provenance and founding evidence are pooled into the existing card. The write
-ledger retains the discarded candidate description so equivalence mistakes can
-be audited.
+Provenance and founding evidence are pooled into the existing card. In
+`memory=v2_multitask`, this lookup spans the whole bank, so equivalent actions
+authored by different tasks share one canonical card. Gain events retain their
+task context and randomized use trials retain their task/run labels. A program
+representative is replaced using fitness only for same-task equivalents; raw
+fitness values never compete across tasks. The write ledger retains the
+discarded candidate description so equivalence mistakes can be audited.
 
 Retrieval or equivalence failure currently fails open to `NEW`; the optional
 novelty judge also fails open. This preserves evolution when the memory LLM is

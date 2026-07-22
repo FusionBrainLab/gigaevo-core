@@ -188,7 +188,7 @@ python run.py problem.name=heilbron \
     pipeline=memory_guided memory=v2 \
     memory_bank_dir=$PWD/SHARE_HEILBRON_MEMORY
 
-# Reuse cards and scale-free usefulness evidence across related tasks
+# Reuse one bank-wide deduplicated card set and scale-free usefulness evidence
 python run.py problem.name=<another-task> \
     memory=v2_multitask \
     memory_bank_dir=$PWD/SHARED_TABULAR_MEMORY

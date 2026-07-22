@@ -13,8 +13,13 @@ class DedupPolicy(BaseModel):
     online_top_k: int = Field(
         default=5,
         ge=0,
-        description="Same-kind, same-task neighbors retrieved from the authored "
-        "candidate before strict equivalence checking.",
+        description="Same-kind neighbors retrieved from the authored candidate "
+        "before strict equivalence checking.",
+    )
+    across_tasks: bool = Field(
+        default=False,
+        description="Search the whole bank for semantic duplicates instead of "
+        "only the authoring task. Evidence remains task-labelled.",
     )
 
 

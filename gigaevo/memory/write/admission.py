@@ -295,26 +295,42 @@ class CardAdmissionGate:
         higher_is_better: bool = True,
         min_fitness_gap: float = 0.0,
     ) -> WriteResult:
-        """Pool exact-equivalent evidence without changing the banked action."""
+        """Pool exact-equivalent evidence without changing the banked action.
+
+        Task-labelled events and trials remain distinct rows on one canonical
+        semantic card. Raw program fitness chooses a representative only within
+        one task, because scales across tasks are not comparable.
+        """
 
         eligible = False
         representative_improved = False
 
         def fold(target: Card) -> Card:
             nonlocal eligible, representative_improved
-            if target.kind is not incoming.kind or target.task_key != incoming.task_key:
+            if target.kind is not incoming.kind:
                 return target
             eligible = True
+            same_task = target.task_key == incoming.task_key
+            absorbed_ids = tuple(
+                card_id
+                for card_id in union_strings(target.absorbed_ids, incoming.absorbed_ids)
+                if card_id != target.id
+            )
             updates: dict = {
                 "programs": union_strings(target.programs, incoming.programs),
                 "gain_events": union_events(target.gain_events, incoming.gain_events),
                 "use_trials": union_use_trials(target.use_trials, incoming.use_trials),
+                "absorbed_ids": absorbed_ids,
             }
-            if target.kind is CardKind.PROGRAM and _fitness_improves(
-                incoming.fitness,
-                target.fitness,
-                higher_is_better=higher_is_better,
-                min_delta=min_fitness_gap,
+            if (
+                target.kind is CardKind.PROGRAM
+                and same_task
+                and _fitness_improves(
+                    incoming.fitness,
+                    target.fitness,
+                    higher_is_better=higher_is_better,
+                    min_delta=min_fitness_gap,
+                )
             ):
                 representative_improved = True
                 updates.update(

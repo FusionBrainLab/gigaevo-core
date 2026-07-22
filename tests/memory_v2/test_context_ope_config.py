@@ -475,6 +475,7 @@ def test_memory_v2_production_surface_composes_with_hydra() -> None:
             == pytest.approx(0.05)
         )
         assert cfg.memory.policy_config.max_pending_per_card == 2
+        assert cfg.memory.writer.dedup_policy.across_tasks is False
         assert cfg.memory.posterior_config.reference_offer_probability == pytest.approx(
             0.70
         )
@@ -585,6 +586,7 @@ def test_memory_v2_multitask_is_one_preset_plus_a_bank_path(tmp_path) -> None:
         assert cfg.memory.candidate_source.allow_cross_task is True
         assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
         assert cfg.memory.causal_writer_updater.record_use_trials is True
+        assert cfg.memory.writer.dedup_policy.across_tasks is True
         assert cfg.memory.store.config.path == str(tmp_path)
         assert cfg.selection_leases.path == f"{tmp_path}/selection_leases.json"
         assert cfg.memory.environment.task_key == "heilbron/variant"

@@ -36,9 +36,9 @@ class Librarian:
     """Owns one clean write protocol for both insights and program exemplars.
 
     An author first proposes at most one actionable card without seeing the
-    bank. Only then do we retrieve same-kind neighbors from that authored
-    action and ask for strict interventional identity between insights or
-    load-bearing strategy-family identity between program exemplars.
+    bank. Only then do we retrieve configured-scope same-kind neighbors from
+    that authored action and ask for strict interventional identity between
+    insights or load-bearing strategy-family identity between program exemplars.
     ``EQUIVALENT`` preserves the existing treatment payload and appends
     provenance; ``NEW`` admits the authored candidate. There is no union prose
     or merge decision.
@@ -54,6 +54,7 @@ class Librarian:
         store: MemoryStore,
         neighbors: NeighborSource,
         top_k: int = 5,
+        dedup_across_tasks: bool = False,
         task_key: str = "",
         task_description: str = "",
         task_description_summary: str = "",
@@ -68,6 +69,7 @@ class Librarian:
         if top_k < 0:
             raise ValueError("top_k cannot be negative")
         self._top_k = top_k
+        self._dedup_across_tasks = dedup_across_tasks
         self._task_key = task_key
         self._task_description = task_description
         self._task_description_summary = task_description_summary
@@ -190,7 +192,7 @@ class Librarian:
         higher_is_better: bool = True,
         min_fitness_gap: float = 0.0,
     ) -> WriteResult:
-        hits = self._same_task_neighbors(card)
+        hits = self._dedup_neighbors(card)
         if not hits:
             return await self._admit_new(card)
 
@@ -234,8 +236,8 @@ class Librarian:
         )
         return result if result.landed else await self._admit_new(card)
 
-    def _same_task_neighbors(self, card: Card) -> list[ScoredCard]:
-        """Retrieve by authored semantics, then keep same-kind/same-task cards."""
+    def _dedup_neighbors(self, card: Card) -> list[ScoredCard]:
+        """Retrieve same-kind candidates in the configured deduplication scope."""
         if self._top_k == 0:
             return []
         try:
@@ -243,7 +245,7 @@ class Librarian:
                 card_brief(card),
                 self._top_k,
                 card.kind,
-                task_key=card.task_key,
+                task_key=None if self._dedup_across_tasks else card.task_key,
             )
         except Exception as exc:
             logger.warning(
@@ -254,7 +256,7 @@ class Librarian:
             hit
             for hit in hits
             if hit.card.kind is card.kind
-            and hit.card.task_key == card.task_key
+            and (self._dedup_across_tasks or hit.card.task_key == card.task_key)
             and hit.card.id != card.id
         ][: self._top_k]
 

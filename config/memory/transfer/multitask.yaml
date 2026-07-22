@@ -1,6 +1,6 @@
 # @package _global_
-# Scale-free transfer: a shared bank is both the action bank and the compact
-# randomized trial history. The bank path itself defines the task family.
+# Scale-free transfer: a shared bank is the globally deduplicated action bank
+# and compact randomized trial history. The bank path defines the task family.
 memory:
   cross_task_usefulness:
     _target_: gigaevo.memory_v2.transfer.CrossTaskUsefulnessConfig
@@ -13,5 +13,8 @@ memory:
     allow_cross_task: true
   provider:
     cross_task_usefulness: ${ref:memory.cross_task_usefulness}
+  writer:
+    dedup_policy:
+      across_tasks: true
   causal_writer_updater:
     record_use_trials: true
