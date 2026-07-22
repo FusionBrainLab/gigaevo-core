@@ -65,27 +65,29 @@ async def test_seed_loader_builds_neutral_graph_for_any_task_type(
     assert storage.added == programs
 
 
-def test_context_combines_universal_abi_with_selected_dataset(tmp_path: Path):
+def test_context_combines_universal_abi_with_grouped_schema_only_dataset(
+    tmp_path: Path,
+):
     dag_tab = tmp_path / "dag_tab"
-    tabular = tmp_path / "tabular" / "adult"
+    tabular = tmp_path / "tabular" / "tabarena" / "adult"
     dag_tab.mkdir()
     tabular.mkdir(parents=True)
     (dag_tab / "task_description.txt").write_text("TASK\nUniversal FeatureGraph ABI")
     (dag_tab / "metrics.yaml").write_text("specs: {}")
+    (tabular / "dataset_id.txt").write_text("tabarena-adult\n")
     (tabular / "task_description.txt").write_text(
         "TASK — TABULAR BINARY CLASSIFICATION (adult)\n\n"
         "DATASET — income prediction\n\n"
-        "CONTRACT\nforbidden model ABI\n\n"
-        "COLUMNS (assembled X[:, j])\n- [0] age\n- [1] hours\n\n"
-        "PROTOCOL\nlegacy protocol"
+        "COLUMNS (assembled X[:, j])\n- [0] age\n- [1] hours\n"
     )
 
-    description = DagTabProblemContext(dag_tab, dataset="adult").task_description
+    description = DagTabProblemContext(
+        dag_tab, dataset="tabarena-adult"
+    ).task_description
 
     assert "Universal FeatureGraph ABI" in description
-    assert "dataset id: adult" in description
+    assert "dataset id: tabarena-adult" in description
     assert "TABULAR BINARY CLASSIFICATION" in description
     assert "income prediction" in description
     assert "[0] age" in description
-    assert "forbidden model ABI" not in description
-    assert "legacy protocol" not in description
+    assert "class Model:" not in description

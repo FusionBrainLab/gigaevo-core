@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 import re
 
@@ -30,6 +31,19 @@ def _extract_dataset_context(text: str) -> str:
     return "\n\n".join(selected)
 
 
+@cache
+def _dataset_description_path(tabular_root: Path, dataset: str) -> Path | None:
+    direct = tabular_root / dataset / "task_description.txt"
+    if direct.is_file():
+        return direct
+    for marker in sorted(tabular_root.glob("*/*/dataset_id.txt")):
+        if marker.read_text().strip() == dataset:
+            description = marker.parent / "task_description.txt"
+            if description.is_file():
+                return description
+    return None
+
+
 class DagTabProblemContext(ProblemContext):
     """FeatureGraph ABI combined with the selected tabular dataset semantics."""
 
@@ -40,10 +54,10 @@ class DagTabProblemContext(ProblemContext):
     @property
     def task_description(self) -> str:
         abi = super().task_description
-        dataset_path = (
-            self.problem_dir.parent / "tabular" / self.dataset / "task_description.txt"
+        dataset_path = _dataset_description_path(
+            self.problem_dir.parent / "tabular", self.dataset
         )
-        if dataset_path.is_file():
+        if dataset_path is not None:
             dataset_context = _extract_dataset_context(dataset_path.read_text())
         else:
             dataset = tabular_data.load_dataset(self.dataset)
