@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable
 import inspect
 from typing import Any
 
@@ -20,9 +20,7 @@ async def collect_metrics_once(
     writer: LogWriter,
     collect_fn: Callable[
         [],
-        dict[str, Any]
-        | asyncio.Future[dict[str, Any]]
-        | Coroutine[Any, Any, dict[str, Any]],
+        dict[str, Any] | Awaitable[dict[str, Any]],
     ],
 ) -> None:
     """Collect and write one best-effort numeric metrics snapshot."""
@@ -42,9 +40,7 @@ def start_metrics_collector(
     writer: LogWriter,
     collect_fn: Callable[
         [],
-        dict[str, Any]
-        | asyncio.Future[dict[str, Any]]
-        | Coroutine[Any, Any, dict[str, Any]],
+        dict[str, Any] | Awaitable[dict[str, Any]],
     ],
     interval: float,
     stop_flag: Callable[[], bool],

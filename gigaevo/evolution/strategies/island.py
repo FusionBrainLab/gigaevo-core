@@ -201,8 +201,10 @@ class MapElitesIsland:
             cell = candidate_space.get_cell(program.metrics)
 
             if not expanded:
-                current = await self.archive_storage.get_elite(cell)
-                return current is None or self.config.archive_selector(program, current)
+                incumbent = await self.archive_storage.get_elite(cell)
+                return incumbent is None or self.config.archive_selector(
+                    program, incumbent
+                )
 
             # Expansion changes every cell boundary. Simulate the post-reindex
             # occupant on the copied grid rather than querying old physical keys.

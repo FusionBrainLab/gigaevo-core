@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import Mapping
 import math
 from typing import Annotated, Any, Literal
 
@@ -320,7 +321,7 @@ class DynamicBehaviorSpace(BehaviorSpace):
         return new_min, new_max
 
     def update_bounds(
-        self, new_bounds: dict[str, tuple[float | None, float | None]]
+        self, new_bounds: Mapping[str, tuple[float | None, float | None]]
     ) -> bool:
         """Update bounds for multiple dimensions at once.
 
@@ -361,7 +362,7 @@ class DynamicBehaviorSpace(BehaviorSpace):
 
     def calculate_optimized_bounds(
         self, metrics_batch: list[dict[str, float]]
-    ) -> dict[str, tuple[float | None, float | None]]:
+    ) -> dict[str, tuple[float, float]]:
         """Calculate new optimized bounds based on a batch of metrics.
 
         Respects fixed bounds - only optimizes bounds that are marked as dynamic.
@@ -372,7 +373,7 @@ class DynamicBehaviorSpace(BehaviorSpace):
         if not metrics_batch:
             return {}
 
-        new_bounds: dict[str, tuple[float | None, float | None]] = {}
+        new_bounds: dict[str, tuple[float, float]] = {}
         for key, strategy in self.bins.items():
             values = [m[key] for m in metrics_batch if key in m]
             if not values:
