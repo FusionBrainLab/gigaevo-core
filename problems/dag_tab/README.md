@@ -123,7 +123,6 @@ python run.py \
   llm=gemini35_flash \
   algorithm=tabular/2d_local_ood \
   mutation_operator.allowed_changes.max_nodes=10 \
-  max_tokens=32768 \
   max_mutants=100
 ```
 
@@ -142,7 +141,6 @@ python run.py \
   memory/llm=qwen_instruct \
   algorithm=tabular/2d_local_ood \
   mutation_operator.allowed_changes.max_nodes=10 \
-  max_tokens=32768 \
   max_mutants=100
 ```
 
