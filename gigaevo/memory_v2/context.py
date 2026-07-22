@@ -82,10 +82,10 @@ class MapElitesContextSource:
     def behavior_keys(self) -> tuple[str, ...]:
         """Return the common ordered model axes from the live behavior spaces."""
 
-        schemas = {
-            tuple(island.config.behavior_space.behavior_keys)
-            for island in self.strategy.islands.values()
-        }
+        spaces = [
+            island.config.behavior_space for island in self.strategy.islands.values()
+        ]
+        schemas = {tuple(space.behavior_keys) for space in spaces}
         if not schemas:
             raise ValueError("memory v2 requires at least one MAP-Elites island")
         if len(schemas) != 1:
@@ -93,12 +93,29 @@ class MapElitesContextSource:
                 "memory v2 requires one shared ordered behavior schema across "
                 f"islands, got {sorted(schemas)!r}"
             )
-        return next(iter(schemas))
+        behavior_keys = next(iter(schemas))
+        semantic_schemas = {
+            tuple(
+                (
+                    key,
+                    canonical_digest(space.bins[key].model_transform_payload()),
+                )
+                for key in behavior_keys
+            )
+            for space in spaces
+        }
+        if len(semantic_schemas) != 1:
+            raise ValueError(
+                "memory v2 requires one shared stable behavior transform across islands"
+            )
+        return behavior_keys
 
     async def snapshot(self, program: Program) -> EvolutionContext:
+        # Keep direct callers as strict as the Hydra path that resolves this
+        # property while constructing the feature map.
+        _ = self.behavior_keys
         island = self._island_for(program)
-        elites = await island.get_elites()
-        behavior_space = island.config.behavior_space.model_copy(deep=True)
+        elites, behavior_space = await island.snapshot_archive_state()
         required = tuple(behavior_space.behavior_keys)
         missing_metrics = set(required) - program.metrics.keys()
         if missing_metrics:

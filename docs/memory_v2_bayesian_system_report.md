@@ -135,6 +135,11 @@ Transient cell indexes and live coordinates are recorded for audit and local arc
 state, but they are not regression features. The posterior therefore sees the same
 model coordinate for the same raw value after the archive is rebinned.
 
+Reindexing publishes a complete replacement map, and a memory snapshot copies the
+elites and bounds under the same island lock. Dynamic bounds are persisted per
+island and restored before dispatch; the archive is reindexed once during resume so
+old runs that predate bound persistence are repaired from their stored elites.
+
 **Plain English:** if a classroom changes its grading curve, the model records both
 the student's raw exam score and their percentile under today's curve. It never
 pretends that “seat 12” is a permanent kind of student.

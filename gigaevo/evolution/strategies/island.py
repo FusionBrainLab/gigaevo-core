@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
@@ -15,10 +16,14 @@ from gigaevo.evolution.strategies.removers import ArchiveRemover
 from gigaevo.evolution.strategies.selectors import ArchiveSelector
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
+from gigaevo.utils.json import dumps as _dumps
+from gigaevo.utils.json import loads as _loads
 
 # Metadata keys for island tracking
 METADATA_KEY_HOME_ISLAND = "home_island"
 METADATA_KEY_CURRENT_ISLAND = "current_island"
+_DYNAMIC_SPACE_STATE_PREFIX = "strategy:dynamic_behavior_space"
+_DYNAMIC_SPACE_STATE_VERSION = 1
 
 
 class IslandConfig(BaseModel):
@@ -76,6 +81,10 @@ class MapElitesIsland:
         self.program_storage = program_storage
         self.archive_storage = archive_storage_factory(config.archive_prefix)
         self.state_manager = ProgramStateManager(program_storage)
+        # Bounds and archive cell keys form one logical state.  Serialize their
+        # mutation and Memory V2 snapshots so readers cannot observe a rebin in
+        # progress.
+        self._archive_state_lock = asyncio.Lock()
         logger.info(
             "[Island][{}] init (max_size={})", config.island_id, config.max_size
         )
@@ -84,6 +93,11 @@ class MapElitesIsland:
 
     async def add(self, program: Program) -> bool:
         """Insert `program` into its behavior cell if it improves the elite."""
+        async with self._archive_state_lock:
+            return await self._add_locked(program)
+
+    async def _add_locked(self, program: Program) -> bool:
+        """Implement :meth:`add` while the archive-state lock is held."""
         missing = set(self.config.behavior_space.behavior_keys) - program.metrics.keys()
         if missing:
             logger.debug(
@@ -97,13 +111,14 @@ class MapElitesIsland:
         # Map program to behavior cell
         # Check for expansion first (only if dynamic)
         if isinstance(self.config.behavior_space, DynamicBehaviorSpace):
+            previous_bounds = self._live_bounds()
             if self.config.behavior_space.check_and_expand(program.metrics):
                 logger.info(
                     "[Island][{}] behavior space expanded by program {}, triggering re-indexing",
                     self.config.island_id,
                     program.id,
                 )
-                await self.reindex_archive()
+                await self._commit_rebin_locked(previous_bounds)
 
         cell = self.config.behavior_space.get_cell(program.metrics)
         behavior_values = {
@@ -166,14 +181,47 @@ class MapElitesIsland:
 
         # If behavior space is dynamic, optimize bounds aggressively on success
         if isinstance(self.config.behavior_space, DynamicBehaviorSpace):
-            await self.optimize_space()
+            await self._optimize_space_locked()
 
-        await self._enforce_size_limit()
+        await self._enforce_size_limit_locked()
         return True
+
+    async def can_accept(self, program: Program) -> bool:
+        """Check archive compatibility without mutating dynamic bounds."""
+
+        required = set(self.config.behavior_space.behavior_keys)
+        if not required.issubset(program.metrics):
+            return False
+
+        async with self._archive_state_lock:
+            candidate_space = self.config.behavior_space.model_copy(deep=True)
+            expanded = False
+            if isinstance(candidate_space, DynamicBehaviorSpace):
+                expanded = candidate_space.check_and_expand(program.metrics)
+            cell = candidate_space.get_cell(program.metrics)
+
+            if not expanded:
+                current = await self.archive_storage.get_elite(cell)
+                return current is None or self.config.archive_selector(program, current)
+
+            # Expansion changes every cell boundary. Simulate the post-reindex
+            # occupant on the copied grid rather than querying old physical keys.
+            current: Program | None = None
+            for elite in await self.get_elites():
+                try:
+                    elite_cell = candidate_space.get_cell(elite.metrics)
+                except Exception:
+                    continue
+                if elite_cell != cell:
+                    continue
+                if current is None or self.config.archive_selector(elite, current):
+                    current = elite
+            return current is None or self.config.archive_selector(program, current)
 
     async def select_elites(self, total: int) -> list[Program]:
         """Return up to `total` elite programs for mutation."""
-        elites = await self.get_elites()
+        async with self._archive_state_lock:
+            elites = await self.get_elites()
         archive_size = len(elites)
 
         logger.debug(
@@ -211,7 +259,8 @@ class MapElitesIsland:
 
     async def select_migrants(self, count: int) -> list[Program]:
         """Select programs to emigrate to other islands."""
-        elites = await self.get_elites()
+        async with self._archive_state_lock:
+            elites = await self.get_elites()
         return [] if not elites else self.config.migrant_selector(elites, count)
 
     async def get_elite_ids(self) -> list[str]:
@@ -226,11 +275,29 @@ class MapElitesIsland:
         programs = await self.program_storage.mget(ids)
         return [p for p in programs if p is not None]
 
+    async def remove_elite_by_id(self, program_id: str) -> bool:
+        """Remove one elite without racing a dynamic archive replacement."""
+
+        async with self._archive_state_lock:
+            return await self.archive_storage.remove_elite_by_id(program_id)
+
+    async def snapshot_archive_state(self) -> tuple[list[Program], BehaviorSpace]:
+        """Return elites and their behavior space from one coherent rebin epoch."""
+
+        async with self._archive_state_lock:
+            elites = await self.get_elites()
+            behavior_space = self.config.behavior_space.model_copy(deep=True)
+            return elites, behavior_space
+
     async def __len__(self) -> int:
         """Number of elites in this island."""
         return await self.archive_storage.size()
 
     async def _enforce_size_limit(self) -> None:
+        async with self._archive_state_lock:
+            await self._enforce_size_limit_locked()
+
+    async def _enforce_size_limit_locked(self) -> None:
         """If `max_size` is set, remove excess programs using the configured remover."""
         if self.config.max_size is None or self.config.archive_remover is None:
             return
@@ -300,44 +367,38 @@ class MapElitesIsland:
 
         # Opportunity to shrink/optimize space if we removed items
         if removed > 0:
-            await self.optimize_space()
+            await self._optimize_space_locked()
 
     async def reindex_archive(self) -> None:
         """Re-calculate cell coordinates for all elites based on current behavior space."""
-        # 1. Get all current elites
-        elites = await self.get_elites()
-        if not elites:
-            return
+        async with self._archive_state_lock:
+            await self._reindex_archive_locked()
+            await self._save_dynamic_space_state_locked()
 
-        # 2. Clear the current mapping
-        await self.archive_storage.clear_all_elites()
+    async def _reindex_archive_locked(
+        self, elites: list[Program] | None = None
+    ) -> None:
+        """Atomically re-index while the archive-state lock is held."""
 
-        # 3. Batch re-insert
-        # We can't simply use bulk_add because we need to handle collisions
-        # (two elites might now map to the same cell).
-        # We sort by fitness (or whatever archive_selector prioritizes) to ensure best ones win.
-        # However, archive_selector is a comparator, not a key.
-        # For simplicity, we just re-add them one by one. The archive logic handles replacements.
-
-        readded = 0
-
-        # Pre-calculate placements
+        if elites is None:
+            elites = await self.get_elites()
         placements = []
         for p in elites:
             try:
                 cell = self.config.behavior_space.get_cell(p.metrics)
                 placements.append((cell, p))
             except Exception as e:
-                logger.warning(
-                    "[Island][{}] failed to map program {} during re-index: {}",
-                    self.config.island_id,
-                    p.id,
-                    e,
-                )
+                raise ValueError(
+                    f"failed to map program {p.id!r} while re-indexing island "
+                    f"{self.config.island_id!r}"
+                ) from e
 
-        # Use bulk add (which handles is_better logic internally per item)
-        readded = await self.archive_storage.bulk_add_elites(
-            placements, self.config.archive_selector
+        # Collision resolution happens before one complete map is published, so
+        # readers see either the pre-rebin or post-rebin archive, never a partial
+        # clear-and-repopulate state.
+        readded = await self.archive_storage.replace_all_elites(
+            placements,
+            self.config.archive_selector,
         )
 
         logger.info(
@@ -349,6 +410,12 @@ class MapElitesIsland:
 
     async def optimize_space(self) -> None:
         """Analyze current population and optimize behavior space bounds (shrink/tighten)."""
+        async with self._archive_state_lock:
+            await self._optimize_space_locked()
+
+    async def _optimize_space_locked(self) -> None:
+        """Optimize dynamic bounds while the archive-state lock is held."""
+
         if not isinstance(self.config.behavior_space, DynamicBehaviorSpace):
             return
 
@@ -364,6 +431,7 @@ class MapElitesIsland:
         )
 
         old_description = self.config.behavior_space.describe()
+        previous_bounds = self._live_bounds()
         if self.config.behavior_space.update_bounds(new_bounds):
             new_description = self.config.behavior_space.describe()
 
@@ -384,4 +452,120 @@ class MapElitesIsland:
                 self.config.island_id,
                 "\n  ".join(changes),
             )
-            await self.reindex_archive()
+            await self._commit_rebin_locked(previous_bounds)
+
+    def _live_bounds(self) -> dict[str, tuple[float, float]]:
+        return {
+            key: (binning.min_val, binning.max_val)
+            for key, binning in self.config.behavior_space.bins.items()
+        }
+
+    def _apply_live_bounds(self, bounds: dict[str, tuple[float, float]]) -> None:
+        space = self.config.behavior_space
+        if not isinstance(space, DynamicBehaviorSpace):
+            return
+        space.update_bounds(
+            {key: (lower, upper) for key, (lower, upper) in bounds.items()}
+        )
+
+    async def _commit_rebin_locked(
+        self, previous_bounds: dict[str, tuple[float, float]]
+    ) -> None:
+        """Commit bounds, archive keys, and resume metadata as one logical change."""
+
+        elites = await self.get_elites()
+        try:
+            await self._reindex_archive_locked(elites)
+            await self._save_dynamic_space_state_locked()
+        except BaseException:
+            # Replacement is atomic for the supported stores, so an ordinary
+            # failed publish leaves the prior map in place.
+            self._apply_live_bounds(previous_bounds)
+            raise
+
+    @property
+    def _dynamic_space_state_key(self) -> str:
+        return f"{_DYNAMIC_SPACE_STATE_PREFIX}:{self.config.island_id}"
+
+    def _dynamic_space_state_payload(self) -> dict[str, object]:
+        return {
+            "version": _DYNAMIC_SPACE_STATE_VERSION,
+            "live_bounds": {
+                key: [lower, upper]
+                for key, (lower, upper) in self._live_bounds().items()
+            },
+        }
+
+    def _parse_dynamic_space_state(self, raw: str) -> dict[str, tuple[float, float]]:
+        try:
+            payload = _loads(raw)
+        except Exception as exc:
+            raise ValueError(
+                f"invalid dynamic behavior-space state for island "
+                f"{self.config.island_id!r}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError("dynamic behavior-space state must be an object")
+        if payload.get("version") != _DYNAMIC_SPACE_STATE_VERSION:
+            raise ValueError(
+                "unsupported dynamic behavior-space state version: "
+                f"{payload.get('version')!r}"
+            )
+        raw_bounds = payload.get("live_bounds")
+        if not isinstance(raw_bounds, dict) or set(raw_bounds) != set(
+            self.config.behavior_space.behavior_keys
+        ):
+            raise ValueError("persisted dynamic behavior-space bounds are incomplete")
+
+        result: dict[str, tuple[float, float]] = {}
+        space = self.config.behavior_space
+        if not isinstance(space, DynamicBehaviorSpace):
+            return result
+        for key in space.behavior_keys:
+            row = raw_bounds[key]
+            if not isinstance(row, list) or len(row) != 2:
+                raise ValueError(f"invalid persisted bounds for behavior axis {key!r}")
+            lower, upper = float(row[0]), float(row[1])
+            hard_lower, hard_upper = space._initial_bounds[key]
+            if (
+                not math.isfinite(lower)
+                or not math.isfinite(upper)
+                or lower > upper
+                or lower < hard_lower
+                or upper > hard_upper
+            ):
+                raise ValueError(f"invalid persisted bounds for behavior axis {key!r}")
+            result[key] = (lower, upper)
+        return result
+
+    async def _save_dynamic_space_state_locked(self) -> None:
+        if not isinstance(self.config.behavior_space, DynamicBehaviorSpace):
+            return
+        await self.program_storage.save_run_state(
+            self._dynamic_space_state_key,
+            _dumps(self._dynamic_space_state_payload()),
+        )
+
+    async def restore_dynamic_space_state(self) -> None:
+        """Restore live dynamic bounds and repair persisted archive cell keys."""
+
+        space = self.config.behavior_space
+        if not isinstance(space, DynamicBehaviorSpace):
+            return
+        async with self._archive_state_lock:
+            elites = await self.get_elites()
+            raw = await self.program_storage.load_run_state_str(
+                self._dynamic_space_state_key
+            )
+            if raw is not None:
+                self._apply_live_bounds(self._parse_dynamic_space_state(raw))
+            elif elites:
+                # Compatibility for archives created before dynamic state was
+                # persisted: reconstruct deterministic tight bounds from elites.
+                self._apply_live_bounds(
+                    space.calculate_optimized_bounds(
+                        [elite.metrics for elite in elites]
+                    )
+                )
+            await self._reindex_archive_locked(elites)
+            await self._save_dynamic_space_state_locked()

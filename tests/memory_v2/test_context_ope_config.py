@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from hydra.utils import instantiate
+import numpy as np
 from omegaconf import OmegaConf
 import pytest
 
@@ -16,6 +17,7 @@ from gigaevo.evolution.mutation.structured_diff import StructuredDiffMutationOpe
 from gigaevo.evolution.strategies.models import (
     BehaviorModelTransform,
     BehaviorSpace,
+    DynamicBehaviorSpace,
     LinearBinning,
 )
 from gigaevo.memory.write.eviction import NullEvictor
@@ -26,6 +28,7 @@ from gigaevo.memory_v2.candidates import (
 )
 from gigaevo.memory_v2.context import MapContextConfig, MapElitesContextSource
 from gigaevo.memory_v2.eviction import CausalRetirementEvictor
+from gigaevo.memory_v2.features import FeatureConfig, HierarchicalFeatureMap
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -128,9 +131,13 @@ async def test_map_elites_context_is_typed_smooth_and_frozen(
         "passages_fetched": 30.0,
         "instr_chars": 1500.0,
     }
+
+    async def snapshot_archive_state():
+        return [parent, peer], space.model_copy(deep=True)
+
     island = SimpleNamespace(
         config=SimpleNamespace(island_id="main", behavior_space=space),
-        get_elites=AsyncMock(return_value=[parent, peer]),
+        snapshot_archive_state=AsyncMock(side_effect=snapshot_archive_state),
     )
     strategy = SimpleNamespace(islands={"main": island}, generation=8)
     metrics = MetricsContext(
@@ -193,6 +200,104 @@ async def test_map_elites_context_is_typed_smooth_and_frozen(
         updated.map_elites.semantic_schema_hash
         == context.map_elites.semantic_schema_hash
     )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cell_change_does_not_change_bayesian_features(
+    environment: EnvironmentFingerprint,
+) -> None:
+    """A live rebin is audit state, never a change of Bayesian identity."""
+
+    space = DynamicBehaviorSpace(
+        bins={"x": LinearBinning(min_val=0.0, max_val=100.0, num_bins=10)}
+    )
+    parent = Program(code="def parent(): return 1", iteration=4)
+    parent.metrics = {"fitness": 0.6, "x": 20.0}
+    parent.metadata["current_island"] = "main"
+
+    async def snapshot_archive_state():
+        return [parent], space.model_copy(deep=True)
+
+    island = SimpleNamespace(
+        config=SimpleNamespace(island_id="main", behavior_space=space),
+        snapshot_archive_state=AsyncMock(side_effect=snapshot_archive_state),
+    )
+    source = MapElitesContextSource(
+        strategy=SimpleNamespace(islands={"main": island}, generation=8),
+        metrics_context=MetricsContext(
+            specs={
+                "fitness": MetricSpec(
+                    description="fitness",
+                    is_primary=True,
+                    higher_is_better=True,
+                    lower_bound=0.0,
+                    upper_bound=1.0,
+                )
+            }
+        ),
+        environment=environment,
+        trajectory_id_source=SimpleNamespace(trajectory_id="dynamic-run"),
+        config=MapContextConfig(),
+        credit=LineageCreditConfig(),
+    )
+    feature_space = HierarchicalFeatureMap(
+        config=FeatureConfig(behavior_keys=("x",))
+    ).space(())
+
+    before = await source.snapshot(parent)
+    space.bins["x"].update_bounds(new_min=10.0, new_max=30.0)
+    after = await source.snapshot(parent)
+
+    assert before.map_elites.parent_cell == (2,)
+    assert after.map_elites.parent_cell == (5,)
+    assert before.map_elites.behavior_schema_hash != (
+        after.map_elites.behavior_schema_hash
+    )
+    assert before.map_elites.semantic_schema_hash == (
+        after.map_elites.semantic_schema_hash
+    )
+    assert before.map_elites.coordinates[0].semantic_normalized == (
+        after.map_elites.coordinates[0].semantic_normalized
+    )
+    assert before.map_elites.coordinates[0].dynamic_normalized != (
+        after.map_elites.coordinates[0].dynamic_normalized
+    )
+    replayed_after = EvolutionContext.model_validate_json(
+        after.model_dump_json(exclude_computed_fields=True)
+    )
+    assert np.array_equal(
+        feature_space.context_features(before),
+        feature_space.context_features(replayed_after),
+    )
+
+
+def test_context_source_rejects_different_stable_transforms_across_islands(
+    environment: EnvironmentFingerprint,
+) -> None:
+    first = BehaviorSpace(
+        bins={"x": LinearBinning(min_val=0.0, max_val=10.0, num_bins=5)}
+    )
+    second = BehaviorSpace(
+        bins={"x": LinearBinning(min_val=0.0, max_val=20.0, num_bins=5)}
+    )
+    source = MapElitesContextSource(
+        strategy=SimpleNamespace(
+            islands={
+                "first": SimpleNamespace(config=SimpleNamespace(behavior_space=first)),
+                "second": SimpleNamespace(
+                    config=SimpleNamespace(behavior_space=second)
+                ),
+            }
+        ),
+        metrics_context=AsyncMock(),
+        environment=environment,
+        trajectory_id_source=SimpleNamespace(trajectory_id="schema-run"),
+        config=MapContextConfig(),
+        credit=LineageCreditConfig(),
+    )
+
+    with pytest.raises(ValueError, match="shared stable behavior transform"):
+        _ = source.behavior_keys
 
 
 def observation(

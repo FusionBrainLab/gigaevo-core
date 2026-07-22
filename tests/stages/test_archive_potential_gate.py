@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from pydantic import ValidationError
 import pytest
@@ -266,6 +266,32 @@ async def test_compute_empty_cell_returns_accepted_by_some_island():
     out = await stage.compute(_make_program())
     assert out.decision == "run"
     assert out.reason == "accepted_by_some_island"
+
+
+@pytest.mark.asyncio
+async def test_compute_uses_locked_island_acceptor_when_available():
+    acceptor = AsyncMock(return_value=True)
+    tgt = ArchiveGateTarget(
+        behavior_space=_StubBehaviorSpace(
+            cell_fn=MagicMock(side_effect=AssertionError("unlocked path used"))
+        ),
+        archive_storage=_StubArchiveStorage(),
+        archive_selector=_always_false,
+        behavior_keys=frozenset({"fitness"}),
+        acceptor=acceptor,
+    )
+
+    class _P(ArchiveGateProvider):
+        def targets_for(self, program: Program):
+            return [tgt]
+
+    stage = ArchivePotentialGateStage(provider=_P(), timeout=5.0)
+    program = _make_program()
+    out = await stage.compute(program)
+
+    assert out.decision == "run"
+    assert out.reason == "accepted_by_some_island"
+    acceptor.assert_awaited_once_with(program)
 
 
 @pytest.mark.asyncio

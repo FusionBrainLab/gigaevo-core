@@ -37,6 +37,8 @@ def _mock_island(island_id: str, size: int = 0) -> MagicMock:
     m.get_elite_ids = AsyncMock(return_value=[])
     m.__len__ = AsyncMock(return_value=size)
     m._enforce_size_limit = AsyncMock()
+    m.restore_dynamic_space_state = AsyncMock()
+    m.remove_elite_by_id = AsyncMock(return_value=True)
     m.archive_storage.remove_elite_by_id = AsyncMock(return_value=True)
     m.state_manager.set_program_state = AsyncMock()
     m.state_manager.update_program = AsyncMock()
@@ -259,7 +261,7 @@ class TestRemoveProgramById:
     async def test_returns_false_when_not_found(self):
         multi, islands, _ = _make_multi_island(n=2)
         for m in islands.values():
-            m.archive_storage.remove_elite_by_id = AsyncMock(return_value=False)
+            m.remove_elite_by_id = AsyncMock(return_value=False)
         result = await multi.remove_program_by_id("does-not-exist")
         assert result is False
 
@@ -267,9 +269,7 @@ class TestRemoveProgramById:
         multi, islands, storage = _make_multi_island(n=2)
         prog = _prog("island_0")
         program_id = prog.id  # auto-generated UUID — do not reassign
-        islands["island_0"].archive_storage.remove_elite_by_id = AsyncMock(
-            return_value=True
-        )
+        islands["island_0"].remove_elite_by_id = AsyncMock(return_value=True)
         storage.get = AsyncMock(return_value=prog)
         islands["island_0"].state_manager.set_program_state = AsyncMock()
         result = await multi.remove_program_by_id(program_id)
@@ -280,9 +280,7 @@ class TestRemoveProgramById:
 
     async def test_returns_true_even_when_program_not_in_storage(self):
         multi, islands, storage = _make_multi_island(n=2)
-        islands["island_0"].archive_storage.remove_elite_by_id = AsyncMock(
-            return_value=True
-        )
+        islands["island_0"].remove_elite_by_id = AsyncMock(return_value=True)
         storage.get = AsyncMock(return_value=None)
         result = await multi.remove_program_by_id("ghost-id")
         assert result is True
@@ -389,13 +387,9 @@ class TestPerformMigration:
         islands["island_1"].select_migrants = AsyncMock(return_value=[])
         multi.mutant_router.route_mutant = AsyncMock(return_value=islands["island_1"])
         islands["island_1"].add = AsyncMock(return_value=True)
-        islands["island_0"].archive_storage.remove_elite_by_id = AsyncMock(
-            return_value=True
-        )
+        islands["island_0"].remove_elite_by_id = AsyncMock(return_value=True)
         await multi._perform_migration()
-        islands["island_0"].archive_storage.remove_elite_by_id.assert_called_once_with(
-            migrant_id
-        )
+        islands["island_0"].remove_elite_by_id.assert_called_once_with(migrant_id)
 
     async def test_rollback_when_remove_from_source_fails(self):
         """If source remove fails, migrant must be removed from destination (rollback)."""
@@ -406,14 +400,12 @@ class TestPerformMigration:
         islands["island_1"].select_migrants = AsyncMock(return_value=[])
         multi.mutant_router.route_mutant = AsyncMock(return_value=islands["island_1"])
         islands["island_1"].add = AsyncMock(return_value=True)
-        islands["island_0"].archive_storage.remove_elite_by_id = AsyncMock(
+        islands["island_0"].remove_elite_by_id = AsyncMock(
             return_value=False  # source remove fails
         )
         await multi._perform_migration()
         # Rollback: remove from destination
-        islands["island_1"].archive_storage.remove_elite_by_id.assert_called_once_with(
-            migrant_id
-        )
+        islands["island_1"].remove_elite_by_id.assert_called_once_with(migrant_id)
 
     async def test_destination_rejects_migrant(self):
         multi, islands, _ = _make_multi_island(n=2)
@@ -424,7 +416,7 @@ class TestPerformMigration:
         islands["island_1"].add = AsyncMock(return_value=False)
         await multi._perform_migration()
         # No removal from source since add failed
-        islands["island_0"].archive_storage.remove_elite_by_id.assert_not_called()
+        islands["island_0"].remove_elite_by_id.assert_not_called()
 
     async def test_migration_with_unknown_source_island(self):
         """Migrant whose source island_id is not in self.islands → one-way migration."""
@@ -436,7 +428,7 @@ class TestPerformMigration:
         islands["island_1"].add = AsyncMock(return_value=True)
         await multi._perform_migration()
         # No remove_elite_by_id called (source is None)
-        islands["island_0"].archive_storage.remove_elite_by_id.assert_not_called()
+        islands["island_0"].remove_elite_by_id.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

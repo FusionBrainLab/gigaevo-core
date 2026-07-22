@@ -18,6 +18,26 @@ from gigaevo.utils.json import loads as _loads
 CellDescriptor = tuple[int, ...]
 
 
+def _resolve_reindex_winners(
+    placements: list[tuple[CellDescriptor, Program]],
+    is_better: Callable[[Program, Program], bool],
+) -> list[tuple[CellDescriptor, Program]]:
+    """Resolve rebin collisions before publishing a replacement archive map."""
+
+    winners: dict[CellDescriptor, Program] = {}
+    seen_programs: dict[str, CellDescriptor] = {}
+    for cell, program in placements:
+        previous_cell = seen_programs.setdefault(program.id, cell)
+        if previous_cell != cell:
+            raise ValueError(
+                f"program {program.id!r} was placed in multiple archive cells"
+            )
+        current = winners.get(cell)
+        if current is None or is_better(program, current):
+            winners[cell] = program
+    return list(winners.items())
+
+
 # ------------------------------- Interface -------------------------------
 
 
@@ -64,6 +84,15 @@ class ArchiveStorage(ABC):
     ) -> int: ...
 
     # Adds multiple elites at once (e.g., during re-indexing). Returns number of successful adds.
+
+    @abstractmethod
+    async def replace_all_elites(
+        self,
+        placements: list[tuple[CellDescriptor, Program]],
+        is_better: Callable[[Program, Program], bool],
+    ) -> int:
+        """Atomically replace the complete archive mapping after re-indexing."""
+        ...
 
     @abstractmethod
     async def size(self) -> int: ...
@@ -328,8 +357,6 @@ class RedisArchiveStorage(ArchiveStorage):
         """Clear all elites and reverse index."""
         await self._ensure_cache()
         count = len(self._elite_cache)
-        if count == 0:
-            return 0
 
         async def _op(r):
             pipe = r.pipeline(transaction=False)
@@ -340,7 +367,8 @@ class RedisArchiveStorage(ArchiveStorage):
         await self._storage._with_redis("archive:clear_all", _op)
         self._cache_clear()
 
-        logger.debug("[Archive] cleared {} elites", count)
+        if count:
+            logger.debug("[Archive] cleared {} elites", count)
         return count
 
     async def bulk_add_elites(
@@ -361,6 +389,41 @@ class RedisArchiveStorage(ArchiveStorage):
                 added_count += 1
 
         return added_count
+
+    async def replace_all_elites(
+        self,
+        placements: list[tuple[CellDescriptor, Program]],
+        is_better: Callable[[Program, Program], bool],
+    ) -> int:
+        """Publish a collision-resolved archive map in one Redis transaction."""
+
+        winners = _resolve_reindex_winners(placements, is_better)
+        by_field = {self._field(cell): program for cell, program in winners}
+
+        async def _op(r):
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.delete(self._hash_key)
+                pipe.delete(self._reverse_key)
+                if by_field:
+                    pipe.hset(
+                        self._hash_key,
+                        mapping={
+                            field: program.id for field, program in by_field.items()
+                        },
+                    )
+                    pipe.hset(
+                        self._reverse_key,
+                        mapping={
+                            program.id: field for field, program in by_field.items()
+                        },
+                    )
+                await pipe.execute()
+
+        await self._storage._with_redis("archive:replace_all", _op)
+        self._elite_cache = dict(by_field)
+        self._elite_reverse = {program.id: field for field, program in by_field.items()}
+        self._cache_loaded = True
+        return len(by_field)
 
 
 class ArchiveStorageFactory(Protocol):
@@ -532,6 +595,21 @@ class DiskArchiveStorage(ArchiveStorage):
             if await self.add_elite(cell, program, is_better):
                 added += 1
         return added
+
+    async def replace_all_elites(
+        self,
+        placements: list[tuple[CellDescriptor, Program]],
+        is_better: Callable[[Program, Program], bool],
+    ) -> int:
+        """Replace the in-memory map under one lock and persist it once."""
+
+        winners = _resolve_reindex_winners(placements, is_better)
+        async with self._lock:
+            self._ensure_loaded()
+            self._elites = {self._field(cell): program.id for cell, program in winners}
+            self._reverse = {program.id: self._field(cell) for cell, program in winners}
+            self._persist()
+            return len(self._elites)
 
     async def size(self) -> int:
         async with self._lock:

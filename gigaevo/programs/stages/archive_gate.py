@@ -10,7 +10,7 @@ See ``docs/superpowers/specs/2026-05-14-archive-potential-gate-design.md``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Literal
 
 from loguru import logger
@@ -34,6 +34,7 @@ class ArchiveGateTarget(BaseModel):
     archive_storage: Any
     archive_selector: Callable[[Program, Program], bool]
     behavior_keys: frozenset[str]
+    acceptor: Callable[[Program], Awaitable[bool]] | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
@@ -76,6 +77,7 @@ class AllIslandsGateProvider(ArchiveGateProvider):
                     archive_storage=island.archive_storage,
                     archive_selector=cfg.archive_selector,
                     behavior_keys=frozenset(cfg.behavior_space.behavior_keys),
+                    acceptor=getattr(island, "can_accept", None),
                 )
             )
         return targets
@@ -139,14 +141,18 @@ class ArchivePotentialGateStage(Stage):
                     decision="run", reason="fail_open_missing_keys"
                 )
             try:
-                cell = tgt.behavior_space.get_cell(program.metrics)
-                current = await tgt.archive_storage.get_elite(cell)
+                if tgt.acceptor is not None:
+                    accepted = await tgt.acceptor(program)
+                else:
+                    cell = tgt.behavior_space.get_cell(program.metrics)
+                    current = await tgt.archive_storage.get_elite(cell)
+                    accepted = current is None or tgt.archive_selector(program, current)
             except Exception as e:
                 logger.warning("[ArchiveGate] target error: {}", e)
                 return ArchivePotentialGateOutput(
                     decision="run", reason="fail_open_target_error"
                 )
-            if current is None or tgt.archive_selector(program, current):
+            if accepted:
                 return ArchivePotentialGateOutput(
                     decision="run", reason="accepted_by_some_island"
                 )

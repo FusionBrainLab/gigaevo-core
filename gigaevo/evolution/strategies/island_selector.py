@@ -5,7 +5,6 @@ import asyncio
 import random
 
 from gigaevo.evolution.strategies.island import MapElitesIsland
-from gigaevo.evolution.strategies.models import DynamicBehaviorSpace
 from gigaevo.programs.program import Program
 
 
@@ -17,18 +16,7 @@ class IslandCompatibilityMixin:
         required = set(island.config.behavior_space.behavior_keys)
         if not required.issubset(program.metrics.keys()):
             return False
-
-        # For dynamic behavior spaces, expand bounds before computing the cell.
-        # Without this, programs whose metrics fall outside the current (shrunk)
-        # bounds are clamped into an already-occupied bin and incorrectly rejected,
-        # even though they would map to an empty bin after proper expansion.
-        # This mirrors the expansion that island.add() performs before get_cell().
-        if isinstance(island.config.behavior_space, DynamicBehaviorSpace):
-            island.config.behavior_space.check_and_expand(program.metrics)
-
-        cell = island.config.behavior_space.get_cell(program.metrics)
-        current = await island.archive_storage.get_elite(cell)
-        return (current is None) or island.config.archive_selector(program, current)
+        return await island.can_accept(program)
 
     @staticmethod
     async def _filter_accepting_islands(

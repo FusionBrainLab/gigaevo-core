@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.snapshot import (
     ENGINE_SNAPSHOT_KEY,
@@ -22,7 +24,11 @@ from gigaevo.evolution.storage.archive_storage import RedisArchiveStorageFactory
 from gigaevo.evolution.strategies.elite_selectors import RandomEliteSelector
 from gigaevo.evolution.strategies.island import IslandConfig
 from gigaevo.evolution.strategies.migrant_selectors import RandomMigrantSelector
-from gigaevo.evolution.strategies.models import BehaviorSpace, LinearBinning
+from gigaevo.evolution.strategies.models import (
+    BehaviorSpace,
+    DynamicBehaviorSpace,
+    LinearBinning,
+)
 from gigaevo.evolution.strategies.multi_island import (
     _RUN_STATE_GENERATION,
     _RUN_STATE_LAST_MIGRATION,
@@ -53,6 +59,27 @@ def _make_island_config(island_id: str = "test") -> IslandConfig:
     return IslandConfig(
         island_id=island_id,
         behavior_space=_make_behavior_space(),
+        max_size=None,
+        archive_selector=SumArchiveSelector(fitness_keys=["score"]),
+        archive_remover=None,
+        elite_selector=RandomEliteSelector(),
+        migrant_selector=RandomMigrantSelector(),
+    )
+
+
+def _make_dynamic_island_config(island_id: str = "dynamic") -> IslandConfig:
+    return IslandConfig(
+        island_id=island_id,
+        behavior_space=DynamicBehaviorSpace(
+            bins={
+                "x": LinearBinning(
+                    min_val=0.0,
+                    max_val=10.0,
+                    num_bins=5,
+                    type="linear",
+                )
+            }
+        ),
         max_size=None,
         archive_selector=SumArchiveSelector(fitness_keys=["score"]),
         archive_remover=None,
@@ -209,6 +236,20 @@ class TestEvolutionEngineRestoreState:
 
 
 class TestMapElitesMultiIslandRestoreState:
+    def test_rejects_shared_mutable_dynamic_space(
+        self, fakeredis_storage, archive_storage_factory
+    ) -> None:
+        first = _make_dynamic_island_config("first")
+        second = _make_dynamic_island_config("second")
+        second.behavior_space = first.behavior_space
+
+        with pytest.raises(ValueError, match="cannot be shared"):
+            MapElitesMultiIsland(
+                island_configs=[first, second],
+                program_storage=fakeredis_storage,
+                archive_storage_factory=RedisArchiveStorageFactory(fakeredis_storage),
+            )
+
     async def test_restores_generation_and_last_migration(
         self, fakeredis_storage, archive_storage_factory
     ) -> None:
@@ -242,6 +283,97 @@ class TestMapElitesMultiIslandRestoreState:
         await strategy.restore_state()
         assert strategy.generation == 0
         assert strategy.last_migration == 0
+
+    async def test_restores_dynamic_bounds_and_repairs_archive_cells(
+        self, fakeredis_storage, archive_storage_factory
+    ) -> None:
+        """Persisted cell keys and live dynamic bounds resume as one state."""
+
+        first = Program(code="def first(): return 1", state=ProgramState.DONE)
+        first.add_metrics({"score": 1.0, "x": 2.0})
+        second = Program(code="def second(): return 2", state=ProgramState.DONE)
+        second.add_metrics({"score": 2.0, "x": 8.0})
+        rejected = Program(code="def rejected(): return 0", state=ProgramState.DONE)
+        rejected.add_metrics({"score": -100.0, "x": 1.39})
+        await fakeredis_storage.add(first)
+        await fakeredis_storage.add(second)
+        await fakeredis_storage.add(rejected)
+
+        initial = MapElitesMultiIsland(
+            island_configs=[_make_dynamic_island_config()],
+            program_storage=fakeredis_storage,
+            archive_storage_factory=RedisArchiveStorageFactory(fakeredis_storage),
+        )
+        assert await initial.islands["dynamic"].add(first)
+        assert await initial.islands["dynamic"].add(second)
+        # A rejected out-of-range candidate can still expand live bounds. Those
+        # exact bounds cannot be reconstructed from elites alone.
+        assert not await initial.islands["dynamic"].add(rejected)
+        live_space = initial.islands["dynamic"].config.behavior_space
+        live_bounds = {
+            key: (binning.min_val, binning.max_val)
+            for key, binning in live_space.bins.items()
+        }
+        live_cells = {
+            program.id: live_space.get_cell(program.metrics)
+            for program in (first, second)
+        }
+
+        resumed = MapElitesMultiIsland(
+            island_configs=[_make_dynamic_island_config()],
+            program_storage=fakeredis_storage,
+            archive_storage_factory=RedisArchiveStorageFactory(fakeredis_storage),
+        )
+        resumed_island = resumed.islands["dynamic"]
+        fresh_space = resumed_island.config.behavior_space
+        assert fresh_space.get_cell(first.metrics) != live_cells[first.id]
+
+        await resumed.restore_state()
+
+        assert {
+            key: (binning.min_val, binning.max_val)
+            for key, binning in fresh_space.bins.items()
+        } == live_bounds
+        for program in (first, second):
+            cell = fresh_space.get_cell(program.metrics)
+            elite = await resumed_island.archive_storage.get_elite(cell)
+            assert elite is not None
+            assert elite.id == program.id
+
+    async def test_auto_route_commits_dynamic_rebin_atomically(
+        self, fakeredis_storage, archive_storage_factory
+    ) -> None:
+        first = Program(code="def first(): return 1", state=ProgramState.DONE)
+        first.add_metrics({"score": 10.0, "x": 4.0})
+        second = Program(code="def second(): return 2", state=ProgramState.DONE)
+        second.add_metrics({"score": 20.0, "x": 6.0})
+        candidate = Program(code="def candidate(): return 3", state=ProgramState.DONE)
+        candidate.add_metrics({"score": 30.0, "x": 3.79})
+        for program in (first, second, candidate):
+            await fakeredis_storage.add(program)
+
+        strategy = MapElitesMultiIsland(
+            island_configs=[_make_dynamic_island_config()],
+            program_storage=fakeredis_storage,
+            archive_storage_factory=RedisArchiveStorageFactory(fakeredis_storage),
+        )
+        island = strategy.islands["dynamic"]
+        assert await strategy.add(first, island_id="dynamic")
+        assert await strategy.add(second, island_id="dynamic")
+        bounds_before = island._live_bounds()
+
+        assert await strategy.add(candidate)
+
+        assert island._live_bounds() != bounds_before
+        assert (
+            await fakeredis_storage.load_run_state_str(island._dynamic_space_state_key)
+            is not None
+        )
+        for elite in await island.get_elites():
+            stored = await island.archive_storage.get_elite(
+                island.config.behavior_space.get_cell(elite.metrics)
+            )
+            assert stored is not None and stored.id == elite.id
 
     async def test_generation_is_saved_after_select_elites(
         self, fakeredis_storage, archive_storage_factory

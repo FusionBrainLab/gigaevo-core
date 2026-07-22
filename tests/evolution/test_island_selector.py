@@ -35,7 +35,6 @@ def _make_island(
     size: int = 0,
     elite=None,
     accepts: bool = True,
-    is_dynamic: bool = False,
 ) -> MagicMock:
     """Create a minimal mock island suitable for selector tests.
 
@@ -53,14 +52,6 @@ def _make_island(
     )
     behavior_space.get_cell.return_value = (0, 0)
 
-    if is_dynamic:
-        from gigaevo.evolution.strategies.models import DynamicBehaviorSpace
-
-        behavior_space.__class__ = DynamicBehaviorSpace
-        behavior_space.check_and_expand = MagicMock()
-    else:
-        behavior_space.__class__ = object  # not DynamicBehaviorSpace
-
     island.config.behavior_space = behavior_space
     # When accepts=False we need a non-None elite so archive_selector is reached
     effective_elite = (
@@ -68,6 +59,7 @@ def _make_island(
     )
     island.archive_storage.get_elite = AsyncMock(return_value=effective_elite)
     island.config.archive_selector.return_value = accepts
+    island.can_accept = AsyncMock(return_value=accepts or effective_elite is None)
     island.__len__ = AsyncMock(return_value=size)
     return island
 
@@ -106,14 +98,12 @@ class TestCanAcceptProgram:
         result = await IslandCompatibilityMixin._can_accept_program(island, prog)
         assert result is False
 
-    async def test_dynamic_behavior_space_calls_check_and_expand(self):
-        """DynamicBehaviorSpace.check_and_expand must be called before get_cell."""
-        island = _make_island(behavior_keys=["score"], is_dynamic=True)
+    async def test_dynamic_behavior_space_delegates_without_mutating_bounds(self):
+        """Routing delegates the read-only compatibility decision to the island."""
+        island = _make_island(behavior_keys=["score"])
         prog = _make_program(metrics={"score": 0.5})
         await IslandCompatibilityMixin._can_accept_program(island, prog)
-        island.config.behavior_space.check_and_expand.assert_called_once_with(
-            prog.metrics
-        )
+        island.can_accept.assert_awaited_once_with(prog)
 
     async def test_no_behavior_keys_required_always_accepts(self):
         """Island with zero behavior keys always accepts (empty set ⊆ any set)."""

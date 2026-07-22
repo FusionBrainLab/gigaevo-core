@@ -14,6 +14,7 @@ from gigaevo.evolution.strategies.island import (
     MapElitesIsland,
 )
 from gigaevo.evolution.strategies.island_selector import WeightedIslandSelector
+from gigaevo.evolution.strategies.models import DynamicBehaviorSpace
 from gigaevo.evolution.strategies.mutant_router import RandomMutantRouter
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -39,6 +40,18 @@ class MapElitesMultiIsland(EvolutionStrategy):
     ):
         if not island_configs:
             raise ValueError("At least one island configuration is required")
+
+        dynamic_owners: dict[int, str] = {}
+        for config in island_configs:
+            space = config.behavior_space
+            if not isinstance(space, DynamicBehaviorSpace):
+                continue
+            previous = dynamic_owners.setdefault(id(space), config.island_id)
+            if previous != config.island_id:
+                raise ValueError(
+                    "dynamic behavior spaces cannot be shared across islands; "
+                    f"{previous!r} and {config.island_id!r} use one mutable object"
+                )
 
         self.islands: dict[str, MapElitesIsland] = {
             cfg.island_id: MapElitesIsland(
@@ -235,7 +248,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
     async def remove_program_by_id(self, program_id: str) -> bool:
         """Remove a program (by id) from whichever island holds it and transition to DISCARDED."""
         for island in self.islands.values():
-            if await island.archive_storage.remove_elite_by_id(program_id):
+            if await island.remove_elite_by_id(program_id):
                 prog = await self.program_storage.get(program_id)
                 if prog is not None:
                     if prog.metadata.get(METADATA_KEY_CURRENT_ISLAND):
@@ -268,7 +281,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
         )
 
     async def restore_state(self) -> None:
-        """Restore generation counters from storage after a resume."""
+        """Restore counters and make dynamic archive cells resume-consistent."""
         gen = await self.program_storage.load_run_state(_RUN_STATE_GENERATION)
         last_mig = await self.program_storage.load_run_state(_RUN_STATE_LAST_MIGRATION)
         if gen is not None:
@@ -281,6 +294,9 @@ class MapElitesMultiIsland(EvolutionStrategy):
                 self.generation,
                 self.last_migration,
             )
+        await asyncio.gather(
+            *(island.restore_dynamic_space_state() for island in self.islands.values())
+        )
 
     async def reindex_archive(self) -> None:
         """Re-evaluate archive placements on all islands using current metrics."""
@@ -374,9 +390,9 @@ class MapElitesMultiIsland(EvolutionStrategy):
                     # nothing to remove — count as successful one-way migration.
                     successful_migrations += 1
                     continue
-                removed = await self.islands[
-                    source_island_id
-                ].archive_storage.remove_elite_by_id(migrant.id)
+                removed = await self.islands[source_island_id].remove_elite_by_id(
+                    migrant.id
+                )
 
                 if not removed:
                     # Rollback: remove from destination to avoid duplicates
@@ -385,7 +401,7 @@ class MapElitesMultiIsland(EvolutionStrategy):
                         migrant.id,
                         source_island_id,
                     )
-                    await destination.archive_storage.remove_elite_by_id(migrant.id)
+                    await destination.remove_elite_by_id(migrant.id)
                     rollbacks += 1
                 else:
                     logger.debug(

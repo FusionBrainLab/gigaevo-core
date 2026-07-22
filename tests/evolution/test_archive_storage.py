@@ -151,6 +151,26 @@ class TestRedisArchiveStorageBulk:
         count = await archive.bulk_add_elites([], _always_better)
         assert count == 0
 
+    async def test_replace_all_moves_cells_and_resolves_collisions(
+        self, storage, archive
+    ):
+        low = _prog(metrics={"score": 1.0})
+        high = _prog(metrics={"score": 10.0})
+        await storage.add(low)
+        await storage.add(high)
+        await archive.add_elite((0,), low, _always_better)
+
+        count = await archive.replace_all_elites(
+            [((2,), low), ((2,), high)],
+            lambda new, current: new.metrics["score"] > current.metrics["score"],
+        )
+
+        assert count == 1
+        assert await archive.get_elite((0,)) is None
+        assert (await archive.get_elite((2,))).id == high.id
+        assert await archive.remove_elite_by_id(low.id) is False
+        assert await archive.remove_elite_by_id(high.id) is True
+
     async def test_bulk_remove(self, storage, archive):
         p1 = _prog()
         p2 = _prog()

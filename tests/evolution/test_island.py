@@ -340,6 +340,44 @@ class TestMapElitesIslandDynamicSpace:
         elites = await isl.get_elites()
         assert len(elites) >= 2
 
+    async def test_can_accept_simulates_expansion_without_mutating_live_grid(
+        self, fakeredis_storage, archive_storage_factory
+    ):
+        dynamic_space = DynamicBehaviorSpace(
+            bins={
+                "x": LinearBinning(
+                    min_val=0.0, max_val=100.0, num_bins=10, type="linear"
+                )
+            },
+            expansion_buffer_ratio=0.1,
+        )
+        isl = MapElitesIsland(
+            _make_island_config(dynamic_space),
+            fakeredis_storage,
+            archive_storage_factory,
+        )
+        incumbent = _prog(score=10.0, x=40.0)
+        peer = _prog(score=20.0, x=60.0)
+        candidate = _prog(score=5.0, x=37.9)
+        for program in (incumbent, peer, candidate):
+            await fakeredis_storage.add(program)
+        assert await isl.add(incumbent)
+        assert await isl.add(peer)
+        bounds_before = isl._live_bounds()
+        cells_before = {
+            elite.id: dynamic_space.get_cell(elite.metrics)
+            for elite in await isl.get_elites()
+        }
+
+        accepted = await isl.can_accept(candidate)
+
+        assert accepted is True
+        assert isl._live_bounds() == bounds_before
+        for elite in await isl.get_elites():
+            assert dynamic_space.get_cell(elite.metrics) == cells_before[elite.id]
+            stored = await isl.archive_storage.get_elite(cells_before[elite.id])
+            assert stored is not None and stored.id == elite.id
+
     async def test_optimize_space_with_programs(
         self, fakeredis_storage, archive_storage_factory
     ):
