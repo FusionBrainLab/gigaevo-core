@@ -96,221 +96,59 @@ Engine shutdown persists a machine-readable `completion_reason` in `engine:snaps
 
 ## Data
 
-Use the same TabM data root as `problems/tabular`:
-
-```bash
-export GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data
-```
+Set `GIGAEVO_TABULAR_DATA` to the same TabM data root as `problems/tabular`.
 
 Select a dataset with `problem.dataset=<name>` and use `loader=dag_tab_seed`. The loader creates a neutral raw-feature FeatureGraph at runtime with the exact `x0...xN-1` schema reported by that dataset, so no California-specific seed is reused. `DagTabProblemContext` combines this file's universal FeatureGraph ABI with the selected dataset's `TASK`, `DATASET`, and `COLUMNS` sections from `problems/tabular/<name>/task_description.txt`. Its implementation lives in `problem_context.py`: the reserved `context.py` filename is intentionally absent because GigaEvo interprets it as a runtime `build_context` hook and would otherwise add an incompatible `AddContext` stage. The existing train/validation/test splits remain authoritative; test data is never used as an evolution fitness signal.
 
-## Install
+## Launches
 
-From the repository root:
+Required environment: `GIGAEVO_TABULAR_DATA` and `OPENAI_API_KEY`. Qwen-backed
+Memory V2 additionally requires `LOCAL_LLM_PROXY` and `LITELLM_MASTER_KEY`.
 
-```bash
-conda run -n documents python -m pip install -e ".[test]"
-```
-
-## Config-only check
-
-This resolves the complete engine without making an LLM call:
-
-```bash
-conda run -n documents python run.py \
-  problem.name=dag_tab \
-  program_format=json_document \
-  mutation=structured_diff_dag_tab \
-  loader=dag_tab_seed \
-  problem.dataset=adult \
-  num_parents=1 \
-  max_mutants=3 \
-  --cfg job
-```
-
-Confirm that the resolved config contains:
-
-- `program_loader._target_: problems.dag_tab.seed_loader.DagTabSeedLoader`;
-- matching `problem_context.dataset` and `program_loader.dataset`;
-- `JsonDocumentEvaluationFeature`;
-- `StructuredDiffMutationOperator`;
-- `AllowedDagTabChanges`.
-
-## S4-style launches: without and with Memory V2
-
-Run these recipes from a clean checkout of current `main`. Both pin the S4
-protocol to three-fold mean CV, a dataset-sized neutral DAG seed, the
-two-dimensional dynamic MAP-Elites archive, one parent, at most ten DAG nodes,
-and Gemini 3.5 Flash with a 32,768-token completion budget. Set `DATASET` to any
-directory under `GIGAEVO_TABULAR_DATA`; `california` is only the default.
-
-Load credentials, select a dataset, and point DAG-tab at the shared data root:
-
-```bash
-set -a
-source ~/gigaevo/.env
-set +a
-
-export GIGAEVO_TABULAR_DATA=~/tabm-data/data
-DATASET="${DATASET:-california}"
-MUTATION_LLM="${MUTATION_LLM:-gemini35_flash}"
-```
-
-The evaluator defaults already provide three-fold mean CV and the standard
-behavior-descriptor budget.
-
-For Qwen-backed Memory V2, the required memory globals are:
-
-```bash
-export LOCAL_LLM_PROXY=http://localhost:8000/v1
-export LITELLM_MASTER_KEY=<litellm-master-key>
-```
-
-`OPENROUTER_API_KEY` is required by the Gemini mutation model, not by Memory V2.
-The launcher below sets `LOCAL_LLM_PROXY` and `NO_PROXY` itself; when it sources
-`.env`, that file therefore only needs `LITELLM_MASTER_KEY` and
-`OPENROUTER_API_KEY`. Langfuse variables are optional.
+These are single 100-mutation S4-style runs on `adult`; replace
+`problem.dataset=adult` as needed. Existing defaults provide three-fold mean CV,
+one parent, disk storage, live Memory V2 writes, and per-run Hydra output paths.
 
 ### Without memory
 
-`pipeline=guided memory=none` is the memory-free control. A complete single-run
-launch is:
-
 ```bash
-python3 -u run.py \
+python run.py \
   problem.name=dag_tab \
-  problem.dataset="$DATASET" \
+  problem.dataset=adult \
   loader=dag_tab_seed \
   program_format=json_document \
   pipeline=guided \
   memory=none \
   mutation=structured_diff_dag_tab \
+  llm=gemini35_flash \
+  algorithm=tabular/2d_local_ood \
   mutation_operator.allowed_changes.max_nodes=10 \
-  llm="$MUTATION_LLM" \
   max_tokens=32768 \
-  max_mutants=100 \
-  algorithm=tabular/2d_local_ood
-```
-
-Hydra creates the single-run output directory. The original historical
-California three-replica S4 control launcher is
-`experiments/dag_tab_envelope_s4_20260722/launch_s4_dag_tab.sh`; it intentionally
-uses that experiment's non-neutral California seed.
-
-For Gemini 3 Flash Preview, select its preset before running the same command:
-
-```bash
-MUTATION_LLM=gemini3_flash
-```
-
-For Gemini 3.5 Flash, keep the default `MUTATION_LLM=gemini35_flash`.
-
-### With Memory V2
-
-The base experiment already defaults to `pipeline=memory_guided`, `memory=v2`,
-live memory writes, disk storage, and one parent. The treatment therefore only
-selects Qwen Instruct through the local LiteLLM proxy for card research and
-writing; Gemini 3.5 Flash remains the mutation model. Use a fresh checkpoint
-directory for every replica; sharing one would mix their cards, leases, and
-causal evidence.
-
-The reproducible three-replica launcher is:
-
-```bash
-RUN_ROOT="/tmp/gigaevo-dag-tab-${DATASET}-s4-memory-v2-$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$RUN_ROOT"
-
-setsid env \
-  RUN_ROOT="$RUN_ROOT" \
-  DATASET="$DATASET" \
-  MUTATION_LLM="$MUTATION_LLM" \
-  PROXY_URL=http://localhost:8000/v1 \
-  experiments/dag_tab_envelope_s4_20260722/launch_s4_dag_tab_memory_v2.sh \
-    3 1 3 \
-  > "$RUN_ROOT/launcher.log" 2>&1 < /dev/null &
-
-echo "$!" | tee "$RUN_ROOT/launcher.pid"
-echo "$RUN_ROOT"
-```
-
-Thus the complete Memory V2 launcher uses Gemini 3.5 Flash by default; set
-`MUTATION_LLM=gemini3_flash` before the block to run the same replicas with
-Gemini 3 Flash Preview.
-
-The launcher runs labels 101, 202, and 303 concurrently. It passes
-`problem.dataset=$DATASET` with `loader=dag_tab_seed`, gives every dataset run a
-fresh isolated Memory V2 bank, pins separate randomization seeds and
-`<run>/memory` checkpoint directories, records the exact Git revision, refuses
-existing replica directories, verifies both LLM endpoints, and keeps all run
-data on local disk.
-Explicit run directories are intentional here because three concurrent Hydra
-jobs can otherwise choose the same second-resolution default path. Three-fold
-CV emits `_evaluation_measurements`; `pipeline=memory_guided` stores that
-contract in program metadata, and Memory V2 uses it as scalar outcome SE. If a
-validator does not report uncertainty, the same path remains valid with
-`se=None`.
-
-## Qwen experiment
-
-```bash
-conda activate documents
-export OPENAI_API_KEY=sk-gigaevo
-export GIGAEVO_TABULAR_DATA=/mnt/virtual_ai0001071-04017_SR004-nfs1/CFS-SR008/workspace/datasets/tabm-data/data
-export NO_PROXY="INTERNAL_IP,localhost,127.0.0.1,${NO_PROXY:-}"
-export no_proxy="$NO_PROXY"
-
-python -u run.py \
-  problem.name=dag_tab \
-  program_format=json_document \
-  pipeline=guided \
-  memory=none \
-  mutation=structured_diff_dag_tab \
-  loader=dag_tab_seed \
-  problem.dataset=adult \
-  mutation_operator.allowed_changes.max_nodes=3 \
-  algorithm=tabular/2d_local_ood \
-  llm=qwen_thinking \
-  llm_base_url=http://localhost:8000/v1 \
-  model_name=Qwen3-235B-A22B-Thinking-2507 \
-  num_parents=1 \
-  max_mutants=10 \
-  max_in_flight=1 \
-  llm_max_concurrent=1 \
-  thinking_token_budget=64000 \
-  max_tokens=72000 \
-  request_timeout=600 \
-  stage_timeout=3600 \
-  dag_timeout=7200
-```
-
-`python -u` keeps progress visible in `tmux`.
-
-Qwen thinking runs remain substantially slower and more expensive than Gemini Flash runs. The engine now performs terminal ingestion and metrics drains before the run-level finalizer closes shared storage, but `request_timeout`, `stage_timeout`, and `dag_timeout` should still be sized for the selected model.
-
-## Gemini 3 Flash via OpenRouter
-
-`config/llm/gemini3_flash.yaml` uses `google/gemini-3-flash-preview`, OpenRouter, and `structured_output_method: function_calling`. Its completion budget is capped at 32,768 tokens. Node rationales are limited to 500 characters and overlong otherwise-valid rationales are truncated during schema repair; prompts prohibit embedding code or JSON in rationale fields. Keep the API key only in the environment:
-
-```bash
-export OPENROUTER_API_KEY=<openrouter-api-key>
-export GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data
-
-python -u run.py \
-  problem.name=dag_tab \
-  program_format=json_document \
-  pipeline=guided \
-  memory=none \
-  mutation=structured_diff_dag_tab \
-  loader=dag_tab_seed \
-  problem.dataset=adult \
-  mutation_operator.allowed_changes.max_nodes=10 \
-  algorithm=tabular/2d_local_ood \
-  llm=gemini3_flash \
-  num_parents=1 \
   max_mutants=100
 ```
 
-Engine defaults handle concurrency and timeouts — no extra overrides needed. For a first endpoint/schema smoke test set `max_mutants=1`, then scale up. Verified 2026-07-16: 100/100 mutations schema-valid in under 9 minutes (~1.7M tokens).
+### With Memory V2
+
+The base config already selects `pipeline=memory_guided memory=v2`.
+
+```bash
+python run.py \
+  problem.name=dag_tab \
+  problem.dataset=adult \
+  loader=dag_tab_seed \
+  program_format=json_document \
+  mutation=structured_diff_dag_tab \
+  llm=gemini35_flash \
+  memory/llm=qwen_instruct \
+  algorithm=tabular/2d_local_ood \
+  mutation_operator.allowed_changes.max_nodes=10 \
+  max_tokens=32768 \
+  max_mutants=100
+```
+
+Use `llm=gemini3_flash` instead for Gemini 3 Flash Preview. Evaluator-provided
+`_evaluation_measurements` are stored in program metadata and used by Memory V2
+as outcome SE; absent measurements remain `se=None`.
 
 ## MAP-Elites archive
 
@@ -325,8 +163,7 @@ Evolutionary evaluation and final test both run the selected `problems/tabular` 
 The neutral seed is evaluated automatically by the normal run. A zero-mutation seed smoke for another dataset is:
 
 ```bash
-GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data \
-conda run -n documents python run.py \
+python run.py \
   problem.name=dag_tab \
   program_format=json_document \
   mutation=structured_diff_dag_tab \
@@ -338,8 +175,7 @@ conda run -n documents python run.py \
 Score a selected JSON genome on the untouched test split, under the same protocol a `problems/tabular` program would get:
 
 ```bash
-GIGAEVO_TABULAR_DATA=/path/to/tabm-data/data \
-conda run -n documents python -m problems.dag_tab.test /path/to/program.json
+python -m problems.dag_tab.test /path/to/program.json
 ```
 
 The JSON result carries exactly the metric keys that dataset's task type emits in `problems/tabular`, so dag_tab and tabular test numbers are directly comparable.
@@ -347,7 +183,7 @@ The JSON result carries exactly the metric keys that dataset's task type emits i
 ## Tests
 
 ```bash
-conda run -n documents python -m pytest tests/dag_tab -q
+python -m pytest tests/dag_tab -q
 ```
 
 The focused suite covers graph invariants, neutral and non-empty parent mutation schemas, node-code execution, invalid-candidate handling, portable parent-specific schemas, keep/new/omit/rewire behavior, dynamic dataset context and seeds, Hydra composition, and the generic structured-diff operator end to end.

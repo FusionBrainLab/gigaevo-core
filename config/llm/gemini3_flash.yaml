@@ -3,7 +3,7 @@
 # Single mutation LLM: google/gemini-3-flash-preview via OpenRouter.
 # Pricing: $0.50/M input, $3.00/M output (OpenRouter, 2026-03-12).
 #
-# Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
+# Requires env var: OPENAI_API_KEY=<openrouter-api-key>
 #
 # Usage:
 #   python run.py ... llm=gemini3_flash
@@ -15,7 +15,7 @@ llm:
   models:
     - _target_: langchain_openai.ChatOpenAI
       model: google/gemini-3-flash-preview
-      api_key: ${oc.env:OPENROUTER_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY}
       temperature: ${temperature}
       # The cap covers reasoning plus the answer. A full twelve-node dag_tab rewrite alone
       # carries 6000 code chars plus a 500-char rationale per node (about 19500 tokens),

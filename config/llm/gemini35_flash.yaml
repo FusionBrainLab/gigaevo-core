@@ -21,7 +21,7 @@
 #     forwards it as-is to Gemini. Use this config when latency tolerance is
 #     high (offline evolution batches) and dollar-cost matters.
 #
-# Requires env var: OPENROUTER_API_KEY=<openrouter-api-key>
+# Requires env var: OPENAI_API_KEY=<openrouter-api-key>
 #
 # Usage:
 #   python run.py ... llm=gemini35_flash
@@ -35,7 +35,7 @@ llm:
   models:
     - _target_: langchain_openai.ChatOpenAI
       model: google/gemini-3.5-flash
-      api_key: ${oc.env:OPENROUTER_API_KEY}
+      api_key: ${oc.env:OPENAI_API_KEY}
       max_tokens: ${max_tokens}
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
