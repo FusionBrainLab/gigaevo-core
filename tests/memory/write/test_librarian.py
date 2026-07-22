@@ -321,6 +321,7 @@ async def test_bank_scoped_dedup_merges_foreign_equivalent_into_canonical_card(
     assert canonical.programs == ("task-b-child", "child-1")
     assert canonical.gain_events == (founding,)
     assert len(equivalence.calls) == 1
+    assert store.authoring_transactions == 1
 
 
 @pytest.mark.asyncio

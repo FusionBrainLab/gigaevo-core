@@ -85,6 +85,8 @@ default):
 | File | Writer | Contents |
 |---|---|---|
 | `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, including compact usefulness trials, atomic rewrite per save |
+| `cards.json.lock` | `LocalMemoryStore` | Short cross-process card persistence transaction |
+| `cards.json.authoring.lock` | `LocalMemoryStore` | Cross-process semantic retrieve → judge → admit transaction |
 | `selection_leases.json` | `SharedSelectionRegistry` | In-flight card reservations across processes sharing the bank |
 
 Run-local files remain under `checkpoint_dir`:

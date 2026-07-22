@@ -8,7 +8,8 @@ Retrieval is an implementation detail of storage: a store answers
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from enum import StrEnum
 from types import TracebackType
 
@@ -109,6 +110,16 @@ class MemoryStore(ABC):
     @abstractmethod
     async def research(self, request: ResearchRequest) -> ResearchResult:
         """Agentic retrieval: plan queries, search, reflect; empty on failure."""
+
+    @asynccontextmanager
+    async def authoring_transaction(self) -> AsyncIterator[None]:
+        """Serialize semantic deduplication and admission when required.
+
+        Non-shared stores need no coordination. Durable stores can override
+        this with a cross-process transaction covering retrieve → judge → save.
+        """
+
+        yield
 
     @abstractmethod
     def rebuild(self) -> None:

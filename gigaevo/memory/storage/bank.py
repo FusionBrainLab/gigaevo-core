@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 import fcntl
 import json
 import os
@@ -46,6 +47,40 @@ class CardBankFileLock(AbstractContextManager["CardBankFileLock"]):
             self._fh = None
 
 
+class AsyncCardBankFileLock(AbstractAsyncContextManager["AsyncCardBankFileLock"]):
+    """Cancellation-safe exclusive file lock for an async authoring section."""
+
+    def __init__(self, path: str | Path, *, poll_seconds: float = 0.05) -> None:
+        self._path = Path(path)
+        self._poll_seconds = poll_seconds
+        self._fh: BinaryIO | None = None
+
+    async def __aenter__(self) -> AsyncCardBankFileLock:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fh = self._path.open("a+b")
+        try:
+            while True:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    await asyncio.sleep(self._poll_seconds)
+                    continue
+                self._fh = fh
+                return self
+        except BaseException:
+            fh.close()
+            raise
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if self._fh is None:
+            return
+        try:
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fh.close()
+            self._fh = None
+
+
 class CardBank:
     """Authoritative card map, persisted as a single JSON file.
 
@@ -76,6 +111,10 @@ class CardBank:
     @property
     def lock_path(self) -> Path:
         return self._path.with_name(f"{self._path.name}.lock")
+
+    @property
+    def authoring_lock_path(self) -> Path:
+        return self._path.with_name(f"{self._path.name}.authoring.lock")
 
     def __len__(self) -> int:
         with self._lock:

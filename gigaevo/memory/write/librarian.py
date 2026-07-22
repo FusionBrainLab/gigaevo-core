@@ -192,6 +192,22 @@ class Librarian:
         higher_is_better: bool = True,
         min_fitness_gap: float = 0.0,
     ) -> WriteResult:
+        async with self._store.authoring_transaction():
+            return await self._route_transaction(
+                card,
+                higher_is_better=higher_is_better,
+                min_fitness_gap=min_fitness_gap,
+            )
+
+    async def _route_transaction(
+        self,
+        card: Card,
+        *,
+        higher_is_better: bool,
+        min_fitness_gap: float,
+    ) -> WriteResult:
+        """Deduplicate and admit while holding the store authoring transaction."""
+
         hits = self._dedup_neighbors(card)
         if not hits:
             return await self._admit_new(card)

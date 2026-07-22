@@ -72,6 +72,11 @@ compared only within one task. The preset enables cross-task candidates and
 disables causal retirement. Detailed causal ledgers remain under each run's
 `checkpoint_dir`.
 
+Multiple runs may use this preset against the same `memory_bank_dir` in
+parallel. Semantic deduplication and admission are one cross-process
+transaction, and compact trial updates are atomic. Keep `checkpoint_dir`
+run-specific so the full causal SQLite ledgers are not shared.
+
 `memory_task_key` defaults to `problem.name`. Qualify it when one problem config
 has materially different dataset parameters, for example
 `memory_task_key=dag_tab/adult`; all such tasks can still use the same bank.

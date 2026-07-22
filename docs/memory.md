@@ -270,7 +270,15 @@ Reusable bank artifacts live under `memory_bank_dir` (which defaults to
 | Artifact | Meaning |
 |---|---|
 | `cards.json` | authoritative card bank, including compact shared-card usefulness trials |
+| `cards.json.lock` | short cross-process transaction for atomic card persistence |
+| `cards.json.authoring.lock` | cross-process semantic retrieve → judge → admit transaction |
 | `selection_leases.json` | in-flight card reservations for processes sharing the bank |
+
+Parallel runs should share only `memory_bank_dir`; each run keeps its own
+`checkpoint_dir` (the default Hydra layout already does this). Card persistence,
+semantic admission, usefulness-trial updates, and selection leases are guarded
+across processes. The vector index remains process-local and refreshes from the
+authoritative bank after another process writes.
 
 Run-local artifacts live under `checkpoint_dir`:
 

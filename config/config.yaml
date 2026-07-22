@@ -27,7 +27,8 @@ checkpoint_dir: ${hydra:runtime.output_dir}/memory
 
 # Card-bank location. It follows checkpoint_dir by default; override just this
 # path to let multiple task runs read and populate one shared memory bank while
-# their detailed causal ledgers remain run-local.
+# their detailed causal ledgers remain run-local. Shared-bank authoring is
+# serialized across processes so semantic deduplication cannot race admission.
 memory_bank_dir: ${checkpoint_dir}
 
 # One durable registry is shared by the memory reader, writer, and engine.

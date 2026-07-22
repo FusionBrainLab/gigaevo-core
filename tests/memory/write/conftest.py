@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from threading import RLock
 
 import pytest
@@ -32,6 +33,7 @@ class FakeStore(MemoryStore):
         self.hits: list[ScoredCard] = []
         self.saved_ids: list[str] = []
         self.deleted_ids: list[str] = []
+        self.authoring_transactions = 0
 
     @property
     def is_ready(self) -> bool:
@@ -95,6 +97,11 @@ class FakeStore(MemoryStore):
 
     async def research(self, request: ResearchRequest) -> ResearchResult:
         return ResearchResult()
+
+    @asynccontextmanager
+    async def authoring_transaction(self) -> AsyncIterator[None]:
+        self.authoring_transactions += 1
+        yield
 
     def rebuild(self) -> None:
         pass

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
@@ -9,7 +10,7 @@ import pytest
 
 from gigaevo.exceptions import MemoryStorageError
 from gigaevo.memory.cards import ContextualGain, DecisionContext
-from gigaevo.memory.storage.bank import CardBank
+from gigaevo.memory.storage.bank import AsyncCardBankFileLock, CardBank
 
 
 def test_snapshot_identity_between_reads(tmp_path, make_card):
@@ -98,6 +99,28 @@ def test_reload_rejects_payload_key_embedded_id_mismatch(tmp_path, make_card):
 
     with pytest.raises(MemoryStorageError, match="embedded card id"):
         CardBank(path)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_async_lock_waiter_does_not_leak_lock(tmp_path):
+    path = tmp_path / "authoring.lock"
+    entered = False
+
+    async def wait_for_lock() -> None:
+        nonlocal entered
+        async with AsyncCardBankFileLock(path, poll_seconds=0.001):
+            entered = True
+
+    async with AsyncCardBankFileLock(path):
+        waiter = asyncio.create_task(wait_for_lock())
+        await asyncio.sleep(0.01)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+    assert entered is False
+    async with AsyncCardBankFileLock(path):
+        pass
 
 
 def test_reload_if_changed_detects_same_size_same_mtime_atomic_replace(

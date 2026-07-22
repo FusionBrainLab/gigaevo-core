@@ -8,8 +8,8 @@ corruption raises.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -27,7 +27,12 @@ from gigaevo.memory.events import (
     MemoryStoreWrite,
     emit_memory_event,
 )
-from gigaevo.memory.storage.bank import CardBank, CardBankFileLock, new_card_id
+from gigaevo.memory.storage.bank import (
+    AsyncCardBankFileLock,
+    CardBank,
+    CardBankFileLock,
+    new_card_id,
+)
 from gigaevo.memory.storage.base import (
     MemoryStore,
     ResearchFailure,
@@ -261,6 +266,13 @@ class LocalMemoryStore(MemoryStore):
             )
             return self._finish_research(started, request, ResearchResult(), exc)
         return self._finish_research(started, request, result)
+
+    @asynccontextmanager
+    async def authoring_transaction(self) -> AsyncIterator[None]:
+        """Serialize semantic retrieve → judge → admit across bank processes."""
+
+        async with AsyncCardBankFileLock(self._bank.authoring_lock_path):
+            yield
 
     def rebuild(self) -> None:
         with self._lock:

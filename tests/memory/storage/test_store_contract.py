@@ -6,6 +6,7 @@ local persistence, retrieval, and state.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import multiprocessing
 from unittest.mock import Mock
@@ -13,7 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 from gigaevo.exceptions import MemoryStorageError
-from gigaevo.memory.cards import CardKind
+from gigaevo.memory.cards import Card, CardKind
 from gigaevo.memory.events import memory_event_context
 from gigaevo.memory.storage.bank import CardBank
 from gigaevo.memory.storage.base import ResearchRequest
@@ -38,6 +39,37 @@ def _append_program_markers(config, card_id, markers, ready, start):
                 update={"programs": (*card.programs, marker)}
             ),
         )
+
+
+def _admit_under_authoring_transaction(config, marker, ready, start):
+    local_module.VectorIndex = _make_noop_index
+    store = LocalMemoryStore(config)
+    ready.put(True)
+    start.wait()
+
+    async def admit() -> None:
+        async with store.authoring_transaction():
+            cards = store.snapshot()
+            if not cards:
+                await asyncio.sleep(0.1)
+                store.save(
+                    Card(
+                        id=f"mem-{marker}",
+                        task_key=marker,
+                        description="shared semantic action",
+                        programs=(marker,),
+                    )
+                )
+                return
+            target = cards[0]
+            store.update(
+                target.id,
+                lambda card: card.model_copy(
+                    update={"programs": tuple(dict.fromkeys((*card.programs, marker)))}
+                ),
+            )
+
+    asyncio.run(admit())
 
 
 @pytest.fixture
@@ -218,6 +250,34 @@ class TestLocalStore:
         persisted = CardBank(config.bank_file).get(card.id)
         assert persisted is not None
         assert set(persisted.programs) == set(marker_groups[0] + marker_groups[1])
+
+    def test_authoring_transaction_serializes_cross_process_admission(
+        self, make_store_config
+    ):
+        config = make_store_config()
+        context = multiprocessing.get_context("fork")
+        ready = context.Queue()
+        start = context.Event()
+        markers = ("run-a", "run-b")
+        processes = [
+            context.Process(
+                target=_admit_under_authoring_transaction,
+                args=(config, marker, ready, start),
+            )
+            for marker in markers
+        ]
+        for process in processes:
+            process.start()
+        for _ in processes:
+            assert ready.get(timeout=30) is True
+        start.set()
+        for process in processes:
+            process.join(timeout=30)
+            assert process.exitcode == 0
+
+        persisted = CardBank(config.bank_file).snapshot()
+        assert len(persisted) == 1
+        assert set(persisted[0].programs) == set(markers)
 
     def test_update_missing_skips_transform(self, make_store_config):
         store = LocalMemoryStore(make_store_config())
