@@ -409,7 +409,7 @@ class DAG:
             result = cast(ProgramStageResult, outcome)
 
         if result.status == StageState.FAILED and result.error is not None:
-            logger.exception(
+            logger.bind(exc_type=result.error.type).exception(
                 "[DAG][{}] Stage '{}' FAILED with exception.\n### ERROR SUMMARY ###:\n{}",
                 pid,
                 stage_name,

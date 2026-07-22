@@ -1,0 +1,6 @@
+# @package _global_
+# memory/embedding_prior=none: the byte-identical control. The reward card prior
+# stays a ``None`` field on the shared feature config, no card embedder is built,
+# and the provider and evictor keep their default ``card_embedder=None``. This
+# option deliberately sets nothing so the disabled path is exactly the code that
+# ran before the prior existed.

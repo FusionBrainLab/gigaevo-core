@@ -11,6 +11,8 @@ from loguru import logger
 import numpy as np
 
 from gigaevo.memory.cards import Card
+from gigaevo.memory_v2.embedding import CardEmbedder, build_embedding_reducer
+from gigaevo.memory_v2.features import EmbeddingPriorConfig
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -44,6 +46,7 @@ class RetirementPosterior(Protocol):
         cards: Sequence[CardSnapshot],
         *,
         lineage_observations: Sequence[CausalObservation] = (),
+        card_embeddings: dict[str, np.ndarray] | None = None,
     ) -> FittedTerminalUtilityPosterior: ...
 
 
@@ -77,6 +80,8 @@ class CausalRetirementEvictor:
         practical_effect_quantile: float = 0.10,
         max_viability_probability: float = 0.10,
         mc_confidence_z: float = 1.96,
+        embedding_prior: EmbeddingPriorConfig | None = None,
+        card_embedder: CardEmbedder | None = None,
     ) -> None:
         if min_treated < 1 or min_global_control < 1:
             raise ValueError("treated and pooled-control support must be positive")
@@ -93,6 +98,9 @@ class CausalRetirementEvictor:
         self.ledger = ledger
         self.posterior = posterior
         self.safety = safety
+        self._embedding_reducer = build_embedding_reducer(
+            embedding_prior, card_embedder
+        )
         self.min_treated = min_treated
         self.min_global_control = min_global_control
         self.min_distinct_contexts = min_distinct_contexts
@@ -141,11 +149,25 @@ class CausalRetirementEvictor:
         if not revisions or not usefulness_rows:
             return []
         minimum_useful_effect = self._practical_effect_threshold(usefulness_rows)
+        card_embeddings = None
+        if self._embedding_reducer is not None:
+            # The fit builds one feature space over every lineage it scores, so
+            # it needs a projection for the observed and lineage rows as well as
+            # the swept revisions. Revisions come last so a live snapshot's text
+            # wins its id.
+            card_embeddings = self._embedding_reducer.reduce(
+                (
+                    *(row.card for row in evidence.observations),
+                    *(row.card for row in evidence.lineage_observations),
+                    *revisions,
+                )
+            )
         try:
             fitted = self.posterior.fit(
                 evidence.observations,
                 tuple(revisions),
                 lineage_observations=evidence.lineage_observations,
+                card_embeddings=card_embeddings,
             )
         except (PosteriorFitError, ValueError) as exc:
             logger.warning(

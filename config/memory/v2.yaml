@@ -10,6 +10,10 @@ defaults:
   - evictor: causal
   - write: live
   - _self_
+  # OFF by default = byte-identical control. ``linear`` augments the shared
+  # feature config, provider, and evictor; it must merge after ``_self_`` to
+  # land on those body-defined nodes.
+  - embedding_prior: none
 
 # Start producing cards early enough for a 250-mutation run to evaluate them.
 # Refresh content and retirement every five successful ingestor sweeps.
@@ -103,6 +107,11 @@ posterior_config:
   baseline_prior_sd: 0.75
   shared_effect_prior_sd: 0.35
   card_effect_prior_sd: 0.25
+  # ``empirical_bayes`` relearns the reward prior scales above (and the residual
+  # prior centre/spread) by maximizing the marginal likelihood, warm-started at
+  # these constants. A self-normalizing observation floor keeps cold banks
+  # byte-identical to ``fixed``.
+  hyperparameter_estimation: fixed
   reward_residual_sd_initial: 0.20
   # Numerical support in normalized reward units. The 0.01 lower bound is the
   # default low-noise operating floor. Retirement fails closed and names this

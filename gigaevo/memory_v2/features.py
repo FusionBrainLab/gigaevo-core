@@ -10,6 +10,24 @@ from pydantic import BaseModel, ConfigDict, Field
 from gigaevo.memory_v2.models import CardSnapshot, EvolutionContext
 
 
+class EmbeddingPriorConfig(BaseModel):
+    """Hierarchical embedding prior on the reward card effect.
+
+    When present, each card lineage's cold-start effect is drawn around
+    ``B @ phi(e_a)`` instead of zero, where ``phi`` is a frozen projection of
+    the card's sentence embedding. ``B`` is estimated jointly as ``dimension``
+    shared design columns per context axis, so the diagonal conjugate solver is
+    untouched. A ``None`` prior is the byte-identical control.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    raw_dimension: int = Field(default=768, gt=0)
+    dimension: int = Field(default=16, gt=0)
+    projection_version: str = "jl-gauss-v1"
+    reward_prior_sd: float = Field(default=0.25, gt=0.0)
+
+
 class FeatureConfig(BaseModel):
     """Stable feature schema; changing it changes the model-config hash."""
 
@@ -20,6 +38,7 @@ class FeatureConfig(BaseModel):
     card_kind_contrast: bool = False
     retrieval_applicability_contrast: bool = False
     citation_contrast: bool = False
+    embedding_prior: EmbeddingPriorConfig | None = None
 
 
 class HierarchicalFeatureMap:
@@ -28,14 +47,23 @@ class HierarchicalFeatureMap:
             raise ValueError("behavior_keys must be unique")
         self.config = config
 
-    def space(self, cards: tuple[CardSnapshot, ...]) -> FeatureSpace:
-        return FeatureSpace(self.config, cards)
+    def space(
+        self,
+        cards: tuple[CardSnapshot, ...],
+        embeddings: dict[str, np.ndarray] | None = None,
+    ) -> FeatureSpace:
+        return FeatureSpace(self.config, cards, embeddings=embeddings)
 
 
 class FeatureSpace:
     """Finite design space with shared and contextual card-lineage effects."""
 
-    def __init__(self, config: FeatureConfig, cards: tuple[CardSnapshot, ...]) -> None:
+    def __init__(
+        self,
+        config: FeatureConfig,
+        cards: tuple[CardSnapshot, ...],
+        embeddings: dict[str, np.ndarray] | None = None,
+    ) -> None:
         all_cards = tuple(cards)
         by_treatment: dict[str, CardSnapshot] = {}
         for card in all_cards:
@@ -53,6 +81,39 @@ class FeatureSpace:
         self._canonical_bank_id = self._resolve_bank_lineages(all_cards)
         bank_ids = sorted(set(self._canonical_bank_id.values()))
         self._bank_index = {card_id: index for index, card_id in enumerate(bank_ids)}
+        self._embedding = self._resolve_embeddings(embeddings)
+
+    def _resolve_embeddings(
+        self, embeddings: dict[str, np.ndarray] | None
+    ) -> dict[str, np.ndarray]:
+        prior = self.config.embedding_prior
+        if prior is None:
+            return {}
+        provided = embeddings or {}
+        by_canonical: dict[str, np.ndarray] = {}
+        for raw_id in sorted(provided):
+            canonical = self._canonical_bank_id.get(raw_id, raw_id)
+            # A survivor's own vector always wins over an absorbed alias, and
+            # sorting makes the alias-only fallback independent of mapping order.
+            if canonical not in by_canonical or raw_id == canonical:
+                by_canonical[canonical] = np.asarray(provided[raw_id], dtype=float)
+        resolved: dict[str, np.ndarray] = {}
+        for bank_id in self._bank_index:
+            vector = by_canonical.get(bank_id)
+            if vector is None:
+                raise ValueError(
+                    f"embedding prior is enabled but card lineage {bank_id!r} "
+                    "has no embedding"
+                )
+            if vector.shape != (prior.dimension,):
+                raise ValueError(
+                    f"embedding for {bank_id!r} must have length {prior.dimension}, "
+                    f"got shape {vector.shape}"
+                )
+            if not np.all(np.isfinite(vector)):
+                raise ValueError(f"embedding for {bank_id!r} must be finite")
+            resolved[bank_id] = vector
+        return resolved
 
     @staticmethod
     def _resolve_bank_lineages(
@@ -151,12 +212,30 @@ class FeatureSpace:
         return self.context_dim
 
     @property
+    def embedding_effect_dim(self) -> int:
+        prior = self.config.embedding_prior
+        if prior is None:
+            return 0
+        return prior.dimension * self.card_context_dim
+
+    @property
+    def embedding_effect_slice(self) -> slice:
+        start = (
+            self.shared_effect_dim
+            + self.kind_effect_dim
+            + self.retrieval_effect_dim
+            + self.citation_effect_dim
+        )
+        return slice(start, start + self.embedding_effect_dim)
+
+    @property
     def card_effect_slice(self) -> slice:
         start = (
             self.shared_effect_dim
             + self.kind_effect_dim
             + self.retrieval_effect_dim
             + self.citation_effect_dim
+            + self.embedding_effect_dim
         )
         return slice(start, start + len(self._bank_index) * self.card_context_dim)
 
@@ -219,6 +298,17 @@ class FeatureSpace:
         result[start : start + self.card_context_dim] = shared
         return result / math.sqrt(self.card_context_dim)
 
+    def _embedding_block(
+        self, card: CardSnapshot, context: EvolutionContext
+    ) -> np.ndarray:
+        # The shared coefficient block B is estimated from the outer product of
+        # the (normalized) context row and the card's frozen embedding, so the
+        # per-card effect prior mean becomes B @ phi(e_a).
+        bank_id = self.bank_lineage_id(card)
+        shared = self.context_features(context)
+        phi = self._embedding[bank_id]
+        return np.outer(shared / math.sqrt(self.card_context_dim), phi).ravel()
+
     def effect(
         self,
         card: CardSnapshot,
@@ -226,6 +316,7 @@ class FeatureSpace:
         *,
         rag_contrast: float = 0.0,
         use_contrast: float = 0.0,
+        embedding: bool = True,
     ) -> np.ndarray:
         result = np.zeros(self.effect_dim, dtype=float)
         context_features = self.context_features(context)
@@ -252,6 +343,8 @@ class FeatureSpace:
                     "citation contrast must be centered tri-state effect coding"
                 )
             result[self.citation_effect_index] = use_contrast
+        if embedding and self.config.embedding_prior is not None:
+            result[self.embedding_effect_slice] = self._embedding_block(card, context)
         result[self.card_effect_slice] = self._card_deviation(card, context)
         return result
 
@@ -263,6 +356,7 @@ class FeatureSpace:
         *,
         rag_contrast: float = 0.0,
         use_contrast: float = 0.0,
+        embedding: bool = True,
     ) -> np.ndarray:
         action_weight = float(treatment)
         effect = action_weight * self.effect(
@@ -270,6 +364,7 @@ class FeatureSpace:
             context,
             rag_contrast=rag_contrast,
             use_contrast=use_contrast,
+            embedding=embedding,
         )
         return np.concatenate((self.baseline(card, context), effect))
 
@@ -303,6 +398,11 @@ class FeatureSpace:
         values = np.full(self.outcome_dim, shared_effect_sd**2, dtype=float)
         values[: self.baseline_dim] = baseline_sd**2
         effect_start = self.baseline_dim
+        if self.config.embedding_prior is not None:
+            values[
+                effect_start + self.embedding_effect_slice.start : effect_start
+                + self.embedding_effect_slice.stop
+            ] = self.config.embedding_prior.reward_prior_sd**2
         values[
             effect_start + self.card_effect_slice.start : effect_start
             + self.card_effect_slice.stop

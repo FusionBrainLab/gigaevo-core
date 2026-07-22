@@ -44,6 +44,10 @@ validation launchers override both
 `memory.policy_config.offer_probability` to `0.50`. Use
 `pipeline=guided memory=none` for a true no-memory arm.
 
+The reward card prior is zero-mean by default; `memory/embedding_prior=linear`
+turns on the embedding-informed prior (see Bounded Hierarchical Utility), and
+`none` is the byte-identical control.
+
 The startup validator rejects multi-parent use, metadata-dropping pipelines,
 and refresh coalescing. A causal decision belongs to one mutation attempt;
 reusing a cached parent assignment for concurrent mutations would give one
@@ -230,10 +234,34 @@ The reward posterior uses proper configured shrinkage priors over shared,
 card-lineage, and contextual effects. Conditional coefficient
 posteriors are Gaussian; residual scale is integrated as a one-dimensional
 Bayesian mixture with explicit quadrature convergence diagnostics. Random-effect
-prior scales are fixed configuration, not weakly identified learned
-hyperparameters. Upper-support truncation or numerical failure makes the policy
+prior scales are fixed configuration by default, not weakly identified learned
+hyperparameters. Setting `memory.posterior_config.hyperparameter_estimation` to
+`empirical_bayes` instead relearns those scales — and the residual-scale prior
+centre and spread — by maximizing the same reward marginal likelihood
+(Nelder-Mead in log space), warm-started at the configured constants and pulled
+back to them by a weak log-space hyperprior; a self-normalizing observation floor
+(scaled by the tuned-parameter count) makes cold banks a no-op, so the default
+`fixed` schema stays byte-identical. Upper-support truncation or numerical
+failure makes the policy
 abstain; concentration near zero unexplained residual noise is logged but is not
 itself a failed fit.
+
+An optional embedding-informed prior replaces the zero mean on each card-lineage
+reward effect with a hierarchical mean `B phi(e_a)`, where `phi` is a frozen
+seeded Johnson-Lindenstrauss projection of the card's unit-normalized sentence
+embedding (`768 -> 16` by default, version-stamped so a reduced vector is
+reconstructible from the card text and the stamp alone). `B` is estimated jointly
+as `dimension` extra shared design columns per context axis — the outer product
+of the normalized context row and `phi(e_a)` — so the conjugate diagonal solver
+is untouched and the block stays constant in the card count. A never-tried
+lineage is then predicted at `B phi(e_a)` instead of zero, borrowing strength
+from semantically similar tried cards. The block is a reward-head construct only:
+the safety head sees it zeroed, so its posterior stays byte-identical. The knob
+is `memory/embedding_prior` — `none` (default) keeps the zero-mean design
+byte-identical to the pre-prior code and builds no embedder; `linear` turns the
+prior on and wires the shared feature config, provider, and evictor to one card
+embedder. The prior scale is fixed configuration, exactly like the other
+random-effect scales above.
 
 The safety model uses a proper-prior logistic MAP fit and Laplace covariance.
 L-BFGS is polished or replaced by a Newton solve, and gradients, objective,

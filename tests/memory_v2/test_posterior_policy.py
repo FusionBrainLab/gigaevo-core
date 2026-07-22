@@ -291,10 +291,14 @@ def test_card_kind_contrast_shares_a_clean_program_vs_insight_signal(
 def test_model_config_hash_uses_the_complete_feature_config(
     posterior_model: HierarchicalTerminalUtilityPosterior,
 ) -> None:
+    # Optional feature seams are excluded from the hash when absent, so a config
+    # that leaves them unset stays byte-identical to code that predates them.
     assert posterior_model.model_config_hash == canonical_digest(
         {
             "model": posterior_model.MODEL_NAME,
-            "features": posterior_model.feature_map.config.model_dump(mode="json"),
+            "features": posterior_model.feature_map.config.model_dump(
+                mode="json", exclude_none=True
+            ),
             "posterior": posterior_model.config.model_dump(mode="json"),
         }
     )

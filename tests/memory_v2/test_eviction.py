@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from gigaevo.memory.cards import Card
+from gigaevo.memory_v2.embedding import CardEmbedder
 from gigaevo.memory_v2.eviction import CausalRetirementEvictor
+from gigaevo.memory_v2.features import EmbeddingPriorConfig
 from gigaevo.memory_v2.models import (
     CardSnapshot,
     CausalObservation,
@@ -77,11 +80,27 @@ class _Posterior:
     def __init__(self, viability) -> None:
         self.fitted = _FittedPosterior(viability)
         self.error: Exception | None = None
+        self.fit_kwargs: dict = {}
 
     def fit(self, *_args, **_kwargs) -> _FittedPosterior:
+        self.fit_kwargs = _kwargs
         if self.error is not None:
             raise self.error
         return self.fitted
+
+
+class _ConstantEmbedder(CardEmbedder):
+    """Deterministic fake embedder for retirement-seam tests."""
+
+    def __init__(self, dimension: int) -> None:
+        self._dimension = dimension
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def embed(self, texts) -> np.ndarray:
+        return np.ones((len(list(texts)), self._dimension), dtype=float)
 
 
 def _observation(
@@ -197,6 +216,60 @@ def test_supported_nonviable_revision_gets_one_shot_verdict(
     assert evictor.sweep((card,)) == [card.id]
     assert evictor.should_evict(card)
     assert not evictor.should_evict(card)
+
+
+def test_embedding_prior_without_an_embedder_fails_construction_loudly(
+    evolution_context: EvolutionContext,
+) -> None:
+    # The read (provider) and write (retirement) seams share one feature config.
+    # If the prior is on but the evictor is handed no embedder, its fit would
+    # raise and be swallowed as "fit failed closed", silently disabling the whole
+    # retirement subsystem. Fail loud at construction instead.
+    ledger = _Ledger(
+        _evidence(
+            CardSnapshot.from_card(Card(id="bad", task_key="task", description="x")),
+            evolution_context,
+        )
+    )
+    with pytest.raises(ValueError):
+        _evictor(
+            ledger,
+            viability=0.0,
+            embedding_prior=EmbeddingPriorConfig(raw_dimension=8, dimension=4),
+        )
+
+
+def test_embedding_prior_supplies_projected_features_to_the_retirement_fit(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="bad", task_key="task", description="bad treatment")
+    revision = CardSnapshot.from_card(card)
+    ledger = _Ledger(_evidence(revision, evolution_context))
+    evictor, posterior = _evictor(
+        ledger,
+        viability=0.0,
+        embedding_prior=EmbeddingPriorConfig(raw_dimension=8, dimension=4),
+        card_embedder=_ConstantEmbedder(dimension=8),
+    )
+
+    evictor.sweep((card,))
+
+    embeddings = posterior.fit_kwargs["card_embeddings"]
+    assert embeddings is not None
+    assert revision.bank_card_id in embeddings
+    assert embeddings[revision.bank_card_id].shape == (4,)
+
+
+def test_disabled_prior_passes_no_embeddings_to_the_retirement_fit(
+    evolution_context: EvolutionContext,
+) -> None:
+    card = Card(id="bad", task_key="task", description="bad treatment")
+    ledger = _Ledger(_evidence(CardSnapshot.from_card(card), evolution_context))
+    evictor, posterior = _evictor(ledger, viability=0.0)
+
+    evictor.sweep((card,))
+
+    assert posterior.fit_kwargs["card_embeddings"] is None
 
 
 def test_verdict_ignores_audit_only_change_but_revalidates_model_and_card(

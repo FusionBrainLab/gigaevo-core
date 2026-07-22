@@ -354,7 +354,7 @@ class Stage:
                     to=self.timeout,
                 )
             else:
-                logger.exception(
+                logger.bind(exc_type=type(exc).__name__).exception(
                     "[{stage}] {prog} Failed after {dur:.2f}s",
                     stage=self.stage_name,
                     prog=program.id[:8],

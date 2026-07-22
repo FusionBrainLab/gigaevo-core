@@ -48,6 +48,10 @@ class _NonBlockingSink:
     write from freezing the single asyncio event loop (the loguru ``enqueue=True``
     pipe would block the producer once its OS buffer filled).
 
+    Records are queued as loguru hands them over, unchanged. A loguru ``Message``
+    subclasses ``str``, so plain text writers work as-is while record-aware
+    writers keep access to ``message.record`` (the exception sink needs it).
+
     Drops are never silent: once the queue recovers, the writer emits one marker
     accounting for the shed records. ``flush`` offers a BOUNDED best-effort drain
     so a clean shutdown does not discard the queued tail (e.g. a crash traceback).
@@ -55,7 +59,7 @@ class _NonBlockingSink:
 
     def __init__(self, write, *, name: str, maxsize: int = _LOG_QUEUE_MAXSIZE) -> None:
         self._write = write
-        self._queue: queue.Queue[str] = queue.Queue(maxsize=maxsize)
+        self._queue: queue.Queue = queue.Queue(maxsize=maxsize)
         self._drop_lock = threading.Lock()
         self.dropped = 0
         self._thread = threading.Thread(target=self._drain, name=name, daemon=True)
@@ -64,7 +68,7 @@ class _NonBlockingSink:
 
     def __call__(self, message) -> None:
         try:
-            self._queue.put_nowait(str(message))
+            self._queue.put_nowait(message)
         except queue.Full:
             with self._drop_lock:
                 self.dropped += 1

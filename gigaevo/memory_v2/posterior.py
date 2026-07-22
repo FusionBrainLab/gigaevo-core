@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
+from typing import Literal
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from scipy.integrate import quad
 from scipy.optimize import brentq, minimize, minimize_scalar
 from scipy.special import expit, logit, logsumexp, ndtr
@@ -360,6 +361,10 @@ class TerminalUtilityPosteriorConfig(BaseModel):
     optimizer_gradient_tolerance: float = Field(default=1e-6, gt=0.0)
     max_hessian_condition: float = Field(default=1e12, gt=1.0)
     jitter: float = Field(default=1e-9, gt=0.0)
+    hyperparameter_estimation: Literal["fixed", "empirical_bayes"] = "fixed"
+    empirical_bayes_min_observations_per_parameter: float = Field(default=5.0, ge=1.0)
+    empirical_bayes_log_prior_sd: float = Field(default=1.0, gt=0.0)
+    empirical_bayes_max_iterations: int = Field(default=200, ge=1)
 
     @field_validator("reward_residual_sd_bounds")
     @classmethod
@@ -773,6 +778,107 @@ class BayesianResidualScaleGaussianRegressor:
         return mean, covariance, log_marginal
 
 
+class EmpiricalBayesRewardPriorEstimator:
+    """Type-II MAP over the reward prior scales via the marginal likelihood.
+
+    Warm-starts at the configured constants and relaxes them by maximizing the
+    log marginal likelihood the reward regressor already returns. A weakly
+    informative log-space hyperprior pulls thin-evidence fits back to the
+    defaults, and a self-normalizing observation floor keeps cold banks byte
+    identical to the fixed schema. Tuning applies to the primary reward head
+    only; the lineage head keeps the warm-start scales because its residuals
+    are a different (unclipped) quantity.
+
+    Cost: each ``estimate`` runs Nelder-Mead over five scales, and every step
+    is a full marginal-likelihood fit, so it re-fits the reward head up to
+    ``empirical_bayes_max_iterations`` times per posterior refresh. This is an
+    opt-in refresh-cadence cost; the default ``fixed`` schema pays none of it.
+    """
+
+    _PARAMETERS = (
+        "baseline_prior_sd",
+        "shared_effect_prior_sd",
+        "card_effect_prior_sd",
+        "reward_residual_sd_initial",
+        "reward_residual_log_prior_sd",
+    )
+
+    def __init__(self, config: TerminalUtilityPosteriorConfig) -> None:
+        self.config = config
+
+    def estimate(
+        self,
+        design: np.ndarray,
+        values: np.ndarray,
+        measurement_sd: np.ndarray,
+        space: FeatureSpace,
+    ) -> TerminalUtilityPosteriorConfig:
+        floor = self.config.empirical_bayes_min_observations_per_parameter * len(
+            self._PARAMETERS
+        )
+        if len(values) < floor:
+            return self.config
+        warm = np.asarray(
+            [getattr(self.config, name) for name in self._PARAMETERS], dtype=float
+        )
+        origin = np.log(warm)
+        prior_sd = self.config.empirical_bayes_log_prior_sd
+        residual_lower, residual_upper = self.config.reward_residual_sd_bounds
+
+        def negative_log_posterior(log_scales: np.ndarray) -> float:
+            try:
+                candidate = self._with_scales(np.exp(log_scales))
+            except ValidationError:
+                # A non-finite or non-positive scale escaped the optimizer.
+                return math.inf
+            if (
+                not residual_lower
+                <= candidate.reward_residual_sd_initial
+                <= residual_upper
+            ):
+                # Keep the residual prior centre inside the quadrature grid; a
+                # centre beyond the bounds truncates the marginalised posterior.
+                return math.inf
+            try:
+                marginal = (
+                    BayesianResidualScaleGaussianRegressor(candidate)
+                    .fit(design, values, measurement_sd, space)
+                    .log_marginal
+                )
+            except PosteriorFitError:
+                return math.inf
+            if not math.isfinite(marginal):
+                # A degenerate prior can yield a NaN marginal without raising.
+                return math.inf
+            deviation = (log_scales - origin) / prior_sd
+            return -marginal + 0.5 * float(deviation @ deviation)
+
+        origin_objective = negative_log_posterior(origin)
+        result = minimize(
+            negative_log_posterior,
+            origin,
+            method="Nelder-Mead",
+            options={
+                "maxiter": self.config.empirical_bayes_max_iterations,
+                "maxfev": self.config.empirical_bayes_max_iterations,
+                "xatol": 1e-3,
+                "fatol": 1e-3,
+            },
+        )
+        result_objective = negative_log_posterior(result.x)
+        if not (
+            math.isfinite(result_objective) and result_objective < origin_objective
+        ):
+            return self.config
+        return self._with_scales(np.exp(result.x))
+
+    def _with_scales(self, scales: np.ndarray) -> TerminalUtilityPosteriorConfig:
+        # model_copy(update=...) skips validation, so reconstruct the config to
+        # re-assert the gt=0 / finite invariants the numeric code relies on.
+        update = {name: float(scale) for name, scale in zip(self._PARAMETERS, scales)}
+        return TerminalUtilityPosteriorConfig(**{**self.config.model_dump(), **update})
+
+
 class StableBayesianLogisticRegressor:
     """Proper-prior logistic MAP/Laplace with fail-closed diagnostics."""
 
@@ -942,7 +1048,7 @@ class FittedTerminalUtilityPosterior:
         context: EvolutionContext,
         *,
         rag_applicability: RagApplicability = RagApplicability.UNASSESSED,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         if (
             self.reward_definition is not None
             and context.reward != self.reward_definition
@@ -955,20 +1061,31 @@ class FittedTerminalUtilityPosterior:
             and context.map_elites.semantic_schema_hash != self.semantic_schema_hash
         ):
             raise ValueError("prediction semantic schema differs from fitted evidence")
-        return (
-            self.space.design(
-                card,
-                context,
-                False,
-                rag_contrast=rag_applicability.contrast,
-            ),
-            self.space.design(
-                card,
-                context,
-                True,
-                rag_contrast=rag_applicability.contrast,
-            ),
+        reward0 = self.space.design(
+            card, context, False, rag_contrast=rag_applicability.contrast
         )
+        reward1 = self.space.design(
+            card, context, True, rag_contrast=rag_applicability.contrast
+        )
+        # The embedding prior is a reward-head construct; the safety head sees
+        # the block zeroed so its posterior stays byte-identical to the control.
+        if self.space.config.embedding_prior is None:
+            return reward0, reward1, reward0, reward1
+        safety0 = self.space.design(
+            card,
+            context,
+            False,
+            rag_contrast=rag_applicability.contrast,
+            embedding=False,
+        )
+        safety1 = self.space.design(
+            card,
+            context,
+            True,
+            rag_contrast=rag_applicability.contrast,
+            embedding=False,
+        )
+        return reward0, reward1, safety0, safety1
 
     @staticmethod
     def _draws(
@@ -1000,7 +1117,7 @@ class FittedTerminalUtilityPosterior:
         reward_draws, _ = self.reward.sample_many(rng, samples)
         lineage_draws, _ = self.lineage_reward.sample_many(rng, samples)
         safety_draws = self._draws(self.safety.mean, self._safety_factor, rng, samples)
-        reward_designs = [
+        arm_designs = [
             self._arm_designs(
                 card,
                 context,
@@ -1014,8 +1131,10 @@ class FittedTerminalUtilityPosterior:
             )
             for card in cards
         ]
-        reward_design0 = np.stack([row[0] for row in reward_designs])
-        reward_design1 = np.stack([row[1] for row in reward_designs])
+        reward_design0 = np.stack([row[0] for row in arm_designs])
+        reward_design1 = np.stack([row[1] for row in arm_designs])
+        safety_design0 = np.stack([row[2] for row in arm_designs])
+        safety_design1 = np.stack([row[3] for row in arm_designs])
         direct0 = reward_draws @ reward_design0.T
         direct1 = reward_draws @ reward_design1.T
         if self.lineage_reward.observations:
@@ -1026,8 +1145,8 @@ class FittedTerminalUtilityPosterior:
             option1 = np.zeros_like(direct1)
         valid0 = _latent_to_gain(direct0 + option0, context)
         valid1 = _latent_to_gain(direct1 + option1, context)
-        p0 = expit(safety_draws @ reward_design0.T)
-        p1 = expit(safety_draws @ reward_design1.T)
+        p0 = expit(safety_draws @ safety_design0.T)
+        p1 = expit(safety_draws @ safety_design1.T)
         lower, _ = normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
@@ -1136,7 +1255,7 @@ class FittedTerminalUtilityPosterior:
         safety_alpha: float,
         minimum_helpful_effect: float,
     ) -> PosteriorPrediction:
-        x0, x1 = self._arm_designs(
+        x0, x1, s0, s1 = self._arm_designs(
             card,
             context,
             rag_applicability=rag_applicability,
@@ -1151,8 +1270,8 @@ class FittedTerminalUtilityPosterior:
             option1 = np.zeros_like(direct1)
         valid0 = _latent_to_gain(direct0 + option0, context)
         valid1 = _latent_to_gain(direct1 + option1, context)
-        p0 = expit(safety_draws @ x0)
-        p1 = expit(safety_draws @ x1)
+        p0 = expit(safety_draws @ s0)
+        p1 = expit(safety_draws @ s1)
         lower, _ = normalized_gain_bounds(context)
         q0 = (1.0 - p0) * valid0 + p0 * lower
         q1 = (1.0 - p1) * valid1 + p1 * lower
@@ -1166,10 +1285,10 @@ class FittedTerminalUtilityPosterior:
         )
         helpful = effects > minimum_helpful_effect
         safety_mean = np.asarray(
-            [x0 @ self.safety.mean, x1 @ self.safety.mean],
+            [s0 @ self.safety.mean, s1 @ self.safety.mean],
             dtype=float,
         )
-        safety_matrix = np.stack((x0, x1))
+        safety_matrix = np.stack((s0, s1))
         safety_covariance = safety_matrix @ self.safety.covariance @ safety_matrix.T
         try:
             (
@@ -1239,7 +1358,7 @@ class HierarchicalTerminalUtilityPosterior:
         self.config = config
         self.reward_regressor = BayesianResidualScaleGaussianRegressor(config)
         self.safety_regressor = StableBayesianLogisticRegressor(config)
-        feature_payload = feature_map.config.model_dump(mode="json")
+        feature_payload = feature_map.config.model_dump(mode="json", exclude_none=True)
         self.model_config_hash = canonical_digest(
             {
                 "model": self.MODEL_NAME,
@@ -1254,6 +1373,7 @@ class HierarchicalTerminalUtilityPosterior:
         candidates: Sequence[CardSnapshot],
         *,
         lineage_observations: Sequence[CausalObservation] = (),
+        card_embeddings: dict[str, np.ndarray] | None = None,
     ) -> FittedTerminalUtilityPosterior:
         # Randomized delivery is the treatment; citation is post-treatment
         # uptake. Every delivered row therefore stays in every usefulness head
@@ -1296,7 +1416,7 @@ class HierarchicalTerminalUtilityPosterior:
                 *candidates,
             )
         )
-        space = self.feature_map.space(all_cards)
+        space = self.feature_map.space(all_cards, embeddings=card_embeddings)
         safety_design = self._matrix(
             [
                 space.design(
@@ -1305,6 +1425,7 @@ class HierarchicalTerminalUtilityPosterior:
                     row.treatment,
                     rag_contrast=row.rag_applicability.contrast,
                     use_contrast=row.use_contrast,
+                    embedding=False,
                 )
                 for row in rows
             ],
@@ -1357,7 +1478,15 @@ class HierarchicalTerminalUtilityPosterior:
             measurement_sd.append(normalized_se)
         reward_value_array = np.asarray(reward_values, dtype=float)
         measurement_sd_array = np.asarray(measurement_sd, dtype=float)
-        reward = self.reward_regressor.fit(
+        reward_regressor = self.reward_regressor
+        if self.config.hyperparameter_estimation == "empirical_bayes" and len(
+            reward_value_array
+        ):
+            tuned_config = EmpiricalBayesRewardPriorEstimator(self.config).estimate(
+                reward_design, reward_value_array, measurement_sd_array, space
+            )
+            reward_regressor = BayesianResidualScaleGaussianRegressor(tuned_config)
+        reward = reward_regressor.fit(
             reward_design,
             reward_value_array,
             measurement_sd_array,

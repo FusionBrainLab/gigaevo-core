@@ -1,0 +1,24 @@
+# @package _global_
+# memory/embedding_prior=linear: turn the embedding-informed reward card prior
+# ON. The prior is one field on the SHARED feature config -- the single source of
+# truth for the augmented design. Both memory-v2 seams fit that config: the
+# provider reads it to score candidates and the evictor writes it during
+# retirement, so both are handed the same card embedder and the evictor points
+# at the very same prior node the feature config holds. If the read and write
+# seams disagreed on the prior, their model-config hashes would diverge and
+# retirement would fail closed.
+memory:
+  # Reuse the retrieval index's sentence-transformer weights (768-dim raw), which
+  # the frozen projection reduces to 16. Keep in sync with the store's
+  # EmbedConfig.embedding_model default.
+  card_embedder:
+    _target_: gigaevo.memory_v2.embedding.SentenceTransformerCardEmbedder
+    model_name: Snowflake/snowflake-arctic-embed-m-v1.5
+  feature_config:
+    embedding_prior:
+      _target_: gigaevo.memory_v2.features.EmbeddingPriorConfig
+  provider:
+    card_embedder: ${ref:memory.card_embedder}
+  evictor:
+    embedding_prior: ${ref:memory.feature_config::embedding_prior}
+    card_embedder: ${ref:memory.card_embedder}

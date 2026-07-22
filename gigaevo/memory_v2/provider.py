@@ -23,6 +23,11 @@ from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory_v2.candidates import CandidateSource, PreparedApplicability
 from gigaevo.memory_v2.context import DecisionContextSource
+from gigaevo.memory_v2.embedding import (
+    CardEmbedder,
+    CardEmbeddingReducer,
+    build_embedding_reducer,
+)
 from gigaevo.memory_v2.events import MemoryV2Decision
 from gigaevo.memory_v2.ledger import SqliteCausalLedger
 from gigaevo.memory_v2.models import (
@@ -66,12 +71,14 @@ class CausalBanditMemoryProvider(MemoryProvider):
         selection_leases: InFlightSelectionRegistry,
         task_key: str,
         run_seed: int = 0,
+        card_embedder: CardEmbedder | None = None,
     ) -> None:
         self.candidate_source = candidate_source
         self.context_source = context_source
         self.ledger = ledger
         self.posterior = posterior
         self.policy = policy
+        self._embedding_reducer = self._build_embedding_reducer(card_embedder)
         if not math.isclose(
             posterior.config.reference_offer_probability,
             policy.config.offer_probability,
@@ -323,6 +330,13 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 "[MemoryV2][Provider] failed to release temporary slate leases"
             )
 
+    def _build_embedding_reducer(
+        self, card_embedder: CardEmbedder | None
+    ) -> CardEmbeddingReducer | None:
+        return build_embedding_reducer(
+            self.posterior.feature_map.config.embedding_prior, card_embedder
+        )
+
     def _fit(
         self,
         evidence_version: str,
@@ -336,10 +350,23 @@ class CausalBanditMemoryProvider(MemoryProvider):
         )
         cache_key = (evidence_version, descriptor_key)
         if self._posterior_cache_key != cache_key or self._posterior_cache is None:
+            card_embeddings = None
+            if self._embedding_reducer is not None:
+                # The feature space needs a projection for every lineage it
+                # scores — observed and lineage rows as well as the candidates.
+                # Candidates come last so a live snapshot's text wins its id.
+                card_embeddings = self._embedding_reducer.reduce(
+                    (
+                        *(observation.card for observation in observations),
+                        *(observation.card for observation in lineage_observations),
+                        *candidates,
+                    )
+                )
             self._posterior_cache = self.posterior.fit(
                 observations,
                 candidates,
                 lineage_observations=lineage_observations,
+                card_embeddings=card_embeddings,
             )
             self._posterior_cache_key = cache_key
         return self._posterior_cache
