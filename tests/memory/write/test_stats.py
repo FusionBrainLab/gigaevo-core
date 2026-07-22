@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from gigaevo.evolution.mutation.constants import (
+    MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY,
     MUTATION_MEMORY_BASE_ID_METADATA_KEY,
     MUTATION_MEMORY_BASE_METRICS_METADATA_KEY,
     MUTATION_MEMORY_BASE_SCORES_METADATA_KEY,
@@ -38,6 +39,7 @@ from gigaevo.memory.write.stats import (
     injection_outcomes_from_programs,
 )
 from gigaevo.programs.metrics.context import VALIDITY_KEY
+from gigaevo.programs.metrics.evaluation import EVALUATION_MEASUREMENTS_METADATA_KEY
 from gigaevo.programs.metrics.paired import PER_SAMPLE_SCORES_KEY
 from tests.fakes.embedding import FakeEmbeddingFunction
 
@@ -398,6 +400,37 @@ def test_gain_events_from_programs_carry_base_context(make_program, metrics_cont
     assert event.context.timestamp == prog.created_at
 
 
+def test_founding_gain_event_carries_reported_uncertainty(
+    make_program, metrics_context
+):
+    metadata = base_meta(selected=[], used=[])
+    metadata[EVALUATION_MEASUREMENTS_METADATA_KEY] = {
+        "fitness": {
+            "value": 0.7,
+            "sample_sd": 0.12,
+            "n": 4,
+            "method": "cross_validation",
+        }
+    }
+    metadata[MUTATION_MEMORY_BASE_EVALUATION_MEASUREMENTS_METADATA_KEY] = {
+        "fitness": {
+            "value": 0.5,
+            "sample_sd": 0.08,
+            "n": 4,
+            "method": "cross_validation",
+        }
+    }
+    event = founding_gain_event(
+        make_program(fitness=0.7, metadata=metadata),
+        fitness_key="fitness",
+        higher_is_better=True,
+        metrics_context=metrics_context,
+    )
+
+    assert event is not None
+    assert event.gain_se == pytest.approx(np.hypot(0.12 / 2, 0.08 / 2))
+
+
 def test_gain_events_from_programs_credit_full_injected_slate(
     make_program, metrics_context
 ):
@@ -443,6 +476,7 @@ def test_founding_gain_event_signed_positive_delta(make_program, metrics_context
     )
     assert event is not None
     assert event.gain == pytest.approx(0.2)
+    assert event.gain_se is None
     assert event.founding is True
     assert event.invalid is False
     assert event.context.parent_id == "parent-1"

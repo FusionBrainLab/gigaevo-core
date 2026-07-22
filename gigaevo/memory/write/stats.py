@@ -47,6 +47,7 @@ from gigaevo.memory.cards import (
 from gigaevo.memory.context.evidence import clean_ids, median, oriented_delta
 from gigaevo.memory.context.no_card import NoCardEvidenceRecorder
 from gigaevo.memory.events import MemoryGainRestamp, emit_memory_event
+from gigaevo.memory.outcomes import outcome_uncertainty
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
 from gigaevo.memory.write.admission import CardAdmissionGate
@@ -183,6 +184,13 @@ def founding_gain_event(
     if base_fit is None or child_fit is None:
         return None
     delta = child_fit - base_fit if higher_is_better else base_fit - child_fit
+    gain_se, _, _, _ = outcome_uncertainty(
+        program,
+        metric_key=fitness_key,
+        child_fitness=child_fit,
+        base_fitness=base_fit,
+        higher_is_better=higher_is_better,
+    )
     return ContextualGain(
         context=DecisionContext(
             task_key=task_key,
@@ -191,6 +199,7 @@ def founding_gain_event(
             timestamp=program.created_at,
         ),
         gain=delta,
+        gain_se=gain_se,
         founding=True,
         attribution=EvidenceAttribution(
             source=EvidenceSource.FOUNDING,

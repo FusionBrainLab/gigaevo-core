@@ -261,7 +261,7 @@ def _reported_uncertainty(
     return combined if math.isfinite(combined) else None
 
 
-def _outcome_uncertainty(
+def outcome_uncertainty(
     program: Program,
     *,
     metric_key: str,
@@ -352,7 +352,7 @@ def _outcome_payload(
                     n_pairs,
                     measurement_kind,
                     pairing_signature,
-                ) = _outcome_uncertainty(
+                ) = outcome_uncertainty(
                     program,
                     metric_key=primary_metric,
                     child_fitness=child_fitness,
