@@ -260,11 +260,18 @@ not sufficient.
 
 ## Persistence and observability
 
-Under `checkpoint_dir`:
+Reusable bank artifacts live under `memory_bank_dir` (which defaults to
+`checkpoint_dir`):
 
 | Artifact | Meaning |
 |---|---|
-| `cards.json` | authoritative card bank |
+| `cards.json` | authoritative card bank, including compact shared-card usefulness trials |
+| `selection_leases.json` | in-flight card reservations for processes sharing the bank |
+
+Run-local artifacts live under `checkpoint_dir`:
+
+| Artifact | Meaning |
+|---|---|
 | `write_ledger.jsonl` | content/equivalence/rejection/retirement audit rows |
 | `memory_v2_selection_evidence.sqlite3` | immutable decisions, terminals, mutation edges, and lineage outcomes |
 | `memory_events.jsonl` | structured runtime events |

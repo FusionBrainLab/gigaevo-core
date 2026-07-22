@@ -48,6 +48,30 @@ The reward card prior is zero-mean by default; `memory/embedding_prior=linear`
 turns on the embedding-informed prior (see Bounded Hierarchical Utility), and
 `none` is the byte-identical control.
 
+### Cross-task bank transfer
+
+For related tasks, point runs at one bank and select the multitask preset:
+
+```bash
+python run.py problem.name=<task> \
+  memory=v2_multitask \
+  memory_bank_dir=$PWD/SHARED_MEMORY_BANK
+```
+
+The bank is the task-family boundary: every run reads and updates the same
+`memory_bank_dir/cards.json`. Completed randomized proposals add a compact
+`(task, run, delivered, success)` trial to the proposed card. A hierarchical
+logistic head learns a global card effect plus task/card deviations, with
+run-specific baselines, and weakly initializes the new task's reward card
+intercept. Success is scale-free (`valid and oriented gain > 0`); reward
+magnitudes, behavior coordinates, invalidity, and lineage value remain local to
+the active task. The preset enables cross-task candidates and disables causal
+retirement. Detailed causal ledgers remain under each run's `checkpoint_dir`.
+
+`memory_task_key` defaults to `problem.name`. Qualify it when one problem config
+has materially different dataset parameters, for example
+`memory_task_key=dag_tab/adult`; all such tasks can still use the same bank.
+
 The startup validator rejects multi-parent use and refresh coalescing. A causal
 decision belongs to one mutation attempt;
 reusing a cached parent assignment for concurrent mutations would give one

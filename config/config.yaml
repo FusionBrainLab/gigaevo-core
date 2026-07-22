@@ -15,15 +15,25 @@ problem:
   name: ???  # Required
   dir: ${hydra:runtime.cwd}/problems/${problem.name}
 
-# Memory checkpoint directory. Per-run by default — lands under the Hydra
-# run dir for isolation across concurrent runs. Override on the CLI
-# (`checkpoint_dir=/abs/path`) to share a card bank across runs.
+# Stable statistical task identity for memory. Parameterized problems can
+# override this without renaming their problem directory, for example
+# memory_task_key=dag_tab/adult.
+memory_task_key: ${problem.name}
+
+# Memory run-state directory. Per-run by default — lands under the Hydra run
+# directory for isolation across concurrent runs. Use memory_bank_dir below to
+# share cards between runs without sharing their detailed causal ledgers.
 checkpoint_dir: ${hydra:runtime.output_dir}/memory
+
+# Card-bank location. It follows checkpoint_dir by default; override just this
+# path to let multiple task runs read and populate one shared memory bank while
+# their detailed causal ledgers remain run-local.
+memory_bank_dir: ${checkpoint_dir}
 
 # One durable registry is shared by the memory reader, writer, and engine.
 selection_leases:
   _target_: gigaevo.memory.selection_leases.SharedSelectionRegistry
-  path: ${checkpoint_dir}/selection_leases.json
+  path: ${memory_bank_dir}/selection_leases.json
 
 # LLM I/O audit trail. When true (default), every router call (plain +
 # structured) is dumped as a complete JSON record (prompt, response, token

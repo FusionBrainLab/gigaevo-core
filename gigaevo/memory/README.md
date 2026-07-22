@@ -77,18 +77,27 @@ declared once and shared by reference:
 See [`docs/memory.md`](../../docs/memory.md) for the arm matrix, component
 groups, and launch recipes.
 
-## Storage layout (per run, under `checkpoint_dir`)
+## Storage layout
+
+Reusable bank files live under `memory_bank_dir` (equal to `checkpoint_dir` by
+default):
 
 | File | Writer | Contents |
 |---|---|---|
-| `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, atomic rewrite per save |
+| `cards.json` | `CardBank` | The bank: `{"cards": {id: card}}`, including compact usefulness trials, atomic rewrite per save |
+| `selection_leases.json` | `SharedSelectionRegistry` | In-flight card reservations across processes sharing the bank |
+
+Run-local files remain under `checkpoint_dir`:
+
+| File | Writer | Contents |
+|---|---|---|
 | `write_ledger.jsonl` | `WriteLedger` | Append-only content and retirement verdicts: `added`, `updated`, `rejected_retired`, `rejected_novelty`, `rejected_capacity`, `retired`, and `evicted` (`discarded` is an unledgered no-op) |
 | `memory_events.jsonl` | `events.py` sink | Every memory event, one JSON row each |
 
 The bank is the source of truth. `VectorIndex` is process-local and in-memory;
 it rebuilds from `cards.json` at startup and after cross-process bank refreshes,
 while incremental index writes remain best-effort. Existing persisted `chroma/`
-directories are ignored. A fresh store over an existing `checkpoint_dir` picks
+directories are ignored. A fresh store over an existing `memory_bank_dir` picks
 the bank up from disk, so a later run consumes a bank a prior run built.
 
 ## Observability

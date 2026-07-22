@@ -10,6 +10,7 @@ defaults:
   - evictor: causal
   - write: live
   - _self_
+  - transfer: none
   # OFF by default = byte-identical control. ``linear`` augments the shared
   # feature config, provider, and evictor; it must merge after ``_self_`` to
   # land on those body-defined nodes.
@@ -37,7 +38,7 @@ evidence:
 
 environment:
   _target_: gigaevo.memory_v2.models.EnvironmentFingerprint
-  task_key: ${problem.name}
+  task_key: ${memory_task_key}
   problem_name: ${problem.name}
   llm:
     _target_: gigaevo.memory_v2.models.LLMFingerprint
@@ -165,7 +166,7 @@ store:
   _target_: gigaevo.memory.storage.local.LocalMemoryStore
   config:
     _target_: gigaevo.memory.storage.config.StoreConfig
-    path: ${checkpoint_dir}
+    path: ${memory_bank_dir}
     research:
       _target_: gigaevo.memory.storage.config.ResearchConfig
       default_top_k: 8
@@ -207,11 +208,11 @@ provider:
   renderer: ${ref:memory.renderer}
   store: ${ref:memory.store}
   selection_leases: ${ref:selection_leases}
-  task_key: ${problem.name}
+  task_key: ${memory_task_key}
   run_seed: ${memory.run_seed}
 
 context_model:
-  task_key: ${problem.name}
+  task_key: ${memory_task_key}
 
 causal_writer_updater:
   _target_: gigaevo.memory_v2.writer.CausalV2ContentOnlyUpdater
@@ -224,7 +225,7 @@ writer:
   evictor: ${ref:memory.evictor}
   store: ${ref:memory.store}
   checkpoint_dir: ${checkpoint_dir}
-  task_key: ${problem.name}
+  task_key: ${memory_task_key}
   metrics_context: ${ref:problem_context::metrics_context}
   stats_updater: ${ref:memory.causal_writer_updater}
   task_description: ${ref:problem_context::task_description}

@@ -163,6 +163,22 @@ class FeatureSpace:
                 f"card bank id {card.bank_card_id!r} is outside this feature space"
             ) from exc
 
+    def card_intercept_index(self, bank_card_id: str) -> int:
+        """Index of a card's constant treatment coefficient in outcome design."""
+
+        canonical = self._canonical_bank_id.get(bank_card_id, bank_card_id)
+        try:
+            card_offset = self._bank_index[canonical]
+        except KeyError as exc:
+            raise ValueError(
+                f"card bank id {bank_card_id!r} is outside this feature space"
+            ) from exc
+        return (
+            self.baseline_dim
+            + self.card_effect_slice.start
+            + card_offset * self.card_context_dim
+        )
+
     @property
     def context_dim(self) -> int:
         # Intercept, oriented fitness, progress, and stable behavior coordinates.

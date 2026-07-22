@@ -1,0 +1,7 @@
+# @package memory
+# Convenience preset. Usage:
+#   memory=v2_multitask memory_bank_dir=/path/to/shared/bank
+defaults:
+  - v2
+  - override evictor: none
+  - override transfer: multitask

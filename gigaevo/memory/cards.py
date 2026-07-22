@@ -367,6 +367,40 @@ class CardStatsBlock(DecisionMetrics):
         }
 
 
+class CardUseTrial(BaseModel):
+    """One randomized memory-v2 offer outcome carried with a shared card.
+
+    The transfer model intentionally keeps only a scale-free success bit.  The
+    richer task-local reward, safety, and lineage evidence remains in the v2
+    causal ledger.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    task_key: str = Field(min_length=1)
+    treatment: bool
+    success: bool
+
+
+def union_use_trials(
+    *groups: tuple[CardUseTrial, ...],
+) -> tuple[CardUseTrial, ...]:
+    """Union trials by causal decision id in a deterministic order."""
+
+    by_decision: dict[str, CardUseTrial] = {}
+    for group in groups:
+        for trial in group:
+            by_decision[trial.decision_id] = trial
+    return tuple(
+        sorted(
+            by_decision.values(),
+            key=lambda row: (row.task_key, row.run_id, row.decision_id),
+        )
+    )
+
+
 class Card(BaseModel):
     """The one memory card.
 
@@ -411,6 +445,11 @@ class Card(BaseModel):
         default=(),
         description="Use-attributed base-relative injection events; reputation "
         "computes this card's efficacy block from them.",
+    )
+    use_trials: tuple[CardUseTrial, ...] = Field(
+        default=(),
+        description="Randomized, task-labelled binary outcomes used only for "
+        "cross-task usefulness transfer.",
     )
     program_id: str = Field(
         default="",

@@ -50,6 +50,16 @@ class NullEvictor:
     """No-op evictor: never evicts. Runs the write path with eviction sweeps
     disabled, the bank-maintenance twin of ``memory=none`` on the read side."""
 
+    def __init__(
+        self,
+        *,
+        embedding_prior: object | None = None,
+        card_embedder: object | None = None,
+    ) -> None:
+        # Global embedding-prior config augments both read and eviction nodes.
+        # Accept those shared arguments when retirement itself is disabled.
+        del embedding_prior, card_embedder
+
     def should_evict(self, card: Card) -> bool:
         return False
 

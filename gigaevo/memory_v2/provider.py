@@ -10,7 +10,7 @@ import math
 from loguru import logger
 
 from gigaevo.exceptions import MemoryStorageError
-from gigaevo.memory.cards import AssignmentRecord, DecisionContext
+from gigaevo.memory.cards import AssignmentRecord, Card, DecisionContext
 from gigaevo.memory.events import (
     MemoryAssignment,
     MemoryReadSelection,
@@ -52,6 +52,10 @@ from gigaevo.memory_v2.posterior import (
 )
 from gigaevo.memory_v2.render import ImmutableCardRenderer
 from gigaevo.memory_v2.rng import EventRNG
+from gigaevo.memory_v2.transfer import (
+    CrossTaskUsefulnessConfig,
+    CrossTaskUsefulnessModel,
+)
 from gigaevo.programs.program import Program
 
 
@@ -72,12 +76,19 @@ class CausalBanditMemoryProvider(MemoryProvider):
         task_key: str,
         run_seed: int = 0,
         card_embedder: CardEmbedder | None = None,
+        cross_task_usefulness: CrossTaskUsefulnessConfig | None = None,
     ) -> None:
         self.candidate_source = candidate_source
         self.context_source = context_source
         self.ledger = ledger
         self.posterior = posterior
         self.policy = policy
+        self.cross_task_usefulness = cross_task_usefulness
+        self._cross_task_model = (
+            CrossTaskUsefulnessModel(cross_task_usefulness, posterior.config)
+            if cross_task_usefulness is not None
+            else None
+        )
         self._embedding_reducer = self._build_embedding_reducer(card_embedder)
         if not math.isclose(
             posterior.config.reference_offer_probability,
@@ -210,6 +221,17 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 )
             candidate_hash = candidate_set_hash(eligible)
             lineage_registry_hash = candidate_set_hash(lineage_registry)
+            model_evidence_hash = evidence.model_version
+            if self._cross_task_model is not None:
+                model_evidence_hash = canonical_digest(
+                    {
+                        "local": evidence.model_version,
+                        "cross_task": self._cross_task_model.evidence_digest(
+                            slate.lineage_registry,
+                            current_run_id=context.run_id,
+                        ),
+                    }
+                )
             key = DecisionKey(
                 run_id=context.run_id,
                 run_seed=self.run_seed,
@@ -222,7 +244,7 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 context_hash=context_hash,
                 model_config_hash=self.decision_config_hash,
                 evidence_hash=evidence.version,
-                model_evidence_hash=evidence.model_version,
+                model_evidence_hash=model_evidence_hash,
                 candidate_set_hash=candidate_hash,
                 lineage_registry_hash=lineage_registry_hash,
                 pending_by_bank_card=candidate_pending_counts(
@@ -236,10 +258,13 @@ class CausalBanditMemoryProvider(MemoryProvider):
                 applicable_bank_card_ids=slate.applicability.applicable_bank_card_ids,
             )
             fitted = self._fit(
-                evidence.model_version,
+                model_evidence_hash,
                 evidence.observations,
                 evidence.lineage_observations,
                 lineage_registry,
+                slate.lineage_registry,
+                target_task_key=context.environment.task_key,
+                current_run_id=context.run_id,
             )
             decision = self.policy.choose(
                 posterior=fitted,
@@ -343,6 +368,10 @@ class CausalBanditMemoryProvider(MemoryProvider):
         observations: Sequence[CausalObservation],
         lineage_observations: Sequence[CausalObservation],
         candidates: tuple[CardSnapshot, ...],
+        card_records: tuple[Card, ...],
+        *,
+        target_task_key: str,
+        current_run_id: str,
     ) -> FittedTerminalUtilityPosterior:
         descriptor_key = tuple(
             card.model_dump_json()
@@ -362,11 +391,24 @@ class CausalBanditMemoryProvider(MemoryProvider):
                         *candidates,
                     )
                 )
+            card_intercept_prior_mean = None
+            if self._cross_task_model is not None:
+                transfer_fit = self._cross_task_model.fit(
+                    card_records,
+                    target_task_key=target_task_key,
+                    current_run_id=current_run_id,
+                )
+                assert self.cross_task_usefulness is not None
+                card_intercept_prior_mean = transfer_fit.reward_intercept_means(
+                    card_effect_prior_sd=self.posterior.config.card_effect_prior_sd,
+                    max_shift_sd=(self.cross_task_usefulness.max_reward_prior_shift_sd),
+                )
             self._posterior_cache = self.posterior.fit(
                 observations,
                 candidates,
                 lineage_observations=lineage_observations,
                 card_embeddings=card_embeddings,
+                card_intercept_prior_mean=card_intercept_prior_mean,
             )
             self._posterior_cache_key = cache_key
         return self._posterior_cache

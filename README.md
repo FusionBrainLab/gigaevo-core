@@ -116,7 +116,7 @@ cheaper, instruct model:
 ```bash
 python run.py problem.name=heilbron \
     memory/llm=qwen_instruct \
-    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+    memory_bank_dir=$PWD/SHARE_HEILBRON_MEMORY
 ```
 
 `llm=local_proxy` and `memory/llm=qwen_instruct` both read
@@ -171,7 +171,7 @@ python run.py problem.name=heilbron storage=redis redis.db=5
 # Default read/write memory v2 run (shown explicitly)
 python run.py problem.name=heilbron \
     pipeline=memory_guided memory=v2 memory/write=live num_parents=1 \
-    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+    memory_bank_dir=$PWD/SHARE_HEILBRON_MEMORY
 
 # Balanced memory-v2 validation (50% delivery / 50% control)
 python run.py problem.name=heilbron \
@@ -181,12 +181,22 @@ python run.py problem.name=heilbron \
 # Build a shared memory bank (memory v2 reads + writes it)
 python run.py problem.name=heilbron \
     pipeline=memory_guided memory=v2 \
-    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+    memory_bank_dir=$PWD/SHARE_HEILBRON_MEMORY
 
 # Reuse the same bank on a later run (also refreshes it)
 python run.py problem.name=heilbron \
     pipeline=memory_guided memory=v2 \
-    checkpoint_dir=$PWD/SHARE_HEILBRON_MEMORY
+    memory_bank_dir=$PWD/SHARE_HEILBRON_MEMORY
+
+# Reuse cards and scale-free usefulness evidence across related tasks
+python run.py problem.name=<another-task> \
+    memory=v2_multitask \
+    memory_bank_dir=$PWD/SHARED_TABULAR_MEMORY
+
+# Parameterized problems should give each dataset its own statistical task key
+python run.py problem.name=dag_tab problem.dataset=adult \
+    memory=v2_multitask memory_task_key=dag_tab/adult \
+    memory_bank_dir=$PWD/SHARED_TABULAR_MEMORY
 
 # JSON-document genomes, e.g. CARL chain problems
 python run.py problem.name=chains/hover/full7 program_format=json_document

@@ -11,7 +11,12 @@ from pathlib import Path
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-from gigaevo.memory.cards import Card, CardKind, ContextualGain
+from gigaevo.memory.cards import (
+    Card,
+    CardKind,
+    ContextualGain,
+    union_use_trials,
+)
 from gigaevo.memory.prior_evidence import EvictedEvidenceSink, _JsonlFileLock
 from gigaevo.memory.selection_leases import InFlightSelectionRegistry
 from gigaevo.memory.storage.base import MemoryStore
@@ -212,6 +217,9 @@ class CardAdmissionGate:
                         "gain_events": union_events(
                             fresh.gain_events, card.gain_events
                         ),
+                        "use_trials": union_use_trials(
+                            fresh.use_trials, card.use_trials
+                        ),
                         "absorbed_ids": union_strings(
                             fresh.absorbed_ids, card.absorbed_ids
                         ),
@@ -300,6 +308,7 @@ class CardAdmissionGate:
             updates: dict = {
                 "programs": union_strings(target.programs, incoming.programs),
                 "gain_events": union_events(target.gain_events, incoming.gain_events),
+                "use_trials": union_use_trials(target.use_trials, incoming.use_trials),
             }
             if target.kind is CardKind.PROGRAM and _fitness_improves(
                 incoming.fitness,

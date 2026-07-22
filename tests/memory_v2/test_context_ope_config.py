@@ -40,6 +40,7 @@ from gigaevo.memory_v2.models import (
     canonical_digest,
 )
 from gigaevo.memory_v2.ope import ConditionalOfferDREvaluator, PreDecisionUnit
+from gigaevo.memory_v2.transfer import CrossTaskUsefulnessConfig
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import Program
 
@@ -561,6 +562,95 @@ def test_memory_v2_null_retirement_ablation_composes() -> None:
                 ],
             )
         validate_memory_v2_scope(cfg)
+        assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_memory_v2_multitask_is_one_preset_plus_a_bank_path(tmp_path) -> None:
+    config_dir = Path(__file__).parents[2] / "config"
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=heilbron",
+                    "memory=v2_multitask",
+                    "memory_task_key=heilbron/variant",
+                    f"memory_bank_dir={tmp_path}",
+                ],
+            )
+        validate_memory_v2_scope(cfg)
+        assert cfg.memory.candidate_source.allow_cross_task is True
+        assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
+        assert cfg.memory.causal_writer_updater.record_use_trials is True
+        assert cfg.memory.store.config.path == str(tmp_path)
+        assert cfg.selection_leases.path == f"{tmp_path}/selection_leases.json"
+        assert cfg.memory.environment.task_key == "heilbron/variant"
+        assert cfg.memory.provider.task_key == "heilbron/variant"
+        assert cfg.memory.context_model.task_key == "heilbron/variant"
+        assert cfg.memory.writer.task_key == "heilbron/variant"
+        assert isinstance(
+            cfg.memory.provider.cross_task_usefulness,
+            CrossTaskUsefulnessConfig,
+        )
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_memory_v2_multitask_accepts_parameterized_task_identity() -> None:
+    config_dir = Path(__file__).parents[2] / "config"
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+            configs = [
+                compose(
+                    config_name="config",
+                    overrides=[
+                        "problem.name=dag_tab",
+                        "mutation=structured_diff_dag_tab",
+                        f"problem.dataset={dataset}",
+                        "memory=v2_multitask",
+                        f"memory_task_key=dag_tab/{dataset}",
+                    ],
+                )
+                for dataset in ("california", "adult")
+            ]
+
+        assert [cfg.memory.environment.task_key for cfg in configs] == [
+            "dag_tab/california",
+            "dag_tab/adult",
+        ]
+        for cfg in configs:
+            expected = cfg.memory.environment.task_key
+            assert cfg.memory.provider.task_key == expected
+            assert cfg.memory.context_model.task_key == expected
+            assert cfg.memory.writer.task_key == expected
+    finally:
+        GlobalHydra.instance().clear()
+
+
+def test_memory_v2_multitask_composes_with_embedding_prior() -> None:
+    config_dir = Path(__file__).parents[2] / "config"
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "problem.name=heilbron",
+                    "memory=v2_multitask",
+                    "memory/embedding_prior=linear",
+                ],
+            )
+        validate_memory_v2_scope(cfg)
+        assert cfg.memory.evictor._target_.endswith("NullEvictor")
+        assert "embedding_prior" in cfg.memory.evictor
+        assert "card_embedder" in cfg.memory.evictor
+        # ``compose`` lacks Hydra's runtime choice table; the evictor only needs
+        # the embedding portion of this config, so pin the unrelated live axes.
+        cfg.memory.feature_config.behavior_keys = []
         assert isinstance(instantiate(cfg.memory.evictor), NullEvictor)
     finally:
         GlobalHydra.instance().clear()

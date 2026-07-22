@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 import math
 from typing import Literal
 
@@ -428,6 +428,23 @@ class GaussianPosterior:
             )
             residual_sds[selected] = component.residual_sd
         return coefficients, residual_sds
+
+
+def _translate_gaussian_posterior(
+    posterior: GaussianPosterior, offset: np.ndarray
+) -> GaussianPosterior:
+    """Translate a zero-mean-prior fit back to its configured prior location."""
+
+    if not np.any(offset):
+        return posterior
+    return replace(
+        posterior,
+        mean=posterior.mean + offset,
+        components=tuple(
+            replace(component, mean=component.mean + offset)
+            for component in posterior.components
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -1374,6 +1391,7 @@ class HierarchicalTerminalUtilityPosterior:
         *,
         lineage_observations: Sequence[CausalObservation] = (),
         card_embeddings: dict[str, np.ndarray] | None = None,
+        card_intercept_prior_mean: Mapping[str, float] | None = None,
     ) -> FittedTerminalUtilityPosterior:
         # Randomized delivery is the treatment; citation is post-treatment
         # uptake. Every delivered row therefore stays in every usefulness head
@@ -1417,6 +1435,11 @@ class HierarchicalTerminalUtilityPosterior:
             )
         )
         space = self.feature_map.space(all_cards, embeddings=card_embeddings)
+        reward_prior_mean = np.zeros(space.outcome_dim, dtype=float)
+        for card_id, value in (card_intercept_prior_mean or {}).items():
+            if not math.isfinite(value):
+                raise ValueError("card intercept prior means must be finite")
+            reward_prior_mean[space.card_intercept_index(card_id)] = value
         safety_design = self._matrix(
             [
                 space.design(
@@ -1478,19 +1501,23 @@ class HierarchicalTerminalUtilityPosterior:
             measurement_sd.append(normalized_se)
         reward_value_array = np.asarray(reward_values, dtype=float)
         measurement_sd_array = np.asarray(measurement_sd, dtype=float)
+        centered_reward_values = reward_value_array - reward_design @ reward_prior_mean
         reward_regressor = self.reward_regressor
         if self.config.hyperparameter_estimation == "empirical_bayes" and len(
-            reward_value_array
+            centered_reward_values
         ):
             tuned_config = EmpiricalBayesRewardPriorEstimator(self.config).estimate(
-                reward_design, reward_value_array, measurement_sd_array, space
+                reward_design, centered_reward_values, measurement_sd_array, space
             )
             reward_regressor = BayesianResidualScaleGaussianRegressor(tuned_config)
-        reward = reward_regressor.fit(
-            reward_design,
-            reward_value_array,
-            measurement_sd_array,
-            space,
+        reward = _translate_gaussian_posterior(
+            reward_regressor.fit(
+                reward_design,
+                centered_reward_values,
+                measurement_sd_array,
+                space,
+            ),
+            reward_prior_mean,
         )
         lineage_design = self._matrix(
             [
