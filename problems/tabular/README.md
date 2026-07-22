@@ -18,6 +18,14 @@ export GIGAEVO_TABULAR_DATA=/some/dir/data
 Each dataset folder (tabm format) holds `info.json`, `X_num_{train,val,test}.npy`
 (always), optional `X_cat_*`/`X_bin_*`, and `Y_{train,val,test}.npy`.
 
+TabReD 0.1.x uses a different native layout. Import its official default
+temporal splits into the same data root with:
+
+```bash
+uvx tabred download all --output-path /some/dir/tabred-native
+python problems/tabular/_common/import_tabred.py /some/dir/tabred-native /some/dir/data
+```
+
 ## Datasets
 
 | problem.name          | task        | features (num/cat/bin) | classes | eval   |

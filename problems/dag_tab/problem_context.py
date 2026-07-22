@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 from gigaevo.problems.context import ProblemContext
+from problems.tabular._common import tabular_data
 
 _SECTION_PATTERN = re.compile(
     r"^(TASK|DATASET|COLUMNS|CONTRACT|PROTOCOL|STRATEGY|CONSTRAINTS)\b.*$",
@@ -42,11 +43,19 @@ class DagTabProblemContext(ProblemContext):
         dataset_path = (
             self.problem_dir.parent / "tabular" / self.dataset / "task_description.txt"
         )
-        if not dataset_path.is_file():
-            raise FileNotFoundError(
-                f"Missing tabular task description for dataset {self.dataset!r}: {dataset_path}"
+        if dataset_path.is_file():
+            dataset_context = _extract_dataset_context(dataset_path.read_text())
+        else:
+            dataset = tabular_data.load_dataset(self.dataset)
+            task = {
+                tabular_data.REGRESSION: "TABULAR REGRESSION",
+                tabular_data.BINCLASS: "TABULAR BINARY CLASSIFICATION",
+                tabular_data.MULTICLASS: "TABULAR MULTICLASS CLASSIFICATION",
+            }[dataset.task_type]
+            dataset_context = (
+                f"TASK — {task} ({self.dataset})\n\n"
+                f"{tabular_data.describe_columns(self.dataset)}"
             )
-        dataset_context = _extract_dataset_context(dataset_path.read_text())
         return (
             f"{abi}\n\n"
             "SELECTED DATASET CONTEXT\n"

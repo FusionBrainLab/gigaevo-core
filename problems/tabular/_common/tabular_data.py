@@ -219,6 +219,7 @@ def _named_columns(cols: tuple[ColumnSpec, ...], names: dict) -> str:
         label = str(meta.get("name", "")).strip()
         desc = str(meta.get("desc", "")).strip()
         if c.kind == "categorical":
+            assert c.vocabulary is not None
             vocab_note = f"categorical (integer code), {_fmt_vocab(c.vocabulary)}"
             note = f"{desc} — {vocab_note}" if desc else vocab_note
         elif c.kind == "binary":
@@ -250,6 +251,7 @@ def describe_columns(name: str, names: dict | None = None) -> str:
             lines.append(f"- {span:<10} {label}")
             i = j + 1
         else:
+            assert c.vocabulary is not None
             lines.append(
                 f"- [{c.index}]{'':<6} categorical (integer code), {_fmt_vocab(c.vocabulary)}"
             )
