@@ -1,20 +1,5 @@
 TASK — TABULAR BINARY CLASSIFICATION (tabarena-amazon-employee-access)
 
-CONTRACT
-```python
-import numpy as np
-
-class Model:
-    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
-        ...
-        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
-
-def entrypoint() -> type:
-    return Model
-```
-- Model() takes no constructor arguments
-- all predictions finite (no NaN, no inf)
-
 COLUMNS (assembled X[:, j], left to right)
 - [0] RESOURCE    categorical (integer code), 4049 levels: 0=0 1=100003 2=100037 3=100039 4=1001 5=1003 ... 4048=99989
 - [1] MGR_ID      categorical (integer code), 3097 levels: 0=100 1=100062 2=100147 3=10038 4=100547 5=10079 ... 3096=99669

@@ -1,20 +1,5 @@
 TASK — TABULAR REGRESSION (regression-cat-medium-2-Mercedes_Benz_Greener_Manufacturing)
 
-CONTRACT
-```python
-import numpy as np
-
-class Model:
-    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
-        ...
-        return preds  # 1D float array, shape (len(X_query),)
-
-def entrypoint() -> type:
-    return Model
-```
-- Model() takes no constructor arguments
-- all predictions finite (no NaN, no inf)
-
 COLUMNS (assembled X[:, j], left to right)
 - [0-355]    binary (0/1)
 - [356]       categorical (integer code), 7 levels: 0=0 1=1 2=2 3=3 4=4 5=5 6=6

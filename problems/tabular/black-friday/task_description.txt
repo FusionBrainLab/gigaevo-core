@@ -2,21 +2,6 @@ TASK — TABULAR REGRESSION (black-friday)
 
 DATASET — predict a customer's purchase amount at a Black Friday retail event from demographic and product-category attributes
 
-CONTRACT
-```python
-import numpy as np
-
-class Model:
-    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
-        ...
-        return preds  # 1D float array, shape (len(X_query),)
-
-def entrypoint() -> type:
-    return Model
-```
-- Model() takes no constructor arguments
-- all predictions finite (no NaN, no inf)
-
 COLUMNS (assembled X[:, j], left to right)
 - [0] Occupation  customer occupation, masked code 0-20 (treated as numeric)
 - [1] Product_Category_1 primary product category, integer 1-18 (no missing)

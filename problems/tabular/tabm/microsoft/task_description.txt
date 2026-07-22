@@ -2,21 +2,6 @@ TASK — TABULAR REGRESSION (microsoft)
 
 DATASET — MSLR-WEB10K learning-to-rank; each row is a query-document pair, predict the relevance grade (0-4) from ~136 anonymized ranking-signal features
 
-CONTRACT
-```python
-import numpy as np
-
-class Model:
-    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
-        ...
-        return preds  # 1D float array, shape (len(X_query),)
-
-def entrypoint() -> type:
-    return Model
-```
-- Model() takes no constructor arguments
-- all predictions finite (no NaN, no inf)
-
 COLUMNS (assembled X[:, j], left to right)
 - [0-130]    numeric
 - [131-135]  binary (0/1)

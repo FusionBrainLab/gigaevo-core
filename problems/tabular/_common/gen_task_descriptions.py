@@ -42,36 +42,6 @@ _HEADERS = {
     "multiclass": "TASK — TABULAR MULTICLASS CLASSIFICATION ({name}, {k} classes)",
 }
 
-_REG_SKELETON = """```python
-import numpy as np
-
-class Model:
-    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
-        ...
-        return preds  # 1D float array, shape (len(X_query),)
-
-def entrypoint() -> type:
-    return Model
-```"""
-
-_CLF_SKELETON = """```python
-import numpy as np
-
-class Model:
-    def fit_predict(self, X_train, y_train, X_val, y_val, X_query) -> np.ndarray:
-        ...
-        return proba  # 2D float array, shape (len(X_query), n_classes); column j = P(class j)
-
-def entrypoint() -> type:
-    return Model
-```"""
-
-_SKELETON = {
-    "regression": _REG_SKELETON,
-    "binclass": _CLF_SKELETON,
-    "multiclass": _CLF_SKELETON,
-}
-
 
 def _semantics() -> dict:
     if not _SEMANTICS_PATH.is_file():
@@ -104,7 +74,7 @@ def _collection_for(name: str, info: dict) -> str | None:
 
 
 def _discover(collection: str) -> dict[str, list[str]]:
-    datasets: dict[str, list[str]] = {task_type: [] for task_type in _SKELETON}
+    datasets: dict[str, list[str]] = {task_type: [] for task_type in _HEADERS}
     for folder in sorted(_data_root().iterdir()):
         if not folder.is_dir():
             continue
@@ -137,14 +107,7 @@ def render(name: str, task_type: str) -> str:
     parts = [header, ""]
     if sem.get("source"):
         parts += [f"DATASET — {sem['source']}", ""]
-    parts += [
-        "CONTRACT",
-        _SKELETON[task_type],
-        "- Model() takes no constructor arguments",
-        "- all predictions finite (no NaN, no inf)",
-        "",
-        cols,
-    ]
+    parts.append(cols)
     return "\n".join(parts) + "\n"
 
 
