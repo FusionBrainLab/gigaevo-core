@@ -22,16 +22,7 @@ COLUMNS (assembled X[:, j], left to right)
 - [3] ad_000      numeric
 - [4] ae_000      numeric
 - [5] af_000      numeric
-- [6] ag_000      numeric
-- [7] ag_001      numeric
-- [8] ag_002      numeric
-- [9] ag_003      numeric
-- [10] ag_004      numeric
-- [11] ag_005      numeric
-- [12] ag_006      numeric
-- [13] ag_007      numeric
-- [14] ag_008      numeric
-- [15] ag_009      numeric
+- [6-15] ag_000 … ag_009 — numeric (10 columns)
 - [16] ah_000      numeric
 - [17] ai_000      numeric
 - [18] aj_000      numeric
@@ -48,36 +39,9 @@ COLUMNS (assembled X[:, j], left to right)
 - [29] au_000      numeric
 - [30] av_000      numeric
 - [31] ax_000      numeric
-- [32] ay_000      numeric
-- [33] ay_001      numeric
-- [34] ay_002      numeric
-- [35] ay_003      numeric
-- [36] ay_004      numeric
-- [37] ay_005      numeric
-- [38] ay_006      numeric
-- [39] ay_007      numeric
-- [40] ay_008      numeric
-- [41] ay_009      numeric
-- [42] az_000      numeric
-- [43] az_001      numeric
-- [44] az_002      numeric
-- [45] az_003      numeric
-- [46] az_004      numeric
-- [47] az_005      numeric
-- [48] az_006      numeric
-- [49] az_007      numeric
-- [50] az_008      numeric
-- [51] az_009      numeric
-- [52] ba_000      numeric
-- [53] ba_001      numeric
-- [54] ba_002      numeric
-- [55] ba_003      numeric
-- [56] ba_004      numeric
-- [57] ba_005      numeric
-- [58] ba_006      numeric
-- [59] ba_007      numeric
-- [60] ba_008      numeric
-- [61] ba_009      numeric
+- [32-41] ay_000 … ay_009 — numeric (10 columns)
+- [42-51] az_000 … az_009 — numeric (10 columns)
+- [52-61] ba_000 … ba_009 — numeric (10 columns)
 - [62] bb_000      numeric
 - [63] bc_000      numeric
 - [64] bd_000      numeric
@@ -115,30 +79,12 @@ COLUMNS (assembled X[:, j], left to right)
 - [96] ck_000      numeric
 - [97] cl_000      numeric
 - [98] cm_000      numeric
-- [99] cn_000      numeric
-- [100] cn_001      numeric
-- [101] cn_002      numeric
-- [102] cn_003      numeric
-- [103] cn_004      numeric
-- [104] cn_005      numeric
-- [105] cn_006      numeric
-- [106] cn_007      numeric
-- [107] cn_008      numeric
-- [108] cn_009      numeric
+- [99-108] cn_000 … cn_009 — numeric (10 columns)
 - [109] co_000      numeric
 - [110] cp_000      numeric
 - [111] cq_000      numeric
 - [112] cr_000      numeric
-- [113] cs_000      numeric
-- [114] cs_001      numeric
-- [115] cs_002      numeric
-- [116] cs_003      numeric
-- [117] cs_004      numeric
-- [118] cs_005      numeric
-- [119] cs_006      numeric
-- [120] cs_007      numeric
-- [121] cs_008      numeric
-- [122] cs_009      numeric
+- [113-122] cs_000 … cs_009 — numeric (10 columns)
 - [123] ct_000      numeric
 - [124] cu_000      numeric
 - [125] cv_000      numeric
@@ -174,30 +120,13 @@ COLUMNS (assembled X[:, j], left to right)
 - [155] eb_000      numeric
 - [156] ec_00       numeric
 - [157] ed_000      numeric
-- [158] ee_000      numeric
-- [159] ee_001      numeric
-- [160] ee_002      numeric
-- [161] ee_003      numeric
-- [162] ee_004      numeric
-- [163] ee_005      numeric
-- [164] ee_006      numeric
-- [165] ee_007      numeric
-- [166] ee_008      numeric
-- [167] ee_009      numeric
+- [158-167] ee_000 … ee_009 — numeric (10 columns)
 - [168] ef_000      numeric
 - [169] eg_000      numeric
 
 PROTOCOL
 - (X_train, y_train) and (X_val, y_val) are both labeled and may both be used to fit; X_query is the unlabeled scoring slice — prediction quality on it is the only objective
-- categorical columns are integer codes; one-hot or target-encode them if useful, or pass through to tree models
-
-STRATEGY (general heuristics; adapt to the data)
-- feature engineering is the primary lever — go well beyond the raw columns: build ratios, interactions, per-unit normalizations, aggregates, binning, and target/count encodings
-- when the COLUMNS section gives semantic meaning, use it to design domain-specific features (combine related quantities, encode the structure the domain implies); creative, dataset-tailored transforms are encouraged
-- gradient-boosted trees (LightGBM/XGBoost/CatBoost) are a strong tabular baseline; other families are worth trying too — regularized linear models with rich feature engineering, kNN, and neural nets/TabM
-- blend diverse models (different families or seeds) — averaging or stacking usually beats any single learner
-- hold the validation split out to choose hyperparameters and early-stopping rounds; once those are fixed, optionally refit the final model on train+val combined before scoring X_query
-- return well-calibrated probabilities and handle class imbalance if present
+- categorical columns are integer codes; train-derived code vocabularies are listed above when available, and unseen values use -1
 
 CONSTRAINTS
 - fix all random seeds (numpy + library random_state/random_seed/seed)

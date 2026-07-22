@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -12,6 +13,9 @@ REGRESSION = "regression"
 BINCLASS = "binclass"
 MULTICLASS = "multiclass"
 _MAX_VOCAB_LISTED = 40
+# Keep short semantic families explicit; collapse only clearly mechanical runs.
+_MIN_NUMBERED_RUN = 8
+_NUMBERED_NAME = re.compile(r"^(.*?)(\d+)$")
 
 
 class TabularDataError(RuntimeError):
@@ -212,24 +216,69 @@ def _fmt_vocab(levels: tuple[str, ...]) -> str:
     return f"{len(levels)} levels: {head} ... {len(levels) - 1}={levels[-1]}"
 
 
+def _named_column(c: ColumnSpec, names: dict) -> tuple[str, str, bool]:
+    meta = names.get(c.index, names.get(str(c.index), {})) or {}
+    label = str(meta.get("name", "")).strip()
+    desc = str(meta.get("desc", "")).strip()
+    if c.kind == "categorical":
+        assert c.vocabulary is not None
+        vocab_note = f"categorical (integer code), {_fmt_vocab(c.vocabulary)}"
+        note = f"{desc} — {vocab_note}" if desc else vocab_note
+    elif c.kind == "binary":
+        note = desc or "binary (0/1)"
+    else:
+        note = desc or "numeric"
+    return label, note, bool(desc)
+
+
+def _numbered_name(label: str) -> tuple[str, int] | None:
+    match = _NUMBERED_NAME.fullmatch(label)
+    if not match:
+        return None
+    return match.group(1), int(match.group(2))
+
+
 def _named_columns(cols: tuple[ColumnSpec, ...], names: dict) -> str:
     lines: list[str] = ["COLUMNS (assembled X[:, j], left to right)"]
-    for c in cols:
-        meta = names.get(c.index, names.get(str(c.index), {})) or {}
-        label = str(meta.get("name", "")).strip()
-        desc = str(meta.get("desc", "")).strip()
-        if c.kind == "categorical":
-            assert c.vocabulary is not None
-            vocab_note = f"categorical (integer code), {_fmt_vocab(c.vocabulary)}"
-            note = f"{desc} — {vocab_note}" if desc else vocab_note
-        elif c.kind == "binary":
-            note = desc or "binary (0/1)"
-        else:
-            note = desc or "numeric"
+    entries = [(c, *_named_column(c, names)) for c in cols]
+    i = 0
+    while i < len(entries):
+        c, label, note, has_desc = entries[i]
+        numbered = _numbered_name(label) if label and not has_desc else None
+        if numbered:
+            stem, number = numbered
+            j = i + 1
+            while j < len(entries):
+                next_c, next_label, next_note, next_has_desc = entries[j]
+                next_numbered = (
+                    _numbered_name(next_label)
+                    if next_label and not next_has_desc
+                    else None
+                )
+                if (
+                    not next_numbered
+                    or next_numbered[0] != stem
+                    or next_numbered[1] != number + 1
+                    or next_c.kind != c.kind
+                    or next_c.vocabulary != c.vocabulary
+                    or next_note != note
+                ):
+                    break
+                number = next_numbered[1]
+                j += 1
+            if j - i >= _MIN_NUMBERED_RUN:
+                end_c, end_label, _, _ = entries[j - 1]
+                lines.append(
+                    f"- [{c.index}-{end_c.index}] {label} … {end_label} — "
+                    f"{note} ({j - i} columns)"
+                )
+                i = j
+                continue
         if label:
             lines.append(f"- [{c.index}] {label:<11} {note}".rstrip())
         else:
             lines.append(f"- [{c.index}]{'':<6} {note}")
+        i += 1
     return "\n".join(lines)
 
 
